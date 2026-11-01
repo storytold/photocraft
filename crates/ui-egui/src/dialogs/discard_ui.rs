@@ -23,6 +23,20 @@ pub struct Prompt {
     docs: Vec<DocId>,
     /// The document whose question has already put keyboard focus on its default answer.
     focused: Option<DocId>,
+    /// A provider reply lands in logic, before this frame's input reaches widgets and tools.
+    provider_save: Option<ProviderSave>,
+}
+
+struct ProviderSave {
+    doc: DocId,
+    revision: u64,
+    connection: String,
+    durable: bool,
+    had_input: bool,
+}
+
+fn provider_close_waits(app: &PhotocraftApp) -> bool {
+    app.discard.as_ref().is_some_and(|p| p.provider_save.is_some())
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -65,7 +79,9 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
         .into_iter()
         .filter_map(|i| docs.get(i))
         .filter(|d| {
-            d.is_dirty() || app.services.file_provider.as_ref().is_some_and(|provider| provider.pending_for(d.doc.id) || provider.prepared_for(d.doc.id))
+            d.is_dirty()
+                || app.services.file_provider.as_ref().is_some_and(|provider| provider.pending_for(d.doc.id) || provider.prepared_for(d.doc.id))
+                || app.discard.as_ref().and_then(|p| p.provider_save.as_ref()).is_some_and(|save| save.doc == d.doc.id)
         })
         .map(|d| d.doc.id)
         .collect();
@@ -86,7 +102,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         log::warn!("quitting a window that lost its GPU device before its unsaved work could be saved for recovery");
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, focused: None, provider_save: None };
     match &app.discard {
         None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -122,7 +138,9 @@ impl PhotocraftApp {
     /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
     pub fn has_unsaved_work(&self) -> bool {
         !self.allow_close
-            && (self.session.documents().iter().any(|d| d.is_dirty()) || self.services.file_provider.as_ref().is_some_and(|provider| provider.busy()))
+            && (self.session.documents().iter().any(|d| d.is_dirty())
+                || self.services.file_provider.as_ref().is_some_and(|provider| provider.busy())
+                || provider_close_waits(self))
     }
 }
 
@@ -248,12 +266,87 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
     if !app.save_options_open()
+        && !provider_close_waits(app)
         && !app.services.file_provider.as_ref().is_some_and(|provider| provider.pending_for(doc))
         && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
         && saved_enough_to_close(app, doc)
     {
         advance(app, ctx);
     }
+}
+
+/// A provider ACK is applied in logic, before the frame's raw input is processed. Keep the
+/// checkpoint, but defer only its close/quit continuation until a complete UI pass has settled.
+pub(crate) fn provider_saved_document(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    host: &crate::file_providers::Host,
+    doc: DocId,
+    revision: u64,
+    durable: bool,
+) {
+    let Some(connection) = host.connection_id() else { return };
+    let Some(prompt) = app.discard.as_mut().filter(|p| p.docs.first() == Some(&doc)) else { return };
+    let had_input = ctx.input(|i| !i.events.is_empty() || !i.raw.dropped_files.is_empty());
+    prompt.provider_save = Some(ProviderSave { doc, revision, connection, durable, had_input });
+    ctx.request_repaint();
+}
+
+/// The end of a real editor pass, never a hidden logic-only tick. A later revision cancels
+/// automatic closing; pending input or an uncommitted tool/field gets time to settle first.
+pub(crate) fn finish_provider_save(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if ctx.will_discard() {
+        return;
+    }
+    let Some(mut save) = app.discard.as_mut().and_then(|p| p.provider_save.take()) else { return };
+    let same_connection = app.services.file_provider.as_ref().and_then(|host| host.connection_id()).as_deref() == Some(save.connection.as_str());
+    let same_revision = app.session.documents().iter().any(|state| state.doc.id == save.doc && state.revision == save.revision);
+    // A second tab may have overwritten the resource after this ACK. A retired provider
+    // checkpoint must never fall through to the browser-download close exception.
+    let checkpoint = !save.durable || app.services.file_provider.as_ref().is_some_and(|host| host.acknowledged_at(save.doc, save.revision));
+    if !same_connection || !same_revision || !checkpoint || !saved_enough_to_close(app, save.doc) {
+        ctx.request_repaint(); // bring the unanswered prompt back after this pass
+        return;
+    }
+    // Type-tool and egui text fields may consume their events. Remember input observed when
+    // the ACK arrived, so consuming it cannot make this very pass look idle.
+    let input = save.had_input || ctx.input(|i| !i.events.is_empty() || !i.raw.dropped_files.is_empty());
+    let held = ctx.input(|i| i.pointer.any_down() || !i.keys_down.is_empty());
+    let synthetic = app.synthetic_batch.is_some() || !app.synthetic.is_empty();
+    if input || held || synthetic || provider_ui_work(app, ctx, save.doc) {
+        save.had_input = false;
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.provider_save = Some(save);
+        }
+        // Exactly one follow-up pass for handled input. Held gestures/drafts wake through
+        // their own events; an idle editor with a parked field does not become a poll loop.
+        if input {
+            ctx.request_repaint();
+        }
+        return;
+    }
+    saved_document(app, ctx, save.doc);
+}
+
+fn provider_ui_work(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
+    let active = app.session.active().map(|state| state.doc.id) == Some(doc);
+    let type_edit = app.ui.text_edit.as_ref().is_some_and(|edit| edit.preedit.is_some() && edit.document.map_or(active, |id| id == doc.0));
+    type_edit
+        || app.ui.type_transform.as_ref().is_some_and(|edit| edit.document == doc.0)
+        || app.ui.cam_transform.as_ref().is_some_and(|edit| edit.document == doc.0)
+        || (app.ui.pen.is_some() && app.ui.pen_doc == Some(doc))
+        || (!app.ui.polygon.is_empty() && app.ui.polygon_doc == Some(doc))
+        || (active
+            && (ctx.text_edit_focused()
+                || !app.ui.dialogs.is_empty()
+                || app.ui.layers_panel_dialog.is_some()
+                || app.ui.transform.is_some()
+                || app.drag.is_some()
+                || app.live_stroke.is_some()
+                || app.live_adjust.is_some()
+                || crate::crop_ui::pending(app)
+                || crate::perspective_crop_ui::pending(app)
+                || app.smart_svg.modal_open()))
 }
 
 /// A local browser download keeps its existing close behaviour. A document bound to an
@@ -271,7 +364,7 @@ fn couldnt_save(e: String) -> String {
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back.
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || provider_close_waits(app) {
         // Hidden meanwhile: the question takes focus again when it comes back.
         if let Some(p) = app.discard.as_mut() {
             p.focused = None;
@@ -393,7 +486,7 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
     };
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || provider_close_waits(app) {
         return Err("the unsaved-changes prompt is waiting for a save to finish".into());
     }
     let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");

@@ -229,6 +229,9 @@ impl PhotocraftApp {
         self.issue_captures(&ctx);
         // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
         gpu_status::check_window(self, &ctx);
+        // Provider completions arrive in logic before widgets see this pass's raw input.
+        // Only now may an unchanged capture release its parked close/quit continuation.
+        discard_ui::finish_provider_save(self, &ctx);
         crate::file_providers::capture(self);
     }
 

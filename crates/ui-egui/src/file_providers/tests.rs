@@ -33,7 +33,9 @@ fn begin(host: &Host, doc: DocId, copy: bool) -> String {
 }
 
 fn tick_once(app: &mut PhotocraftApp) {
-    tick(app, &egui::Context::default());
+    let ctx = egui::Context::default();
+    tick(app, &ctx);
+    crate::discard_ui::finish_provider_save(app, &ctx);
 }
 
 #[test]
@@ -190,6 +192,31 @@ fn a_device_download_cannot_close_a_document_edited_after_its_capture() {
             assert!(app.session.documents().is_empty(), "the unchanged capture retains the browser's existing download-and-close behaviour");
         }
     }
+}
+
+#[test]
+fn a_deferred_close_cannot_use_the_download_exception_after_its_resource_is_overwritten() {
+    let (mut app, host, first) = app();
+    app.services.write_unconfirmed = true;
+    let first_save = begin(&host, first, false);
+    app.run("file.new", json!({"width":2,"height":2,"name":"Other"})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    app.session.active_mut().unwrap().revision = 7;
+    let other_save = begin(&host, other, false);
+    {
+        let mut state = host.state();
+        state.bindings.insert(first, "shared-resource".into());
+        state.bindings.insert(other, "shared-resource".into());
+    }
+    app.session.set_active(0);
+    assert!(crate::discard_ui::intercept(&mut app, "file.close", &json!({})));
+    host.result(first_save, "saved".into(), "shared-resource".into()).unwrap();
+    host.result(other_save, "saved".into(), "shared-resource".into()).unwrap();
+    tick_once(&mut app);
+    let first = app.session.documents().iter().find(|state| state.doc.id == first).unwrap();
+    assert!(first.is_dirty(), "the other tab replaced this tab's only durable checkpoint");
+    assert!(!host.bound(first.doc.id));
+    assert!(crate::discard_ui::inspect(&app).is_some());
 }
 
 #[test]

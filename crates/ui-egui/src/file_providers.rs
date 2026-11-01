@@ -207,6 +207,16 @@ impl Host {
         Ok(())
     }
 
+    pub(crate) fn connection_id(&self) -> Option<String> {
+        let s = self.state();
+        s.provider.as_ref().map(|_| s.connection_id.clone())
+    }
+
+    pub(crate) fn acknowledged_at(&self, doc: DocId, revision: u64) -> bool {
+        let s = self.state();
+        s.bindings.contains_key(&doc) && s.provider_revisions.get(&doc) == Some(&revision)
+    }
+
     pub fn busy(&self) -> bool {
         self.state().busy()
     }
@@ -575,14 +585,14 @@ fn apply_result(app: &mut PhotocraftApp, ctx: &egui::Context, host: &Host, reque
                     s.provider_revisions.insert(save.doc, save.revision);
                     s.bindings.insert(save.doc, resource);
                 }
-                crate::discard_ui::saved_document(app, ctx, save.doc);
+                crate::discard_ui::provider_saved_document(app, ctx, host, save.doc, save.revision, true);
             }
         }
     } else if status == "download" && save.destination == "device" {
         app.ui.status_error = false;
         app.ui.status = crate::i18n::t("Download requested; the browser does not confirm that it was saved.").into();
         if !save.copy && app.session.documents().iter().any(|doc| doc.doc.id == save.doc && doc.revision == save.revision) {
-            crate::discard_ui::saved_document(app, ctx, save.doc);
+            crate::discard_ui::provider_saved_document(app, ctx, host, save.doc, save.revision, false);
         }
     } else if status == "cancel" {
         app.ui.status_error = false;

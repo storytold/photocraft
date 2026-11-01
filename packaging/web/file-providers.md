@@ -126,7 +126,11 @@ only in browser memory also cannot be reported as `saved`.
 Only one save may be outstanding for a document. Editing can continue, but a second Save waits
 for the capture's outcome. Pending provider work participates in the editor's close/leave
 guard. An acknowledgement that leaves later edits dirty cannot release a close prompt. A delayed
-device-download result also cannot close a document edited after its capture.
+device-download result also cannot close a document edited after its capture. Provider-driven
+close/quit continuations wait until the editor has completed a UI pass, then recheck the same
+document, captured revision, provider connection and still-valid resource checkpoint. Input
+received with the acknowledgement gets processed first; active gestures, text-field drafts and tool previews keep the document
+open until they settle. A later model revision cancels automatic closing and keeps the prompt.
 
 `download` is accepted only for a capture whose chosen destination was `device`; it cannot
 complete a `provider` upload or release its unsaved-changes prompt. A failed upload must be

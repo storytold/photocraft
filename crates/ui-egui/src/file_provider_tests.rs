@@ -139,6 +139,8 @@ fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
         }
         provider.result(request, "saved".into(), "resource-one".into()).unwrap();
         file_providers::tick(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 1, "logic cannot close before the UI pass consumes its input");
+        crate::discard_ui::finish_provider_save(&mut app, &ctx);
         assert!(!app.saving());
         if edit_after_capture {
             assert_eq!(app.session.documents().len(), 1);
@@ -148,6 +150,101 @@ fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
             assert!(app.session.documents().is_empty());
         }
     }
+}
+
+#[test]
+fn provider_ack_waits_for_raw_type_input_from_the_same_frame_before_closing() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let (mut app, provider, _) = app(true);
+    let text = app.run("type.create", json!({"text":"Before", "size":12})).unwrap()["layer"].as_u64().unwrap();
+    crate::type_tool::edit_active(&mut app).unwrap();
+    let edit = app.ui.text_edit.as_mut().unwrap();
+    edit.anchor = edit.caret;
+    let doc = app.session.active().unwrap().doc.id;
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    let request = resolve_save(&mut app, &provider, &ctx);
+    let captured = app.session.active().unwrap().revision;
+    provider.result(request, "saved".into(), "resource-one".into()).unwrap();
+
+    let raw = egui::RawInput { focused: true, events: vec![egui::Event::Text(" after".into())], ..Default::default() };
+    let _ = ctx.run_ui(raw, |ui| {
+        // eframe runs logic before UI with this same raw input. This is the real Type
+        // input handler: its engine edit must not be preempted by the save continuation.
+        file_providers::tick(&mut app, ui.ctx());
+        assert_eq!(app.session.active().unwrap().doc.id, doc);
+        assert!(app.has_unsaved_work(), "the parked close remains guarded until UI settles");
+        assert!(crate::type_tool::handle_keys(&mut app, ui.ctx()));
+        crate::discard_ui::finish_provider_save(&mut app, ui.ctx());
+        app.finish_type_reset_pass(ui.ctx());
+    });
+    let state = app.session.active().unwrap();
+    let photocraft_doc::LayerContent::Text(layer) = &state.doc.layer(photocraft_doc::LayerId(text)).unwrap().content else { panic!("text layer") };
+    assert_eq!(layer.text, "Before after");
+    assert_eq!(state.saved_revision, captured);
+    assert_ne!(state.revision, captured);
+    assert!(state.is_dirty());
+    assert!(crate::discard_ui::inspect(&app).is_some());
+}
+
+#[test]
+fn provider_ack_with_only_pointer_input_closes_after_a_settled_ui_pass() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, _) = app(true);
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    let request = resolve_save(&mut app, &provider, &ctx);
+    provider.result(request, "saved".into(), "resource-one".into()).unwrap();
+    let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))], ..Default::default() };
+    let _ = ctx.run_ui(raw, |ui| {
+        file_providers::tick(&mut app, ui.ctx());
+        crate::discard_ui::finish_provider_save(&mut app, ui.ctx());
+    });
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(app.has_unsaved_work());
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::discard_ui::finish_provider_save(&mut app, ui.ctx()));
+    assert!(app.session.documents().is_empty());
+    assert!(!app.has_unsaved_work());
+}
+
+#[test]
+fn provider_ack_does_not_discard_an_uncommitted_preview_or_its_later_commit() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, _) = app(true);
+    let layer = app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    let request = resolve_save(&mut app, &provider, &ctx);
+    provider.result(request, "saved".into(), "resource-one".into()).unwrap();
+    app.live_adjust = Some((photocraft_doc::LayerId(layer), json!({"preview":"not committed"})));
+    file_providers::tick(&mut app, &ctx);
+    crate::discard_ui::finish_provider_save(&mut app, &ctx);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(app.has_unsaved_work());
+    assert!(crate::discard_ui::answer_control(&mut app, &ctx, "dontSave").is_err());
+    app.live_adjust = None;
+    app.run("layer.new.layer", json!({"name":"Committed after capture"})).unwrap();
+    crate::discard_ui::finish_provider_save(&mut app, &ctx);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(crate::discard_ui::inspect(&app).is_some());
+}
+
+#[test]
+fn a_deferred_provider_close_cannot_cross_an_account_connection() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, _) = app(true);
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    let request = resolve_save(&mut app, &provider, &ctx);
+    provider.result(request, "saved".into(), "resource-one".into()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    assert_eq!(app.session.documents().len(), 1);
+    provider.disconnect().unwrap();
+    provider.connect("test-storage".into(), "Example Storage".into(), "account-b".into()).unwrap();
+    crate::discard_ui::finish_provider_save(&mut app, &ctx);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(crate::discard_ui::inspect(&app).is_some());
 }
 
 #[test]
