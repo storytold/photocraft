@@ -499,6 +499,9 @@ fn main() -> eframe::Result {
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;
+            // What the last self-update left behind (read here, once, by the copy that opens a window).
+            services.update_failure = updates::previous_failure();
+            services.update_installed = Some(updates::installed_a_moment_ago);
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
             #[cfg(target_os = "linux")]

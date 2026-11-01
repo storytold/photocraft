@@ -210,6 +210,8 @@ impl PhotocraftApp {
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
+        // What the last self-update left behind, so a failed one is not a silent restart (#10477).
+        app.updates_rt.problem = app.services.update_failure.take().map(|error| crate::updates_ui::Problem::helper_failed(&error));
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app

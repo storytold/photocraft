@@ -339,7 +339,8 @@ Headless and web sessions without a release transport report `supported: false`.
 Set `general.automaticallyCheckUpdates` with `prefs.set` to enable or disable the next
 desktop startup's single check (enabled by default). Manual checks still work when automatic checks are off.
 `ui.inspect` includes `updates` and `updatesOpen`; `ui.set {"updatesOpen": false}` closes
-the non-modal update window.
+the non-modal update window. `updates.problem` is the text of the open update-problem window
+(a self-update that failed, or one that did not take effect), or `null`.
 
 ## Snapping
 
