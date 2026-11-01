@@ -436,3 +436,13 @@ fn preview_scale_is_clamped_to_its_range() {
     assert_eq!(grid_cell_width(52.0, 0.0), 26.0);
     assert_eq!(grid_cell_width(52.0, f32::INFINITY), 52.0);
 }
+
+/// #10574, #10340: the Brushes list fills the panel above its 40 px footer, with no upper cap (it
+/// used to stop at 640 px in a tall dock column); 180 px is the minimum.
+#[test]
+fn brushes_list_grows_with_a_tall_panel() {
+    assert_eq!(list_max_height(1200.0), 1160.0);
+    assert_eq!(list_max_height(700.0), 660.0);
+    assert_eq!(list_max_height(100.0), 180.0);
+    assert_eq!(list_max_height(f32::NAN), 180.0);
+}

@@ -292,6 +292,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
         _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
         _ if crate::delete_layer_prompt::owns(fields) => crate::delete_layer_prompt::body(ui, fields),
+        _ if crate::hdr_flatten_prompt::owns(fields) => crate::hdr_flatten_prompt::body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
@@ -455,6 +456,8 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
+        } else if crate::hdr_flatten_prompt::owns(&d.fields) {
+            tl!("No")
         } else {
             tl!("Cancel")
         };
@@ -511,6 +514,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
+    } else if crate::hdr_flatten_prompt::owns(&d.fields) {
+        tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
@@ -831,6 +836,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::channel_options_ui::owns_new_spot,
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
+    crate::hdr_flatten_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_insert_stop,
     crate::new_layer_ui::owns,
@@ -986,6 +992,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         _ if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
+        _ if crate::hdr_flatten_prompt::owns(&d.fields) => crate::hdr_flatten_prompt::confirm(app),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
@@ -1126,6 +1133,7 @@ pub(super) mod filter_preview_ui;
 pub(super) mod filter_preview_worker;
 pub mod gallery_ui;
 pub mod guide_layout_ui;
+pub mod hdr_flatten_prompt;
 pub mod history_options_ui;
 pub mod jpeg_options_ui;
 pub mod layer_picker;
