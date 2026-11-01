@@ -133,7 +133,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 | LUTs `.cube` / `.3dl` / `.look` | R/W (Export Color Lookup) | R/W / R / R | `cms/src/lutfile.rs` |
 | Keyboard shortcuts `.kys` | R/W | R/W | `engine/src/kys.rs` (`write`: Edit › Keyboard Shortcuts › Export…, rows carry our id; Photoshop reading our files is unverified) |
 | ICC profiles | R | R | Own CMS |
-| Actions `.atn` ([reference](atn.md)) | R/W | R/W | `psd/src/atn.rs` (version 16 sets, exact round trip), `engine/src/atn_cmds.rs` (Photoshop events ↔ commands, including Apply Layer Comp by name, #7101; other steps kept verbatim; Save As maps to `file.saveAs`/`file.saveACopy` when its destination is a file, #7102). Panel menu, CLI `batch --actions set.atn`, `actions.load`/`actions.save`. Photoshop 5-era version 12 files unsupported (AUTO-219-2) |
+| Actions `.atn` ([reference](atn.md)) | R/W | R/W | `psd/src/atn.rs` (version 16 sets, exact round trip), `engine/src/atn_cmds.rs` (Photoshop events ↔ commands, including Apply Layer Comp by name, #7101; recorded classic `GrMp` with fractional RGB stops and `RplC` with explicit Lab sample bounds, part of #10607; other steps kept verbatim; Save As maps to `file.saveAs`/`file.saveACopy` when its destination is a file, #7102). Panel menu, CLI `batch --actions set.atn`, `actions.load`/`actions.save`. Photoshop 5-era version 12 files unsupported (AUTO-219-2) |
 | Styles `.asl` | R/W | R/W | `psd/src/asl.rs`, `io/src/asl_map.rs`; Styles panel Import/Export Styles…, `style.presets.importAsl`/`exportAsl` (#1051) |
 | Contours `.shc` | R/W | R/W | `psd/src/shc.rs`; Contour Editor Load…/Save… (FILE-215-15). No user contour library; not yet checked against a Photoshop-written file |
 | Custom shapes `.csh`, tool presets `.tpl` | R/W | no | |
@@ -148,6 +148,7 @@ Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCr
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Recorded direct Gradient Map and Lab-range Replace Color load, play and retain their measured settings on save; unsupported forms remain preserved (part of #10607). |
 | 2026-11-01 | minor | `.atn`: event reference [atn.md](atn.md): the 117 supported events, and measured keys, defaults, ranges and enum values for 101 events not mapped yet |
 | 2026-10-26 | minor | Embedded AI/PDF/EPS save-back retains native format and a separate source-bound display preview; original sources remain undoable. Native Adobe interoperability and standalone EPS/DCS remain unverified; no corpus floor or percentage changed. |
 | 2026-10-22 | minor | Embedded PSD vectors gain explicit bounded SVG editor/save-back; standalone EPS/DCS and native-format fidelity remain open. |

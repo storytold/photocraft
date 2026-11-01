@@ -631,6 +631,17 @@ PhotoCraft equivalent.
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
 
+
+Recorded direct Gradient Map (`GrMp`) and Replace Color (`RplC`) forms are described in
+[the ATN reference](atn.md#supported-direct-adjustment-settings), based on davidmann4's
+measurements in #10603. Gradient Map keeps its event, fractional RGB stops and recorded name;
+unsupported interpolation, midpoint and transparency settings remain preserved steps.
+Replace Color accepts `labMinimum` / `labMaximum` (three D50 Lab numbers each), exclusively
+of RGB samples and localized settings. The new option matches native surface samples through
+the document profile, retains alpha and untouched native pixels, and uses one undoable edit.
+A zero tone shift validates its inputs without changing pixels. The existing RGB option keeps
+its previous behavior. Explicit Lab bounds require a composite pixel-layer target.
+
 ## Remove Tool quality
 
 `cargo run --release -p photocraft-engine --example remove_quality -- <dir> [out dir]` fills
