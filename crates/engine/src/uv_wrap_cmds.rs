@@ -17,6 +17,7 @@ struct SurfaceStamp {
     pressure: f32,
 }
 
+#[derive(Clone)]
 pub(crate) struct WrappedStroke {
     doc: DocId,
     layer: Option<LayerId>,
@@ -250,13 +251,13 @@ fn stamp(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mesh = s.uv.wrap_mesh.as_ref().cloned().ok_or_else(|| bad("Missing wrap topology"))?;
     let mut should_composite = false;
+    let checkpoint = stroke.clone();
     for (sample, material) in stamps.into_iter().zip(materials) {
         match accumulate_stamp(s, &scene, &mesh, size, material, &mut stroke, sample) {
             Ok(changed) => should_composite |= changed,
             Err(error) => {
-                // A bad sample must not discard the stroke already accumulated for this
-                // gesture. Keeping it also preserves its original pre-surface and flow ceiling.
-                s.uv.wrapped_stroke = Some(stroke);
+                // Roll back every sample in this batch while keeping prior successful calls.
+                s.uv.wrapped_stroke = Some(checkpoint);
                 return Err(error);
             }
         }

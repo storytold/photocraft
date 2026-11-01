@@ -108,6 +108,8 @@ pub(crate) use strokes::clone_preview_texture;
 pub(crate) use strokes::feed_live_stroke;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
+#[cfg(feature = "uv-workbench")]
+pub(crate) use strokes::remove_native_mask_gpu_renderer;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
 use strokes::{HOLD_REPEAT_MS, draw_clone_preview, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
 #[cfg(test)]

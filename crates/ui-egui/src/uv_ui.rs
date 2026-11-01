@@ -1036,8 +1036,7 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
                 let mut previous_cache = std::mem::take(&mut app.uv_cache);
                 let mut gpu = previous_cache.gpu.take();
                 if let Some(renderer) = &mut gpu {
-                    crate::canvas::fail_native_mask_gpu_brush(app);
-                    renderer.clear();
+                    crate::canvas::remove_native_mask_gpu_renderer(app, || renderer.clear());
                 }
                 app.uv_cache = Cache {
                     gpu,
@@ -1644,8 +1643,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::uv_paint::finish(app, &mut cache.paint);
         cache.geometry = None;
         if let Some(gpu) = &mut cache.gpu {
-            crate::canvas::fail_native_mask_gpu_brush(app);
-            gpu.clear();
+            crate::canvas::remove_native_mask_gpu_renderer(app, || gpu.clear());
         }
         cache.refreshed = None;
     }
@@ -1754,6 +1752,8 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             };
             if let Err(e) = lighting_refresh {
                 state.status = e;
+            } else if let Some(status) = cache.lighting.surface.budget_status.take() {
+                state.status = status;
             }
         }
         cache.refreshed = Some(Instant::now());
@@ -1836,8 +1836,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(id) => gpu_image = Some(id),
             Err(e) => {
                 state.status = format!("3D GPU: {e}. CPU fallback.");
-                crate::canvas::fail_native_mask_gpu_brush(app);
-                cache.gpu = None;
+                crate::canvas::remove_native_mask_gpu_renderer(app, || cache.gpu = None);
                 cache.keys.fill((0, 0, 0, 0));
                 cache.refreshed = None;
             }
@@ -3597,6 +3596,36 @@ mod tests {
         crate::uv_lighting::refresh_gpu(&mut app, &mut maps).unwrap();
 
         assert!(maps.gpu[0].get(material).is_some_and(Option::is_some), "canonical RGB maps retain the direct GPU request path");
+    }
+    #[test]
+    fn gpu_refresh_reserves_retained_fill_maps_and_continues_after_cpu_slot_rejection() {
+        let mut app = fixture_app();
+        app.run("uv.texture.create", json!({"channel":"baseColor","width":1,"height":1})).unwrap();
+        app.run("uv.texture.create", json!({"channel":"metallic","width":2,"height":1})).unwrap();
+        app.run("uv.texture.create", json!({"channel":"ao","width":1,"height":1})).unwrap();
+        app.run("uv.texture.create", json!({"channel":"roughness","width":1,"height":1})).unwrap();
+        app.run("layer.layerMask.hideAll", json!({})).unwrap();
+        app.run("uv.maskPaint.add", json!({"kind":"fill","value":1.0})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        crate::uv_mask_paint_preview::set_fill(&mut app, layer, 0, [0, 0, 1, 1], 17.0);
+
+        let material = app.session.uv.material;
+        let mut maps = crate::uv_lighting::SurfaceMaps::default();
+        maps.images[2].resize_with(material + 1, || None);
+        maps.images[2][material] = Some(photocraft_uv::preview::Image { width: 1, height: 1, rgba: vec![[0.25; 4]] });
+
+        crate::uv_lighting::refresh_impl_with_budget(&mut app, &mut maps, true, 32).unwrap();
+
+        assert!(maps.gpu[0][material].is_some(), "GPU Color maps do not consume the CPU map budget");
+        assert!(maps.images[1][material].is_none(), "the 2-pixel Metallic map is rejected after the retained map is reserved");
+        assert!(maps.images[2][material].is_some(), "the retained Fill map survives within budget");
+        assert!(maps.images[3][material].is_some(), "a later 1-pixel AO map is admitted after the rejected slot");
+        let status = maps.budget_status.as_deref().unwrap_or_default();
+        assert!(status.contains("Metallic material"), "the user status reports which map was skipped: {status}");
+
+        crate::uv_lighting::refresh_impl_with_budget(&mut app, &mut maps, true, 8).unwrap();
+        assert!(maps.images[2][material].is_none(), "a retained Fill map is released if it alone exceeds the configured budget");
+        assert!(maps.budget_status.as_deref().unwrap_or_default().contains("retained Fill preview"));
     }
     #[test]
     fn pbr_linear_sources_persisted_settings_always_normals_and_panel() {

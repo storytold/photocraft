@@ -569,8 +569,14 @@ impl Renderer {
 
         let size = [source.document.size.width, source.document.size.height];
         if let Some((base, settings)) = input.begin.as_ref() {
+            let Some(stack) = stack else {
+                Self::fail_gray_mask_brush_input(input, "GPU Gray mask brush source stack disappeared");
+                self.mask_stack_renderer.cancel_mask_brush_preview();
+                self.gray_mask_brush_identity = None;
+                return;
+            };
             if let Err(error) =
-                self.mask_stack_renderer.begin_round_mask_brush_preview(&self.rs.device, &self.rs.queue, input.stroke_key, size, base, *settings)
+                self.mask_stack_renderer.begin_round_mask_brush_preview(&self.rs.device, &self.rs.queue, input.stroke_key, size, stack, base, *settings)
             {
                 log::warn!("Could not start GPU Gray mask brush preview; using CPU stroke path: {error}");
                 Self::fail_gray_mask_brush_input(input, error);

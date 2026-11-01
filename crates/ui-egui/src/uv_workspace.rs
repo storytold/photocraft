@@ -85,7 +85,8 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, St
         "file.uv.openProject" => uv_ui::reveal(app).and_then(|()| uv_ui::pick_file(app, "project", 0, false)),
         "file.uv.saveProject" => uv_ui::save_project(app),
         "file.uv.closeProject" => {
-            crate::uv_project::close(app);
+            let discard = std::mem::take(&mut app.uv_cache.project.discard_once);
+            crate::uv_project::close(app, discard);
             Ok(Value::Null)
         }
         "file.uv.saveAllTextures" => {
@@ -703,8 +704,24 @@ mod tests {
     fn uv_shell_options_are_localized_and_hidden_outside_3d() {
         let _gpu = photocraft_testkit::gpu_lock();
         for (language, label, hint) in [
-            ("en", "UV shell selection", "Click to select · Shift to add · Ctrl to subtract"),
-            ("ru", "Выделение UV-шеллов", "Щелчок — выбрать · Shift — добавить · Ctrl — вычесть"),
+            (
+                "en",
+                "UV shell selection",
+                if cfg!(target_os = "macos") {
+                    "Click to select · Shift to add · ⌘ to subtract"
+                } else {
+                    "Click to select · Shift to add · Ctrl to subtract"
+                },
+            ),
+            (
+                "ru",
+                "Выделение UV-шеллов",
+                if cfg!(target_os = "macos") {
+                    "Щелчок — выбрать · Shift — добавить · ⌘ — вычесть"
+                } else {
+                    "Щелчок — выбрать · Shift — добавить · Ctrl — вычесть"
+                },
+            ),
         ] {
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
             app.session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));

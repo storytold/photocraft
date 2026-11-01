@@ -2,8 +2,8 @@
 
 See the [illustrated presentation](uv-workbench-presentation.md) for the current
 workspace overview, editable mask sublayers, polygon wireframe and model selection.
-The [update validation](uv-workbench-validation.md) records the 0.16.0 checks and
-the remaining integration work against current upstream.
+The [update validation](uv-workbench-validation.md) records historical 0.16.0 checks and
+current-main validation, including checks deferred for later.
 
 Build the native application with `cargo build -p photocraft --features uv-workbench`.
 Window > 3D / UV Workbench reveals a tab in the right Properties dock, including without
@@ -251,7 +251,7 @@ The old Windows x64 package replaced the main executable with a tested build for
 
 An official launcher update could replace the main executable. Reapplying the old package was supported only for the identical official release. Updating to another release required porting and testing a new package; it was not an arbitrary-version binary plug-in. The upstream WASM plug-in ABI supports image filters, not a native 3D viewport or shell integration.
 
-## English package and workspace language (2026-10-23)
+## Historical English package and workspace language (2026-10-23)
 
 The 3D/UV workspace follows PhotoCraft's interface language. English and Russian cover its controls, tooltips, navigation, environment settings, image shelf, project prompts and status messages. Other languages retain their existing native PhotoCraft translations and use explicit English fallbacks for extension strings that have no translation. English can be selected in Edit > Preferences > Interface > Language. Switching languages does not alter scene or texture data.
 

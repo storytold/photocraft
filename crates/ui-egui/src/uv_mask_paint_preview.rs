@@ -547,12 +547,15 @@ mod fill_worker_tests {
         let first_release = Arc::new(Barrier::new(2));
         let second_started = Arc::new(Barrier::new(2));
         let second_release = Arc::new(Barrier::new(2));
+        let sampled = Arc::new(Mutex::new(Vec::new()));
         let sample: Arc<FillMaskSampleFn> = {
             let first_started = first_started.clone();
             let first_release = first_release.clone();
             let second_started = second_started.clone();
             let second_release = second_release.clone();
+            let sampled = sampled.clone();
             Arc::new(move |job: FillMaskJob, epoch: &AtomicU64| {
+                sampled.lock().unwrap().push(job.key);
                 match job.key {
                     10 => {
                         first_started.wait();
@@ -580,6 +583,7 @@ mod fill_worker_tests {
         let epoch = worker.cancel_epoch.load(Ordering::Relaxed);
         worker.submit(job(10, epoch));
         first_started.wait();
+        worker.submit(job(15, epoch));
         worker.submit(job(20, epoch));
         assert_eq!(worker.cancel_epoch.load(Ordering::Relaxed), epoch);
         first_release.wait();
@@ -595,6 +599,7 @@ mod fill_worker_tests {
             std::thread::yield_now();
         };
         assert_eq!(latest.key, 20);
+        assert_eq!(*sampled.lock().unwrap(), vec![10, 20], "the intermediate replacement is coalesced before sampling");
     }
 }
 
@@ -716,7 +721,7 @@ pub(crate) fn cancel_stale_on_escape(app: &mut PhotocraftApp, ctx: &egui::Contex
     let stale = !app.session.documents().iter().any(|st| st.doc.id == p.doc && st.revision == p.revision);
     if stale && app.ui.dialogs.is_empty() && !ctx.egui_wants_keyboard_input() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cancel(app);
-        app.ui.status = "Discarded an outdated mask Paint opacity preview".into();
+        app.ui.status = tl!("Discarded an outdated mask Paint opacity preview").into();
     }
 }
 

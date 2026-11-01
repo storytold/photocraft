@@ -127,6 +127,7 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
     };
     let size = [40, 32];
     let base = Surface::with_default(PixelFormat::RGBA8, &[0.25, 0.5, 0.75, 1.0]);
+    let stack = Stack { base: Surface::new(PixelFormat::GRAY8), layers: Vec::new(), active: 0 };
     let brush = photocraft_paint::BrushSettings {
         size: 8.0,
         hardness: 0.45,
@@ -157,6 +158,7 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
             &queue,
             991,
             size,
+            &stack,
             &base,
             MaskBrushSettings { hardness: brush.hardness, stroke_opacity: brush.opacity, color: brush.color },
         )
@@ -246,6 +248,7 @@ fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
             &queue,
             818,
             size,
+            &stack,
             &base,
             MaskBrushSettings { hardness: 0.7, stroke_opacity: 0.8, color: [1.0, 1.0, 1.0, 1.0] },
         )

@@ -54,7 +54,10 @@ fn switch(s: &mut Session, p: &Value) -> Result<Value> {
     s.sync_tools_mask_target();
     Ok(json!({"active":active,"documents":s.docs.len()}))
 }
-fn close(s: &mut Session, _: &Value) -> Result<Value> {
+fn close(s: &mut Session, params: &Value) -> Result<Value> {
+    if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
+        return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
+    }
     switch(s, &json!({"active":true}))?;
     while !s.docs.is_empty() {
         s.close(s.docs.len() - 1);

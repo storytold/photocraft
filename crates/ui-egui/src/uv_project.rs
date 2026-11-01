@@ -106,6 +106,7 @@ pub(crate) fn save_to(app: &mut PhotocraftApp, path: String) -> Result<Value, St
 pub(crate) struct Ui {
     prompt: Option<(String, Value)>,
     skip_once: bool,
+    pub(crate) discard_once: bool,
     pub(crate) approved_replace: bool,
     exit_approved: bool,
     cancel_workspace: Option<String>,
@@ -143,10 +144,10 @@ fn saved_view_changed(view: &Value, saved: &Value) -> bool {
     }
     without_pending_fit(view) != without_pending_fit(saved)
 }
-pub(crate) fn close(app: &mut PhotocraftApp) {
+pub(crate) fn close(app: &mut PhotocraftApp, discard: bool) {
     let in_3d = app.ui.workspace == "3D";
     uv_ui::finish_paint(app);
-    if let Err(e) = app.run("uv.project.close", json!({})) {
+    if let Err(e) = app.run("uv.project.close", json!({"discard":discard})) {
         app.ui.status = e;
         return;
     }
@@ -186,7 +187,7 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bo
         return true;
     }
     if native_close {
-        close(app);
+        close(app, false);
         return true;
     }
     if id == "file.exit" {
@@ -291,6 +292,9 @@ pub(crate) fn prompt(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // "Don't save" discards transient Paint/Fill previews with the project itself.
             // Save errors leave the preview intact so the user can retry or explicitly discard.
             crate::uv_mask_paint_preview::cancel(app);
+            if action.0 == "file.uv.closeProject" {
+                app.uv_cache.project.discard_once = true;
+            }
             resume(app, ctx, action);
         }
         _ => {}

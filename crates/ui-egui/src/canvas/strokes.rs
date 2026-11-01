@@ -301,6 +301,12 @@ pub(crate) fn fail_native_mask_gpu_brush(app: &PhotocraftApp) {
     }
 }
 
+/// Mark the live route for CPU replay before a renderer teardown makes GPU readback impossible.
+pub(crate) fn remove_native_mask_gpu_renderer(app: &PhotocraftApp, remove: impl FnOnce()) {
+    fail_native_mask_gpu_brush(app);
+    remove();
+}
+
 /// Take the pending bridge payload when the UV GPU source is built for this frame.
 #[cfg(feature = "uv-workbench")]
 pub(crate) fn native_mask_gpu_input(app: &mut PhotocraftApp) -> Option<crate::uv_gpu::GrayMaskGpuBrushInput> {
@@ -1123,7 +1129,9 @@ mod native_mask_gpu_bridge_tests {
     #[test]
     fn renderer_removal_marks_bridge_failed_and_completes_cpu_fallback() {
         let mut app = app_with_live_gpu_stroke();
-        fail_native_mask_gpu_brush(&mut app);
+        let mut renderer_removed = false;
+        remove_native_mask_gpu_renderer(&app, || renderer_removed = true);
+        assert!(renderer_removed, "the production teardown action runs after marking the bridge failed");
         assert!(complete_native_mask_gpu_release(&mut app), "a removed renderer must not leave release waiting for readback");
         assert!(!native_mask_gpu_brush_active(&app), "the native route is switched off after CPU replay");
     }

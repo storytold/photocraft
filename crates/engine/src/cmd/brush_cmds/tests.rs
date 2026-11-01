@@ -240,6 +240,14 @@ fn native_mask_gpu_readback_patch_commits_through_one_existing_undo_step() {
     assert_eq!(s.active().unwrap().history.past_len(), history_before + 1);
     let surface = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
     assert_eq!(surface.pixel(8, 8), [1.0, 1.0, 1.0, 1.0]);
+    let committed_mask = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap();
+    let mut recomposed = committed_mask.clone();
+    photocraft_compose::mask_paint::refresh_in_canvas(&mut recomposed, s.active().unwrap().doc.bounds());
+    assert_eq!(
+        committed_mask.surface.read_region(s.active().unwrap().doc.bounds()),
+        recomposed.surface.read_region(s.active().unwrap().doc.bounds()),
+        "the committed flattened mask must match a full downstream Blur recomposition before Undo"
+    );
     s.undo();
     let restored = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
     assert_eq!(restored.pixel(8, 8), [0.0, 0.0, 0.0, 0.0]);

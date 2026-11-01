@@ -163,7 +163,7 @@ pub(crate) fn select(
 }
 
 pub(crate) fn select_ids(app: &mut PhotocraftApp, state: &mut crate::uv_ui::State, material: usize, shells: &[usize], modifiers: egui::Modifiers) {
-    let mode = if modifiers.ctrl {
+    let mode = if modifiers.command {
         "subtract"
     } else if modifiers.shift {
         "add"

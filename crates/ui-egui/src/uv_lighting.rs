@@ -28,6 +28,7 @@ pub(crate) struct SurfaceMaps {
     pub regions: [Vec<Option<RegionHint>>; 5],
     pub use_color_for_pbr: Vec<bool>,
     pub output: Option<(u64, Image)>,
+    pub budget_status: Option<String>,
     snapshots: [Vec<Option<Arc<photocraft_doc::Document>>>; 5],
 }
 pub(crate) fn gpu_color_encoding(doc: &photocraft_doc::Document, channel: Channel) -> Option<bool> {
@@ -56,15 +57,17 @@ pub(crate) struct Cache {
     pending: Option<std::sync::mpsc::Receiver<Result<(String, Environment), String>>>,
 }
 pub(crate) fn refresh(app: &mut PhotocraftApp, maps: &mut SurfaceMaps) -> Result<(), String> {
-    refresh_impl(app, maps, false)
+    refresh_impl_with_budget(app, maps, false, MAX_CPU_MAP_BYTES)
 }
 pub(crate) fn refresh_gpu(app: &mut PhotocraftApp, maps: &mut SurfaceMaps) -> Result<(), String> {
-    refresh_impl(app, maps, true)
+    refresh_impl_with_budget(app, maps, true, MAX_CPU_MAP_BYTES)
 }
-fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool) -> Result<(), String> {
+pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool, budget: u64) -> Result<(), String> {
     // Charge only maps that will be composited on CPU. GPU-composited Color/Emissive slots do
     // not need a full-resolution CPU image, and one oversized slot must not block other maps.
     let mut cpu_bytes = 0u64;
+    let mut skipped = Vec::new();
+    maps.budget_status = None;
     let monitor = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()).map(|d| d.monitor.clone());
     let monitor = monitor.as_deref().unwrap_or(photocraft_cms::Builtin::Srgb.profile());
     let hash = monitor.content_hash();
@@ -80,6 +83,36 @@ fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool
     maps.use_color_for_pbr.resize(material_count, false);
     for material in 0..material_count {
         maps.use_color_for_pbr[material] = opacity_bindings.get(material).is_none_or(Option::is_none);
+    }
+    // Fill gestures retain their last CPU maps while parameter-current maps are generated from
+    // the GPU proxy. Reserve these already-resident allocations first so ordinary CPU slots do
+    // not make the process exceed the aggregate map budget.
+    if allow_gpu {
+        for (kind, channel) in MAPS.into_iter().enumerate() {
+            let bindings = app.session.uv.map_bindings(channel).to_vec();
+            for (material, id) in bindings.into_iter().enumerate() {
+                let active_fill = id
+                    .and_then(|id| app.session.documents().iter().position(|state| state.doc.id == id))
+                    .is_some_and(|index| crate::uv_mask_paint_preview::fill_manipulation_active(app, index));
+                if !active_fill {
+                    continue;
+                }
+                let Some(image) = maps.images[kind].get(material).and_then(Option::as_ref) else {
+                    continue;
+                };
+                let bytes = image.width.checked_mul(image.height).and_then(|pixels| pixels.checked_mul(16)).and_then(|bytes| u64::try_from(bytes).ok());
+                let fits = bytes.is_some_and(|bytes| cpu_bytes.checked_add(bytes).is_some_and(|total| total <= budget));
+                if fits {
+                    cpu_bytes += bytes.unwrap_or(0);
+                } else {
+                    maps.images[kind][material] = None;
+                    maps.gpu[kind][material] = None;
+                    maps.keys[kind][material] = Key::default();
+                    maps.snapshots[kind][material] = None;
+                    skipped.push(format!("{channel:?} material {} (retained Fill preview)", material + 1));
+                }
+            }
+        }
     }
     for (kind, channel) in MAPS.into_iter().enumerate() {
         let bindings = app.session.uv.map_bindings(channel).to_vec();
@@ -111,12 +144,13 @@ fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool
                 let source = &app.session.documents()[index];
                 (source.revision, [source.doc.size.width, source.doc.size.height], if allow_gpu { gpu_color_encoding(&source.doc, channel) } else { None })
             };
-            if encoding.is_none() && !reserve_cpu_map_budget(&mut cpu_bytes, size) {
+            if encoding.is_none() && !reserve_cpu_map_budget_with_limit(&mut cpu_bytes, size, budget) {
                 maps.images[kind][material] = None;
                 maps.gpu[kind][material] = None;
                 maps.keys[kind][material] = Key::default();
                 maps.regions[kind][material] = None;
                 maps.snapshots[kind][material] = None;
+                skipped.push(format!("{channel:?} material {}", material + 1));
                 continue;
             }
             let gpu_candidate = encoding.map(|encoding| {
@@ -210,13 +244,21 @@ fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool
             }
         }
     }
+    if !skipped.is_empty() {
+        maps.budget_status = Some(format!("Skipped UV maps to stay within the 4 GiB CPU map limit: {}", skipped.join(", ")));
+    }
     Ok(())
 }
 
+#[cfg(test)]
 fn reserve_cpu_map_budget(used: &mut u64, size: [u32; 2]) -> bool {
+    reserve_cpu_map_budget_with_limit(used, size, MAX_CPU_MAP_BYTES)
+}
+
+fn reserve_cpu_map_budget_with_limit(used: &mut u64, size: [u32; 2], limit: u64) -> bool {
     let Some(bytes) = u64::from(size[0]).checked_mul(u64::from(size[1])).and_then(|pixels| pixels.checked_mul(16)) else { return false };
     let Some(total) = used.checked_add(bytes) else { return false };
-    if total > MAX_CPU_MAP_BYTES {
+    if total > limit {
         return false;
     }
     *used = total;

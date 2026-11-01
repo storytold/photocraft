@@ -48,6 +48,21 @@ fn rewrite_with_different_size(path: &std::path::Path, content: String) {
     let after = std::fs::metadata(path).unwrap().len();
     assert_ne!(before, after, "fixture rewrite must change the source size independent of timestamp granularity");
 }
+fn remove_project_source_stamp(path: &std::path::Path) {
+    let bytes = std::fs::read(path).unwrap();
+    let zip = photocraft_format::zip::ZipReader::new(&bytes).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&zip.read_by_name("project.json", 128 * 1024 * 1024).unwrap()).unwrap();
+    assert!(manifest.as_object_mut().unwrap().remove("source_stamp").is_some(), "fixture starts with the modern source stamp field");
+    let mut writer = photocraft_format::zip::ZipWriter::new();
+    for entry in &zip.entries {
+        if entry.name == "project.json" {
+            writer.add(&entry.name, &serde_json::to_vec(&manifest).unwrap()).unwrap();
+        } else {
+            writer.add(&entry.name, &zip.read(entry, 256 * 1024 * 1024).unwrap()).unwrap();
+        }
+    }
+    std::fs::write(path, writer.finish().unwrap()).unwrap();
+}
 #[test]
 fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_name() {
     let (_temp, path) = file();
@@ -145,7 +160,9 @@ fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
     let mut loaded = Session::new();
     loaded.execute("uv.project.load", json!({"path":project})).unwrap();
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
-    loaded.uv.source_stamp = None;
+    remove_project_source_stamp(&project);
+    let mut loaded = Session::new();
+    loaded.execute("uv.project.load", json!({"path":project})).unwrap();
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], false);
     rewrite_with_different_size(&path, obj("A", "B", 1234.56789));
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);

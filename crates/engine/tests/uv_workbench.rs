@@ -12,6 +12,17 @@ fn scene() -> Session {
     s
 }
 #[test]
+fn project_close_requires_explicit_discard_for_dirty_uv_documents() {
+    let mut s = scene();
+    s.execute("uv.texture.create", json!({"width":16,"height":16})).unwrap();
+    s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+    assert!(s.active().unwrap().is_dirty());
+    assert!(s.execute("uv.project.close", json!({})).is_err());
+    assert!(s.active().is_some(), "a rejected close preserves the active UV document");
+    assert!(s.execute("uv.project.close", json!({"discard":true})).is_ok());
+    assert!(s.uv.scene.is_none());
+}
+#[test]
 fn project_resave_retains_view_paths_and_refuses_bad_metadata_without_replacing_file() {
     let mut s = scene();
     let source = s.active().unwrap().path.clone();
@@ -124,7 +135,8 @@ fn mask_paint_select_invalidates_revision_without_dirtying_a_clean_document() {
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
     s.execute("uv.maskPaint.add", json!({"kind":"paint"})).unwrap();
     s.execute("uv.maskPaint.add", json!({"kind":"fill"})).unwrap();
-    let path = std::env::temp_dir().join(format!("uv-mask-select-{}.pcuv", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("uv-mask-select.pcuv");
     s.execute("uv.project.save", json!({"path":path})).unwrap();
     let before = s.active().unwrap().revision;
 
@@ -134,7 +146,6 @@ fn mask_paint_select_invalidates_revision_without_dirtying_a_clean_document() {
     assert!(after.revision > before, "selection changes the serialized active effect and invalidates revision-keyed UI caches");
     assert!(!after.is_dirty(), "selecting an effect is UI state and should keep a previously clean document clean");
     assert!(after.last_damage.is_some_and(|damage| damage.is_empty()), "effect selection invalidates revision-keyed previews without pixel damage");
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -213,7 +224,8 @@ fn project_roundtrip_keeps_scene_layers_masks_and_selection() {
     std::sync::Arc::make_mut(s.uv.scene.as_mut().unwrap()).materials.push(duplicate);
     s.uv.bindings.push(s.uv.bindings[material]);
     s.uv.normal_bindings.push(None);
-    let path = std::env::temp_dir().join(format!("photocraft-uv-roundtrip-{}.pcuv", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("photocraft-uv-roundtrip.pcuv");
     {
         s.execute("uv.project.save", json!({"path":path.to_str().unwrap()})).unwrap();
         let mut restored = Session::new();
@@ -224,7 +236,6 @@ fn project_roundtrip_keeps_scene_layers_masks_and_selection() {
         assert!(restored.active().unwrap().doc.layers.last().unwrap().mask.is_some());
         assert_eq!(restored.uv.bindings[material], *restored.uv.bindings.last().unwrap());
     }
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -439,7 +450,8 @@ fn all_map_slots_roundtrip_and_reimport_preserve_editable_documents() {
         s.execute("uv.texture.create", json!({"channel":kind.key(),"width":16,"height":16})).unwrap();
         assert_eq!(s.uv.map_bindings(kind)[material], Some(s.active().unwrap().doc.id));
     }
-    let path = std::env::temp_dir().join(format!("uv-maps-{}.pcuv", std::process::id()));
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("uv-maps.pcuv");
     s.execute("uv.project.save", json!({"path":path})).unwrap();
     s.execute("uv.project.load", json!({"path":path})).unwrap();
     assert_eq!(s.uv.current_channel(), Channel::Emissive);
@@ -449,7 +461,6 @@ fn all_map_slots_roundtrip_and_reimport_preserve_editable_documents() {
     let ids: Vec<_> = s.uv.all_bindings().copied().collect();
     s.execute("uv.model.reimport", json!({})).unwrap();
     assert_eq!(ids, s.uv.all_bindings().copied().collect::<Vec<_>>());
-    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

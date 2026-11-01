@@ -194,6 +194,7 @@ impl MaskStackRenderer {
         queue: &wgpu::Queue,
         owner_key: u64,
         size: [u32; 2],
+        stack: &Stack,
         base_paint: &Surface,
         settings: MaskBrushSettings,
     ) -> Result<(), String> {
@@ -208,6 +209,8 @@ impl MaskStackRenderer {
         {
             return Err("GPU mask brush settings or source surface are invalid".into());
         }
+        Self::validate_allocation_budget(stack, size)?;
+        validate_brush_preview_budget(stack, size, rgba8_compatible(base_paint))?;
         let coverage_bytes =
             u64::from(size[0]).checked_mul(u64::from(size[1])).and_then(|pixels| pixels.checked_mul(4)).ok_or("GPU mask brush coverage size overflow")?;
         if coverage_bytes > u64::from(device.limits().max_storage_buffer_binding_size) || coverage_bytes > device.limits().max_buffer_size {
@@ -1139,6 +1142,37 @@ fn validate_stack_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(),
     Ok(())
 }
 
+fn validate_brush_preview_budget(stack: &Stack, size: [u32; 2], rgba8_base: bool) -> Result<(), String> {
+    let pixels = u64::from(size[0]).checked_mul(u64::from(size[1])).ok_or("Mask brush pixel count overflow")?;
+    // The transient preview adds a full source texture, a four-byte coverage buffer and an
+    // eight-byte output texture. Include them in the same 2 GiB budget as the stack renderer.
+    let preview_bytes = pixels.checked_mul(if rgba8_base { 16 } else { 20 }).ok_or("Mask brush GPU allocation size overflow")?;
+    let mut stack_bytes = pixels.checked_mul(56).ok_or("Mask-stack GPU allocation size overflow")?;
+    for layer in stack.layers.iter().filter(|layer| layer.visible && layer.opacity > 0.0) {
+        if matches!(&layer.kind, EffectKind::Paint) {
+            let texture_bpp = if rgba8_compatible(&layer.surface) { 4 } else { 8 };
+            stack_bytes = stack_bytes
+                .checked_add(pixels.checked_mul(texture_bpp).ok_or("Mask-stack GPU allocation size overflow")?)
+                .ok_or("Mask-stack GPU allocation size overflow")?;
+        }
+        if layer.fill_map.is_some() {
+            let fill_pixels = u64::from(layer.fill_map_size[0]).checked_mul(u64::from(layer.fill_map_size[1])).ok_or("Mask Fill allocation size overflow")?;
+            stack_bytes = stack_bytes
+                .checked_add(fill_pixels.checked_mul(4).ok_or("Mask Fill allocation size overflow")?)
+                .ok_or("Mask-stack GPU allocation size overflow")?;
+        }
+    }
+    if stack.layers.iter().any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { radius } if *radius > 0)) {
+        stack_bytes =
+            stack_bytes.checked_add(pixels.checked_mul(24).ok_or("Mask Blur allocation size overflow")?).ok_or("Mask-stack GPU allocation size overflow")?;
+    }
+    let total = stack_bytes.checked_add(preview_bytes).ok_or("Mask brush GPU allocation size overflow")?;
+    if total > MAX_MASK_GPU_WORKING_BYTES {
+        return Err("Mask stack and brush preview exceed the GPU working-set limit".into());
+    }
+    Ok(())
+}
+
 enum MaskLayer {
     Paint(usize),
     Fill {
@@ -1605,6 +1639,14 @@ mod mask_stack_gpu_tests {
             active: 0,
         };
         assert!(MaskStackRenderer::validate_allocation_budget(&stack, [6_000, 6_000]).is_ok());
+    }
+
+    #[test]
+    fn brush_preview_is_included_in_the_stack_aggregate_budget() {
+        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
+        let size = [5_600, 5_600];
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, size).is_ok(), "the persistent stack fits by itself");
+        assert!(validate_brush_preview_budget(&stack, size, true).is_err(), "the three full-canvas preview resources exceed the aggregate limit");
     }
 
     #[test]

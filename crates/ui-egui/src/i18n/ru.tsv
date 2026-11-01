@@ -4863,3 +4863,6 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+	The mask Paint preview is stale. Press Escape to discard it.	Предпросмотр маски Paint устарел. Нажмите Escape, чтобы отменить его.
+	The mask Paint preview document is unavailable	Документ предпросмотра маски Paint недоступен
+	Discarded an outdated mask Paint opacity preview	Устаревший предпросмотр непрозрачности маски Paint отменён
