@@ -750,6 +750,41 @@ fn align_single_layer_to_canvas() {
     assert_eq!(bounds(&s, a), Rect::new(0, 35, 10, 45), "left edge to the canvas");
 }
 
+/// #10337 review: each `to` says exactly what the layers align to. Selection needs one and says
+/// so without it; Canvas is the canvas however many layers are selected and whatever is selected
+/// in the image; and several layers move in one undo step, as Photoshop does.
+#[test]
+fn align_to_selection_or_canvas_with_one_layer_and_with_several() {
+    let mut s = session(8); // 100 x 80
+    let a = rect_layer(&mut s, Rect::new(10, 10, 20, 20));
+    let b = rect_layer(&mut s, Rect::new(40, 50, 70, 60));
+    // Selection: refused while there is none, for one layer and for several.
+    select_all(&mut s, &[a]);
+    let e = s.execute("layer.align.leftEdges", json!({"to": "selection"})).unwrap_err().to_string();
+    assert!(e.contains("no selection to align to"), "one layer, no selection: {e}");
+    select_all(&mut s, &[a, b]);
+    let e = s.execute("layer.align.leftEdges", json!({"to": "selection"})).unwrap_err().to_string();
+    assert!(e.contains("no selection to align to"), "several layers, no selection: {e}");
+    // With one, both layers go to its left edge, in a single undoable step.
+    s.execute("select.rect", json!({"x": 50, "y": 40, "width": 30, "height": 30})).unwrap();
+    let steps = s.active().unwrap().history.entries().len();
+    s.execute("layer.align.leftEdges", json!({"to": "selection"})).unwrap();
+    assert_eq!(bounds(&s, a), Rect::new(50, 10, 60, 20));
+    assert_eq!(bounds(&s, b), Rect::new(50, 50, 80, 60));
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1, "both layers in one step");
+    s.undo();
+    assert_eq!(bounds(&s, a), Rect::new(10, 10, 20, 20), "one undo puts both back");
+    assert_eq!(bounds(&s, b), Rect::new(40, 50, 70, 60));
+    // Canvas: the canvas edge, not the selection's and not the layers' own union.
+    s.execute("layer.align.leftEdges", json!({"to": "canvas"})).unwrap();
+    assert_eq!(bounds(&s, a), Rect::new(0, 10, 10, 20), "to the canvas though a selection is active");
+    assert_eq!(bounds(&s, b), Rect::new(0, 50, 30, 60));
+    s.execute("select.deselect", json!({})).unwrap();
+    select_all(&mut s, &[b]);
+    s.execute("layer.align.rightEdges", json!({"to": "canvas"})).unwrap();
+    assert_eq!(bounds(&s, b), Rect::new(70, 50, 100, 60), "one layer to the canvas's right edge");
+}
+
 #[test]
 fn distribute_uneven_layers() {
     for depth in [8, 16, 32] {

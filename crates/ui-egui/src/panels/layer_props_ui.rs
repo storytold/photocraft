@@ -223,11 +223,13 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 
 /// The Align and Distribute section: its buttons run `layer.align.*` and `layer.distribute.*` on
 /// the selected layers (pushed onto `run`), greyed where the engine says they can't.
-fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(String, Value)>) {
+fn align_and_distribute(app: &mut PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(String, Value)>) {
     let t = Tokens::get(ui.ctx());
     if !section(ui, "align", tl!("Align and Distribute")) {
         return;
     }
+    ui.horizontal(|ui| crate::align_bar::align_to(app, ui));
+    let params = crate::align_bar::align_params(app);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (i, kind) in ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"].into_iter().enumerate() {
@@ -245,7 +247,7 @@ fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(S
             let tip = crate::i18n::fmt(tl!("Align {what}"), &[("what", tl!(&label))]);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &tip));
             if resp.on_hover_text(tip).clicked() {
-                run.push((id, json!({})));
+                run.push((id, params.clone()));
             }
         }
     });
@@ -431,5 +433,50 @@ mod tests {
         s.execute("layer.new.layer", json!({})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), u, 800.0), 0.5, "a pixel layer keeps half a pixel");
+    }
+
+    /// #10337: Align To Canvas aligns several selected layers to the canvas, not to each other;
+    /// Selection (the default) keeps aligning them to their own bounds.
+    #[test]
+    fn align_to_canvas_aligns_the_selected_layers_to_the_canvas() {
+        use egui_kittest::kittest::Queryable;
+        for canvas in [false, true] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+            let mut ids = Vec::new();
+            for x in [40, 90] {
+                ids.push(app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+                app.run("select.rect", json!({"x": x, "y": 30, "width": 20, "height": 20})).unwrap();
+                app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+                app.run("select.deselect", json!({})).unwrap();
+            }
+            app.run("layer.select", json!({"layer": ids[0], "mode": "add"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().cumulative_pass_nr() == 0 {
+                        PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                        return;
+                    }
+                    let state = app.session.active().unwrap();
+                    let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                    properties(app, ui, &layer);
+                },
+                app,
+            );
+            h.run_steps(3);
+            if canvas {
+                h.get_by_role(egui::accesskit::Role::ComboBox).click();
+                h.run_steps(3);
+                h.get_by_label("Canvas").click();
+                h.run_steps(3);
+                assert!(h.state().ui.tool_options.move_align_to_canvas, "the drop-down sets Align To Canvas");
+            }
+            h.get_by_label("Align Left Edges").click();
+            h.run_steps(3);
+            let st = h.state().session.active().unwrap();
+            let lefts: Vec<i32> =
+                ids.iter().map(|&id| st.doc.layer(photocraft_doc::LayerId(id)).and_then(|l| l.surface()).unwrap().content_bounds().x0).collect();
+            assert_eq!(lefts, if canvas { [0, 0] } else { [40, 40] }, "Align To Canvas: {canvas}");
+        }
     }
 }

@@ -486,24 +486,37 @@ pub(super) fn paste_to(id: &str, _: &Value) -> Option<Descriptor> {
     Some(d.with("AntA", enm("Annt", "Anno")))
 }
 
+/// An .atn Merge Visible step: the `Dplc` ("duplicate") flag tells Stamp Visible, which leaves
+/// the merged layers in place, from a plain Merge Visible.
 pub(super) fn merge_visible_from(d: &Descriptor) -> Mapped {
     none(if get_bool(d, "Dplc") == Some(true) { "layer.stampVisible" } else { "layer.mergeVisible" })
 }
 
+/// `layer.mergeVisible` and `layer.stampVisible` as an .atn step: the same event, told apart by
+/// the `Dplc` ("duplicate") flag that leaves the merged layers in place.
 pub(super) fn merge_visible_to(id: &str, _: &Value) -> Option<Descriptor> {
     Some(if id == "layer.stampVisible" { desc("null").with("Dplc", D::Boolean(true)) } else { desc("null") })
 }
 
+/// An .atn Align step to `layer.align.*`: the direction from the `Usng` enum, and Photoshop's
+/// `alignToCanvas` flag as `"to": "artboard"`, which is what that flag means here (#10337).
 pub(super) fn align_from(d: &Descriptor) -> Mapped {
     match get_enum(d, "Usng").and_then(|u| lookup(ALIGN, &u)) {
-        Some(a) => step(&format!("layer.align.{a}"), if get_bool(d, "alignToCanvas") == Some(true) { json!({"to": "canvas"}) } else { json!({}) }),
+        // Photoshop's one flag means "the board the layers sit on, else the canvas", which is
+        // `artboard` here; plain `canvas` is PhotoCraft's own and reads back as that (#10337).
+        Some(a) => step(&format!("layer.align.{a}"), if get_bool(d, "alignToCanvas") == Some(true) { json!({"to": "artboard"}) } else { json!({}) }),
         None => Mapped::Unsupported { harmless: false },
     }
 }
 
 pub(super) fn align_to(id: &str, p: &Value) -> Option<Descriptor> {
     let a = lookup_back(ALIGN, id.strip_prefix("layer.align.")?)?;
-    Some(desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", a)).with("alignToCanvas", D::Boolean(jstr(p, "to") == Some("canvas"))))
+    Some(
+        desc("null")
+            .with("null", target_ref("Lyr "))
+            .with("Usng", enm("ADSt", a))
+            .with("alignToCanvas", D::Boolean(matches!(jstr(p, "to"), Some("canvas" | "artboard")))),
+    )
 }
 
 pub(super) fn purge_from(d: &Descriptor) -> Mapped {

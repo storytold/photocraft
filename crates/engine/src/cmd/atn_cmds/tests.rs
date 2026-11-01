@@ -578,7 +578,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.stampVisible", json!({})),
         ("layer.mergeVisible", json!({})),
         ("layer.matting.defringe", json!({"width": 2})),
-        ("layer.align.leftEdges", json!({"to": "canvas"})),
+        ("layer.align.leftEdges", json!({"to": "artboard"})),
         ("select.inverse", json!({})),
         ("select.modify.feather", json!({"radius": 4})),
         ("select.modify.contract", json!({"radius": 1})),
@@ -785,6 +785,31 @@ fn every_mapped_command_exports_and_imports_back() {
             "the .atn table names an unknown command `{id}`"
         );
     }
+}
+
+/// Review on #10358: Photoshop's `.atn` holds one `alignToCanvas` flag, which means "the board
+/// the layers sit on, else the canvas" — `artboard` here, so that target survives the round trip.
+/// Plain `canvas` is PhotoCraft's own stricter target, which the file cannot say apart: it
+/// exports as the same flag and reads back as `artboard` (the same bounds wherever there is no
+/// artboard), rather than an artboard alignment silently becoming a canvas one.
+#[test]
+fn align_to_an_artboard_survives_the_atn_round_trip() {
+    let back = |to: &str| {
+        let item = export_item("layer.align.leftEdges", &json!({"to": to}), "S").expect("Align exports");
+        let d = item.descriptor.as_ref().expect("Align writes a descriptor");
+        assert_eq!(get_bool(d, "alignToCanvas"), Some(true), "{to}");
+        let e = event_for(&item.event).expect("the event is known");
+        match (e.from)(d) {
+            Mapped::Steps(steps) => steps[0].1.clone(),
+            Mapped::Unsupported { .. } => panic!("{to} does not import back"),
+        }
+    };
+    assert_eq!(back("artboard"), json!({"to": "artboard"}));
+    assert_eq!(back("canvas"), json!({"to": "artboard"}), "the file cannot hold the stricter canvas target");
+    // Without the flag it stays the default target.
+    let item = export_item("layer.align.leftEdges", &json!({}), "S").expect("Align exports");
+    let d = item.descriptor.as_ref().expect("Align writes a descriptor");
+    assert_eq!(get_bool(d, "alignToCanvas"), Some(false));
 }
 
 /// `paint.bucket` exported to .atn and imported back → its params, or None when it doesn't export.
