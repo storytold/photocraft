@@ -88,9 +88,13 @@ impl BarrelRightClick {
                     out.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers });
                 }
                 // The pointer left or the window lost focus with the press still down: it is over,
-                // so a later, unrelated left release stays a left release.
+                // so a later, unrelated left release stays a left release. egui keeps its buttons
+                // down through either event, so the right press is released here.
                 Event::PointerGone | Event::WindowFocused(false) => {
-                    self.press = None;
+                    if let Some(r) = self.press.take() {
+                        let pos = if r.dragging { self.last_pos.unwrap_or(r.origin) } else { r.origin };
+                        out.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers });
+                    }
                     out.push(e);
                 }
                 e => out.push(e),
@@ -202,13 +206,43 @@ mod tests {
         for end in [Event::PointerGone, Event::WindowFocused(false)] {
             let mut b = BarrelRightClick::default();
             run(&mut b, HELD, vec![button(50.0, PointerButton::Primary, true)]);
-            assert_eq!(run(&mut b, NONE, vec![end.clone()]), vec![end.clone()], "passed on");
+            assert_eq!(
+                run(&mut b, NONE, vec![end.clone()]),
+                vec![button(50.0, PointerButton::Secondary, false), end.clone()],
+                "the right press is released, and {end:?} passed on"
+            );
             // A later left release (the mouse, a new press) is not turned into a right one.
             assert_eq!(
                 run(&mut b, NONE, vec![button(60.0, PointerButton::Primary, false)]),
                 vec![button(60.0, PointerButton::Primary, false)],
                 "after {end:?}"
             );
+        }
+    }
+
+    /// A right-drag cut short by the pointer leaving or the window losing focus lets go of the
+    /// right button where the pen last was, so egui ends the drag instead of keeping it down.
+    #[test]
+    fn a_right_drag_that_ends_without_a_release_lets_go_of_the_right_button() {
+        for end in [Event::PointerGone, Event::WindowFocused(false)] {
+            let ctx = egui::Context::default();
+            let mut b = BarrelRightClick::default();
+            let frames: Vec<(BarrelInput, Vec<Event>)> = vec![
+                (HELD, vec![moved(50.0), button(50.0, PointerButton::Primary, true)]),
+                (STILL_HELD, vec![moved(80.0), moved(120.0)]),
+                (NONE, vec![end.clone()]),
+            ];
+            let mut down = Vec::new();
+            for (i, (input, mut events)) in frames.into_iter().enumerate() {
+                b.apply(input, &mut events, Modifiers::NONE);
+                if i == 2 {
+                    assert_eq!(events, vec![button(120.0, PointerButton::Secondary, false), end.clone()]);
+                }
+                let raw = egui::RawInput { time: Some(i as f64 * 0.1), events, ..Default::default() };
+                let mut out = ctx.run_ui(raw, |ui| down.push(ui.input(|i| i.pointer.secondary_down())));
+                out.textures_delta.clear();
+            }
+            assert_eq!(down, vec![true, true, false], "after {end:?}");
         }
     }
 
