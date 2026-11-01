@@ -3378,3 +3378,27 @@ fn smart_sharpen_amount_or_radius_in_another_unit_is_kept() {
         );
     }
 }
+
+/// `filter.sharpen.smartSharpen` takes an amount of 1..500 % and a radius of 0.1..64 px and
+/// rejects anything else. A step outside them would map and then fail when it plays, so it
+/// stays a Photoshop step, and a step outside them is not written either (#10610).
+#[test]
+fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
+    kept_when_wrong_typed("smartSharpen", &[("Amnt", pct(0.5)), ("Amnt", pct(500.5)), ("Rds ", px(0.05)), ("Rds ", px(64.5)), ("Rds", px(1000.0))]);
+    for (amount, radius) in [(1.0, 0.1), (500.0, 64.0)] {
+        let d = desc("null").with("Amnt", pct(amount)).with("Rds ", px(radius));
+        assert_eq!(
+            mapped(newer("smartSharpen", d)),
+            ("filter.sharpen.smartSharpen".into(), json!({"amount": amount, "radius": radius, "reduceNoise": 0})),
+            "{amount} {radius}"
+        );
+    }
+    for params in [
+        json!({"amount": 0.5, "reduceNoise": 0}),
+        json!({"amount": 501, "reduceNoise": 0}),
+        json!({"radius": 0.05, "reduceNoise": 0}),
+        json!({"radius": 65, "reduceNoise": 0}),
+    ] {
+        assert!(export_item("filter.sharpen.smartSharpen", &params, "S").is_none(), "{params} exported");
+    }
+}

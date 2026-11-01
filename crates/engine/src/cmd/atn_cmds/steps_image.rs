@@ -597,10 +597,16 @@ fn in_unit(unit: [u8; 4]) -> impl Fn(&D) -> Option<f64> {
     }
 }
 
+/// `filter.sharpen.smartSharpen`'s amount and radius limits, in `smart_sharpen_params`' key order.
+/// The command rejects a value outside them, so such a step keeps the Photoshop step on import
+/// and is refused on export, rather than mapping a step that fails when it plays.
+const SMART_SHARPEN_LIMITS: &[(&str, f64, f64)] = &[("amount", 1.0, 500.0), ("radius", 0.1, 64.0)];
+
 /// Smart Sharpen (`smartSharpen`), as Photoshop records it without its dialog: the legacy
 /// filter, removing Lens Blur, with no noise reduction (so `reduceNoise` is 0). A step that
 /// asks for what the command does not do (another blur, More Accurate, the newer filter, a
-/// preset), or an amount or radius in another unit, keeps it as a Photoshop step.
+/// preset), or an amount or radius in another unit or outside the command's limits, keeps it
+/// as a Photoshop step.
 pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
     match smart_sharpen_params(d) {
         Some(p) => step("filter.sharpen.smartSharpen", Value::Object(p)),
@@ -619,8 +625,9 @@ fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
         return None;
     }
     let mut p = Map::new();
-    for (key, param, unit, default) in [("Amnt", "amount", *b"#Prc", 200.0), ("Rds", "radius", PX, 1.0)] {
-        p.insert(param.into(), setting(d, key, in_unit(unit), default)?.into());
+    for ((key, unit, default), (param, min, max)) in [("Amnt", *b"#Prc", 200.0), ("Rds", PX, 1.0)].into_iter().zip(SMART_SHARPEN_LIMITS) {
+        let n = setting(d, key, in_unit(unit), default).filter(|n| (*min..=*max).contains(n))?;
+        p.insert((*param).into(), n.into());
     }
     p.insert("reduceNoise".into(), 0.into());
     Some(p)
@@ -634,7 +641,7 @@ pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
     }
     let num = |k: &str, default: f64| match p.get(k) {
         None | Some(Value::Null) => Some(default),
-        Some(v) => v.as_f64().filter(|n| n.is_finite()),
+        Some(v) => v.as_f64().filter(|n| SMART_SHARPEN_LIMITS.iter().any(|(param, min, max)| *param == k && (*min..=*max).contains(n))),
     };
     Some(
         desc("null")
