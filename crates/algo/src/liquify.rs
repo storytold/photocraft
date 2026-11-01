@@ -116,10 +116,11 @@ fn d_rate() -> f64 {
 ///
 /// A fourth number makes the point *live*: the milliseconds since the previous point, as the
 /// interactive dialog records them. A segment ending on a live point follows the pointer exactly
-/// (Forward Warp and Push Left apply all the motion so far instead of waiting for the next dab
-/// spacing) and the stationary tools work by elapsed time as well as distance, so the brush keeps
-/// working at the same speed when it moves slowly or the frame rate changes. Points without it
-/// (older strokes, scripts) replay exactly as they always have.
+/// (Forward Warp and Push Left also show the motion since their last dab, as a provisional dab
+/// taken back before the next point, instead of waiting for the next dab spacing) and the
+/// stationary tools work by elapsed time as well as distance, so the brush keeps working at the
+/// same speed when it moves slowly or the frame rate changes. Points without it (older strokes,
+/// scripts) replay exactly as they always have.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiquifyStroke {
@@ -192,8 +193,9 @@ pub struct LiquifyField {
     tail: Option<LiveTail>,
 }
 
-/// What a live segment's closing dab overwrote: the nodes from `(i0, j0)` to column `i1`, as they were
-/// (row-major, whole rows) and the document rectangle the dab touched.
+/// What a live segment's closing dab overwrote: the displacements `saved` of the nodes in columns
+/// `i0..=i1`, one row after another from row `j0`, as they were, and the document rectangle the
+/// dab touched.
 #[derive(Clone, Debug)]
 struct LiveTail {
     i0: usize,
