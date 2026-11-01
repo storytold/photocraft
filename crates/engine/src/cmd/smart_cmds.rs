@@ -313,7 +313,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartFilter.setParams",
             "Edit Smart Filter",
             &[],
-            r##"{"layer":id?,"index":u32?,"params":{…} (merged),"replace":bool?=false (params replace the filter's instead)}"##,
+            r##"{"layer":id?,"index":u32?,"params":{…} (merged),"replace":bool?=false (params are the filter's complete settings, an object: a missing key takes its default, invalid ones are refused; without it a non-object params still replaces)}"##,
             has_smart_filters,
             set_filter_params
         ),
