@@ -265,7 +265,7 @@ fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[C
 fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.horizontal_wrapped(|ui| {
+    ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
         ui.label(tl!("Show"));
         for m in NameMode::ALL {
             if ui.selectable_label(v.names == m, m.label()).clicked() {
@@ -319,7 +319,7 @@ fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &
             // horizontal_wrapped gives its first row the interact height; text rows are shorter,
             // so the first gap came out wider than the rest.
             ui.spacing_mut().interact_size.y = 0.0;
-            ui.horizontal_wrapped(|ui| {
+            ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
                 for c in &list {
                     link(app, ui, c, v.names);
                 }
@@ -493,7 +493,9 @@ fn header_cell(ui: &mut egui::Ui, t: &crate::theme::Tokens, label: &str, numeric
     let current = sort.flatten();
     let color = if sort.is_none() || current.is_some() || resp.hovered() { t.text } else { t.text_dim };
     let size = egui::TextStyle::Body.resolve(ui.style()).size;
-    let galley = ui.painter().layout_no_wrap(label.to_string(), crate::theme::semibold(size), color);
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), crate::theme::semibold(size), color);
+    job.direction = crate::direction::text_direction();
+    let galley = ui.painter().layout_job(job);
     let inner = rect.shrink2(egui::vec2(CELL_PAD, 0.0));
     let y = rect.center().y - galley.size().y / 2.0;
     let (text_x, arrow_x) = if hugs_the_right(numeric) {
@@ -594,6 +596,36 @@ fn models_body(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
 mod tests {
     use super::*;
     use egui_kittest::kittest::{NodeT, Queryable};
+
+    /// The toolbar row reads in reading order: the "Show" label hugs the row's reading-start
+    /// edge, left in LTR and right in RTL, and the item gaps stay equal in both directions.
+    #[test]
+    fn toolbar_row_mirrors_item_order_in_rtl() {
+        use crate::direction::{Dir, direction_scope};
+        fn items(dir: Dir) -> (egui::Rect, egui::Rect) {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
+                        let a = ui.label("Show");
+                        let b = ui.label("Sort");
+                        (a.rect, b.rect)
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner
+        }
+        let (ltr_a, ltr_b) = items(Dir::Ltr);
+        let (rtl_a, rtl_b) = items(Dir::Rtl);
+        assert!(ltr_a.left() < ltr_b.left(), "LTR: Show leads on the left: {ltr_a:?} then {ltr_b:?}");
+        assert!(rtl_b.left() < rtl_a.left(), "RTL: Show leads on the right: {rtl_a:?} then {rtl_b:?}");
+        let ltr_gap = ltr_b.left() - ltr_a.right();
+        let rtl_gap = rtl_a.left() - rtl_b.right();
+        assert!((ltr_gap - rtl_gap).abs() < 0.01, "same item gap in both directions: {ltr_gap} vs {rtl_gap}");
+    }
 
     fn c(login: &'static str, display: Option<&'static str>, real: Option<&'static str>, added: u64, deleted: u64, first: &'static str) -> Contributor {
         Contributor {
