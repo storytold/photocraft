@@ -420,6 +420,22 @@ fn native_dxgi_fast_path_preserves_the_d3d12_intel_decision() {
     assert_eq!(guarded.contains(&INTEL), original.contains(&INTEL));
 }
 
+/// The audited descriptor must match the Windows SDK ABI before GetDesc1 writes into it.
+/// Check both pointer widths so the vendor field stays at the documented byte offset.
+#[cfg(windows)]
+#[test]
+fn native_dxgi_adapter_descriptor_matches_the_sdk_layout() {
+    use std::mem::{align_of, offset_of, size_of};
+    use winsafe::DXGI_ADAPTER_DESC1;
+    assert_eq!(offset_of!(DXGI_ADAPTER_DESC1, VendorId), 256);
+    assert_eq!(offset_of!(DXGI_ADAPTER_DESC1, DedicatedVideoMemory), 272);
+    let (size, alignment, luid, flags) = if size_of::<usize>() == 8 { (312, 8, 296, 304) } else { (296, 4, 284, 292) };
+    assert_eq!(size_of::<DXGI_ADAPTER_DESC1>(), size);
+    assert_eq!(align_of::<DXGI_ADAPTER_DESC1>(), alignment);
+    assert_eq!(offset_of!(DXGI_ADAPTER_DESC1, AdapterLuid), luid);
+    assert_eq!(offset_of!(DXGI_ADAPTER_DESC1, flags), flags);
+}
+
 #[test]
 fn cpu_prefers_software_adapters() {
     use wgpu::{Backend as B, DeviceType as T};

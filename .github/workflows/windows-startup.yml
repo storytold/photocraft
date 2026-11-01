@@ -1,0 +1,77 @@
+name: Windows GPU startup
+
+on:
+  push:
+    paths:
+      - .github/workflows/windows-startup.yml
+      - .github/scripts/windows-startup.ps1
+      - apps/photocraft/src/gpu_startup.rs
+      - apps/photocraft/src/gpu_startup/**
+      - apps/photocraft/Cargo.toml
+      - Cargo.toml
+      - Cargo.lock
+      - docs/windows-dxgi-audit.md
+  pull_request:
+    paths:
+      - .github/workflows/windows-startup.yml
+      - .github/scripts/windows-startup.ps1
+      - apps/photocraft/src/gpu_startup.rs
+      - apps/photocraft/src/gpu_startup/**
+      - apps/photocraft/Cargo.toml
+      - Cargo.toml
+      - Cargo.lock
+      - docs/windows-dxgi-audit.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-startup-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Build and test native Windows startup
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      RUST_BACKTRACE: "1"
+      PHOTOCRAFT_NO_PRINT: "1"
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Optional, public comparison commit. A fork can enable the one-off loader audit without
+      # making every upstream run rebuild a historical revision. Never used as shell source.
+      PHOTOCRAFT_STARTUP_IMPORT_BASELINE: ${{ vars.PHOTOCRAFT_STARTUP_IMPORT_BASELINE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.95.0
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: windows-startup
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Build, smoke-test, and run all desktop unit tests at the PR head
+        shell: pwsh
+        run: ./.github/scripts/windows-startup.ps1
+
+      - name: Upload build, test, and import evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-startup-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            target/windows-startup-ci/*.txt
+            target/windows-startup-ci/*.json
+          if-no-files-found: warn
+          retention-days: 14
