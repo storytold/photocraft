@@ -2,6 +2,27 @@ use super::*;
 
 const B: [f64; 4] = [10.0, 20.0, 110.0, 70.0];
 
+/// Construction and file-data validation agree on the last allowed patch count.
+#[test]
+fn mesh_construction_and_validation_share_the_grid_limit() {
+    let max = BezierMesh::MAX_PATCHES_PER_AXIS;
+    assert_eq!(max, 64, "keep the existing serialized mesh limit");
+    for (cols, rows) in [(usize::MAX, 1), (1, usize::MAX)] {
+        let mesh = BezierMesh::identity(B, cols, rows);
+        assert_eq!((mesh.us.len(), mesh.vs.len()), (cols.min(max) + 1, rows.min(max) + 1));
+        assert!(mesh.is_valid());
+    }
+    // Bypass identity's clamp to model oversized serialized data, with otherwise
+    // valid knots and control points. Reject excess columns and rows independently.
+    for (cols, rows) in [(max + 1, 1), (1, max + 1)] {
+        let us = (0..=cols).map(|i| i as f64 / cols as f64).collect();
+        let vs = (0..=rows).map(|i| i as f64 / rows as f64).collect();
+        let mesh = BezierMesh::fit(&|s, t| [s, t], us, vs);
+        assert_eq!(mesh.points.len(), mesh.nx() * mesh.ny());
+        assert!(!mesh.is_valid());
+    }
+}
+
 /// Refused splits preserve a mesh at the 64-patch limit while the other axis stays editable.
 #[test]
 fn splitting_at_the_grid_limit_preserves_a_valid_mesh() {
