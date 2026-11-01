@@ -410,9 +410,13 @@ pub fn read_with(
     // The Alt branches take [`alt_gesture`], so Ctrl + Alt (Windows' ctrl + command mirror) counts
     // as Alt here too, and the ⇧-snap branches stay as they were. `latest_shift` above keeps its
     // stricter test, so a Ctrl + Alt + ⇧ notch is dropped by the alt branch (`!m.shift`) and the
-    // snap branch never takes it either: that combination is a dead gesture, pinned in
-    // `wheel_nav/tests.rs`. Which Photoshop gesture it should be is open on #10488 - do not quietly
-    // "fix" it in passing without measured evidence for the choice.
+    // snap branch never takes it either. With Zoom with Scroll Wheel off that combination is a dead
+    // gesture; with the preference on it zooms nothing either - `alt != zoom_with_wheel` is false,
+    // the zoom arms are skipped, and the notch reaches the view as a plain pan through egui's own
+    // smoothed scroll delta (one notch = 40 points, no zoom, no snap, in either Animated Zoom
+    // mode). All four preference combinations are pinned in `wheel_nav/tests.rs`. Which Photoshop
+    // gesture it should be is open on #10488 - do not quietly "fix" it in passing without measured
+    // evidence for the choice.
     // `instant`: the part of `raw` egui leaves unsmoothed (a trackpad; see `wheel_events`).
     let (raw, instant) = wheel
         .iter()

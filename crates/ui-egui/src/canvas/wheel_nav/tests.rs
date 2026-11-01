@@ -644,21 +644,35 @@ fn each_modifier_maps_like_photoshop() {
     // Zoom with Scroll Wheel off, Animated Zoom off. Asserting the claimed continuous zoom first
     // failed exactly that way:
     // "Ctrl + ⌥ + ⇧ + wheel zooms 10%, at once: [0.0 0.0] 1 snaps 0".
-    // What follows pins what the code does today (nothing at all, in either Animated Zoom mode) so
-    // the gesture cannot change silently; whether it should zoom like ⌥ + wheel or behave exactly
-    // like ⌥ + ⇧ (snap) is the open question for the maintainer on #10488 - this repo has no
-    // measured Photoshop evidence for the combination, so no behaviour was invented here.
+    // Review 4433950859: those two assertions and that "nothing at all" only hold with Zoom with
+    // Scroll Wheel OFF, and the comment, the parity row and the wheel_nav.rs filter comment stated
+    // the no-action result without that condition. With the preference ON, `alt != zoom_with_wheel`
+    // is false, the zoom arms are skipped, and the notch reaches the view through egui's own
+    // smoothed scroll delta (which the `raw` filter never gates) as a plain pan. Measured over a
+    // second with one notch: pan [0.0 40.0], zoom 1.0, snaps 0 - with Animated Zoom off AND on (it
+    // only spreads the same 40 points over later frames). The four combinations below pin all of it
+    // so the gesture cannot change silently; whether it should zoom like ⌥ + wheel or behave
+    // exactly like ⌥ + ⇧ (snap) is the open question for the maintainer on #10488 - this repo has
+    // no measured Photoshop evidence for the combination, so no behaviour was invented here.
     let ctrl_alt_shift = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
     let (pan, zoom, snaps) = one(ctrl_alt_shift);
-    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "Ctrl + ⌥ + ⇧ + wheel is a dead gesture today: {pan:?} {zoom} snaps {snaps}");
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "Ctrl + ⌥ + ⇧ + wheel is dead with Zoom with Scroll Wheel off: {pan:?} {zoom} snaps {snaps}");
     let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], false, false, true);
-    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and stays dead with Animated Zoom on: {pan:?} {zoom} snaps {snaps}");
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and stays dead with the preference off, Animated Zoom on: {pan:?} {zoom} snaps {snaps}");
+    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, false);
+    assert!(
+        near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0,
+        "with the preference on it pans through the scroll fallback: {pan:?} {zoom} snaps {snaps}"
+    );
+    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, true);
+    assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0, "eased with Animated Zoom on, the same 40 points: {pan:?} {zoom} snaps {snaps}");
     // Without the Windows ctrl mirror the same wheel does snap, so only the ctrl half kills it.
     let (pan, zoom, snaps) = one(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
     assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 1, "⌥ + ⇧ + wheel still snaps: {pan:?} {zoom} snaps {snaps}");
     // macOS ⌘ + ⌥ (command set, ctrl not) is deliberately NOT the zoom gesture: it is left to egui's
-    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the row above: it is not
-    // even a scroll), and which of the two readings is right is the open question on #10488.
+    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the rows above: with Zoom
+    // with Scroll Wheel off it is not even a scroll; with the preference on the notch pans), and
+    // which of the two readings is right is the open question on #10488.
     let (pan, zoom, _) = one(Modifiers { alt: true, ..CMD });
     assert!(zoom == 1.0 && pan != Vec2::ZERO, "⌘ + ⌥ + wheel keeps scrolling: {pan:?} {zoom}");
 }
