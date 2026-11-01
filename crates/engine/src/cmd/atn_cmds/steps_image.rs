@@ -290,24 +290,7 @@ const REFINE_OUTPUT: &[(&str, &str)] = &[
     ("selectionOutputToSelection", "selection"),
 ];
 
-/// Filter Gallery effects (`GEfc` with the effect in `GEfk`): Photoshop's effect code, the
-/// command, and its fields. A stack of several effects stays unsupported.
-const GALLERY: &[(&str, &str, &[F])] = &[("Spt", "filter.gallery.spatter", &[F("SprR", "sprayRadius", Kind::Long), F("Smth", "smoothness", Kind::Long)])];
-
-pub(super) const GALLERY_IDS: &[&str] = &["filter.gallery.spatter"];
-
-pub(super) fn gallery_from(d: &Descriptor) -> Mapped {
-    let Some(effect) = get_enum(d, "GEfk") else { return Mapped::Unsupported { harmless: false } };
-    match GALLERY.iter().find(|(code, _, _)| *code == effect).and_then(|(_, id, fields)| Some((*id, fields_from(d, fields)?))) {
-        Some((id, p)) => step(id, Value::Object(p)),
-        None => Mapped::Unsupported { harmless: false },
-    }
-}
-
-pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
-    let (code, _, fields) = GALLERY.iter().find(|(_, cmd, _)| *cmd == id)?;
-    fields_to(p, fields, desc("null").with("GEfk", enm("GEft", code)))
-}
+pub(super) use super::steps_gallery::{GALLERY_IDS, gallery_from, gallery_to};
 
 /// Select and Mask as Photoshop CC 2015.5 and later record it (`smartBrushWorkspace`); the
 /// older Refine Edge event is [`REFINE_EDGE`], which is also what Select and Mask exports as.

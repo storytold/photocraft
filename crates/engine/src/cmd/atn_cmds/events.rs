@@ -619,6 +619,8 @@ pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
     let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id);
     find(&id).or_else(|| match item {
+        // An effect run from its own menu item records its id as the event (#10592).
+        AtnEvent::Code(_) if super::steps_gallery::is_effect(&id) => find("filterGallery"),
         AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
         AtnEvent::Name(_) => None,
     })
