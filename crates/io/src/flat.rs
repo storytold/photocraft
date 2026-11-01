@@ -398,7 +398,9 @@ fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<Im
     let mut s = image_surface(img, f.layout, f.sample)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
-    if img.layout().has_alpha() { s.prune(); }
+    if img.layout().has_alpha() {
+        s.prune();
+    }
     let mut r = single_layer_document(name, img.dimensions(), f, img.layout().has_alpha(), s, img.icc.clone(), img.meta.clone(), warnings);
     r.warnings.extend(crate::tiff_layers::channels_from_extras(&mut r.document, img));
     Ok(r)
