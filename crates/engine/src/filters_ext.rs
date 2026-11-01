@@ -287,8 +287,10 @@ fn displace(p: &Value) -> FilterParams {
         vertical: f(p, "vertical", 10.0).clamp(-999.0, 999.0),
         stretch: s(p, "fit", "stretch") != "tile",
         undefined: undefined(p, "repeat"),
-        // PSD imports carry the map, and `mapPath` or `mapDocument` resolve later.
+        // PSD imports carry the map, and `mapPath` or `mapDocument` resolve later. An embedded map
+        // is 8-bit.
         map: photocraft_io::smart_map::displace_embedded_map(p),
+        map_8bit: true,
     }
 }
 
@@ -489,8 +491,8 @@ pub(crate) fn prepare(s: &Session, id: &str, p: &Value) -> Value {
     out
 }
 
-/// A flattened document (or one of its layers) as an RGBA map image.
-fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> {
+/// A flattened document (or one of its layers) as an RGBA map image, and whether it is 8-bit.
+fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<(algo::Image, bool)> {
     let buf = match layer.and_then(|l| doc.layer(photocraft_doc::LayerId(l))) {
         Some(l) => photocraft_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds())),
         None => photocraft_compose::flatten(doc),
@@ -498,7 +500,8 @@ fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> 
     if buf.rect.is_empty() {
         return None;
     }
-    Some(algo::Image { rect: buf.rect, ch: 4, data: buf.px.iter().flatten().copied().collect() })
+    let img = algo::Image { rect: buf.rect, ch: 4, data: buf.px.iter().flatten().copied().collect() };
+    Some((img, doc.depth == photocraft_color::SampleType::U8))
 }
 
 /// Resolves inputs that live outside the target layer: Displace's map (`mapPath`, or
@@ -515,7 +518,7 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
         *depth_map = Some(Arc::new(algo::Image::read(surface, doc.bounds())));
         return Ok(());
     }
-    let FilterParams::Displace { map, .. } = fp else { return Ok(()) };
+    let FilterParams::Displace { map, map_8bit, .. } = fp else { return Ok(()) };
     if map.is_some() {
         return Ok(());
     }
@@ -533,7 +536,8 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
     } else {
         return Err(EngineError::Other("Displace needs a displacement map: pass `mapPath` or `mapDocument`".into()));
     };
-    *map = Some(Arc::new(img.ok_or_else(|| EngineError::Other("the displacement map is empty".into()))?));
+    let (img, levels) = img.ok_or_else(|| EngineError::Other("the displacement map is empty".into()))?;
+    (*map, *map_8bit) = (Some(Arc::new(img)), levels);
     Ok(())
 }
 
@@ -554,8 +558,8 @@ pub(crate) fn map_document(p: &Value) -> Option<&Value> {
     p.get("mapDocument").filter(|d| !d.is_null() && d.as_i64().is_none_or(|i| i >= 0))
 }
 
-/// Displace's map read from a file (flattened, or its `mapLayer`).
-fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<algo::Image>> {
+/// Displace's map read from a file (flattened, or its `mapLayer`), and whether it is 8-bit.
+fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<(algo::Image, bool)>> {
     let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
     let imported = crate::file_cmds::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
     Ok(map_from_document(&imported, layer))
@@ -566,12 +570,14 @@ fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<algo::Image>> 
 /// through. The path is stored in the document, so it is followed only as
 /// [`crate::doc_path::resolve`] allows. `mapDocument` needs the session and is left unresolved.
 pub(crate) fn resolve_map_path(fp: &mut FilterParams, p: &Value) -> Result<()> {
-    if let FilterParams::Displace { map, .. } = fp
+    if let FilterParams::Displace { map, map_8bit, .. } = fp
         && map.is_none()
         && let Some(path) = map_path(p)
     {
         let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the displacement map", path, why))?;
-        *map = map_from_path(&file.to_string_lossy(), p.get("mapLayer").and_then(Value::as_u64))?.map(Arc::new);
+        if let Some((img, levels)) = map_from_path(&file.to_string_lossy(), p.get("mapLayer").and_then(Value::as_u64))? {
+            (*map, *map_8bit) = (Some(Arc::new(img)), levels);
+        }
     }
     Ok(())
 }

@@ -59,7 +59,14 @@ fn new_filters() -> Vec<FilterParams> {
         FilterParams::TraceContour { level: 128.0, upper: true },
         FilterParams::Wind { method: WindMethod::Blast, from_right: false, seed: 7 },
         FilterParams::Wind { method: WindMethod::Stagger, from_right: true, seed: 7 },
-        FilterParams::Displace { horizontal: 10.0, vertical: 10.0, stretch: true, undefined: UndefinedAreas::Wrap, map: Some(map_image([0.8, 0.3, 0.5, 1.0])) },
+        FilterParams::Displace {
+            horizontal: 10.0,
+            vertical: 10.0,
+            stretch: true,
+            undefined: UndefinedAreas::Wrap,
+            map: Some(map_image([0.8, 0.3, 0.5, 1.0])),
+            map_8bit: true,
+        },
         FilterParams::Shear { points: vec![[0.0, 0.0], [0.5, 0.3], [1.0, 0.0]], undefined: UndefinedAreas::Repeat },
         FilterParams::ZigZag { amount: 50.0, ridges: 4.0, style: ZigZagStyle::PondRipples },
         FilterParams::Fibers { variance: 16.0, strength: 4.0, seed: 8, foreground: BLACK, background: WHITE },
@@ -212,7 +219,7 @@ fn new_params_serde_roundtrip() {
         // Caller-supplied maps are not serialized.
         let strip = |p: &FilterParams| match p.clone() {
             FilterParams::Displace { horizontal, vertical, stretch, undefined, .. } => {
-                FilterParams::Displace { horizontal, vertical, stretch, undefined, map: None }
+                FilterParams::Displace { horizontal, vertical, stretch, undefined, map: None, map_8bit: false }
             }
             other => other,
         };
@@ -224,8 +231,15 @@ fn new_params_serde_roundtrip() {
 fn identities_at_zero_strength() {
     let s = pattern(SampleType::U8, R);
     let cases = vec![
-        FilterParams::Displace { horizontal: 0.0, vertical: 0.0, stretch: true, undefined: UndefinedAreas::Wrap, map: Some(map_image([0.9, 0.1, 0.0, 1.0])) },
-        FilterParams::Displace { horizontal: 50.0, vertical: 50.0, stretch: true, undefined: UndefinedAreas::Wrap, map: None },
+        FilterParams::Displace {
+            horizontal: 0.0,
+            vertical: 0.0,
+            stretch: true,
+            undefined: UndefinedAreas::Wrap,
+            map: Some(map_image([0.9, 0.1, 0.0, 1.0])),
+            map_8bit: true,
+        },
+        FilterParams::Displace { horizontal: 50.0, vertical: 50.0, stretch: true, undefined: UndefinedAreas::Wrap, map: None, map_8bit: true },
         FilterParams::Shear { points: vec![[0.0, 0.0], [1.0, 0.0]], undefined: UndefinedAreas::Wrap },
         FilterParams::ZigZag { amount: 0.0, ridges: 5.0, style: ZigZagStyle::AroundCenter },
         FilterParams::Custom { kernel: (0..25).map(|i| if i == 12 { 1.0 } else { 0.0 }).collect(), scale: 1.0, offset: 0.0 },
@@ -698,16 +712,146 @@ fn ntsc_limits_saturated_colours_only() {
 #[test]
 fn displace_shifts_by_map_and_shear_by_curve() {
     let s = pattern(SampleType::F32, R);
-    let v = 0.5 + 3.0 / 64.0;
+    // Level 140: 12 levels over Photoshop's zero (128), a 128th each of 25 % of 128 px = 3 px.
+    let v = 140.0 / 255.0;
     let out = run(
         &s,
-        &FilterParams::Displace { horizontal: 25.0, vertical: 0.0, stretch: false, undefined: UndefinedAreas::Wrap, map: Some(map_image([v, 0.5, 0.5, 1.0])) },
+        &FilterParams::Displace {
+            horizontal: 25.0,
+            vertical: 0.0,
+            stretch: false,
+            undefined: UndefinedAreas::Wrap,
+            map: Some(map_image([v, 0.5, 0.5, 1.0])),
+            map_8bit: true,
+        },
     );
     for x in 0..30 {
         assert_eq!(out.pixel(x, 7), s.pixel(x + 3, 7), "x={x}");
     }
     let sh = run(&s, &FilterParams::Shear { points: vec![[0.0, 0.1], [1.0, 0.1]], undefined: UndefinedAreas::Wrap });
     assert_eq!(sh.pixel(10, 4), s.pixel(8, 4));
+}
+
+/// #10444: Photoshop 2025, Displace at 100 % with constant maps on a synthetic image: level 160
+/// moves 32 px and level 96 moves -32 px, level 128 not at all.
+#[test]
+fn displace_moves_one_pixel_per_level_from_128_at_100_percent() {
+    let s = pattern(SampleType::F32, R);
+    for (level, dx) in [(160.0f32, 32i32), (96.0, -32), (128.0, 0)] {
+        let out = run(
+            &s,
+            &FilterParams::Displace {
+                horizontal: 100.0,
+                vertical: 0.0,
+                stretch: true,
+                undefined: UndefinedAreas::Wrap,
+                map: Some(map_image([level / 255.0, 0.5, 0.5, 1.0])),
+                map_8bit: true,
+            },
+        );
+        let w = R.width() as i32;
+        for x in 0..w {
+            assert_eq!(out.pixel(x, 7), s.pixel((x + dx).rem_euclid(w), 7), "level {level} at x={x}");
+        }
+    }
+}
+
+/// A 16- or 32-bit map has no level 128: its zero is its exact mid-grey, half, and a quarter
+/// over it moves half the full shift (64 px at 100 %).
+#[test]
+fn displace_reads_half_as_zero_on_deeper_maps() {
+    let s = pattern(SampleType::F32, R);
+    for (m, dx) in [(0.5f32, 0i32), (0.75, 64), (0.25, -64)] {
+        let out = run(
+            &s,
+            &FilterParams::Displace {
+                horizontal: 100.0,
+                vertical: 100.0,
+                stretch: true,
+                undefined: UndefinedAreas::Wrap,
+                map: Some(map_image([m, 0.5, 0.5, 1.0])),
+                map_8bit: false,
+            },
+        );
+        let w = R.width() as i32;
+        for y in 0..R.height() as i32 {
+            for x in 0..w {
+                assert_eq!(out.pixel(x, y), s.pixel((x + dx).rem_euclid(w), y), "map {m} at ({x}, {y})");
+            }
+        }
+    }
+}
+
+/// A layer with a pixel far past the canvas frames Displace over the canvas and that pixel
+/// (#10444), but the map moves pixels by at most the full shift: only the canvas grown by it is
+/// read, not the gap to the pixel, and the canvas's pixels come out as with a near one.
+/// #10462 review: the algorithm API bounds Displace's scale itself (the engine's ±999 %), so a
+/// huge or non-finite scale can't overflow the read's reach or ask for a vast source.
+#[test]
+fn displace_bounds_its_scale_through_the_algorithm_api() {
+    let s = pattern(SampleType::F32, R);
+    for scale in [1e30, -1e30, f32::INFINITY, f32::NAN] {
+        let p = FilterParams::Displace {
+            horizontal: scale,
+            vertical: 0.0,
+            stretch: false,
+            undefined: UndefinedAreas::Repeat,
+            map: Some(map_image([1.0, 0.5, 0.5, 1.0])),
+            map_8bit: true,
+        };
+        let rect = crate::global_source(&s, &p, R, R).rect;
+        assert!(rect.contains_rect(&R) && rect.width() <= R.width() + 2 * (1279 + 3), "{scale}: {rect:?}");
+    }
+}
+
+#[test]
+fn displace_reads_only_the_pixels_its_map_reaches() {
+    let displace = |undefined| FilterParams::Displace {
+        horizontal: 10.0,
+        vertical: 10.0,
+        stretch: false,
+        undefined,
+        map: Some(map_image([100.0 / 255.0, 150.0 / 255.0, 0.5, 1.0])),
+        map_8bit: true,
+    };
+    let with_pixel_at = |x: i32| {
+        let mut s = pattern(SampleType::F32, R);
+        s.write_pixel(x, 3, &[1.0, 0.0, 0.0, 1.0]);
+        s
+    };
+    let (far, near) = (with_pixel_at(1_000_000), with_pixel_at(R.x1 + 100));
+    for undefined in [UndefinedAreas::Wrap, UndefinedAreas::Repeat, UndefinedAreas::Transparent] {
+        let p = displace(undefined);
+        let frame = R.union(&far.content_bounds());
+        // 10 % of 128 px, and the bilinear neighbours.
+        assert_eq!(crate::global_source(&far, &p, R, frame).rect, R.inflate(15), "{undefined:?}");
+        // Wrapping reads the far side, where the pixels differ.
+        if undefined != UndefinedAreas::Wrap {
+            let run = |s: &Surface| apply_in(s, &p, R, R.union(&s.content_bounds()), None, R.union(&s.content_bounds())).read_region(R);
+            assert_eq!(run(&far), run(&near), "{undefined:?}");
+        }
+    }
+}
+
+/// [`distort2::displace_source`] fills in the frame's undefined areas as sampling the whole frame
+/// with them did: wrapping reads the frame's far side, repeating its edge, transparency nothing.
+#[test]
+fn displace_source_fills_in_the_frames_undefined_areas() {
+    let mut s = pattern(SampleType::F32, R);
+    s.write_pixel(90, 3, &[1.0, 0.0, 0.0, 1.0]);
+    let frame = R.union(&s.content_bounds());
+    let full = Image::read(&s, frame);
+    for undefined in [UndefinedAreas::Wrap, UndefinedAreas::Repeat, UndefinedAreas::Transparent] {
+        let src = crate::distort2::displace_source(&s, R, frame, (10.0, -10.0), undefined);
+        assert_eq!(src.rect, R.inflate(15));
+        let edge = crate::other::edge_of(undefined);
+        for y in src.rect.y0..src.rect.y1 {
+            for x in src.rect.x0..src.rect.x1 {
+                let want: Vec<f32> = (0..src.ch).map(|c| full.get_edge(x, y, c, edge, frame)).collect();
+                assert_eq!(src.px(x, y), want.as_slice(), "{undefined:?} at ({x}, {y})");
+            }
+        }
+    }
 }
 
 #[test]

@@ -187,24 +187,49 @@ fn fibers_fill_an_empty_layer() {
 
 #[test]
 fn displace_reads_another_document() {
-    let mut s = session();
-    // Map document: a flat colour that shifts 3 px right at 25 % (see the algo test).
-    s.execute("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
-    let v = 0.5 + 3.0 / 64.0;
-    s.edit("map", |doc, _| {
-        let bg = doc.layers[0].id;
-        doc.layer_mut(bg).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[v, 0.5, 0.5, 1.0]);
-        Ok(())
-    })
-    .unwrap();
-    s.set_active(0);
-    let before = pixels(&s);
-    assert!(s.execute("filter.distort.displace", json!({})).is_err(), "needs a map");
-    s.execute("filter.distort.displace", json!({"mapDocument": 1, "horizontal": 25, "vertical": 0, "fit": "tile", "undefinedAreas": "wrap"})).unwrap();
-    let after = pixels(&s);
-    let at = |v: &[f32], x: usize, y: usize| v[(y * 48 + x) * 4];
-    for x in 5..40 {
-        assert!((at(&after, x, 10) - at(&before, x + 3, 10)).abs() < 1e-2, "x={x}");
+    // Map documents: a flat colour that shifts 3 px right at 25 % (see the algo test): on an 8-bit
+    // map level 140, 12 over Photoshop's zero; on a 32-bit one 3/64 over half.
+    for (depth, v) in [(8, 140.0 / 255.0), (32, 0.5 + 3.0 / 64.0)] {
+        let mut s = session();
+        s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+        s.edit("map", |doc, _| {
+            let bg = doc.layers[0].id;
+            doc.layer_mut(bg).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[v, 0.5, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.set_active(0);
+        let before = pixels(&s);
+        assert!(s.execute("filter.distort.displace", json!({})).is_err(), "needs a map");
+        s.execute("filter.distort.displace", json!({"mapDocument": 1, "horizontal": 25, "vertical": 0, "fit": "tile", "undefinedAreas": "wrap"})).unwrap();
+        let after = pixels(&s);
+        let at = |v: &[f32], x: usize, y: usize| v[(y * 48 + x) * 4];
+        for x in 5..40 {
+            assert!((at(&after, x, 10) - at(&before, x + 3, 10)).abs() < 1e-2, "{depth}-bit map, x={x}");
+        }
+    }
+}
+
+/// A map's zero: level 128 on an 8-bit map, as Photoshop's, and half on a 16- or 32-bit one,
+/// which has no level 128. Read as level 127.5 of 255, half moved 0.5 px at 100 %.
+#[test]
+fn displace_map_zero_follows_its_depth() {
+    for (depth, v) in [(8, 128.0 / 255.0), (16, 0.5), (32, 0.5)] {
+        let mut s = session();
+        s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+        s.edit("map", |doc, _| {
+            let bg = doc.layers[0].id;
+            doc.layer_mut(bg).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[v, v, v, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.set_active(0);
+        let before = pixels(&s);
+        s.execute("filter.distort.displace", json!({"mapDocument": 1, "horizontal": 100, "vertical": 100, "fit": "stretch", "undefinedAreas": "wrap"}))
+            .unwrap();
+        let after = pixels(&s);
+        let worst = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 1e-2, "{depth}-bit map at its zero moved pixels: off by {worst}");
     }
 }
 

@@ -213,7 +213,16 @@ pub fn apply_filter_to_surface(
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
-    Ok(Some(algo::apply_in(surf, &fp, area, bounds, selection, canvas.union(&content))))
+    let frame = distort_frame(id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+    Ok(Some(algo::apply_in(surf, &fp, area, frame, selection, canvas.union(&content))))
+}
+
+/// The frame of filter `id` on pixels covering `content`: without a selection, Displace frames the
+/// canvas and the layer's pixels past it, as Photoshop does: it stretches or tiles its map over
+/// them and repeats their edge pixels (#10444). Anything else keeps `bounds`, the selection's or
+/// the canvas. The output area is unchanged.
+fn distort_frame(id: &str, bounds: photocraft_geom::Rect, content: photocraft_geom::Rect, selected: bool) -> photocraft_geom::Rect {
+    if selected || content.is_empty() || id != "filter.distort.displace" { bounds } else { bounds.union(&content) }
 }
 
 pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), String> {
@@ -347,7 +356,8 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             let before = locks.transparency.then(|| surf.clone());
             let content = surf.content_bounds();
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
-            *surf = filter(surf, &fp, area, bounds, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
+            let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+            *surf = filter(surf, &fp, area, frame, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
             if let Some(before) = &before {
                 keep_alpha(before, surf, &|| ctx.cancelled())?;
             }
