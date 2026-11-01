@@ -600,17 +600,21 @@ mod rtl_row_twin {
         let rtl = harness(Dir::Rtl);
         let ltr_label = ltr.get_by_label("Eyedroppers:").rect();
         let ltr_black = ltr.get_by_label("Set Black Point").rect();
+        let ltr_gray = ltr.get_by_label("Set Neutral Gray Point").rect();
         let ltr_white = ltr.get_by_label("Set White Point").rect();
-        assert!(ltr_label.right() <= ltr_black.left() && ltr_black.left() < ltr_white.left(), "LTR order: {ltr_label:?} {ltr_black:?} {ltr_white:?}");
-        let ltr_gap = (ltr_black.left() - ltr_label.right()).min(ltr_white.left() - ltr_black.right());
-        let ltr_gap2 = (ltr_black.left() - ltr_label.right()).max(ltr_white.left() - ltr_black.right());
+        assert!(ltr_label.right() <= ltr_black.left() && ltr_black.left() < ltr_gray.left() && ltr_gray.left() < ltr_white.left(), "LTR order: {ltr_label:?} {ltr_black:?} {ltr_gray:?} {ltr_white:?}");
+        let ltr_gaps = [ltr_black.left() - ltr_label.right(), ltr_gray.left() - ltr_black.right(), ltr_white.left() - ltr_gray.right()];
+        let ltr_gap = ltr_gaps.iter().fold(f32::INFINITY, |a, b| a.min(*b));
+        let ltr_gap2 = ltr_gaps.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b));
         assert!((ltr_gap - ltr_gap2).abs() < 1.0, "LTR gaps equal: {ltr_gap} vs {ltr_gap2}");
         let rtl_label = rtl.get_by_label("Eyedroppers:").rect();
         let rtl_black = rtl.get_by_label("Set Black Point").rect();
+        let rtl_gray = rtl.get_by_label("Set Neutral Gray Point").rect();
         let rtl_white = rtl.get_by_label("Set White Point").rect();
-        assert!(rtl_label.left() >= rtl_black.right() && rtl_black.left() > rtl_white.left(), "RTL mirrors: {rtl_label:?} {rtl_black:?} {rtl_white:?}");
-        let rtl_gap = (rtl_label.left() - rtl_black.right()).min(rtl_black.left() - rtl_white.right());
-        let rtl_gap2 = (rtl_label.left() - rtl_black.right()).max(rtl_black.left() - rtl_white.right());
+        assert!(rtl_label.left() >= rtl_black.right() && rtl_black.left() > rtl_gray.left() && rtl_gray.left() > rtl_white.left(), "RTL mirrors: {rtl_label:?} {rtl_black:?} {rtl_gray:?} {rtl_white:?}");
+        let rtl_gaps = [rtl_label.left() - rtl_black.right(), rtl_black.left() - rtl_gray.right(), rtl_gray.left() - rtl_white.right()];
+        let rtl_gap = rtl_gaps.iter().fold(f32::INFINITY, |a, b| a.min(*b));
+        let rtl_gap2 = rtl_gaps.iter().fold(f32::NEG_INFINITY, |a, b| a.max(*b));
         assert!((rtl_gap - rtl_gap2).abs() < 1.0 && (ltr_gap - rtl_gap).abs() < 1.0, "gaps equal and mirrored: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
