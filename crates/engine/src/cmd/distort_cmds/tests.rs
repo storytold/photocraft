@@ -723,6 +723,12 @@ fn puppet_warp_warps_a_targeted_mask_and_refuses_a_missing_one() {
     assert_eq!(warped.format(), mask.format(), "the mask stays a one-channel mask");
     let canvas = s.active().unwrap().doc.bounds();
     assert_ne!(warped.read_region(canvas), mask.read_region(canvas), "the mask is warped");
+    // The pins pull the revealed block's right side down: the strip it vacates along the block's
+    // top edge takes the mask's default (black for Reveal Selection), not the white it held.
+    let default = mask.default_pixel()[0];
+    let vacated = Rect::new(40, 15, 50, 16);
+    assert!(mask.read_region(vacated).iter().all(|&v| v != default), "the strip held content: {:?}", mask.read_region(vacated));
+    assert!(warped.read_region(vacated).iter().all(|&v| v == default), "vacated: {:?}", warped.read_region(vacated));
     // No mask: refused before it runs, and nothing is recorded.
     let mut s = session(8);
     let (pixels, steps) = (active_surface(&s), s.active().unwrap().history.entries().len());
