@@ -3436,7 +3436,8 @@ fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
 /// Focus Area, Select Sky and Remove Background, mapped from the empty steps Photoshop records,
 /// play and do their work: on a textured red disc against a smooth blue sky over textured ground,
 /// Focus Area selects the textured ground, Select Sky the sky, and Remove Background masks the
-/// layer to the disc. Each step plays on its own so a step that runs without finding anything fails
+/// layer to the disc. Each step plays on its own, with nothing selected, so a step that runs
+/// without finding anything, or that works from the selection left by the step before, fails
 /// (#10610).
 #[test]
 fn newer_feature_selection_steps_play() {
@@ -3485,6 +3486,8 @@ fn newer_feature_selection_steps_play() {
     play(&mut s, "selectSky");
     assert!(selected(&s, 20, 15).is_some_and(|v| v > 0.9), "Select Sky left the sky out");
     assert!(selected(&s, 20, 85).is_some_and(|v| v < 0.1), "Select Sky took the ground");
+    s.execute("select.deselect", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.selection.is_none(), "Remove Background would play with the sky selected");
 
     play(&mut s, "removeBackground");
     let mask = s.active().unwrap().doc.layers[0].mask.as_ref().expect("Remove Background set no mask");
