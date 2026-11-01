@@ -13,8 +13,9 @@ it back unchanged. Playback stops at an enabled kept step with its name, so an a
 work. Kept steps with no effect on the document (tool selections and the like) are imported switched off,
 so playback skips them.
 
-This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
-does not map yet, with everything needed to implement them without the reference application.
+This page has three parts: the events PhotoCraft maps today, the settings some of them still lose, and a
+measured reference for the events it does not map yet, with everything needed to implement them without
+the reference application.
 
 ## Supported events (117)
 
@@ -27,19 +28,19 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | applyLocking | Apply Locking | `layer.lockLayers` |
 | (string ID only) | assignProfile | Assign Profile | `edit.assignProfile` |
 | (string ID only) | autoColor | Auto Color | `image.autoColor` |
-| (string ID only) | BanW | blackAndWhite | `Black & White` |
+| (string ID only) | blackAndWhite | Black & White | `image.adjustments.blackWhite` |
 | `Blr ` | blur | Blur | `filter.blur.blur` |
 | `BlrM` | blurMore | Blur More | `filter.blur.blurMore` |
 | `Brdr` | border | Border | `select.modify.border` |
 | (string ID only) | boxblur | Box Blur | `filter.blur.boxBlur` |
-| `BrgC` | BrgC | brightnessEvent | `Brightness/Contrast` |
+| `BrgC` | brightnessEvent | Brightness/Contrast | `image.adjustments.brightnessContrast` |
 | `CnvS` | canvasSize | Canvas Size | `image.canvasSize` |
-| `ChnM` | ChnM | channelMixer | `Channel Mixer` |
+| `ChnM` | channelMixer | Channel Mixer | `image.adjustments.channelMixer` |
 | (string ID only) | clearEvent | Clear | `select.editInQuickMaskMode`, `history.clear` |
 | `Cls ` | close | Close | `file.close` |
 | (string ID only) | collapseAllGroupsEvent | Collapse All Groups | `layer.setExpanded` |
+| `ClrB` | colorBalance | Color Balance | `image.adjustments.colorBalance` |
 | `ClrR` | colorRange | Color Range | `select.colorRange` |
-| `ClrB` | ClrB | colorBalance | `Color Balance` |
 | `Cntc` | contract | Contract | `select.modify.contract` |
 | `CnvM` | convertMode | Convert Mode | `image.mode.rgb`, `image.mode.grayscale`, `image.mode.cmyk`, `image.mode.lab`, `image.mode.multichannel`, `image.mode.bits8`, `image.mode.bits16`, `image.mode.bits32`, `image.mode.bitmap` |
 | (string ID only) | convertToProfile | Convert to Profile | `edit.convertToProfile` |
@@ -50,7 +51,7 @@ does not map yet, with everything needed to implement them without the reference
 | `GrpL` | groupEvent | Create Clipping Mask | `layer.createClippingMask` |
 | `Crop` | crop | Crop | `image.crop` |
 | `Crst` | crystallize | Crystallize | `filter.pixelate.crystallize` |
-| `Crvs` | Crvs | curves | `Curves` |
+| `Crvs` | curves | Curves | `image.adjustments.curves` |
 | `cut ` | cut | Cut | `edit.cut` |
 | `Dfrg` | defringe | Defringe | `layer.matting.defringe` |
 | `Dlt ` | delete | Delete | `layer.delete`, `edit.clear`, `layer.layerMask.delete`, `layer.smartFilter.deleteFilterMask` |
@@ -66,22 +67,22 @@ does not map yet, with everything needed to implement them without the reference
 | `Exch` | exchange | Exchange | `tools.swapColors` |
 | `Expn` | expand | Expand | `select.modify.expand` |
 | `Expr` | export | Export | `file.export.saveForWebLegacy` |
-| `Exps` | Exps | exposure | `Exposure` |
+| `Exps` | exposure | Exposure | `image.adjustments.exposure` |
 | `Fthr` | feather | Feather | `select.modify.feather` |
 | `Fl  ` | fill | Fill | `edit.fill`, `paint.bucket` |
 | `GEfc` | filterGallery | Filter Gallery | `filter.gallery.spatter` |
 | `FltI` | flattenImage | Flatten Image | `layer.flattenImage` |
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
-| `GdMp` | GdMp | gradientMapEvent | `Gradient Map` |
+| `GdMp` | gradientMapEvent | Gradient Map | `image.adjustments.gradientMap` |
 | `Grow` | grow | Grow | `select.grow` |
 | `Hd  ` | hide | Hide | `layer.hideLayers` |
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
-| `HStr` | HStr | hueSaturation | `Hue/Saturation` |
+| `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
 | (string ID only) | conditional | If | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
 | `Invs` | inverse | Inverse | `select.inverse` |
-| `Invr` | Invr | invert | `Invert` |
+| `Invr` | invert | Invert | `image.adjustments.invert` |
 | `CpTL` | copyToLayer | Layer Via Copy | `layer.new.layerViaCopy` |
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
@@ -98,10 +99,10 @@ does not map yet, with everything needed to implement them without the reference
 | `Opn ` | open | Open | `file.openAs` |
 | `past` | paste | Paste | `edit.paste`, `edit.pasteSpecial.pasteInPlace` |
 | (string ID only) | pasteEffects | Paste Layer Style | `layer.layerStyle.pasteLayerStyle` |
-| (string ID only) | PhtF | photoFilter | `Photo Filter` |
+| (string ID only) | photoFilter | Photo Filter | `image.adjustments.photoFilter` |
 | `Plc ` | placeEvent | Place | `file.placeEmbedded`, `file.placeLinked` |
 | `Ply ` | play | Play | `actions.play` |
-| `Pstr` | Pstr | posterize | `Posterize` |
+| `Pstr` | posterize | Posterize | `image.adjustments.posterize` |
 | `Prge` | purge | Purge | `edit.purge.all`, `edit.purge.clipboard`, `edit.purge.histories`, `edit.purge.undo` |
 | `RdlB` | radialBlur | Radial Blur | `filter.blur.radialBlur` |
 | (string ID only) | rasterizeLayer | Rasterize | `layer.rasterize.layer` |
@@ -117,7 +118,7 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
-| `SlcC` | SlcC | selectiveColor | `Selective Color` |
+| `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
 | `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
@@ -130,13 +131,61 @@ does not map yet, with everything needed to implement them without the reference
 | `Stop` | stop | Stop | `STOP_MESSAGE` |
 | `Strk` | stroke | Stroke | `edit.stroke` |
 | (string ID only) | surfaceBlur | Surface Blur | `filter.blur.surfaceBlur` |
-| `Thrs` | Thrs | threshold | `Threshold` |
+| `Thrs` | threshold | Threshold | `image.adjustments.threshold` |
 | `Trnf` | transform | Transform | `edit.transform`, `select.transformSelection` |
 | (string ID only) | trim | Trim | `image.trim` |
 | (string ID only) | ungroupLayersEvent | Ungroup Layers | `layer.ungroupLayers` |
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
-| `Vbrn` | Vbrn | vibrance | `Vibrance` |
+| `Vbrn` | vibrance | Vibrance | `image.adjustments.vibrance` |
+
+## Known gaps in mapped events
+
+A mapped event can still lose a setting. Every mapped event was checked on 2026-11-01: the 5 296 steps of
+the `.atn` corpus (sets the reference application recorded) and factory descriptors measured in the
+reference application went through `actions.load` and `actions.save`, and each saved descriptor was compared
+with the original; the forms PhotoCraft writes were then played in the reference application. The steps
+below change what a step does. Each line says what is lost and what the fix is.
+
+### Import or export loses a setting (fix in `atn_cmds` only)
+
+| Event | What is lost | Fix |
+|---|---|---|
+| Transform (`Trnf`) | The reference point `FTcs` (`QCSt`: `Qcsa` centre, `Qcs0`..`Qcs8` corners and edges) is ignored on load, and save always writes `Qcsa`. A 50 % scale about the top-left corner of a 100 px square at 60,60 ends at 60,60..110,110 in the reference application, at 85,85..135,135 when played about the centre. | Read `FTcs` into the commands' `reference`; write it back. Pure offsets are unaffected. |
+| Show (`Shw `) with `TglO` true | Alt-click on the eye ("show only this layer", a toggle: a second step restores the others) loads as a plain Show. | `TglO` true maps to `layer.showOnly`, and back. |
+| Make `layerSection` (Group from Layers) | Newer recordings store the group name as a top-level `Nm  ` (no `Usng`); only `Usng.Nm  ` is read, so the group gets the default name. | Read the top-level `Nm  ` too. |
+| Make `Lyr ` (New Layer) | `Usng.Grup` true (Use Previous Layer to Create Clipping Mask) is dropped. | Map to `clipToPrevious`; export it (today such a step is refused). |
+| Make `AdjL` (adjustment layer) | `Usng.Clr ` (the colour label) is dropped. | Map the label; export it. |
+| Make `contentLayer` with `Shp ` (Rectangle tool shape layer, with `strokeStyle`) | Loads as a solid colour fill layer covering the canvas: the shape and its stroke settings are lost. | Map to the shape command, or keep the step as a kept step until it is mapped. |
+| Make with `Nw ` + `Usng ArSl.Slct` (Layer via Copy / Cut with layer options) | Only the name is kept; `Md  ` (blend mode), `Opct` and `Clr ` are dropped. | Carry them into the `layer.setProps` step that follows. |
+| Set of the selection to `Chnl.Trsp` of a named layer (Cmd-click on another layer's thumbnail) | The layer in the reference is dropped, so the current layer's transparency is loaded. | Keep the layer in `select.loadSelection`; export it. |
+| Background layer by property (`Lyr .Bckg`) | Becomes the layer name "Background" on load and is saved as a name reference. A localised reference application has no layer of that name ("Hintergrund" in German), and the step fails there. | Keep the property form: load as the Background layer, save as `Lyr .Bckg`. |
+| Close (`Cls `) without `Svng` | Without `Svng` the reference application asks whether to save (without a dialog it refuses to close a changed document). Save writes `Svng N` (do not save), so playback there silently discards changes. 244 corpus steps. | Write no `Svng` for a Close that asks. |
+| Photo Filter (`photoFilter`) with a `LbCl` colour | The reference application's default filter colour is Lab (`Lmnc`, `A   `, `B   `); only RGB, HSB and gray colours are read, so a recorded Photo Filter usually stays a kept step. | Convert Lab colours (through `photocraft-cms`) on load. |
+
+### The command has no such setting (needs a new command option first)
+
+| Event | Setting | Note |
+|---|---|---|
+| Image Size (`ImgS`) | `scaleStyles` | Measured: with `scaleStyles` true a 20 px stroke becomes 10 px at 50 %; with false or no key it stays 20 px. `image.imageSize` always scales effects, so a step without the key plays differently in PhotoCraft, and a saved step plays unscaled there. 27 corpus steps carry it. |
+| Convert to Profile (`convertToProfile`) | `Dthr` (dither), `Fltt` (flatten), `rasterizePlaced`, `sdwM` | Dropped on load. |
+| Fill (`Fl  `) with Content-Aware | `contentAwareColorAdaptationFill`, `contentAwareRotateFill`, `contentAwareScaleFill`, `contentAwareMirrorFill` | Dropped on load. |
+| Paste Layer Style (`pasteEffects`) | `allowPasteFXOnLayerSet` | Dropped on load. |
+| Paste (`past`) | `As ` (paste a vector clipboard as pixels, path or shape) | Dropped on load. |
+
+### Differences that do not change the result
+
+- Value types: `long` and unit values are interchangeable for the reference application (Motion Blur
+  `Angl`, Dust & Scratches `Rds `, Apply Image `Ofst`: same pixels either way); Apply Image's `With`
+  object plays the same with class `null`.
+- Save writes the 4-character event code where the file had the string ID, writes `null` as the
+  top-level class (the application writes the event code), and writes an empty descriptor for steps that
+  had none.
+- Ids of the recording session (`LyrI`, `DocI`, `Idnt`, `layerSectionStart`, `layerSectionEnd`, `Vrsn`,
+  `forceNotify`) and default flags (`MkVs` false, `Adjs` false) are not written back.
+- An adjustment layer's values equal to the defaults are not written back (other values are).
+- Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
+- Levels and Curves write the composite as `Chnl.Cmps` (the application skips `Ordn.Trgt`, #8543).
 
 ## Event reference: events not mapped yet
 
