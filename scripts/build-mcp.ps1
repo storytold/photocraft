@@ -28,7 +28,14 @@ function Invoke-Cargo {
 }
 
 Write-Host '==> building photocraft-cli (release)'
-Invoke-Cargo build --release --locked -p photocraft-cli @flags
+# Take the binary's path from Cargo's own report: with --target or CARGO_BUILD_TARGET it lives
+# under target\<triple>\release, not target\release. Diagnostics still go to stderr.
+$messages = & cargo build --release --locked -p photocraft-cli @flags --message-format=json-render-diagnostics
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
+$bin = $messages | Where-Object { $_.StartsWith('{') } | ForEach-Object { $_ | ConvertFrom-Json } |
+    Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'photocraft-cli' -and $_.executable } |
+    Select-Object -Last 1 -ExpandProperty executable
+if (-not $bin -or -not (Test-Path $bin)) { throw 'cargo did not report a photocraft-cli executable' }
 
 if (-not $NoTest) {
     Write-Host '==> testing photocraft-automation and photocraft-cli (unit, MCP protocol, image, file-permission tests)'
@@ -38,7 +45,7 @@ if (-not $NoTest) {
 if ($CheckTargets) {
     $hostTarget = ((rustc -vV) | Select-String '^host: (.+)$').Matches[0].Groups[1].Value
     $installed = @(rustup target list --installed 2>$null)
-    foreach ($t in 'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc', 'x86_64-unknown-linux-gnu', 'aarch64-apple-darwin', 'x86_64-apple-darwin') {
+    foreach ($t in 'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc', 'x86_64-pc-windows-gnu', 'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu', 'aarch64-apple-darwin', 'x86_64-apple-darwin') {
         if ($t -eq $hostTarget) { continue }
         if ($installed -contains $t) {
             Write-Host "==> cargo check --target $t"
@@ -49,8 +56,6 @@ if ($CheckTargets) {
     }
 }
 
-$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
-$bin = Join-Path $targetDir 'release\photocraft-cli.exe'
 Write-Host "==> built $bin"
 & $bin --version
 

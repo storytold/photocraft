@@ -1135,7 +1135,18 @@ fn batch(h: &mut Headless, p: &BatchProcessParams) -> Result<Value, AutomationEr
             }
         };
         let output = plan::join(&p.output_dir, &out_name);
-        let exists = h.workspace().map(|ws| ws.write_target_exists(&output)).transpose()?.unwrap_or(false);
+        // A name the path rules refuse (`12:30.png`, `con.png`) fails this file, not the batch.
+        let exists = match h.workspace().map(|ws| ws.write_target_exists(&output)).transpose() {
+            Ok(exists) => exists.unwrap_or(false),
+            Err(e) => {
+                failed += 1;
+                files.push(json!({"input": input, "output": output, "status": "failed", "error": e.to_string()}));
+                if p.stop_on_error {
+                    break;
+                }
+                continue;
+            }
+        };
         if exists && !p.overwrite {
             skipped += 1;
             files.push(json!({"input": input, "output": output, "status": "skipped", "reason": "output exists (pass overwrite: true to replace it)"}));
@@ -1194,14 +1205,25 @@ fn structured_ok(tool: &str, mut v: Value) -> CallToolResult {
         m.insert("ok".into(), json!(true));
         m.insert("tool".into(), json!(tool));
     }
-    match json_bytes(&v) {
-        Ok(_) => CallToolResult::structured(v),
+    // Measure the finished result: it carries the JSON twice (structuredContent and the text
+    // block), so checking `v` alone would let a reply over half the budget through (#504).
+    let result = CallToolResult::structured(v);
+    match json_bytes(&result) {
+        Ok(_) => result,
         Err(e) => structured_err(tool, &format!("{e}; the operation may have completed")),
     }
 }
 
+/// Longest error text a task tool sends back (characters).
+const MAX_ERROR_CHARS: usize = 4096;
+
 fn structured_err(tool: &str, msg: &str) -> CallToolResult {
-    CallToolResult::structured_error(json!({"ok": false, "tool": tool, "error": msg}))
+    let result = CallToolResult::structured_error(json!({"ok": false, "tool": tool, "error": msg}));
+    if json_bytes(&result).is_ok() {
+        return result;
+    }
+    let short: String = msg.chars().take(MAX_ERROR_CHARS).collect();
+    CallToolResult::structured_error(json!({"ok": false, "tool": tool, "error": format!("{short}… (error text truncated)")}))
 }
 
 impl PhotocraftMcp {

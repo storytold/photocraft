@@ -135,7 +135,10 @@ for ten minutes. List/read responses include the MCP 2026-07-28 result/cache fie
 
 Besides the generic tools, headless mode offers task-shaped image tools with typed, validated
 arguments. Each tool runs ordinary engine commands through `command_run`'s path (same
-authorization, history and filesystem roots), so `edit.undo` reverts it like any other command.
+authorization, history and filesystem roots). Their document edits join the history, so
+`edit.undo` reverts them like any other command. Files they write are not rolled back:
+`save_image`, `export_image` and `batch_process` change the disk, and undo does not restore an
+earlier file.
 Agents need no command ids or parameter grammars for everyday edits. `command_run` stays available
 for the rest of the engine's commands.
 
@@ -161,9 +164,19 @@ for the rest of the engine's commands.
 Behaviour shared by the task tools:
 
 - **Structured replies.** Every reply carries `structuredContent`, and the same JSON as a text
-  block for text-only clients. Success looks like `{"ok": true, "tool": …, "result": …,
-  "document": {index, name, width, height, mode, depth, resolution, layerCount, …}}`. Failure is
-  `isError: true` with `{"ok": false, "tool": …, "error": "<reason>"}`. Unknown argument keys are
+  block for text-only clients. Every success has `"ok": true` and `"tool"`. The rest depends on
+  the tool:
+  - The editing tools and `manage_layers` return `result` (the engine's reply) and `document`
+    (`{index, name, width, height, mode, depth, resolution, layerCount, …}`, plus `layers` for
+    `manage_layers`).
+  - `open_image` returns `document` and `warnings`.
+  - `save_image` and `export_image` return `path`, `warnings` and `document`.
+  - `inspect_image` returns the summary fields at the top level (`width`, `height`, `layers`, …,
+    and `file` for a path).
+  - `batch_process` returns `processed`, `failed`, `skipped`, `truncated` and `files` at the top
+    level.
+
+  Failure is `isError: true` with `{"ok": false, "tool": …, "error": "<reason>"}`. Unknown argument keys are
   JSON-RPC `-32602` errors before anything runs. Out-of-range values name the accepted range.
 - **No silent overwrites.** `save_image`, `export_image` and `batch_process` refuse an existing
   target unless `overwrite: true`. Even then, the write root's rule still applies: only image and
@@ -193,8 +206,13 @@ unless `stop_on_error` is true.
 ### Logging
 
 Set `PHOTOCRAFT_LOG` (`error`, `warn`, `info`, `debug` or `trace`) in the server's environment
-to log task tool calls, their timings and batch failures to **stderr**. Stdout carries only the
-protocol. Unset, the server logs nothing.
+to log to **stderr**. Stdout carries only the protocol. Unset, the server logs nothing. Each level
+includes the ones above it:
+
+- `warn`: batch files that failed.
+- `info`: also every task tool call with its duration and outcome (and the MCP session's own
+  start-up events).
+- `debug`: also each engine command a task tool runs, with its parameters.
 
 ### Client configuration
 

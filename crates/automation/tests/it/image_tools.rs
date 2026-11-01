@@ -486,3 +486,26 @@ async fn batch_process_converts_a_folder_one_file_at_a_time() {
     assert!(e.is_err() || e.as_ref().is_ok_and(|r| r.is_error == Some(true)), "an unknown operation is rejected");
     c.cancel().await.unwrap();
 }
+
+/// A file name the path rules refuse (here `12:30.png`, legal on Unix) fails that file only.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_process_reports_unwritable_names_per_file() {
+    let root = Root::new("batch-names");
+    std::fs::create_dir_all(root.path("in")).unwrap();
+    let c = connect(root.server()).await;
+    two_tone(&c, 8, 8, 4, "#ff0000").await;
+    ok(&call(&c, "export_image", json!({"path": "in/a.png"})).await);
+    std::fs::copy(root.path("in/a.png"), root.path("in/12:30.png")).unwrap();
+    std::fs::copy(root.path("in/a.png"), root.path("in/z.png")).unwrap();
+
+    let v = ok(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": "out"})).await);
+    assert_eq!((v["processed"].as_u64(), v["failed"].as_u64()), (Some(2), Some(1)), "{v}");
+    let bad = v["files"].as_array().unwrap().iter().find(|f| f["input"] == "in/12:30.png").unwrap();
+    assert_eq!(bad["status"], "failed");
+    assert!(root.path("out/a.png").exists() && root.path("out/z.png").exists(), "the files after it still ran");
+
+    let v = ok(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": "out2", "stop_on_error": true})).await);
+    assert_eq!((v["processed"].as_u64(), v["failed"].as_u64()), (Some(0), Some(1)), "sorted first, then stops: {v}");
+    c.cancel().await.unwrap();
+}

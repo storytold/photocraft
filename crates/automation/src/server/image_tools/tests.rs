@@ -174,3 +174,22 @@ fn batch_operations_deserialize_strictly() {
     assert!(serde_json::from_value::<BatchOp>(json!({"tool": "resize_image", "widht": 100})).is_err(), "unknown fields are rejected");
     assert!(serde_json::from_value::<BatchOp>(json!({"tool": "run_shell", "cmd": "rm"})).is_err(), "unknown tools are rejected");
 }
+
+#[test]
+fn replies_are_measured_with_their_duplicated_text() {
+    // Just over half the response budget: fits once, but not as structuredContent + text.
+    let half = crate::budgets::MAX_RESPONSE_BYTES / 2 + 1024;
+    let r = structured_ok("batch_process", json!({"files": "x".repeat(half)}));
+    assert_eq!(r.is_error, Some(true), "an oversized reply becomes an error");
+    let sc = r.structured_content.unwrap();
+    assert!(sc["error"].as_str().unwrap().contains("may have completed"), "{sc}");
+
+    let small = structured_ok("resize_image", json!({"result": 1}));
+    assert_eq!(small.is_error, Some(false));
+    assert_eq!(small.structured_content.unwrap()["ok"], true);
+
+    // A huge error text is cut, never dropped.
+    let r = structured_err("open_image", &"e".repeat(crate::budgets::MAX_RESPONSE_BYTES));
+    let msg = r.structured_content.unwrap()["error"].as_str().unwrap().to_owned();
+    assert!(msg.ends_with("(error text truncated)") && msg.chars().count() < MAX_ERROR_CHARS + 64);
+}

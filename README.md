@@ -242,8 +242,10 @@ photocraft-cli batch --actions grade.json --in ./raw --out ./graded
 # Every subcommand explains itself
 photocraft-cli batch --help
 
-# Let an agent drive it over MCP (headless, or bridged to the running app): typed task tools
-# (resize_image, remove_background, batch_process, …) plus every engine command; see docs/mcp.md
+# Let an agent drive it over MCP (headless, or bridged to the running app). Headless mode adds typed
+# task tools (resize_image, remove_background, batch_process, …); in bridge mode use command_run.
+# Both roots must already exist. See docs/mcp.md
+mkdir -p photos out
 photocraft-cli mcp --automation-read-root ./photos --automation-write-root ./out
 ```
 

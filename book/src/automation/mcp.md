@@ -5,7 +5,7 @@
 - **Headless:** an in-process `Headless` session owns the engine and performs file I/O.
 - **Bridge:** `BridgeClient` forwards tools to a desktop application started with `photocraft --control <port>`.
 
-For a source checkout, first [install the CLI on PATH and register the server](../../../docs/mcp.md#install-and-register).
+For a source checkout, first [install the CLI on PATH and register the server](https://github.com/storytold/photocraft/blob/main/docs/mcp.md#install-and-register).
 The installed binary survives `cargo clean`; a symlink into `target/release` does not.
 
 Start the headless server with:
@@ -38,7 +38,7 @@ Headless mode also offers typed task tools for everyday edits, so an agent needs
 `apply_blur`, `apply_sharpen`, `remove_background`, `add_text`, `manage_layers` and
 `batch_process` (a folder at a time). They reply with structured JSON and never replace an
 existing file unless `overwrite` is true. Arguments, limits, logging (`PHOTOCRAFT_LOG`) and
-Claude Code / Codex configuration are in [`docs/mcp.md`](../../../docs/mcp.md#task-tools).
+Claude Code / Codex configuration are in [`docs/mcp.md`](https://github.com/storytold/photocraft/blob/main/docs/mcp.md#task-tools).
 
 ## From an installed release
 
@@ -73,4 +73,4 @@ The five shared core tools are `command_list`, `command_run`, `command_batch`, `
 and `render_preview`. Existing documented tools, including `doc_render_preview`, remain
 listed. `photocraft://document` and `photocraft://commands` expose live JSON. Direct headless
 Render Video supports progress and cancellation using the granted write root; see
-[`docs/mcp.md`](../../../docs/mcp.md) for arguments, cleanup and transport behavior.
+[`docs/mcp.md`](https://github.com/storytold/photocraft/blob/main/docs/mcp.md) for arguments, cleanup and transport behavior.

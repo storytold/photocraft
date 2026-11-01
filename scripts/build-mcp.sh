@@ -37,7 +37,14 @@ done
 flags=(${CARGO_FLAGS:-})
 
 echo "==> building photocraft-cli (release)"
-cargo build --release --locked -p photocraft-cli ${flags[@]+"${flags[@]}"}
+# Take the binary's path from Cargo's own report: with --target or CARGO_BUILD_TARGET it lives
+# under target/<triple>/release, not target/release. Diagnostics still go to stderr.
+bin="$(cargo build --release --locked -p photocraft-cli ${flags[@]+"${flags[@]}"} --message-format=json-render-diagnostics |
+    grep '"name":"photocraft-cli"' | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)"
+if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    echo "build-mcp.sh: cargo did not report a photocraft-cli executable" >&2
+    exit 1
+fi
 
 if [ "$run_tests" = 1 ]; then
     echo "==> testing photocraft-automation and photocraft-cli (unit, MCP protocol, image, file-permission tests)"
@@ -47,7 +54,7 @@ fi
 if [ "$check_targets" = 1 ]; then
     host="$(rustc -vV | sed -n 's/^host: //p')"
     installed="$(rustup target list --installed 2>/dev/null || true)"
-    for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-pc-windows-gnu aarch64-apple-darwin x86_64-apple-darwin; do
+    for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-pc-windows-gnu aarch64-apple-darwin x86_64-apple-darwin; do
         [ "$target" = "$host" ] && continue
         if printf '%s\n' "$installed" | grep -qx "$target"; then
             echo "==> cargo check --target $target"
@@ -58,7 +65,6 @@ if [ "$check_targets" = 1 ]; then
     done
 fi
 
-bin="${CARGO_TARGET_DIR:-target}/release/photocraft-cli"
 echo "==> built $bin"
 "$bin" --version
 
