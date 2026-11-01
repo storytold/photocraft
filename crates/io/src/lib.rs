@@ -461,7 +461,7 @@ pub fn import_file_for_open_with(
 ) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let source = photocraft_psd::FileSource::open(path).map_err(read_failed)?;
+    let source = photocraft_format::open_for_read(path).and_then(photocraft_psd::FileSource::new).map_err(read_failed)?;
     let mut magic = [0u8; 4];
     let psd = !has_extension(name, photocraft_format::EXTENSION) && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
     if !psd {
