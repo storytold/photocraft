@@ -489,6 +489,48 @@ fn web_safe(c: [f32; 3]) -> [f32; 3] {
     c.map(|v| (v.clamp(0.0, 1.0) * 5.0).round() / 5.0)
 }
 
+/// Reuse each row's colour while preserving the smooth grid's interpolation topology.
+/// Web-safe rows are flat, so each can span the full strip without internal cells.
+fn strip_mesh(rect: Rect, web: bool, color: impl Fn(f32) -> [f32; 3]) -> Mesh {
+    let mut mesh = Mesh::default();
+    if web {
+        let n = WEB_CELLS;
+        let (cw, ch) = (rect.width() / n as f32, rect.height() / n as f32);
+        // Match the original first/last horizontal endpoint arithmetic.
+        let left = rect.left() + 0.0 * cw;
+        let right = rect.left() + (n - 1) as f32 * cw + cw;
+        for j in 0..n {
+            let c = c32(web_safe(color((j as f32 + 0.5) / n as f32)));
+            let y = rect.top() + j as f32 * ch;
+            let a = mesh.vertices.len() as u32;
+            for p in [pos2(left, y), pos2(right, y), pos2(right, y + ch), pos2(left, y + ch)] {
+                mesh.colored_vertex(p, c);
+            }
+            mesh.add_triangle(a, a + 1, a + 2);
+            mesh.add_triangle(a, a + 2, a + 3);
+        }
+    } else {
+        let n = 32;
+        for j in 0..=n {
+            let y = j as f32 / n as f32;
+            let c = c32(color(y));
+            for i in 0..=n {
+                let x = i as f32 / n as f32;
+                mesh.colored_vertex(pos2(rect.left() + x * rect.width(), rect.top() + y * rect.height()), c);
+            }
+        }
+        let w = (n + 1) as u32;
+        for j in 0..n as u32 {
+            for i in 0..n as u32 {
+                let a = j * w + i;
+                mesh.add_triangle(a, a + 1, a + w + 1);
+                mesh.add_triangle(a, a + w + 1, a + w);
+            }
+        }
+    }
+    mesh
+}
+
 /// Like [`grid_mesh`], but every cell is one flat colour sampled at its centre, so a quantized
 /// field shows hard bands instead of blending between the snapped corners.
 fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh {
@@ -615,7 +657,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
     let (strip, sresp) = ui.allocate_exact_size(vec2(18.0, FIELD), Sense::click_and_drag());
-    ui.painter().add(mesh(strip, &|_, y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
+    ui.painter().add(strip_mesh(strip, web_only, |y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
     let sy = strip.top() + (1.0 - fz) * strip.height();
     for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
         let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];

@@ -179,6 +179,68 @@ fn web_only_field_is_flat_web_safe_bands() {
     assert!(distinct.len() > 1 && distinct.len() <= 216);
 }
 
+/// Smooth strips retain exact vertices and triangles; flat strips only remove internal cells.
+#[test]
+fn component_strip_preserves_samples_and_smooth_topology() {
+    for rgb in [[0.2, 0.5, 0.8], [0.5; 3], [0.12345, 2.0, -0.25]] {
+        let display = rgb.map(|v: f32| v.clamp(0.0, 1.0));
+        let hsv = rgb_to_hsb(display);
+        let lab = photocraft_color::convert::srgb_to_lab(display);
+        for mode in MODES.iter().chain(LAB_MODES).map(|m| m.0).chain(["unknown"]) {
+            for origin in [pos2(0.0, 0.0), pos2(16.25, 16.375)] {
+                let rect = Rect::from_min_size(origin, vec2(18.0, FIELD));
+                let color = |y| slider_color(mode, 1.0 - y, hsv, rgb, lab);
+                let smooth = strip_mesh(rect, false, color);
+                let original = grid_mesh(rect, 32, |_, y| color(y));
+                assert_eq!(smooth, original, "{mode}, {rgb:?}, {origin:?}");
+                let bands = strip_mesh(rect, true, color);
+                let original = flat_grid_mesh(rect, WEB_CELLS, |_, y| web_safe(color(y)));
+                assert!(bands.is_valid());
+                assert_eq!((bands.vertices.len(), bands.indices.len()), (4 * WEB_CELLS, 6 * WEB_CELLS));
+                assert_eq!(bands.calc_bounds(), original.calc_bounds());
+                for (band, row) in bands.vertices.chunks_exact(4).zip(original.vertices.chunks_exact(4 * WEB_CELLS)) {
+                    for (a, b) in band.iter().zip([&row[0], &row[row.len() - 3], &row[row.len() - 2], &row[3]]) {
+                        assert_eq!((a.pos, a.uv, a.color), (b.pos, b.uv, b.color));
+                    }
+                    assert!(row.iter().all(|v| v.color == band[0].color));
+                }
+            }
+        }
+    }
+}
+
+/// Passive SDR/HDR redraws use the strip builder without rewriting the stored colour.
+#[test]
+fn picker_redraw_uses_component_strips_without_changing_color() {
+    let mut h = picker("#336699");
+    for color in [json!("#336699"), json!([0.12345, 0.5, 0.98765]), json!([0.12345, 2.0, -0.25])] {
+        for web in [false, true] {
+            for mode in MODES.iter().chain(LAB_MODES).map(|m| m.0) {
+                h.state_mut().insert("color".into(), color.clone());
+                h.state_mut().insert("__floatRgb".into(), json!(color.is_array()));
+                h.state_mut().insert("__mode".into(), json!(mode));
+                h.state_mut().insert("__webOnly".into(), json!(web));
+                h.run_steps(2);
+                assert_eq!(h.state()["color"], color);
+                let now = current(h.state());
+                let strip = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Mesh(m) if (m.calc_bounds().width() - 18.0).abs() < 0.01 && (m.calc_bounds().height() - FIELD).abs() < 0.01 => Some(m),
+                        _ => None,
+                    })
+                    .expect("component strip drawn by the picker body");
+                assert_eq!(
+                    strip.as_ref(),
+                    &strip_mesh(Rect::from_min_size(strip.vertices[0].pos, vec2(18.0, FIELD)), web, |y| slider_color(mode, 1.0 - y, now.hsv, now.rgb, now.lab))
+                );
+            }
+        }
+    }
+}
+
 fn picker(color: &str) -> Harness<'static, Map<String, Value>> {
     let mut f = Map::new();
     f.insert("__colorPicker".into(), json!("foreground"));
