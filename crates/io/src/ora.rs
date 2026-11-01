@@ -374,6 +374,7 @@ pub(crate) fn csample(depth: SampleType) -> CSample {
 }
 
 /// Builds the document tree bottom-to-top (stack.xml lists the topmost node first).
+/// The tile writer copies pixels, so matching images can be borrowed.
 fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<Vec<Layer>> {
     let mut out = Vec::with_capacity(nodes.len());
     for node in nodes.into_iter().rev() {
@@ -383,7 +384,7 @@ fn build(nodes: Vec<Node>, images: &[Image], fmt: PixelFormat, ctl: &Interrupt<'
                 let mut surface = Surface::new(fmt);
                 if let Some(image) = image.and_then(|i| images.get(i)) {
                     let (w, h) = image.dimensions();
-                    let px = image.convert(ChannelLayout::Rgba, csample(fmt.sample));
+                    let px = image.converted(ChannelLayout::Rgba, csample(fmt.sample));
                     let rect = Rect::new(x, y, x.saturating_add(w as i32), y.saturating_add(h as i32));
                     if rect.width() != w || rect.height() != h || px.data().len() != (w as usize) * (h as usize) * fmt.bytes_per_pixel() {
                         return Err(invalid("layer image does not fit its position"));
