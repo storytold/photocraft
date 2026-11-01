@@ -80,7 +80,7 @@ fn hue_saturation_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit 
     if colorize {
         range = 0;
     }
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let opts: Vec<(usize, &str)> = std::iter::once((0, tl!("Master"))).chain(RANGE_LABELS.iter().enumerate().map(|(i, l)| (i + 1, *l))).collect();
         ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), tl!("Range"), &mut range, &opts, 120.0));
     });
@@ -313,5 +313,55 @@ mod tests {
         for (a, b) in ltr.iter().zip(&rtl) {
             assert!((a - b).abs() < 1.0, "the handles keep their physical place: {ltr:?} {rtl:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::{Queryable, by};
+
+    /// The Hue/Saturation panel over a fresh adjustment, drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                let _dir = crate::direction::direction_scope(dir);
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("hs-twin"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                hue_saturation(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The migrated Range row hugs the reading start: the dropdown sits at the column's left in
+    /// LTR and at its right in RTL, with the same width in both.
+    #[test]
+    fn the_range_row_mirrors_to_the_reading_start() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let combo = |h: &egui_kittest::Harness<'_, Value>| {
+            h.query_all(by().role(egui::accesskit::Role::ComboBox)).next().expect("the Range dropdown").rect()
+        };
+        let ltr_combo = combo(&ltr);
+        let rtl_combo = combo(&rtl);
+        assert!(ltr_combo.left() < 40.0, "LTR: the row starts at the left: {ltr_combo:?}");
+        assert!(rtl_combo.right() > 340.0, "RTL: the row starts at the right: {rtl_combo:?}");
+        assert!((ltr_combo.width() - rtl_combo.width()).abs() < 1.0, "same width in both: {ltr_combo:?} {rtl_combo:?}");
     }
 }
