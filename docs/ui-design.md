@@ -69,6 +69,8 @@ cached text pixel, not the cache's overall bounding rectangle. Transparent corne
 text and transparent padding in PSD caches do not intercept a lower text layer. At a real
 overlap the topmost shown type layer wins; hidden groups are skipped. While editing, an
 outside click still commits without opening another layer on that same click.
+Transparent leading between soft-wrapped lines remains part of the paragraph's layout hit
+area: clicking there places the caret on the nearest line rather than requiring an ink pixel.
 
 Shape Stroke Options (updated 2026-10-11) sizes to its content and scrolls only when necessary.
 It has no Apply/Cancel footer. Solid, Dashed and Dotted are full clickable rows with line

@@ -595,6 +595,50 @@ fn type_click_picks_lower_text_outside_rotated_top_ink() {
     }
 }
 
+/// #10296 review: transparent leading between two soft-wrapped lines still belongs to the
+/// paragraph's layout, so picking must not become an ink-only test.
+#[test]
+fn type_click_between_paragraph_lines_keeps_the_paragraph_target() {
+    for ppp in [1.0, 2.0] {
+        let mut app = new_app();
+        let peer =
+            LayerId(app.run("type.create", json!({"text": "UNCHANGED", "font": "Inter", "size": 32, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap());
+        let original = "MMMM MMMM";
+        let id = LayerId(
+            app.run("type.create", json!({"text": original, "font": "Inter", "size": 32, "box": [400, 300, 150, 260]})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        app.run("type.setStyle", json!({"layer": id.0, "leading": 96})).unwrap();
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = harness(ppp, app);
+        let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+        assert_eq!(l.lines.len(), 2, "one paragraph wraps into two lines");
+        let (first, second) = (&l.lines[0], &l.lines[1]);
+        assert_eq!((first.paragraph, second.paragraph), (0, 0));
+        assert_eq!(second.range.start, 5);
+        let bottom = first.baseline + first.descent;
+        let top = second.baseline - second.ascent;
+        assert!(top > bottom, "explicit leading leaves a gap between line boxes");
+        let c = l.clusters.iter().find(|c| c.range.start == second.range.start).unwrap();
+        let (x, y) = (c.x + c.advance * 0.2, top - (top - bottom) * 0.25);
+        assert!(y > bottom && y < top, "the click is between lines, not inside a glyph");
+        let doc = aff.apply(Point::new(f64::from(x), f64::from(y)));
+        let cache = text(h.state(), id).cache.unwrap();
+        assert_eq!(cache.rgba(doc.x.floor() as i32, doc.y.floor() as i32)[3], 0.0);
+        let p = screen(&mut h, id, x, y);
+        assert!(xf(h.state()).rect.contains(p));
+        assert!(h.state().ui.text_edit.is_none(), "exercise initial layer picking");
+        click(&mut h, p);
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(id.0));
+        assert_eq!(selection(&h), (5, 5), "the gap click places the caret at the second line");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+        h.event(egui::Event::Text("X".into()));
+        h.run_steps(2);
+        assert_eq!(text(h.state(), id).text, "MMMM XMMMM");
+        assert_eq!(text(h.state(), peer).text, "UNCHANGED");
+    }
+}
+
 /// A PSD type layer keeps Photoshop's pixels until it is edited. Clicking into it re-renders it
 /// with our engine first (so the caret sits on what is shown), inside the edit session's single
 /// history step; Cancel brings Photoshop's pixels back.
