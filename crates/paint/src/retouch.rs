@@ -14,10 +14,13 @@
 //! All pixel data here is the surface's *native* channels as normalised `f32` (any depth, any colour
 //! model); colour-space-specific work happens in the callbacks.
 
+use std::collections::HashMap;
+
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 
+use crate::wrap::{fits, fold_area, wrap_coord};
 use crate::{Dab, Stroke, dab_coverage, dabs};
 
 /// A rectangle of native-channel pixels (`rect.width() × rect.height() × ch` floats, row-major).
@@ -74,6 +77,14 @@ impl Region {
     /// Write this region into a surface.
     pub fn write(&self, s: &mut Surface) {
         s.write_region(self.rect, &self.data);
+    }
+    /// Read `rect` from a surface that repeats `wrap` apart (View › Pattern Preview): `rect` may
+    /// cross its edges. `None` (or an empty tile) is [`Region::read`].
+    pub fn read_wrapped(s: &Surface, rect: Rect, wrap: Option<Rect>) -> Self {
+        match wrap.filter(|t| !t.is_empty()) {
+            Some(tile) => Self { rect, ch: s.channels(), data: crate::wrap::read(rect, tile, s.channels(), |r| s.read_region(r)) },
+            None => Self::read(s, rect),
+        }
     }
 }
 
@@ -264,6 +275,174 @@ pub fn apply_dab_stroke(
     }
     mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
     bounds
+}
+
+/// [`apply_dab_stroke`] wrapped around `wrap` (View › Pattern Preview): each dab reads and edits
+/// the pixels where it repeats on that tile, so a stroke crossing an edge carries on at the
+/// opposite one. The dabs run one by one on a [`WorkTiles`] working copy, as live previews run
+/// them. `None` (or an empty tile) is [`apply_dab_stroke`]. Returns the damaged rectangle.
+pub fn apply_dab_stroke_wrapped(
+    target: &mut Surface,
+    stroke: &Stroke,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    halo: i32,
+    wrap: Option<Rect>,
+    mut effect: impl FnMut(&mut Region, &Footprint),
+) -> Rect {
+    let Some(tile) = wrap.filter(|t| !t.is_empty()) else {
+        return apply_dab_stroke(target, stroke, selection, lock_transparency, halo, effect);
+    };
+    let ctx = crate::BrushContext::new(&stroke.brush);
+    let mut work = WorkTiles::new(target.channels()).wrapped(Some(tile));
+    let mut damage = Rect::EMPTY;
+    for (i, d) in dabs(stroke).iter().enumerate() {
+        let fp = ctx.footprint(d, i);
+        if fp.rect.is_empty() {
+            continue;
+        }
+        let mut region = work.read(target, fp.rect.inflate(halo));
+        effect(&mut region, &fp);
+        work.write_dab(target, &region, &fp);
+        damage = damage.union(&fold_area(fp.rect, tile));
+    }
+    let written: Vec<Rect> = work.areas().map(|r| r.intersect(&tile)).filter(|r| !r.is_empty()).collect();
+    for r in written {
+        let edited = work.read(target, r);
+        mix_back(target, &Region::read(target, r), &edited, r, stroke.brush.opacity, selection, lock_transparency);
+    }
+    damage
+}
+
+/// Side of the tiles a [`WorkTiles`] working copy keeps its pixels in.
+const WORK_TILE: i32 = 128;
+
+/// The working copy of a sequential-dab stroke run dab by dab (live previews,
+/// [`apply_dab_stroke_wrapped`]): the target's native channels as `f32`, in tiles copied from the
+/// pre-stroke surface the first time a dab writes to them. Unlike a `Surface`, it isn't rounded to
+/// the document's depth between dabs, so each dab sees what [`apply_dab_stroke`]'s working copy
+/// holds. Wrapped around a tile ([`Self::wrapped`]), it keeps each pixel once, where it lies on
+/// the tile, and reads and writes it wherever it repeats.
+pub struct WorkTiles {
+    ch: usize,
+    tiles: HashMap<(i32, i32), Vec<f32>>,
+    wrap: Option<Rect>,
+}
+
+impl WorkTiles {
+    pub fn new(ch: usize) -> Self {
+        Self { ch, tiles: HashMap::new(), wrap: None }
+    }
+
+    /// Keep the pixels of a stroke wrapped around `tile` (View › Pattern Preview). `None` or an
+    /// empty tile doesn't wrap.
+    pub fn wrapped(mut self, tile: Option<Rect>) -> Self {
+        self.wrap = tile.filter(|t| !t.is_empty());
+        self
+    }
+
+    fn tile_rect((tx, ty): (i32, i32)) -> Rect {
+        Rect::new(tx * WORK_TILE, ty * WORK_TILE, tx * WORK_TILE + WORK_TILE, ty * WORK_TILE + WORK_TILE)
+    }
+
+    /// The tiles `r` overlaps.
+    fn coords(r: Rect) -> impl Iterator<Item = (i32, i32)> {
+        let (x0, x1) = (r.x0.div_euclid(WORK_TILE), (r.x1 - 1).div_euclid(WORK_TILE));
+        let (y0, y1) = (r.y0.div_euclid(WORK_TILE), (r.y1 - 1).div_euclid(WORK_TILE));
+        let empty = r.is_empty();
+        (y0..=y1).filter(move |_| !empty).flat_map(move |ty| (x0..=x1).map(move |tx| (tx, ty)))
+    }
+
+    /// The working pixels of `r`: the pre-stroke pixels `pre` where no dab has written yet.
+    /// Wrapped, `r` may cross the tile's edges or be bigger than it.
+    pub fn read(&self, pre: &Surface, r: Rect) -> Region {
+        match self.wrap {
+            Some(tile) => Region { rect: r, ch: self.ch, data: crate::wrap::read(r, tile, self.ch, |part| self.read_at(pre, part).data) },
+            None => self.read_at(pre, r),
+        }
+    }
+
+    fn read_at(&self, pre: &Surface, r: Rect) -> Region {
+        let mut out = Region::new(r, self.ch);
+        let n = self.ch;
+        let mut buf = Vec::new();
+        for c in Self::coords(r) {
+            let tr = Self::tile_rect(c);
+            let part = r.intersect(&tr);
+            let w = part.width() as usize * n;
+            let tile = self.tiles.get(&c);
+            if tile.is_none() {
+                pre.read_region_into(part, &mut buf);
+            }
+            for y in part.y0..part.y1 {
+                let src = match tile {
+                    Some(t) => t.get(((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n..).and_then(|s| s.get(..w)),
+                    None => buf.get((y - part.y0) as usize * w..).and_then(|s| s.get(..w)),
+                };
+                let dst = out.index(part.x0, y) * n;
+                if let (Some(s), Some(d)) = (src, out.data.get_mut(dst..dst + w)) {
+                    d.copy_from_slice(s);
+                }
+            }
+        }
+        out
+    }
+
+    /// Store a dab's edit: the pixels of `region` (which covers the dab) over the dab's rectangle
+    /// `fp.rect`. Wrapped, they land where they lie on the tile; a dab bigger than the tile covers
+    /// some pixels more than once, and each keeps the copy the dab covers most.
+    pub fn write_dab(&mut self, pre: &Surface, region: &Region, fp: &Footprint) {
+        let r = fp.rect.intersect(&region.rect);
+        let Some(tile) = self.wrap else {
+            return self.write_at(pre, &region.crop(r));
+        };
+        if fits(r, tile) {
+            for (part, (dx, dy)) in crate::wrap::pieces(r, tile) {
+                let mut piece = region.crop(part.translate(dx, dy));
+                piece.rect = part;
+                self.write_at(pre, &piece);
+            }
+            return;
+        }
+        let area = fold_area(r, tile);
+        let mut folded = self.read_at(pre, area);
+        let mut most = vec![0.0f32; area.width() as usize * area.height() as usize];
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let (c, tx, ty) = (fp.at(x, y), wrap_coord(x, tile.x0, tile.x1), wrap_coord(y, tile.y0, tile.y1));
+                if let Some(m) = most.get_mut(folded.index(tx, ty))
+                    && c > *m
+                {
+                    *m = c;
+                    folded.px_mut(tx, ty).copy_from_slice(region.px(x, y));
+                }
+            }
+        }
+        self.write_at(pre, &folded);
+    }
+
+    /// Store `region` as the working pixels of its rectangle.
+    fn write_at(&mut self, pre: &Surface, region: &Region) {
+        let (r, n) = (region.rect, self.ch);
+        for c in Self::coords(r) {
+            let tr = Self::tile_rect(c);
+            let tile = self.tiles.entry(c).or_insert_with(|| pre.read_region(tr));
+            let part = r.intersect(&tr);
+            let w = part.width() as usize * n;
+            for y in part.y0..part.y1 {
+                let dst = ((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n;
+                let src = region.index(part.x0, y) * n;
+                if let (Some(s), Some(d)) = (region.data.get(src..src + w), tile.get_mut(dst..dst + w)) {
+                    d.copy_from_slice(s);
+                }
+            }
+        }
+    }
+
+    /// The rectangles of the tiles dabs have written to.
+    pub fn areas(&self) -> impl Iterator<Item = Rect> + '_ {
+        self.tiles.keys().map(|&c| Self::tile_rect(c))
+    }
 }
 
 /// Mix a sequential-dab stroke's working pixels `work` back over the original `orig` at
@@ -636,5 +815,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The canvas the Pattern Preview strokes below wrap around.
+    const TILE: Rect = Rect::new(0, 0, 40, 30);
+
+    /// `area` of a surface showing the canvas repeated: every pixel of the canvas has its own colour.
+    fn tiled(fmt: PixelFormat, area: Rect) -> Surface {
+        let mut s = Surface::new(fmt);
+        let px = (area.y0..area.y1).flat_map(|y| (area.x0..area.x1).map(move |x| (wrap_coord(x, 0, 40), wrap_coord(y, 0, 30))));
+        let data: Vec<f32> = px.flat_map(|(x, y)| [x as f32 / 40.0, y as f32 / 30.0, ((x * 7 + y * 3) % 13) as f32 / 13.0, 1.0]).collect();
+        s.write_region(area, &data);
+        s
+    }
+
+    fn smudge(size: f32) -> impl FnMut(&mut Region, &Footprint) {
+        let mut sm = Smudge::new(0.8, None, size).with_alpha(Some(3));
+        move |work, fp| sm.dab(work, fp)
+    }
+
+    #[test]
+    fn a_wrapped_sequential_stroke_paints_the_canvas_as_its_tiled_copies_would() {
+        // View › Pattern Preview: a smudge across a corner of the canvas copy it is drawn on gives
+        // the canvas exactly what it gives the canvas tiled three by three, where it runs into the
+        // next copies and carries their colours along. (The same points both times: moved points
+        // would place the dabs a rounding apart.)
+        let fmt = PixelFormat::RGBA32F;
+        let far = stroke(&[(68.0, 48.0), (92.0, 70.0)], 12.0, 0.5);
+        let halo = Smudge::sampling_radius(12.0);
+        let mut canvas = tiled(fmt, TILE);
+        let dmg = apply_dab_stroke_wrapped(&mut canvas, &far, None, false, halo, Some(TILE), smudge(12.0));
+        let three = Rect::new(0, 0, 120, 90);
+        let (before, mut big) = (tiled(fmt, three), tiled(fmt, three));
+        apply_dab_stroke(&mut big, &far, None, false, halo, smudge(12.0));
+        let mut changed = 0;
+        for y in 0..30 {
+            for x in 0..40 {
+                let copies = [(40, 30), (80, 30), (40, 60), (80, 60)].map(|(dx, dy)| (x + dx, y + dy));
+                let moved: Vec<_> = copies.into_iter().filter(|&(u, v)| big.pixel(u, v) != before.pixel(u, v)).collect();
+                let want = match moved.as_slice() {
+                    [] => before.pixel(x, y),
+                    [(u, v)] => big.pixel(*u, *v),
+                    _ => panic!("({x}, {y}): two copies under the stroke"),
+                };
+                assert_eq!(canvas.pixel(x, y), want, "({x}, {y})");
+                changed += usize::from(!moved.is_empty());
+            }
+        }
+        assert!(changed > 300, "the smudge crossed both edges ({changed} px)");
+        assert!(dmg.x0 >= 0 && dmg.y0 >= 0 && dmg.x1 <= 40 && dmg.y1 <= 30, "{dmg:?}");
+        assert!((-12..0).all(|x| canvas.pixel(x, 20)[3] == 0.0) && (40..52).all(|x| canvas.pixel(x, 20)[3] == 0.0), "nothing off the canvas");
+    }
+
+    #[test]
+    fn a_wrapped_sequential_stroke_inside_the_canvas_paints_as_before() {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA32F] {
+            let st = stroke(&[(16.0, 12.0), (24.0, 18.0)], 6.0, 0.8);
+            let run = |wrap| {
+                let mut s = tiled(fmt, TILE);
+                let dmg = apply_dab_stroke_wrapped(&mut s, &st, None, false, Smudge::sampling_radius(6.0), wrap, smudge(6.0));
+                (s, dmg)
+            };
+            let ((plain, d0), (wrapped, d1)) = (run(None), run(Some(TILE)));
+            assert_eq!(d0, d1, "{fmt:?}");
+            assert!((0..30).all(|y| (0..40).all(|x| plain.pixel(x, y) == wrapped.pixel(x, y))), "{fmt:?}");
+            assert!(plain.pixel(20, 15) != tiled(fmt, TILE).pixel(20, 15), "{fmt:?}: the stroke smudged");
+        }
+    }
+
+    #[test]
+    fn a_wrapped_dab_bigger_than_the_canvas_edits_all_of_it_and_nothing_else() {
+        let small = Rect::new(0, 0, 10, 8);
+        let mut s = Surface::new(PixelFormat::RGBA32F);
+        s.fill_rect(small, &[1.0, 0.0, 0.0, 1.0]);
+        let darken = |work: &mut Region, fp: &Footprint| {
+            let r = fp.rect.intersect(&work.rect);
+            for y in r.y0..r.y1 {
+                for x in r.x0..r.x1 {
+                    work.px_mut(x, y)[0] *= 1.0 - 0.5 * fp.at(x, y);
+                }
+            }
+        };
+        let dmg = apply_dab_stroke_wrapped(&mut s, &stroke(&[(5.0, 4.0), (9.0, 6.0)], 30.0, 0.0), None, false, 0, Some(small), darken);
+        assert_eq!(dmg, small);
+        assert!((0..8).all(|y| (0..10).all(|x| s.pixel(x, y)[0] < 1.0)), "every pixel under the dab's copies darkens");
+        assert!((-5..15).all(|x| s.pixel(x, -1)[3] == 0.0 && s.pixel(x, 8)[3] == 0.0), "nothing off the canvas");
     }
 }

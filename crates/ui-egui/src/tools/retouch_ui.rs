@@ -34,6 +34,8 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
         p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
+    } else {
+        crate::canvas::pattern_wrap(app, &mut p);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
     // the aligned pairing and applies the slot's scale/rotation/flip.
@@ -57,7 +59,7 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
 /// Blur, Sharpen, Smudge, Dodge, Burn, Sponge. Shared by the live preview and the commit.
 pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static str, Value)> {
     let o = &app.ui.tool_options;
-    Some(match tool {
+    let (cmd, mut p) = match tool {
         Tool::Blur => ("paint.blur", json!({"strength": o.strength, "sampleAllLayers": o.sample_all.blur})),
         Tool::Sharpen => ("paint.sharpen", json!({"strength": o.strength, "protectDetail": o.protect_detail, "sampleAllLayers": o.sample_all.sharpen})),
         Tool::Smudge => ("paint.smudge", json!({"strength": o.strength, "fingerPainting": o.finger_painting, "sampleAllLayers": o.sample_all.smudge})),
@@ -67,7 +69,9 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
         ),
         Tool::Sponge => ("paint.sponge", json!({"mode": o.sponge_mode, "vibrance": o.vibrance})),
         _ => return None,
-    })
+    };
+    crate::canvas::pattern_wrap(app, &mut p);
+    Some((cmd, p))
 }
 
 /// `paint.colorReplacement` params from the options bar (without `points`): shared by the live
@@ -75,7 +79,7 @@ pub(crate) fn dab_params(app: &PhotocraftApp, tool: Tool) -> Option<(&'static st
 /// stroke paints the same colour; Background Swatch sampling matches the background colour.
 pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
     let o = &app.ui.tool_options;
-    json!({
+    let mut p = json!({
         "color": app.session.tools.foreground,
         "mode": o.cr_mode,
         "sampling": o.cr_sampling,
@@ -84,7 +88,9 @@ pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
         "antiAlias": o.cr_anti_alias,
         // A mask or channel target is refused: the tool recolours layer pixels only.
         "target": crate::canvas::paint_target(app),
-    })
+    });
+    crate::canvas::pattern_wrap(app, &mut p);
+    p
 }
 
 /// `paint.patternStamp` params from the options bar and the Patterns panel (without `points` and
@@ -109,6 +115,7 @@ pub(crate) fn pattern_stamp_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> 
     if let Some(id) = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|x| x.id.clone()) {
         p["pattern"] = json!(id);
     }
+    crate::canvas::pattern_wrap(app, &mut p);
     p
 }
 
@@ -176,6 +183,10 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         _ => return false,
     };
     p["points"] = pts;
+    // Spot Healing and History Brush; the others' params have it already.
+    if !matches!(tool, Tool::Remove | Tool::MixerBrush) {
+        crate::canvas::pattern_wrap(app, &mut p);
+    }
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
     let result = app.run(cmd, p);

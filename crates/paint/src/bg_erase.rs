@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
 use crate::replace::{Limits, Sampling};
-use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke};
+use crate::retouch::{Footprint, Region, alpha_index, apply_dab_stroke_wrapped};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -49,8 +49,14 @@ fn dist(a: &[f32], b: &[f32]) -> f32 {
 /// the selection limits the effect. Returns the damaged rectangle; empty when the surface has no
 /// alpha channel.
 pub fn apply_background_eraser(target: &mut Surface, stroke: &Stroke, bs: &BgEraseSettings, selection: Option<&Surface>) -> Rect {
-    let Some(effect) = background_eraser_effect(target, bs) else { return Rect::EMPTY };
-    apply_dab_stroke(target, &background_eraser_stroke(stroke), selection, false, 0, effect)
+    apply_background_eraser_wrapped(target, stroke, bs, selection, None)
+}
+
+/// [`apply_background_eraser`] wrapped around `wrap` (View › Pattern Preview): the stroke samples
+/// and erases where its pixels lie on that canvas, so it carries on across the edges.
+pub fn apply_background_eraser_wrapped(target: &mut Surface, stroke: &Stroke, bs: &BgEraseSettings, selection: Option<&Surface>, wrap: Option<Rect>) -> Rect {
+    let Some(effect) = background_eraser_effect(target, bs, wrap) else { return Rect::EMPTY };
+    apply_dab_stroke_wrapped(target, &background_eraser_stroke(stroke), selection, false, 0, wrap, effect)
 }
 
 /// The stroke [`apply_background_eraser`] runs its dabs along: full opacity (the tool has none),
@@ -64,8 +70,9 @@ pub fn background_eraser_stroke(stroke: &Stroke) -> Stroke {
 
 /// One Background Eraser dab's edit of a working copy of `pre` (the target before the stroke):
 /// shared by [`apply_background_eraser`] and live previews that run the dabs as they come, so both
-/// erase the same pixels. `None` when `pre` has no alpha channel (nothing can be erased).
-pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<impl FnMut(&mut Region, &Footprint) + use<>> {
+/// erase the same pixels. `None` when `pre` has no alpha channel (nothing can be erased). In a
+/// stroke wrapped around `wrap`, `pre` is read where the working pixels lie on that canvas.
+pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings, wrap: Option<Rect>) -> Option<impl FnMut(&mut Region, &Footprint) + use<>> {
     let fmt = pre.format();
     let a = alpha_index(&fmt)?;
     let nc = a;
@@ -97,7 +104,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
             return;
         }
         if orig.as_ref().is_none_or(|o| o.rect != work.rect) {
-            orig = Some(Region::read(&pre, work.rect));
+            orig = Some(Region::read_wrapped(&pre, work.rect, wrap));
         }
         let Some(orig) = orig.as_ref() else { return };
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
