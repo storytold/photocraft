@@ -485,6 +485,16 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("filter.video.deInterlace", json!({"eliminate": "evenFields", "createBy": "duplication"})),
+        ("filter.video.ntscColors", json!({})),
+        ("filter.other.hsbHsl", json!({"inputMode": "hsl", "rowOrder": "rgb"})),
+        (
+            "filter.other.custom",
+            json!({"kernel": [0, 0, 0, 0, 0, 0, -1, -1, -1, 0, 0, -1, 9, -1, 0, 0, -1, -1, -1, 0, 0, 0, 0, 0, 0], "scale": 3, "offset": -10}),
+        ),
+        ("filter.blur.average", json!({})),
+        ("layer.matting.removeBlackMatte", json!({})),
+        ("layer.matting.removeWhiteMatte", json!({})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3174,4 +3184,124 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// The step `d` of the Photoshop event `code` (a four-character code), as PhotoCraft loads it.
+fn other_step(code: &str, d: Descriptor) -> Mapped {
+    let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
+    (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
+}
+
+/// Photoshop's De-Interlace, NTSC Colors, HSB/HSL, Custom, Average and Remove Black / White
+/// Matte steps load as their commands, play, and save back with the same keys (#10607).
+#[test]
+fn video_other_and_matting_steps_load_play_and_save_back() {
+    let cells: Vec<D> = (0..25)
+        .map(|i| {
+            D::Integer(if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            })
+        })
+        .collect();
+    let kernel: Vec<i32> = (0..25)
+        .map(|i| {
+            if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            }
+        })
+        .collect();
+    let cases = [
+        (
+            "Dntr",
+            desc("null").with("IntE", enm("IntE", "ElmE")).with("IntC", enm("IntC", "CrtD")),
+            "filter.video.deInterlace",
+            json!({"eliminate": "evenFields", "createBy": "duplication"}),
+        ),
+        ("NTSC", desc("null"), "filter.video.ntscColors", json!({})),
+        (
+            "HsbP",
+            desc("null").with("Inpt", enm("ClrS", "RGBC")).with("Otpt", enm("ClrS", "HSLC")),
+            "filter.other.hsbHsl",
+            json!({"inputMode": "rgb", "rowOrder": "hsl"}),
+        ),
+        (
+            "Cstm",
+            desc("null").with("Scl ", D::Integer(1)).with("Ofst", D::Integer(0)).with("Mtrx", D::List(cells)),
+            "filter.other.custom",
+            json!({"kernel": kernel, "scale": 1, "offset": 0}),
+        ),
+        ("Avrg", desc("null"), "filter.blur.average", json!({})),
+        ("RmvB", desc("null"), "layer.matting.removeBlackMatte", json!({})),
+        ("RmvW", desc("null"), "layer.matting.removeWhiteMatte", json!({})),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, d, id, params) in cases {
+        let Mapped::Steps(steps) = other_step(code, d.clone()) else { panic!("{code} kept") };
+        let mut p = steps[0].1.clone();
+        // Numbers come back as the descriptor's integers.
+        if let Some(k) = p.get_mut("kernel") {
+            *k = json!(k.as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as i32).collect::<Vec<_>>());
+        }
+        for k in ["scale", "offset"] {
+            if let Some(v) = p.get_mut(k) {
+                *v = json!(v.as_f64().unwrap() as i32);
+            }
+        }
+        assert_eq!((steps[0].0.as_str(), &p), (id, &params), "{code}");
+        assert_eq!(export_item(id, &steps[0].1, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
+        s.actions.list.push(Action::new(code, vec![(id.to_string(), steps[0].1.clone())]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+    // Missing keys are Photoshop's defaults.
+    let Mapped::Steps(steps) = other_step("Dntr", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"eliminate": "oddFields", "createBy": "interpolation"}));
+    let Mapped::Steps(steps) = other_step("HsbP", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"inputMode": "rgb", "rowOrder": "hsb"}));
+}
+
+/// A step the commands cannot play keeps the Photoshop step: a Custom matrix that is not 5 × 5,
+/// an unknown enumeration value, or a key the event does not have (#10607).
+#[test]
+fn video_other_and_matting_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let nine = D::List((0..9).map(D::Integer).collect());
+    assert!(kept(other_step("Cstm", desc("null").with("Mtrx", nine))));
+    assert!(kept(other_step("Cstm", desc("null"))));
+    assert!(kept(other_step("HsbP", desc("null").with("Inpt", enm("ClrS", "LbCl")))));
+    assert!(kept(other_step("Dntr", desc("null").with("IntE", enm("IntE", "ElmA")))));
+    assert!(kept(other_step("NTSC", desc("null").with("Lvl ", D::Integer(1)))));
+    assert!(kept(other_step("RmvW", desc("null").with("Lyr ", D::Integer(1)))));
+}
+
+/// What the events cannot hold refuses the step: a fractional kernel cell, a kernel that is not
+/// 25 cells, a mask target, an unknown mode (#10607).
+#[test]
+fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1.5);
+    for (id, params) in [
+        ("filter.other.custom", json!({"kernel": cells})),
+        ("filter.other.custom", json!({"kernel": [0, 0, 0, 0, 1, 0, 0, 0, 0]})),
+        ("filter.other.custom", json!({"scale": 2.5})),
+        ("filter.blur.average", json!({"target": "mask"})),
+        ("filter.other.hsbHsl", json!({"inputMode": "lab"})),
+        ("filter.video.deInterlace", json!({"eliminate": "allFields"})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // A Custom step without a kernel is the command's identity kernel.
+    let d = export_item("filter.other.custom", &json!({}), "S").unwrap().descriptor.unwrap();
+    let cells = get_list(&d, "Mtrx").unwrap();
+    assert_eq!((cells.len(), cells.get(12)), (25, Some(&D::Integer(1))));
 }
