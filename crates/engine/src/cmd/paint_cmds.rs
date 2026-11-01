@@ -116,7 +116,44 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "filled": filled }))
 }
 
+/// `paint.gradient`'s inputs, read once: painted into the document by the command, or into a copy
+/// by [`gradient_preview`].
+struct GradientJob {
+    from: (f32, f32),
+    to: (f32, f32),
+    shape: GradientShape,
+    stops: Vec<(f32, [f32; 4])>,
+    reverse: bool,
+    opacity: f32,
+    blend: photocraft_color::BlendMode,
+    dither: bool,
+    layer: Option<photocraft_doc::LayerId>,
+}
+
+impl GradientJob {
+    fn paint(&self, doc: &mut photocraft_doc::Document, p: &Value) -> Result<()> {
+        let sel = doc.selection.clone();
+        let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, self.layer, p)?;
+        paint_gradient(surf, area, self.from, self.to, self.shape, &self.stops, self.reverse, self.opacity, self.blend, self.dither, sel.as_ref(), lock);
+        Ok(())
+    }
+}
+
 fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
+    let job = gradient_job(s, p)?;
+    s.edit("Gradient", |doc, _| job.paint(doc, p))?;
+    Ok(Value::Null)
+}
+
+/// `paint.gradient` with params `p`, painted into `doc` (a copy of the active document) instead of
+/// committed: the Gradient tool previews a gradient on a layer mask this way while it is drawn and
+/// adjusted, and commits it with the command.
+pub fn gradient_preview(s: &Session, doc: &mut photocraft_doc::Document, p: &Value) -> Result<()> {
+    gradient_job(s, p)?.paint(doc, p)
+}
+
+fn gradient_job(s: &Session, p: &Value) -> Result<GradientJob> {
     let from = point(p, "from").ok_or_else(|| EngineError::BadParams { cmd: "paint.gradient".into(), msg: "missing from".into() })?;
     let to = point(p, "to").ok_or_else(|| EngineError::BadParams { cmd: "paint.gradient".into(), msg: "missing to".into() })?;
     let shape = match p.get("style").and_then(Value::as_str).unwrap_or("linear") {
@@ -161,14 +198,7 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     let blend = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(photocraft_color::BlendMode::Normal);
     let dither = b(p, "dither", true); // Photoshop dithers gradients by default (reduces banding).
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
-    s.edit("Gradient", |doc, _| {
-        let sel = doc.selection.clone();
-        let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
-        let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref(), lock);
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    Ok(GradientJob { from, to, shape, stops, reverse, opacity, blend, dither, layer })
 }
 
 /// Paint helper command specs.

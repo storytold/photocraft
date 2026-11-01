@@ -620,6 +620,10 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     if focus == Focus::None && crate::perspective_crop_ui::keys(app, ctx) {
         return true;
     }
+    // A live gradient on a layer mask: ↩ paints it into the mask, Esc drops it (#10703).
+    if focus == Focus::None && crate::gradient_ui::mask::keys(app, ctx) {
+        return true;
+    }
     // Move tool / Free Transform: arrows nudge (⇧ ×10, ⌥ duplicates first).
     if focus == Focus::None && crate::move_mods::arrow_keys(app, ctx) {
         return true;

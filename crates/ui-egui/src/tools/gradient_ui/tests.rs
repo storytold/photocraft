@@ -439,3 +439,91 @@ fn the_ramp_covers_its_checkerboard_at_half_pixel_offsets() {
         assert_eq!(ramp, checker.round_to_pixels(ppp), "{ppp}x: the ramp covers every pixel of the checker");
     }
 }
+
+/// A layer with a white (reveal all) mask, targeted, and the live Gradient tool.
+fn app_on_mask() -> (PhotocraftApp, LayerId) {
+    let mut app = app_with_gradient("linear");
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool_options.gradient_dither = false;
+    app.ui.tool_options.gradient_classic = false;
+    app.sync_views();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    assert_eq!(crate::canvas::paint_target(&app), json!("mask"));
+    (app, layer)
+}
+
+fn mask_at(doc: &Document, layer: LayerId, x: i32) -> f32 {
+    doc.layer(layer).unwrap().mask.as_ref().unwrap().surface.pixel(x, 60)[0]
+}
+
+/// #10703: on a layer mask the live Gradient previews the gradient and keeps its handles, so it
+/// can still be moved; ↩ paints exactly what was shown, in one history step.
+#[test]
+fn a_gradient_on_a_mask_previews_with_handles_and_paints_what_was_shown() {
+    let (mut app, layer) = app_on_mask();
+    let revision = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient waits with its handles");
+    assert_eq!(app.session.active().unwrap().revision, revision, "nothing is painted yet");
+    let (shown, _) = display_doc(&mut app, 0).expect("a preview of the mask");
+    // The mask colours: white foreground to black background.
+    assert!(mask_at(&shown, layer, 10) > 0.95 && mask_at(&shown, layer, 150) < 0.05, "the preview shows the gradient");
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0, "the mask itself is untouched");
+    // The end handle drags the end; the line drags both ends.
+    drag(&mut app, [120.0, 60.0], [180.0, 60.0]);
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [180.0, 60.0])));
+    drag(&mut app, [100.0, 60.0], [90.0, 70.0]);
+    assert_eq!(mask::pending(&app), Some(([10.0, 70.0], [170.0, 70.0])));
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    mask::commit(&mut app);
+    assert_eq!(mask::pending(&app), None);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.revision, revision + 1, "one history step");
+    for x in (0..200).step_by(7) {
+        assert_eq!(mask_at(&st.doc, layer, x), mask_at(&shown, layer, x), "x = {x}: painted as previewed");
+    }
+}
+
+/// Esc drops it; another tool, or a command that edits the document, paints it first; an undo
+/// under it drops it.
+#[test]
+fn a_pending_mask_gradient_is_painted_or_dropped_like_photoshops() {
+    let (mut app, layer) = app_on_mask();
+    let revision = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    mask::cancel(&mut app);
+    assert_eq!((mask::pending(&app), app.session.active().unwrap().revision), (None, revision), "Esc paints nothing");
+
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.ui.tool = Tool::Brush;
+    mask::tick(&mut app);
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "switching tools paints it");
+
+    app.ui.tool = Tool::Gradient;
+    drag(&mut app, [150.0, 60.0], [50.0, 60.0]);
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 10) < 0.05, "a new layer paints it first, into its own mask");
+
+    app.run("layer.select", json!({"layer": layer.0})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_views();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    app.session.execute("edit.undo", json!({})).unwrap();
+    mask::tick(&mut app);
+    assert_eq!(mask::pending(&app), None, "an edit under it drops it");
+    assert_ne!(app.session.active().unwrap().revision, before);
+}
+
+/// Classic still paints the mask on release, with no handles.
+#[test]
+fn the_classic_gradient_paints_a_mask_on_release() {
+    let (mut app, layer) = app_on_mask();
+    app.ui.tool_options.gradient_classic = true;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert_eq!(mask::pending(&app), None);
+    assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05);
+}

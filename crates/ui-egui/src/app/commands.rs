@@ -45,6 +45,11 @@ impl PhotocraftApp {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
+        // A gradient pending on a layer mask is painted before a command that edits the document,
+        // as Photoshop applies it first (#10703).
+        if self.run_depth == 1 {
+            crate::gradient_ui::mask::before_command(self, id);
+        }
         if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
             self.ui.symmetry_transform = None;
         }

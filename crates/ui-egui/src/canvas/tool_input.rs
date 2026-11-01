@@ -594,8 +594,9 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     let cmd = match tool {
         Tool::Move => "layer.translate",
         // The live Gradient makes a new Gradient Fill layer above the target, which Photoshop
-        // allows over a hidden layer; only the classic one paints the target itself.
-        Tool::Gradient if !app.ui.tool_options.gradient_classic => return None,
+        // allows over a hidden layer; the classic one paints the target itself, and so does the
+        // live one on a layer mask (#10703).
+        Tool::Gradient if !app.ui.tool_options.gradient_classic && !crate::gradient_ui::mask::active(app) => return None,
         // Every painting command follows the same target (layer, mask or channel) as a stroke.
         t if t.is_brushlike() || matches!(t, Tool::Gradient | Tool::PaintBucket | Tool::MagicEraser) => "paint.stroke",
         _ => return None,

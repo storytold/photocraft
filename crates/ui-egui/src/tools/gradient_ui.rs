@@ -29,6 +29,7 @@ use crate::widgets;
 
 #[cfg(test)]
 mod editor_tests;
+pub(crate) mod mask;
 mod properties_panel;
 
 /// Id of the temporary layer previewing a new gradient while it is drawn.
@@ -75,11 +76,13 @@ pub struct LiveGradient {
     preset_stop: Option<Value>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
+    /// A gradient on a layer mask, previewed with its handles until it is painted (#10703).
+    mask: mask::MaskGradient,
 }
 
 /// Whether an uncommitted gradient gesture must finish before applying a saved vector.
 pub(crate) fn editing(app: &PhotocraftApp) -> bool {
-    app.gradient.drag.is_some() || app.gradient.panel.is_some() || app.gradient.preset_stop.is_some()
+    app.gradient.drag.is_some() || app.gradient.mask.dragging() || app.gradient.panel.is_some() || app.gradient.preset_stop.is_some()
 }
 
 /// Whether the Gradient tool is in its live (Gradient Fill layer) mode.
@@ -136,6 +139,13 @@ fn edited_fill(app: &PhotocraftApp, layer: &Layer, canvas: Rect32, cmd: &str, p:
 fn create_params(app: &PhotocraftApp, from: [f32; 2], to: [f32; 2]) -> Value {
     let o = &app.ui.tool_options;
     json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label()})
+}
+
+/// Options-bar params of a gradient painted into pixels (`paint.gradient`) on the Channels panel's
+/// target: the Classic drag, and the live gradient on a layer mask (`mask`).
+pub(crate) fn paint_params(app: &PhotocraftApp, from: [f64; 2], to: [f64; 2]) -> Value {
+    let o = &app.ui.tool_options;
+    json!({"from": from, "to": to, "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": crate::canvas::paint_target(app)})
 }
 
 fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -220,6 +230,10 @@ impl Widget {
 
 /// Pointer input for the Gradient tool in live mode. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
+    if mask::active(app) {
+        app.gradient.drag = None;
+        return mask::pointer(app, ev, mods);
+    }
     if !live_mode(app) {
         app.gradient.drag = None;
         return false;
@@ -372,6 +386,9 @@ fn preview_key(revision: u64, what: &str) -> u64 {
 
 /// The document to show while a gradient is drawn or edited (`canvas::display_doc`).
 pub fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    if let Some(shown) = mask::display_doc(app, idx) {
+        return Some(shown);
+    }
     if app.session.active_index() != Some(idx) {
         return None;
     }
@@ -464,6 +481,7 @@ pub(crate) fn diamond(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, o
 
 /// Draws the live gradient widget over the canvas.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
+    mask::draw_overlay(app, painter, xf);
     if !live_mode(app) {
         return;
     }

@@ -1,8 +1,6 @@
 use super::drag::{Drag, marquee_preview_px, single_line_drag_px};
 use super::selection::finish_selection_drag;
-use super::strokes::{
-    EngineStroke, commit_brush_stroke, feed_live_stroke, live_retouch_command, offer_live_retouch, paint_target, snap_aliased_tip, stroke_params,
-};
+use super::strokes::{EngineStroke, commit_brush_stroke, feed_live_stroke, live_retouch_command, offer_live_retouch, snap_aliased_tip, stroke_params};
 use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
@@ -139,11 +137,8 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             }
         }
         Tool::Gradient if (end[0] - d.start[0]).abs() + (end[1] - d.start[1]).abs() >= 2.0 => {
-            let o = app.ui.tool_options.clone();
-            let _ = app.run(
-                "paint.gradient",
-                json!({"from": [d.start[0], d.start[1]], "to": [end[0], end[1]], "style": o.gradient_style, "reverse": o.gradient_reverse, "dither": o.gradient_dither, "opacity": o.fill_opacity, "mode": o.gradient_blend_mode.label(), "target": paint_target(app)}),
-            );
+            let p = crate::gradient_ui::paint_params(app, [d.start[0], d.start[1]], [end[0], end[1]]);
+            let _ = app.run("paint.gradient", p);
         }
         Tool::Move => {
             let (dx, dy) = ((end[0] - d.start[0]).round(), (end[1] - d.start[1]).round());

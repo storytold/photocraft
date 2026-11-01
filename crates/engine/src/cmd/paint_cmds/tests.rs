@@ -328,3 +328,28 @@ fn bucket_and_gradient_reject_non_numeric_opacity_without_editing() {
         assert!((px(&s, 5, 5)[0] - 128.0 / 255.0).abs() < 0.01, "{cmd}: null opacity is 100%");
     }
 }
+
+/// #10703: the live mask gradient's preview paints the same pixels into a copy as the command
+/// paints into the document, and leaves the document and its history alone.
+#[test]
+fn a_gradient_preview_paints_a_copy_exactly_as_the_command_does() {
+    let (mut s, _) = bucket_layers(8);
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let p = json!({"from": [2, 0], "to": [17, 0], "colors": ["#000000", "#ffffff"], "target": "mask", "dither": false});
+    let revision = s.active().unwrap().revision;
+    let mut copy = (*s.active().unwrap().doc).clone();
+    gradient_preview(&s, &mut copy, &p).unwrap();
+    assert_eq!(s.active().unwrap().revision, revision, "the preview commits nothing");
+    let id = s.active().unwrap().active_layer.unwrap();
+    let mask = |d: &photocraft_doc::Document, x: i32| d.layer(id).unwrap().mask.as_ref().unwrap().surface.pixel(x, 5)[0];
+    assert_eq!(mask(&s.active().unwrap().doc, 10), 1.0, "the document's mask is untouched");
+    s.execute("paint.gradient", p.clone()).unwrap();
+    let painted = &s.active().unwrap().doc;
+    for x in 0..20 {
+        assert_eq!(mask(&copy, x), mask(painted, x), "x = {x}");
+    }
+    assert!(mask(&copy, 2) < 0.05 && mask(&copy, 17) > 0.95, "black at the start, white at the end");
+    // Bad params are an error, as for the command, and paint nothing.
+    let mut untouched = (*s.active().unwrap().doc).clone();
+    assert!(gradient_preview(&s, &mut untouched, &json!({"to": [1, 1], "target": "mask"})).is_err());
+}
