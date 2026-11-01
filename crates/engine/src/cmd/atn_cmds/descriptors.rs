@@ -20,11 +20,15 @@ pub(super) fn get_num(d: &Descriptor, k: &str) -> Option<f64> {
     d.get(k).and_then(num)
 }
 
-pub(super) fn get_bool(d: &Descriptor, k: &str) -> Option<bool> {
-    match d.get(k) {
-        Some(D::Boolean(b)) => Some(*b),
+pub(super) fn boolean(v: &D) -> Option<bool> {
+    match v {
+        D::Boolean(b) => Some(*b),
         _ => None,
     }
+}
+
+pub(super) fn get_bool(d: &Descriptor, k: &str) -> Option<bool> {
+    d.get(k).and_then(boolean)
 }
 
 pub(super) fn get_text(d: &Descriptor, k: &str) -> Option<String> {
@@ -35,11 +39,15 @@ pub(super) fn get_text(d: &Descriptor, k: &str) -> Option<String> {
 }
 
 /// An enumerated value's id, trailing spaces removed (`Ordn.Trgt` → `"Trgt"`).
-pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
-    match d.get(k) {
-        Some(D::Enumerated { value, .. }) => Some(trimmed(value)),
+pub(super) fn enumerated(v: &D) -> Option<String> {
+    match v {
+        D::Enumerated { value, .. } => Some(trimmed(value)),
         _ => None,
     }
+}
+
+pub(super) fn get_enum(d: &Descriptor, k: &str) -> Option<String> {
+    d.get(k).and_then(enumerated)
 }
 
 pub(super) fn get_obj<'a>(d: &'a Descriptor, k: &str) -> Option<&'a Descriptor> {

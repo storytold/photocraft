@@ -1,7 +1,7 @@
 //! Photoshop's Distort filter steps (#10605): Pinch, Polar Coordinates, Spherize, Twirl, Wave and
 //! ZigZag, each key in recorded order with the limits and defaults Photoshop measures.
 
-use super::descriptors::{desc, enm, get_enum, get_num, trimmed};
+use super::descriptors::{desc, enm, enumerated, num, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
@@ -10,6 +10,16 @@ use super::{D, Descriptor, Map, Value, json};
 /// Whether every key of `d` is one of `keys` (codes compare without their space padding).
 fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// The step's `key` read by `read` (its space padding ignored, as `only_keys` admits it),
+/// `default` when the step leaves it out, `None` when it holds a value `read` can't take: that
+/// is still the step's setting, so the step is kept rather than played with the default.
+fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default: T) -> Option<T> {
+    match d.items.iter().find(|(k, _)| trimmed(k) == key.trim_end()) {
+        Some((_, v)) => read(v),
+        None => Some(default),
+    }
 }
 
 /// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
@@ -42,7 +52,7 @@ impl Key {
 }
 
 /// A step with exactly `keys` (any missing): each value clamped or looked up, Photoshop's
-/// default for what it leaves out. Any other key keeps the step.
+/// default for what it leaves out. Any other key, or a value of the wrong type, keeps the step.
 pub(super) fn keys_from(d: &Descriptor, id: &str, keys: &[Key]) -> Mapped {
     keys_map(d, keys, &[]).map_or(Mapped::Unsupported { harmless: false }, |m| step(id, Value::Object(m)))
 }
@@ -56,9 +66,9 @@ fn keys_map(d: &Descriptor, keys: &[Key], extra: &[&'static str]) -> Option<Map<
     for k in keys {
         let v = match k {
             Key::Int { key, min, max, default, .. } => {
-                Value::from(get_num(d, key).map_or(*default, |n| n.round().clamp(f64::from(*min), f64::from(*max)) as i32))
+                Value::from(setting(d, key, |v| num(v).map(|n| n.round().clamp(f64::from(*min), f64::from(*max)) as i32), *default)?)
             }
-            Key::Enum { key, table, default, .. } => Value::from(lookup(table, &get_enum(d, key).unwrap_or_else(|| (*default).to_string()))?),
+            Key::Enum { key, table, default, .. } => Value::from(lookup(table, &setting(d, key, enumerated, (*default).to_string())?)?),
         };
         m.insert(k.param().into(), v);
     }
@@ -135,13 +145,17 @@ const WAVE_UNDEFINED: &[(&str, &str)] = &[("RptE", "repeat"), ("WrpA", "wrap")];
 pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(mut m) = keys_map(d, WAVE, &["SclH", "SclV", "UndA", "RndS"]) else { return unsupported };
-    if ["SclH", "SclV"].iter().any(|k| get_num(d, k).is_some_and(|n| n.round().clamp(1.0, 100.0) != 100.0)) {
+    if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.round().clamp(1.0, 100.0) != 100.0)) {
         return unsupported;
     }
-    let Some(undefined) = lookup(WAVE_UNDEFINED, &get_enum(d, "UndA").unwrap_or_else(|| "RptE".into())) else { return unsupported };
+    let Some(undefined) = setting(d, "UndA", enumerated, "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
     m.insert("undefinedAreas".into(), undefined.into());
-    if let Some(seed) = get_num(d, "RndS") {
-        m.insert("seed".into(), Value::from(seed as i32 as u32));
+    match setting(d, "RndS", |v| num(v).map(Some), None) {
+        Some(Some(seed)) => {
+            m.insert("seed".into(), Value::from(seed as i32 as u32));
+        }
+        Some(None) => {}
+        None => return unsupported,
     }
     step("filter.distort.wave", Value::Object(m))
 }

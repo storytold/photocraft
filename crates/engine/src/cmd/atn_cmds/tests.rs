@@ -3290,3 +3290,25 @@ fn distort_filter_steps_that_cannot_be_written_are_refused() {
     let wave = export_item("filter.distort.wave", &json!({}), "S").unwrap().descriptor.unwrap();
     assert_eq!(get_enum(&wave, "UndA").as_deref(), Some("WrpA"));
 }
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10605).
+#[test]
+fn distort_filter_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Pnch", "Amnt", D::Boolean(true)),
+        ("Twrl", "Angl", text("90")),
+        ("Plr ", "Cnvr", D::Integer(1)),
+        ("Sphr", "SphM", text("HrzO")),
+        ("ZgZg", "NmbR", enm("Ordn", "Trgt")),
+        ("Wave", "NmbG", D::Boolean(false)),
+        ("Wave", "Wvtp", D::Integer(2)),
+        ("Wave", "SclH", text("50")),
+        ("Wave", "SclV", D::Boolean(true)),
+        ("Wave", "UndA", D::Integer(1)),
+        ("Wave", "RndS", text("7")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+}
