@@ -305,11 +305,28 @@ fn build() -> Vec<CommandSpec> {
                 Ok(json!({ "document": i }))
             }
         ),
-        cmd!("file.close", "Close", ["File"], Some("Cmd+W"), r##"{"document":index?}"##, has_doc, |s, p| {
-            let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
-            s.close(i).ok_or(EngineError::NoDocument)?;
-            Ok(Value::Null)
-        }),
+        cmd!(
+            "file.close",
+            "Close",
+            ["File"],
+            Some("Cmd+W"),
+            r##"{"document":index?,"save":"discard|ask"="discard"} (ask refuses to close a changed document in headless playback)"##,
+            has_doc,
+            |s, p| {
+                let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
+                match p.get("save").filter(|v| !v.is_null()) {
+                    Some(v) if v == "ask" => {
+                        if s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() {
+                            return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
+                        }
+                    }
+                    Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask or discard")),
+                    _ => {}
+                }
+                s.close(i).ok_or(EngineError::NoDocument)?;
+                Ok(Value::Null)
+            }
+        ),
         // Edit
         cmd!("edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{}", can_undo, |s, _| Ok(json!(s.undo()))),
         cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| Ok(json!(s.redo()))),

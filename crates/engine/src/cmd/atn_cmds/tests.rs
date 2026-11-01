@@ -562,6 +562,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.setProps", json!({"name": "Renamed", "opacity": 0.4, "blend": "Linear Light"})),
         ("layer.setProps", json!({"layer": "Shadow", "visible": false})),
         ("layer.setLabelColor", json!({"color": "red"})),
+        ("layer.showOnly", json!({"layer": "Solo"})),
         ("layer.select", json!({"layer": "Shadow", "mode": "add"})),
         ("layer.select", json!({"layer": "Shadow", "mode": "range"})),
         ("layer.selectTop", json!({})),
@@ -2082,7 +2083,7 @@ fn minimum_and_maximum_with_roundness_are_not_exported_as_squareness() {
 }
 
 /// #7515: a Transform Selection's interpolation survives the round trip as a layer transform's
-/// does. #7516-#7519: a reference point other than the centre, a skew or a warp can't be written,
+/// does. An arbitrary coordinate reference, a skew or a warp can't be written,
 /// so the step is refused instead of replaying as a plain scale.
 #[test]
 fn transform_selection_keeps_its_interpolation_and_refuses_what_it_cannot_carry() {
@@ -2094,7 +2095,6 @@ fn transform_selection_keeps_its_interpolation_and_refuses_what_it_cannot_carry(
     assert_eq!(imported.actions[0].steps, vec![("select.transformSelection".to_string(), p)]);
     for id in ["select.transformSelection", "edit.transform"] {
         for p in [
-            json!({"scaleX": 140, "reference": "topLeft"}),
             json!({"scaleX": 140, "reference": [3, 4]}),
             json!({"scaleX": 140, "skewX": 12}),
             json!({"scaleX": 140, "skewY": -5}),
@@ -2138,15 +2138,13 @@ fn canvas_bound_modify_and_placed_pattern_bucket_refuse_strict_export() {
     }
 }
 
-/// #7502, #7512, #7513, #7514: a New Layer step that clips to the layer below, has a colour
-/// label, fills with the neutral colour or goes below the active layer isn't exported, since the
-/// descriptor carries only its name, opacity and mode. Those options at their defaults still
+/// #7512, #7513, #7514: a New Layer step with a colour label, neutral fill or a position below
+/// the active layer isn't exported. Invalid clipping values are also refused. Defaults still
 /// export, and the step round-trips.
 #[test]
 fn new_layer_options_the_descriptor_cannot_carry_refuse_strict_export() {
     let new_layer = |p: Value| Action { name: "Probe".into(), steps: vec![("layer.new.layer".into(), p)], ..Default::default() };
     for p in [
-        json!({"name": "New", "clipToPrevious": true}),
         json!({"name": "New", "color": "red"}),
         json!({"name": "New", "mode": "Overlay", "fillNeutral": true}),
         json!({"name": "New", "position": "below"}),
@@ -3174,4 +3172,298 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// Newer Group from Layers recordings put the name outside Usng; existing nested names win.
+#[test]
+fn mapped_make_group_name_survives_load_and_save() {
+    for (top, nested, expected) in [(Some("Selected"), None, "Selected"), (None, Some("Nested"), "Nested"), (Some("Top"), Some("Nested"), "Nested")] {
+        let mut d = desc("null").with("null", class_ref("layerSection")).with("From", target_ref("Lyr "));
+        if let Some(name) = top {
+            d = d.with("Nm  ", text(name));
+        }
+        if let Some(name) = nested {
+            d = d.with("Usng", D::Descriptor(desc("layerSection").with("Nm  ", text(name))));
+        }
+        let source = one_action(vec![item("Mk  ", "Group from Layers", Some(d))]);
+        let loaded = import(&atn::write(&source).unwrap()).unwrap();
+        assert_eq!(loaded.actions[0].steps, vec![("layer.groupLayers".into(), json!({"name": expected}))]);
+        let (saved, skipped) = export("Groups", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+    }
+}
+
+/// A recorded New Layer clipping flag must reach the command and survive strict export.
+#[test]
+fn mapped_make_clipping_flag_survives_load_and_save() {
+    for clip in [None, Some(false), Some(true)] {
+        let mut using = desc("Lyr ").with("Nm  ", text("Clipped"));
+        if let Some(clip) = clip {
+            using = using.with("Grup", D::Boolean(clip));
+        }
+        let d = desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(using));
+        let loaded = import(&atn::write(&one_action(vec![item("Mk  ", "New Layer", Some(d))])).unwrap()).unwrap();
+        let mut expected = json!({"name": "Clipped"});
+        if clip == Some(true) {
+            expected["clipToPrevious"] = json!(true);
+        }
+        assert_eq!(loaded.actions[0].steps, vec![("layer.new.layer".into(), expected)]);
+        let (saved, skipped) = export("Layers", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
+    }
+}
+
+/// An unreadable clipping flag keeps the original step instead of creating an unclipped layer.
+#[test]
+fn mapped_make_invalid_clipping_flag_is_kept() {
+    let using = desc("Lyr ").with("Grup", long(1.0));
+    let d = desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(using));
+    let loaded = import(&atn::write(&one_action(vec![item("Mk  ", "New Layer", Some(d))])).unwrap()).unwrap();
+    assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+}
+
+/// Load a recorded descriptor through the same parser as Load Actions.
+fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
+    import(&atn::write(&one_action(vec![item(event, event, Some(descriptor))])).unwrap()).unwrap()
+}
+
+/// Every frame anchor survives import/export; unknown anchors stay available verbatim.
+#[test]
+fn mapped_transform_reference_points_round_trip() {
+    for (code, reference) in [
+        ("Qcsa", "center"),
+        ("Qcs0", "topLeft"),
+        ("Qcs1", "top"),
+        ("Qcs2", "topRight"),
+        ("Qcs3", "left"),
+        ("Qcs4", "center"),
+        ("Qcs5", "right"),
+        ("Qcs6", "bottomLeft"),
+        ("Qcs7", "bottom"),
+        ("Qcs8", "bottomRight"),
+    ] {
+        for target in [target_ref("Lyr "), D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }])] {
+            let d = desc("null")
+                .with("null", target)
+                .with("FTcs", enm("QCSt", code))
+                .with("Wdth", pct(50.0))
+                .with("Hght", pct(50.0))
+                .with("Ofst", D::Descriptor(desc("Ofst").with("Hrzn", px(0.0)).with("Vrtc", px(0.0))));
+            let loaded = mapped_recording("Trnf", d);
+            let params = &loaded.actions[0].steps[0].1;
+            assert_eq!(params.get("reference").and_then(Value::as_str).unwrap_or("center"), reference);
+            let (bytes, _) = export("Anchors", &[&loaded.actions[0]], &[], false).unwrap();
+            assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
+            if reference == "topLeft" && loaded.actions[0].steps[0].0 == "select.transformSelection" {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width":256,"height":256})).unwrap();
+                s.execute("select.rect", json!({"x":60,"y":60,"width":100,"height":100})).unwrap();
+                let (id, p) = &loaded.actions[0].steps[0];
+                s.execute(id, p.clone()).unwrap();
+                assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(60, 60, 110, 110));
+            }
+        }
+    }
+    let d = desc("null").with("null", target_ref("Lyr ")).with("FTcs", enm("QCSt", "unknown")).with("Wdth", pct(50.0));
+    assert_eq!(mapped_recording("Trnf", d).actions[0].steps[0].0, PHOTOSHOP_STEP);
+}
+
+/// Alt-clicking an eye twice must isolate and then restore visibility, not just show a layer.
+#[test]
+fn mapped_show_only_round_trip_and_toggle() {
+    let d = desc("null").with("null", D::List(vec![name_ref("Lyr ", "Solo")])).with("TglO", D::Boolean(true));
+    let loaded = mapped_recording("Shw ", d);
+    assert_eq!(loaded.actions[0].steps, vec![("layer.showOnly".into(), json!({"layer": "Solo"}))]);
+    let (bytes, _) = export("Eyes", &[&loaded.actions[0]], &[], false).unwrap();
+    let saved = atn::parse(&bytes).unwrap();
+    assert_eq!(get_bool(saved.actions[0].items[0].descriptor.as_ref().unwrap(), "TglO"), Some(true));
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Solo"})).unwrap();
+    let visible = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.visible).collect::<Vec<_>>();
+    let original = visible(&s);
+    let (id, params) = &loaded.actions[0].steps[0];
+    assert_eq!(s.execute(id, params.clone()).unwrap()["shownAlone"], true);
+    assert_ne!(visible(&s), original);
+    assert_eq!(s.execute(id, params.clone()).unwrap()["shownAlone"], false);
+    assert_eq!(visible(&s), original);
+    let malformed = desc("null").with("null", D::List(vec![name_ref("Lyr ", "Solo"), long(1.0)])).with("TglO", D::Boolean(true));
+    assert_eq!(mapped_recording("Shw ", malformed).actions[0].steps[0].0, PHOTOSHOP_STEP);
+}
+
+/// A layer label is separate from an adjustment's own colour parameter.
+#[test]
+fn mapped_adjustment_label_survives_export() {
+    let d = desc("null")
+        .with("null", class_ref("AdjL"))
+        .with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(desc("Invr"))).with("Clr ", enm("Clr ", "Rd  "))));
+    let loaded = mapped_recording("Mk  ", d);
+    assert_eq!(loaded.actions[0].steps, vec![("layer.newAdjustmentLayer.invert".into(), json!({})), ("layer.setLabelColor".into(), json!({"color":"red"}))]);
+    let (bytes, _) = export("Labels", &[&loaded.actions[0]], &[], false).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    for (id, params) in &loaded.actions[0].steps {
+        s.execute(id, params.clone()).unwrap();
+    }
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().label.id(), "red");
+}
+
+/// Keeping an unmapped shape is safer than creating a solid fill over the whole canvas.
+#[test]
+fn mapped_shape_creation_is_kept_with_its_geometry_and_stroke() {
+    let d = desc("null").with("null", class_ref("contentLayer")).with("Shp ", D::Descriptor(desc("Rctn").with("Wdth", px(20.0)))).with(
+        "Usng",
+        D::Descriptor(
+            desc("contentLayer")
+                .with("Type", D::Descriptor(desc("solidColorLayer")))
+                .with("strokeStyle", D::Descriptor(desc("strokeStyle").with("strokeStyleLineWidth", px(3.0)))),
+        ),
+    );
+    let loaded = mapped_recording("Mk  ", d.clone());
+    assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    let (bytes, _) = export("Shapes", &[&loaded.actions[0]], &[], false).unwrap();
+    assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&d));
+}
+
+/// Copy and Cut retain all recorded layer options, including labels and fractional opacity.
+#[test]
+fn mapped_copy_cut_layer_options_survive_export() {
+    for (copy, id) in [(true, "layer.new.layerViaCopy"), (false, "layer.new.layerViaCut")] {
+        let options = desc("Lyr ").with("Nm  ", text("Extracted")).with("Md  ", enm("BlnM", "Mltp")).with("Opct", pct(37.5)).with("Clr ", enm("Clr ", "Bl  "));
+        let d = desc("null").with("Nw  ", D::Descriptor(options)).with("Usng", enm("ArSl", "Slct")).with("Cpy ", D::Boolean(copy));
+        let loaded = mapped_recording("Mk  ", d);
+        assert_eq!(
+            loaded.actions[0].steps,
+            vec![
+                (id.into(), json!({})),
+                ("layer.setLabelColor".into(), json!({"color":"blue"})),
+                ("layer.setProps".into(), json!({"name":"Extracted","blend":"Multiply","opacity":0.375}))
+            ]
+        );
+        let (bytes, _) = export("Extract", &[&loaded.actions[0]], &[], false).unwrap();
+        let saved = import(&bytes).unwrap();
+        assert_eq!(saved.actions[0].steps[..2], loaded.actions[0].steps[..2]);
+        let mut props = serde_json::Map::new();
+        for (id, p) in &saved.actions[0].steps[2..] {
+            assert_eq!(id, "layer.setProps");
+            props.extend(p.as_object().unwrap().clone());
+        }
+        assert_eq!(Value::Object(props), loaded.actions[0].steps[2].1);
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
+        s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
+        for (id, params) in &saved.actions[0].steps {
+            s.execute(id, params.clone()).unwrap();
+        }
+        let st = s.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(layer.name, "Extracted");
+        assert_eq!(layer.opacity, 0.375);
+        assert_eq!(layer.blend, photocraft_color::BlendMode::Multiply);
+        assert_eq!(layer.label.id(), "blue");
+    }
+}
+
+/// Loading transparency must keep the source layer instead of using the active layer.
+#[test]
+fn mapped_named_layer_transparency_survives_export() {
+    let source = D::Reference(vec![
+        ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code("Trsp") },
+        ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul("Source") },
+    ]);
+    let d = desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: code("fsel") }])).with("T   ", source);
+    let loaded = mapped_recording("setd", d);
+    assert_eq!(loaded.actions[0].steps, vec![("select.loadSelection".into(), json!({"channel":"transparency","layer":"Source"}))]);
+    let (bytes, _) = export("Transparency", &[&loaded.actions[0]], &[], false).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
+    s.execute("layer.setProps", json!({"name":"Source"})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Empty"})).unwrap();
+    let (id, p) = &loaded.actions[0].steps[0];
+    s.execute(id, p.clone()).unwrap();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(0, 0, 4, 4));
+}
+
+/// A localized Background and an ordinary layer named Background are distinct targets.
+#[test]
+fn mapped_background_property_survives_export_and_playback() {
+    let r = D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: code("Bckg") }]);
+    let loaded = mapped_recording("Hd  ", desc("null").with("null", D::List(vec![r.clone()])));
+    assert_eq!(loaded.actions[0].steps, vec![("layer.hideLayers".into(), json!({"layer":{"background":true}}))]);
+    let (bytes, _) = export("Background", &[&loaded.actions[0]], &[], false).unwrap();
+    assert_eq!(get_list(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref().unwrap(), "null"), Some(&[r][..]));
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers[0].name = "Hintergrund".into();
+    s.execute("layer.new.layer", json!({"name":"Background"})).unwrap();
+    let (id, p) = &loaded.actions[0].steps[0];
+    s.execute(id, p.clone()).unwrap();
+    let layers = &s.active().unwrap().doc.layers;
+    assert!(!layers[0].visible);
+    assert!(layers[1].visible);
+    s.execute("layer.hideLayers", json!({"layer":"Background"})).unwrap();
+    assert!(!s.active().unwrap().doc.layers[1].visible);
+    assert!(s.execute("layer.showLayers", json!({"layer":{"background":false}})).is_err());
+    s.execute("layer.setLabelColor", json!({"layer":{"background":true},"color":"red"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layers[0].label.id(), "red");
+    s.execute("select.loadSelection", json!({"channel":"transparency","layer":{"background":true}})).unwrap();
+    assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(0, 0, 4, 4));
+    let selected = mapped_recording("slct", desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: code("Bckg") }])));
+    let (bytes, _) = export("Select Background", &[&selected.actions[0]], &[], false).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, selected.actions[0].steps);
+    let (id, p) = &selected.actions[0].steps[0];
+    s.execute(id, p.clone()).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(s.active().unwrap().doc.layers[0].id));
+    let revision = s.active().unwrap().revision;
+    for selector in [json!({"background":false}), json!({"background":"true"}), json!({"background":true,"extra":0})] {
+        assert!(s.execute("select.loadSelection", json!({"channel":"transparency","layer":selector})).is_err());
+        assert_eq!(s.active().unwrap().revision, revision);
+    }
+}
+
+/// An unanswered Close must not turn into an explicit discard or close a changed document.
+#[test]
+fn mapped_close_keeps_ask_and_discard_distinct() {
+    let loaded = mapped_recording("Cls ", desc("null"));
+    assert_eq!(loaded.actions[0].steps, vec![("file.close".into(), json!({"save":"ask"}))]);
+    let (bytes, _) = export("Close", &[&loaded.actions[0]], &[], false).unwrap();
+    assert!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref().unwrap().get("Svng").is_none());
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, loaded.actions[0].steps);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let (id, p) = &loaded.actions[0].steps[0];
+    assert!(s.execute(id, p.clone()).is_err());
+    assert_eq!(s.documents().len(), 1);
+    s.execute("file.close", json!({"save":"discard"})).unwrap();
+    assert!(s.documents().is_empty());
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    s.execute(id, p.clone()).unwrap();
+    assert!(s.documents().is_empty());
+}
+
+/// Lab Photo Filter colours use the CMS conversion and remain mapped after saving as RGB.
+#[test]
+fn mapped_lab_photo_filter_imports_and_round_trips() {
+    for (lab, expected) in
+        [([0.0, 0.0, 0.0], "#000000"), ([100.0, 0.0, 0.0], "#ffffff"), ([50.0, 0.0, 0.0], "#777777"), ([54.2917, 80.8125, 69.8851], "#ff0000")]
+    {
+        let color = desc("LbCl").with("Lmnc", D::Double(lab[0])).with("A   ", D::Double(lab[1])).with("B   ", D::Double(lab[2]));
+        let loaded = mapped_recording("photoFilter", desc("null").with("Clr ", D::Descriptor(color)).with("Dnst", long(25.0)));
+        let (id, params) = &loaded.actions[0].steps[0];
+        assert_eq!(id, "image.adjustments.photoFilter");
+        assert_eq!(params["color"], expected);
+        assert_eq!(params["density"].as_f64(), Some(25.0));
+        let (bytes, _) = export("Lab", &[&loaded.actions[0]], &[], false).unwrap();
+        let saved = import(&bytes).unwrap();
+        assert_eq!(saved.actions[0].steps[0].0, *id);
+        assert_eq!(saved.actions[0].steps[0].1["color"], expected);
+        assert_eq!(saved.actions[0].steps[0].1["density"].as_f64(), Some(25.0));
+    }
 }

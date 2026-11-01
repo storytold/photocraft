@@ -473,7 +473,14 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "placedLayerEditContents", "Edit Contents", "layer.smartObjects.editContents", &[]),
     ev!("", "updatePlacedLayer", "Update Smart Objects", "layer.smartObjects.updateModifiedContent", &[]),
     Event { code: "Hd  ", name: "hide", label: "Hide", ids: &["layer.hideLayers"], from: |d| visibility_from(d, "layer.hideLayers"), to: visibility_to },
-    Event { code: "Shw ", name: "show", label: "Show", ids: &["layer.showLayers"], from: |d| visibility_from(d, "layer.showLayers"), to: visibility_to },
+    Event {
+        code: "Shw ",
+        name: "show",
+        label: "Show",
+        ids: &["layer.showLayers", "layer.showOnly"],
+        from: |d| visibility_from(d, "layer.showLayers"),
+        to: visibility_to,
+    },
     Event {
         code: "move",
         name: "move",

@@ -113,9 +113,14 @@ pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
-/// `close`: Photoshop's Save prompt answer becomes a Save step before the Close.
+/// Import Close's save policy: absent asks, Yes saves first, and No explicitly discards.
 pub(super) fn close_from(d: &Descriptor) -> Mapped {
-    if get_enum(d, "Svng").as_deref() == Some("Ys") { steps(vec![("file.save", json!({})), ("file.close", json!({}))]) } else { none("file.close") }
+    match d.get("Svng") {
+        None => step("file.close", json!({"save": "ask"})),
+        Some(D::Enumerated { value, .. }) if value.is("Ys  ") => steps(vec![("file.save", json!({})), ("file.close", json!({}))]),
+        Some(D::Enumerated { value, .. }) if value.is("N   ") => none("file.close"),
+        _ => Mapped::Unsupported { harmless: false },
+    }
 }
 
 /// A Close of an explicit document has no mapping here: written as a plain Close it would
@@ -124,7 +129,11 @@ pub(super) fn close_to(_: &str, p: &Value) -> Option<Descriptor> {
     if p.get("document").is_some_and(|d| !d.is_null()) {
         return None;
     }
-    Some(desc("null").with("Svng", enm("YsN ", "N   ")))
+    match p.get("save").filter(|v| !v.is_null()) {
+        Some(v) if v == "ask" => Some(desc("null")),
+        Some(v) if v != "discard" => None,
+        _ => Some(desc("null").with("Svng", enm("YsN ", "N   "))),
+    }
 }
 
 const WEB_FORMATS: &[(&str, &str)] = &[("PN24", "png24"), ("PN8", "png8"), ("JPEG", "jpeg"), ("GIFf", "gif"), ("WBMP", "wbmp")];

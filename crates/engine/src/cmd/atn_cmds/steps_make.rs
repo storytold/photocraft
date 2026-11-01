@@ -92,13 +92,29 @@ fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     })
 }
 
+/// Import New Document and selection-based Copy/Cut, retaining the new layer's options.
 fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let nw = get_obj(d, "Nw  ")?;
     if get_enum(d, "Usng").as_deref() == Some("Slct") {
         let id = if get_bool(d, "Cpy ") == Some(true) { "layer.new.layerViaCopy" } else { "layer.new.layerViaCut" };
         let mut mapped_steps = vec![(id, json!({}))];
+        let mut props = Map::new();
         if let Some(n) = get_text(nw, "Nm  ") {
-            mapped_steps.push(("layer.setProps", json!({"name": n})));
+            props.insert("name".into(), n.into());
+        }
+        if let Some(o) = get_num(nw, "Opct") {
+            props.insert("opacity".into(), (o / 100.0).into());
+        }
+        if let Some(m) = get_enum(nw, "Md  ") {
+            let Some(mode) = blend_label(&m) else { return Some(Mapped::Unsupported { harmless: false }) };
+            props.insert("blend".into(), mode.into());
+        }
+        if let Some(c) = get_enum(nw, "Clr ") {
+            let Some(color) = lookup(LABEL_COLORS, &c) else { return Some(Mapped::Unsupported { harmless: false }) };
+            mapped_steps.push(("layer.setLabelColor", json!({"color": color})));
+        }
+        if !props.is_empty() {
+            mapped_steps.push(("layer.setProps", Value::Object(props)));
         }
         return Some(steps(mapped_steps));
     }
@@ -139,6 +155,7 @@ fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
 /// New Snapshot's From: the full document, the layers merged, or the current layer.
 const SNAPSHOT_FROM: &[(&str, &str)] = &[("FllD", "fullDocument"), ("MrgL", "mergedLayers"), ("CrnL", "currentLayer")];
 
+/// Import Make events only when their geometry and options can be represented faithfully.
 pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if let Some(mapped) = duplicate_layer_from_descriptor(d) {
         return mapped;
@@ -165,13 +182,33 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
                 if let Some(m) = get_enum(u, "Md  ").and_then(|m| blend_label(&m)) {
                     p.insert("mode".into(), m.into());
                 }
+                match u.get("Grup") {
+                    Some(D::Boolean(true)) => {
+                        p.insert("clipToPrevious".into(), true.into());
+                    }
+                    Some(D::Boolean(false)) | None => {}
+                    _ => return Mapped::Unsupported { harmless: false },
+                }
             }
             step("layer.new.layer", Value::Object(p))
         }
         Some("AdjL") => match type_desc.and_then(|t| adjustment_by_class(&trimmed(&t.class_id))) {
-            Some(a) => adjustment_steps(a, "layer.newAdjustmentLayer.", type_desc),
+            Some(a) => {
+                let mut mapped = adjustment_steps(a, "layer.newAdjustmentLayer.", type_desc);
+                if let Some(c) = using.and_then(|u| get_enum(u, "Clr ")) {
+                    let Some(color) = lookup(LABEL_COLORS, &c) else { return Mapped::Unsupported { harmless: false } };
+                    if let Mapped::Steps(steps) = &mut mapped {
+                        steps.push(("layer.setLabelColor".into(), json!({"color": color})));
+                    }
+                }
+                mapped
+            }
             None => Mapped::Unsupported { harmless: false },
         },
+        Some("contentLayer") if d.get("Shp ").is_some() || using.is_some_and(|u| u.get("Shp ").is_some() || u.get("strokeStyle").is_some()) => {
+            // A shape's geometry and stroke cannot be represented by a canvas-wide fill.
+            Mapped::Unsupported { harmless: false }
+        }
         Some("contentLayer") => match type_desc {
             Some(t) if t.class_id.is("solidColorLayer") => match get_obj(t, "Clr ").and_then(color_hex) {
                 Some(c) => step("layer.newFillLayer.solidColor", json!({"color": c})),
@@ -185,7 +222,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         },
         Some("layerSection") => {
             let mut p = Map::new();
-            if let Some(n) = using.and_then(|u| get_text(u, "Nm  ")) {
+            if let Some(n) = using.and_then(|u| get_text(u, "Nm  ")).or_else(|| get_text(d, "Nm  ")) {
                 p.insert("name".into(), n.into());
             }
             match get_ref(d, "From") {
@@ -223,6 +260,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Write a creation step, refusing native options the target descriptor cannot carry.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     let with_name = |cls: &str| {
         let mut u = desc(cls);
@@ -233,12 +271,12 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     };
     Some(match id {
         "layer.new.layer" => {
-            // The descriptor carries the name, opacity and mode only. A step that also clips to
-            // the layer below, labels the layer, fills it with the neutral colour or places it
+            // The descriptor carries the name, opacity, mode and clipping flag. A step that
+            // labels the layer, fills it with the neutral colour or places it
             // below the active layer would replay as a different layer, so it isn't exported
-            // (strict export fails, a partial one skips it: #7502, #7512, #7513, #7514).
+            // (strict export fails, a partial one skips it: #7512, #7513, #7514).
             let set = |key: &str, default: Value| p.get(key).is_some_and(|v| !v.is_null() && *v != default);
-            if set("clipToPrevious", Value::Bool(false))
+            if p.get("clipToPrevious").is_some_and(|v| !v.is_null() && !v.is_boolean())
                 || set("color", json!("none"))
                 || set("fillNeutral", Value::Bool(false))
                 || set("position", json!("above"))
@@ -246,6 +284,9 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
                 return None;
             }
             let mut u = with_name("Lyr ");
+            if jbool(p, "clipToPrevious") == Some(true) {
+                u = u.with("Grup", D::Boolean(true));
+            }
             if let Some(o) = jnum(p, "opacity") {
                 u = u.with("Opct", pct(o * 100.0));
             }
@@ -359,6 +400,7 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     })
 }
 
+/// Import selection geometry or a channel source, including its optional source layer.
 fn selection_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     match d.get("T   ") {
@@ -369,7 +411,18 @@ fn selection_from(d: &Descriptor) -> Mapped {
             _ => unsupported,
         },
         Some(D::Reference(t)) => match (ref_class(t).as_deref(), target(t)) {
-            (Some("Chnl"), Target::Ordinal(o)) if o == "Trsp" => step("select.loadSelection", json!({"channel": "transparency"})),
+            (Some("Chnl"), Target::Ordinal(o)) if o == "Trsp" => {
+                let mut p = Map::new();
+                p.insert("channel".into(), "transparency".into());
+                if t.len() > 1 {
+                    if t.len() != 2 || ref_class(&t[1..]).as_deref() != Some("Lyr") {
+                        return unsupported;
+                    }
+                    let Some(layer) = layer_target(&t[1..]) else { return unsupported };
+                    p.extend(layer);
+                }
+                step("select.loadSelection", Value::Object(p))
+            }
             // ⌘-click on the targeted channel (a layer mask after `select` of `Msk`).
             (Some("Chnl"), Target::Ordinal(o)) if o == "Trgt" => step("select.loadSelection", json!({"channel": "targeted"})),
             (Some("Chnl"), Target::Name(n)) => step("select.loadSelection", json!({"channel": n})),
@@ -664,7 +717,14 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             return None;
         }
         "select.loadSelection" => match jstr(p, "channel")? {
-            "transparency" => sel(D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") }])),
+            "transparency" => {
+                let mut r = vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") }];
+                if p.get("layer").is_some_and(|v| !v.is_null()) {
+                    let D::Reference(layer) = layer_ref(p)? else { return None };
+                    r.extend(layer);
+                }
+                sel(D::Reference(r))
+            }
             "targeted" => sel(D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Ordn"), value: Id::new("Trgt") }])),
             name => sel(name_ref("Chnl", name)),
         },
