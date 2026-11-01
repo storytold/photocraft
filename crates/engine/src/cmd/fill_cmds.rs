@@ -258,10 +258,12 @@ pub(crate) fn content_aware_native(
     content_aware_native_with_options(surf, hole_bounds, canvas, &content_aware_options(color_adaptation, seed), is_hole, usable)
 }
 
+/// The adaptation defaults shared by Fill and Content-Aware Crop.
 fn content_aware_options(color_adaptation: bool, seed: u64) -> FillOptions {
     FillOptions { color_adaptation: photocraft_algo::content_aware::color_level(if color_adaptation { "default" } else { "none" }), seed, ..Default::default() }
 }
 
+/// Fill the bounded sampling window with native channel values and the requested adaptations.
 fn content_aware_native_with_options(
     surf: &Surface,
     hole_bounds: Rect,
