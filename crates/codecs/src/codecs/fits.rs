@@ -479,6 +479,7 @@ fn quoted_whole(v: &str, body: &str) -> bool {
     literal(v) || body.trim_matches('\'').trim_end().replace("''", "'") == ascii(v).trim_end()
 }
 
+/// Encode FITS samples in file order, borrowing native bytes for wide samples.
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
@@ -532,23 +533,26 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             }
         }
         16 => {
-            let d = img.to_u16_samples().unwrap_or_default();
+            let d = img.data().as_chunks::<2>().0;
             for p in 0..nc {
                 for y in 0..hu {
                     for x in 0..wu {
-                        out.extend_from_slice(&((d[idx(p, y, x)] as i32 - 32768) as i16).to_be_bytes());
+                        let bytes = d.get(idx(p, y, x)).ok_or_else(|| CodecError::encode(F, "image buffer is shorter than its dimensions"))?;
+                        let v = u16::from_ne_bytes(*bytes);
+                        out.extend_from_slice(&((v as i32 - 32768) as i16).to_be_bytes());
                     }
                 }
             }
         }
         _ => {
-            let d = img.to_f32_samples().unwrap_or_default();
+            let d = img.data().as_chunks::<4>().0;
             for p in 0..nc {
                 for y in 0..hu {
                     for x in 0..wu {
                         // 0..1 as documented: a value above 2 would make readers (ours too)
                         // take the data as ADU and scale it by 65535. NaN is written as 0.
-                        let v = d[idx(p, y, x)];
+                        let bytes = d.get(idx(p, y, x)).ok_or_else(|| CodecError::encode(F, "image buffer is shorter than its dimensions"))?;
+                        let v = f32::from_ne_bytes(*bytes);
                         let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
                         out.extend_from_slice(&v.to_be_bytes());
                     }
@@ -652,15 +656,33 @@ mod tests {
         assert_eq!(img.to_f32_samples().unwrap(), vec![1.0, 0.0]);
     }
 
+    /// Native U16 samples keep FITS's signed bias and bottom-up planar order.
+    #[test]
+    fn wide_integer_export_writes_signed_planes_bottom_up() {
+        let values = [0, 32768, 65535, 1, 0x1234, 0xabcd, 65534, 0x8001, 2, 0x0102, 0xff00, 0x8000];
+        let img = Image::from_u16(2, 2, ChannelLayout::Rgb, &values).unwrap();
+        let opts = EncodeOptions::default();
+        let bytes = encode(&img, crate::fidelity::plan(&img, F, &opts), &opts).unwrap();
+        let start = find_image(&bytes).unwrap().0.data_start;
+        let expected: Vec<u8> = [0x7ffeu16, 0x8102, 0x8000, 0x8001, 0x0001, 0x7f00, 0x0000, 0x9234, 0x8002, 0x0000, 0x7fff, 0x2bcd]
+            .into_iter()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        assert_eq!(&bytes[start..start + expected.len()], expected);
+    }
+
+    /// Float exports keep row order, signed zero and the established clipping rules.
     #[test]
     fn hdr_float_saves_clamped_and_reopens_as_saved() {
         // One value above 2 used to make the reader scale everything by 65535 (all black).
-        let img = Image::from_f32(2, 1, ChannelLayout::Gray, &[0.5, 3.0]).unwrap();
+        let img = Image::from_f32(3, 2, ChannelLayout::Gray, &[0.5, 3.0, -0.0, f32::NAN, f32::NEG_INFINITY, f32::INFINITY]).unwrap();
         let opts = EncodeOptions::default();
         let bytes = encode(&img, crate::fidelity::plan(&img, F, &opts), &opts).unwrap();
+        let start = find_image(&bytes).unwrap().0.data_start;
+        let expected: Vec<u8> = [0u32, 0, 0x3f800000, 0x3f000000, 0x3f800000, 0x80000000].into_iter().flat_map(u32::to_be_bytes).collect();
+        assert_eq!(&bytes[start..start + expected.len()], expected);
         let back = decode(&bytes, &Limits::default()).unwrap().to_f32_samples().unwrap();
-        assert!((back[0] - 0.5).abs() < 1e-6, "{back:?}");
-        assert!((back[1] - 1.0).abs() < 1e-6, "{back:?}");
+        assert_eq!(back, [0.5, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
