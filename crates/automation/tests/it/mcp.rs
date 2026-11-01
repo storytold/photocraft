@@ -473,12 +473,8 @@ async fn bridge_response_budget_drops_connection_without_retrying_the_operation(
         let (sock, _) = listener.accept().await.unwrap();
         let (read, mut write) = sock.into_split();
         let mut reader = BufReader::new(read);
+        crate::bridge::serve_handshake(&mut reader, &mut write).await;
         let mut line = String::new();
-        reader.read_line(&mut line).await.unwrap();
-        let auth: Value = serde_json::from_str(&line).unwrap();
-        let reply = json!({"id": auth["id"], "ok": true, "result": {"authenticated": true}});
-        write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
-        line.clear();
         reader.read_line(&mut line).await.unwrap();
         let request: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(request["method"], "engine.execute");
@@ -917,6 +913,7 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
     let addr = listener.local_addr().unwrap().to_string();
     let h = tokio::spawn(async move {
         let mut seen = Vec::new();
+        let mut handshake = photocraft_automation::security::ServerHandshake::new();
         let mut authenticated = false;
         let (sock, _) = listener.accept().await.unwrap();
         let (r, mut w) = sock.into_split();
@@ -926,12 +923,10 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
             let id = req["id"].clone();
             let method = req["method"].as_str().unwrap_or("").to_owned();
             let reply = match method.as_str() {
-                "auth" if req["params"]["token"] == CONTROL_TOKEN => {
-                    authenticated = true;
-                    json!({"id": id, "ok": true, "result": {"authenticated": true}})
-                }
                 _ if !authenticated => {
-                    json!({"id": id, "ok": false, "error": "authentication required"})
+                    let (reply, step) = handshake.reply(&line, CONTROL_TOKEN);
+                    authenticated = step == photocraft_automation::security::AuthStep::Authenticated;
+                    reply
                 }
                 "ui.inspect" => {
                     json!({"id": id, "ok": true, "result": {"tool": "brush", "panels": ["layers"]}})
@@ -1010,12 +1005,8 @@ async fn bridge_lost_reply_does_not_replay_an_edit_and_next_call_reconnects() {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (read, mut write) = socket.into_split();
                 let mut reader = BufReader::new(read);
+                crate::bridge::serve_handshake(&mut reader, &mut write).await;
                 let mut line = String::new();
-                reader.read_line(&mut line).await.unwrap();
-                let (auth, authenticated) = photocraft_automation::security::authentication_reply(&line, CONTROL_TOKEN);
-                assert!(authenticated, "each connection must authenticate");
-                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
-                line.clear();
                 reader.read_line(&mut line).await.unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
                 seen.push(request["params"]["command"].as_str().unwrap().to_owned());
@@ -1172,7 +1163,8 @@ async fn bridge_rejects_wrong_token_before_control_methods() {
     let client = connect(PhotocraftMcp::bridge(&addr, wrong).unwrap()).await;
     let r = call(&client, "ui_inspect", json!({})).await;
     assert_eq!(r.is_error, Some(true));
-    assert!(text(&r).contains("authentication required"), "{}", text(&r));
+    // The app's challenge proof does not match the client's token, so nothing more is sent.
+    assert!(text(&r).contains("did not prove it holds this control token"), "{}", text(&r));
     client.cancel().await.unwrap();
     app.abort();
 }

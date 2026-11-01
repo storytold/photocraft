@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 use crate::budgets::{BatchReplyBudget, write_reply};
 use crate::security::{
-    AUTH_DEADLINE, AuthDeadlineStream, ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply,
+    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake,
     configure_stream, discard_rest_of_line, read_bounded_line, repeat_auth_reply,
 };
 use crate::{AutomationError, Headless};
@@ -295,6 +295,7 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
     let mut reader = std::io::BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
     let mut out = stream;
     let mut line = String::new();
+    let mut handshake = ServerHandshake::new();
     let mut authenticated = false;
     loop {
         match read_bounded_line(&mut reader, &mut line)? {
@@ -312,19 +313,19 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
             LineRead::Line if line.trim().is_empty() => continue,
             LineRead::Line => {}
         }
-        let reply = if authenticated {
-            repeat_auth_reply(&line).unwrap_or_else(|| respond(h, &line))
+        let (reply, step) = if authenticated {
+            (repeat_auth_reply(&line).unwrap_or_else(|| respond(h, &line)), AuthStep::Authenticated)
         } else {
-            let (reply, ok) = authentication_reply(&line, token);
-            authenticated = ok;
-            if ok {
+            let (reply, step) = handshake.reply(&line, token);
+            if step == AuthStep::Authenticated {
+                authenticated = true;
                 reader.get_mut().authenticated()?;
             }
-            reply
+            (reply, step)
         };
         write_reply(&mut out, &reply)?;
         out.flush()?;
-        if !authenticated {
+        if step == AuthStep::Rejected {
             return Ok(());
         }
     }

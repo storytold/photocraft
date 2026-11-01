@@ -17,13 +17,29 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
 
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents. A flag wins over its variable and an empty variable counts as unset; with `--control` (or `PHOTOCRAFT_CONTROL_PORT`), a token together with a token file, from flags or variables, is a usage error (exit status 2). Without it no token is read, so the pair is ignored.
 
-The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
+The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds. There are two ways; a refused frame gets `{"ok": false, "error": "authentication required"}` and the connection is closed.
+
+**Challenge authentication** (what `photocraft-cli mcp --bridge` uses) never sends the token, and the server proves it holds the token before the client reveals anything derived from it, so a process that took the port (the app is not running yet, or has exited) learns nothing:
+
+```json
+{"id": 1, "method": "auth.challenge", "params": {"clientNonce": "<64 hex: 32 fresh random bytes>"}}
+{"id": 1, "ok": true, "result": {"serverNonce": "<64 hex>", "serverProof": "<64 hex>"}}
+{"id": 2, "method": "auth", "params": {"proof": "<64 hex>"}}
+{"id": 2, "ok": true, "result": {"authenticated": true}}
+```
+
+Both proofs are lowercase hex HMAC-SHA256, keyed by the token's 64 lowercase hex characters (as ASCII), over `<label>\n<clientNonce>\n<serverNonce>` with both nonces lowercase and `
+` a newline byte. The label is `photocraft-control-v1 server` for `serverProof` and `photocraft-control-v1 client` for `proof`. The client checks `serverProof` and, when it does not match, closes the connection without sending `auth`. After a challenge only `auth {proof}` is accepted.
+
+**Token authentication** is the original single frame, still accepted for scripts:
 
 ```json
 {"id": "auth", "method": "auth", "params": {"token": "<64 hexadecimal characters>"}}
 ```
 
-Authenticate once per connection. A later `auth` frame on the same connection gets `{"ok": false, "error": "already authenticated"}` and the connection keeps serving.
+It sends the token to whatever holds the port, so a client should use it only when it knows the app is the listener. PhotoCraft's own bridge never falls back to it.
+
+Authenticate once per connection. A later `auth` or `auth.challenge` frame on the same connection gets `{"ok": false, "error": "already authenticated"}` and the connection keeps serving.
 
 After the successful authentication reply, each request is one JSON line:
 
@@ -361,7 +377,7 @@ magenta alignment lines. `ui.pointer` drives the same code, so agents get identi
 - **Headless** (`photocraft-cli mcp`): an in-process `photocraft_engine::Session`. There is no window.
 - **Bridge** (`photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <path>`): every tool is forwarded to a running `photocraft --control 7878 --control-token-file <path>` over this protocol, so agents see and drive the live app. `--bridge 7878` is short for `--bridge 127.0.0.1:7878`. With no `--bridge`, `PHOTOCRAFT_CONTROL_PORT` selects the bridge port (`127.0.0.1:<port>`), and the CLI says so on standard error; with neither (or the variable empty), the MCP runs headless. A value that is not a port is a usage error naming the variable. `--automation-read-root` or `--automation-write-root` with the variable set is a usage error, since the bridge would drop the roots.
 
-The bridge keeps one authenticated TCP connection open, and drops and reconnects before a call once the connection has been idle long enough that the app (which closes idle connections after 30s) may have dropped it. A transport failure while sending a request or waiting for its reply, including a reply timeout, drops the connection and reports that the operation may have completed; inspect the document before retrying an edit. Edits are never automatically resent (#1007); a connection that could not be established is reported as "the request was not sent" instead. The MCP server opts its pure-read tools (`ui_inspect`, `doc_inspect`, `command_list`, `jobs_list`, `session_list`, `ui_screenshot`) into one automatic retry on a fresh connection, since a read applies nothing; clients driving `BridgeClient` directly opt in per call with `call_read`. The next separate call reconnects and authenticates, and reply lines whose `id` does not match the request are skipped. The client's call timeout is 55s, strictly below the server's 60s reply deadline, so the bridge's error is the one callers see; commands that can run longer should pass `"wait": false` and poll `jobs.list`. It only accepts loopback addresses, because the app only listens on loopback. Supply its bearer token with `--control-token-file`, `--control-token`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, or `PHOTOCRAFT_CONTROL_TOKEN`:
+The bridge keeps one authenticated TCP connection open, and drops and reconnects before a call once the connection has been idle long enough that the app (which closes idle connections after 30s) may have dropped it. A transport failure while sending a request or waiting for its reply, including a reply timeout, drops the connection and reports that the operation may have completed; inspect the document before retrying an edit. Edits are never automatically resent (#1007); a connection that could not be established is reported as "the request was not sent" instead. The MCP server opts its pure-read tools (`ui_inspect`, `doc_inspect`, `command_list`, `jobs_list`, `session_list`, `ui_screenshot`) into one automatic retry on a fresh connection, since a read applies nothing; clients driving `BridgeClient` directly opt in per call with `call_read`. The next separate call reconnects and authenticates, and reply lines whose `id` does not match the request are skipped. The client's call timeout is 55s, strictly below the server's 60s reply deadline, so the bridge's error is the one callers see; commands that can run longer should pass `"wait": false` and poll `jobs.list`. It only accepts the literal loopback addresses `127.0.0.1:<port>` and `[::1]:<port>`, because the app only listens on loopback; `localhost:<port>` means `127.0.0.1:<port>` and is never looked up, since a lookup may return `[::1]` first and reach another process listening there. Every connection authenticates by challenge (see above), so the token is never sent, and a listener that cannot prove it holds the token is reported as such ("the control token was not sent"); an app too old for challenge authentication is refused the same way, so update the app with the CLI. Supply its bearer token with `--control-token-file`, `--control-token`, `PHOTOCRAFT_CONTROL_TOKEN_FILE`, or `PHOTOCRAFT_CONTROL_TOKEN`:
 
 ```sh
 photocraft-cli mcp --bridge 127.0.0.1:7878 \
