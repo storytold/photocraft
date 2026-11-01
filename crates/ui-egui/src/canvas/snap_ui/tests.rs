@@ -55,6 +55,33 @@ fn moving_selected_pixels_snaps_their_bounds_not_the_marquee() {
     assert_eq!(gesture, Some(Gesture::Move { rect: [20.0, 20.0, 120.0, 110.0] }), "the Background");
 }
 
+#[test]
+fn colour_set_selected_drag_snaps_its_selection_frame_to_guides() {
+    for colors in [[0, 1], [0, 2], [1, 2]] {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Move;
+        app.ui.extras.snap = true;
+        app.ui.view.show.smart_guides = false;
+        app.ui.view.snap_to.layers = false;
+        app.ui.view.snap_to.document_bounds = false;
+        app.run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 90})).unwrap();
+        app.run("channel.target", json!({"colors": colors})).unwrap();
+        app.session
+            .edit("guide", |doc, _| {
+                doc.guides.vertical.push(200.0);
+                Ok(())
+            })
+            .unwrap();
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+        assert_eq!(app.prefs_rt.snap.as_ref().unwrap().gesture, Gesture::Move { rect: [20.0, 20.0, 120.0, 110.0] });
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 137.0, y: 60.0, pressure: 1.0 }, m);
+        assert!(app.prefs_rt.snap_lines.iter().any(|line| line.vertical && line.pos == 200.0 && line.kind == SnapKind::Guide));
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 137.0, y: 60.0 }, m);
+        assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), photocraft_geom::Rect::new(100, 20, 200, 110));
+    }
+}
+
 fn mover_bounds(app: &PhotocraftApp) -> photocraft_geom::Rect {
     let st = app.session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()

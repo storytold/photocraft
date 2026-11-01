@@ -814,3 +814,67 @@ fn colour_set_selected_drag_previews_and_commits_only_selected_native_samples() 
         assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().surface(), before.layer(id).unwrap().surface());
     }
 }
+
+#[test]
+fn colour_set_selected_drag_outline_follows_the_pointer_and_resets_on_release() {
+    for depth in [8, 16, 32] {
+        for colors in [[0, 1], [0, 2], [1, 2]] {
+            let (mut app, _) = selected_pixels(depth);
+            app.run("select.modify.feather", json!({"radius": 1})).unwrap();
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            let original = app.session.active().unwrap().doc.selection.clone().unwrap();
+            let m = egui::Modifiers::NONE;
+            assert_eq!(crate::canvas::selection_cursor(&app, Tool::Move, [16.0, 16.0], m), Some(crate::canvas::SelCursor::Cut));
+            assert_eq!(crate::canvas::selection_cursor(&app, Tool::Move, [16.0, 16.0], egui::Modifiers::ALT), None, "copying a set is unsupported");
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+            for (x, y, delta) in [(26.0, 21.0, (10, 5)), (16.0, 16.0, (0, 0)), (12.0, 23.0, (-4, 7))] {
+                crate::canvas::tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
+                assert_eq!(crate::canvas::selection_shown_offset(&app), Some(delta), "{depth}-bit, {colors:?}");
+                assert_eq!(crate::canvas::selection_cursor(&app, Tool::Move, [x, y], m), Some(crate::canvas::SelCursor::Dragging));
+                let shown = super::display_doc(&mut app, 0).unwrap().0;
+                assert_eq!(shown.selection.as_ref().unwrap().content_bounds(), original.content_bounds().translate(delta.0, delta.1));
+                assert_eq!(app.session.active().unwrap().doc.selection.as_ref(), Some(&original), "the live offset does not edit the source");
+            }
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 12.0, y: 23.0 }, m);
+            assert_eq!(crate::canvas::selection_shown_offset(&app), None, "the committed outline must not be offset twice");
+            assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), original.content_bounds().translate(-4, 7));
+        }
+    }
+}
+
+#[test]
+fn colour_set_selected_shift_drag_uses_diagonals_in_preview_and_commit() {
+    for depth in [8, 16, 32] {
+        for colors in [[0, 1], [0, 2], [1, 2]] {
+            let (mut app, _) = selected_pixels(depth);
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            let original = app.session.active().unwrap().doc.selection.clone().unwrap();
+            let m = egui::Modifiers::SHIFT;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 28.0, pressure: 1.0 }, m);
+            assert_eq!(super::drag_offset(&app), Some((13, 13)), "{depth}-bit, {colors:?}: 45 degrees");
+            let shown = super::display_doc(&mut app, 0).unwrap().0;
+            assert_eq!(shown.selection.as_ref().unwrap().content_bounds(), original.content_bounds().translate(13, 13));
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 28.0 }, m);
+            assert_eq!(app.session.active().unwrap().doc.selection, shown.selection, "{depth}-bit, {colors:?}: release matches preview");
+        }
+    }
+}
+
+#[test]
+fn colour_set_selected_drag_does_not_snap_to_its_starting_selection() {
+    for colors in [[0, 1], [0, 2], [1, 2]] {
+        let (mut app, _) = selected_pixels(8);
+        app.run("channel.target", json!({"colors": colors})).unwrap();
+        app.ui.extras.snap = true;
+        app.ui.view.snap_to.document_bounds = false;
+        app.ui.view.snap_to.layers = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 18.0, y: 17.0, pressure: 1.0 }, m);
+        assert_eq!(super::drag_offset(&app), Some((2, 1)), "{colors:?}: a small drag must not snap back to its own selection");
+        assert!(app.prefs_rt.snap_lines.iter().all(|line| line.kind != photocraft_engine::snap::SnapKind::Selection));
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 18.0, y: 17.0 }, m);
+        assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 9, 26, 25));
+    }
+}

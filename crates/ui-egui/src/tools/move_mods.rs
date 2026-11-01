@@ -143,8 +143,9 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let Some(start) = app.move_mods.start.filter(|_| moving(app)) else { return p };
-    // Selected pixels (`move_ui`): ⌥ copied them at the press.
-    let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some());
+    // Selected native colour sets do not float, but use the same 45° constraints. Their copy
+    // gesture is refused at the press; ordinary selected pixels were copied there already.
+    let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some() || crate::move_ui::moves_selected_pixels_with(app, d.tool));
     let mut d = [p[0] - start[0], p[1] - start[1]];
     if mods.shift {
         d = constrain(d, app.move_mods.last, if pixels { TRANSFORM_DIRECTIONS } else { MOVE_DIRECTIONS });
@@ -264,7 +265,7 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     if app.drag.is_some() {
         return;
     }
-    if crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
+    if crate::move_ui::floats_selected_pixels_with(app, Tool::Move) {
         crate::move_ui::float_selected(app, duplicate_first, dx, dy);
         return;
     }

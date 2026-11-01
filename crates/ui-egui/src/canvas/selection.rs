@@ -26,6 +26,7 @@ pub fn selection_cursor(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui
         return match d.sel_move {
             Some(true) => Some(SelCursor::Dragging),
             Some(false) => Some(SelCursor::Outline),
+            None if crate::move_ui::moves_selected_pixels_with(app, d.tool) => Some(SelCursor::Dragging),
             None => None,
         };
     }
@@ -43,6 +44,9 @@ pub fn selection_cursor(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui
     }
     // ⌥ (⌘⌥ with a selection tool) floats a copy, of the layer's pixels or of the piece.
     let copy = mods.alt && (tool == Tool::Move || mods.command);
+    if copy && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1) {
+        return None;
+    }
     Some(match (floating, copy) {
         (_, true) => SelCursor::Copy,
         (true, false) => SelCursor::Piece,
@@ -73,8 +77,8 @@ pub(super) fn selection_shown_offset(app: &PhotocraftApp) -> Option<(i32, i32)> 
     crate::move_ui::floating_offset(app).or_else(|| selection_drag_delta(app)).or_else(|| carried_selection_delta(app))
 }
 
-/// Whole-pixel offset of a Move drag of several layers, which carries the selection along
-/// (`move_ui::carries_selection`): their ants follow the layers while they move (#7538).
+/// Whole-pixel offset of a non-floating Move that carries its selection: selected native colour
+/// samples or several whole layers (#7538). The source outline stays immutable during the drag.
 fn carried_selection_delta(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move && d.sel_move.is_none())?;
     if !crate::move_ui::carries_selection(app) {

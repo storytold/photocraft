@@ -5,7 +5,8 @@
 //!
 //! With a selection, the Move tool drags the selected pixels instead (#578): they float
 //! (`select.float`, the canvas shows the piece at the pointer) until ↩, Deselect or any other
-//! command drops them, as one "Move" history step.
+//! command drops them, as one "Move" history step. A selected native colour set cannot float;
+//! its selected samples preview directly and commit on release, with the same drag feedback.
 
 use std::sync::Arc;
 
@@ -29,13 +30,23 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
     photocraft_engine::color_channels::selected(&app.session)
 }
 
-/// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
+/// Does the gesture move selected pixels, either as a floating piece or as native colour samples?
+/// Feedback (snapping, cursor, outline and constraints) must not depend on whether they can float.
+pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
+    floats_selected_pixels_with(app, tool)
+        || (tool == Tool::Move
+            && app.ui.transform.is_none()
+            && color_target(app).is_some_and(|colors| colors.len() > 1)
+            && app.session.active().is_some_and(|st| st.doc.selection.is_some()))
+}
+
+/// Does the Move tool float (and do the arrow keys nudge) the selected pixels of the active layer
 /// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
 /// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
 /// several selected layers still move whole, as without one. The canvas cursor asks before the
 /// press, and a pointer event passes `canvas::event_tool`, which also sees a ⌘ sent with the event
 /// (#2768).
-pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
+pub(crate) fn floats_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
     let Some(st) = app.session.active() else { return false };
     tool == Tool::Move
         && app.ui.transform.is_none()
@@ -509,11 +520,10 @@ pub(crate) fn is_preview_key(key: u64) -> bool {
     key > BASE && key < BASE << 1
 }
 
-/// Does a Move drag of whole layers take the selection along? With several layers selected, as
-/// in Photoshop (#7538): their selected pixels can't float, so the layers move and the marching
-/// ants follow them.
+/// Does a non-floating Move drag carry the selection? Native colour-set samples move within it;
+/// several whole layers also carry it (#7538). Their marching ants follow the same offset.
 pub(crate) fn carries_selection(app: &PhotocraftApp) -> bool {
-    app.session.active().is_some_and(|st| st.doc.selection.is_some() && st.selected_layers().len() > 1)
+    app.session.active().is_some_and(|st| st.doc.selection.is_some() && (st.selected_layers().len() > 1 || moves_selected_pixels_with(app, Tool::Move)))
 }
 
 /// Release: one `layer.translate` by the drag's offset. The canvas already shows the result, so

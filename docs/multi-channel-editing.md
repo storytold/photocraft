@@ -37,6 +37,8 @@ including hiding and revealing the selected components. Eye changes survive comm
 cancel and Undo. Eligible RGB previews cache one source and combine the selected
 components in one GPU pass; different scalar sampling outlines retain the CPU oracle.
 Move drags with a several-component pixel selection use the native CPU preview.
+Their marching ants follow the preview, snapping uses the selection frame without
+snapping back to its starting outline, and Shift constrains movement to axes or 45° diagonals.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge
@@ -375,3 +377,5 @@ oracle. All untargeted samples and transparency remain protected.
 The final command review added a repeat-copy availability guard after measurement;
 the native Move, resampling and GPU sampler sources measured above are unchanged.
 The guard is covered separately by native command and adversarial tests.
+The subsequent Move gesture review corrected outline offsets, selection snapping and
+Shift constraints without changing those measured native processing or shader sources.
