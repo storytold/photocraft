@@ -325,9 +325,7 @@ pub(super) fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui)
 mod properties_rtl_tests {
     use super::*;
     use crate::direction::{Dir, direction_scope};
-    use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
-    #[allow(unused_imports)]
-    use egui_kittest::Node as _;
+    use egui_kittest::{Harness, kittest::Queryable};
 
     fn harness(adjustments_tab: bool) -> Harness<'static, PhotocraftApp> {
         let mut session = photocraft_engine::Session::new();
@@ -540,31 +538,6 @@ mod properties_rtl_tests {
             drag(&mut h, grab, grab + vec2(40.0, 0.0));
             let after = card_rect(&h);
             assert!(after.left() > card.left(), "the strip drags the card: {card:?} -> {after:?}");
-        }
-    }
-
-    #[test]
-    fn probe_palettes() {
-        {
-            let _rtl = direction_scope(Dir::Rtl);
-            let h = harness(true);
-            let card = card_rect(&h);
-            eprintln!("PROBE card={card:?}");
-            for n in h.query_all_by_role(egui::accesskit::Role::Button) {
-                if let Some(l) = n.accesskit_node().label() {
-                    eprintln!("PROBE card cell {l:?} -> {:?}", n.rect());
-                }
-            }
-        }
-        {
-            let _rtl = direction_scope(Dir::Rtl);
-            let h = docked_harness();
-            eprintln!("PROBE docked:");
-            for n in h.query_all_by_role(egui::accesskit::Role::Button) {
-                if let Some(l) = n.accesskit_node().label() {
-                    eprintln!("PROBE docked cell {l:?} -> {:?}", n.rect());
-                }
-            }
         }
     }
 
