@@ -295,9 +295,9 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard");
     ui.separator();
     crate::menus::menu_button(ui, tl!("Filter Options"), |ui| {
-        let mut show = app.ui.layers_panel_options.show_filters;
-        if ui.checkbox(&mut show, tl!("Show")).changed() {
-            app.ui.layers_panel_options.show_filters = show;
+        let show = app.ui.layers_panel_options.show_filters;
+        if crate::menu_keys::menu_row(ui, tl!("Show"), None, show, true).clicked() {
+            app.ui.layers_panel_options.show_filters = !show;
             crate::layers_panel_ui::persist_options(app);
             ui.close();
         }
@@ -325,9 +325,9 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     // Photoshop's Clip Thumbnails to Layer Bounds: frame each layer's pixels, not the canvas (#4281).
-    let mut clip = app.session.prefs().interface.clip_thumbnails_to_layer_bounds;
-    if crate::widgets::checkbox(ui, &mut clip, tl!("Clip Thumbnails to Layer Bounds")).changed() {
-        if let Err(e) = app.run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": clip})) {
+    let clip = app.session.prefs().interface.clip_thumbnails_to_layer_bounds;
+    if crate::menu_keys::menu_row(ui, tl!("Clip Thumbnails to Layer Bounds"), None, clip, true).clicked() {
+        if let Err(e) = app.run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": !clip})) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
