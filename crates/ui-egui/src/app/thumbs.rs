@@ -249,7 +249,12 @@ impl PhotocraftApp {
             _ => false,
         };
         if !current {
-            let comp = photocraft_compose::thumbnail(&doc, 56);
+            // `thumbnail(&doc, 56)` with its proxy kept, so the ink thumbnails below sample the
+            // same proxy instead of building another one.
+            let proxy = photocraft_compose::thumbnail_proxy(&doc, 56);
+            let src = proxy.as_ref().unwrap_or(&doc);
+            let (tw, th) = photocraft_compose::thumbnail_size(&doc, 56);
+            let comp = photocraft_compose::render_reduced(src, tw, th).to_rgba8();
             let (w, h) = (comp.width as usize, comp.height as usize);
             let side = w.max(h);
             let make = |f: &dyn Fn(&[u8]) -> egui::Color32, name: &str| {
@@ -266,7 +271,7 @@ impl PhotocraftApp {
             let fmt = doc.pixel_format();
             let colors = fmt.mode.color_channels();
             let mut texs = vec![make(&|p| egui::Color32::from_rgb(p[0], p[1], p[2]), "composite")];
-            let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| ink_thumbnail(&doc, 56, w, h));
+            let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| ink_thumbnail(src, w, h));
             if colors > 1 {
                 for k in 0..colors {
                     let mut px = vec![egui::Color32::TRANSPARENT; side * side];
@@ -323,11 +328,10 @@ impl PhotocraftApp {
 }
 
 /// The inks of a CMYK document's `w`×`h` channel thumbnails, row by row: the document's own
-/// inks, not the RGB thumbnail separated again (#8359). Sampled at the thumbnail's pixel centres,
-/// from the same proxy as the composite thumbnail on large documents.
-fn ink_thumbnail(doc: &Document, max_side: u32, w: usize, h: usize) -> Vec<[f32; 4]> {
-    let proxy = photocraft_compose::thumbnail_proxy(doc, max_side);
-    let src = proxy.as_ref().unwrap_or(doc);
+/// inks, not the RGB thumbnail separated again (#8359). Sampled at the thumbnail's pixel centres
+/// from `src`: the document, or on large documents the proxy its composite thumbnail is reduced
+/// from ([`photocraft_compose::thumbnail_proxy`]).
+fn ink_thumbnail(src: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
     let (sw, sh) = (src.size.width.max(1) as f32, src.size.height.max(1) as f32);
     let xs: Vec<i32> = (0..w).map(|x| ((x as f32 + 0.5) * sw / w as f32) as i32).collect();
     let ys: Vec<i32> = (0..h).map(|y| ((y as f32 + 0.5) * sh / h as f32) as i32).collect();
@@ -400,7 +404,7 @@ mod ink_thumbnail_tests {
         s.execute("edit.fillForeground", json!({})).unwrap();
         let doc = &s.active().unwrap().doc;
         let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
-        let inks = ink_thumbnail(doc, 56, w as usize, h as usize);
+        let inks = ink_thumbnail(doc, w as usize, h as usize);
         assert_eq!(inks.len(), (w * h) as usize);
         assert!(inks.iter().all(|p| p.iter().zip([1.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01)), "{:?}", inks[0]);
     }
@@ -415,9 +419,9 @@ mod ink_thumbnail_tests {
         s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
         s.execute("edit.fillForeground", json!({})).unwrap();
         let doc = &s.active().unwrap().doc;
-        assert!(photocraft_compose::thumbnail_proxy(doc, 56).is_some());
+        let proxy = photocraft_compose::thumbnail_proxy(doc, 56).expect("a 17.6 MP document thumbnails from a proxy");
         let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
-        let inks = ink_thumbnail(doc, 56, w as usize, h as usize);
+        let inks = ink_thumbnail(&proxy, w as usize, h as usize);
         let at = |x: u32, y: u32| inks[(y * w + x) as usize];
         let near = |p: [f32; 4], q: [f32; 4]| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.01);
         assert!(near(at(5, h / 2), [1.0, 1.0, 1.0, 0.0]), "{:?}", at(5, h / 2));
