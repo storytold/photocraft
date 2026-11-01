@@ -2363,9 +2363,9 @@ fn a_live_clone_or_history_stroke_commits_its_own_pixels() {
     }
 }
 
-/// Unrestricted retouch previews cannot become a persistent isolated-channel canvas texture.
+/// Restricted retouch previews can be retained without changing untargeted encoded samples.
 #[test]
-fn isolated_retouch_commits_do_not_retain_unrestricted_live_pixels() {
+fn isolated_retouch_commits_retain_restricted_live_pixels() {
     for depth in DEPTHS {
         for (cmd, extra) in [("paint.cloneStamp", json!({"source":[20,15]})), ("paint.historyBrush", json!({"state":1}))] {
             let setup = || {
@@ -2382,7 +2382,7 @@ fn isolated_retouch_commits_do_not_retain_unrestricted_live_pixels() {
             let live = LiveRetouch::begin(&s, cmd, &p).unwrap();
             s.offer_live_retouch(live).unwrap();
             let result = s.execute(cmd, p.clone()).unwrap();
-            assert!(result.get("fromLive").is_none(), "unrestricted {cmd} pixels cannot retain the preview texture");
+            assert_eq!(result["fromLive"], true, "{cmd} retains its restricted preview pixels");
             let mut fresh = setup();
             fresh.execute(cmd, p).unwrap();
             let st = s.active().unwrap();

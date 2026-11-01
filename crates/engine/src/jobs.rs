@@ -228,7 +228,7 @@ struct Running {
     ctx: JobCtx,
     started_ms: f64,
     coalesce: Option<String>,
-    color_restrict: Option<usize>,
+    color_restrict: Option<crate::color_channels::Restriction>,
     isolated_transform: bool,
     filter_mask_layer: Option<LayerId>,
     /// The document's layer selection when the job started: applying targets it, not whatever
@@ -811,8 +811,18 @@ impl Session {
         // (#3089), as Transform Again records its transform (#1440). With no filter yet it falls
         // through to its own precondition.
         if id == "filter.lastFilter"
-            && let Some((filter, p)) = crate::filters::last_filter(self).filter(|(f, _)| f != id)
+            && let Some((filter, mut p)) = crate::filters::last_filter(self).filter(|(f, _)| f != id)
         {
+            for key in ["target", "layer"] {
+                if let Some(value) = params.get(key) {
+                    if p.is_null() {
+                        p = serde_json::json!({});
+                    }
+                    if let Some(object) = p.as_object_mut() {
+                        object.insert(key.into(), value.clone());
+                    }
+                }
+            }
             return self.dispatch(&filter, p, background);
         }
         if id == "file.new" {

@@ -924,3 +924,43 @@ fn preset_selection_pivots_preserve_explicit_layer_and_colour_target_precedence(
         }
     }
 }
+
+#[test]
+fn selected_colour_sets_refuse_geometry_but_explicit_targets_and_layers_keep_precedence() {
+    let mut s = session(ColorMode::Rgb, SampleType::U8);
+    s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    for command in ["edit.transform", "edit.transform.warp", "edit.transform.flipHorizontal"] {
+        assert!(!s.is_enabled(command), "{command}");
+        assert!(s.execute(command, json!({"dx":1})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    }
+    let id = s.active().unwrap().active_layer.unwrap();
+    let p = json!({"layer":id.0,"matrix":[1,0,0,1,1,0],"interpolation":"nearest"});
+    assert!(s.is_enabled_with("edit.transform", &p));
+    s.precheck("edit.transform", &p).unwrap();
+    s.execute("edit.transform", p).unwrap();
+    s.undo();
+    let p = json!({"target":{"colors":[1]},"dx":1,"interpolation":"nearest"});
+    assert!(s.is_enabled_with("edit.transform", &p));
+    s.execute("edit.transform", p).unwrap();
+    assert_eq!(surface(&s).pixel(4, 3)[0], before.layer(id).unwrap().surface().unwrap().pixel(4, 3)[0]);
+}
+
+#[test]
+fn explicit_layer_move_bypasses_a_colour_set_and_a_singleton_set_moves_one_component() {
+    let mut s = session(ColorMode::Rgb, SampleType::U8);
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.translate", json!({"layer":id.0,"dx":1})).unwrap();
+    s.undo();
+    let original = surface(&s).to_interleaved(Rect::new(0, 0, 12, 8));
+    s.execute("layer.translate", json!({"target":{"colors":[1]},"dx":1})).unwrap();
+    let after = surface(&s).to_interleaved(Rect::new(0, 0, 12, 8));
+    assert_ne!(original, after);
+    for (a, b) in after.as_chunks::<4>().0.iter().zip(original.as_chunks::<4>().0) {
+        assert_eq!(a[0], b[0]);
+        assert_eq!(a[2..], b[2..]);
+    }
+}

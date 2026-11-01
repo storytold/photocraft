@@ -216,7 +216,7 @@ fn pressure_sized_live_dabs_commit_only_the_requested_mask_or_channel() {
 }
 
 #[test]
-fn single_color_live_dabs_replay_through_the_channel_restriction() {
+fn single_color_live_dabs_retain_restricted_pixels_and_match_replay() {
     for depth in [8, 16, 32] {
         let mut s = setup(depth, "rgb");
         s.execute("channel.target", json!({"channel":"red"})).unwrap();
@@ -238,7 +238,7 @@ fn single_color_live_dabs_replay_through_the_channel_restriction() {
             }
             s.offer_live_dab(live).unwrap();
             let result = s.execute(cmd, params).unwrap();
-            assert!(result.get("fromLive").is_none(), "an unrestricted live surface cannot be reused for one colour");
+            assert_eq!(result["fromLive"], true, "a restricted live surface can be retained for one colour");
             assert_eq!(s.active().unwrap().doc, want, "depth={depth} {cmd}");
             let current = pixels(&s);
             assert_eq!(original.len(), current.len());

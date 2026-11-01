@@ -4,6 +4,7 @@ use super::{
     smart_cmds,
 };
 use crate::channel_transform;
+use crate::color_channels;
 use crate::warp_cmds;
 
 impl Session {
@@ -101,7 +102,10 @@ impl Session {
         }
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
         let run_params = if channel_transform::geometric(id) { channel_transform::params(self, &run_params)? } else { run_params };
-        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+        if let Some(why) = color_channels::refusal(self, id, &run_params) {
+            return Err(EngineError::Disabled(id.into(), why));
+        }
+        if let Err(why) = self.explicit_layer_enabled(spec, &run_params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         if let Some(why) = self.job_conflict(id, spec.journal) {
@@ -134,7 +138,16 @@ impl Session {
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
         let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
-        self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
+        let params = channel_cmds::inject_target(self, id, params.clone());
+        let params = if channel_transform::geometric(id) {
+            match channel_transform::params(self, &params) {
+                Ok(p) => p,
+                Err(e) => return Some(e.to_string()),
+            }
+        } else {
+            params
+        };
+        self.precondition(s, &params).err().or_else(|| self.job_conflict(id, s.journal))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
@@ -147,6 +160,9 @@ impl Session {
         }
         if channel_transform::geometric(spec.id) && channel_cmds::is_channel_target(params) {
             return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
+        }
+        if let Some(why) = color_channels::refusal(self, spec.id, params) {
+            return Err(why);
         }
         if self.names_existing_layer(spec.id, params) {
             return Ok(());
@@ -230,8 +246,8 @@ impl Session {
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
-        if let (Some(k), Some(id)) = (restrict, active) {
-            channel_cmds::restrict_to_color(&before, &mut doc, id, k)?;
+        if let Some(restrict) = restrict {
+            channel_cmds::restrict_to_color(&before, &mut doc, restrict.layer, restrict.colors)?;
         }
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;

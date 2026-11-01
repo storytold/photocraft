@@ -25,6 +25,9 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
     {
         return begin_path(app, ctx, params, path);
     }
+    if params.get("layer").is_none() && crate::canvas::multiple_color_target(app) {
+        return Err("Move and transforms on several colour channels are not implemented yet".into());
+    }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }

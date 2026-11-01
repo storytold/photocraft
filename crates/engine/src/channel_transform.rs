@@ -73,6 +73,16 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
             map.insert("target".into(), json!("pixels"));
             return Ok(out);
         }
+        if target.get("colors").is_some() {
+            let count = s.active().map_or(0, |st| crate::channel_cmds::color_count(&st.doc));
+            let colors = crate::color_channels::explicit(p, count)?.ok_or_else(|| bad("invalid colour target"))?;
+            if colors.len() != 1 {
+                return Err(bad("Move and transforms on several colour channels are not implemented yet"));
+            }
+            let k = colors.indices().next().ok_or_else(|| bad("no colour channel selected"))?;
+            map.insert("target".into(), json!({"color":k}));
+            return Ok(out);
+        }
         let valid = matches!(target.as_str(), Some("pixels" | "mask" | "quickMask"))
             || target.as_object().is_some_and(|o| {
                 o.len() == 1 && (o.get("color").or_else(|| o.get("channel"))).is_some_and(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()).is_some())
@@ -88,6 +98,11 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let target = match st.channel_view.target {
+        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter) => json!("mask"),
+        ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => json!("pixels"),
+        ChannelTarget::Color(_) if crate::color_channels::selected(s).is_some_and(|c| c.len() > 1) => {
+            return Err(bad("Move and transforms on several colour channels are not implemented yet"));
+        }
         ChannelTarget::Color(k) => json!({"color": k}),
         ChannelTarget::Alpha(i) => json!({"channel": i}),
         ChannelTarget::LayerMask => json!("mask"),
@@ -100,10 +115,14 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
 }
 
 pub fn color_index(p: &Value) -> Result<Option<usize>> {
-    p.get("target")
-        .and_then(|t| t.get("color"))
-        .map(|v| v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("invalid colour channel index")))
-        .transpose()
+    let Some(target) = p.get("target") else { return Ok(None) };
+    let index = if let Some(colors) = target.get("colors") {
+        let values = colors.as_array().filter(|v| v.len() == 1).ok_or_else(|| bad("transforms require one colour channel"))?;
+        values.first()
+    } else {
+        target.get("color")
+    };
+    index.map(|v| v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("invalid colour channel index"))).transpose()
 }
 
 /// Whether the channel's Channels-panel eye is currently on.

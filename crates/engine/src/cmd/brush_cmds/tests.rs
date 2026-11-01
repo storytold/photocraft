@@ -1330,7 +1330,7 @@ fn colour_channel_live_strokes_preserve_native_samples_and_match_replay() {
                     s.execute("channel.target", json!({"channel":{"color":k}})).unwrap();
                     let original = s.active().unwrap().doc.clone();
                     let before = surface(&s).try_to_interleaved(original.bounds()).unwrap();
-                    let base = json!({"points":[points[0]],"color":"#ffffff","seed":17,"target":"pixels",
+                    let base = json!({"points":[points[0]],"color":"#ffffff","seed":17,"target":{"color":k},
                         "brush":{"size":14,"hardness":0.3,"pressureSize":true,"smoothing":{"amount":if selected {0.3} else {0.0}}}});
                     let mut live = LiveStroke::begin_with(&s, cmd, &base).unwrap();
                     let mut params = base;
@@ -1406,7 +1406,11 @@ fn colour_channel_restore_rejects_bad_indices_and_allocation_failures_transactio
     assert_eq!(s.active().unwrap().history.past_len(), steps);
     let old = surface(&s);
     let mut new = old.clone();
-    assert!(crate::channel_cmds::restrict_color_region(&old, &mut new, usize::MAX, Rect::new(0, 0, 1, 1)).is_err());
+    assert!(
+        crate::color_channels::ColorChannels::from_indices([usize::MAX], old.format().mode.color_channels())
+            .and_then(|colors| crate::color_channels::restrict_region(&old, &mut new, colors, Rect::new(0, 0, 1, 1)))
+            .is_err()
+    );
     assert_eq!(new, old);
 }
 
@@ -1630,4 +1634,21 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.mixer, mixer);
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
+}
+
+#[test]
+fn retained_paint_captures_the_complete_colour_set_and_layer() {
+    let mut s = session(80, 40);
+    s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
+    let (live, mut params) = live_and_commit(&s, "paint.stroke", json!({"size":8,"color":"#ffffff"}), &[[10.0, 20.0, 1.0], [70.0, 20.0, 1.0]]);
+    let offer = live.into_commit().unwrap();
+    params["target"] = json!({"colors":[0,2]});
+    let points = parse_points(&params, "paint.stroke").unwrap();
+    assert!(offer.matches(&s, "paint.stroke", &params, &points));
+    let first = s.active().unwrap().active_layer.unwrap();
+    s.active_mut().unwrap().active_layer = Some(photocraft_doc::LayerId(u64::MAX));
+    assert!(!offer.matches(&s, "paint.stroke", &params, &points));
+    s.active_mut().unwrap().active_layer = Some(first);
+    params["target"] = json!({"colors":[0,1]});
+    assert!(!offer.matches(&s, "paint.stroke", &params, &points));
 }
