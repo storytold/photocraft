@@ -161,7 +161,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl disables other gestures, while Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
+| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl held to start a layer move keeps snapping, a fresh Ctrl press during a drag disables it, and Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
 | Snap vector tools and transforms to the pixel grid | done | `snap_ui.rs:196` |
 | Smart guides (magenta alignment lines) | done | |
 | Smart guide distance and spacing labels | missing | |
@@ -304,6 +304,7 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-12 | minor | New Group button groups two or more selected layers (CC 2014+); New Group dialog (Layer › New, Layers panel menu, row menu, ⌥-click); ⌘-click New Group adds the group below; groups made from layers start collapsed (#2561) |
 | 2026-10-12 | minor | New layers go into an open active group (or the artboard their content is on) and join the clip group they land in (#2203); ⌘-click New Layer adds below |
 | 2026-10-12 | minor | Closed #3632: Distort and Ctrl/Cmd corner drags snap actual corners to guides and intersections; shared guide snapping respects Extras and Canvas Guides visibility, with offset, visibility and constrained-alignment regressions |
+| 2026-10-28 | minor | Ctrl-initiated layer moves keep snapping and Smart Guides on Windows, matching Command moves on macOS; release and re-press Ctrl during a drag to temporarily disable snapping. No percentage changed |
 | 2026-10-10 | minor | Fixed Crop live resize snapping feedback and outdated-camera rendering, applied ratios immediately to centred inscribed previews, and removed two-point options-bar overflow; added pointer, rendering, dropdown/Enter, Swap/X and scrolling regressions |
 | 2026-10-11 | minor | Flick panning done: releasing a moving Hand drag (tool, Space or middle button) glides and decays, gated by Enable Flick Panning |
 | 2026-10-11 | minor | History snapshots: the camera button takes one, snapshot rows return to it as a new state, rename and delete it (#2966) |

@@ -2,9 +2,11 @@
 //! document, snaps tool gestures (Move tool, marquees, crop, shapes, pen anchors, Free Transform
 //! handles and guides), and draws smart guides (magenta alignment lines) while layers move.
 //!
-//! Snapping is on when View › Snap (⇧⌘;) is; holding Ctrl while dragging turns it off, except when
-//! Ctrl is the corner-distortion modifier. Smart guides follow View › Show › Smart Guides and also snap the Move
-//! tool to other layers' edges and centres. The threshold is 8 screen pixels at the current zoom.
+//! Snapping is on when View › Snap (⇧⌘;) is. Ctrl temporarily turns it off, except when it starts
+//! a layer move or is the corner-distortion modifier. Releasing Ctrl ends the layer-move exception;
+//! pressing it again disables snapping. Smart guides follow View › Show › Smart Guides and also
+//! snap the Move tool to other layers' edges and centres. The threshold is 8 screen pixels at the
+//! current zoom.
 
 use egui::{Color32, Stroke, pos2};
 use photocraft_doc::LayerId;
@@ -50,6 +52,8 @@ pub struct ActiveSnap {
     /// Layer alignments only (smart guides), when View › Snap and Smart Guides are on.
     pub smart: SnapTargets,
     pub disabled: bool,
+    /// Ctrl used to start a Move/Auto-Select gesture belongs to that tool until released.
+    pub move_ctrl_held: bool,
 }
 
 /// Snap To options from the View menu and the Guides/Grid preferences.
@@ -178,9 +182,8 @@ fn near_handle(q: &[[f64; 2]; 4], p: [f64; 2], tol: f64) -> bool {
     })
 }
 
-/// Photoshop: holding Ctrl (Windows) / Control (macOS) *during* a drag temporarily turns snapping
-/// off. Only the held state while dragging counts: Ctrl at the press belongs to the tool (Ctrl-click
-/// auto-selects with the Move tool), and ⌘ on the Mac never overrides snapping.
+/// Ctrl (Windows) / Control (macOS) is the temporary snap override; ⌘ on the Mac is not.
+/// A Ctrl press that starts a Move gesture belongs to the tool instead (`override_for_gesture`).
 fn override_held(mods: egui::Modifiers) -> bool {
     mods.ctrl && !mods.mac_cmd
 }
@@ -189,8 +192,14 @@ fn corner_distorts(app: &PhotocraftApp, gesture: &Gesture, mods: egui::Modifiers
     matches!(gesture, Gesture::TransformCorner { index, .. } if crate::transform_tool::corner_distorts(app, *index, mods))
 }
 
-fn override_for_gesture(app: &PhotocraftApp, mods: egui::Modifiers) -> bool {
-    override_held(mods) && !(mods.command && app.prefs_rt.snap.as_ref().is_some_and(|s| corner_distorts(app, &s.gesture, mods)))
+/// Ctrl used to start moving is consumed until released; a fresh press overrides snapping.
+fn override_for_gesture(app: &mut PhotocraftApp, mods: egui::Modifiers) -> bool {
+    let ctrl = override_held(mods);
+    if let Some(snap) = app.prefs_rt.snap.as_mut() {
+        // Once released, a fresh Ctrl press can disable snapping for this drag again.
+        snap.move_ctrl_held &= ctrl;
+    }
+    ctrl && !app.prefs_rt.snap.as_ref().is_some_and(|s| s.move_ctrl_held || (mods.command && corner_distorts(app, &s.gesture, mods)))
 }
 
 /// The Move tool's press at `p` picked other layers (Auto-Select): the drag moves those, so its
@@ -297,7 +306,8 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else {
         SnapTargets::default()
     };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
+    let move_ctrl_held = mods.command && override_held(mods) && (tool == Tool::Move || moves_layer) && matches!(gesture, Gesture::Move { .. });
+    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false, move_ctrl_held });
 }
 
 /// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
@@ -305,7 +315,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
 pub fn begin_guide(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap_lines.clear();
     let targets = if snap_on(app) { build(app, &[], false).filtered(|k| k != SnapKind::Guide) } else { SnapTargets::default() };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false });
+    app.prefs_rt.snap = Some(ActiveSnap { gesture: Gesture::Guide, start: p, targets, smart: SnapTargets::default(), disabled: false, move_ctrl_held: false });
 }
 
 /// Round to whole pixels when Preferences › Tools asks vector tools and transforms to snap to

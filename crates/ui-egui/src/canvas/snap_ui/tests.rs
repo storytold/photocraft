@@ -135,15 +135,124 @@ fn puppet_warp_pins_never_snap() {
 /// drag: it gets the Move tool's box and smart-guide snapping, not the selected tool's.
 #[test]
 fn command_drag_temporary_move_snaps_like_the_move_tool() {
-    for tool in [Tool::Brush, Tool::RectMarquee] {
+    let windows = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    let mac = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+    for (tool, cmd) in [Tool::Move, Tool::Brush, Tool::RectMarquee].into_iter().flat_map(|tool| [windows, mac].map(|cmd| (tool, cmd))) {
         let mut app = app_with_box();
         app.ui.tool = tool;
-        let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+        let history = app.session.active().unwrap().history.past_len();
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, cmd);
         let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
         assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 90.0, 80.0] }), "{tool:?}: the mover's box");
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 }, cmd);
+        assert!(app.prefs_rt.snap_lines.iter().any(|l| l.vertical && l.pos == 300.0 && l.kind.is_smart()), "{tool:?}, {cmd:?}: live alignment");
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, cmd);
-        assert_eq!(mover_bounds(&app).x0, 300, "{tool:?}: snapped to the target's edge");
+        assert_eq!(mover_bounds(&app).x0, 300, "{tool:?}, {cmd:?}: snapped to the target's edge");
+        assert!(app.prefs_rt.snap.is_none() && app.prefs_rt.snap_lines.is_empty());
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(mover_bounds(&app).x0, 40);
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(mover_bounds(&app).x0, 300);
+    }
+}
+
+/// Releasing and pressing Ctrl again disables snapping for this drag; a new drag resets it.
+#[test]
+fn ctrl_move_can_disable_snapping_after_releasing_and_pressing_ctrl_again() {
+    let mut app = app_with_box();
+    app.ui.tool = Tool::Move;
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, ctrl);
+    let at = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    crate::canvas::tool_event(&mut app, at, ctrl);
+    assert!(!app.prefs_rt.snap_lines.is_empty(), "Ctrl used to start moving must preserve snapping");
+    crate::canvas::tool_event(&mut app, at, egui::Modifiers::NONE);
+    assert!(!app.prefs_rt.snap_lines.is_empty());
+    crate::canvas::tool_event(&mut app, at, ctrl);
+    assert!(app.prefs_rt.snap.as_ref().unwrap().disabled);
+    assert!(app.prefs_rt.snap_lines.is_empty(), "a fresh Ctrl press temporarily disables snapping");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303, "release commits the unsnapped position");
+
+    // A new Ctrl-initiated drag snaps again; the override belongs only to the previous drag.
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 323.0, y: 100.0, pressure: 1.0 }, ctrl);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 324.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 300);
+}
+
+#[test]
+fn ctrl_pressed_during_move_disables_snapping() {
+    let mut app = app_with_box();
+    app.ui.tool = Tool::Move;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+    let at = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    crate::canvas::tool_event(&mut app, at, m);
+    assert!(app.prefs_rt.snap_lines.iter().any(|l| l.vertical && l.pos == 300.0 && l.kind.is_smart()));
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    crate::canvas::tool_event(&mut app, at, ctrl);
+    assert!(app.prefs_rt.snap.as_ref().unwrap().disabled);
+    assert!(app.prefs_rt.snap_lines.is_empty());
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303);
+}
+
+/// Ctrl-started moves obey View Snap and the screen-space threshold, including release-only input.
+#[test]
+fn ctrl_move_respects_view_snap_and_screen_space_tolerance() {
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for (snap, zoom, expected) in [(true, 1.0, 300), (false, 1.0, 303), (true, 8.0, 303)] {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Brush;
+        app.ui.extras.snap = snap;
+        app.ui.views[0].zoom = zoom;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, ctrl);
+        // Also exercise a release without an intermediate Move event.
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+        assert_eq!(mover_bounds(&app).x0, expected, "View Snap {snap}, zoom {zoom}");
+    }
+}
+
+/// The moving bounds align to the document centre and to guides independently of the grab point.
+#[test]
+fn ctrl_move_snaps_to_document_centre_and_guides() {
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for (guide, x, expected) in [(false, 192.0, 175), (true, 237.0, 220)] {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Move;
+        if guide {
+            app.run("view.newGuide", json!({"orientation": "vertical", "position": 220})).unwrap();
+        }
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, ctrl);
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x, y: 100.0 }, ctrl);
+        assert_eq!(mover_bounds(&app).x0, expected, "guide {guide}");
+    }
+}
+
+/// Ctrl-Straighten near a guide keeps its raw line endpoint and angle in both crop modes.
+#[test]
+fn ctrl_straighten_near_a_guide_does_not_take_the_layer_move_exception() {
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for classic in [false, true] {
+        let mut app = app_with_box();
+        app.ui.tool = Tool::Crop;
+        app.ui.tool_options.crop_shield.classic_mode = classic;
+        crate::crop_ui::ensure_frame(&mut app);
+        app.ui.crop_rect = Some([80.0, 60.0, 240.0, 180.0]);
+        app.crop.default_frame = false;
+        app.ui.view.snap_to.layers = false;
+        app.ui.view.snap_to.document_bounds = false;
+        app.run("view.newGuide", json!({"orientation": "vertical", "position": 220})).unwrap();
+        let (start, end) = ([120.0, 100.0], [258.0, 130.0]);
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, ctrl);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, ctrl);
+        // A moved Classic frame's left edge would be x=218, close enough to snap to x=220.
+        assert_eq!(app.crop.straighten.line, Some([start, end]), "classic {classic}: the line must follow the pointer");
+        assert!(app.prefs_rt.snap_lines.is_empty(), "classic {classic}: Straighten is not a layer move");
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, ctrl);
+        let expected = 30.0f64.atan2(138.0).to_degrees();
+        assert!((app.ui.crop_angle - expected).abs() < 1e-6, "classic {classic}: {} != {expected}", app.ui.crop_angle);
     }
 }
 
@@ -152,7 +261,8 @@ fn command_drag_temporary_move_snaps_like_the_move_tool() {
 /// no snapping at all).
 #[test]
 fn move_tool_box_and_snapping_follow_the_auto_selected_layer() {
-    for before in ["target", "empty"] {
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for (before, m) in ["target", "empty"].into_iter().flat_map(|before| [egui::Modifiers::NONE, ctrl].map(|m| (before, m))) {
         let mut app = app_with_box();
         let mover = app.session.active().unwrap().active_layer.unwrap();
         if before == "empty" {
@@ -163,8 +273,7 @@ fn move_tool_box_and_snapping_follow_the_auto_selected_layer() {
             app.run("layer.select", json!({"layer": target.0})).unwrap();
         }
         app.ui.tool = Tool::Move;
-        app.ui.tool_options.move_auto_select = true;
-        let m = egui::Modifiers::NONE;
+        app.ui.tool_options.move_auto_select = !m.command;
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
         assert_eq!(app.session.active().unwrap().active_layer, Some(mover), "{before}: Auto-Select picked the mover");
         let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
