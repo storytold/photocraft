@@ -303,6 +303,8 @@ fn is_latin1_keyword(k: &str) -> bool {
     !k.is_empty() && k.len() <= 79 && k.chars().all(|c| (' '..='~').contains(&c) || ('\u{a1}'..='\u{ff}').contains(&c))
 }
 
+/// Encodes the planned PNG, reusing owned converted pixels when 16-bit samples
+/// need big-endian byte order.
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
