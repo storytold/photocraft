@@ -492,6 +492,41 @@ fn lab_replace_visits_only_stored_tiles_when_the_default_is_transparent() {
     assert_eq!(s.active().unwrap().doc, before);
 }
 
+/// Opaque defaults remain visible when the surface has no tiles or only a small exception.
+#[test]
+fn lab_replace_includes_visible_default_pixels_with_and_without_alpha() {
+    for depth in [8, 16, 32] {
+        for (alpha, exception) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut s = fixture("lab", depth);
+            s.edit("Opaque default Lab", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let format = photocraft_doc::PixelFormat { alpha, ..surface.format() };
+                let channels = format.channels();
+                *surface = photocraft_raster::Surface::with_default(format, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
+                if exception {
+                    surface.fill_rect(photocraft_doc::Rect::new(1, 0, 2, 1), &[0.25, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
+                } else {
+                    assert!(surface.content_bounds().is_empty());
+                }
+                Ok(())
+            })
+            .unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let original = raw(&s);
+            s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+            for (i, (pixel, original)) in raw(&s).chunks_exact(3 + usize::from(alpha)).zip(original.chunks_exact(3 + usize::from(alpha))).enumerate() {
+                if exception && i == 1 {
+                    assert_eq!(pixel, original);
+                } else {
+                    assert!(pixel[0] > 0.99, "{depth}/{alpha}/{exception} pixel {i}: {pixel:?}");
+                }
+            }
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
 /// Existing RGB replacement and ordinary gradient export retain their native behavior.
 #[test]
 fn legacy_rgb_replace_color_and_ordinary_gradient_exports_are_unchanged() {

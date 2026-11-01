@@ -80,12 +80,17 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
         return Ok(Some(Value::Null));
     }
     s.edit("Replace Color", |doc, _| {
+        let canvas = doc.bounds();
         let selected = doc.selection.clone();
         let surface = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        let bounds = edit_bounds(surface.content_bounds(), selected.as_ref());
+        let transparent_default = format.alpha && surface.default_pixel().last().is_some_and(|a| a.is_nan() || *a <= 0.0);
+        let content = surface.content_bounds();
+        // A nontransparent default is visible across the canvas even without stored tiles.
+        let extent = if transparent_default { content } else { content.union(&canvas) };
+        let bounds = edit_bounds(extent, selected.as_ref());
         // Transparent gaps cannot match. Visit stored tiles instead of the possibly
         // enormous rectangle between two distant pixels.
-        let stored = if format.alpha && surface.default_pixel().last().is_some_and(|a| a.is_nan() || *a <= 0.0) {
+        let stored = if transparent_default {
             let mut tiles = crate::allocation::capacity(surface.tiles().count(), "Replace Color tile coordinates")?;
             tiles.extend(surface.tiles().map(|(tile, _)| *tile));
             Some(tiles)
