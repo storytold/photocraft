@@ -2589,6 +2589,8 @@ fn wrap_cases() -> Vec<(&'static str, Value, Setup, bool)> {
         ("paint.smudge", json!({"strength": 70, "sampleAllLayers": true}), textured_below, false),
         ("paint.colorReplacement", json!({"color": "#ff8000", "tolerance": 60}), textured, false),
         ("paint.backgroundEraser", json!({"tolerance": 40}), textured, false),
+        ("paint.colorReplacement", json!({"color": "#ff8000", "tolerance": 60, "target": {"colors": [0, 2]}}), textured, false),
+        ("paint.backgroundEraser", json!({"tolerance": 40, "target": {"colors": [0, 2]}}), textured, false),
         ("paint.patternStamp", json!({"pattern": "Bricks", "impressionist": true}), textured, false),
         ("paint.patternStamp", json!({"pattern": "Checkerboard"}), textured, true),
         ("paint.historyBrush", json!({"state": 1}), textured_in_history, true),
@@ -2793,9 +2795,11 @@ fn wrapped_live_strokes_show_what_their_commits_paint() {
         }
         let pts: Vec<_> = points.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect();
         type Begin = fn(&Session, &Value) -> Result<LiveDab>;
-        let shown: [(&str, Value, Begin); 3] = [
+        let shown: [(&str, Value, Begin); 5] = [
             ("paint.colorReplacement", json!({"color": "#ff8000", "tolerance": 60}), crate::brush_cmds::live_color_replacement),
+            ("paint.colorReplacement", json!({"color": "#ff8000", "tolerance": 60, "target": {"colors": [0, 2]}}), crate::brush_cmds::live_color_replacement),
             ("paint.backgroundEraser", json!({"tolerance": 40}), crate::eraser_cmds::live_background_eraser),
+            ("paint.backgroundEraser", json!({"tolerance": 40, "target": {"colors": [0, 2]}}), crate::eraser_cmds::live_background_eraser),
             // A seed, as the canvas sends: without one the jitter hashes all the points.
             ("paint.patternStamp", json!({"pattern": "Bricks", "impressionist": true, "seed": 7}), live_pattern_impressionist),
         ];
