@@ -141,10 +141,18 @@ fn layer_pixels_equal(a: &Layer, b: &Layer) -> bool {
     layer_pixels_cmp(a, b, &mut |x, y, _| surfaces_equal(x, y))
 }
 
+fn layer_pixels_equal_ignoring_mask(a: &Layer, b: &Layer) -> bool {
+    layer_pixels_cmp_inner(a, b, &mut |x, y, _| surfaces_equal(x, y), false)
+}
+
 /// [`layer_pixels_equal`] with the surfaces the layer draws from (its pixels, mask, type and
 /// smart-object caches, fill cache) compared by `surf`; everything else compares exactly, before
 /// any surface, so `surf` sees a pair only when every scalar the compositor reads is equal.
 fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
+    layer_pixels_cmp_inner(a, b, surf, true)
+}
+
+fn layer_pixels_cmp_inner(a: &Layer, b: &Layer, surf: SurfaceCmp, compare_mask: bool) -> bool {
     let Layer {
         id,
         name: _,
@@ -197,7 +205,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
             _ => false,
         }
         // Every scalar is equal: now the surfaces.
-        && masks_cmp(mask, &b.mask, surf)
+        && (!compare_mask || masks_cmp(mask, &b.mask, surf))
         && match (content, &b.content) {
             (LayerContent::Raster(x), LayerContent::Raster(y)) => surf(x, y, 0.0),
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, surf),
@@ -272,29 +280,35 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
 /// [`step_damage`] but without computing any bounds. Cheap: pixels compare by tile pointer.
 /// Conservative (`false`) past a nesting depth no real document reaches.
 pub fn same_pixels(a: &Document, b: &Document) -> bool {
-    pixels_equal_with(a, b, |_, _| false)
+    pixels_equal_with(a, b, |_, _| false, true)
+}
+
+/// Whether documents differ at most in their layer masks. Callers must compare the mask state
+/// separately; this avoids walking every mask tile twice when deriving ordinary canvas damage.
+pub fn same_pixels_ignoring_masks(a: &Document, b: &Document) -> bool {
+    pixels_equal_with(a, b, |_, _| false, false)
 }
 
 /// [`same_pixels`], with video layers equal when `video_equal` says their frame stacks are.
-fn pixels_equal_with(a: &Document, b: &Document, video_equal: fn(&VideoData, &VideoData) -> bool) -> bool {
-    fn walk(xs: &[Layer], ys: &[Layer], depth: usize, video_equal: fn(&VideoData, &VideoData) -> bool) -> bool {
+fn pixels_equal_with(a: &Document, b: &Document, video_equal: fn(&VideoData, &VideoData) -> bool, compare_masks: bool) -> bool {
+    fn walk(xs: &[Layer], ys: &[Layer], depth: usize, video_equal: fn(&VideoData, &VideoData) -> bool, compare_masks: bool) -> bool {
         depth < 256
             && xs.len() == ys.len()
             && xs.iter().zip(ys).all(|(x, y)| {
-                layer_pixels_equal(x, y)
+                (if compare_masks { layer_pixels_equal(x, y) } else { layer_pixels_equal_ignoring_mask(x, y) })
                     && match (&x.video, &y.video) {
                         (None, None) => true,
                         (Some(vx), Some(vy)) => video_equal(vx, vy),
                         _ => false,
                     }
                     && match (x.children(), y.children()) {
-                        (Some(xc), Some(yc)) => walk(xc, yc, depth + 1, video_equal),
+                        (Some(xc), Some(yc)) => walk(xc, yc, depth + 1, video_equal, compare_masks),
                         (None, None) => true,
                         _ => false,
                     }
             })
     }
-    doc_pixels_equal(a, b) && walk(&a.layers, &b.layers, 0, video_equal)
+    doc_pixels_equal(a, b) && walk(&a.layers, &b.layers, 0, video_equal, compare_masks)
 }
 
 /// Whether two video layers hold the same frames: the same settings and stack shape
@@ -352,7 +366,7 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         file_encoding,
     } = a;
     // The ignored fields above are the pixel ones `pixels_equal_with` already compares.
-    pixels_equal_with(a, b, video_frames_equal)
+    pixels_equal_with(a, b, video_frames_equal, true)
         && *id == b.id
         && *name == b.name
         && *layers == b.layers

@@ -782,6 +782,53 @@ fn selecting_mask_thumbnail_toggles_swatches_to_mask_colors_and_back() {
     assert_eq!(h.state().session.tools.foreground, grey);
 }
 
+#[test]
+#[cfg(feature = "uv-workbench")]
+fn clicking_a_uv_mask_thumbnail_targets_and_focuses_its_active_effect() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+    let mut s = photocraft_engine::Session::new();
+    s.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+    s.execute("uv.model.import", json!({"path":source})).unwrap();
+    s.execute("uv.texture.create", json!({"width":200,"height":100})).unwrap();
+    let masked = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("layer.layerMask.revealAll", json!({"layer":masked})).unwrap();
+    s.execute("uv.maskPaint.add", json!({"layer":masked,"kind":"paint"})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    h.state_mut().ui.workspace = "3D".into();
+    crate::menus::apply_workspace(h.state_mut());
+    h.state_mut().run("window.panel.activate", json!({"panel":"layers"})).unwrap();
+    h.state_mut().ui.panels.properties = false;
+    h.run_steps(4);
+
+    assert!(!h.state().ui.mask_target, "start with pixel content targeted");
+    let thumbnail = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(kind, _)| *kind == MaskKind::Pixel).unwrap().1;
+    click_with(&mut h, thumbnail.center(), Modifiers::NONE);
+    h.run_steps(3);
+
+    let state = h.state().session.active().unwrap();
+    let stack = state.doc.layer(photocraft_doc::LayerId(masked)).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap();
+    assert!(h.state().ui.mask_target, "the mask, not its pixels, is the paint target");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"));
+    assert_eq!(crate::uv_mask_paint::selected_effect(&h.ctx, state.doc.id.0, masked), Some(stack.active));
+    assert!(h.state().ui.panels.properties, "the active effect opens Properties");
+    assert_eq!(h.state().ui.dock_tabs.properties, 0);
+    assert!(h.query_all_by_label("Blend mode").next().is_some(), "active Paint effect controls are visible");
+    assert!(photocraft_engine::mask_view_cmds::current(state).is_none(), "a regular click keeps the composite view");
+
+    click_with(&mut h, thumbnail.center(), Modifiers::ALT);
+    h.run_steps(3);
+    let state = h.state().session.active().unwrap();
+    assert_eq!(photocraft_engine::mask_view_cmds::current(state).map(|view| view.mode), Some(photocraft_engine::mask_view_cmds::MaskViewMode::Gray));
+    assert!(h.state().ui.mask_target, "Alt-click still targets the mask in gray view");
+    assert_eq!(crate::canvas::paint_target(h.state()), json!("mask"));
+
+    click_with(&mut h, thumbnail.center(), Modifiers::ALT);
+    h.run_steps(3);
+    let state = h.state().session.active().unwrap();
+    assert!(photocraft_engine::mask_view_cmds::current(state).is_none(), "Alt-click toggles gray view off");
+    assert!(h.state().ui.mask_target, "toggling the gray view off leaves the mask targeted");
+}
+
 // #3369: a new adjustment or fill layer targets its mask, but Properties shows its settings
 // until the mask thumbnail is clicked, as in Photoshop.
 #[test]

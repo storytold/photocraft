@@ -425,6 +425,11 @@ impl Surface {
         decode_pixel(&self.format, &self.default_pixel)
     }
 
+    /// Change the value returned for untouched pixels. Existing tiles keep their stored samples.
+    pub fn set_default_pixel(&mut self, pixel: &[f32]) {
+        encode_pixel(&self.format, pixel, &mut self.default_pixel);
+    }
+
     /// Decode the default pixel, using dynamic storage only when the stack buffer is too small.
     fn default_samples<'a>(&self, stack: &'a mut [f32], heap: &'a mut Vec<f32>) -> &'a mut [f32] {
         let px = sample_buffer(self.channels(), stack, heap);

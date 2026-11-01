@@ -42,6 +42,13 @@ struct Op {
 
 const F_MASK: u32 = 1u;          // layer has an enabled mask
 const F_MASK_TEX: u32 = 2u;      // mask pixels live in `mask_tex`
+const F_MASK_SLOT: u32 = 2097152u; // flattened editable Paint mask lives in a planner slot
+const F_MASK_FILL: u32 = 4194304u;
+const F_MASK_FILL_REPEAT_U: u32 = 8388608u;
+const F_MASK_FILL_REPEAT_V: u32 = 16777216u;
+const F_MASK_FILL_MIRROR_U: u32 = 33554432u;
+const F_MASK_FILL_MIRROR_V: u32 = 67108864u;
+const F_MASK_FILL_LEGACY: u32 = 134217728u;
 const F_TEX: u32 = 4u;           // layer pixels live in `layer_tex`
 const F_GRADIENT: u32 = 8u;      // gradient fill (stops in `lut_tex`)
 const F_KNOCKOUT: u32 = 16u;     // effect paint: the layer knocks out the coverage (drop shadow)
@@ -97,13 +104,144 @@ fn mask_value(d: vec2<i32>) -> f32 {
         return 1.0;
     }
     var v = op.mask_default;
-    if ((op.flags & F_MASK_TEX) != 0u) {
+    if ((op.flags & F_MASK_SLOT) != 0u) {
+        v = textureLoad(mask_tex, d - chunk.origin, 0).r;
+    } else if ((op.flags & F_MASK_TEX) != 0u) {
         let m = d - op.mask_origin;
         if (inside(m, op.mask_size)) {
             v = textureLoad(mask_tex, m, 0).r;
         }
     }
     return 1.0 - op.mask_density * (1.0 - v);
+}
+
+// Editable grayscale-mask Paint stack. The planner emits base, paint layers and one final
+// quantize pass; keeping all blending in float matches the CPU flattener's single final write.
+@fragment
+fn fs_mask_stack(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let d = doc_px(p);
+    if (op.kind == 0) {
+        var value = op.color.r;
+        if ((op.flags & F_TEX) != 0u) {
+            let q = d - op.tex_origin;
+            if (inside(q, op.tex_size)) { value = textureLoad(layer_tex, q, 0).r; }
+        }
+        return vec4(value, value, value, value);
+    }
+    let below = textureLoad(tex_a, p, 0).r;
+    if (op.kind == 6) {
+        let radius = i32(op.p0.y);
+        var step = vec2<i32>(1, 0);
+        if (op.p0.x > 0.5) { step = vec2<i32>(0, 1); }
+        var value = 0.0;
+        for (var k = 0; k <= 2 * radius; k++) {
+            let q = p + step * (k - radius);
+            if (inside(q, chunk.size)) {
+                value += textureLoad(tex_a, q, 0).r * textureLoad(lut_tex, vec2<i32>(k, 0), 0).r;
+            }
+        }
+        return vec4(value, value, value, value);
+    }
+    if (op.kind == 7) {
+        let blurred = below;
+        let original = textureLoad(tex_b, p, 0).r;
+        var value = blurred * op.opacity + original * (1.0 - op.opacity);
+        if (op.mode != M_NORMAL) {
+            let blended = blend_channel(op.mode, original, blurred);
+            value = original + (blended - original) * op.opacity;
+        }
+        return vec4(value, value, value, value);
+    }
+    if (op.kind == 2) {
+        var value = below;
+        if (op.p0.x > 0.0) { value = floor(clamp(value, 0.0, 1.0) * op.p0.x + 0.5) / op.p0.x; }
+        return vec4(value, value, value, value);
+    }
+    if (op.kind == 3) {
+        var value = op.color.r * op.opacity + below * (1.0 - op.opacity);
+        if (op.mode != M_NORMAL) {
+            let blended = blend_channel(op.mode, below, op.color.r);
+            value = below + (blended - below) * op.opacity;
+        }
+        return vec4(value, value, value, value);
+    }
+    if (op.kind == 4) {
+        let input_black = op.p0.x;
+        let gamma = max(op.p0.y, 0.01);
+        let input_white = op.p0.z;
+        let output_black = op.p0.w;
+        let output_white = op.p1.x;
+        let normalized = clamp((below - input_black) / max(input_white - input_black, 0.0000001), 0.0, 1.0);
+        let adjusted = output_black + pow(normalized, 1.0 / gamma) * (output_white - output_black);
+        var value = adjusted * op.opacity + below * (1.0 - op.opacity);
+        if (op.mode != M_NORMAL) {
+            let blended = blend_channel(op.mode, below, adjusted);
+            value = below + (blended - below) * op.opacity;
+        }
+        return vec4(value, value, value, value);
+    }
+    if (op.kind == 5 && (op.flags & F_MASK_FILL) != 0u) {
+        let bounds = op.p0;
+        let span = bounds.zw - bounds.xy;
+        if (span.x <= 0.0 || span.y <= 0.0) {
+            return vec4(below, below, below, below);
+        }
+        let legacy = (op.flags & F_MASK_FILL_LEGACY) != 0u;
+        let repeat_u = (op.flags & F_MASK_FILL_REPEAT_U) != 0u;
+        let repeat_v = (op.flags & F_MASK_FILL_REPEAT_V) != 0u;
+        let source_size = vec2<i32>(op.p2.xy);
+        var uv: vec2<f32>;
+        if (legacy) {
+            // Old fills without spatial bounds repeated at the source image's pixel size.
+            uv = max(vec2<f32>(d), vec2<f32>(0.0)) / 2147483647.0;
+            if (repeat_u && source_size.x > 0) { uv.x = (f32(d.x) + 0.5) / f32(source_size.x); }
+            if (repeat_v && source_size.y > 0) { uv.y = (f32(d.y) + 0.5) / f32(source_size.y); }
+        } else {
+            let center = (bounds.xy + bounds.zw) * 0.5;
+            let delta = vec2<f32>(d) + vec2<f32>(0.5) - center;
+            let sin_a = op.p1.x;
+            let cos_a = op.p1.y;
+            let source_local = vec2<f32>(cos_a * delta.x + sin_a * delta.y, -sin_a * delta.x + cos_a * delta.y);
+            uv = (source_local + center - bounds.xy) / span;
+        }
+        if (!legacy && ((!repeat_u && (uv.x < 0.0 || uv.x >= 1.0)) || (!repeat_v && (uv.y < 0.0 || uv.y >= 1.0)))) {
+            return vec4(below, below, below, below);
+        }
+        let tile = floor(uv);
+        var fraction = uv - tile;
+        if (legacy && !repeat_u) { fraction.x = uv.x; }
+        if (legacy && !repeat_v) { fraction.y = uv.y; }
+        if (repeat_u && (op.flags & F_MASK_FILL_MIRROR_U) != 0u && rem_euclid(tile.x, 2.0) == 1.0) {
+            fraction.x = 1.0 - fraction.x;
+        }
+        if (repeat_v && (op.flags & F_MASK_FILL_MIRROR_V) != 0u && rem_euclid(tile.y, 2.0) == 1.0) {
+            fraction.y = 1.0 - fraction.y;
+        }
+        var sample_value = op.color.r;
+        if (source_size.x > 0 && source_size.y > 0) {
+            let source = clamp(vec2<i32>(floor(fraction * vec2<f32>(source_size))), vec2<i32>(0), source_size - vec2<i32>(1));
+            sample_value = textureLoad(pat_tex, source, 0).r;
+        }
+        var value = sample_value * op.opacity + below * (1.0 - op.opacity);
+        if (op.mode != M_NORMAL) {
+            let blended = blend_channel(op.mode, below, sample_value);
+            value = below + (blended - below) * op.opacity;
+        }
+        return vec4(value, value, value, value);
+    }
+    var source = op.color;
+    if ((op.flags & F_TEX) != 0u) {
+        let q = d - op.tex_origin;
+        if (inside(q, op.tex_size)) { source = textureLoad(layer_tex, q, 0); }
+    }
+    let alpha = source.a * op.opacity;
+    var value = source.r * alpha + below * (1.0 - alpha);
+    if (op.mode != M_NORMAL) {
+        let blended = blend_channel(op.mode, below, source.r);
+        value = below + (blended - below) * alpha;
+    }
+    return vec4(value, value, value, value);
 }
 
 fn lut(row: i32, v: f32) -> f32 {
@@ -225,6 +363,8 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
         }
         default: { return cs; }                                 // Normal, Dissolve, PassThrough
     }
+    // FXC requires a function-level return even though every switch arm returns.
+    return cs;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }

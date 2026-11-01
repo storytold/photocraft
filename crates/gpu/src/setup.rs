@@ -7,6 +7,18 @@ use super::{
     Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
 };
 
+pub(crate) fn mask_fill_source_bytes([width, height]: [u32; 2], max_side: u32) -> Result<u64, Unsupported> {
+    let row_width = width.div_ceil(64).checked_mul(64).ok_or_else(|| Unsupported("mask Fill image width overflows".into()))?;
+    if width == 0 || height == 0 || row_width > max_side || height > max_side {
+        return Err(Unsupported("mask Fill image is empty or larger than the GPU texture limit".into()));
+    }
+    let bytes = u64::from(row_width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(4));
+    match bytes {
+        Some(bytes) if bytes <= consts::MASK_FILL_SOURCE_BYTES => Ok(bytes),
+        _ => Err(Unsupported("mask Fill image exceeds the dedicated GPU source memory limit".into())),
+    }
+}
+
 impl Compositor {
     /// Create a compositor with the default accumulation format ([`ACC_FORMAT`]).
     pub fn new(device: &wgpu::Device) -> Self {
@@ -140,6 +152,7 @@ impl Compositor {
             prefix: prefix::Prefix::default(),
             temps: Vec::new(),
             patterns: HashMap::new(),
+            mask_fills: HashMap::new(),
             pattern_mode: photocraft_color::ColorMode::Rgb,
             pattern_doc: DocId(0),
             pattern_budget: PATTERN_BUDGET,
@@ -286,7 +299,13 @@ impl Compositor {
         let mut seen = std::collections::HashSet::new();
         let mut total = 0u64;
         for p in &plan.passes {
-            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
+            let sources = [
+                p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())),
+                p.mask.as_ref().and_then(|m| match &m.source {
+                    plan::MaskSource::Surface(surface) => Some((m.layer, Role::Mask, surface.get())),
+                    plan::MaskSource::Slot(_) => None,
+                }),
+            ];
             for (layer, role, s) in sources.into_iter().flatten() {
                 if seen.insert((layer, role)) {
                     let a = s.tile_bounds().intersect(&grid).intersect(&cells);
@@ -321,6 +340,10 @@ impl Compositor {
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
+    }
+
+    pub fn mask_fill_cache_bytes(&self) -> u64 {
+        self.mask_fills.values().map(|fill| fill.bytes).sum()
     }
 
     /// Set the GPU memory pattern textures may hold (default [`PATTERN_BUDGET`]). It takes effect
@@ -396,6 +419,9 @@ impl Compositor {
             if let Some(pat) = pass.pattern {
                 self.check_pattern(pat)?;
             }
+            if let Some(fill) = &pass.mask_fill {
+                mask_fill_source_bytes(fill.size, self.device_max)?;
+            }
         }
         Ok(())
     }
@@ -415,6 +441,7 @@ impl Compositor {
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
         self.residents.retain(|_, r| r.doc != doc);
+        self.mask_fills.retain(|(id, _, _), _| *id != doc);
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -429,6 +456,7 @@ impl Compositor {
             .map(|r| r.doc)
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
+            .chain(self.mask_fills.keys().map(|(doc, _, _)| *doc))
             .chain(self.prefix.doc())
             .filter(|d| !keep(*d))
             .collect();
@@ -448,6 +476,7 @@ impl Compositor {
             .map(|r| r.doc)
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
+            .chain(self.mask_fills.keys().map(|(doc, _, _)| *doc))
             .chain(self.prefix.doc())
             .collect();
         docs.sort_by_key(|d| d.0);
@@ -507,3 +536,4 @@ impl Compositor {
         self.timer.as_mut().and_then(timing::GpuTimer::take)
     }
 }
+use super::consts;

@@ -911,6 +911,37 @@ impl StrokeRenderer {
     pub fn dab_count(&self) -> usize {
         self.dabs_done
     }
+    /// Accumulate an externally projected native dab. Geometry adapters provide
+    /// coverage in destination pixels; native opacity, masks, colour dynamics,
+    /// blending, bit depth and sparse stroke compositing remain in this renderer.
+    pub fn accumulate_mapped(&mut self, rect: Rect, coverage: &[f32], dual: &[f32], depth: &[f32], dab: &Dab) -> bool {
+        let n = u64::from(rect.width()) * u64::from(rect.height());
+        if n == 0
+            || n > 16_777_216
+            || coverage.len() as u64 != n
+            || dual.len() != coverage.len()
+            || depth.len() != coverage.len()
+            || coverage.iter().chain(dual).chain(depth).any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || dab.color.iter().any(|v| !v.is_finite())
+            || !dab.opacity.is_finite()
+            || !(0.0..=1.0).contains(&dab.opacity)
+        {
+            return false;
+        }
+        let mut native = [0.0; 8];
+        let color = match (self.per_dab_color, self.fmt) {
+            (true, Some(fmt)) => {
+                from_rgba_into(&fmt, dab.color, &mut native);
+                Some(&native[..fmt.mode.color_channels()])
+            }
+            _ => None,
+        };
+        self.cov.accumulate(rect, coverage, dab.opacity, color, self.ctx.brush.wet_edges.then_some(depth));
+        if let Some(target) = &mut self.dual {
+            target.accumulate(rect, dual, 1.0, None, None);
+        }
+        true
+    }
     /// Union of the dab rectangles so far.
     pub fn bounds(&self) -> Rect {
         self.cov.bounds

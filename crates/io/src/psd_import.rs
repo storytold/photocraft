@@ -392,6 +392,7 @@ impl Ctx<'_> {
             linked: flags & 1 == 0,
             density: params.and_then(|p| p.user_density).map_or(1.0, |d| f32::from(d) / 255.0),
             feather: params.and_then(|p| p.user_feather).map_or(0.0, |f| f as f32),
+            paint: None,
         })
     }
 

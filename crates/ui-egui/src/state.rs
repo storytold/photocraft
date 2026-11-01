@@ -204,6 +204,9 @@ pub struct DocWindow {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
+    #[cfg(feature = "uv-workbench")]
+    #[serde(default)]
+    pub uv_workbench: crate::uv_ui::State,
     pub tool: Tool,
     /// The last tool used in each shortcut group (the tools sharing a key, [`Tool::key`]), at most
     /// one per group: the group's key brings it back, as in Photoshop (#2608).
@@ -293,6 +296,9 @@ pub struct UiState {
     /// `crate::brush_mode_menu`): screen position in points.
     #[serde(default)]
     pub brush_mode_menu: Option<[f32; 2]>,
+    /// Viewport whose screen coordinates own the open painting-tool mode menu.
+    #[serde(skip)]
+    pub brush_mode_menu_viewport: Option<egui::ViewportId>,
     /// The tool whose Shift+right-click menu is open: another tool closes it.
     #[serde(default)]
     pub brush_mode_menu_tool: Option<Tool>,
@@ -520,6 +526,8 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             tool: Tool::Move,
+            #[cfg(feature = "uv-workbench")]
+            uv_workbench: Default::default(),
             group_tools: Vec::new(),
             spring: None,
             recent_files: Vec::new(),
@@ -542,6 +550,7 @@ impl Default for UiState {
             properties_layer: None,
             brush_picker: None,
             brush_mode_menu: None,
+            brush_mode_menu_viewport: None,
             brush_mode_menu_tool: None,
             brush_picker_list: crate::brush_picker::list_state(),
             brush_picker_size: None,

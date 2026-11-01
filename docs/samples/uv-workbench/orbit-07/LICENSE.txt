@@ -1,0 +1,8 @@
+ORBIT-07 field robot: original procedural geometry and texture maps
+
+The model and maps in this folder were created for the PhotoCraft 3D / UV
+workspace demonstration by PhotoCraft contributors with OpenAI Codex. They are
+dedicated to the public domain under the Creative Commons CC0 1.0 Universal
+Public Domain Dedication.
+
+https://creativecommons.org/publicdomain/zero/1.0/

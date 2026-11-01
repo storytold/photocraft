@@ -1,4 +1,6 @@
 use super::{PhotocraftApp, gpu_canvas, gpu_status};
+#[cfg(feature = "uv-workbench")]
+use crate::uv_gpu;
 
 impl PhotocraftApp {
     /// Draw the document canvas on the GPU (custom WGSL shader) instead of via egui textures.
@@ -29,6 +31,13 @@ impl PhotocraftApp {
         };
         self.perf.gpu_info.canvas = "gpu".into();
         self.window_device = Some((rs.device.clone(), gpu.health().clone()));
+        #[cfg(feature = "uv-workbench")]
+        {
+            match uv_gpu::Renderer::new(rs.clone(), gpu.health().clone()) {
+                Ok(renderer) => self.uv_cache.gpu = Some(renderer),
+                Err(error) => log::warn!("3D GPU preview unavailable: {error}"),
+            }
+        }
         self.gpu = Some(gpu);
         self.prefs_rt.gpu_style = None;
     }
@@ -37,6 +46,25 @@ impl PhotocraftApp {
     /// the device was lost).
     pub fn gpu_active(&self) -> bool {
         self.gpu.is_some()
+    }
+
+    /// Attach only the optional 3D renderer (also useful for isolated, windowless validation).
+    #[cfg(feature = "uv-workbench")]
+    pub fn set_uv_wgpu(&mut self, rs: eframe::egui_wgpu::RenderState) -> Result<(), String> {
+        let health = self.gpu_health().unwrap_or_else(|| photocraft_gpu::DeviceHealth::watch(&rs.device));
+        self.uv_cache.gpu = Some(uv_gpu::Renderer::new(rs, health)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "uv-workbench")]
+    pub fn uv_gpu_active(&self) -> bool {
+        self.uv_cache.gpu.is_some()
+    }
+
+    /// Actual resident map dimensions, ordered by material (colour, normal).
+    #[cfg(feature = "uv-workbench")]
+    pub fn uv_gpu_texture_sizes(&self) -> Vec<([u32; 2], [u32; 2])> {
+        self.uv_cache.gpu.as_ref().map_or_else(Vec::new, |g| g.texture_sizes())
     }
 
     /// The GPU canvas's device health flag (tests inject faults through it).

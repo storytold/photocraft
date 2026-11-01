@@ -2956,6 +2956,63 @@ fn damage_grows_by_nested_effect_reach() {
 }
 
 #[test]
+fn mask_blur_reach_grows_damage_and_partial_thumbnail_matches_full_refresh() {
+    use photocraft_color::PixelFormat;
+    use photocraft_compose::{render_reduced_damage, thumbnail_buffer, thumbnail_size};
+    use photocraft_doc::{
+        ColorMode, Document, Layer, LayerMask, SampleType, Size,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let empty_paint = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]);
+    let make_effect = |kind| Paint {
+        name: "test".into(),
+        visible: true,
+        opacity: 1.0,
+        blend: photocraft_color::BlendMode::Normal,
+        surface: empty_paint.clone(),
+        fill_map: None,
+        fill_map_size: [0, 0],
+        fill_bounds: None,
+        kind,
+    };
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack { base, layers: vec![make_effect(EffectKind::Paint), make_effect(EffectKind::Blur { radius: 7 })], active: 0 });
+    let mut layer = Layer::raster("masked", PixelFormat::RGBA8);
+    *layer.surface_mut().unwrap() = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    layer.mask = Some(mask);
+    let mut doc = Document::new("mask blur damage", Size::new(256, 128), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(layer);
+
+    assert_eq!(effect_reach(&doc.layers), 7, "visible enabled mask Blur expands damage by its finite support");
+    let child_with_blur = doc.layers[0].clone();
+    assert_eq!(effect_reach(&[Layer::group("group", vec![child_with_blur.clone()])]), 7, "nested group damage includes its child's mask Blur");
+    let mut disabled_blur = child_with_blur.clone();
+    disabled_blur.mask.as_mut().unwrap().enabled = false;
+    assert_eq!(effect_reach(&[disabled_blur]), 0, "a disabled mask cannot extend the composite");
+    let mut hidden_blur = child_with_blur;
+    hidden_blur.mask.as_mut().unwrap().paint.as_mut().unwrap().layers[1].visible = false;
+    assert_eq!(effect_reach(&[hidden_blur]), 0, "a hidden Blur cannot extend the composite");
+    let full_before = thumbnail_buffer(&doc, 512);
+    let (width, height) = thumbnail_size(&doc, 512);
+    let edit = Rect::new(126, 62, 127, 63);
+    doc.layers[0].mask.as_mut().unwrap().paint.as_mut().unwrap().layers[0].surface.write_region(edit, &[1.0, 1.0, 1.0, 1.0]);
+    let changed = edit.inflate(effect_reach(&doc.layers)).intersect(&doc.bounds());
+    let patch = render_reduced_damage(&doc, width, height, changed);
+    let mut partially_updated = full_before;
+    for y in 0..patch.rect.height() as usize {
+        let dst = (patch.rect.y0 as usize + y) * width as usize + patch.rect.x0 as usize;
+        let src = y * patch.rect.width() as usize;
+        partially_updated.px[dst..dst + patch.rect.width() as usize].copy_from_slice(&patch.px[src..src + patch.rect.width() as usize]);
+    }
+    assert_eq!(partially_updated.px, thumbnail_buffer(&doc, 512).px, "a stroke's partial update includes the visible mask Blur halo");
+}
+
+#[test]
 fn tab_reorder_keeps_floating_documents_in_place() {
     let visible = [0, 2];
     assert_eq!(move_target_after_filter(&visible, 0, 1, 3), 2);

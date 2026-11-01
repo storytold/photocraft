@@ -584,6 +584,132 @@ cameraRaw	Yellow	पीला
 	Refine Hair needs hair detection, which isn't available yet	बाल परिशोधित करने के लिए बालों की पहचान चाहिए, जो अभी उपलब्ध नहीं है
 	Select and Mask was closed: its document is no longer the active one	चयन और मास्क बंद कर दिया गया: उसका दस्तावेज़ अब सक्रिय नहीं है
 	Select and Mask was closed: another layer was selected	चयन और मास्क बंद कर दिया गया: दूसरी लेयर चुनी गई
+
+# Optional 3D / UV extension: English fallback; full extension translations are available in English and Russian.
+	Environment map exceeds 256 MiB	Environment map exceeds 256 MiB
+	Unknown environment map format	Unknown environment map format
+	Choose a linear HDR or EXR panorama	Choose a linear HDR or EXR panorama
+	Environment preparation was interrupted	Environment preparation was interrupted
+	Environment loading is available in the desktop build	Environment loading is available in the desktop build
+	Environment / PBR	Environment / PBR
+	Studio environment	Studio environment
+	Studio	Studio
+	Preparing lighting…	Preparing lighting…
+	Brightness	Brightness
+	Rotation	Rotation
+	Show environment background	Show environment background
+	Background brightness	Background brightness
+	Emissive intensity	Emissive intensity
+	Material defaults	Material defaults
+	Choose a local HDR / EXR map	Choose a local HDR / EXR map
+	No file selected	No file selected
+	Project images are available in the 3D workspace	Project images are available in the 3D workspace
+	Import a 3D model first	Import a 3D model first
+	Drop images here, then drag them into Layers	Drop images here, then drag them into Layers
+	Add images…	Add images…
+	A local file is required	A local file is required
+	Add to Layers	Add to Layers
+	Remove from library	Remove from library
+	Assign a texture to this material before painting	Assign a texture to this material before painting
+	UV shell selection	UV shell selection
+	3D / 2D views	3D / 2D views
+	3D only                      F2	3D only                      F2
+	2D only                      F3	2D only                      F3
+	Swap 3D / 2D                 F4	Swap 3D / 2D                 F4
+	Open 3D in a window	Open 3D in a window
+	Open 2D in a window	Open 2D in a window
+	Show UV shells	Show UV shells
+	Camera projection	Camera projection
+	Perspective view             F5	Perspective view             F5
+	Orthographic view            F6	Orthographic view            F6
+	3D display	3D display
+	Lighting	Lighting
+	MSAA antialiasing	MSAA antialiasing
+	Smooth navigation	Smooth navigation
+	Up to 1600 px while navigating; source maps stay full size and full viewport resolution returns when you release the mouse.	Up to 1600 px while navigating; source maps stay full size and full viewport resolution returns when you release the mouse.
+	Cull backfaces	Cull backfaces
+	Flip faces	Flip faces
+	Normal strength	Normal strength
+	Camera navigation	Camera navigation
+	Orbit pivot	Orbit pivot
+	Reset camera	Reset camera
+	Alt+LMB — orbit · Alt+MMB — pan	Alt+LMB — orbit · Alt+MMB — pan
+	Alt+RMB — dolly · Ctrl+LMB — pipette · F / A — frame	Alt+RMB — dolly · Ctrl+LMB — pipette · F / A — frame
+	Display channel	Display channel
+	Material shows the shaded material. Map channels show unlit texture colors.	Material shows the shaded material. Map channels show unlit texture colors.
+	2D map	2D map
+	The 2D map can be selected independently of the 3D display	The 2D map can be selected independently of the 3D display
+	3D import settings	3D import settings
+	UV set:	UV set:
+	Materials, color textures and normal maps are loaded automatically.	Materials, color textures and normal maps are loaded automatically.
+	Choose model…	Choose model…
+	3D · Model	3D · Model
+	2D · Texture	2D · Texture
+	Wait for the environment map to finish preparing, then save the project again	Wait for the environment map to finish preparing, then save the project again
+	Save changes to the 3D project?	Save changes to the 3D project?
+	The .pcuv container saves layered textures, library images, the model and scene settings. Export Textures is not required.	The .pcuv container saves layered textures, library images, the model and scene settings. Export Textures is not required.
+	Save project	Save project
+	Don't save	Don't save
+	View center → surface	View center → surface
+	Under cursor	Under cursor
+	Fixed	Fixed
+	Mesh reimported. UVs changed: check existing seam protection masks.	Mesh reimported. UVs changed: check existing seam protection masks.
+	Mesh reimported; textures and layers preserved.	Mesh reimported; textures and layers preserved.
+	The source model is unavailable. The current mesh is retained.	The source model is unavailable. The current mesh is retained.
+	The source model changed — click ReImport	The source model changed — click ReImport
+	Source maps require more than 4 GiB of CPU cache. Remove unused material bindings; maps are not downscaled automatically.	Source maps require more than 4 GiB of CPU cache. Remove unused material bindings; maps are not downscaled automatically.
+	Marquee:	Marquee:
+	Intersecting	Intersecting
+	Fully enclosed	Fully enclosed
+	General margin, px	General margin, px
+	Horizontal margin, px	Horizontal margin, px
+	Vertical margin, px	Vertical margin, px
+	Inward feather, px	Inward feather, px
+	Drop one file onto the texture slot	Drop one file onto the texture slot
+	Assigning a texture requires a local file	Assigning a texture requires a local file
+	Choose a file or drop an image here	Choose a file or drop an image here
+	Edit in 2D	Edit in 2D
+	Paint on this map	Paint on this map
+	Use active document	Use active document
+	New layer	New layer
+	New 1K texture	New 1K texture
+	Open the 3D workspace	Open the 3D workspace
+	Materials / visibility	Materials / visibility
+	Show mesh parts using this material	Show mesh parts using this material
+	Material textures	Material textures
+	Import a UV-mapped FBX or OBJ. Materials and available textures are loaded automatically.	Import a UV-mapped FBX or OBJ. Materials and available textures are loaded automatically.
+	Image: {name}	Image: {name}
+	Could not save scene: {error}	Could not save scene: {error}
+	Triangles: {triangles} · UV shells: {shells}	Triangles: {triangles} · UV shells: {shells}
+	Source thumbnail	Source thumbnail
+	Click to replace or drop a file	Click to replace or drop a file
+	Export Textures: exported {saved}, missing path {unsaved}, errors {errors}	Export Textures: exported {saved}, missing path {unsaved}, errors {errors}
+	Source map {width} × {height} exceeds the GPU limit of {limit}. Maps are not downscaled automatically.	Source map {width} × {height} exceeds the GPU limit of {limit}. Maps are not downscaled automatically.
+	3D Import	3D Import
+	Import Model…	Import Model…
+	Import Settings…	Import Settings…
+	Open 3D Project…	Open 3D Project…
+	Save 3D Project…	Save 3D Project…
+	Close 3D Project	Close 3D Project
+	Export Textures	Export Textures
+	Images	Images
+	3D / UV Workbench	3D / UV Workbench
+# Optional 3D / UV extension: English fallback; full extension translations are available in English and Russian.
+	Import model…	Import model…
+	ReImport	ReImport
+	Brush tip in UV space	Brush tip in UV space
+	Wraps neighboring faces and UV seams. Brush, Pencil and Eraser; retouching uses Paint UV.	Wraps neighboring faces and UV seams. Brush, Pencil and Eraser; retouching uses Paint UV.
+	Click to select · Shift to add · Ctrl to subtract	Click to select · Shift to add · Ctrl to subtract
+	Paint UV	Paint UV
+	Paint Wrap	Paint Wrap
+	PBR · Roughness / Metallic	PBR · Roughness / Metallic
+	HDR / EXR…	HDR / EXR…
+	Metallic	Metallic
+	Reimport	Reimport
+	Add Paint layer	Add Paint layer
+	Delete Paint layer	Delete Paint layer
+	Move Up	Move Up
+	Move Down	Move Down
 # Art History Brush (#213).
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)

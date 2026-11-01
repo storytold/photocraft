@@ -8,14 +8,18 @@ impl Session {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();
+        #[cfg(feature = "uv-workbench")]
+        let uv_cache_context = self.active().and_then(|state| self.uv.mask_cache_context(&state.doc));
         let Some(st) = self.active_mut() else { return false };
-        st.coalesce = None;
         // The step being undone: the layers whose visibility it changed get it back.
         let changed = st.history.current_visibility().to_vec();
-        match st.history.undo(st.doc.clone()) {
+        let mut next_history = st.history.clone();
+        match next_history.undo(st.doc.clone()) {
             // Undo Clear History: the list comes back, the document is the same one. Not an
             // edit: keep a clean document clean (the revision still moves for the panels).
             Some((d, layers)) if Arc::ptr_eq(&d, &st.doc) => {
+                st.history = next_history;
+                st.coalesce = None;
                 restore_target(st, layers);
                 let clean = !st.is_dirty();
                 st.revision += 1;
@@ -33,9 +37,28 @@ impl Session {
                 if keep_visibility {
                     carry_visibility(&st.doc, &mut d, &changed);
                 }
+                #[cfg(feature = "uv-workbench")]
+                if let Some(context) = uv_cache_context.as_ref() {
+                    let target_context = context.for_document(&d);
+                    if !target_context.is_current(&d) {
+                        if crate::uv_reload_cmds::refresh_bound_mask_cache_for_document(
+                            Arc::make_mut(&mut d),
+                            &context.scene,
+                            &context.topology,
+                            &context.materials,
+                        )
+                        .is_err()
+                        {
+                            return false;
+                        }
+                        target_context.remember(&d);
+                    }
+                }
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
+                st.history = next_history;
+                st.coalesce = None;
                 let before = std::mem::replace(&mut st.doc, d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
@@ -52,19 +75,40 @@ impl Session {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();
+        #[cfg(feature = "uv-workbench")]
+        let uv_cache_context = self.active().and_then(|state| self.uv.mask_cache_context(&state.doc));
         let Some(st) = self.active_mut() else { return false };
-        st.coalesce = None;
-        match st.history.redo(st.doc.clone()) {
+        let mut next_history = st.history.clone();
+        match next_history.redo(st.doc.clone()) {
             Some((mut d, layers)) => {
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
                 }
                 if keep_visibility {
                     // The step being redone sets the visibility it changed again.
-                    let changed = st.history.current_visibility().to_vec();
+                    let changed = next_history.current_visibility().to_vec();
                     carry_visibility(&st.doc, &mut d, &changed);
                 }
+                #[cfg(feature = "uv-workbench")]
+                if let Some(context) = uv_cache_context.as_ref() {
+                    let target_context = context.for_document(&d);
+                    if !target_context.is_current(&d) {
+                        if crate::uv_reload_cmds::refresh_bound_mask_cache_for_document(
+                            Arc::make_mut(&mut d),
+                            &context.scene,
+                            &context.topology,
+                            &context.materials,
+                        )
+                        .is_err()
+                        {
+                            return false;
+                        }
+                        target_context.remember(&d);
+                    }
+                }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
+                st.history = next_history;
+                st.coalesce = None;
                 let before = std::mem::replace(&mut st.doc, d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);

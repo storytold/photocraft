@@ -580,6 +580,10 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
         dispatch_pressed(app, ctx, focus, false);
         return true;
     }
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_ui::keys(app, ctx) {
+        return true;
+    }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
     if crate::distort_ui::keys(app, ctx) {
         return true;
@@ -897,6 +901,14 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
         let Some(k) = crate::spring_tools::key_of(t.key()) else { continue };
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
+            #[cfg(feature = "uv-workbench")]
+            {
+                if !crate::uv_ui::commit_current_polygon_selection(app) {
+                    continue;
+                }
+                app.ui.uv_workbench.select_shells = false;
+                app.uv_cache.shell_tool_owner = None;
+            }
             let before = app.ui.tool;
             let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|x| x.key() == t.key() && crate::tool_shortcuts::uses_default(app, *x)).collect();
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {

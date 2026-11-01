@@ -1,4 +1,5 @@
 use super::{PhotocraftApp, Sense, Tokens, icons, theme, vec2, widgets};
+use serde_json::json;
 
 // ----------------------------------------------------------------------------- title bar
 
@@ -102,9 +103,12 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         0
                     };
                     let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
-                    if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", tl!("Workspace"), &mut ws, &opts, ws_width) {
-                        app.ui.workspace = ws;
-                        crate::menus::apply_workspace(app);
+                    if room >= WORKSPACE_MIN
+                        && widgets::dropdown(ui, "workspace", tl!("Workspace"), &mut ws, &opts, ws_width)
+                        && let Err(error) = crate::menus::invoke(app, ui.ctx(), "window.workspace.select", json!({"name":ws}))
+                    {
+                        app.ui.status = error;
+                        app.ui.status_error = true;
                     }
                     if icons_shown >= 1
                         && icons::button(ui, "search", 28.0, app.ui.palette_open, &crate::shortcuts::tip_label(app, "Search commands", "edit.search")).clicked()

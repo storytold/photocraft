@@ -2076,7 +2076,7 @@ fn shapeless_fx_doc(depth: SampleType) -> Document {
             let mut m = photocraft_raster::Surface::new(mask_fmt);
             m.fill_rect(Rect::new(4 + i as i32, y - 12, 44, y + 30), &[1.0]);
             m.fill_rect(Rect::new(4 + i as i32, y + 30, 30, y + 34), &[0.5]);
-            l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
         }
         d.layers.push(l);
     }
@@ -2088,7 +2088,7 @@ fn shapeless_fx_doc(depth: SampleType) -> Document {
     inner.advanced.transparency_shapes = false;
     let mut m = photocraft_raster::Surface::new(mask_fmt);
     m.fill_rect(Rect::new(8, 240, 36, 380), &[1.0]);
-    inner.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    inner.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
     let mut g = Layer::group("g", vec![inner]);
     g.effects.items = vec![Effect::DropShadow(Shadow { size: 40.0, spread: 0.1, ..shadow(90.0, 70.0) }), stroke(120.0, StrokePosition::Outside)];
     g.opacity = 0.6;
@@ -4534,7 +4534,7 @@ fn clipped_dissolve_adjustment_preserves_alpha_and_document_coverage() {
         adjustment.fill_opacity = 0.5;
         let mut mask = photocraft_raster::Surface::new(PixelFormat::GRAY8);
         mask.fill_rect(Rect::new(-3, -2, 260, 12), &[1.0]);
-        adjustment.mask = Some(LayerMask { surface: mask, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        adjustment.mask = Some(LayerMask { surface: mask, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
         d.layers.push(adjustment);
         let whole = render(&d, bounds);
         let mut changed = 0;

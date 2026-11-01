@@ -1,0 +1,4 @@
+The two-shells*.fbx, two-shells.obj, two-shells.mtl, checker.png, normals-reflected.fbx and normal.png fixtures are
+original synthetic test assets created for the PhotoCraft UV extension.
+Licensed under MIT OR Apache-2.0, as PhotoCraft (see the repository root licenses).
+No external models or textures are included.

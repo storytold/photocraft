@@ -30,7 +30,12 @@ pub fn render_to_vec_stats(
             mapped_at_creation: false,
         });
         enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: out.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: out.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: out.origin[0], y: out.origin[1], z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buf,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(out.rect.height()) },

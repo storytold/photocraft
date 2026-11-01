@@ -48,10 +48,15 @@ fn op_values(p: &plan::Pass<'_>, tex: Option<[i32; 4]>, mask: Option<[i32; 4]>, 
         flags |= 1;
         density = m.density;
         mdefault = m.default;
-        if let Some(r) = mask {
-            flags |= 2;
-            mo = [r[0], r[1]];
-            ms = [r[2], r[3]];
+        match &m.source {
+            plan::MaskSource::Slot(_) => flags |= plan::F_MASK_SLOT,
+            plan::MaskSource::Surface(_) => {
+                if let Some(r) = mask {
+                    flags |= 2;
+                    mo = [r[0], r[1]];
+                    ms = [r[2], r[3]];
+                }
+            }
         }
     }
     if p.gradient {
@@ -103,13 +108,18 @@ pub(crate) const BATCH: usize = 4;
 pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
     let passes = &plan.passes;
     let n = passes.len();
-    let reads = |p: &plan::Pass<'_>, s: plan::Slot| [p.a, p.b, p.c, p.d].contains(&Some(s));
+    let reads = |p: &plan::Pass<'_>, s: plan::Slot| {
+        [p.a, p.b, p.c, p.d].contains(&Some(s)) || p.mask.as_ref().is_some_and(|m| matches!(&m.source, plan::MaskSource::Slot(slot) if *slot == s))
+    };
     // feeds_next[i]: what pass i writes is read by pass i + 1 alone.
     let feeds_next: Vec<bool> = (0..n)
         .map(|i| {
             let (Some(this), Some(next)) = (passes.get(i), passes.get(i + 1)) else { return false };
             let dst = this.dst;
-            if next.a != Some(dst) || [next.b, next.c, next.d].contains(&Some(dst)) {
+            if next.a != Some(dst)
+                || [next.b, next.c, next.d].contains(&Some(dst))
+                || next.mask.as_ref().is_some_and(|m| matches!(&m.source, plan::MaskSource::Slot(slot) if *slot == dst))
+            {
                 return false;
             }
             for later in passes.iter().skip(i + 2) {
@@ -132,7 +142,7 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
             let (mut k, mut best) = (1, 1);
             while k < BATCH && feeds_next.get(i + k - 1).copied().unwrap_or(false) && passes.get(i + k).is_some_and(extra) {
                 k += 1;
-                if passes.get(i + k - 1).is_some_and(|p| Some(p.dst) != first.a) {
+                if passes.get(i + k - 1).is_some_and(|last| !reads(first, last.dst)) {
                     best = k;
                 }
             }

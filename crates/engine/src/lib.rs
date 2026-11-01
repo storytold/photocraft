@@ -42,6 +42,20 @@ pub mod shortcut_sets;
 pub mod snap;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
+#[cfg(feature = "uv-workbench")]
+pub mod uv_asset_cmds;
+#[cfg(feature = "uv-workbench")]
+pub mod uv_cmds;
+#[cfg(feature = "uv-workbench")]
+pub mod uv_mask_paint_cmds;
+#[cfg(feature = "uv-workbench")]
+mod uv_reload_cmds;
+#[cfg(feature = "uv-workbench")]
+mod uv_texture_save_cmds;
+#[cfg(feature = "uv-workbench")]
+pub mod uv_workspace_cmds;
+#[cfg(feature = "uv-workbench")]
+mod uv_wrap_cmds;
 
 use std::sync::Arc;
 
@@ -185,6 +199,10 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 
 #[derive(Default)]
 pub struct Session {
+    #[cfg(feature = "uv-workbench")]
+    pub uv: uv_cmds::UvState,
+    #[cfg(feature = "uv-workbench")]
+    pub uv_workspace: uv_workspace_cmds::Documents,
     docs: Vec<DocState>,
     /// Admitted document identities in opening order, independent of visual-tab reordering.
     open_document_order: Vec<photocraft_doc::DocId>,

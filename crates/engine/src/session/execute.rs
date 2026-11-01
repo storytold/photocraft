@@ -5,6 +5,79 @@ use super::{
 };
 use crate::color_channels;
 
+/// Compare surfaces without walking pixel bytes in unchanged COW tiles. Surface mutation always
+/// replaces a shared tile `Arc`; comparing bytes is needed only for tiles whose storage changed
+/// (for example, a command that rewrites a tile with identical values).
+fn same_surface_content_fast(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> bool {
+    if a.format() != b.format() || a.default_pixel() != b.default_pixel() {
+        return false;
+    }
+    let mut a_tiles = a.tiles();
+    let mut b_tiles = b.tiles();
+    loop {
+        match (a_tiles.next(), b_tiles.next()) {
+            (None, None) => return true,
+            (Some((a_coord, a_tile)), Some((b_coord, b_tile))) => {
+                if a_coord != b_coord || (!Arc::ptr_eq(a_tile, b_tile) && a_tile != b_tile) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn same_surface_storage(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface) -> bool {
+    if a.format() != b.format() || a.default_pixel() != b.default_pixel() {
+        return false;
+    }
+    let mut a_tiles = a.tiles();
+    let mut b_tiles = b.tiles();
+    loop {
+        match (a_tiles.next(), b_tiles.next()) {
+            (None, None) => return true,
+            (Some((a_coord, a_tile)), Some((b_coord, b_tile))) => {
+                if a_coord != b_coord || !Arc::ptr_eq(a_tile, b_tile) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Whether two editable mask stacks have the same pixel-affecting fields and COW tile storage.
+/// Names and active selection are presentation/target state and do not affect the evaluated mask.
+fn same_mask_stack_cache_inputs(a: &photocraft_doc::mask_paint::Stack, b: &photocraft_doc::mask_paint::Stack) -> bool {
+    let same_optional_surface = |a: Option<&photocraft_raster::Surface>, b: Option<&photocraft_raster::Surface>| match (a, b) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+        (Some(_), Some(_)) => true,
+    };
+    if a.layers.len() != b.layers.len()
+        || !a.layers.iter().zip(&b.layers).all(|(a, b)| {
+            a.visible == b.visible
+                && a.opacity == b.opacity
+                && a.blend == b.blend
+                && a.kind == b.kind
+                && same_optional_surface(a.fill_map.as_ref(), b.fill_map.as_ref())
+                && a.fill_map_size == b.fill_map_size
+                && a.fill_bounds == b.fill_bounds
+        })
+    {
+        return false;
+    }
+    same_surface_storage(&a.base, &b.base)
+        && a.layers.iter().zip(&b.layers).all(|(a, b)| {
+            same_surface_storage(&a.surface, &b.surface)
+                && match (a.fill_map.as_ref(), b.fill_map.as_ref()) {
+                    (Some(a), Some(b)) => same_surface_storage(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
+}
+
 impl Session {
     /// Run a command by id with JSON params. Returns a JSON result.
     ///
@@ -150,7 +223,9 @@ impl Session {
         if spec.id == "layer.smartFilter.deleteFilterMask" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
             return smart_cmds::smart_layer_active(self);
         }
-        channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
+        channel_cmds::mask_stack_geometry_enabled(self, spec.id, params)
+            .or_else(|| channel_cmds::mask_target_enabled(self, spec.id, params))
+            .unwrap_or_else(|| (spec.enabled)(self))
     }
 
     /// Whether `id` is a layer command whose `"layer"` param names an existing layer, so it needs no
@@ -211,7 +286,22 @@ impl Session {
         let filter_mask_layer = self.filter_mask_layer;
         let sampler_map = self.sampler_map.take();
         let symmetry_map = self.symmetry_map.take();
-        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        // Snapshot document-to-material bindings before borrowing the active document. Editable
+        // mask Blur uses these only for bound UV texture documents; ordinary masks keep image-wide
+        // Blur semantics.
+        #[cfg(feature = "uv-workbench")]
+        let uv_material_bindings: Vec<_> = photocraft_uv::preview::Channel::MAPS
+            .into_iter()
+            .flat_map(|channel| self.uv.map_bindings(channel).iter().enumerate().filter_map(move |(material, id)| id.map(|id| (id, material))))
+            .collect();
+        #[cfg(feature = "uv-workbench")]
+        let uv_cache_context = self.active().and_then(|state| self.uv.mask_cache_context(&state.doc));
+        #[cfg(feature = "uv-workbench")]
+        let uv_cache_was_current = uv_cache_context.as_ref().is_some_and(|context| self.active().is_some_and(|state| context.is_current(&state.doc)));
+        // Borrow the active document field directly so UV cache state remains independently
+        // available while this edit is prepared.
+        let active_index = self.active.ok_or(EngineError::NoDocument)?;
+        let st = self.docs.get_mut(active_index).ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
         // Selecting layers is not a step, so the state this edit leaves behind targets what was
         // selected just before it (#1356): undoing a stroke keeps the painted layer active.
@@ -219,6 +309,98 @@ impl Session {
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
+        // `mask.surface` is a render/export cache while a non-destructive Paint stack exists.
+        // Commands that still edit that legacy surface (Fade, linked transforms, and similar
+        // paths) must not silently lose their result when the cache is rebuilt below. Until
+        // those commands can edit the stack itself, reject the cloned edit atomically.
+        for (_, _, before_layer) in before.walk() {
+            let Some(before_mask) = before_layer.mask.as_ref().filter(|mask| mask.paint.is_some()) else { continue };
+            let Some(after_mask) = doc.layer(before_layer.id).and_then(|layer| layer.mask.as_ref()) else { continue };
+            if after_mask.paint.as_ref().zip(before_mask.paint.as_ref()).is_some_and(|(after, before)| same_mask_stack_cache_inputs(after, before))
+                && !same_surface_content_fast(&after_mask.surface, &before_mask.surface)
+            {
+                return Err(EngineError::Other("This operation cannot edit the flattened cache of an editable mask Paint stack".into()));
+            }
+        }
+        // The regular mask surface is the render/export cache for non-destructive mask Paint stacks.
+        let mask_canvas = doc.bounds();
+        let mask_ids: Vec<_> =
+            doc.walk().iter().filter_map(|(_, _, layer)| layer.mask.as_ref().filter(|mask| mask.paint.is_some()).map(|_| layer.id)).collect();
+        // Determine pixel-affecting stack edits once. Comparing Surface content directly here
+        // would scan every byte in every unchanged COW tile, and the old code repeated that scan
+        // several times per Session::edit.
+        let mask_stack_pixel_changes: Vec<_> = mask_ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                let current = doc.layer(*id).and_then(|layer| layer.mask.as_ref()).and_then(|mask| mask.paint.as_ref());
+                let old = before.layer(*id).and_then(|layer| layer.mask.as_ref()).and_then(|mask| mask.paint.as_ref());
+                match (current, old) {
+                    (Some(current), Some(old)) => !same_mask_stack_cache_inputs(current, old),
+                    (None, None) => false,
+                    _ => true,
+                }
+            })
+            .collect();
+        #[cfg(feature = "uv-workbench")]
+        let uv_mask_stack_changed = !mask_stack_pixel_changes.is_empty();
+        #[cfg(feature = "uv-workbench")]
+        {
+            let needs_shell_aware_refresh = mask_stack_pixel_changes.iter().any(|id| {
+                doc.layer(*id).and_then(|layer| layer.mask.as_ref()).and_then(|mask| mask.paint.as_ref()).is_some_and(|stack| {
+                    stack
+                        .layers
+                        .iter()
+                        .any(|layer| layer.visible && layer.opacity > 0.0 && matches!(layer.kind, photocraft_doc::mask_paint::EffectKind::Blur { .. }))
+                })
+            });
+            let bound_materials: std::collections::BTreeSet<_> =
+                uv_material_bindings.iter().filter_map(|(bound, material)| (*bound == before.id).then_some(*material)).collect();
+            let shell_ids = if needs_shell_aware_refresh && !bound_materials.is_empty() {
+                let materials = bound_materials.iter().copied().collect::<Vec<_>>();
+                self.uv.mask_shell_ids(doc.size.width, doc.size.height, &materials, [0, 0])
+            } else {
+                None
+            };
+            let shell_map = shell_ids.as_deref().and_then(|ids| photocraft_compose::mask_paint::ShellIdMap::new(mask_canvas, ids));
+            for id in mask_ids {
+                let old = before.layer(id).and_then(|layer| layer.mask.as_ref()).and_then(|mask| mask.paint.as_ref());
+                // Blur's materialized surface is derived from both the stack and current UV topology.
+                // An unrelated document edit must leave that cache alone; otherwise it needlessly
+                // rebuilds every bound Blur and can fail if no topology refresh was requested.
+                if !mask_stack_pixel_changes.contains(&id) {
+                    continue;
+                }
+                if let Some(mask) = doc.layer_mut(id).and_then(|layer| layer.mask.as_mut()) {
+                    let has_blur = mask.paint.as_ref().is_some_and(|stack| {
+                        stack
+                            .layers
+                            .iter()
+                            .any(|layer| layer.visible && layer.opacity > 0.0 && matches!(layer.kind, photocraft_doc::mask_paint::EffectKind::Blur { .. }))
+                    });
+                    if has_blur && !bound_materials.is_empty() {
+                        let Some(shell_map) = shell_map else {
+                            return Err(EngineError::Other("Could not prepare UV shell ownership for mask Blur".into()));
+                        };
+                        if !photocraft_compose::mask_paint::refresh_changes_in_canvas_with_shell_ids(mask, old, mask_canvas, shell_map) {
+                            return Err(EngineError::Other("Mask Blur exceeded the bounded UV shell compositor region".into()));
+                        }
+                    } else {
+                        photocraft_compose::mask_paint::refresh_changes_in_canvas(mask, old, mask_canvas);
+                    }
+                }
+            }
+        }
+        #[cfg(not(feature = "uv-workbench"))]
+        for id in mask_ids {
+            let old = before.layer(id).and_then(|layer| layer.mask.as_ref()).and_then(|mask| mask.paint.as_ref());
+            if !mask_stack_pixel_changes.contains(&id) {
+                continue;
+            }
+            if let Some(mask) = doc.layer_mut(id).and_then(|layer| layer.mask.as_mut()) {
+                photocraft_compose::mask_paint::refresh_changes_in_canvas(mask, old, mask_canvas);
+            }
+        }
         if let Some(restrict) = restrict {
             channel_cmds::restrict_to_color(&before, &mut doc, restrict.layer, restrict.colors)?;
         }
@@ -291,6 +473,13 @@ impl Session {
             self.subject_cache = Default::default();
             self.object_finder = Default::default();
         }
+        #[cfg(feature = "uv-workbench")]
+        if (uv_cache_was_current || uv_mask_stack_changed)
+            && let Some(document) = self.active().map(|state| Arc::clone(&state.doc))
+            && let Some(context) = self.uv.mask_cache_context(&document)
+        {
+            context.remember(&document);
+        }
         Ok(r)
     }
 
@@ -314,5 +503,54 @@ impl Session {
         }
         let Some(st) = self.active_mut() else { return };
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+    }
+}
+
+#[cfg(test)]
+mod mask_stack_comparison_tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
+
+    fn stack() -> Stack {
+        Stack {
+            base: photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]),
+            layers: vec![Paint {
+                name: "Paint".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: photocraft_raster::Surface::new(PixelFormat::RGBA8),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            }],
+            active: 0,
+        }
+    }
+
+    #[test]
+    fn mask_stack_pixel_change_detection_skips_metadata_and_unchanged_cow_tiles() {
+        let tile = photocraft_geom::Rect::new(0, 0, 1, 1);
+        let mut original = stack();
+        original.layers[0].surface.write_region(tile, &[0.0, 0.0, 0.0, 1.0]);
+
+        let mut metadata = original.clone();
+        metadata.layers[0].name = "Renamed".into();
+        metadata.active = 0;
+        assert!(same_mask_stack_cache_inputs(&original, &metadata), "renaming does not invalidate flattened mask pixels");
+
+        let mut changed = original.clone();
+        changed.layers[0].opacity = 0.5;
+        assert!(!same_mask_stack_cache_inputs(&original, &changed), "a pixel-affecting scalar still invalidates the cache");
+
+        let mut same_pixel_rewrite = original.clone();
+        same_pixel_rewrite.layers[0].surface.write_region(tile, &[0.0, 0.0, 0.0, 1.0]);
+        assert!(!same_mask_stack_cache_inputs(&original, &same_pixel_rewrite), "a rewritten tile is conservatively treated as changed by COW identity");
+
+        let mut changed_tile = original.clone();
+        changed_tile.layers[0].surface.write_region(tile, &[1.0, 1.0, 1.0, 1.0]);
+        assert!(!same_mask_stack_cache_inputs(&original, &changed_tile), "changed COW tile identity invalidates the cache");
     }
 }

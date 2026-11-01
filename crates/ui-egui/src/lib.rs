@@ -55,6 +55,36 @@ pub mod theme;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
 pub(crate) mod tool_memory;
 pub mod updates_ui;
+#[cfg(feature = "uv-workbench")]
+mod uv_box;
+#[cfg(feature = "uv-workbench")]
+mod uv_clone;
+#[cfg(feature = "uv-workbench")]
+mod uv_damage;
+#[cfg(feature = "uv-workbench")]
+mod uv_gpu;
+#[cfg(feature = "uv-workbench")]
+mod uv_library;
+#[cfg(feature = "uv-workbench")]
+mod uv_lighting;
+#[cfg(feature = "uv-workbench")]
+mod uv_mask;
+#[cfg(feature = "uv-workbench")]
+mod uv_mask_paint;
+#[cfg(feature = "uv-workbench")]
+mod uv_mask_paint_preview;
+#[cfg(feature = "uv-workbench")]
+mod uv_mips;
+#[cfg(feature = "uv-workbench")]
+mod uv_paint;
+#[cfg(feature = "uv-workbench")]
+mod uv_project;
+#[cfg(feature = "uv-workbench")]
+mod uv_symmetry;
+#[cfg(feature = "uv-workbench")]
+pub mod uv_ui;
+#[cfg(feature = "uv-workbench")]
+mod uv_workspace;
 pub mod widgets;
 pub mod work_area;
 
@@ -334,6 +364,12 @@ pub use widgets::tone;
 type InfoSampleKey = (i32, i32, u64, u32);
 
 pub struct PhotocraftApp {
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) uv_cache: uv_ui::Cache,
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) uv_mask_paint_preview: Option<uv_mask_paint_preview::Preview>,
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) uv_paint_key: Option<String>,
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
@@ -411,6 +447,13 @@ pub struct PhotocraftApp {
     /// While a batch of recovered pointer samples is replayed, defer the live-stroke update to one
     /// call for the whole frame (see `canvas::canvas_view`).
     defer_live_stroke: bool,
+    /// True only while the native UV surface path feeds 3D pointer samples to a live stroke.
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) native_uv_surface_input: bool,
+    /// Keep 3D UV symmetry strokes on the asynchronous CPU preview path until native GPU
+    /// accumulation preserves the CPU renderer's mirrored-pass coverage semantics.
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) native_uv_mask_gpu_disabled: bool,
     /// A live painting stroke started on the press (`canvas_view`): the drag egui recognises later,
     /// or the click, continues or ends it rather than starting another.
     press_stroke: bool,

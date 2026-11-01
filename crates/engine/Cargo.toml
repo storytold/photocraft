@@ -8,10 +8,12 @@ license.workspace = true
 workspace = true
 
 [features]
+uv-workbench = ["dep:photocraft-uv"]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 
 [dependencies]
+photocraft-uv = { workspace = true, optional = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }

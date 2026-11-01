@@ -343,6 +343,15 @@ pub fn set_space(app: &mut PhotocraftApp, down: bool) {
 /// cancelled or committed, it frames the selection's bounds, or the whole canvas. In default mode
 /// the view then follows the frame being edited (`crop_mode::sync`).
 pub fn ensure_frame(app: &mut PhotocraftApp) {
+    if app.ui.tool == Tool::Crop
+        && let Err(error) = crate::sizing::geometry_preflight(app, "image.crop")
+    {
+        cancel(app);
+        app.ui.tool = Tool::Brush;
+        app.ui.status = error;
+        app.ui.status_error = true;
+        return;
+    }
     frame(app);
     crate::crop_mode::sync(app, None);
 }

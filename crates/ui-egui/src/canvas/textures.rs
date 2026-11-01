@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::display::{GPU_OUTPUT, cache_key, canvas_display, display_doc, display_image, texture_key};
 use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
@@ -337,7 +339,7 @@ pub(crate) fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), no
         return Some(if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) });
     }
     if seen.1 == now.1 ^ display_key && seen.0 + 1 == now.0 {
-        return last_damage;
+        return last_damage.map(|r| app.session.documents().get(idx).map_or(r, |st| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }));
     }
     if seen.0 == now.0
         && let Some(st) = app.session.documents().get(idx)
@@ -435,18 +437,35 @@ pub(crate) fn shown_as_document(app: &mut PhotocraftApp, doc: photocraft_doc::Do
 }
 
 /// How far beyond an edit's damage rect the composite can change: layer effects (shadows, glows,
-/// strokes, …) on the edited layer and on the groups around it reach that far.
+/// strokes, …), editable mask-stack Blur, and effects on the groups around it reach that far.
 pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
     layers
         .iter()
         .filter(|l| l.visible)
         .map(|l| {
-            let own = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let layer_effect_reach = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+            let mask_blur_reach = l
+                .mask
+                .as_ref()
+                .filter(|mask| mask.enabled)
+                .and_then(|mask| mask.paint.as_ref())
+                .map(|stack| {
+                    stack
+                        .layers
+                        .iter()
+                        .filter(|effect| effect.visible && effect.opacity > 0.0)
+                        .map(|effect| match &effect.kind {
+                            photocraft_doc::mask_paint::EffectKind::Blur { radius } => i32::from(*radius),
+                            _ => 0,
+                        })
+                        .sum::<i32>()
+                })
+                .unwrap_or(0);
             let inner = match &l.content {
                 LayerContent::Group(g) => effect_reach(&g.children),
                 _ => 0,
             };
-            own + inner
+            layer_effect_reach + mask_blur_reach + inner
         })
         .max()
         .unwrap_or(0)
@@ -457,14 +476,14 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
 /// Returns false if there is no GPU canvas.
 pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible: DRect) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
-    let Some((revision, last_damage, id)) = app
-        .session
-        .documents()
-        .get(idx)
-        .map(|st| (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id))
-    else {
+    let Some((revision, last_damage, id)) = app.session.documents().get(idx).map(|st| (st.revision, st.last_damage, st.doc.id)) else {
         return false;
     };
+    // Spatial Fill's GPU planner consumes effect params directly. Give it the live immutable
+    // snapshot while CPU fallback paths keep using display_doc's matching materialized key.
+    #[cfg(feature = "uv-workbench")]
+    let (doc, raw_key) = crate::uv_mask_paint_preview::gpu_display_doc(app, idx).unwrap_or_else(|| display_doc(app, idx));
+    #[cfg(not(feature = "uv-workbench"))]
     let (doc, raw_key) = display_doc(app, idx);
     let (display, _) = canvas_display(app, &doc, None);
     // Repeated pattern tiles sample the same texture, including pixels outside the unwrapped
@@ -578,10 +597,13 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if r.kind == crate::gpu_canvas::REFRESH_DEFERRED {
         // Composited off the UI thread, the visible part first (#4024).
         let region = if partial { damage.unwrap_or(doc.bounds()) } else { doc.bounds() };
-        crate::background_redraw::start(app, ctx, &gpu, doc.clone(), display.clone(), visible, region, r.fallback.clone());
+        let redraw_doc = if r.fallback.is_some() { Arc::new(crate::gpu_canvas::materialize_paint_masks(&doc)) } else { doc.clone() };
+        crate::background_redraw::start(app, ctx, &gpu, redraw_doc, display.clone(), visible, region, r.fallback.clone());
     } else if partial {
         // The edit drew its damage; blocks of a running redraw still to come follow the edit.
-        crate::background_redraw::restart(app, ctx, &gpu, doc.clone(), display.clone(), visible);
+        let redraw_doc =
+            if crate::background_redraw::needs_materialized_masks(app, id) { Arc::new(crate::gpu_canvas::materialize_paint_masks(&doc)) } else { doc.clone() };
+        crate::background_redraw::restart(app, ctx, &gpu, redraw_doc, display.clone(), visible);
     } else {
         crate::background_redraw::cancel(app, id);
     }
@@ -598,6 +620,11 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     }
     if r.kind.starts_with("gpu") {
         app.perf.gpu_uploads = r.uploads;
+        app.perf.gpu_upload_bytes = r.gpu_upload_bytes;
+        app.perf.gpu_passes = r.gpu_passes;
+        app.perf.gpu_chunks = r.gpu_chunks;
+    } else {
+        app.perf.gpu_fallback = r.fallback.map(|reason| reason.to_string());
     }
     let Some(cache) = app.canvases.get_mut(&(id, GPU_OUTPUT)) else { return true };
     cache.revision = revision;

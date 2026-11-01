@@ -34,7 +34,7 @@ next to them.
 | `epaint_default_fonts::EGUI_ICONS` (build input; deflated into `OUT_DIR/egui_fonts/egui-icons.ttf.deflate`, registered by `crates/ui-egui/src/egui_fonts.rs`) | egui-icons, five-glyph subset of emoji-icon-font | John Slegers | [egui fork at 6d518fc](https://github.com/storytold/egui/tree/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts), [original](https://github.com/jslegers/emoji-icon-font); egui subset, unmodified here | MIT; Copyright (c) 2014 John Slegers; full upstream notice in [NOTICE](NOTICE) |
 | `assets/fonts/Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf` | Inter 4.001 (UI font) | The Inter Project Authors (Rasmus Andersson) | <https://github.com/rsms/inter> | SIL OFL 1.1, [`assets/fonts/OFL-Inter.txt`](assets/fonts/OFL-Inter.txt) |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono 2.305 (numeric font) | The JetBrains Mono Project Authors | <https://github.com/JetBrains/JetBrainsMono> | SIL OFL 1.1, [`assets/fonts/OFL-JetBrainsMono.txt`](assets/fonts/OFL-JetBrainsMono.txt) |
-| `assets/icons/*.svg` except `slice-knife.svg`, `slice-select.svg`, `font-similar.svg`, `font-variable.svg`, `sampler.svg`, `artboard.svg`, `perspective-crop.svg`, `frame-placeholder.svg`, `ellipse-dashed.svg`, `gradient.svg`, `type-mask.svg`, `type-mask-vertical.svg`, `text-warp.svg`, `clip-below.svg`, `clip-release.svg`, `layer-mask.svg`, `adjustment-layer.svg`, `brush-replace.svg`, `quick-selection.svg`, `eraser-background.svg`, `eraser-magic.svg`, `lasso-magnetic.svg`, `direct-select.svg`, `convert-point.svg`, `pen-add-anchor.svg`, `pen-delete-anchor.svg`, `pen-freeform.svg`, `pen-curvature.svg`, `bandage-sparkle.svg`, `painting-symmetry.svg`, `symmetry-*.svg`, `path-op-*.svg` and `marquee-{row,column}.svg`, `align-edge-*.svg` and `distribute-*.svg` (113 files; `star-filled.svg` is `star.svg` with a solid fill) | Lucide icons | Lucide Icons and Contributors | <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`; `align-*` are now named `text-align-*` upstream) | ISC, [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
+| `assets/icons/*.svg` except `slice-knife.svg`, `slice-select.svg`, `font-similar.svg`, `font-variable.svg`, `sampler.svg`, `artboard.svg`, `perspective-crop.svg`, `frame-placeholder.svg`, `ellipse-dashed.svg`, `gradient.svg`, `type-mask.svg`, `type-mask-vertical.svg`, `text-warp.svg`, `clip-below.svg`, `clip-release.svg`, `layer-mask.svg`, `adjustment-layer.svg`, `brush-replace.svg`, `quick-selection.svg`, `eraser-background.svg`, `eraser-magic.svg`, `lasso-magnetic.svg`, `direct-select.svg`, `convert-point.svg`, `pen-add-anchor.svg`, `pen-delete-anchor.svg`, `pen-freeform.svg`, `pen-curvature.svg`, `bandage-sparkle.svg`, `painting-symmetry.svg`, `symmetry-*.svg`, `path-op-*.svg`, `marquee-{row,column}.svg`, `align-edge-*.svg`, `distribute-*.svg` and `uv-{perspective,orthographic}.svg` (113 files; `star-filled.svg` is `star.svg` with a solid fill) | Lucide icons | Lucide Icons and Contributors | <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`; `align-*` are now named `text-align-*` upstream) | ISC, [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
 | `assets/icons/{check,chevron-down,chevron-left,chevron-right,chevron-up,chevrons-left,chevrons-right,circle,clock,compass,info,link,link-2,lock,minus,monitor,moon,move,navigation,plus,search,square,trash,triangle,type,x,zoom-in}.svg` | Lucide icons derived from Feather (subset of the row above) | Cole Bemis (Feather), Lucide Contributors | <https://github.com/feathericons/feather> via Lucide | MIT (Feather) and ISC (Lucide), [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
 | `assets/icons/slice-knife.svg` | Slice tool glyph | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/slice-select.svg` | Slice Select tool glyph | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
@@ -140,6 +140,34 @@ next to the files:
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
+## UV workbench synthetic assets
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/uv/tests/fixtures/` | Two connected quads with separate UV shells; checker texture; reflected smooth sphere and normal map; FBX/OBJ/MTL | PhotoCraft UV extension contributors | Original synthetic geometry and pixels, FBX exported with Blender | MIT OR Apache-2.0; `LICENSE.txt` beside the files |
+| `assets/icons/uv-{perspective,orthographic}.svg` | Solid projection cubes | PhotoCraft contributors | Original work | MIT, [`assets/icons/LICENSE-uv.txt`](assets/icons/LICENSE-uv.txt) |
+| `docs/images/uv-workspace-*.png` | Native 2D and 3D/UV interface captures with synthetic test assets | PhotoCraft contributors | Original windowless renders | MIT OR Apache-2.0; existing brand terms retained, [`docs/images/LICENSE-uv-workspace.txt`](docs/images/LICENSE-uv-workspace.txt) |
+| `docs/images/uv-showcase/{overview,mask-sublayers,model-wireframe,model-selection,model-mirror}.png` | Native PhotoCraft captures of the 3D/UV workspace using ORBIT-07 | PhotoCraft contributors | Original synthetic model and maps; captured in PhotoCraft | CC0 1.0; [`LICENSE-CC0-1.0.txt`](docs/images/uv-showcase/LICENSE-CC0-1.0.txt) |
+| `docs/samples/uv-workbench/orbit-07/` | ORBIT-07 sample model, material and four texture maps | PhotoCraft contributors | Original synthetic geometry and maps | CC0 1.0; `LICENSE.txt` beside the files; packaged as `orbit-07-demo.zip` |
+
+## UV workbench Rust dependencies
+
+The versions below are pinned in `Cargo.lock`. Their published crate manifests and bundled
+license texts were checked together. All four offer permissive licenses. This inventory
+covers these four dependencies, not a complete audit of the transitive dependency graph.
+License files are copied verbatim from the corresponding crates.io packages.
+
+| Dependency | Upstream source | Declared license | Retained license texts |
+|---|---|---|---|
+| glam 0.33.12 | [glam-rs](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 | [MIT](docs/licenses/uv-dependencies/glam-0.33.12/LICENSE-MIT), [Apache-2.0](docs/licenses/uv-dependencies/glam-0.33.12/LICENSE-APACHE) |
+| fbxcel 0.9.0 | [fbxcel](https://github.com/lo48576/fbxcel) | MIT OR Apache-2.0 | [MIT](docs/licenses/uv-dependencies/fbxcel-0.9.0/LICENSE-MIT.txt), [Apache-2.0](docs/licenses/uv-dependencies/fbxcel-0.9.0/LICENSE-APACHE.txt) |
+| tobj 4.0.5 | [tobj](https://github.com/Twinklebear/tobj) | MIT | [MIT](docs/licenses/uv-dependencies/tobj-4.0.5/LICENSE.md) |
+| earcutr 0.5.0 | [earcutr](https://github.com/frewsxcv/earcutr) | ISC | [ISC](docs/licenses/uv-dependencies/earcutr-0.5.0/LICENSE) |
+
+Binary distributions using these dependencies must retain the applicable license and
+copyright notices. The retained MIT and ISC texts include the notices supplied by the
+packages; MIT is an available licensing option for glam and fbxcel. This section does not
+replace the notices required for other PhotoCraft dependencies.
 ## Embedded-vector editor source
 
 The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change

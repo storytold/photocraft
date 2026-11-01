@@ -109,6 +109,16 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
     let done: Vec<_> = taken
         .into_par_iter()
         .flat_map_iter(|(tc, tile)| {
+            let tr = tc.rect().intersect(&r);
+            // RGB retains unselected native samples exactly. Other modes also
+            // round-trip unselected samples through RGB; keep their existing semantics.
+            if fmt.mode == photocraft_color::ColorMode::Rgb
+                && selection.is_some_and(|sel| {
+                    if sel.tile(tc).is_none() { sel.default_pixel().first().is_none_or(|v| *v <= 0.0) } else { crate::fill_cmds::Mask::of(sel, tc).empty(tr) }
+                })
+            {
+                return vec![(tc, tile)];
+            }
             // A one-tile surface, so `adjusted` reads and writes this tile only.
             let mut one = Surface::new(fmt);
             one.put_tiles([(tc, tile)]);

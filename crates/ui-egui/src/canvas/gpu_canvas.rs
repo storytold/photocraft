@@ -68,13 +68,17 @@ use resources::{DocTextures, Resources, identity_lut_bytes, lut_bind_group};
 use setup::device_limits_for;
 use setup::texture_buffer;
 pub use setup::{Refresh, device_descriptor, device_limits, display_texels, timing_features, use_adapter_limits, use_adapter_limits_with, wgpu_setup};
+#[cfg(any(test, feature = "uv-workbench"))]
+pub(crate) use shaders::MIP_WGSL;
 #[cfg(test)]
-use shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
+use shaders::{CANVAS_WGSL, ENCODE_WGSL};
+#[cfg(test)]
+use texels::f16_to_f32;
+#[cfg(any(test, feature = "uv-workbench"))]
+pub(crate) use texels::f32_to_f16;
 #[cfg(not(target_arch = "wasm32"))]
 use texels::texel_to_f32;
 pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f};
-#[cfg(test)]
-use texels::{f16_to_f32, f32_to_f16};
 use texels::{texel_bytes, texels, texels_into};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
@@ -668,7 +672,12 @@ impl GpuCanvas {
                     if r.is_empty() {
                         continue;
                     }
-                    let offset = [out.rect.x0 - tx, out.rect.y0 - ty, i32::from(encode_srgb), keep_hdr];
+                    // `out.rect` is in document coordinates, while the compositor texture can
+                    // include a Blur halo before its visible center. Map document pixels into
+                    // that texture by subtracting both the tile origin and the chunk's in-texture
+                    // origin; without the latter every blurred chunk is sampled shifted by its
+                    // halo when encoded into the 2D canvas texture.
+                    let offset = [out.rect.x0 - tx - out.origin[0] as i32, out.rect.y0 - ty - out.origin[1] as i32, i32::from(encode_srgb), keep_hdr];
                     let ubuf = init_buffer(device, "pc_encode", &offset.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>(), wgpu::BufferUsages::UNIFORM);
                     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("pc_encode"),
@@ -782,6 +791,9 @@ impl GpuCanvas {
                 // Encoding and submitting only: the GPU is still running this work.
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
+                out.gpu_upload_bytes = stats.bytes_uploaded as u64;
+                out.gpu_passes = stats.passes as u64;
+                out.gpu_chunks = stats.chunks as u64;
                 out.gpu = stats.gpu_time;
                 return out;
             }
@@ -793,6 +805,15 @@ impl GpuCanvas {
             out.px = px;
             return out;
         }
+        // Paint-mask previews are GPU-first and intentionally leave `mask.surface` untouched.
+        // Materialize only for a synchronous CPU draw. Deferred jobs take one durable flattened
+        // snapshot in `textures::ensure_gpu` after this method returns.
+        let has_paint_masks = doc.walk().iter().any(|(_, _, layer)| layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some()));
+        let cpu_doc = out.fallback.as_ref().filter(|_| has_paint_masks).map(|_| match damage {
+            Some(region) => materialize_paint_masks_region(doc, region),
+            None => materialize_paint_masks(doc),
+        });
+        let doc = cpu_doc.as_ref().unwrap_or(doc);
         if let Some(r) = damage {
             if r.is_empty() {
                 out.kind = "rect";
@@ -808,7 +829,14 @@ impl GpuCanvas {
                 return out;
             }
         }
-        self.upload_composite(key, doc, display);
+        if damage.is_some() && out.fallback.is_some() && has_paint_masks {
+            // A failed rect upload falls through to a whole-canvas upload; that snapshot must be
+            // complete, since the partial materialization above only covers this damage + halo.
+            let full_doc = materialize_paint_masks(doc);
+            self.upload_composite(key, &full_doc, display);
+        } else {
+            self.upload_composite(key, doc, display);
+        }
         out.kind = "full";
         out.px = bounds.width() as u64 * bounds.height() as u64;
         out.composite_ms = now_ms() - t0;
@@ -999,6 +1027,36 @@ impl GpuCanvas {
     pub fn paint(painter: &egui::Painter, rect: egui::Rect, params: ViewParams) {
         painter.add(egui_wgpu::Callback::new_paint_callback(rect, CanvasCallback { rect, params }));
     }
+}
+
+/// Flatten transient Paint mask stacks into a private document copy for CPU consumers.
+/// The live/display document remains GPU-first and its canonical surface is not mutated.
+pub(crate) fn materialize_paint_masks(doc: &photocraft_doc::Document) -> photocraft_doc::Document {
+    materialize_paint_masks_region(doc, doc.bounds())
+}
+
+/// Flatten only the mask pixels needed by a CPU rect render. Feathered pixel masks need the
+/// three-sigma support around the render rect so the compositor's feathered mask cache sees the
+/// same input as a full materialization. A deferred/full upload must use [`materialize_paint_masks`].
+pub(crate) fn materialize_paint_masks_region(doc: &photocraft_doc::Document, region: photocraft_geom::Rect) -> photocraft_doc::Document {
+    let mut materialized = doc.clone();
+    let canvas = materialized.bounds();
+    let region = region.intersect(&canvas);
+    if region.is_empty() {
+        return materialized;
+    }
+    let mask_ids: Vec<_> =
+        materialized.walk().iter().filter_map(|(_, _, layer)| layer.mask.as_ref().filter(|mask| mask.paint.is_some()).map(|_| layer.id)).collect();
+    for id in mask_ids {
+        if let Some(mask) = materialized.layer_mut(id).and_then(|layer| layer.mask.as_mut())
+            && mask.paint.is_some()
+        {
+            let feather = photocraft_vector::feather::feather_sigma(mask.feather);
+            let needed = photocraft_vector::feather::grow(region, feather).intersect(&canvas);
+            photocraft_compose::mask_paint::refresh(mask, Some(needed));
+        }
+    }
+    materialized
 }
 
 #[cfg(test)]

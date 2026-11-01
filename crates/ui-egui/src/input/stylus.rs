@@ -135,6 +135,9 @@ pub struct Stylus {
     prev: Option<PenSample>,
     /// The sample [`Self::select`] interpolated for the pointer move being processed.
     current: Option<PenSample>,
+    /// `current` may intentionally be `None` while replaying a queued mouse point. In that case
+    /// do not fall back to a newer pen sample from `latest()`.
+    forced_current: bool,
     /// The highest pen pressure (before the curve) since the drag began, for a tap's one dab.
     peak: f32,
     /// The pen's touch contacts in the raw input, so a held pen is no press-and-hold right click.
@@ -167,6 +170,7 @@ impl Default for Stylus {
             frame: Vec::new(),
             prev: None,
             current: None,
+            forced_current: false,
             peak: 0.0,
             pen_contacts: PenContacts::default(),
             updated_frame: None,
@@ -261,10 +265,13 @@ impl Stylus {
     /// The current pen sample, `None` for a mouse (and for any pen while Use Tablet Pressure is
     /// off).
     pub fn sample(&self) -> Option<PenSample> {
-        if !self.use_pressure {
+        if !self.use_pressure || (self.forced_current && self.current.is_none()) {
             return None;
         }
-        let s = self.current.or_else(|| self.latest()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
+        let s = self
+            .current
+            .or_else(|| (!self.forced_current).then(|| self.latest()).flatten())
+            .or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))?;
         // The pen's pressure through Preferences › Tools › Pressure Curve, before any brush sees it.
         Some(match &self.pressure_curve {
             Some(c) => PenSample { pressure: c.eval(s.pressure), ..s },
@@ -286,6 +293,7 @@ impl Stylus {
     /// frame (from the previous frame's last sample), instead of all sharing the latest one. A
     /// mouse, or a frame without pen samples, keeps the current sample.
     pub(crate) fn select(&mut self, k: usize, n: usize) {
+        self.forced_current = false;
         self.current = None;
         if !self.use_pressure || n == 0 || self.frame.is_empty() || self.sample().is_none() {
             return;
@@ -314,6 +322,27 @@ impl Stylus {
     /// Back to the current sample after a frame's moves.
     pub(crate) fn clear_selection(&mut self) {
         self.current = None;
+        self.forced_current = false;
+    }
+
+    /// Raw sample selected for a pointer event, before the pressure curve is applied.
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) fn raw_selection(&self) -> Option<PenSample> {
+        if !self.use_pressure {
+            return None;
+        }
+        if self.forced_current {
+            self.current
+        } else {
+            self.current.or_else(|| self.latest()).or(self.touch.map(|pressure| PenSample { pressure, ..Default::default() }))
+        }
+    }
+
+    /// Replay a previously captured pointer event while processing a queued surface stroke.
+    #[cfg(feature = "uv-workbench")]
+    pub(crate) fn select_raw_sample(&mut self, sample: Option<PenSample>) {
+        self.current = sample;
+        self.forced_current = true;
     }
 
     /// Did the pen just flip to its eraser end (`Some(true)`) or back to its tip (`Some(false)`)?

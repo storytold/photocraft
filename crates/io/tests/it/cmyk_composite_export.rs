@@ -35,6 +35,7 @@ fn mixed_region_document(depth: SampleType, opaque: bool) -> Document {
         linked: true,
         density: 1.0,
         feather: 0.0,
+        paint: None,
     });
     doc.layers.push(top);
     doc.resolution_dpi = 300.0;

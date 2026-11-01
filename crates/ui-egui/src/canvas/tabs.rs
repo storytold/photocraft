@@ -6,7 +6,15 @@ use super::{Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, TextureOptions, c
 /// another document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::distort_ui::drop_foreign(app);
-    documents(app, ui);
+    #[cfg(feature = "uv-workbench")]
+    let handled = crate::uv_ui::workspace(app, ui);
+    #[cfg(not(feature = "uv-workbench"))]
+    let handled = false;
+    if !handled {
+        documents(app, ui);
+    }
+    #[cfg(feature = "uv-workbench")]
+    crate::uv_workspace::floating(app, ui.ctx());
     crate::layer_transfer::finish(app, ui.ctx());
     // Once a frame, not per document view: the right-click or options-bar Brush Preset picker.
     crate::paint_mouse::show_picker(app, ui.ctx());
@@ -29,7 +37,16 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
     Some(documents[start..].iter().copied().zip(cells).collect())
 }
 
-fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    documents_with_tabs(app, ui, true);
+}
+
+#[cfg(feature = "uv-workbench")]
+pub(crate) fn uv_documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    documents_with_tabs(app, ui, false);
+}
+
+fn documents_with_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui, show_tabs: bool) {
     app.drop_canvas_rect = None;
     app.tab_strip = None;
     retain_gpu_documents(app);
@@ -56,7 +73,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         paint_dots(ui, ui.available_rect_before_wrap(), app.session.prefs().interface.show_canvas_dots);
         return;
     }
-    if !app.ui.view.hides_tabs() || opening {
+    if show_tabs && (!app.ui.view.hides_tabs() || opening) {
         // Flat Spectrum tabs sit directly against the canvas. The parent's default vertical
         // item spacing would otherwise leave a visible gap below the tab strip (#2188).
         let spacing = ui.spacing().item_spacing.y;
