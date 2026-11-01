@@ -101,7 +101,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 /// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
 /// The New Group dialog's fields.
 fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let r = crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(252.0)).accessible_name(tl!("Name"));
@@ -118,7 +118,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             crate::field_tab::select_all(ui.ctx(), r.id, &name);
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Color:"));
         let mut color = f.get("color").and_then(Value::as_str).and_then(LabelColor::from_id).unwrap_or(LabelColor::None);
         let options: Vec<(LabelColor, &str)> = LabelColor::ALL.iter().map(|c| (*c, crate::layer_menu_ui::color_name(*c))).collect();
@@ -127,7 +127,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         swatch(ui, color);
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Mode:"));
         let mut mode = f.get("mode").and_then(Value::as_str).and_then(photocraft_engine::commands::blend_from_str).unwrap_or(BlendMode::PassThrough);
         let options = crate::panels::blend_options(true, mode);
