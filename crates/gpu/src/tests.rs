@@ -144,6 +144,33 @@ fn shader_validates() {
     }
 }
 
+/// The body of WGSL function `name` in `src`: from its `fn` line to the first line that is
+/// exactly `}` (top-level functions close at column 0).
+fn wgsl_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+    let head = format!("fn {name}(");
+    let start = src.find(&head).unwrap_or_else(|| panic!("no fn {name}"));
+    let rest = &src[start..];
+    let end = rest.find("\n}").unwrap_or_else(|| panic!("fn {name} is not closed"));
+    &rest[..end]
+}
+
+/// #8733 / #10575: FXC (Windows DX12's default compiler) rejects a function whose `switch` cases
+/// all `return` with `error X3507: Not all control paths return a value`, so the compositor never
+/// built and every document drew on the CPU. naga and every other backend accept it, so a test on
+/// a machine without FXC can't see it; this keeps the blend switches in the shape FXC compiles
+/// (cases assign, one `return` after the switch). The real compile is
+/// `tests/it/pipelines.rs::every_compositor_pipeline_builds_on_dx12_with_fxc` on Windows.
+#[test]
+fn blend_switches_return_once_after_the_switch() {
+    for name in ["blend_channel", "blend_rgb"] {
+        let code: Vec<&str> = wgsl_fn_body(SHADER, name).lines().map(|l| l.split("//").next().unwrap_or("")).collect();
+        let returns = code.iter().filter(|l| l.contains("return ")).count();
+        assert_eq!(returns, 1, "{name} must assign in its cases and return once, after the switch, for FXC");
+        let last = code.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty());
+        assert!(last.is_some_and(|l| l.starts_with("return ")), "{name}: the one return must follow the switch");
+    }
+}
+
 /// The decimal float literals in `src` (comments skipped; hex literals are exact, so skipped),
 /// with their line numbers.
 fn decimal_float_literals(src: &str) -> Vec<(usize, String)> {

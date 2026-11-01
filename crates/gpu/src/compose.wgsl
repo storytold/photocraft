@@ -173,58 +173,58 @@ const F32_MAX: f32 = 0x1.fffffep+127f;
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
     let hi = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
+    // One exit: every case assigns `r` and the function returns once, after the switch. FXC
+    // (Windows DX12's default compiler) can't prove that a switch whose cases all `return` covers
+    // every path, and rejects the function with `X3507: Not all control paths return a value`
+    // (#8733, #10575); the GPU compositor then never builds and every document draws on the CPU.
+    var r = cs;                                                 // Normal, Dissolve, PassThrough
     switch mode {
-        case 3: { return min(cb, cs); }                         // Darken
-        case 4: { return cb * cs; }                             // Multiply
-        case 5: { return color_burn(cb, cs); }                  // ColorBurn
-        case 6: { return max(cb + cs - 1.0, 0.0); }             // LinearBurn
-        case 8: { return max(cb, cs); }                         // Lighten
-        case 9: { return cb + cs - cb * cs; }                   // Screen
-        case 10: { return color_dodge(cb, cs); }                // ColorDodge
-        case 11: { return min(cb + cs, hi); }                   // LinearDodge
-        case 13: { return hard_light(cs, cb); }                 // Overlay
-        case 14: { return soft_light_ps(cb, cs); }              // SoftLight
-        case 15: { return hard_light(cb, cs); }                 // HardLight
-        case 16: { return vivid_light_ps(cb, cs); }             // VividLight (Photoshop)
-        case 17: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
+        case 3: { r = min(cb, cs); }                            // Darken
+        case 4: { r = cb * cs; }                                // Multiply
+        case 5: { r = color_burn(cb, cs); }                     // ColorBurn
+        case 6: { r = max(cb + cs - 1.0, 0.0); }                // LinearBurn
+        case 8: { r = max(cb, cs); }                            // Lighten
+        case 9: { r = cb + cs - cb * cs; }                      // Screen
+        case 10: { r = color_dodge(cb, cs); }                   // ColorDodge
+        case 11: { r = min(cb + cs, hi); }                      // LinearDodge
+        case 13: { r = hard_light(cs, cb); }                    // Overlay
+        case 14: { r = soft_light_ps(cb, cs); }                 // SoftLight
+        case 15: { r = hard_light(cb, cs); }                    // HardLight
+        case 16: { r = vivid_light_ps(cb, cs); }                // VividLight (Photoshop)
+        case 17: { r = clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); }  // LinearLight
         case 18: {                                              // PinLight
-            if (cs <= 0.5) { return min(cb, 2.0 * cs); }
-            return max(cb, 2.0 * cs - 1.0);
+            if (cs <= 0.5) { r = min(cb, 2.0 * cs); } else { r = max(cb, 2.0 * cs - 1.0); }
         }
         case 19: {                                              // HardMix (Photoshop)
-            return select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
+            r = select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
         }
-        case 20: { return abs(cb - cs); }                       // Difference
-        case 21: { return cb + cs - 2.0 * cb * cs; }            // Exclusion
-        case 22: { return max(cb - cs, 0.0); }                  // Subtract
+        case 20: { r = abs(cb - cs); }                          // Difference
+        case 21: { r = cb + cs - 2.0 * cb * cs; }               // Exclusion
+        case 22: { r = max(cb - cs, 0.0); }                     // Subtract
         case 23: {                                              // Divide
-            if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
-            return min(cb / cs, hi);
+            if (cs <= 0.0) { r = select(1.0, 0.0, cb <= 0.0); } else { r = min(cb / cs, hi); }
         }
-        case 28: {                                             // Reflect
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb * cb / (1.0 - cs), 1.0);
+        case 28: {                                              // Reflect
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb * cb / (1.0 - cs), 1.0); }
         }
-        case 29: {                                             // Glow
-            if (cb >= 1.0) { return 1.0; }
-            return min(cs * cs / (1.0 - cb), 1.0);
+        case 29: {                                              // Glow
+            if (cb >= 1.0) { r = 1.0; } else { r = min(cs * cs / (1.0 - cb), 1.0); }
         }
-        case 30: { return 1.0 - abs(1.0 - cb - cs); }            // Negation
-        case 31: {                                             // XOR (8-bit channel operation)
+        case 30: { r = 1.0 - abs(1.0 - cb - cs); }              // Negation
+        case 31: {                                              // XOR (8-bit channel operation)
             let b = u32(floor(clamp(cb, 0.0, 1.0) * 255.0 + 0.5));
             let s = u32(floor(clamp(cs, 0.0, 1.0) * 255.0 + 0.5));
-            return f32(b ^ s) / 255.0;
+            r = f32(b ^ s) / 255.0;
         }
-        case 32: {                                             // Paint.NET Color Burn
-            if (cs <= 0.0) { return 0.0; }
-            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        case 32: {                                              // Paint.NET Color Burn
+            if (cs <= 0.0) { r = 0.0; } else { r = max(1.0 - (1.0 - cb) / cs, 0.0); }
         }
-        case 33: {                                             // Paint.NET Color Dodge
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb / (1.0 - cs), 1.0);
+        case 33: {                                              // Paint.NET Color Dodge
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb / (1.0 - cs), 1.0); }
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { }
     }
+    return r;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
@@ -258,17 +258,20 @@ fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
 fn blend_rgb(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
     // blend_rgb_within: 32-bit documents keep values above 1 (f32::MAX).
     let top = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
+    // One exit, like `blend_channel`: FXC rejects a value-returning switch whose cases all `return`.
+    var r = vec3(0.0);
     switch mode {
-        case 24: { return set_lum(set_sat(cs, sat(cb)), lum(cb), top); } // Hue
-        case 25: { return set_lum(set_sat(cb, sat(cs)), lum(cb), top); } // Saturation
-        case 26: { return set_lum(cs, lum(cb), top); }                  // Color
-        case 27: { return set_lum(cb, lum(cs), top); }                  // Luminosity
-        case 7: { return select(cb, cs, lum(cs) < lum(cb)); }      // DarkerColor
-        case 12: { return select(cb, cs, lum(cs) > lum(cb)); }     // LighterColor
+        case 24: { r = set_lum(set_sat(cs, sat(cb)), lum(cb), top); } // Hue
+        case 25: { r = set_lum(set_sat(cb, sat(cs)), lum(cb), top); } // Saturation
+        case 26: { r = set_lum(cs, lum(cb), top); }                   // Color
+        case 27: { r = set_lum(cb, lum(cs), top); }                   // Luminosity
+        case 7: { r = select(cb, cs, lum(cs) < lum(cb)); }            // DarkerColor
+        case 12: { r = select(cb, cs, lum(cs) > lum(cb)); }           // LighterColor
         default: {
-            return vec3(blend_channel(mode, cb.r, cs.r), blend_channel(mode, cb.g, cs.g), blend_channel(mode, cb.b, cs.b));
+            r = vec3(blend_channel(mode, cb.r, cs.r), blend_channel(mode, cb.g, cs.g), blend_channel(mode, cb.b, cs.b));
         }
     }
+    return r;
 }
 
 fn composite(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
