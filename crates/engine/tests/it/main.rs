@@ -76,6 +76,7 @@ mod svg_smart_object;
 mod transform_budget_unclamped;
 mod type_format_targets;
 mod type_postscript_font;
+mod type_profile_conversion_psd;
 mod undo_keeps_active_layer;
 mod unicode_colors;
 mod unsupported_smart_filters;

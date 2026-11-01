@@ -784,8 +784,15 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
     });
     for l in &mut doc.layers {
         convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
-        // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    // A type layer's `TySh` still holds the old colours, and a PSD reopen takes the text's
+    // colour from it (#9674). Fills, shapes and effects are compared on export instead.
+    let dpi = doc.resolution_dpi;
+    crate::image_cmds::for_each_layer(&mut doc.layers, &mut |l| {
+        if let LayerContent::Text(tx) = &mut l.content {
+            crate::canvas_geom::retag_text(dpi, tx);
+        }
+    });
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
