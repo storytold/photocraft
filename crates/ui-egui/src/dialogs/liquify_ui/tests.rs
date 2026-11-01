@@ -1033,8 +1033,9 @@ fn frame_diagnostics_reset_per_stroke_and_are_reported() {
     d.frame_max_ms = 9.0;
     d.frame_ms = 4.0;
     pointer(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    let d = app.distort.liquify.as_ref().unwrap();
+    let d = app.distort.liquify.as_mut().unwrap();
     assert_eq!(d.frame_max_ms, 0.0, "a new stroke starts its own maximum");
+    d.frame_events = 3;
     let v = d.describe();
     assert_eq!(v["dabMs"].as_f64(), Some(d.dab_ms), "{v}");
     assert_eq!(v["frameMs"].as_f64(), Some(d.frame_ms), "{v}");
