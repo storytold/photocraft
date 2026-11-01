@@ -572,6 +572,43 @@ fn cmd_drag_with_the_brush_is_the_move_tool() {
     assert_eq!(h.state().ui.tool, Tool::Brush, "the Brush is back");
 }
 
+/// #9931: the Zoom tool does not keep ⌘: a ⌘-drag moves the layer and does not zoom, and the Zoom
+/// tool is back when ⌘ comes up.
+#[test]
+fn cmd_drag_with_the_zoom_tool_is_the_move_tool() {
+    let mut h = harness(Tool::Zoom);
+    let id = with_layer(&mut h);
+    let z0 = h.state().ui.views[0].zoom;
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move));
+    drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(held_tool(h.state(), &h.ctx), None);
+    assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "the layer moved by (40, 20)");
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Move"));
+    assert_eq!(h.state().ui.views[0].zoom, z0, "no zoom");
+    assert_eq!(h.state().ui.tool, Tool::Zoom, "the Zoom tool is back");
+}
+
+/// The Zoom tool's own keys still win: ⌘Space is Zoom In (not the Move tool), ⌘ over the Hand is
+/// Zoom In, and ⌥ with the Zoom tool is Zoom Out.
+#[test]
+fn zoom_tool_keeps_its_own_modifier_keys() {
+    let mut h = harness(Tool::Zoom);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.event(Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: platform(Modifiers::COMMAND) });
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    let mut h = harness(Tool::Hand);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::ZoomIn));
+    let mut h = harness(Tool::Zoom);
+    h.event(Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), None, "⌥ is read by the Zoom tool itself, not a temporary tool");
+}
+
 /// ⌘ released mid-drag: the Move tool lasts until the button comes up (Photoshop), and the
 /// Eraser's `Up` never fires.
 #[test]
@@ -677,7 +714,6 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
     for tool in [
         Tool::Hand,
         Tool::RotateView,
-        Tool::Zoom,
         Tool::Pen,
         Tool::Rectangle,
         Tool::Type,
@@ -700,7 +736,7 @@ fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
         let want = (tool == Tool::Hand).then_some(Temporary::ZoomIn);
         assert_eq!(held_tool(h.state(), &h.ctx), want, "{tool:?}");
     }
-    for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::MagneticLasso, Tool::QuickSelection] {
+    for tool in [Tool::Brush, Tool::Eraser, Tool::Zoom, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::MagneticLasso, Tool::QuickSelection] {
         assert!(cmd_moves(tool), "{tool:?}");
     }
 }
@@ -1030,6 +1066,22 @@ fn latched_modifier_keys_zoom_with_the_hand_tool() {
     h.state_mut().ui.shell.sticky_alt = true;
     h.run_steps(1);
     assert_eq!(held_tool(h.state(), &h.ctx), None, "only the Hand's ⌥ zooms");
+}
+
+/// #9931: the Modifier Keys panel's latched ⌘ makes the Zoom tool the Move tool too, so a click
+/// moves the layer and does not zoom.
+#[test]
+fn latched_command_with_the_zoom_tool_is_the_move_tool() {
+    let mut h = harness(Tool::Zoom);
+    let id = with_layer(&mut h);
+    let z0 = h.state().ui.views[0].zoom;
+    h.state_mut().ui.shell.sticky_command = true;
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move));
+    drag_with(&mut h, Modifiers::NONE, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "the layer moved by (40, 20)");
+    assert_eq!(h.state().ui.views[0].zoom, z0, "no zoom");
+    assert_eq!(h.state().ui.tool, Tool::Zoom);
 }
 
 /// A Hand press made without a modifier stays the Hand through its release: ⌘ or ⌥ pressed
