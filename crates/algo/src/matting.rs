@@ -547,6 +547,58 @@ pub fn refine_surface(
     let mut uniform: HashMap<usize, Option<f32>> = HashMap::new();
     let mut output = Surface::new(PixelFormat::GRAY8);
     let solid = output.solid_tile(&[1.0]);
+    // Only mixed blocks need expensive filtering. Keep their concurrency and aggregate
+    // scratch estimate bounded; uniform interiors still take the cheap serial path.
+    struct Work {
+        core: Rect,
+        input: Rect,
+        painted: Option<Vec<f32>>,
+    }
+    let run = |work: &Work| {
+        let (t, r) = (work.core, work.input);
+        let m = crate::selection::mask_from_surface(Some(mask), r);
+        let (rw, rh) = (r.width() as usize, r.height() as usize);
+        let adds = work.painted.as_ref().is_some_and(|v| v.iter().any(|v| *v > 0.0));
+        let img = (p.uses_image() || adds).then(|| sampler.rgb(r));
+        let bb = match (&work.painted, brush) {
+            (Some(v), Some(b)) => Some(BrushBuf { v, window: b.window() }),
+            _ => None,
+        };
+        let refined = refine_buffer_with(img.as_ref(), &m, rw, rh, p, bb);
+        let mut data = Vec::with_capacity(t.width() as usize * t.height() as usize);
+        for yy in t.y0..t.y1 {
+            for xx in t.x0..t.x1 {
+                let i = (yy - r.y0) as usize * rw + (xx - r.x0) as usize;
+                data.push((refined.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8);
+            }
+        }
+        (t, data)
+    };
+    let flush = |pending: &mut Vec<Work>, output: &mut Surface| -> Result<(), photocraft_raster::AllocationError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let results: Vec<_> = {
+            use rayon::prelude::*;
+            pending.par_iter().map(&run).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let results: Vec<_> = pending.iter().map(&run).collect();
+        for (t, data) in results {
+            if data.iter().any(|v| *v != 0) {
+                output.try_write_interleaved(t, &data)?;
+                for tc in t.tiles() {
+                    if output.tile(tc).is_some_and(|tile| tile.bytes().iter().all(|v| *v == 255)) {
+                        output.put_tiles([(tc, solid.clone())]);
+                    }
+                }
+            }
+        }
+        pending.clear();
+        Ok(())
+    };
+    let mut pending = Vec::new();
+    let mut pending_bytes = 0usize;
+    const MAX_SCRATCH_BYTES: usize = 512 * 1024 * 1024;
+    const MAX_FILTER_WORKERS: usize = 4;
     for (by, bx) in blocks {
         let x = (i64::from(bbox.x0) + bx * i64::from(TILE)) as i32;
         let y = (i64::from(bbox.y0) + by * i64::from(TILE)) as i32;
@@ -557,7 +609,7 @@ pub fn refine_surface(
         let painted = brush
             .filter(|b| b.tile_coords().any(|tc| !tc.rect().intersect(&r).is_empty()))
             .map(|b| {
-                if scratch_bytes > 512 * 1024 * 1024 {
+                if scratch_bytes > MAX_SCRATCH_BYTES {
                     return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: scratch_bytes });
                 }
                 Ok(b.read(r))
@@ -600,31 +652,16 @@ pub fn refine_surface(
             }
             output.fill_rect(t, &[1.0]);
         } else {
-            // Guided filtering holds many working planes simultaneously. Bound one worker's
-            // scratch before any image or mask read, independent of bounding-box area.
-            let pixels = (r.width() as usize).checked_mul(r.height() as usize).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
-            let bytes = pixels.checked_mul(256).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
-            if bytes > 512 * 1024 * 1024 {
-                return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes });
+            if scratch_bytes > MAX_SCRATCH_BYTES {
+                return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: scratch_bytes });
             }
-            let m = crate::selection::mask_from_surface(Some(mask), r);
-            let (rw, rh) = (r.width() as usize, r.height() as usize);
-            let img = (p.uses_image() || adds).then(|| sampler.rgb(r));
-            let bb = match (&painted, brush) {
-                (Some(v), Some(b)) => Some(BrushBuf { v, window: b.window() }),
-                _ => None,
-            };
-            let refined = refine_buffer_with(img.as_ref(), &m, rw, rh, p, bb);
-            let mut data = Vec::with_capacity(t.width() as usize * t.height() as usize);
-            for yy in t.y0..t.y1 {
-                for xx in t.x0..t.x1 {
-                    let i = (yy - r.y0) as usize * rw + (xx - r.x0) as usize;
-                    data.push((refined.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8);
-                }
+            if !pending.is_empty() && (pending.len() >= MAX_FILTER_WORKERS || pending_bytes.saturating_add(scratch_bytes) > MAX_SCRATCH_BYTES) {
+                flush(&mut pending, &mut output)?;
+                pending_bytes = 0;
             }
-            if data.iter().any(|v| *v != 0) {
-                output.try_write_interleaved(t, &data)?;
-            }
+            pending_bytes = pending_bytes.saturating_add(scratch_bytes);
+            pending.push(Work { core: t, input: r, painted });
+            continue;
         }
         // Canonical tiles can straddle two legacy blocks. Share them as soon as complete,
         // keeping solid interiors compact even when the processing origin is unaligned.
@@ -634,6 +671,7 @@ pub fn refine_surface(
             }
         }
     }
+    flush(&mut pending, &mut output)?;
     Ok((output.tile_count() > 0).then_some(output))
 }
 
