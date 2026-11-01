@@ -375,10 +375,26 @@ impl Coverage {
         let Some(s) = s else { return Coverage::empty() };
         let outside = s.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
         let mut out = Coverage { values: Surface::with_default(PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32), &[outside]), outside };
-        for (tc, _) in s.tiles() {
+        let mut converted = std::collections::HashMap::new();
+        for (tc, tile) in s.tiles() {
             let area = tc.rect().intersect(&canvas);
+            if area.is_empty() {
+                continue;
+            }
+            let key = Arc::as_ptr(tile) as usize;
+            if area == tc.rect()
+                && let Some(shared) = converted.get(&key)
+            {
+                out.values.put_tiles([(*tc, Arc::clone(shared))]);
+                continue;
+            }
             let data = photocraft_algo::selection::mask_from_surface(Some(s), area);
             out.values.write_region(area, &data);
+            if area == tc.rect()
+                && let Some(shared) = out.values.tile(*tc)
+            {
+                converted.insert(key, shared.clone());
+            }
         }
         out
     }
@@ -441,11 +457,24 @@ impl Coverage {
     fn surface(&self, f: impl Fn(f32) -> f32) -> Surface {
         let g = |v: f32| f(v).clamp(0.0, 1.0);
         let mut s = Surface::with_default(PixelFormat::GRAY8, &[g(self.outside)]);
-        for (tc, _) in self.values.tiles() {
+        let default = s.default_bytes().first().copied().unwrap_or(0);
+        let mut converted: std::collections::HashMap<usize, Option<Arc<photocraft_raster::Tile>>> = std::collections::HashMap::new();
+        for (tc, tile) in self.values.tiles() {
+            let key = Arc::as_ptr(tile) as usize;
+            if let Some(shared) = converted.get(&key) {
+                if let Some(shared) = shared {
+                    s.put_tiles([(*tc, shared.clone())]);
+                }
+                continue;
+            }
             let bytes: Vec<u8> = self.values.read_region(tc.rect()).iter().map(|v| (g(*v) * 255.0).round() as u8).collect();
-            s.write_interleaved(tc.rect(), &bytes);
+            if bytes.iter().all(|v| *v == default) {
+                converted.insert(key, None);
+            } else {
+                s.write_interleaved(tc.rect(), &bytes);
+                converted.insert(key, s.tile(*tc).cloned());
+            }
         }
-        s.prune();
         s
     }
 }
@@ -835,4 +864,17 @@ fn sparse_brush_dabs_bound_tiles_and_apply_add_restore_formula() {
         let want = if b >= 0.0 { v.max(b) } else { v * (1.0 + b) };
         assert!((result.at(x, 11) - want).abs() < 1e-6, "x={x}, brush={b}");
     }
+}
+
+#[test]
+fn preview_conversion_preserves_shared_solid_tiles() {
+    let canvas = Rect::new(0, 0, 2048, 1024);
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.fill_rect(canvas, &[1.0]);
+    let coverage = Coverage::read(Some(&selection), canvas);
+    let display = coverage.surface(|v| v);
+    let a = photocraft_geom::TileCoord::new(0, 0);
+    let b = photocraft_geom::TileCoord::new(3, 2);
+    assert!(Arc::ptr_eq(coverage.values.tile(a).unwrap(), coverage.values.tile(b).unwrap()));
+    assert!(Arc::ptr_eq(display.tile(a).unwrap(), display.tile(b).unwrap()));
 }
