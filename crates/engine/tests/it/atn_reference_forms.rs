@@ -333,6 +333,8 @@ fn comp_forms_keep_their_wire_kind_and_resolve_at_playback() {
         }
         for (reference, expected) in cases {
             s.execute("layerComp.apply", json!({"comp":current})).unwrap();
+            s.execute(if current == second { "layer.hideLayers" } else { "layer.showLayers" }, json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.last_applied_comp, Some(current));
             let action = imported(AtnEvent::name("applyComp"), Descriptor::new("null").with("null", D::Reference(vec![reference.clone()])));
             roundtrip(&action, &reference, None);
             replay(&mut s, &action);
