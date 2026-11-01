@@ -210,6 +210,54 @@ fn the_pen_carries_on_an_open_path_from_either_end() {
     assert_eq!((work.subpaths.len(), work.subpaths[1].closed, work.subpaths[1].knots.len()), (2, true, 3));
 }
 
+/// #10726: after another tool, the Curvature Pen carries an open path on as in Photoshop: a click on
+/// its endpoint selects it, and the next click continues the path from there. The subpath is
+/// extended in one History step, its segments keep their shape, and the new anchors take smooth
+/// curvature handles.
+#[test]
+fn the_curvature_pen_carries_on_an_open_path() {
+    let mut app = app(Tool::Pen);
+    click(&mut app, 20.0, 20.0);
+    // A curve: the middle anchor's handles dragged out further than the Curvature Pen would set.
+    tool_event(&mut app, ToolEvent::Down { x: 80.0, y: 20.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 130.0, y: 10.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 130.0, y: 10.0 }, Modifiers::NONE);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let before = work_path(&app).subpaths[0].knots.clone();
+    assert_ne!(before[1].out_ctrl, before[1].anchor, "the middle anchor has handles");
+    let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    let at = steps(&app);
+    app.ui.tool = Tool::CurvaturePen;
+    click(&mut app, 80.0, 80.0);
+    assert!(app.ui.pen.is_none(), "the click selects the endpoint, it draws nothing");
+    click(&mut app, 140.0, 120.0);
+    assert!(app.ui.pen.as_ref().is_some_and(|p| p.curvature && p.knots.len() == 4), "the next click carries the path on");
+    click(&mut app, 200.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let work = work_path(&app);
+    assert_eq!(work.subpaths.len(), 1, "the same subpath, extended");
+    let knots = &work.subpaths[0].knots;
+    let anchors: Vec<[f64; 2]> = knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+    assert_eq!(anchors, [[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [140.0, 120.0], [200.0, 80.0]]);
+    assert_eq!(steps(&app), at + 1, "one History step");
+    // The Pen's straight segments keep their shape: the first knots are as they were, and the
+    // endpoint keeps its incoming handle.
+    assert_eq!((knots[0], knots[1]), (before[0], before[1]));
+    assert_eq!((knots[2].anchor, knots[2].in_ctrl), (before[2].anchor, before[2].in_ctrl));
+    // The new anchor in the middle is smooth: its handles lie either side of it.
+    let mid = &knots[3];
+    assert!(mid.in_ctrl != mid.anchor && mid.out_ctrl != mid.anchor, "{mid:?}");
+    assert!((mid.in_ctrl.x - mid.anchor.x) * (mid.out_ctrl.x - mid.anchor.x) < 0.0, "handles on either side: {mid:?}");
+    // While it draws on, the Curvature Pen moves only the new anchors: a press on an old corner
+    // adds an anchor there.
+    click(&mut app, 200.0, 80.0);
+    click(&mut app, 260.0, 40.0);
+    click(&mut app, 80.0, 20.0);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(7), "a new anchor, the old one untouched");
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots[1][0]), Some([80.0, 20.0]));
+}
+
 /// #6593 review: carrying on a subpath keeps its path operation, and a draft whose subpath changed
 /// meanwhile refuses without overwriting newer work. The historical test name is retained
 /// for reviewed-head provenance; captured-revision validation supersedes its stale fallback.

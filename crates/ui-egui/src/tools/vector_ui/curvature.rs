@@ -1,11 +1,27 @@
-use super::pen::{cancel_stale, pen_commit};
+use super::pen::{cancel_stale, pen_commit, resume_at};
 use super::{PenPath, PhotocraftApp};
 
-/// Recompute a Curvature Pen path's handles from its anchors and corner points.
+/// Recompute a Curvature Pen path's handles from its anchors and corner points. The knots of a
+/// path it carries on (`PenPath::fixed`) keep theirs, but for the endpoint's outgoing handle,
+/// which bends into the first new segment (#10726), and, once the path closes, the first knot's
+/// incoming handle, which bends into the closing one.
 pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
     let corners: Vec<bool> = (0..anchors.len()).map(|i| pen.unlinked.contains(&i)).collect();
     pen.knots = photocraft_vector::edit::curvature_knots(&anchors, &corners, closed);
+    let last = pen.fixed.len().saturating_sub(1);
+    let extended = pen.knots.len() > pen.fixed.len();
+    for (i, was) in pen.fixed.iter().enumerate() {
+        let Some(k) = pen.knots.get_mut(i) else { break };
+        let (keep_in, keep_out) = (!(closed && i == 0), !(extended && i == last));
+        k[0] = was[0];
+        if keep_in {
+            k[1] = was[1];
+        }
+        if keep_out {
+            k[2] = was[2];
+        }
+    }
 }
 
 /// The anchor of the Curvature Pen path being drawn under (x, y), for the cursor.
@@ -44,6 +60,20 @@ pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     if app.ui.pen.is_none() {
         app.ui.pen_doc = app.session.active().map(|st| st.doc.id);
     }
+    // With an endpoint of an open path selected (a click, or ⌘/Ctrl-click, on it), the press
+    // carries that path on from there, as in Photoshop (#10726): its segments keep their shape,
+    // the press adds the next anchor and the commit extends that subpath.
+    if app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty())
+        && let Some(end) = crate::direct_select::selected_open_end(app)
+        && let Some(mut resumed) = resume_at(app, end[0], end[1], 0.5)
+    {
+        resumed.curvature = true;
+        resumed.fixed = resumed.knots.clone();
+        app.ui.pen = Some(resumed);
+    }
+    // The anchors of the path carried on stay where they are; the new ones move.
+    let fixed = app.ui.pen.as_ref().map_or(0, |p| p.fixed.len());
+    let hit = hit.filter(|&i| i >= fixed);
     let Some(owner) = capture_pen_owner(app) else { return };
     let pen = app.ui.pen.get_or_insert_with(|| PenPath { curvature: true, ..Default::default() });
     if pen.owner.is_none() {

@@ -241,6 +241,18 @@ fn converting(tool: Tool, mods: Modifiers, pen_idle: bool) -> bool {
     !mods.command && (tool == Tool::ConvertPoint || (tool == Tool::Pen && mods.alt && pen_idle))
 }
 
+/// The selected anchor when it is the only one and an endpoint of an open subpath of the active
+/// path: where the Curvature Pen carries the path on from (#10726), as Photoshop does after a
+/// click, or ⌘/Ctrl-click, on the last point.
+pub(crate) fn selected_open_end(app: &PhotocraftApp) -> Option<[f64; 2]> {
+    let ds = &app.ui.direct_selection;
+    let ([[s, k]], Some(target)) = (ds.anchors.as_slice(), ds.target) else { return None };
+    let (_, path) = active_paths(app).into_iter().find(|(r, _)| *r == target)?;
+    let sub = path.subpaths.get(*s).filter(|sub| !sub.closed)?;
+    let knot = sub.knots.get(*k).filter(|_| *k == 0 || *k + 1 == sub.knots.len())?;
+    Some([knot.anchor.x, knot.anchor.y])
+}
+
 /// Is the Curvature Pen idle (no path being drawn, no ⌘/Ctrl)? Then it edits the active path in
 /// place, as in Photoshop: a press on one of its anchors drags it, with no modifier.
 fn curvature_idle(app: &PhotocraftApp, mods: Modifiers) -> bool {

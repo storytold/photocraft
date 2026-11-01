@@ -100,6 +100,11 @@ pub struct PenPath {
     /// commit replaces that subpath instead of adding one.
     #[serde(default)]
     pub resumes: Option<Resumed>,
+    /// The Curvature Pen carrying on a path: its knots as they were, which keep their shape while
+    /// the new anchors' handles follow them (`curvature_refresh`, #10726). The last one is the
+    /// endpoint drawing carries on from; only its outgoing handle bends into the new segment.
+    #[serde(default)]
+    pub fixed: Vec<[[f64; 2]; 3]>,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The

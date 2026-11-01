@@ -479,7 +479,7 @@ fn doc_path<'a>(doc: &'a Document, name: &str) -> Option<&'a Path> {
 /// layer, else of the path a new Pen path would join (the one selected in the Paths panel, else
 /// the work path). Its knots run towards that anchor: reversed, handles swapped, when it is the
 /// first.
-fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
+pub(super) fn resume_at(app: &PhotocraftApp, x: f64, y: f64, tol: f64) -> Option<PenPath> {
     let st = app.session.active()?;
     let doc = st.doc.id.0;
     let (name, layer, path) = if let Some((id, p)) = targeted_vector_mask(app) {
