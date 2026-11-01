@@ -349,7 +349,7 @@ pub struct ImportOptions {
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace. May lower the
-    /// default cap; does not cover metadata, patterns or smart-filter caches.
+    /// default cap; does not cover metadata or smart-filter caches.
     pub psd_max_pixel_bytes: u64,
 }
 

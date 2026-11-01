@@ -124,6 +124,56 @@ fn legacy_conversion_reports_a_rejected_import_instead_of_decoding_it() {
     assert!(warnings.iter().any(|warning| warning.contains("pixel memory")));
 }
 
+fn pattern_block(mode: u32, depth: u16, width: u32, height: u32) -> photocraft_psd::TaggedBlock {
+    use photocraft_psd::patterns::{PsdPattern, mode_channels, write_pattern_block};
+    let len = (width as usize * depth as usize).div_ceil(8) * height as usize;
+    let p = PsdPattern {
+        mode,
+        depth,
+        width,
+        height,
+        name: "Budget pattern".into(),
+        id: "budget".into(),
+        palette: (mode == 2).then(|| vec![0; 768]),
+        channels: vec![vec![0; len]; mode_channels(mode)],
+        alpha: None,
+    };
+    photocraft_psd::TaggedBlock::new(*b"Patt", write_pattern_block(&[p]).unwrap())
+}
+
+#[test]
+fn pattern_tiles_and_expansion_share_the_import_allowance() {
+    for (mode, depth) in [(1, 1), (2, 8), (3, 8), (4, 16), (9, 32)] {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        let baseline = estimate(&file);
+        let block = pattern_block(mode, depth, 9, 3);
+        file.global_blocks.push(block.clone());
+        let one = estimate(&file);
+        assert!(one > baseline);
+        assert!(check(&file, one).is_ok());
+        assert!(matches!(check(&file, one - 1), Err(IoError::PsdImportBudget { .. })));
+        let bytes = file.to_bytes().unwrap();
+        let opts = crate::ImportOptions { psd_max_pixel_bytes: one - 1, ..Default::default() };
+        assert!(matches!(crate::import_with_options("pattern.psd", &bytes, &opts), Err(IoError::PsdImportBudget { .. })));
+        assert_eq!(crate::import("pattern.psd", &bytes).unwrap().document.patterns.len(), 1);
+        file.global_blocks.push(block);
+        assert!(estimate(&file) > one, "blocks cannot each reuse the allowance");
+    }
+}
+
+#[test]
+fn malformed_later_pattern_still_counts_earlier_decodes() {
+    let mut file = testgen::small(Version::Psd, Compression::Raw);
+    let baseline = estimate(&file);
+    let mut block = pattern_block(1, 1, 9, 3);
+    // An invalid second pattern makes the real parser discard the block, after decoding
+    // its first record. The preflight must still account for that transient allocation.
+    block.data.extend_from_slice(&4u32.to_be_bytes());
+    block.data.extend_from_slice(&99u32.to_be_bytes());
+    file.global_blocks.push(block);
+    assert!(estimate(&file) > baseline);
+}
+
 /// An unknown colour mode imports as RGB (`import_format`), layers included, so it must pay
 /// for them: a layered file can't dodge the allowance by carrying mode 5.
 #[test]
