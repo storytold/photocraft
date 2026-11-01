@@ -262,6 +262,21 @@ mod tests {
     }
 
     #[test]
+    fn inverting_a_hue_range_affects_the_rest_and_undoes_itself() {
+        use super::hue_saturation::invert_hue_range;
+        // Reds (fully affected -15..15) become every other hue (45..315), fading over the same edges.
+        let reds = HueRange::neutral(0).bounds;
+        let inverted = invert_hue_range(reds);
+        assert_eq!(inverted, [15.0, 45.0, 315.0, 345.0]);
+        for i in 0..6 {
+            let b = HueRange::neutral(i).bounds;
+            assert_eq!(invert_hue_range(invert_hue_range(b)), HueRange::canonical_bounds(b), "range {i}");
+        }
+        // A range that wraps past 0° inverts too.
+        assert_eq!(invert_hue_range([330.0, 350.0, 20.0, 40.0]), HueRange::canonical_bounds([20.0, 40.0, 330.0, 350.0]));
+    }
+
+    #[test]
     fn hue_range_drag_canonicalizes_bounds_before_clamping() {
         let moved = move_hue_range_handle([0.0, 350.0, 100.0, 200.0], 2, 354.0);
         assert_eq!(moved, [-360.0, -10.0, -6.0, -1.0]);
