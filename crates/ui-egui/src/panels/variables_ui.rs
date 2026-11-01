@@ -135,7 +135,7 @@ fn body_ui(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, 
 
     ui.set_min_width(420.0);
     // Page switcher.
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         for (id, label) in [("define", tl!("Define")), ("dataSets", tl!("Data Sets"))] {
             let sel = page == id;
             if ui.selectable_label(sel, tl!(&label)).clicked() {
@@ -179,7 +179,7 @@ fn define_page(ui: &mut egui::Ui, _t: &Tokens, layers: &[(u64, String, bool)], s
     ui.add_space(4.0);
     let mut remove = None;
     for (i, d) in defs.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             // name
             let mut name = d.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
@@ -260,7 +260,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     let Some(sets) = state.get_mut("dataSets").and_then(Value::as_array_mut) else { return };
     let mut cur = data_set_index(fields, sets.len());
 
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         // The pager mirrors with its row: icon_name swaps the chevrons under RTL, so each still points backwards through the sets.
         if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous data set")).clicked() && cur > 0 {
             cur -= 1;
@@ -299,7 +299,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     if let Some(set) = sets.get_mut(cur) {
         // name
         let mut sname = set.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let name_label = ui.label(tl!("Name:"));
             let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
             if ui.add(crate::widgets::rtl_singleline(&mut sname, &mut layouter).desired_width(200.0)).labelled_by(name_label.id).changed() {
@@ -323,7 +323,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
                     values.len() - 1
                 }
             };
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.add_sized([130.0, 18.0], egui::Label::new(vname.as_str()).truncate());
                 match vty.as_str() {
                     "visibility" => {
