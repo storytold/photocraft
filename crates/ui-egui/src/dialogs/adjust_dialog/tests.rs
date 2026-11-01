@@ -610,6 +610,35 @@ fn curves_preset_menu_is_absent_in_cmyk_and_lab_documents() {
     }
 }
 
+/// #9221: a preset's curves go through the engine on OK and come back rounded to 0.01 when the
+/// dialog reopens at its last settings (⌥⌘M); the menu still names the preset, not Custom.
+#[test]
+fn curves_presets_keep_their_names_after_a_round_trip_through_the_engine() {
+    for mode in ["rgb", "grayscale"] {
+        let gray = mode == "grayscale";
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_in_mode(mode));
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        for preset in crate::curves_presets::available(gray) {
+            let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+            let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+            let mut values = crate::filter_dialog::params_of(fields);
+            crate::curves_presets::apply(&mut values, preset, gray);
+            if let Value::Object(v) = values {
+                fields.extend(v);
+            }
+            h.run_steps(3);
+            crate::dialogs::confirm(h.state_mut(), id).unwrap();
+            h.run_steps(2);
+            let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+            h.run_steps(4);
+            let menus = combo_boxes(&h);
+            let shown = menus.iter().find(|(l, _)| l == "Preset").map(|(_, v)| v.as_str());
+            assert_eq!(shown, Some(preset.label), "{mode}: {} after OK and ⌥⌘M (menus: {menus:?})", preset.id);
+            crate::dialogs::cancel(h.state_mut(), id).unwrap();
+        }
+    }
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
