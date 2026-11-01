@@ -26,7 +26,7 @@ use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_engine::Session;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-use photocraft_testkit::perf::{RssSampler, report, row, write_report};
+use photocraft_testkit::perf::{RssSampler, Summary, report, row, write_report};
 use photocraft_ui_egui::gpu_canvas::GpuCanvas;
 use serde_json::{Value, json};
 
@@ -115,6 +115,12 @@ struct Bench {
     last_kind: std::cell::Cell<(&'static str, Option<&'static str>)>,
     /// The current sample's command / refresh split, set by `after_cmd` or `drag_frame`.
     split: std::cell::Cell<Option<Split>>,
+    /// The (document id, revision) the canvas shows, as the app's canvas cache keeps it; `None`
+    /// when unknown (nothing refreshed yet, or a drag frame showed a document not in the session).
+    shown: std::cell::Cell<Option<(u64, u64)>>,
+    /// Revisions before the last edit that the last `refresh` also had to show (0 in the app's
+    /// one-edit-per-frame case): setup work that no untimed refresh caught up on.
+    last_missed: std::cell::Cell<u64>,
 }
 
 /// One sample's command time and the canvas refresh after it.
@@ -124,13 +130,20 @@ struct Split {
     refresh_ms: f64,
     kind: &'static str,
     fallback: Option<&'static str>,
+    /// See `Bench::last_missed`.
+    missed: u64,
 }
 
-/// The middle sample (the upper one of an even count).
+/// The p50 of `v` as the row's `p50_ms` takes it.
 fn median(v: &[f64]) -> f64 {
-    let mut v = v.to_vec();
-    v.sort_by(f64::total_cmp);
-    v.get(v.len() / 2).copied().unwrap_or(f64::NAN)
+    Summary::of(v).map_or(f64::NAN, |s| s.p50)
+}
+
+/// A GPU refresh's kind and fallback; `refresh_with` reports nothing to draw as `"rect"` (like
+/// the CPU-compositor rect upload), which the bench calls `"none"` as its CPU path does.
+fn gpu_kind(r: &photocraft_ui_egui::gpu_canvas::Refresh) -> (&'static str, Option<&'static str>) {
+    let fallback = r.fallback.as_ref().map(|f| f.kind());
+    (if r.kind == "rect" && r.px == 0 && fallback.is_none() { "none" } else { r.kind }, fallback)
 }
 
 /// The layer a command's result names (`{"layer": id}`), else the active layer it left.
@@ -143,9 +156,8 @@ impl Bench {
         self.only.as_ref().is_none_or(|o| name.contains(o.as_str()))
     }
 
-    /// The canvas refresh after an edit (`canvas::ensure_gpu`): the damage rect grown by the
-    /// effect reach when the session reports one, else everything; waits for the GPU.
-    /// Re-composite only `r` of the active document (what the canvas hadn't shown yet).
+    /// Re-composite only `r` of the active document: the caller knows the canvas already shows
+    /// the rest of the current revision (a stroke's live preview, say).
     fn refresh_rect(&self, s: &Session, r: photocraft_geom::Rect) -> Res<f64> {
         let st = s.active().ok_or("no document")?;
         let doc = &st.doc;
@@ -162,19 +174,30 @@ impl Bench {
                 }
             }
         }
+        self.shown.set(Some((doc.id.0, st.revision)));
         Ok(ms(t))
     }
 
+    /// The canvas refresh after an edit (`canvas::ensure_gpu`), with the damage the app's
+    /// `damage_since` gives it: nothing when the canvas shows this revision, the last edit's rect
+    /// grown by the effect reach when it showed the one before (and the session reports a rect),
+    /// else everything (`full`, or several edits since the last refresh); waits for the GPU.
     fn refresh(&self, s: &Session, full: bool) -> Res<f64> {
         let st = s.active().ok_or("no document")?;
         let doc = &st.doc;
-        let damage = if full { None } else { st.last_damage.map(|r| r.inflate(reach(&doc.layers)).intersect(&doc.bounds())) };
+        let seen = self.shown.replace(Some((doc.id.0, st.revision))).filter(|&(id, _)| id == doc.id.0 && !full).map(|(_, rev)| rev);
+        self.last_missed.set(seen.map_or(0, |rev| st.revision.saturating_sub(rev).saturating_sub(1)));
+        let damage = match seen {
+            Some(rev) if rev == st.revision => Some(Rect::EMPTY),
+            Some(rev) if rev.checked_add(1) == Some(st.revision) => st.last_damage.map(|r| r.inflate(reach(&doc.layers)).intersect(&doc.bounds())),
+            _ => None,
+        };
         let t = Instant::now();
         match &self.gpu {
             Some((g, rs)) => {
                 let r = g.refresh(doc.id.0, doc, damage, None);
                 self.last_px.set(r.px);
-                self.last_kind.set((r.kind, r.fallback.as_ref().map(|f| f.kind())));
+                self.last_kind.set(gpu_kind(&r));
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
@@ -196,7 +219,7 @@ impl Bench {
         let cmd_ms = ms(t);
         let refresh_ms = self.refresh(s, full)?;
         let (kind, fallback) = self.last_kind.get();
-        self.split.set(Some(Split { cmd_ms, refresh_ms, kind, fallback }));
+        self.split.set(Some(Split { cmd_ms, refresh_ms, kind, fallback, missed: self.last_missed.get() }));
         Ok(cmd_ms + refresh_ms)
     }
 
@@ -215,11 +238,13 @@ impl Bench {
         let damage = was.translate(prev, prev / 2).union(&was.translate(d, d / 2)).inflate(1).intersect(&doc.bounds());
         let cmd_ms = ms(t);
         let t = Instant::now();
+        // The canvas now shows a document the session doesn't hold: the next refresh redraws all.
+        self.shown.set(None);
         let kind = match &self.gpu {
             Some((g, rs)) => {
                 let r = g.refresh(doc.id.0, &shown, Some(damage), None);
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
-                (r.kind, r.fallback.as_ref().map(|f| f.kind()))
+                gpu_kind(&r)
             }
             None => {
                 std::hint::black_box(photocraft_compose::render(&shown, damage));
@@ -227,7 +252,7 @@ impl Bench {
             }
         };
         let refresh_ms = ms(t);
-        self.split.set(Some(Split { cmd_ms, refresh_ms, kind: kind.0, fallback: kind.1 }));
+        self.split.set(Some(Split { cmd_ms, refresh_ms, kind: kind.0, fallback: kind.1, missed: 0 }));
         Ok(cmd_ms + refresh_ms)
     }
 
@@ -282,6 +307,11 @@ impl Bench {
                         fallbacks.extend(x.fallback);
                     }
                     split = format!("  cmd {:.2} + refresh {:.2} ms {kinds:?}", median(&cmd), median(&refresh));
+                    // A timed refresh that also drew earlier, untimed edits overstates this row.
+                    let missed = splits.iter().filter(|x| x.missed > 0).count();
+                    if missed > 0 {
+                        eprintln!("{name}: {missed} of {} timed refreshes also redrew setup edits no untimed refresh showed", splits.len());
+                    }
                     if let Some(o) = r.as_object_mut() {
                         o.insert("cmd_samples_ms".into(), json!(cmd));
                         o.insert("refresh_samples_ms".into(), json!(refresh));
@@ -458,6 +488,8 @@ fn main() {
         px: std::cell::RefCell::new(Vec::new()),
         last_kind: std::cell::Cell::new(("none", None)),
         split: std::cell::Cell::new(None),
+        shown: std::cell::Cell::new(None),
+        last_missed: std::cell::Cell::new(0),
     };
     println!("perf_scenarios: {} mode, {} reps, {}", if quick { "quick" } else { "full" }, reps, adapter.as_deref().unwrap_or("CPU canvas"));
     let t_all = Instant::now();
@@ -634,32 +666,31 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
 
     // A 12 MP layer, duplicated and pasted: the first time (a fresh layer, cold caches) and
     // again (the same source). The fresh layer is on screen before the timer starts, as in the
-    // app: the deselect after its fill leaves no damage, so its rect is refreshed explicitly.
+    // app (its setup is several edits, so that untimed refresh redraws everything).
     // Each "first" sample deletes the layers it added (untimed), so every sample lands on the
     // same stack instead of one two 12 MP layers taller each time.
     let (lw, lh) = sz.big_layer;
     let (lx, ly) = ((w - lw) / 2, (h - lh) / 2);
-    let fill_rect = Rect::new(lx as i32, ly as i32, (lx + lw) as i32, (ly + lh) as i32);
     let fresh_layer = |b: &Bench, s: &mut Session| -> Res<u64> {
         exec(s, "layer.new.layer", json!({"name": "12 MP"}))?;
         exec(s, "select.rect", json!({"x": lx, "y": ly, "width": lw, "height": lh}))?;
         exec(s, "edit.fill", json!({"color": "#3070a0"}))?;
         exec(s, "select.deselect", json!({}))?;
-        b.refresh_rect(s, fill_rect)?;
+        b.refresh(s, false)?;
         active_layer(s)
     };
     let delete_layers = |b: &Bench, s: &mut Session, ids: &[u64]| -> Res<()> {
         for &id in ids {
             exec(s, "layer.delete", json!({"layer": id}))?;
         }
-        b.refresh_rect(s, fill_rect).map(|_| ())
+        b.refresh(s, false).map(|_| ())
     };
-    let copy_layer = |s: &mut Session, id: u64| -> Res<()> {
+    let copy_layer = |b: &Bench, s: &mut Session, id: u64| -> Res<()> {
         exec(s, "layer.select", json!({"layer": id}))?;
         exec(s, "select.all", json!({}))?;
         exec(s, "edit.copy", json!({}))?;
         exec(s, "select.deselect", json!({}))?;
-        Ok(())
+        b.refresh(s, false).map(|_| ())
     };
     let reps_big = reps.min(5);
     b.time("duplicate 12 MP layer (first) + refresh", &mut s, reps_big, false, |b, s, _| {
@@ -672,7 +703,7 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
     });
     b.time("paste 12 MP layer (first) + refresh", &mut s, reps_big, false, |b, s, _| {
         let src = fresh_layer(b, s)?;
-        copy_layer(s, src)?;
+        copy_layer(b, s, src)?;
         let t = Instant::now();
         let pasted = exec(s, "edit.paste", json!({}))?;
         let v = b.after_cmd(s, t, false)?;
@@ -685,7 +716,7 @@ fn layered_scenarios(b: &mut Bench, sz: &Sizes) {
     if !repeat_rows.iter().any(|r| b.wanted(r)) {
         return;
     }
-    let src = match fresh_layer(b, &mut s).and_then(|id| copy_layer(&mut s, id).map(|()| id)) {
+    let src = match fresh_layer(b, &mut s).and_then(|id| copy_layer(b, &mut s, id).map(|()| id)) {
         Ok(id) => id,
         Err(e) => return b.errors.push(("12 MP source layer".into(), e)),
     };
@@ -928,9 +959,10 @@ fn job_scenarios(b: &mut Bench, sz: &Sizes) {
             Ok(psd) => {
                 let mut holder = Session::new();
                 b.time(open, &mut holder, reps, true, |b, s, _| {
+                    // Free the previous sample's document before the timer: its teardown isn't decode.
+                    drop(std::mem::replace(s, Session::new()));
                     let t = Instant::now();
                     let d = photocraft_io::import("layered.psd", &psd).map_err(|e| e.to_string())?.document;
-                    *s = Session::new();
                     s.open_document(d, Some("layered.psd".into()));
                     b.after_cmd(s, t, true)
                 });
