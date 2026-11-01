@@ -213,7 +213,8 @@ pub enum XmpEmbed {
     /// Embed the document's whole XMP packet and free-form text.
     #[default]
     All,
-    /// Embed no XMP or free-form text.
+    /// Leave the document's own XMP packet and free-form text out. Metadata a format writes
+    /// about the file itself, such as a PDF's spot-plate description, is still written.
     None,
 }
 
@@ -251,6 +252,12 @@ pub struct ExportOptions {
     /// PSD/PSB and layered TIFF: read and embed the files linked smart objects name (see
     /// [`PsdExportOptions::read_linked_files`]). On by default; automation turns it off.
     pub read_linked_files: bool,
+    /// PDF: write the document's spot channels as overprinting `/Separation` plates after the
+    /// flattened image, and a Multichannel document as its plates alone (FILE-215-17). On by
+    /// default; `false` (`"pdfSpotPlates": false`) writes the flattened image only, so an RGB,
+    /// Grayscale or CMYK document loses its plates and a Multichannel document, which has no
+    /// image to write, is refused.
+    pub pdf_spot_plates: bool,
 }
 
 impl Default for ExportOptions {
@@ -266,6 +273,7 @@ impl Default for ExportOptions {
             document_path: None,
             pcraft_cache: None,
             read_linked_files: true,
+            pdf_spot_plates: true,
         }
     }
 }
@@ -639,7 +647,8 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return ora::export(doc);
     }
     if ext == "pdf" {
-        return pdf::export(doc);
+        let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
+        return pdf::export_with(doc, opts.pdf_spot_plates, xmp);
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

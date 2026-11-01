@@ -275,6 +275,34 @@ fn save_a_copy_writes_the_targa_bits_asked_for() {
     }
 }
 
+/// A PDF keeps the document's spot channels as `/Separation` plates unless `pdfSpotPlates` is
+/// false; anything but a boolean is refused before anything is written.
+#[test]
+fn save_a_copy_writes_pdf_spot_plates_unless_asked_not_to() {
+    let dir = tmp("pdf-spot-plates");
+    let mut s = session(12, 6, 8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Underbase White", "color": "#ffffff"})).unwrap();
+    let has = |bytes: &[u8], needle: &str| bytes.windows(needle.len()).any(|w| w == needle.as_bytes());
+    for (params, plates) in
+        [(json!({}), true), (json!({"pdfSpotPlates": true}), true), (json!({"pdfSpotPlates": null}), true), (json!({"pdfSpotPlates": false}), false)]
+    {
+        let out = join(&dir, "a.pdf");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(has(&bytes, "/Separation /Underbase#20White /DeviceCMYK"), plates, "{params}");
+        assert_eq!(has(&bytes, "/OP true /op true"), plates, "{params}: overprint rides with the plates");
+    }
+    for bad in [json!(1), json!("true"), json!([true])] {
+        let out = join(&dir, "bad.pdf");
+        let r = s.execute("file.saveACopy", json!({"path": out, "pdfSpotPlates": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+    }
+}
+
 /// `dpxBits` picks a DPX's bits per sample (byte 803 of the header); unset, it follows the
 /// document's depth. Anything but 8, 10, 12 or 16 is refused before anything is written.
 #[test]
