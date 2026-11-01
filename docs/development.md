@@ -503,6 +503,13 @@ cargo run --release -p photocraft-ui-egui --example perf_scenarios -- \
 That writes the row's own report and stops there: it does **not** evaluate the budget, so read
 `p50_ms`/`p95_ms`/`max_ms` out of the JSON yourself. Use `cargo xtask perf --bench <name>` when you
 want the verdict, the merged `results.json`/`summary.md` and the regression check.
+
+`perf_scenarios` rows that time a command and then the canvas refresh after it also split each
+sample: `cmd_samples_ms` and `refresh_samples_ms` (`samples_ms`, what budgets judge, is their sum),
+`refresh_kinds` (how many refreshes were `gpu-rect`, `gpu-full`, `rect`/`full` on the CPU
+compositor, …) and `fallbacks` (why the wgpu compositor didn't draw, `CpuReason::kind`). The
+console line ends with the medians, e.g. `cmd 0.06 + refresh 1.71 ms {"gpu-rect": 7}`, so a slow
+row says whether the engine or the canvas is the cost before you profile it.
 Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
 is rejected before any benchmark runs or any report or baseline is written.
 
