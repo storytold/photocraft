@@ -647,8 +647,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
             if web || fixed.is_some() {
-                ui.set_max_width(available.x);
-                ui.set_min_size(available);
+                // A resizable dialog must not pin its content min/max to the current available
+                // size: the fork's Resize re-pins the desired size up to the content min, so a
+                // current-size pin makes shrink drags dead. Fixed dialogs keep the pin.
+                if resizable.is_none() {
+                    ui.set_max_width(available.x);
+                    ui.set_min_size(available);
+                }
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
@@ -1420,6 +1425,76 @@ mod preference_resize_tests {
             // The window frame itself (the dialog's outer area), not just the content, shrinks.
             let outer_opened = outer_frame_before;
             let outer_shrunk = outer_frame(&h);
+            assert!(outer_shrunk.width() < outer_opened.width() - 150.0 && outer_shrunk.height() < outer_opened.height() - 60.0, "{dir:?}: the outer frame shrank: {outer_opened:?} -> {outer_shrunk:?}");
+            if rtl {
+                assert!((outer_shrunk.right() - outer_opened.right()).abs() < 4.0, "RTL: the outer right edge is anchored: {outer_opened:?} -> {outer_shrunk:?}");
+            } else {
+                assert!((outer_shrunk.left() - outer_opened.left()).abs() < 4.0, "LTR: the outer left edge is anchored: {outer_opened:?} -> {outer_shrunk:?}");
+            }
+        }
+    }
+
+    /// An over-shrink drag clamps at the dialog's constant minimum (560x400 for Preferences), in
+    /// both directions: the min handed to Resize is a constant, not the dialog's current size.
+    #[test]
+    fn resize_over_shrink_clamps_to_the_constant_min() {
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            crate::prefs_ui::open_preferences(&mut app, "interface");
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        show(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(5);
+            let opened = frame(&h);
+            let rtl = dir == crate::text::direction::Dir::Rtl;
+            let by = if rtl { egui::vec2(3000.0, -3000.0) } else { egui::vec2(-3000.0, -3000.0) };
+            drag_grip(&mut h, by);
+            let clamped = frame(&h);
+            let min = egui::vec2(560.0, 400.0);
+            assert!(clamped.width() < opened.width() - 150.0, "{dir:?}: shrank at all: {opened:?} -> {clamped:?}");
+            assert!((clamped.width() - min.x).abs() < 8.0 && (clamped.height() - min.y).abs() < 8.0, "{dir:?}: clamped to {min:?}: {opened:?} -> {clamped:?}");
+            if rtl {
+                assert!((clamped.right() - opened.right()).abs() < 4.0, "RTL: the right edge is anchored: {opened:?} -> {clamped:?}");
+            } else {
+                assert!((clamped.left() - opened.left()).abs() < 4.0, "LTR: the left edge is anchored: {opened:?} -> {clamped:?}");
+            }
+        }
+    }
+
+    /// The resizable Save for Web dialog never pins its content min to its current size, so a
+    /// grip drag shrinks the window frame itself (not just the content), in both directions.
+    #[test]
+    fn web_dialog_shrink_drag_shrinks_the_outer_frame() {
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 256, "height": 256})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        show(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            crate::file_ui::open_web(h.state_mut());
+            h.run_steps(5);
+            let opened = frame(&h);
+            let outer_opened = outer_frame(&h);
+            let rtl = dir == crate::text::direction::Dir::Rtl;
+            let by = if rtl { egui::vec2(260.0, -120.0) } else { egui::vec2(-260.0, -120.0) };
+            drag_grip(&mut h, by);
+            let shrunk = frame(&h);
+            let outer_shrunk = outer_frame(&h);
+            assert!(shrunk.width() < opened.width() - 150.0 && shrunk.height() < opened.height() - 60.0, "{dir:?}: shrank: {opened:?} -> {shrunk:?}");
             assert!(outer_shrunk.width() < outer_opened.width() - 150.0 && outer_shrunk.height() < outer_opened.height() - 60.0, "{dir:?}: the outer frame shrank: {outer_opened:?} -> {outer_shrunk:?}");
             if rtl {
                 assert!((outer_shrunk.right() - outer_opened.right()).abs() < 4.0, "RTL: the outer right edge is anchored: {outer_opened:?} -> {outer_shrunk:?}");

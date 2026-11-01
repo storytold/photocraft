@@ -229,7 +229,7 @@ fn check(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, 
 
 fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>, unit: &str, d: f64) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
         let mut v = n(f, key, d) as f32;
         crate::widgets::value_field(ui, &mut v, range, unit, 64.0).accessible_name(tl!(&label));
