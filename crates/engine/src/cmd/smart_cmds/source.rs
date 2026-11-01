@@ -353,13 +353,15 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// Converts `src`, a file decoded with its embedded profile, into an RGB `dest`'s profile
 /// (relative colorimetric, black-point compensation, as for SVG sources), as Photoshop converts a
-/// placed file. An untagged source, or one in another mode, is taken as it is.
+/// placed file. An untagged source, one whose tag is unreadable or not RGB, or one in another mode,
+/// is taken as it is.
 pub(crate) fn source_into_profile(src: &mut Document, dest: &Document) -> Result<()> {
-    if dest.mode != ColorMode::Rgb || src.mode != ColorMode::Rgb || src.icc_profile.is_none() {
+    if dest.mode != ColorMode::Rgb || src.mode != ColorMode::Rgb {
         return Ok(());
     }
+    let Some(from) = src.icc_profile.as_ref().and_then(|b| crate::color_cmds::profile_from_bytes(b).ok()) else { return Ok(()) };
     let to = crate::color_cmds::document_profile(dest);
-    if crate::color_cmds::document_profile(src).same_colors(&to) {
+    if from.color_space != crate::color_cmds::mode_space(ColorMode::Rgb) || from.same_colors(&to) {
         return Ok(());
     }
     crate::color_cmds::convert_document(src, &to, photocraft_cms::Intent::RelativeColorimetric, true)

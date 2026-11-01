@@ -1,9 +1,17 @@
 use super::PhotocraftApp;
 
-fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
+/// `icc`, the profile an image from another app is in, counts too: the same pixels in another
+/// profile are another image. Our own exports carry none, so they still match when read back.
+fn clip_signature(w: u32, h: u32, px: &[u8], icc: Option<&[u8]>) -> u64 {
+    use std::hash::{Hash, Hasher};
     let mut sig = (w as u64) << 32 | h as u64;
     for b in px.iter().step_by(997) {
         sig = sig.rotate_left(5) ^ *b as u64;
+    }
+    if let Some(icc) = icc {
+        let mut h = std::hash::DefaultHasher::new();
+        icc.hash(&mut h);
+        sig ^= h.finish();
     }
     sig
 }
@@ -24,7 +32,7 @@ impl PhotocraftApp {
         clip.surface.read_rgba8_into(b, &mut px);
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes, None));
             self.clip_unmirrored = false;
         }
     }
@@ -66,7 +74,7 @@ impl PhotocraftApp {
             }
             return Ok(false);
         };
-        let sig = clip_signature(w, h, &bytes);
+        let sig = clip_signature(w, h, &bytes, icc.as_deref());
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
             return Ok(false);
         }

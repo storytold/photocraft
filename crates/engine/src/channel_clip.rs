@@ -98,7 +98,8 @@ pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit:
     let canvas = d.doc.bounds();
     let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
     let (dx, dy) = crate::edit_cmds::paste_offset(&clip, d.doc.id, canvas, p, in_place);
-    let src = crate::edit_cmds::shifted(&clip.surface, dx, dy);
+    // Its luminosity in the document's colours, as an ordinary paste converts it.
+    let src = crate::edit_cmds::in_doc_colors(s, crate::edit_cmds::shifted(&clip.surface, dx, dy), clip.profile.as_ref(), &d.doc)?;
     let area = src.content_bounds().intersect(&canvas);
     s.edit(label, |doc, _| {
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
@@ -216,7 +217,7 @@ pub(crate) fn paste_colors(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = crate::commands::layer_param(s, p)?;
     let (dx, dy) = crate::edit_cmds::paste_offset(&clip, st.doc.id, st.doc.bounds(), p, in_place);
-    let source = crate::edit_cmds::shifted(&clip.surface, dx, dy);
+    let source = crate::edit_cmds::in_doc_colors(s, crate::edit_cmds::shifted(&clip.surface, dx, dy), clip.profile.as_ref(), &st.doc)?;
     let area = source.content_bounds().intersect(&st.doc.bounds());
     s.edit(label, |doc, _| {
         let surf = crate::commands::paint_surface(doc, id, p)?;

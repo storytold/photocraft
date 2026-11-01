@@ -435,7 +435,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// `surface`, in the colours of `profile`, converted into `doc`'s profile when they differ (Color
 /// Settings' intent and black point compensation, as layers dragged between documents convert).
 /// Pixels without a profile, or with one of another colour space, are left as they are.
-fn in_doc_colors(s: &Session, surface: Surface, profile: Option<&Arc<Vec<u8>>>, doc: &Document) -> Result<Surface> {
+pub(crate) fn in_doc_colors(s: &Session, surface: Surface, profile: Option<&Arc<Vec<u8>>>, doc: &Document) -> Result<Surface> {
     let mode = surface.format().mode;
     let Some(from) = profile.and_then(|b| crate::color_cmds::profile_from_bytes(b).ok()) else { return Ok(surface) };
     let to = crate::color_cmds::document_profile(doc);

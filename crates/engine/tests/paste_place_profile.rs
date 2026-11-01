@@ -77,8 +77,19 @@ fn pasted_pixels_convert_from_the_profile_they_were_copied_in() {
     s.execute("edit.paste", json!({})).unwrap();
     assert!(close(centre(&s), in_srgb()), "pasted {:?}, want {:?}", centre(&s), in_srgb());
 
+    // Into a targeted channel, the luminosity of the converted colours.
+    new_doc(&mut s, "srgb");
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let gray = photocraft_color::convert::rgb_to_gray(in_srgb().map(f32::from));
+    assert!((f32::from(centre(&s)[0]) - gray).abs() <= 1.0, "red channel {:?}, want {gray}", centre(&s));
+
     // Into a document of the same profile the values stay as they are.
     new_doc(&mut s, "adobe-rgb-compat");
     s.execute("edit.paste", json!({})).unwrap();
     assert_eq!(centre(&s), ADOBE);
+
+    // New from Clipboard keeps the profile the pixels are in.
+    s.execute("file.newFromClipboard", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.icc_profile, Some(Builtin::AdobeRgbCompat.profile().to_bytes()));
 }
