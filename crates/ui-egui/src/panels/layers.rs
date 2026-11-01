@@ -380,7 +380,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         } else {
             ("layer.delete", "Delete layer")
         };
-        let trash = icons::button(ui, "trash", 26.0, false, tl!(label));
+        let trash = icons::button(ui, icons::FOOTER_DELETE, icons::FOOTER_SIZE, false, tl!(label));
         // A selected smart filter row is what Delete removes, as in Photoshop (#4751).
         let picked_filter = crate::smart_ui::selected(&ctx, &doc, active);
         if trash.clicked()
@@ -411,7 +411,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // A click follows the selected thumbnail; name that action for screen readers even
         // though dropping a whole layer row onto the same button always deletes the layer.
         trash.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(label)));
-        let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
+        let new_layer =
+            icons::button(ui, icons::FOOTER_NEW, icons::FOOTER_SIZE, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
         if new_layer.clicked() {
             // A click makes the layer above the selection; ⌥-click asks first (the New Layer
             // dialog) and ⌘/Ctrl-click adds it below, as in Photoshop.
@@ -426,7 +427,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             actions.push(("layer.new.layer".into(), params));
         }
         actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
-        let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
+        let group = icons::button(ui, icons::FOOTER_NEW_GROUP, icons::FOOTER_SIZE, false, tl!("Create a new group"));
         if group.clicked() {
             // Like Photoshop CC 2014 and later, a click with two or more layers selected puts them
             // in the new group (Layer › Group Layers); with one layer or none it adds an empty
