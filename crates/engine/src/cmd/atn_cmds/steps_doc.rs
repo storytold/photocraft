@@ -339,6 +339,7 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Import pixel or percentage dimensions and their recorded style-scaling option.
 pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     let mut percent: Option<f64> = None;
@@ -380,9 +381,17 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     if p.is_empty() {
         return Mapped::Unsupported { harmless: false };
     }
+    // An omitted recorded flag preserves style sizes; native calls still default to scaling.
+    let scale_styles = match d.get("scaleStyles") {
+        None => false,
+        Some(D::Boolean(value)) => *value,
+        Some(_) => return Mapped::Unsupported { harmless: false },
+    };
+    p.insert("scaleStyles".into(), scale_styles.into());
     step("image.imageSize", Value::Object(p))
 }
 
+/// Export effective style scaling with the existing Image Size dimensions.
 pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
     if jnum(p, "resolution").is_some()
@@ -418,7 +427,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(i) = jstr(p, "resample").filter(|r| *r != "none") {
         d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, i)?));
     }
-    Some(d)
+    Some(d.with("scaleStyles", D::Boolean(jbool(p, "scaleStyles").unwrap_or(true))))
 }
 
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
@@ -475,11 +484,42 @@ pub(super) fn stop_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 pub(super) fn paste_from(d: &Descriptor) -> Mapped {
+    // As is a class, not text or an enum; unknown forms must not fall back to raster paste.
+    if let Some(value) = d.get("As  ") {
+        let mode = match value {
+            D::Class(value) if value.class_id.is("Pxel") => "pixels",
+            D::Class(value) if value.class_id.is("Path") => "path",
+            D::Class(value) if value.class_id.is("shapeClass") => "shape",
+            _ => return Mapped::Unsupported { harmless: false },
+        };
+        if !matches!(d.get("inPlace"), None | Some(D::Boolean(false))) || d.get("null").is_some() {
+            return Mapped::Unsupported { harmless: false };
+        }
+        if d.get("AntA").is_some_and(|v| !matches!(v, D::Enumerated { type_id, value } if type_id.is("Annt") && value.is("Anno"))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        return step("edit.paste", json!({"as": mode}));
+    }
     none(if get_bool(d, "inPlace") == Some(true) { "edit.pasteSpecial.pasteInPlace" } else { "edit.paste" })
 }
 
-pub(super) fn paste_to(id: &str, _: &Value) -> Option<Descriptor> {
+pub(super) fn paste_to(id: &str, p: &Value) -> Option<Descriptor> {
     let mut d = desc("null");
+    if let Some(mode) = p.get("as") {
+        if id != "edit.paste"
+            || ["center", "inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| p.get(key).is_some())
+            || p.get("target").is_some_and(|v| v.as_str() != Some("pixels"))
+        {
+            return None;
+        }
+        let id = match mode.as_str()? {
+            "pixels" => "Pxel",
+            "path" => "Path",
+            "shape" => "shapeClass",
+            _ => return None,
+        };
+        d = d.with("As  ", D::Class(class(id)));
+    }
     if id == "edit.pasteSpecial.pasteInPlace" {
         d = d.with("inPlace", D::Boolean(true));
     }
@@ -528,12 +568,26 @@ pub(super) fn reset_to(_: &str, _: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("Clrs") }])))
 }
 
+/// Import represented RGB targets and strict profile flags; keep other destination modes intact.
 pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     let name = get_text(d, "T   ").or_else(|| get_text(d, "profile"));
     let Some(profile) = name.as_deref().and_then(|n| lookup(PROFILES, n)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"profile": profile});
     if id == "edit.convertToProfile" {
-        if let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) {
+        // All mapped PROFILES are RGB. Other radio values need their own target mapping.
+        if !matches!(d.get("sdwM"), None | Some(D::Integer(2))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        for (key, param) in [("Dthr", "dither"), ("Fltt", "flatten"), ("rasterizePlaced", "rasterizePlaced")] {
+            let value = match d.get(key) {
+                None => false,
+                Some(D::Boolean(value)) => *value,
+                Some(_) => return Mapped::Unsupported { harmless: false },
+            };
+            p[param] = json!(value);
+        }
+        if d.get("Inte").is_some() {
+            let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) else { return Mapped::Unsupported { harmless: false } };
             p["intent"] = json!(i);
         }
         if let Some(b) = get_bool(d, "MpBl") {
@@ -543,14 +597,27 @@ pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     step(id, p)
 }
 
+/// Export effective native flags explicitly, deriving the RGB radio value from the mapped target.
 pub(super) fn profile_to(id: &str, p: &Value) -> Option<Descriptor> {
     let name = lookup_back(PROFILES, jstr(p, "profile")?)?;
     let mut d = desc("null").with("null", target_ref("Dcmn"));
     if id == "edit.convertToProfile" {
+        if p.get("sdwM").is_some() {
+            return None;
+        }
         d = d
             .with("T   ", text(name))
             .with("Inte", enm("Inte", lookup_back(INTENT, jstr(p, "intent").unwrap_or("relative"))?))
-            .with("MpBl", D::Boolean(jbool(p, "bpc").unwrap_or(true)));
+            .with("MpBl", D::Boolean(jbool(p, "bpc").unwrap_or(true)))
+            .with("sdwM", D::Integer(2));
+        for (key, param) in [("Dthr", "dither"), ("Fltt", "flatten"), ("rasterizePlaced", "rasterizePlaced")] {
+            let value = match p.get(param) {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return None,
+            };
+            d = d.with(key, D::Boolean(value));
+        }
     } else {
         d = d.with("profile", text(name));
     }
