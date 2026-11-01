@@ -214,6 +214,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     let tool = crate::canvas::event_tool(app, mods);
     let moves_layer = crate::canvas::command_moves_layer(app, tool, p, mods);
     let crop_tol = crate::crop_ui::tolerance(app);
+    let straightens = tool == Tool::Crop && app.crop.drag.is_none() && (app.crop.straighten.armed || mods.command);
     let gesture = if let Some(t) = &app.ui.transform {
         let corner = match crate::transform_tool::hit(t, p, crate::transform_tool::handle_tolerance(app)) {
             crate::transform_tool::Hit::Corner(index) => {
@@ -235,6 +236,11 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else if tool == Tool::Move || moves_layer {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app, tool).map(|rect| (Gesture::Move { rect }, exclude))
+    } else if straightens {
+        // A straighten line (`crop_straighten::pointer` takes the press before the frame's drags)
+        // snaps its ends as points wherever it starts, never by the offset of a frame or image it
+        // doesn't move.
+        Some((Gesture::Point, Vec::new()))
     } else if tool == Tool::Crop
         && (crate::crop_mode::classic(app) || app.crop.default_frame)
         && let Some(rect) =
@@ -297,7 +303,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else {
         SnapTargets::default()
     };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
+    // Windows Ctrl both starts a straighten line and is held while it is drawn: the override then
+    // covers the press too, or the line's start would snap and its end not.
+    let disabled = straightens && override_held(mods);
+    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled });
 }
 
 /// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
