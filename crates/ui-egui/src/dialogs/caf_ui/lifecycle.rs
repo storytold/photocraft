@@ -104,8 +104,18 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
-/// An Apply or OK that failed: the error in the panel and the status bar.
+/// An Apply or OK that failed: the error in the panel and the status bar. Custom with nothing
+/// to sample isn't an error: the panel already shows the hint, in the hint's style, and the
+/// status bar says the same (#10621).
 pub(super) fn report(app: &mut PhotocraftApp, e: String) {
+    if let Some(w) = app.distort.caf.as_mut()
+        && w.awaiting_custom_area()
+    {
+        w.error = None;
+        app.ui.status = tl!(CUSTOM_HINT).to_string();
+        app.ui.status_error = false;
+        return;
+    }
     if let Some(w) = app.distort.caf.as_mut() {
         w.error = Some(e.clone());
     }

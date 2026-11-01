@@ -548,12 +548,43 @@ fn custom_sampling_erased_again_hints_and_apply_and_ok_do_not_run_the_fill() {
     assert_eq!(control(&mut app, &json!({"commit": true})).unwrap_err(), CUSTOM_HINT, "OK");
     commit(&mut app);
     assert!(app.distort.caf.is_some(), "OK keeps the workspace open");
-    assert_eq!(ws(&app).error.as_deref(), Some(CUSTOM_HINT));
+    assert!(ws(&app).error.is_none() && ws(&app).awaiting_custom_area(), "the panel keeps the hint");
     assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
     // Painting again previews the fill.
     let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}, "waitPreview": true})).unwrap();
     assert!(d["previewHint"].is_null() && d["previewError"].is_null() && d["error"].is_null(), "{d}");
     assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
+}
+
+/// Apply and OK with nothing to sample in Custom leave the panel's hint as it is, in the hint's
+/// style, and the status bar says the same in the UI's language: not the English hint as an
+/// error, in the error colour, that replaces it in the panel (#10621). An earlier Apply's error
+/// gives way to the hint too.
+#[test]
+fn custom_apply_and_ok_with_nothing_painted_show_the_translated_hint_not_an_error() {
+    let ja = crate::i18n::Lang::from_code("ja").unwrap();
+    let hint = crate::i18n::tr(ja, CUSTOM_HINT);
+    assert_ne!(hint, CUSTOM_HINT, "the catalog translates the hint");
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    for ok in [false, true] {
+        app.distort.caf.as_mut().unwrap().error = Some("an earlier Apply's error".into());
+        crate::i18n::with_language(ja, || {
+            if ok {
+                commit(&mut app);
+            } else if let Err(e) = apply(&mut app) {
+                lifecycle::report(&mut app, e);
+            }
+        });
+        let what = if ok { "OK" } else { "Apply" };
+        assert!(app.distort.caf.is_some(), "{what} keeps the workspace open");
+        assert!(ws(&app).error.is_none() && ws(&app).awaiting_custom_area(), "{what}: the panel shows the hint");
+        assert_eq!(app.ui.status, hint, "{what}");
+        assert!(!app.ui.status_error, "{what}: not an error");
+    }
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
 }
 
 /// Picking Custom shows the image unfilled straight away, even while the preview of the
