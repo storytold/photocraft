@@ -879,7 +879,7 @@ fn build() -> Vec<CommandSpec> {
             "Adjustment Properties",
             [],
             None,
-            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only)"##,
+            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only; Hue/Saturation: "eyedropper":{"point":"sample|add|subtract","range":"reds…magentas","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = its colour range eyedroppers; not with Colorize on, in Grayscale, Duotone or Bitmap documents, or for a gray sample (RGB spread below 1/255))"##,
             has_layer,
             |s, p| {
                 let id = layer_param(s, p)?;
@@ -1139,7 +1139,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "hueSaturation",
             "Hue/Saturation…",
-            r##"{"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"colorize":bool=false,"reds":json,"yellows":json,"greens":json,"cyans":json,"blues":json,"magentas":json} (per range {"hue","saturation","lightness","range":[4 hue degrees]}; colorize: hue 0..360, saturation 0..100)"##,
+            r##"{"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"colorize":bool=false,"reds":json,"yellows":json,"greens":json,"cyans":json,"blues":json,"magentas":json,"eyedropper":json} (per range {"hue","saturation","lightness","range":[4 hue degrees]}; colorize: hue 0..360, saturation 0..100; eyedropper = the colour range eyedroppers {"point":"sample|add|subtract","range":"reds|yellows|greens|cyans|blues|magentas","at":[x,y],"size":1..101=1} or {…,"color":[r,g,b] 0..1}: sample centres the range on the colour's hue, add grows it out to it, subtract shrinks it to 15° past it; not with Colorize on, in Grayscale, Duotone or Bitmap documents, or for a gray sample (RGB spread below 1/255))"##,
         ),
         (
             "colorBalance",
@@ -1188,7 +1188,11 @@ fn build() -> Vec<CommandSpec> {
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
+                let eyedropped = if matches!(kind.as_str(), "levels" | "curves" | "hueSaturation") {
+                    crate::adjust_params::eyedropper_from_params(s, &kind, p)?
+                } else {
+                    None
+                };
                 let adj = match eyedropped {
                     Some(adj) => adj,
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
@@ -1214,7 +1218,11 @@ fn build() -> Vec<CommandSpec> {
             enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
+                let eyedropped = if matches!(kind.as_str(), "levels" | "curves" | "hueSaturation") {
+                    crate::adjust_params::eyedropper_from_params(s, &kind, p)?
+                } else {
+                    None
+                };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
                 // to, not the sample (#3127).
                 let recorded = eyedropped.as_ref().map(|adj| {

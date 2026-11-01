@@ -23,6 +23,9 @@ pub struct LayerPicker {
     pub layer: u64,
     pub point: String,
     pub tool: Tool,
+    /// Hue/Saturation: the colour range (`"reds"` …) the eyedropper edits (#9247).
+    #[serde(default)]
+    pub range: Option<String>,
 }
 
 const POINTS: [(&str, CurvesEyedropper); 3] = [("black", CurvesEyedropper::Black), ("gray", CurvesEyedropper::NeutralGray), ("white", CurvesEyedropper::White)];
@@ -37,13 +40,31 @@ pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, &str)> {
     let picker = app.ui.layer_picker.as_ref()?;
     let st = app.session.active()?;
     let layer = LayerId(picker.layer);
-    let tonal = st.doc.layer(layer).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::Levels { .. } | Adjustment::Curves { .. })));
-    let supported = eyedropper(&picker.point).is_some_and(|e| crate::adjust_dialog::picker_supported(st.doc.mode, e));
-    (picker.tool == app.ui.tool && st.active_layer == Some(layer) && tonal && supported).then_some((layer, picker.point.as_str()))
+    let supported = match st.doc.layer(layer).map(|l| &l.content) {
+        Some(LayerContent::Adjustment(Adjustment::Levels { .. } | Adjustment::Curves { .. })) => {
+            eyedropper(&picker.point).is_some_and(|e| crate::adjust_dialog::picker_supported(st.doc.mode, e))
+        }
+        Some(LayerContent::Adjustment(Adjustment::HueSaturation { colorize, .. })) => {
+            !colorize
+                && picker.range.is_some()
+                && crate::adjust_dialog::hue_picker(Some(&json!(picker.point))).is_some()
+                && !crate::adjust_editors::is_gray(st.doc.mode)
+        }
+        _ => false,
+    };
+    (picker.tool == app.ui.tool && st.active_layer == Some(layer) && supported).then_some((layer, picker.point.as_str()))
 }
 
 /// Drops a picker that no longer applies, so returning to its tool or layer doesn't re-arm it.
-pub fn prune(app: &mut PhotocraftApp) {
+/// A Hue/Saturation picker first takes the range Properties shows now: the selector writes it
+/// after the eyedroppers drew, and a floating Properties window draws after the canvas.
+pub fn prune(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let hue = app.ui.layer_picker.as_ref().map(|p| LayerId(p.layer)).filter(|&l| {
+        app.session.active().and_then(|s| s.doc.layer(l)).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::HueSaturation { .. })))
+    });
+    if let (Some(layer), Some(p)) = (hue, app.ui.layer_picker.as_mut()) {
+        p.range = crate::adjust_dialog::hue_range_shown(ctx, crate::adjust_editors::layer_mem(layer)).map(str::to_string);
+    }
     if app.ui.layer_picker.is_some() && armed(app).is_none() {
         app.ui.layer_picker = None;
     }
@@ -60,7 +81,11 @@ pub fn cancel(app: &mut PhotocraftApp) -> bool {
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some((layer, point)) = armed(app).map(|(l, p)| (l, p.to_string())) else { return false };
     let size = app.ui.tool_options.eyedropper_size;
-    let p = json!({"layer": layer.0, "eyedropper": {"point": point, "at": [x, y], "size": size}});
+    let mut e = json!({"point": point, "at": [x, y], "size": size});
+    if let Some(range) = app.ui.layer_picker.as_ref().and_then(|p| p.range.clone()) {
+        e["range"] = json!(range);
+    }
+    let p = json!({"layer": layer.0, "eyedropper": e});
     if let Err(err) = app.run("layer.setAdjustment", p) {
         app.ui.status = err;
         app.ui.status_error = true;
@@ -85,7 +110,41 @@ pub fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     });
     match clicked {
         Some((_, true)) => app.ui.layer_picker = None,
-        Some((id, false)) => app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: id.into(), tool: app.ui.tool }),
+        Some((id, false)) => app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: id.into(), tool: app.ui.tool, range: None }),
+        None => {}
+    }
+}
+
+/// Hue/Saturation's three eyedroppers (Sample, Add to, Subtract from a colour range) above the
+/// editor of adjustment layer `layer`, on while a colour range is shown, as in Photoshop (#9247).
+/// The armed picker follows the range shown.
+pub fn hue_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId, mem: egui::Id) {
+    let range = crate::adjust_dialog::hue_range_shown(ui.ctx(), mem);
+    let colorize = app
+        .session
+        .active()
+        .and_then(|s| s.doc.layer(layer))
+        .is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::HueSaturation { colorize: true, .. })));
+    let gray = app.session.active().is_some_and(|s| crate::adjust_editors::is_gray(s.doc.mode));
+    let enabled = range.is_some() && !colorize && !gray;
+    if let Some(p) = app.ui.layer_picker.as_mut().filter(|p| p.layer == layer.0) {
+        p.range = range.map(str::to_string);
+    }
+    let current = armed(app).filter(|(l, _)| *l == layer).map(|(_, p)| p.to_string());
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        for (id, _, label, badge) in crate::adjust_dialog::HUE_PICKERS {
+            let selected = current.as_deref() == Some(id);
+            if crate::adjust_dialog::hue_picker_button(ui, selected, enabled, tl!(label), badge).clicked() {
+                clicked = Some((id, selected));
+            }
+        }
+    });
+    match clicked {
+        Some((_, true)) => app.ui.layer_picker = None,
+        Some((id, false)) => {
+            app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: id.into(), tool: app.ui.tool, range: range.map(str::to_string) });
+        }
         None => {}
     }
 }

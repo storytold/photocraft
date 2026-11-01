@@ -122,6 +122,9 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     if matches!(kind, "levels" | "curves") {
         crate::layer_picker::controls(app, ui, id);
     }
+    if kind == "hueSaturation" {
+        crate::layer_picker::hue_controls(app, ui, id, layer_mem(id));
+    }
     let e = editor(ui, kind, &mut values, &cx);
     if e.import_gradients {
         crate::preset_files_ui::import_gradients_dialog(app);
