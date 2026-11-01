@@ -230,7 +230,8 @@ impl ContentAwareScalePreview {
     /// surface with its corner at the origin. Checks `ctx` for cancellation before every seam.
     pub fn run(&self, ctx: &crate::jobs::JobCtx) -> Result<Surface> {
         let CasPlan { doc, layer, region, dst: _, amount, protect, skin_tones } = &self.plan;
-        let surf = doc.layer(*layer).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(*layer))?;
+        let l = doc.layer(*layer).ok_or(EngineError::NoLayer(*layer))?;
+        let surf = l.surface().ok_or(EngineError::NoLayer(*layer))?;
         let fmt = surf.format();
         let n = fmt.channels();
         let (w, h) = (region.width(), region.height());
@@ -248,7 +249,9 @@ impl ContentAwareScalePreview {
             }
         }
         let protect = protect.as_ref().map(|m| (0..pw * ph).map(|i| m.sample_channel(src_x[i % pw], src_y(i / pw), 0)).collect());
-        let (out, _) = cas_pixels(ctx, "Content-Aware Scale", &img, (pw, ph), fmt, protect, *skin_tones, (pnw, pnh), *amount, None)?;
+        // The linked mask steers the seams of the commit, so it steers the preview's the same way.
+        let mask: Option<Vec<f32>> = linked_mask(l).map(|m| (0..pw * ph).map(|i| m.sample_channel(src_x[i % pw], src_y(i / pw), 0)).collect());
+        let (out, _) = cas_pixels(ctx, "Content-Aware Scale", &img, (pw, ph), fmt, protect, *skin_tones, (pnw, pnh), *amount, mask.as_deref())?;
         let mut s = Surface::new(fmt);
         s.write_region(Rect::from_xywh(0, 0, pnw as u32, pnh as u32), &out);
         Ok(s)
