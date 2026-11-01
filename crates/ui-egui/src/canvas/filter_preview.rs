@@ -96,7 +96,13 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 // Errors stay on the exact request: a value the pointer has already dragged past
                 // must not raise a notice, and a still one will raise it when it is recomputed.
                 Err(error) if finished == request => {
-                    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: finished, result: None, committing: false });
+                    app.filter_preview = Some(crate::filter_dialog::FilterPreview {
+                        key: finished,
+                        result: None,
+                        flat: None,
+                        uploaded: photocraft_geom::Rect::EMPTY,
+                        committing: false,
+                    });
                     crate::notices::error(app, error);
                 }
                 Err(_) => {}
@@ -127,7 +133,13 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 });
                 crate::dialogs::filter_preview_worker::Computed { result, ms: crate::gpu_canvas::now_ms() - t0 }
             }) {
-                app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request.clone(), result: None, committing: false });
+                app.filter_preview = Some(crate::filter_dialog::FilterPreview {
+                    key: request.clone(),
+                    result: None,
+                    flat: None,
+                    uploaded: photocraft_geom::Rect::EMPTY,
+                    committing: false,
+                });
                 crate::notices::error(app, error);
             }
         }
@@ -191,20 +203,127 @@ fn publish_filter_preview(
     computed: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
     ms: f64,
 ) {
-    let result = computed.and_then(|(result, buffer)| {
+    let mut uploaded = photocraft_geom::Rect::EMPTY;
+    let computed = computed.and_then(|(result, buffer)| {
         let t0 = crate::gpu_canvas::now_ms();
         let doc = app.session.documents().get(idx)?.doc.clone();
-        // Shown through the preview's own colour management, as the result will be: Assign and
-        // Convert to Profile change the profile (and Convert the mode), not just the pixels.
-        let (display, _) = canvas_display(app, &result, None);
         // A GPU texture is an optimisation: headless/CPU tests must still see the preview.
         if let Some(gpu) = app.gpu.as_ref() {
-            gpu.upload_buffer_full(request.doc.0 ^ (1u64 << 61), &texture_buffer(display.as_deref(), &buffer), doc.depth);
+            let key = request.doc.0 ^ (1u64 << 61);
+            // At 100 % the canvas uploads only what its view shows (`upload_filter_preview_view`):
+            // the whole result was converted and uploaded, every mip level, for every result.
+            // A proxy is already small and goes up whole.
+            if request.k > 1 || !gpu.reserve_buffer(key, [result.size.width, result.size.height], doc.depth) {
+                // Shown through the preview's own colour management, as the result will be: Assign
+                // and Convert to Profile change the profile (and Convert the mode), not the pixels.
+                let (display, _) = canvas_display(app, &result, None);
+                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), doc.depth);
+                uploaded = result.bounds();
+            }
         }
         app.perf.record("filter-preview", result.size.area(), ms, crate::gpu_canvas::now_ms() - t0);
-        Some(result)
+        Some((result, std::sync::Arc::new(buffer)))
     });
-    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, committing: false });
+    let (result, flat) = computed.unzip();
+    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, flat, uploaded, committing: false });
+}
+
+/// How far past the view a 100 % filter preview is uploaded, so a small pan needs nothing new.
+const FILTER_PREVIEW_MARGIN: i32 = 256;
+
+/// Upload the part of a 100 % filter preview that the view at `visible` (preview pixels) shows and
+/// isn't on the GPU texture yet: the view plus a margin at first, then only the strips a pan
+/// uncovers, cropped from the worker's composite (#5772).
+pub(crate) fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photocraft_geom::Rect) {
+    let Some(gpu) = app.gpu.clone() else { return };
+    let Some(p) = app.filter_preview.as_ref() else { return };
+    let Some(result) = p.result.clone() else { return };
+    if key != p.key.doc.0 ^ (1u64 << 61) {
+        return;
+    }
+    // A reduced preview goes up whole when it's published, and again when nothing is recorded:
+    // after Retry GPU built a new canvas (`gpu_status::retry_now` clears the record).
+    if p.key.k != 1 {
+        if p.uploaded.is_empty() {
+            let buffer = p.flat.clone().unwrap_or_else(|| std::sync::Arc::new(photocraft_compose::flatten(&result)));
+            let (display, _) = canvas_display(app, &result, None);
+            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), result.depth);
+            if let Some(p) = app.filter_preview.as_mut().filter(|_| whole) {
+                p.uploaded = result.bounds();
+            }
+        }
+        return;
+    }
+    let (flat, have) = (p.flat.clone(), p.uploaded);
+    // View › Pattern Preview draws copies of the texture around the document, from anywhere in
+    // it: all of it is uploaded, as `ensure_gpu` composites all of it.
+    let want = if app.ui.view.pattern_preview { result.bounds() } else { snap_out(visible.inflate(FILTER_PREVIEW_MARGIN), 64).intersect(&result.bounds()) };
+    if have.contains_rect(&want) {
+        return;
+    }
+    let t0 = crate::gpu_canvas::now_ms();
+    // A jump to a part that doesn't meet what is there uploads only the new part: the union would
+    // send the whole gap between them too. What was there stays on the texture, unrecorded.
+    let have = if have.intersect(&want).is_empty() { photocraft_geom::Rect::EMPTY } else { have };
+    let target = have.union(&want);
+    let (display, _) = canvas_display(app, &result, None);
+    let mut px = 0u64;
+    // A linear composite is sRGB-encoded for the texture (`texture_buffer`), so its part is copied
+    // out first; otherwise the texels are converted straight from the worker's composite.
+    let encodes = display.as_deref().is_some_and(|d| d.encode_srgb);
+    for part in missing_rects(target, have) {
+        let uploaded = match &flat {
+            Some(flat) if !encodes && flat.rect.contains_rect(&part) => gpu.upload_buffer_part(key, flat, part),
+            Some(flat) if flat.rect.contains_rect(&part) => {
+                gpu.upload_buffer_rect(key, &texture_buffer(display.as_deref(), &crate::filter_preview_ui::crop(flat, part)))
+            }
+            _ => gpu.upload_buffer_rect(key, &texture_buffer(display.as_deref(), &photocraft_compose::render(&result, part))),
+        };
+        if !uploaded {
+            // No texture to add to (the device was lost or the size changed): upload it whole.
+            // If that fails too (an unhealthy GPU), nothing is recorded, so a later frame tries again.
+            // The worker's composite when there is one: flattening again is a full CPU composite.
+            let buffer = flat.clone().unwrap_or_else(|| std::sync::Arc::new(photocraft_compose::flatten(&result)));
+            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), result.depth);
+            px = if whole { result.size.area() } else { 0 };
+            if let Some(p) = app.filter_preview.as_mut() {
+                p.uploaded = if whole { result.bounds() } else { photocraft_geom::Rect::EMPTY };
+            }
+            app.perf.record("filter-preview-view", px, 0.0, crate::gpu_canvas::now_ms() - t0);
+            return;
+        }
+        px += u64::from(part.width()) * u64::from(part.height());
+    }
+    if let Some(p) = app.filter_preview.as_mut() {
+        p.uploaded = target;
+    }
+    app.perf.record("filter-preview-view", px, 0.0, crate::gpu_canvas::now_ms() - t0);
+}
+
+/// `r` grown outwards to multiples of `step`.
+fn snap_out(r: photocraft_geom::Rect, step: i32) -> photocraft_geom::Rect {
+    let down = |v: i32| v.saturating_sub(v.rem_euclid(step));
+    let up = |v: i32| v.saturating_add((step - v.rem_euclid(step)) % step);
+    photocraft_geom::Rect::new(down(r.x0), down(r.y0), up(r.x1), up(r.y1))
+}
+
+/// The parts of `target` outside `have`, as at most four rectangles (all of `target` when they
+/// don't meet). `target` is expected to contain `have`.
+fn missing_rects(target: photocraft_geom::Rect, have: photocraft_geom::Rect) -> Vec<photocraft_geom::Rect> {
+    use photocraft_geom::Rect;
+    let have = have.intersect(&target);
+    if have.is_empty() {
+        return vec![target].into_iter().filter(|r| !r.is_empty()).collect();
+    }
+    [
+        Rect::new(target.x0, target.y0, target.x1, have.y0),
+        Rect::new(target.x0, have.y1, target.x1, target.y1),
+        Rect::new(target.x0, have.y0, have.x0, have.y1),
+        Rect::new(have.x1, have.y0, target.x1, have.y1),
+    ]
+    .into_iter()
+    .filter(|r| !r.is_empty())
+    .collect()
 }
 
 /// The document whose colour management the canvas texture under `key` is shown through: a filter
@@ -306,3 +425,7 @@ pub(super) fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize, zoom: f3
     }
     Some((k, key, [proxy.size.width, proxy.size.height]))
 }
+
+#[cfg(test)]
+#[path = "filter_preview_view_tests.rs"]
+mod view_tests;

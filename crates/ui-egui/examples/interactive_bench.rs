@@ -259,6 +259,61 @@ fn main() {
             ms(t)
         });
     }
+    // What a filter dialog's live preview costs after its command at k 1 (#5772): the canvas
+    // texels for a 1920×1080 view plus its 256 px margin (the whole result before phase 0, see the
+    // line printed below) and the preview window's texture, both cropped from the worker's composite.
+    {
+        let st = s.active().expect("doc");
+        let p = photocraft_ui_egui::filter_dialog::preview_document(&st.doc, st.active_layer, "filter.blur.gaussianBlur", &json!({"radius": 40.0}), 1)
+            .expect("preview");
+        let flat = photocraft_compose::flatten(&p);
+        let display = s.color.canvas_display_for(&p, None).ok();
+        // Clipped to the composite: a `--size` smaller than the view or the window puts them partly
+        // outside it.
+        let crop = |r: Rect| {
+            let r = r.intersect(&flat.rect);
+            let stride = flat.rect.width() as usize;
+            let (x0, cw) = ((r.x0 - flat.rect.x0) as usize, r.width() as usize);
+            let mut px = Vec::with_capacity(cw * r.height() as usize);
+            for y in r.y0..r.y1 {
+                px.extend_from_slice(&flat.px[(y - flat.rect.y0) as usize * stride + x0..][..cw]);
+            }
+            photocraft_compose::Buffer { rect: r, px }
+        };
+        let texels = |buf: &photocraft_compose::Buffer| {
+            let texture = match &display {
+                Some(d) => d.texture_buffer(buf),
+                None => std::borrow::Cow::Borrowed(buf),
+            };
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
+        };
+        // Converted straight from the composite, as the canvas does (a linear one is copied out and
+        // sRGB-encoded first).
+        b.time("filter preview canvas upload, k 1 (view, display + texels)", |_| {
+            let t = Instant::now();
+            let view = Rect::from_xywh(w as i32 / 2 - 960 - 256, h as i32 / 2 - 540 - 256, 1920 + 512, 1080 + 512).intersect(&flat.rect);
+            if display.as_deref().is_some_and(|d| d.encode_srgb) {
+                texels(&crop(view));
+            } else {
+                std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels_of_part(wgpu::TextureFormat::Rgba8Unorm, &flat, view));
+            }
+            ms(t)
+        });
+        // The window's texture holds its view plus half again on each side: 800×300 pixels for a
+        // 400×150 point window at 100 %.
+        b.time("filter preview window texture, k 1", |_| {
+            let t = Instant::now();
+            let cropped = crop(Rect::from_xywh(w as i32 / 2 - 400, h as i32 / 2 - 150, 800, 300));
+            std::hint::black_box(photocraft_ui_egui::canvas::display_image(display.as_deref(), &cropped));
+            ms(t)
+        });
+        let t = Instant::now();
+        texels(&flat);
+        println!("  (the whole-result texels the canvas no longer converts: {:.1} ms)", ms(t));
+        let t = Instant::now();
+        std::hint::black_box(photocraft_compose::flatten(&p));
+        println!("  (the flatten the window no longer repeats: {:.1} ms)", ms(t));
+    }
     // Image › Adjustments dialog preview, per settings change (#77). Before: the command re-run
     // on a downsampled proxy (plus its flatten for upload). After: the document with a temporary
     // clipped adjustment layer, recomposited over the target's area by the canvas compositor.
