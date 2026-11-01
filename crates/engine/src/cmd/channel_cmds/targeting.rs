@@ -116,8 +116,9 @@ fn edits_mask(id: &str) -> bool {
         // Copying a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.cut" | "edit.clear")
         || crate::fill_key_cmds::IDS.contains(&id)
-        // Liquify deforms a targeted mask (#10457).
+        // Liquify (#10457) and Puppet Warp deform a targeted mask.
         || id == crate::distort_cmds::LIQUIFY
+        || id == crate::distort_cmds::PUPPET
 }
 
 fn has_mask(s: &Session) -> std::result::Result<(), String> {

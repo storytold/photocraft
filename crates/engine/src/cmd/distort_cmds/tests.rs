@@ -694,3 +694,60 @@ fn camera_raw_naming_its_layer_is_admitted_by_that_layers_mask() {
         }
     }
 }
+
+/// The session's layer with a mask that reveals a 30×20 block at (20, 15).
+fn session_with_mask() -> Session {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s
+}
+
+fn active_mask(s: &Session) -> Surface {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.clone()
+}
+
+/// FredApps on #10469: Photoshop's Puppet Warp "works on image layers, layer masks, and vector
+/// masks" (Adobe's help), so with the layer mask named in its params it warps the mask, which
+/// stays a one-channel mask, and leaves the layer's pixels. A layer with no mask refuses the call
+/// up front, with no history step.
+#[test]
+fn puppet_warp_warps_a_targeted_mask_and_refuses_a_missing_one() {
+    let p = json!({"target": "mask", "pins": [{"src": [20, 20], "dst": [20, 20]}, {"src": [50, 30], "dst": [56, 34]}, {"src": [30, 35], "dst": [30, 35]}]});
+    let mut s = session_with_mask();
+    let (pixels, mask) = (active_surface(&s), active_mask(&s));
+    s.execute(PUPPET, p.clone()).unwrap();
+    let warped = active_mask(&s);
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+    assert_eq!(warped.format(), mask.format(), "the mask stays a one-channel mask");
+    let canvas = s.active().unwrap().doc.bounds();
+    assert_ne!(warped.read_region(canvas), mask.read_region(canvas), "the mask is warped");
+    // No mask: refused before it runs, and nothing is recorded.
+    let mut s = session(8);
+    let (pixels, steps) = (active_surface(&s), s.active().unwrap().history.entries().len());
+    assert!(!s.is_enabled_with(PUPPET, &p), "disabled on a layer without a mask");
+    let err = s.execute(PUPPET, p).unwrap_err();
+    assert!(matches!(&err, EngineError::Disabled(_, why) if why.contains("no layer mask")), "{err}");
+    assert_eq!(s.active().unwrap().history.entries().len(), steps, "no history step");
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+}
+
+/// FredApps on #10469: Adobe's help doesn't document Perspective Warp on a layer mask, so it keeps
+/// what it did before #10469 with a `"target"`: it warps the layer, and its linked mask with it,
+/// exactly as without one.
+#[test]
+fn perspective_warp_warps_the_layer_whatever_the_target() {
+    let quad = json!({"planes": [{"src": [[10, 10], [60, 10], [60, 40], [10, 40]], "dst": [[14, 10], [60, 12], [58, 40], [10, 38]]}]});
+    let mut targeted = quad.clone();
+    targeted["target"] = json!("mask");
+    let run = |p: &Value| {
+        let mut s = session_with_mask();
+        s.execute(PERSPECTIVE, p.clone()).unwrap();
+        (active_surface(&s), active_mask(&s))
+    };
+    let pixels = active_surface(&session_with_mask());
+    let (plain, mask) = run(&quad);
+    assert_ne!(plain, pixels, "the layer is warped");
+    assert!(run(&targeted) == (plain, mask), "a mask target changes nothing");
+}
