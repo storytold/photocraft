@@ -70,8 +70,10 @@ fn clouds_value(x: f32, y: f32, base: f32, seed: u32, period: (Option<f32>, Opti
 /// The period Clouds may repeat with along an axis of `size` pixels: the size itself when it is a
 /// power of two, as Photoshop's Clouds tile seamlessly at 256 × 256 but not at 300 × 200 (#8999).
 /// An octave only wraps when the axis holds a whole number of its lattice cells, and the noise
-/// scale follows the longer side, so in practice both sides must be powers of two: 256 × 300
-/// doesn't tile along x either (Photoshop's behaviour at mixed sizes is unmeasured).
+/// scale is a quarter of the longer side (16..512 px), so a power-of-two side tiles whenever it is
+/// the longer one and at least 16 px (512 × 300 tiles along x), but a shorter one only when that
+/// quarter divides it (256 × 1024 tiles both ways, 256 × 300 along neither). Photoshop's
+/// behaviour at mixed sizes is unmeasured.
 fn tile_period(size: u32) -> Option<f32> {
     (size >= 2 && size.is_power_of_two()).then_some(size as f32)
 }
@@ -375,6 +377,16 @@ mod clouds_tests {
         (seam, inside)
     }
 
+    /// [`jumps`] down the columns: across the seam from the last row to the first, and inside.
+    fn row_jumps(w: u32, h: u32) -> (f32, f32) {
+        let base = (w.max(h) as f32 / 4.0).clamp(16.0, 512.0);
+        let period = (tile_period(w), tile_period(h));
+        let v = |x: u32, y: u32| clouds_value(x as f32, y as f32, base, 7, period);
+        let seam = (0..w).map(|x| (v(x, h - 1) - v(x, 0)).abs()).sum::<f32>() / w as f32;
+        let inside = (0..w).map(|x| (v(x, h / 2) - v(x, h / 2 + 1)).abs()).sum::<f32>() / w as f32;
+        (seam, inside)
+    }
+
     /// #8999: like Photoshop's, Clouds on a 256 × 256 image tile: the last column runs on into
     /// the first as smoothly as neighbouring columns do (Filter › Other › Offset shows no seam).
     /// At 300 × 200 Photoshop's don't, and neither do these.
@@ -382,10 +394,34 @@ mod clouds_tests {
     fn clouds_tile_at_power_of_two_sizes() {
         let (seam, inside) = jumps(256, 256);
         assert!(seam < inside * 3.0 + 0.01, "seam {seam} vs {inside}");
+        let (seam, inside) = row_jumps(256, 256);
+        assert!(seam < inside * 3.0 + 0.01, "bottom row into the top: seam {seam} vs {inside}");
         let (seam, inside) = jumps(300, 200);
         assert!(seam > inside * 3.0, "300 × 200 doesn't tile: seam {seam} vs {inside}");
         assert_eq!(tile_period(256), Some(256.0));
         assert_eq!(tile_period(300), None);
         assert_eq!(tile_period(1), None);
+    }
+
+    /// Tiling only changes power-of-two sizes: at 300 × 200 the values are upstream's before
+    /// #8999 (computed with its `clouds_value`, seed 7).
+    #[test]
+    fn clouds_at_other_sizes_are_unchanged() {
+        let (w, h) = (300u32, 200u32);
+        let base = (w.max(h) as f32 / 4.0).clamp(16.0, 512.0);
+        let period = (tile_period(w), tile_period(h));
+        let before = [
+            (0u32, 0u32, 0.366_656_63f32),
+            (1, 0, 0.350_685_9),
+            (37, 11, 0.350_264_6),
+            (150, 100, 0.535_888_6),
+            (299, 0, 0.168_244_15),
+            (0, 199, 0.850_466_7),
+            (299, 199, 0.756_825_2),
+            (212, 157, 0.899_339_4),
+        ];
+        for (x, y, want) in before {
+            assert_eq!(clouds_value(x as f32, y as f32, base, 7, period), want, "({x}, {y})");
+        }
     }
 }
