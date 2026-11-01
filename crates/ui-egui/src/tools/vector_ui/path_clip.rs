@@ -63,10 +63,10 @@ fn view_center(app: &PhotocraftApp) -> Option<[f64; 2]> {
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     // A newer OS clipboard image supersedes a path clip, like any newer clip: refresh the import
     // first — its signature guard leaves an unchanged OS image (and the path clip) alone — and
-    // route only what is still the freshest clip. Only once the OS clipboard was seen (a
-    // signature baseline exists): an image of unknown age must not displace a known-fresh
-    // internal clip (the OS clipboard may have sat untouched since before the app started).
-    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() && app.os_clip_sig.is_some() {
+    // route only what is still the freshest clip. The copy/cut below calibrates the baseline,
+    // so both orderings hold: an older OS image never displaces a newly copied path, and an OS
+    // image copied afterwards still wins on Paste.
+    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
         let _ = app.import_os_clipboard();
     }
     // The intercept only takes the plain menu/shortcut form: explicit params address the
@@ -78,9 +78,14 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
             let params = live_selection(app)?;
             let cmd = if id == "edit.copy" { "path.copy" } else { "path.cut" };
             let r = app.run(cmd, params);
-            if r.is_ok() && cmd == "path.cut" {
-                // The indices addressed the path as it was; the cut changed it.
-                crate::direct_select::cancel_stale(app);
+            if r.is_ok() {
+                // The new path clip is known-fresh: baseline the OS clipboard against it (one
+                // read on this explicit action) so Paste can order the two clips.
+                app.calibrate_os_clipboard();
+                if cmd == "path.cut" {
+                    // The indices addressed the path as it was; the cut changed it.
+                    crate::direct_select::cancel_stale(app);
+                }
             }
             Some(r)
         }
@@ -235,9 +240,9 @@ mod tests {
         assert_eq!(shape(&app).1.path.subpaths.len(), 2, "the shape is untouched");
     }
 
-    /// Paste precedence, one clipboard: an unchanged OS clipboard leaves the path paste alone;
-    /// a newer OS image supersedes the path clip and ⌘V pastes the pixels. An OS image that was
-    /// never seen (no signature baseline) never displaces a known-fresh internal clip.
+    /// Paste precedence, one clipboard, both orderings: the path copy calibrates the OS baseline,
+    /// so an unchanged or older OS image never displaces a known-fresh path clip, while a
+    /// genuinely newer OS image still wins. An empty OS clipboard at copy time is a baseline too.
     #[test]
     fn paste_prefers_a_newer_os_image() {
         let os = std::sync::Arc::new(std::sync::Mutex::new(None::<(u32, u32, Vec<u8>)>));
@@ -246,24 +251,37 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
         app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [15, 5], [15, 15], [5, 15]]}]}})).unwrap();
+        let pixel_layer = |app: &PhotocraftApp| {
+            let st = app.session.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            l.surface().map(|s| s.content_bounds().width())
+        };
 
-        // The OS clipboard holds an image the app has never seen (no baseline): the known-fresh
-        // path clip wins over content of unknown age.
+        // Ordering 1 — the OS image predates the path copy: it cannot displace the clip.
         *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
         app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        // The Edit intercept calibrates the OS baseline on Copy; this test drives the engine
+        // command directly, so it calibrates the same way here (and below).
+        app.calibrate_os_clipboard();
         app.run("edit.paste", json!({})).unwrap();
-        assert!(saved(&app, "Pasted Path").is_some(), "the path clip pasted, the unseen OS image did not displace it");
-        // Establish the baseline (the app sees OS image A)…
-        assert!(app.import_os_clipboard().unwrap());
-        // …then a path copy, then a genuinely newer OS image B: ⌘V pastes the pixels.
-        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        assert!(saved(&app, "Pasted Path").is_some(), "the older OS image did not displace the path clip");
+        assert!(app.session.clipboard.is_none(), "and it was not installed as a pixel clip");
+        // Ordering 2 — a newer OS image supersedes the clip: ⌘V pastes the pixels.
         *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
         app.run("edit.paste", json!({})).unwrap();
         assert!(app.session.path_clipboard.is_none(), "the newer OS image replaced the path clip");
-        assert_eq!(saved(&app, "Pasted Path").unwrap().subpaths.len(), 1, "no second Pasted Path");
-        let st = app.session.active().unwrap();
-        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
-        assert_eq!(l.surface().map(|s| s.content_bounds().width()), Some(2), "the OS image pasted as a new layer");
+        assert_eq!(pixel_layer(&app), Some(2), "the OS image pasted as a new layer");
+        // Ordering 3 — empty OS clipboard at copy time: the sentinel baseline lets an image
+        // copied afterwards still win.
+        *os.lock().unwrap() = None;
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        app.calibrate_os_clipboard();
+        app.run("edit.paste", json!({})).unwrap();
+        assert!(app.session.clipboard.is_none() && app.session.path_clipboard.is_some(), "the empty baseline kept the path paste");
+        *os.lock().unwrap() = Some((2, 2, [0u8, 0, 255, 255].repeat(4)));
+        app.run("edit.paste", json!({})).unwrap();
+        assert!(app.session.path_clipboard.is_none(), "the image copied after the empty baseline won");
+        assert_eq!(pixel_layer(&app), Some(2));
         drop(a);
     }
 

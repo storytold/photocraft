@@ -11,6 +11,11 @@ pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     sig
 }
 
+/// Freshness-baseline sentinel for an observed-empty OS clipboard: remembering it lets a later
+/// Paste tell an image copied *after* that observation from the empty state. A real image
+/// signature collides with it with probability 2^-64.
+const OS_EMPTY: u64 = u64::MAX;
+
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     pub(super) fn export_os_clipboard(&mut self) {
@@ -29,6 +34,22 @@ impl PhotocraftApp {
         if set(b.width(), b.height(), &bytes).is_ok() {
             self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
             self.clip_unmirrored = false;
+        }
+    }
+
+    /// Record the OS clipboard's current signature without importing it: the freshness baseline
+    /// a later Paste compares against, so an unchanged or older OS image never displaces a
+    /// known-fresh internal clip while a genuinely newer one still wins. An empty OS clipboard
+    /// is remembered as a sentinel too. Runs on explicit clipboard actions only (Copy, Cut,
+    /// Paste), never in the background.
+    pub(crate) fn calibrate_os_clipboard(&mut self) {
+        let Some(get) = self.services.clipboard_get_image.as_mut() else { return };
+        match get() {
+            Ok(Some((w, h, bytes))) if w > 0 && h > 0 && bytes.len() == w as usize * h as usize * 4 => {
+                self.os_clip_sig = Some(clip_signature(w, h, &bytes));
+            }
+            Ok(_) => self.os_clip_sig = Some(OS_EMPTY),
+            Err(_) => {}
         }
     }
 
@@ -66,6 +87,11 @@ impl PhotocraftApp {
                 self.session.clipboard = None;
                 self.clip_external = false;
                 self.clip_unmirrored = true;
+            }
+            // While a path clip holds, keep the freshness baseline: an empty OS clipboard
+            // observed once is the baseline, so an image copied later still reads as newer.
+            if self.session.path_clipboard.is_some() {
+                self.os_clip_sig = Some(OS_EMPTY);
             }
             return Ok(false);
         };
