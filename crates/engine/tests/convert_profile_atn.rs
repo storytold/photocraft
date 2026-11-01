@@ -79,6 +79,10 @@ fn absolute_and_unknown_intents_remain_distinct_with_conversion_flags() {
             assert_eq!(played["ran"], 1);
             assert!(played.get("failed").is_none(), "{played}");
             assert_eq!(rendered(&s), rendered(&absolute));
+            // Half media white scales linear 128/255 to 64/255, about 137/255 in sRGB.
+            // Check the cached pixel before opacity so a shared intent swap cannot pass.
+            let pixel = s.active().unwrap().doc.layers[1].surface().unwrap().default_pixel();
+            assert!(pixel[..3].iter().all(|value| (value - 137.0 / 255.0).abs() <= 1.0 / 255.0), "{pixel:?}");
         }
     }
 }
