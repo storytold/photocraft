@@ -234,6 +234,45 @@ fn provider_ack_does_not_discard_an_uncommitted_preview_or_its_later_commit() {
 }
 
 #[test]
+fn provider_ack_waits_for_live_gradient_edit_without_pointer_or_dialog() {
+    for commit in [false, true] {
+        let ctx = egui::Context::default();
+        let (mut app, provider, _) = app(true);
+        app.run("layer.new.layer", json!({})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+        let request = resolve_save(&mut app, &provider, &ctx);
+        let captured = app.session.active().unwrap().revision;
+        app.ui.tool = crate::state::Tool::Gradient;
+        app.ui.tool_options.gradient_classic = false;
+        assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, egui::Modifiers::NONE,));
+        assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE,));
+        assert!(crate::gradient_ui::editing(&app));
+        assert_eq!(app.session.active().unwrap().revision, captured, "the live gradient is only a preview");
+        assert!(!ctx.input(|input| input.pointer.any_down()));
+        assert!(app.ui.dialogs.is_empty());
+        provider.result(request, "saved".into(), "resource-one".into()).unwrap();
+        file_providers::tick(&mut app, &ctx);
+        crate::discard_ui::finish_provider_save(&mut app, &ctx);
+        assert_eq!(app.session.documents().len(), 1, "the ACK must wait for the uncommitted gradient");
+        assert!(app.has_unsaved_work());
+        if commit {
+            assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE));
+            assert!(!crate::gradient_ui::editing(&app));
+            assert_ne!(app.session.active().unwrap().revision, captured);
+            crate::discard_ui::finish_provider_save(&mut app, &ctx);
+            assert!(app.session.active().unwrap().is_dirty());
+            assert!(crate::discard_ui::inspect(&app).is_some());
+        } else {
+            app.gradient = Default::default();
+            crate::discard_ui::finish_provider_save(&mut app, &ctx);
+            assert!(app.session.documents().is_empty(), "cancelling the preview leaves the acknowledged capture unchanged");
+            assert!(!app.has_unsaved_work());
+        }
+    }
+}
+
+#[test]
 fn a_deferred_provider_close_cannot_cross_an_account_connection() {
     let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);

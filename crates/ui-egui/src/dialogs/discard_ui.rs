@@ -344,6 +344,7 @@ fn provider_ui_work(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> boo
                 || app.drag.is_some()
                 || app.live_stroke.is_some()
                 || app.live_adjust.is_some()
+                || crate::gradient_ui::editing(app)
                 || crate::crop_ui::pending(app)
                 || crate::perspective_crop_ui::pending(app)
                 || app.smart_svg.modal_open()))
