@@ -207,10 +207,16 @@ fn warp_layer(
         LayerContent::Shape(sh) => crate::vector_cmds::map_shape(sh, None, Some(w))?,
         LayerContent::Smart(sm) => {
             // Store in source space: undo the placement (affine, or Distort / Perspective) around the warp.
-            let inv = crate::smart_cmds::placement(sm).inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
+            let place = crate::smart_cmds::placement(sm);
+            let inv = place.inverse().ok_or_else(|| EngineError::Other("the smart object's transform is degenerate".into()))?;
             let corners =
                 [[w.bounds[0], w.bounds[1]], [w.bounds[2], w.bounds[1]], [w.bounds[2], w.bounds[3]], [w.bounds[0], w.bounds[3]]].map(|p| hom_apply(&inv, p));
             let sb = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            // Whether the warp box maps onto the axis-aligned box `sb` corner for corner: then
+            // `sb` is the box the warp is stored over. A rotated, flipped or distorted placement isn't.
+            let tol = 1e-6 * (1.0 + sb.iter().fold(0.0f64, |a, v| a.max(v.abs())));
+            let box_corners = [[sb[0], sb[1]], [sb[2], sb[1]], [sb[2], sb[3]], [sb[0], sb[3]]];
+            let upright = corners.iter().zip(box_corners).all(|(c, e)| (c[0] - e[0]).abs() <= tol && (c[1] - e[1]).abs() <= tol);
             let src_warp = match w.style {
                 WarpStyle::None => None,
                 WarpStyle::Custom => {
@@ -218,9 +224,11 @@ fn warp_layer(
                     // A `mesh` parameter's knots span the contents, not the warp box's image (#4113).
                     match frames.and_then(|f| f.get(&l.id)).and_then(|&c| content_frame_warp(&mesh, c, sb)) {
                         Some(cw) => Some(cw),
+                        None if !upright => Some(placed_warp(w, &place, &inv, sb).unwrap_or_else(|| Warp::custom(mesh, sb))),
                         None => Some(Warp::custom(mesh, sb)),
                     }
                 }
+                WarpStyle::Cylinder if !upright => placed_warp(w, &place, &inv, sb).or_else(|| cylinder_in_source(w, &inv, sb)),
                 WarpStyle::Cylinder => cylinder_in_source(w, &inv, sb),
                 _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
             };
@@ -355,6 +363,51 @@ fn content_frame_warp(mesh: &BezierMesh, c: [f64; 4], b: [f64; 4]) -> Option<War
     let rows = pad(&rows, top, bottom)?;
     let m = BezierMesh { us, vs, points: rows.into_iter().flatten().collect() };
     m.is_valid().then(|| Warp::custom(m, t))
+}
+
+/// The stored warp of a smart object whose placement `place` (inverse `inv`) is rotated or
+/// distorted: a mesh over the source box `sb` that sends each source point where the document
+/// warp `w` sends the point it is placed at, expressed back in source space. Storing the mesh over
+/// the bounding box of the skewed warp box instead would cancel the placement (#10325).
+fn placed_warp(w: &Warp, place: &Homography, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
+    let (m, b) = (w.to_mesh(1, 1), w.bounds);
+    let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
+    if !(bw > 0.0 && bh > 0.0) {
+        return None;
+    }
+    let f = |u: f64, v: f64| {
+        let p = hom_apply(place, [sb[0] + u * (sb[2] - sb[0]), sb[1] + v * (sb[3] - sb[1])]);
+        hom_apply(inv, eval_extended(&m, (p[0] - b[0]) / bw, (p[1] - b[1]) / bh))
+    };
+    // At least as many patches as the warp's own mesh.
+    let n = m.us.len().max(m.vs.len()).saturating_sub(1).clamp(4, 64);
+    let knots: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
+    let mesh = BezierMesh::fit(&f, knots.clone(), knots);
+    mesh.is_valid().then(|| Warp::custom(mesh, sb))
+}
+
+/// `m` at normalised `(s, t)` as [`BezierMesh::eval`], but past `0..=1` the edge patch's
+/// polynomial goes on instead of clamping: [`placed_warp`]'s patches straddle the warp box's edge,
+/// and a clamped map has a kink there that the fit would spread into the contents.
+fn eval_extended(m: &BezierMesh, s: f64, t: f64) -> [f64; 2] {
+    let local = |k: &[f64], s: f64| -> Option<(usize, f64)> {
+        let last = k.len().checked_sub(2)?;
+        let i = k.get(1..=last)?.partition_point(|&x| x < s);
+        let (k0, k1) = (*k.get(i)?, *k.get(i + 1)?);
+        if k1 > k0 { Some((i, (s - k0) / (k1 - k0))) } else { None }
+    };
+    let (Some((pi, a)), Some((pj, b))) = (local(&m.us, s), local(&m.vs, t)) else { return m.eval(s, t) };
+    let bern = |a: f64| [(1.0 - a).powi(3), 3.0 * a * (1.0 - a).powi(2), 3.0 * a * a * (1.0 - a), a.powi(3)];
+    let (ba, bb) = (bern(a), bern(b));
+    let mut out = [0.0; 2];
+    for (j, wb) in bb.iter().enumerate() {
+        for (i, wa) in ba.iter().enumerate() {
+            let p = m.point(3 * pi + i, 3 * pj + j);
+            out[0] += wa * wb * p[0];
+            out[1] += wa * wb * p[1];
+        }
+    }
+    out
 }
 
 /// Largest warp frame side: far above any real layer, far below what would exhaust memory.
