@@ -475,6 +475,49 @@ fn windows_held_ancestors_cannot_be_swapped_during_directory_creation() {
     }
 }
 
+/// The rules that do not depend on the root hold below a UNC root too (#10317): `..` is refused
+/// in a request and climbs no further than the root in the configured spelling, a directory at
+/// the target is refused before it is opened and survives, and a path past `MAX_PATH` works,
+/// since the canonical root is verbatim (`\\?\UNC\...`) and every step below it goes through a
+/// handle or that verbatim root path.
+#[cfg(windows)]
+#[test]
+fn windows_unc_root_refuses_traversal_and_accepts_long_paths_when_supported() {
+    let (inside, outside, _) = roots("unc-rules");
+    let Some(unc) = loopback_unc(&inside) else { return };
+    if std::fs::metadata(&unc).is_err() {
+        return;
+    }
+    let workspace = AuthorizedWorkspace::new(Some(&unc), Some(&unc)).unwrap();
+
+    for path in ["../escape.png", "sub/../../escape.png", r"sub\..\..\escape.png", r"..\frames"] {
+        assert!(workspace.write(path, b"no").is_err(), "write accepted {path:?}");
+        assert!(workspace.export_sequence(path).is_err(), "export accepted {path:?}");
+    }
+    let spelled = unc.join("..").join("inside");
+    let aliased = AuthorizedWorkspace::new(Some(&spelled), Some(&spelled)).unwrap();
+    aliased.write("spelled.png", b"same grant").unwrap();
+    assert_eq!(std::fs::read(inside.join("spelled.png")).unwrap(), b"same grant");
+    assert!(aliased.write(&spelled.join("..").join("outside").join("climb.png").to_string_lossy(), b"no").is_err());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+
+    std::fs::create_dir(inside.join("adir")).unwrap();
+    assert!(workspace.write("adir", b"x").is_err());
+    assert!(inside.join("adir").is_dir());
+    assert!(temp_files(&inside).is_empty());
+
+    let long = format!("frames/{}/{}", "x".repeat(120), "y".repeat(120));
+    assert!(unc.join(&long).as_os_str().len() > 260);
+    let mut export = workspace.export_sequence(&long).unwrap();
+    export.write("clip_0000.png", b"deep").unwrap();
+    export.commit();
+    drop(export);
+    assert_eq!(std::fs::read(inside.join(&long).join("clip_0000.png")).unwrap(), b"deep");
+    workspace.write(&format!("{long}/saved.png"), b"long save").unwrap();
+    assert_eq!(std::fs::read(inside.join(&long).join("saved.png")).unwrap(), b"long save");
+    assert!(temp_files(&inside.join(&long)).is_empty());
+}
+
 /// `\\localhost\C$\...` for a path on drive `C:`; `None` for a path without a drive letter.
 #[cfg(windows)]
 fn loopback_unc(path: &Path) -> Option<PathBuf> {
