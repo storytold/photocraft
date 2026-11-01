@@ -1667,3 +1667,37 @@ fn copy_merged_uses_the_true_middle_of_the_area() {
     assert_eq!((clip.bounds.x0, clip.bounds.x1), (9, 11));
     assert_eq!(clip.board.map(|x| x.0), Some(right), "the middle, x = 10, is on R");
 }
+
+/// With a locked board itself selected, a paste goes above the board rather than into it, so it
+/// isn't moved to the board's spot either (#10538 review): it keeps the usual paste placement.
+#[test]
+fn paste_with_a_locked_artboard_selected_is_not_moved_onto_it() {
+    let (mut s, red, _a, b) = two_boards();
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["offset"], json!([0, 0]), "not moved by the boards' offset");
+    assert_eq!(board_of_active(&s), None, "above the locked board, not in it");
+}
+
+/// A merged clip whose middle is on its source board lands inside the destination board after
+/// the shift too: both use the true middle of the area (#10538 review). Boards R (10..20) and D
+/// (30..40); the clip spans 9..11 (middle 10, on R) and moves by 20 to 29..31 (middle 30, on D).
+#[test]
+fn a_shifted_merged_clip_is_placed_inside_the_destination_board() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 50, "height": 20})).unwrap();
+    s.execute("layer.new.artboard", json!({"rect": [0, 0, 10, 20], "name": "L"})).unwrap();
+    let r = s.execute("layer.new.artboard", json!({"rect": [10, 0, 10, 20], "name": "R"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let d = s.execute("layer.new.artboard", json!({"rect": [30, 0, 10, 20], "name": "D"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("select.rect", json!({"x": 9, "y": 5, "width": 2, "height": 2})).unwrap();
+    s.execute("edit.copyMerged", json!({})).unwrap();
+    assert_eq!(s.clipboard.as_ref().unwrap().board.map(|x| x.0), Some(r));
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": d.0})).unwrap();
+    let out = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(out["offset"], json!([20, 0]));
+    assert_eq!(board_of_active(&s), Some(d), "inside board D");
+}

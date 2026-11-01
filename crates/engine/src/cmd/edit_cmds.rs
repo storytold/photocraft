@@ -350,8 +350,18 @@ pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, 
         return None;
     }
     let (from, src) = clip.board?;
-    let to = doc.artboard_of(active?)?;
+    let active = active?;
+    let to = doc.artboard_of(active)?;
     if to == from {
+        return None;
+    }
+    // Pasted with a locked board itself selected, the layer goes above the board, not into it
+    // (`layer_place`'s rule for layers edited right after they are made), so it keeps its usual
+    // place instead of one on a board it isn't on. A layer inside a locked board is placed by its
+    // own rules and still lands on the board.
+    let board = doc.layer(to)?;
+    let k = board.locks;
+    if active == to && (k.all || k.pixels || k.transparency || k.position) {
         return None;
     }
     let dst = doc.layer(to)?.artboard()?.rect;

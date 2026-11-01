@@ -83,8 +83,10 @@ fn takes_new_layers(target: &Layer, depth: usize, layer: &Layer) -> bool {
     let LayerContent::Group(g) = &target.content else { return false };
     let on_board = |rect: photocraft_geom::Rect| {
         crate::layer_multi_cmds::layer_bounds(layer).is_none_or(|b| {
-            let (cx, cy) = (b.x0 / 2 + b.x1 / 2, b.y0 / 2 + b.y1 / 2);
-            rect.contains(cx, cy)
+            // The true middle, edges added before halving: halving each first rounds 19..21 to
+            // 19, and a paste moved onto a board starting at 20 was turned away from it (#10538).
+            let mid = |a: i32, b: i32| i32::try_from((i64::from(a) + i64::from(b)) / 2).unwrap_or(a);
+            rect.contains(mid(b.x0, b.x1), mid(b.y0, b.y1))
         })
     };
     let open = match &g.artboard {
