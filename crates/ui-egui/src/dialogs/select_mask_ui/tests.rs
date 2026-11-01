@@ -1137,3 +1137,34 @@ fn select_and_mask_ants_march_rather_than_blink() {
     assert!(shifted * 10 < n, "the dashes shift by {shift} px: {shifted} of {n} pixels don't");
     assert!(inverted * 10 < n * 9, "black and white don't swap: {inverted} of {n} pixels changed");
 }
+
+/// #10506: at 100 % and 200 % the dialog's ants are the canvas's ants at the frame's time: every
+/// pixel of the top edge's band is black exactly where `ants::Style::new(ppp, time)` puts a dash.
+/// The dialog reads the same frame clock as the canvas, so the pattern doesn't restart when it
+/// opens; and it is fixed to the screen, so the two line up.
+#[test]
+fn select_and_mask_ants_have_the_canvas_phase() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for ppp in [1.0f32, 2.0] {
+        // 0.37 s steps, so the march has a phase that isn't zero or a whole dash.
+        let Some(mut h) = ants_harness(ppp, 0.37) else { return };
+        let img = frame(&mut h);
+        let time = h.ctx.input(|i| i.time);
+        let (phase, period) = crate::ants::Style::new(ppp, time).march();
+        let (dash, w) = (period / 2, period / 8);
+        assert_eq!(w, ppp.ceil() as i64);
+        assert!(phase % dash != 0, "@{ppp}x: phase {phase} at {time} s");
+        let ((x0, ay), (x1, _)) = (device(&h, ppp, [100.0, 80.0]), device(&h, ppp, [300.0, 80.0]));
+        let mut wrong = Vec::new();
+        for y in ay - w / 2..ay - w / 2 + w {
+            for x in x0 + 12..x1 - 12 {
+                let black = (x + w * y + phase).rem_euclid(period) < dash;
+                let l = img.luma(x, y).unwrap_or(128);
+                if (l < 64) != black || (24..232).contains(&l) {
+                    wrong.push((x, y, l));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "@{ppp}x phase {phase}: {} pixels differ from the canvas's ants, first {:?}", wrong.len(), wrong.first());
+    }
+}
