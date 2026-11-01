@@ -4445,3 +4445,9 @@ navigator	Zoom	תקריב
 	Source:	מקור:
 	Uncached Refresh	רענון לא ממוטמן
 	Update and Restart	עדכן והפעל מחדש
+
+# Color picker, gradient map and font list strings added on main
+	No matching fonts	אין גופנים תואמים
+	Recently Used Colors	צבעים שנעשה בהם שימוש לאחרונה
+	Shapes can't use patterns yet	צורות עדיין לא יכולות להשתמש בתבניות
+	Stop Color	צבע נקודת עצירה
