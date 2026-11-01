@@ -116,7 +116,7 @@ fn group_f_unsupported_settings_are_not_silently_replaced() {
     }
     for key in ["Top ", "Left", "Btom", "Rght"] {
         let mut d = rectangle([1.0, 2.0, 3.0, 4.0], false);
-        let D::Descriptor(shape) = &mut d.items[1].1 else { unreachable!() };
+        let D::Descriptor(shape) = &mut d.items[1].1 else { panic!("rectangle fixture must contain a shape") };
         shape.items.push((code(key), px(9.0)));
         cases.push((*b"AddT", d));
     }
