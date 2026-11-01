@@ -21,7 +21,11 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 
 /// [`import_flat`] with the caller's PSD pixel allowance, which a layered TIFF is held to.
 pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
-    import_flat_with_limit_and_interrupt(name, bytes, pixel_limit, &Interrupt::NONE)
+    if pixel_limit == crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES {
+        import_flat_with(name, bytes, &Interrupt::NONE)
+    } else {
+        import_flat_with_limit_and_interrupt(name, bytes, pixel_limit, &Interrupt::NONE)
+    }
 }
 
 pub fn import_flat_with(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<ImportResult, IoError> {
