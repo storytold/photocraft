@@ -161,6 +161,12 @@ fn paint_sv_square(painter: &egui::Painter, r: Rect, hue: f32) {
     painter.add(mesh);
 }
 
+/// `at` pulled in so a `size`-sized HUD stays whole on `screen`. The clamp is symmetric in x,
+/// so the pointer-anchored HUD lands in the same place in both directions.
+fn clamped_pos(at: egui::Pos2, size: egui::Vec2, screen: egui::Rect) -> egui::Pos2 {
+    egui::pos2(at.x.min(screen.right() - size.x).max(screen.left()), at.y.min(screen.bottom() - size.y).max(screen.top()))
+}
+
 /// Draw the HUD and track the pointer: called once per frame while a gesture is open.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(mut hud) = app.ui.color_hud else { return };
@@ -189,7 +195,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let size = Vec2::from(SIZE) + m.sum() + egui::Vec2::splat(2.0 * stroke);
     let start = rgb_to_hsb([hud.start[0], hud.start[1], hud.start[2]]);
     let at = egui::pos2(hud.anchor[0], hud.anchor[1]) - colour_offset(start) - vec2(f32::from(m.left) + stroke, f32::from(m.top) + stroke);
-    let pos = egui::pos2(at.x.min(screen.right() - size.x).max(screen.left()), at.y.min(screen.bottom() - size.y).max(screen.top()));
+    let pos = clamped_pos(at, size, screen);
     let area = egui::Area::new(hud_id()).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
             .show(ui, |ui| {
@@ -533,5 +539,26 @@ mod tests {
         assert_eq!(pick_at([0.0, 0.5, 0.5], strip, square, strip.center()), Some([180.0, 0.5, 0.5]));
         assert_eq!(pick_at([0.0, 0.5, 0.5], strip, square, Pos2::new(SQUARE + GAP / 2.0, 10.0)), None, "the gap picks nothing");
         assert_eq!(pick_at([0.0, 0.5, 0.5], strip, square, Pos2::new(1e9, -1e9)), None);
+    }
+
+    /// The pointer-anchored HUD's clamp keeps it whole on screen in both directions, and lands
+    /// it in the same place in both (the follower is physical, not mirrored).
+    #[test]
+    fn hud_clamp_stays_on_screen_in_both_directions() {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0));
+        let size = Vec2::from(SIZE) + vec2(8.0, 8.0);
+        let spots = [Pos2::new(600.0, 400.0), Pos2::new(1195.0, 795.0), Pos2::new(2.0, 1.0), Pos2::new(-50.0, -50.0)];
+        let mut ltr: Vec<Pos2> = Vec::new();
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _g = crate::direction::direction_scope(dir);
+            let mut pos_all = Vec::new();
+            for at in spots {
+                let pos = clamped_pos(at, size, screen);
+                let r = Rect::from_min_size(pos, size);
+                assert!(screen.contains_rect(r), "{dir:?}: {r:?} at {at:?} stays inside {screen:?}");
+                pos_all.push(pos);
+            }
+            if dir == crate::direction::Dir::Ltr { ltr = pos_all } else { assert_eq!(ltr, pos_all, "the clamp is direction-independent") }
+        }
     }
 }
