@@ -223,20 +223,27 @@ struct Footage {
     /// The frame rate the footage itself implies (a single animated GIF's or WebP's delays); `None` for
     /// stills and sequences, which carry none.
     fps: Option<f32>,
+    /// How long each frame shows, in milliseconds (a single animated GIF's or WebP's delays, as
+    /// shown); empty for stills and sequences.
+    delays_ms: Vec<u32>,
+}
+
+/// A GIF or WebP frame delay as browsers show it: under 20 ms, which includes the 0 and 10 ms many
+/// encoders write, is 100 ms, since it would otherwise play at an unintended 50-100 fps.
+fn shown_delay(ms: u32) -> u32 {
+    if ms < 20 { 100 } else { ms }
 }
 
 /// The frame rate for a GIF's frame delays (milliseconds): that of the most common delay, the
-/// first one seen on a tie. GIF has a delay per frame but the timeline one rate. Delays under
-/// 20 ms, which includes the 0 and 10 ms many encoders write, are shown at 100 ms, as browsers
-/// do, since they would otherwise play at an unintended 50-100 fps.
+/// first one seen on a tie. The timeline keeps each frame's own delay too; the rate is for the
+/// frames without one (added later, or past the GIF's end).
 fn fps_from_delays(delays: &[u32]) -> Option<f32> {
-    let clean = |d: u32| if d < 20 { 100 } else { d };
-    // Count delays with a map keyed on the cleaned delay, recording first-seen order
+    // Count delays with a map keyed on the shown delay, recording first-seen order
     // separately. A linear scan per frame (iter_mut().find) was O(n^2) for a GIF with many
     // distinct delays. order[] preserves the tie-break: the earliest-seen delay wins.
     let mut counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     let mut order: Vec<u32> = Vec::new();
-    for d in delays.iter().copied().map(clean) {
+    for d in delays.iter().copied().map(shown_delay) {
         let n = counts.entry(d).or_insert_with(|| {
             order.push(d);
             0
@@ -362,8 +369,8 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
             .map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
     }
     // Only a lone GIF or WebP says how fast it plays; a sequence mixing files has no single rate.
-    let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
-    Ok(Footage { frames, fps })
+    let (fps, delays_ms) = if files.len() == 1 { (fps_from_delays(&delays), delays.into_iter().map(shown_delay).collect()) } else { (None, Vec::new()) };
+    Ok(Footage { frames, fps, delays_ms })
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
@@ -373,14 +380,20 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.newVideoLayerFromFile".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let Footage { frames, fps: footage_fps } = load_frames(&path, fmt)?;
+    let Footage { frames, fps: footage_fps, delays_ms } = load_frames(&path, fmt)?;
     // An explicit `fps` wins, then the rate the footage implies, then 30.
-    let fps = crate::timeline_cmds::fps_param("layer.videoLayers.newVideoLayerFromFile", p)?.or(footage_fps).unwrap_or(30.0);
+    let explicit = crate::timeline_cmds::fps_param("layer.videoLayers.newVideoLayerFromFile", p)?;
+    let fps = explicit.or(footage_fps).unwrap_or(30.0);
+    // A GIF's or WebP's own delays time the timeline it creates, unless a rate was asked for. An existing
+    // timeline keeps its timing.
+    let delays_ms = if explicit.is_some() { Vec::new() } else { delays_ms };
     let n = frames.len();
     let id = s.edit("New Video Layer from File", |doc, active| {
         store(doc);
         if doc.timeline.is_none() {
-            doc.timeline = Some(Timeline::new(n, fps));
+            let mut t = Timeline::new(n, fps);
+            t.delays_ms = std::sync::Arc::new(delays_ms);
+            doc.timeline = Some(t);
         } else if let Some(t) = &mut doc.timeline {
             grow_duration(t, n);
         }
@@ -525,9 +538,6 @@ pub fn render_video_with(
     if frames > crate::timeline_cmds::MAX_DURATION {
         return Err(EngineError::Other(format!("the timeline is {frames} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
     }
-    // Only the GIF delay reads the rate (frames come from the duration); rates under 1 fps are
-    // valid timelines, so only an unusable loaded rate falls back to 30.
-    let fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
     let stem = safe_stem(&base.name);
     let fmt = base.pixel_format();
     let bounds = base.bounds();
@@ -545,7 +555,9 @@ pub fn render_video_with(
         if (w as u64) * (h as u64) > MAX_GIF_FRAME_PIXELS {
             return Err(EngineError::Other(format!("{w} × {h} is too large to render as an animated GIF (limit {MAX_GIF_FRAME_PIXELS} pixels per frame)")));
         }
-        let delay = (100.0 / fps).round().clamp(1.0, 65535.0) as u16;
+        // Each frame shows for its own delay, else the rate's (rates under 1 fps are valid
+        // timelines; only an unusable loaded rate falls back to 30).
+        let delay = |f: usize| base.timeline.as_ref().map_or(Timeline::new(1, 30.0).frame_ms(0), |t| t.frame_ms(f));
         let mut gframes = Vec::with_capacity(frames);
         for f in 0..frames {
             let mut doc = base.clone();
@@ -556,7 +568,7 @@ pub fn render_video_with(
             let surf = crate::file_cmds::flattened(&doc, fmt);
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
-            gframes.push(gif_frame(px, w, delay)?);
+            gframes.push(gif_frame(px, w, delay_cs(delay(f)))?);
             // The final report follows encoding/writing, so total means the output exists.
             if !progress((f + 1).min(frames.saturating_sub(1)), frames) {
                 return Err(cancelled());
@@ -591,6 +603,11 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// A frame delay in milliseconds as a GIF's centiseconds (1 to 65535; GIF has no zero-length frame).
+pub(crate) fn delay_cs(ms: u32) -> u16 {
+    (ms.saturating_add(5) / 10).clamp(1, 65535) as u16
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels

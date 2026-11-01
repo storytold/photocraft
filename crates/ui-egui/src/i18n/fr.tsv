@@ -4512,6 +4512,9 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+	Frame Delay	Délai de l’image
+	All Frames	Toutes les images
+# Art History Brush (#213).
 	The path was kept as the Work Path	Le tracé a été conservé comme tracé de travail
 	The path was discarded	Le tracé a été supprimé
 	Art History Brush Tool	Outil Pinceau d'historique artistique

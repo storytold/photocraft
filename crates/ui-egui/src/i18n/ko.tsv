@@ -3704,6 +3704,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Category	카테고리
 	Target	대상
 	Units	단위
+	Frame Delay	프레임 지연
+	All Frames	모든 프레임
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정

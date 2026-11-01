@@ -180,15 +180,17 @@ pub fn encode_gif_animated(width: u32, height: u32, frames: &[GifFrame], loop_fo
         out.extend_from_slice(b"NETSCAPE2.0");
         out.extend([0x03, 0x01, 0x00, 0x00, 0x00]); // loop count 0 = forever
     }
+    // Every frame covers the whole image. When any frame has a transparent index, every frame is
+    // cleared after it shows (disposal 2), or the frame before a see-through one shows through it;
+    // otherwise each is left in place (disposal 1).
+    let disposal = if frames.iter().any(|f| f.transparent.is_some()) { 0x08 } else { 0x04 };
     for f in frames {
         if f.palette.is_empty() || f.palette.len() > 256 || f.indices.len() != w * h || f.indices.iter().any(|&i| usize::from(i) >= f.palette.len()) {
             return Err(gif_err("every frame's palette must have 1..=256 entries covering its indices"));
         }
         let bits = (1..=8u8).find(|b| (1usize << b) >= f.palette.len()).unwrap_or(8);
-        // Graphic Control Extension: delay and optional transparency. Every frame covers the whole
-        // image, so an opaque one is left in place (disposal 1), while one with a transparent index
-        // is cleared afterwards (disposal 2): otherwise the frames before it show through.
-        let packed = if f.transparent.is_some() { 0x09 } else { 0x04 };
+        // Graphic Control Extension: disposal, delay and optional transparency.
+        let packed = disposal | u8::from(f.transparent.is_some());
         out.extend([0x21, 0xF9, 0x04, packed]);
         out.extend(f.delay_cs.to_le_bytes());
         out.push(f.transparent.unwrap_or(0));
@@ -514,6 +516,18 @@ mod anim_tests {
         assert_eq!(packed(&clear), 0x09, "disposal 2 with the transparency flag");
         let px = crate::decode(&clear).unwrap().to_rgba8();
         assert_eq!((px[3], &px[4..8]), (0, &[255, 0, 0, 255][..]), "index 0 transparent, index 1 red");
+    }
+
+    /// An opaque frame before a see-through one is cleared too, or it would show through.
+    #[test]
+    fn an_opaque_frame_before_a_transparent_one_is_cleared() {
+        let opaque = GifFrame { indices: vec![1; 4], palette: vec![[0, 0, 0], [255, 0, 0]], transparent: None, delay_cs: 4 };
+        let clear = GifFrame { indices: vec![0; 4], palette: vec![[0, 0, 0], [0, 255, 0]], transparent: Some(0), delay_cs: 4 };
+        let g = encode_gif_animated(2, 2, &[opaque, clear], false).unwrap();
+        let packed: Vec<u8> = g.windows(4).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| w[3]).collect();
+        assert_eq!(packed, [0x08, 0x09]);
+        let frames = crate::decode_gif_frames(&g, &crate::DecodeOptions::default()).unwrap();
+        assert_eq!(frames[1].image.to_rgba8()[3], 0, "the red frame no longer shows through");
     }
 
     #[test]

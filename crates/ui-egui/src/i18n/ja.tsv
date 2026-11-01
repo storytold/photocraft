@@ -4150,6 +4150,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+	Frame Delay	フレームの遅延
+	All Frames	すべてのフレーム
+# Art History Brush (#213).
 	The path was kept as the Work Path	パスは作業用パスとして保持されました
 	The path was discarded	パスは破棄されました
 	Art History Brush Tool	アートヒストリーブラシツール

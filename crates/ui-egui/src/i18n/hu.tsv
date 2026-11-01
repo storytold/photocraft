@@ -4395,6 +4395,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+	Frame Delay	Képkocka késleltetése
+	All Frames	Minden képkocka
+# Art History Brush (#213).
 	The path was kept as the Work Path	Az útvonal munkaútvonalként megmaradt
 	The path was discarded	Az útvonal el lett vetve
 	Art History Brush Tool	Művészi előzményecset eszköz

@@ -1,7 +1,9 @@
 use super::assets::{asset_output_path, asset_path_components};
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
-use super::settings::{WebSettings, rgb_hex};
-use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
+use super::settings::{WebFormat, WebSettings, rgb_hex};
+use super::{
+    Document, EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file,
+};
 
 /// A file-name-safe slice name.
 fn slice_file(name: &str) -> String {
@@ -144,6 +146,45 @@ pub(super) fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     save_for_web_impl(s, p, &mut write_file, true)
 }
 
+/// Most palette indices an animated GIF export holds at once (every frame's, before encoding):
+/// the timeline's length times the image's size is input, so it is capped before allocating.
+const MAX_ANIMATED_GIF_PIXELS: u64 = 1 << 30;
+
+/// Every frame of the timeline as one animated GIF of `w` × `h` (the still image's layout). Each
+/// frame is laid out and quantized like the still image, to its own palette, and shows for its own
+/// frame delay. Edits on the frame at the playhead are kept, as in Render Video. The size is
+/// checked against `MAX_ANIMATED_GIF_PIXELS` before any frame is rendered.
+fn animated_gif(doc: &Document, p: &Value, st: &WebSettings, frames: usize, (w, h): (u32, u32)) -> Result<Vec<u8>> {
+    if (frames as u64).saturating_mul(u64::from(w) * u64::from(h)) > MAX_ANIMATED_GIF_PIXELS {
+        return Err(other(format!("{frames} frames of {w} × {h} are too many to save as an animated GIF (limit {MAX_ANIMATED_GIF_PIXELS} pixels in all)")));
+    }
+    let mut doc = doc.clone();
+    crate::video_cmds::store(&mut doc);
+    let mut gframes = Vec::with_capacity(frames.min(1024));
+    for f in 0..frames {
+        let mut at = doc.clone();
+        if let Some(t) = &mut at.timeline {
+            t.current = f;
+        }
+        crate::video_cmds::sync(&mut at);
+        let (wdoc, _, _) = web_document(&at, p, st)?;
+        let rect = wdoc.bounds();
+        if (rect.width(), rect.height()) != (w, h) {
+            return Err(other(format!("frame {f} lays out at {} × {}, not {w} × {h}", rect.width(), rect.height())));
+        }
+        let buf = photocraft_compose::flatten(&wdoc);
+        let ix = super::optimizer::indexed_pixels(&buf.px, wdoc.size.width as usize, rect, st)?;
+        let delay_ms = doc.timeline.as_ref().map_or(100, |t| t.frame_ms(f));
+        gframes.push(photocraft_codecs::web::GifFrame {
+            indices: ix.indices,
+            palette: ix.palette,
+            transparent: ix.transparent.map(|i| i as u8),
+            delay_cs: crate::video_cmds::delay_cs(delay_ms),
+        });
+    }
+    photocraft_codecs::web::encode_gif_animated(w, h, &gframes, true).map_err(other)
+}
+
 /// Save for Web through a platform writer (native files or browser downloads).
 /// The writer receives every image, spacer and HTML file. A write error stops the export;
 /// only a complete export remembers its settings and fires the export event. A custom writer
@@ -215,6 +256,20 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         return Ok(
             json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
         );
+    }
+    // A GIF of a timeline is animated: every frame, each shown for its own delay.
+    let frames = doc.timeline.as_ref().map_or(1, |t| t.duration);
+    if let Some(path) = single.filter(|_| dir.is_none() && st.format == WebFormat::Gif && frames > 1 && (all.len() == 1 || p.get("slices").is_none())) {
+        if frames > crate::timeline_cmds::MAX_DURATION {
+            return Err(other(format!("the timeline is {frames} frames; an animated GIF is limited to {}", crate::timeline_cmds::MAX_DURATION)));
+        }
+        let (w, h) = (wdoc.bounds().width(), wdoc.bounds().height());
+        let bytes = animated_gif(&doc, p, &st, frames, (w, h))?;
+        write(path, &bytes)?;
+        remember_web_settings(s, cmd, &last_web);
+        s.file_menu.last_web = Some(last_web);
+        crate::automate_cmds::fire_event(s, "export");
+        return Ok(json!({"files": [path], "bytes": bytes.len(), "width": w, "height": h, "frames": frames, "warnings": warnings}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;

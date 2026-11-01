@@ -4232,6 +4232,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+	Frame Delay	Framevertraging
+	All Frames	Alle frames
+# Art History Brush (#213).
 	The path was kept as the Work Path	Het pad is behouden als werkpad
 	The path was discarded	Het pad is weggegooid
 	Art History Brush Tool	Artistiek historiepenseel

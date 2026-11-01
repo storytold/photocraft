@@ -4402,6 +4402,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+	Frame Delay	Atraso do quadro
+	All Frames	Todos os quadros
+# Art History Brush (#213).
 	The path was kept as the Work Path	O demarcador foi mantido como demarcador de trabalho
 	The path was discarded	O demarcador foi descartado
 	Art History Brush Tool	Ferramenta Pincel do histórico da arte

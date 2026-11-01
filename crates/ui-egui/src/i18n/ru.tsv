@@ -4673,6 +4673,9 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+	Frame Delay	Задержка кадра
+	All Frames	Все кадры
+# Art History Brush (#213).
 	The path was kept as the Work Path	Контур сохранён как рабочий контур
 	The path was discarded	Контур удалён
 	Art History Brush Tool	Инструмент «Кисть истории искусств»

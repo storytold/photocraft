@@ -3168,6 +3168,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Profile	配置文件
 	Target	目标
 	Units	单位
+	Frame Delay	帧延迟
+	All Frames	所有帧
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设

@@ -95,6 +95,49 @@ fn step(s: &mut Session, delta: i64) -> Result<Value> {
     })
 }
 
+/// Shortest and longest frame delay, in milliseconds. Browsers show anything under 20 ms slower, and
+/// a minute is far past any animation's frame.
+const DELAY_MS: std::ops::RangeInclusive<u64> = 10..=60_000;
+
+/// Sets how long a frame shows (`ms`): the playhead's frame, `frame`, or every frame with `all`.
+/// `all` sets the frame rate and drops the per-frame delays; one frame stores delays up to it, the
+/// frames before it keeping what they showed for.
+fn set_frame_delay(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "timeline.setFrameDelay";
+    let ms = p.get("ms").and_then(Value::as_u64).filter(|v| DELAY_MS.contains(v)).ok_or_else(|| {
+        bad(cmd, format!("`ms` must be a whole number from {} to {}, got {}", DELAY_MS.start(), DELAY_MS.end(), p.get("ms").unwrap_or(&Value::Null)))
+    })? as u32;
+    let all = match p.get("all").filter(|v| !v.is_null()) {
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, format!("`all` must be true or false, got {v}")))?,
+        None => false,
+    };
+    let frame = match p.get("frame").filter(|v| !v.is_null()) {
+        Some(v) => Some(v.as_u64().and_then(|f| usize::try_from(f).ok()).ok_or_else(|| bad(cmd, format!("`frame` must be a frame index, got {v}")))?),
+        None => None,
+    };
+    // Delays are stored up to the frame, so a loaded timeline longer than any command makes (a
+    // crafted file) is refused before it can size that allocation.
+    let duration = s.active().and_then(|d| d.doc.timeline.as_ref()).map_or(0, |t| t.duration);
+    if duration > MAX_DURATION {
+        return Err(bad(cmd, format!("the timeline is {duration} frames; frame delays are limited to {MAX_DURATION} frames")));
+    }
+    with_timeline(s, |t| {
+        let Some(t) = t else { return };
+        if all {
+            t.fps = 1000.0 / ms as f32;
+            t.delays_ms = Arc::default();
+            return;
+        }
+        let at = frame.unwrap_or(t.current).min(t.duration.saturating_sub(1));
+        let shown: Vec<u32> = (t.delays_ms.len()..=at).map(|f| t.frame_ms(f)).collect();
+        let delays = Arc::make_mut(&mut t.delays_ms);
+        delays.extend(shown);
+        if let Some(d) = delays.get_mut(at) {
+            *d = ms;
+        }
+    })
+}
+
 fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
     let fps = fps_param("timeline.setProps", p)?;
     let duration = duration_param("timeline.setProps", p)?;
@@ -125,7 +168,7 @@ fn info(s: &mut Session) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     Ok(match &st.doc.timeline {
         Some(t) => {
-            json!({"timeline": {"fps": t.fps, "duration": t.duration, "current": t.current, "workStart": t.work_start, "workEnd": t.work_end, "time": t.time()}})
+            json!({"timeline": {"fps": t.fps, "duration": t.duration, "current": t.current, "workStart": t.work_start, "workEnd": t.work_end, "time": t.time(), "frameMs": t.frame_ms(t.current)}})
         }
         None => json!({"timeline": null}),
     })
@@ -146,6 +189,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("timeline.previousFrame", "Previous Frame", "{} → {timeline}", has_timeline, |s, _| step(s, -1)),
         spec!("timeline.setProps", "Timeline Settings", r#"{fps?, duration?, workStart?, workEnd?} → {timeline}"#, has_timeline, |s, p| set_props(s, p)),
         spec!("timeline.info", "Timeline Info", "{} → {timeline}", has_doc, |s, _| info(s)),
+        spec!("timeline.setFrameDelay", "Frame Delay", r#"{ms, frame?, all?} → {timeline}"#, has_timeline, |s, p| set_frame_delay(s, p)),
     ]
 }
 
@@ -278,7 +322,7 @@ mod tests {
                     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
                     let st = s.active_mut().unwrap();
                     let mut doc = (*st.doc).clone();
-                    doc.timeline = Some(Timeline { fps: f32::NAN, duration, current, work_start: usize::MAX, work_end: 0 });
+                    doc.timeline = Some(Timeline { fps: f32::NAN, duration, current, work_start: usize::MAX, work_end: 0, delays_ms: Arc::default() });
                     st.doc = Arc::new(doc);
                     let r = s.execute(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd} d={duration} c={current}: {e}"));
                     let t = &r["timeline"];
@@ -298,5 +342,81 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         assert!(s.execute("timeline.setFrame", json!({"frame": 1})).is_err());
+    }
+
+    /// A frame's delay is stored up to that frame; the frames before it keep the rate's time, and
+    /// `all` sets the rate instead.
+    #[test]
+    fn set_frame_delay_sets_one_frame_or_all() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("timeline.create", json!({"duration": 4, "fps": 10.0})).unwrap();
+        s.execute("timeline.setFrameDelay", json!({"frame": 2, "ms": 500})).unwrap();
+        let t = s.active().unwrap().doc.timeline.clone().unwrap();
+        assert_eq!(*t.delays_ms, [100, 100, 500]);
+        assert_eq!(t.frame_ms(3), 100);
+        // Without `frame`, the playhead's frame; past the end, the last frame.
+        s.execute("timeline.setFrame", json!({"frame": 1})).unwrap();
+        let r = s.execute("timeline.setFrameDelay", json!({"ms": 40})).unwrap();
+        assert_eq!(r["timeline"]["frameMs"], 40);
+        s.execute("timeline.setFrameDelay", json!({"frame": 99, "ms": 70})).unwrap();
+        assert_eq!(*s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms, [100, 40, 500, 70]);
+        // Navigation leaves history alone, and so does this metadata.
+        assert_eq!(s.active().unwrap().history.past_len(), 0);
+        let r = s.execute("timeline.setFrameDelay", json!({"ms": 50, "all": true})).unwrap();
+        assert_eq!(r["timeline"]["fps"], 20.0);
+        assert!(s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms.is_empty());
+        // A shorter timeline drops the delays past its end.
+        s.execute("timeline.setFrameDelay", json!({"frame": 3, "ms": 200})).unwrap();
+        s.execute("timeline.setProps", json!({"duration": 2})).unwrap();
+        assert_eq!(*s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms, [50, 50]);
+    }
+
+    /// A loaded timeline longer than `MAX_DURATION` (a crafted file) is refused before delays are
+    /// stored up to its playhead, which would size an allocation from the file.
+    #[test]
+    fn set_frame_delay_refuses_an_oversized_loaded_timeline() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let st = s.active_mut().unwrap();
+        let mut doc = (*st.doc).clone();
+        doc.timeline = Some(Timeline { fps: 10.0, duration: usize::MAX, current: usize::MAX - 1, work_start: 0, work_end: 1, delays_ms: Arc::default() });
+        st.doc = Arc::new(doc);
+        let before = snapshot(&s);
+        for p in [json!({"ms": 100}), json!({"ms": 100, "frame": u64::MAX})] {
+            let e = s.execute("timeline.setFrameDelay", p.clone()).expect_err(&format!("{p} must be rejected"));
+            assert!(matches!(e, EngineError::BadParams { .. }), "{p}: {e}");
+            assert_eq!(snapshot(&s), before, "{p}: nothing changes");
+        }
+        // Control: `all` stores nothing per frame, but is refused the same way.
+        assert!(s.execute("timeline.setFrameDelay", json!({"ms": 100, "all": true})).is_err());
+    }
+
+    /// Bad `ms` or `frame` values are rejected and change nothing.
+    #[test]
+    fn set_frame_delay_rejects_bad_params() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        assert!(s.execute("timeline.setFrameDelay", json!({"ms": 100})).is_err(), "no timeline");
+        s.execute("timeline.create", json!({"duration": 3, "fps": 10.0})).unwrap();
+        let before = snapshot(&s);
+        for p in [
+            json!({}),
+            json!({"ms": 0}),
+            json!({"ms": 9}),
+            json!({"ms": 60_001}),
+            json!({"ms": -5}),
+            json!({"ms": 1.5}),
+            json!({"ms": "fast"}),
+            json!({"ms": u64::MAX}),
+            json!({"ms": 100, "frame": -1}),
+            json!({"ms": 100, "frame": "first"}),
+            json!({"ms": 100, "all": "true"}),
+            json!({"ms": 100, "all": 1}),
+        ] {
+            let e = s.execute("timeline.setFrameDelay", p.clone()).expect_err(&format!("{p} must be rejected"));
+            assert!(matches!(e, EngineError::BadParams { .. }), "{p}: {e}");
+            assert_eq!(snapshot(&s), before, "{p}: nothing changes");
+        }
     }
 }

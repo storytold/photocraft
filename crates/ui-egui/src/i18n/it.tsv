@@ -4588,6 +4588,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Barra scala di grigio
 	Current Colors	Colori correnti
 	Make Ramp Web Safe	Limita la barra ai colori web
+	Frame Delay	Ritardo fotogramma
+	All Frames	Tutti i fotogrammi
+# Art History Brush (#213).
 	The path was kept as the Work Path	Il tracciato è stato conservato come tracciato di lavoro
 	The path was discarded	Il tracciato è stato scartato
 	Art History Brush Tool	Strumento Pennello storia artistica
