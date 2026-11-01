@@ -259,17 +259,33 @@ fn adjustments_grid_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ("colorLookup", "grid-3x3", tl!("Color Lookup")),
     ];
     let mut run = None;
-    // The adjustment buttons are a physical grid strip: ltr_grid keeps the cells in
-    // left-to-right order in both directions; the column count matches the old wrapped
-    // flow of 30 pt buttons with 2 pt spacing.
-    let cols = ((ui.available_width() + 2.0) / 32.0).floor().max(1.0) as usize;
-    crate::direction::ltr_grid(ui, "adjustments-grid", cols, vec2(2.0, 2.0), |ui| {
-        for (kind, icon, tip) in items {
-            if icons::button(ui, icon, 30.0, false, tip).clicked() {
-                run = Some(format!("layer.newAdjustmentLayer.{kind}"));
+    // The column count matches the old wrapped flow of 30 pt buttons with 2 pt spacing.
+    // row_width reads max_rect in RTL, where the fork's available-width read balloons.
+    let cols = ((crate::direction::row_width(ui) + 2.0) / 32.0).floor().max(1.0) as usize;
+    if !crate::direction::is_rtl() {
+        crate::direction::ltr_grid(ui, "adjustments-grid", cols, vec2(2.0, 2.0), |ui| {
+            for (kind, icon, tip) in items {
+                if icons::button(ui, icon, 30.0, false, tip).clicked() {
+                    run = Some(format!("layer.newAdjustmentLayer.{kind}"));
+                }
             }
+        });
+    } else {
+        // The fork's Grid mis-wraps under the RTL style flag (later rows overflow the
+        // max_rect), so under RTL each row is a `direction::row()` scope: it starts from the
+        // reading start, so the first adjustment of each row lands rightmost.
+        for chunk in items.chunks(cols) {
+            ui.with_layout(crate::direction::row(), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (kind, icon, tip) in chunk {
+                    if icons::button(ui, icon, 30.0, false, tip).clicked() {
+                        run = Some(format!("layer.newAdjustmentLayer.{kind}"));
+                    }
+                }
+            });
+            ui.add_space(2.0);
         }
-    });
+    }
     if let Some(id) = run {
         let _ = app.run(&id, json!({}));
         app.ui.dock_tabs.properties = 0;
@@ -309,7 +325,9 @@ pub(super) fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui)
 mod properties_rtl_tests {
     use super::*;
     use crate::direction::{Dir, direction_scope};
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
+    #[allow(unused_imports)]
+    use egui_kittest::Node as _;
 
     fn harness(adjustments_tab: bool) -> Harness<'static, PhotocraftApp> {
         let mut session = photocraft_engine::Session::new();
@@ -526,58 +544,28 @@ mod properties_rtl_tests {
     }
 
     #[test]
-    fn probe_area_sizing() {
-        for dir in [Dir::Ltr, Dir::Rtl] {
-            let _scope = direction_scope(dir);
-            let ctx = egui::Context::default();
-            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
-                ..Default::default()
-            };
-            let id = egui::Id::unique("probe-area");
-            let mut inner_max = None;
-            let mut grid_avail = None;
-            let mut full = ctx.run_ui(input, |ui| {
-                let frame = egui::Frame::NONE.inner_margin(egui::Margin::same(14));
-                egui::Area::new(id).order(egui::Order::Middle).fixed_pos(egui::pos2(12.0, 44.0)).show(ui.ctx(), |ui| {
-                    frame.show(ui, |ui| {
-                        ui.set_width(292.0);
-                        inner_max = Some(ui.max_rect());
-                        grid_avail = Some(ui.available_width());
-                        crate::direction::ltr_grid(ui, "probe-grid", 16, egui::vec2(2.0, 2.0), |ui| {
-                            for _ in 0..16 {
-                                ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
-                            }
-                        });
-                    });
-                });
-            });
-            full.textures_delta.clear();
-            let area = ctx.memory(|m| m.area_rect(id)).unwrap();
-            eprintln!("PROBE {dir:?}: area={area:?} inner_max={inner_max:?} grid_avail={grid_avail:?}");
+    fn probe_palettes() {
+        {
+            let _rtl = direction_scope(Dir::Rtl);
+            let h = harness(true);
+            let card = card_rect(&h);
+            eprintln!("PROBE card={card:?}");
+            for n in h.query_all_by_role(egui::accesskit::Role::Button) {
+                if let Some(l) = n.accesskit_node().label() {
+                    eprintln!("PROBE card cell {l:?} -> {:?}", n.rect());
+                }
+            }
         }
-    }
-
-    #[test]
-    fn probe_card_rtl() {
-        let _rtl = direction_scope(Dir::Rtl);
-        let h = harness(true);
-        let card = card_rect(&h);
-        let header = h.get_by_label("Add an adjustment").rect();
-        let first = h.get_by_label("Brightness/Contrast").rect();
-        let last = h.get_by_label("Color Lookup").rect();
-        eprintln!("PROBE card={card:?} header={header:?} first={first:?} last={last:?}");
-    }
-
-    #[test]
-    fn probe_docked_rtl() {
-        let _rtl = direction_scope(Dir::Rtl);
-        let h = docked_harness();
-        let header = h.get_by_label("Add an adjustment").rect();
-        let first = h.get_by_label("Brightness/Contrast").rect();
-        let last = h.get_by_label("Color Lookup").rect();
-        eprintln!("PROBE docked header={header:?} first={first:?} last={last:?}");
+        {
+            let _rtl = direction_scope(Dir::Rtl);
+            let h = docked_harness();
+            eprintln!("PROBE docked:");
+            for n in h.query_all_by_role(egui::accesskit::Role::Button) {
+                if let Some(l) = n.accesskit_node().label() {
+                    eprintln!("PROBE docked cell {l:?} -> {:?}", n.rect());
+                }
+            }
+        }
     }
 
     /// Twin of the migrated `ltr_grid` adjustments strip: cell order stays left-to-right in
