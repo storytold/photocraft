@@ -362,8 +362,11 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     if rows.any() || !appearance.is_empty() {
         pref_group(ui, "Appearance", |ui| {
             if rows.any() {
-                // The theme rows are owned by appearance.rs and draw into a Grid themselves.
-                grid_scope(ui, |ui| {
+                // The theme rows are owned by appearance.rs and draw into a Grid themselves: the
+                // grid stays physical left-to-right (the fork's Grid cannot place cells under an
+                // RTL cursor) in a core LTR scope, and grid_cells inside appearance_rows emits the
+                // cells in reading order. min_col_width keeps the LTR column geometry identical.
+                crate::text::direction::ltr_vertical(ui, |ui| {
                     egui::Grid::new(("prefs-grid", "interface-appearance")).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0).show(ui, |ui| {
                         appearance_rows(ui, obj, system, rows);
                     });
@@ -481,13 +484,6 @@ fn max_label_width(ui: &egui::Ui, obj: &Map<String, Value>, keys: &[String]) -> 
 /// every cell left, which leaves the right-to-left reading start of a label column ragged.
 fn reading_start_cell<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.with_layout(crate::text::direction::row(), add).inner
-}
-
-/// The fork's `Grid` cannot place its cells under a right-to-left cursor, so a grid inside the
-/// mirrored content column runs in an explicit left-to-right scope; `grid_cells` emits the
-/// cells in reading order. A no-op in LTR, where that is the inherited layout already.
-pub(super) fn grid_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    ui.with_layout(egui::Layout::top_down(egui::Align::Min), add).inner
 }
 
 /// One row per setting in `keys` (already filtered by `field_visible`), emitted through `row`
@@ -764,5 +760,78 @@ mod rtl_direction_tests {
         let rtl = probe_gap("general", Dir::Rtl, "Image interpolation");
         assert!((ltr - rtl).abs() < 1.5, "gap differs: LTR {ltr} vs RTL {rtl}");
         assert!(ltr < 100.0 && rtl < 100.0, "the gap stays the grid's 14 px + label slack: LTR {ltr}, RTL {rtl}");
+    }
+
+    /// The Appearance group's theme rows (drawn by appearance.rs into the physical-LTR grid):
+    /// render `prefs_body` for "interface" under `dir` with the real direction flag; return the
+    /// label<->editor gap and both rects of the row whose label is `needle`.
+    fn probe_appearance_gap(dir: Dir, needle: &str) -> (f32, egui::Rect, egui::Rect) {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                ctx.all_styles_mut(|s| s.right_to_left = rtl);
+            })
+            .build_ui_state(
+                |ui, f: &mut Map<String, Value>| {
+                    ui.with_layout(crate::text::direction::body_layout(), |ui| super::prefs_body(ui, f, Some(egui::Theme::Dark)));
+                },
+                prefs_fields("interface"),
+            );
+        h.run_steps(6);
+        let label = h.query_all_by_role_and_label(Role::Label, needle).next().expect(needle).rect();
+        let editor = h.query_all_by_role_and_label(Role::ComboBox, needle).next().expect(needle).rect();
+        let gap = if dir == Dir::Rtl { label.left() - editor.right() } else { editor.left() - label.right() };
+        (gap, label, editor)
+    }
+
+    /// Twin: the Appearance Mode row of the theme grid keeps the LTR label<->editor gap in RTL,
+    /// the label does not overlap the editor, and it reads first (right of the editor) in RTL.
+    #[test]
+    fn appearance_theme_rows_mirror_under_rtl() {
+        let (ltr_gap, ltr_label, ltr_editor) = probe_appearance_gap(Dir::Ltr, "Appearance Mode");
+        let (rtl_gap, rtl_label, rtl_editor) = probe_appearance_gap(Dir::Rtl, "Appearance Mode");
+        assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
+        assert!(rtl_gap >= 0.0 && rtl_gap < 100.0, "no overlap, gap stays the grid spacing: RTL {rtl_gap}");
+        assert!(rtl_label.left() > rtl_editor.right(), "RTL: the label reads first: {rtl_label:?} {rtl_editor:?}");
+        assert!(ltr_editor.left() > ltr_label.right(), "LTR twin: {ltr_label:?} {ltr_editor:?}");
+    }
+
+    /// The rect of one light-theme swatch in the Appearance group, by its option index.
+    fn appearance_swatch(dir: Dir, index: usize) -> egui::Rect {
+        use super::super::appearance::LIGHT_THEME_OPTIONS;
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                ctx.all_styles_mut(|s| s.right_to_left = rtl);
+            })
+            .build_ui_state(
+                |ui, f: &mut Map<String, Value>| {
+                    ui.with_layout(crate::text::direction::body_layout(), |ui| super::prefs_body(ui, f, Some(egui::Theme::Dark)));
+                },
+                prefs_fields("interface"),
+            );
+        h.run_steps(6);
+        let name = crate::i18n::t(&choice_label(LIGHT_THEME_OPTIONS[index].0)).to_string();
+        h.query_all_by_role_and_label(Role::RadioButton, &name).next().expect("the swatch").rect()
+    }
+
+    /// Twin: the theme swatch strip keeps the first option at the reading start in RTL (rightmost)
+    /// and at the left in LTR; the swatch paint itself never mirrors.
+    #[test]
+    fn appearance_theme_swatches_mirror_under_rtl() {
+        use super::super::appearance::LIGHT_THEME_OPTIONS;
+        let last = LIGHT_THEME_OPTIONS.len() - 1;
+        let ltr_first = appearance_swatch(Dir::Ltr, 0);
+        let ltr_last = appearance_swatch(Dir::Ltr, last);
+        let rtl_first = appearance_swatch(Dir::Rtl, 0);
+        let rtl_last = appearance_swatch(Dir::Rtl, last);
+        assert!(ltr_first.left() < ltr_last.left(), "LTR twin: first swatch is leftmost: {ltr_first:?} {ltr_last:?}");
+        assert!(rtl_first.left() > rtl_last.left(), "RTL: first swatch is rightmost: {rtl_first:?} {rtl_last:?}");
     }
 }
