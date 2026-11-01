@@ -1343,6 +1343,8 @@ fn decode_merged(
     }
 }
 
+/// Fill `doc` from a decoded PSD: its Multichannel planes, its layers, or its flattened
+/// composite, whichever the file holds, then the alpha and spot channels beside them.
 fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if cx.fatal_error.is_some() {
         return;
@@ -1361,6 +1363,8 @@ fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mu
     }
 }
 
+/// Fill `doc` from a Multichannel PSD's merged planes, with the channel names the file carries.
+/// Planes too large to read leave the document reported as damaged rather than half-filled.
 fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Vec<u8>>>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if let Some(Ok(all)) = merged {
         let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();

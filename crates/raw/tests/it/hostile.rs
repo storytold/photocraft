@@ -99,6 +99,7 @@ fn samples() -> Vec<Vec<u8>> {
             precision: 14,
             components: 2,
             slices: vec![16, 16, 8],
+            slices_long: None,
             borders: Some([8, 2, 39, 9]),
             wb_rggb: Some([2000, 1024, 1024, 1500]),
             orientation: 8,
