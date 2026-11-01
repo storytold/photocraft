@@ -387,6 +387,13 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
 /// The web build has no threads: the preview is computed when the pointer comes up.
 #[cfg(target_arch = "wasm32")]
 pub(super) fn drive_preview(app: &mut PhotocraftApp, _ctx: &egui::Context, dragging: bool) {
+    // Custom with nothing to sample shows the image unfilled straight away, also while the
+    // pointer is still down on a stroke that erased it all.
+    if let Some(w) = app.distort.caf.as_mut()
+        && w.awaiting_custom_area()
+    {
+        w.preview.clear(w.preview.want);
+    }
     let stale = app.distort.caf.as_ref().is_some_and(|w| w.preview.shown != w.preview.want);
     if stale && !dragging {
         let _ = wait_preview(app);
