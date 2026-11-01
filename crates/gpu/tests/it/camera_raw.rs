@@ -56,16 +56,17 @@ fn gpu() -> Option<Gpu> {
     Some(Gpu { device, queue, dev, _lock: lock })
 }
 
-/// The Camera Raw shader parses and validates (naga, as wgpu does before any driver sees it),
+/// The Camera Raw shaders parse and validate (naga, as wgpu does before any driver sees them),
 /// with no adapter: the GPU tests below skip on runners without one.
 #[test]
-fn the_shader_validates_without_a_gpu() {
-    let src = photocraft_gpu::CAMERA_RAW_SHADER;
-    let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-    wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-    assert!(!module.entry_points.is_empty());
+fn the_shaders_validate_without_a_gpu() {
+    for src in [photocraft_gpu::CAMERA_RAW_SHADER, photocraft_gpu::CAMERA_RAW_TONE_SHADER] {
+        let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+        wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+        assert!(!module.entry_points.is_empty());
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
