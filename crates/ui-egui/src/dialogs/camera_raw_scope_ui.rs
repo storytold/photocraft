@@ -739,7 +739,7 @@ mod rtl_tests {
             ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
             let mut row_w = 0.0;
             let mut avail = 0.0;
-            ctx.run_ui(
+            let mut out = ctx.run_ui(
                 egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0))), ..Default::default() },
                 |ui| {
                     crate::direction::window_body(ui, |ui| {
@@ -748,6 +748,7 @@ mod rtl_tests {
                     });
                 },
             );
+            out.textures_delta.clear();
             assert!((row_w - 400.0).abs() < 1e-4, "{dir:?}: row_width is the full body width, got {row_w}");
             if dir == Dir::Ltr {
                 assert!((row_w - avail).abs() < 1e-4, "ltr: row_width == available_width ({row_w} vs {avail})");
