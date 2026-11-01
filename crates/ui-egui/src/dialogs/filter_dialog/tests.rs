@@ -1577,6 +1577,53 @@ fn replace_color_result_swatch_sets_the_sliders() {
     assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["lightness"], json!(10.0));
 }
 
+/// #6488: clicking the Result swatch opens the Color Picker without moving the sliders: the
+/// picker's start colour is not a pick. The sliders change only when the picker confirms.
+#[test]
+fn replace_color_result_swatch_click_leaves_the_sliders_alone_until_a_pick() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    // A grey sample with a hue shift: a grey Result carries no hue, so recomputing the sliders
+    // from the picker's start colour would drop Hue 90 to 0 before anything is picked.
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), REPLACE_COLOR).unwrap();
+    h.run_steps(3);
+    {
+        let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        f.insert("color".into(), json!("#808080"));
+        f.insert("hue".into(), json!(90.0));
+    }
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Result").click();
+    h.run_steps(3);
+    let picker = h.state().ui.dialogs.last().unwrap();
+    assert_ne!(picker.id, id, "clicking Result opens the Color Picker");
+    // Nothing picked yet: the sliders keep the user's values, and the picker opened on the
+    // current Result (its start colour equals the seed, so it is not read back as a pick).
+    let f = &h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+    assert_eq!(
+        (f["hue"].clone(), f["saturation"].clone(), f["lightness"].clone()),
+        (json!(90.0), json!(0.0), json!(0.0)),
+        "the click alone must not rewrite the sliders"
+    );
+    assert_eq!(f[RESULT_PICKED], f[RESULT_FROM], "the picker opened on the current Result");
+    // What the picker's OK writes into the filter dialog: a light green from the grey sample.
+    let picker = picker.id;
+    h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#80ff80"));
+    crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+    h.state_mut().ui.dialogs.retain(|d| d.id != picker);
+    h.run_steps(3);
+    let f = h.state_mut().ui.dialog_mut(id).unwrap().fields.clone();
+    // Grey (s = 0) to #80ff80 (h = 120°, full saturation, lightness up): the shift the sliders take.
+    assert_eq!((f["hue"].clone(), f["saturation"].clone(), f["lightness"].clone()), (json!(120.0), json!(100.0), json!(50.0)), "a real pick sets the sliders");
+    assert!(!f.contains_key(RESULT_PICKED) && !f.contains_key(RESULT_FROM), "the pick is consumed");
+}
+
 /// #4457: Localized Color Clusters and its Range, as in Photoshop's dialog; the sampled point
 /// and both settings reach the command.
 #[test]
