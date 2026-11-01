@@ -139,9 +139,13 @@ fn hard_light(cb: f32, cs: f32) -> f32 {
     let s = 2.0 * cs - 1.0;
     return cb + s - cb * s;
 }
+// The W3C curve, as Photoshop: D(cb) is the cubic below a quarter, sqrt above it (#8804).
 fn soft_light_ps(cb: f32, cs: f32) -> f32 {
     if (cs <= 0.5) { return 2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs); }
-    return 2.0 * cb * (1.0 - cs) + sqrt(max(cb, 0.0)) * (2.0 * cs - 1.0);
+    let b = max(cb, 0.0);
+    var d = sqrt(b);
+    if (b <= 0.25) { d = ((16.0 * b - 12.0) * b + 4.0) * b; }
+    return 2.0 * cb * (1.0 - cs) + d * (2.0 * cs - 1.0);
 }
 fn vivid_light_ps(cb: f32, cs: f32) -> f32 {
     if (cs <= 0.5) {
@@ -612,8 +616,22 @@ fn levels_float(record: i32, v: f32) -> f32 {
     return lut_at(base + 3) + mapped * (lut_at(base + 4) - lut_at(base + 3));
 }
 
-fn tone_channel(row: i32, v: f32, identity: f32) -> f32 {
+fn tone_channel(row: i32, v: f32, identity: f32, extrapolate: f32) -> f32 {
     if (identity > 0.5) { return v; }
+    // Mirrors compose::adjust::lut_extended: past 0..1 along the end segments' slopes, measured
+    // over TONE_SLOPE_SPAN (16) table steps.
+    if (extrapolate > 0.5 && abs(v) <= 3.0e38) {
+        if (v < 0.0) {
+            let a = textureLoad(lut_tex, vec2(0, row), 0).r;
+            let b = textureLoad(lut_tex, vec2(16, row), 0).r;
+            return a + v * (b - a) * (4095.0 / 16.0);
+        }
+        if (v > 1.0) {
+            let a = textureLoad(lut_tex, vec2(4079, row), 0).r;
+            let b = textureLoad(lut_tex, vec2(4095, row), 0).r;
+            return b + (v - 1.0) * (b - a) * (4095.0 / 16.0);
+        }
+    }
     return lut(row, v);
 }
 
@@ -647,7 +665,7 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             return clamp(v, vec3(0.0), vec3(1.0));
         }
         case 6: { return vec3(exposure(c.r, p0), exposure(c.g, p0), exposure(c.b, p0)); }  // Exposure
-        case 7: { return vec3(tone_channel(0, c.r, p0.x), tone_channel(1, c.g, p0.y), tone_channel(2, c.b, p0.z)); } // Levels / Curves / modern Brightness/Contrast (compose::adjust::modern_lut)
+        case 7: { return vec3(tone_channel(0, c.r, p0.x, p0.w), tone_channel(1, c.g, p0.y, p0.w), tone_channel(2, c.b, p0.z, p0.w)); } // Levels / Curves / modern Brightness/Contrast (compose::adjust::modern_lut)
         case 17: { return vec3(levels_float(0, levels_float(1, c.r)), levels_float(0, levels_float(2, c.g)), levels_float(0, levels_float(3, c.b))); }
         case 8: {                                                              // Hue/Saturation
             let hsl = rgb_to_hsl(c);
@@ -747,7 +765,8 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             if (c.r >= c.g && c.r >= c.b) { primary = 0; } else if (c.g >= c.b) { primary = 2; }
             var secondary = 5;
             if (c.b <= c.r && c.b <= c.g) { secondary = 1; } else if (c.r <= c.g) { secondary = 3; }
-            let g = clamp(mn + (mid - mn) * w[secondary] / 100.0 + (mx - mid) * w[primary] / 100.0, 0.0, 1.0);
+            // 32-bit: superwhites stay, up to Photoshop's 16
+            let g = clamp(mn + (mid - mn) * w[secondary] / 100.0 + (mx - mid) * w[primary] / 100.0, 0.0, select(1.0, 16.0, hdr));
             if (p1.z > 0.5) {
                 if (hdr) { return set_lum(p2.rgb, g, F32_MAX); }                // 32-bit: nothing clips at 1
                 return clamp(set_lum(p2.rgb, g, 1.0), vec3(0.0), vec3(1.0));   // Color blend of the tint
@@ -981,8 +1000,21 @@ fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
     if (op.mode == M_DISSOLVE) {
         return select(b, vec4(a.rgb, b.a), dissolve_noise(doc_px(p)) < k);
     }
-    let bl = blend_rgb(op.mode, b.rgb, a.rgb);
-    return vec4(b.rgb + (bl - b.rgb) * k, b.a);
+    // Fill below 100% in one of the special eight (compose::blend_back, psblend::blend_rgb_fill):
+    // the result pulled toward the mode's neutral colour; Hard Mix (cb - f(1 - cs)) / (1 - f).
+    let f = clamp(op.fill, 0.0, 1.0);
+    let special = f < 1.0 && fill_is_special(op.mode);
+    var cs = a.rgb;
+    if (special) {
+        var neutral = 0.0;
+        if (op.mode == 5 || op.mode == 6) { neutral = 1.0; }
+        if (op.mode == 16 || op.mode == 17) { neutral = 0.5; }
+        cs = vec3(neutral) + (a.rgb - vec3(neutral)) * f;
+    }
+    var bl = blend_rgb(op.mode, b.rgb, cs);
+    if (special && op.mode == 19) { bl = clamp((b.rgb - f * (vec3(1.0) - a.rgb)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
+    // Keep bounded adjustment results exact at full coverage over HDR backdrops.
+    return vec4(b.rgb * (1.0 - k) + bl * k, b.a);
 }
 
 // Pass-through group coverage mixes premultiplied colour, then returns straight alpha.
@@ -1006,8 +1038,8 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         return vec4(clamp(pm.rgb / al, vec3(0.0), vec3(1.0)), al);
     }
     if ((op.flags & F_BLEND_IF) != 0u) {
-        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks),
-        // or B itself for an adjustment layer; "Underlying Layer" is A.
+        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks, or an
+        // adjustment's result before Opacity, #9542), B when p4.y is set; "Underlying Layer" is A.
         var this_px = b;
         if (op.p4.y < 0.5) {
             this_px = textureLoad(tex_c, p, 0);
@@ -1061,15 +1093,19 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         if (px.a <= 0.0) {
             continue;
         }
-        // The CPU gets 8- and 16-bit levels exactly (k / 255 × 255 = k), but GPU arithmetic can
-        // land a few millionths below, which flips a hard threshold at that level: values that
-        // close to a level are that level. Real 8/16-bit values off a level are ≥ 1/257 away.
-        let raw = clamp(px.rgb, vec3(0.0), vec3(1.0)) * 255.0;
-        let v = select(raw, round(raw), abs(raw - round(raw)) < vec3(1e-4));
+        // compose::blend_if_level: a value on a level's 16-bit step (Photoshop's 0..32768,
+        // round(c × 32768 / 255)) is that level, as Photoshop compares Blend If (#9521); every
+        // 8-bit level is on its own step, a few millionths of GPU drift included.
+        let x = clamp(px.rgb, vec3(0.0), vec3(1.0));
+        let raw = x * 255.0;
+        let level = round(raw);
+        let v = select(raw, level, round(x * 32768.0) == round(level * 32768.0 / 255.0));
         if (op.p4.x > 0.5) {
             k = k * bi_weight(0u, s, v.r) * bi_weight(1u, s, v.r);
         } else {
-            let gray = 0.299 * v.r + 0.587 * v.g + 0.114 * v.b;
+            // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
+            let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
+            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
@@ -1097,15 +1133,10 @@ fn wrap(i: i32, n: i32) -> i32 {
     return ((i % n) + n) % n;
 }
 
-// compose::pattern::Tile::sample through Placement::map. p3 = (origin, cos, sin),
-// p4 = (1 / scale, tile w, tile h); `pat_tex` holds premultiplied RGBA.
-fn pattern_sample(d: vec2<i32>) -> vec4<f32> {
-    let dx = f32(d.x) + 0.5 - op.p3.x;
-    let dy = f32(d.y) + 0.5 - op.p3.y;
-    let c = op.p3.z;
-    let s = op.p3.w;
-    let u = (dx * c - dy * s) * op.p4.x - 0.5;
-    let v = (dx * s + dy * c) * op.p4.x - 0.5;
+// One bilinear, wrapping, premultiplied tap at tile coordinates (u, v) (Tile::sample_premul).
+fn pattern_tap(u0: f32, v0: f32) -> vec4<f32> {
+    let u = u0 - 0.5;
+    let v = v0 - 0.5;
     let x0 = floor(u);
     let y0 = floor(v);
     let fx = u - x0;
@@ -1124,6 +1155,28 @@ fn pattern_sample(d: vec2<i32>) -> vec4<f32> {
             acc += textureLoad(pat_tex, vec2(wrap(ix + i, tw), wrap(iy + j, th)), 0) * (wx[i] * wy[j]);
         }
     }
+    return acc;
+}
+
+// compose::pattern::Tile::sample_area through Placement::map. p3 = (origin, cos, sin),
+// p4 = (1 / scale, tile w, tile h); `pat_tex` holds premultiplied RGBA. Below 100 % a pixel
+// averages n x n taps over its footprint (n = ceil(1 / scale), at most 8), like the CPU.
+fn pattern_sample(d: vec2<i32>) -> vec4<f32> {
+    var n = 1;
+    if (op.p4.x > 1.0) { n = i32(min(ceil(op.p4.x), 8.0)); }
+    let c = op.p3.z;
+    let s = op.p3.w;
+    var acc = vec4(0.0);
+    for (var j = 0; j < n; j++) {
+        for (var i = 0; i < n; i++) {
+            let ox = (f32(i) + 0.5) / f32(n) - 0.5;
+            let oy = (f32(j) + 0.5) / f32(n) - 0.5;
+            let dx = f32(d.x) + 0.5 + ox - op.p3.x;
+            let dy = f32(d.y) + 0.5 + oy - op.p3.y;
+            acc += pattern_tap((dx * c - dy * s) * op.p4.x, (dx * s + dy * c) * op.p4.x);
+        }
+    }
+    acc = acc / f32(n * n);
     if (acc.a <= 0.0) { return vec4(0.0); }
     return vec4(acc.rgb / acc.a, min(acc.a, 1.0));
 }
@@ -1187,6 +1240,7 @@ fn fs_fxinit(in: VOut) -> @location(0) vec4<f32> {
 // beneath a layer of alpha `l` (disjoint areas).
 fn outline_share(cov: f32, l: f32) -> f32 {
     let outside = max(1.0 - clamp(cov, 0.0, 1.0), 0.0);
+    if (outside <= 1e-6) { return 0.0; }
     let rest = 1.0 - clamp(l, 0.0, 1.0);
     if (rest <= 1e-6) { return 1.0; }
     return min(outside / rest, 1.0);
@@ -1252,13 +1306,11 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
         k = k * outline_share(a, lay_a);
     } else if (a > INSIDE_EPS) {
         // Pixel layers: the stroke shows beneath only through the part the shape leaves
-        // (`effects.rs`): (1 - a) / (1 - layer alpha), 1 under an opaque layer.
+        // (`effects.rs`): (1 - a) / (1 - layer alpha), none beneath a fully covered pixel.
         if (vector) {
             k = 0.0;
-        } else if (lay_a >= 1.0) {
-            k = 1.0;
         } else {
-            k = clamp((1.0 - clamp(a, 0.0, 1.0)) / (1.0 - lay_a), 0.0, 1.0);
+            k = k * outline_share(a, lay_a);
         }
     }
     var cov = k * op.opacity;
