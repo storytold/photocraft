@@ -1638,12 +1638,13 @@ fn popup_width(h: &Harness<'static, LibState>) -> f32 {
     preview.width()
 }
 
+/// The caller uses Unicode scalar selection offsets and normalizes the selected lines.
 #[test]
 fn the_preview_sets_the_type_layers_text_or_the_selection_being_typed() {
     let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     assert_eq!(super::preview_text(&app), None, "no document");
     app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
-    let id = app.run("type.create", serde_json::json!({"text": "Hello\rworld  ", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let id = app.run("type.create", serde_json::json!({"text": "🙂e\u{301}中\rworld  ", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     app.run("layer.select", serde_json::json!({"id": id})).ok();
     app.ui.text_edit = Some(crate::state::TextEdit {
         layer: id,
@@ -1657,12 +1658,17 @@ fn the_preview_sets_the_type_layers_text_or_the_selection_being_typed() {
         resize: None,
         preedit: None,
     });
-    assert_eq!(super::preview_text(&app).as_deref(), Some("Hello world"), "the whole text, on one line");
+    assert_eq!(super::preview_text(&app).as_deref(), Some("🙂e\u{301}中 world"), "the whole text, on one line");
     if let Some(ed) = app.ui.text_edit.as_mut() {
-        ed.anchor = 6;
-        ed.caret = 11;
+        ed.anchor = 5;
+        ed.caret = 10;
     }
     assert_eq!(super::preview_text(&app).as_deref(), Some("world"), "only the selection while typing");
+    if let Some(ed) = app.ui.text_edit.as_mut() {
+        ed.anchor = 1;
+        ed.caret = 10;
+    }
+    assert_eq!(super::preview_text(&app).as_deref(), Some("e\u{301}中 world"), "the Unicode selection uses scalar offsets");
     if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 50;
         ed.caret = 400;
