@@ -273,12 +273,16 @@ pub(super) fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Optio
             .icon(crate::widgets::chevron_icon)
             .close_behavior(close)
             .show_ui(ui, |ui| {
-                for p in presets {
-                    let item = ui.selectable_label(p == shown, p);
-                    if press.chosen(ui, &item) {
-                        out = parse_kerning(p);
+                // The combo's popup body is pinned left-to-right by the fork; the shared body
+                // scope and menu rows mirror it under a right-to-left direction.
+                crate::direction::popup_body(ui, |ui| {
+                    for p in presets {
+                        let item = crate::menu_keys::menu_row(ui, p, None, p == shown, true);
+                        if press.chosen(ui, &item) {
+                            out = parse_kerning(p);
+                        }
                     }
-                }
+                })
             });
         press.after(&combo.response);
         let _ = combo.response.accessible_name(tl!("Kerning"));
