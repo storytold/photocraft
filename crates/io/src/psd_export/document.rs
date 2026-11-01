@@ -35,17 +35,23 @@ pub(super) fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, de
 
 /// Export with a caller-selected PSD size limit; the test suite lowers it to exercise promotion.
 pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt, size_limit: u64) -> (PsdFile, Vec<String>) {
+    let layerless_limit = opts.size_limit_psb.then_some(size_limit);
+    // Multichannel and Indexed/Bitmap are written without layers: no Smart Object, just a note.
+    if doc.mode == ColorMode::Multichannel {
+        let (file, mut warnings) = crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit);
+        let mut all = crate::type_smart::flat_warnings(doc);
+        all.append(&mut warnings);
+        return (file, all);
+    }
+    if let Some((file, mut warnings)) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit) {
+        let mut all = crate::type_smart::flat_warnings(doc);
+        all.append(&mut warnings);
+        return (file, all);
+    }
     // Type with a free warp or distort is written as a Smart Object holding the type.
     let mut type_warnings = Vec::new();
     let smart_type = crate::type_smart::with_smart_type(doc, &mut type_warnings);
     let doc = smart_type.as_ref().unwrap_or(doc);
-    let layerless_limit = opts.size_limit_psb.then_some(size_limit);
-    if doc.mode == ColorMode::Multichannel {
-        return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit);
-    }
-    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit) {
-        return file;
-    }
     let fmt = doc.pixel_format();
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit, type_warnings)
 }

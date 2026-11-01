@@ -399,6 +399,11 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
             "as in Photoshop, type takes only a warp style (arc, flag, …); turn on Preferences › Type › Free Transforms on Type, or rasterize the type",
         ));
     }
+    // Free transforms off: an unchanged (identity) commit must not remove the free warp the layer
+    // already has; only a free-warp session's own commit may (the UI edits the Warp Text then).
+    if !free && w.is_identity() && !next.distortions.is_empty() {
+        return Ok(json!({"layer": id.0, "changed": false}));
+    }
     if !crate::type_distort::set_warp(&mut next, w)? {
         return Ok(json!({"layer": id.0, "changed": false}));
     }

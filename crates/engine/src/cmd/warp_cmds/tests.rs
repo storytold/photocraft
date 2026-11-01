@@ -148,6 +148,28 @@ fn free_warp_and_distort_keep_type_editable() {
     assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(bad, r)})).is_err());
 }
 
+/// With Free Transforms on Type off, an unchanged (identity) Warp commit keeps the free warp the
+/// layer already has (no silent data loss) and is not a history step.
+#[test]
+fn an_identity_warp_with_free_transforms_off_keeps_the_free_warp() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 160})).unwrap();
+    s.execute("type.create", json!({"x": 20, "y": 90, "text": "Warp", "size": 48})).unwrap();
+    let b = text_of(&s).cache.unwrap().content_bounds();
+    let r = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    let mut mesh = BezierMesh::identity(r, 1, 1);
+    mesh.points[3][1] += 30.0;
+    s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, r)})).unwrap();
+    let before = text_of(&s).distortions;
+    assert_eq!(before.len(), 1);
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": false})).unwrap();
+    let n = s.active().unwrap().history.past_len();
+    s.execute("edit.transform.warp", json!({"style": "none"})).unwrap();
+    assert!(same(&text_of(&s).distortions, &before), "the free warp survives an unchanged commit");
+    assert_eq!(s.active().unwrap().history.past_len(), n);
+}
+
 /// The seven values of a cylinder over the session's painted box (x 10..60, y 10..40).
 const CYL: [f64; 7] = [10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5];
 

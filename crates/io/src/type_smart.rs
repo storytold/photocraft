@@ -21,6 +21,21 @@ pub(crate) fn with_smart_type(doc: &Document, warnings: &mut Vec<String>) -> Opt
     Some(out)
 }
 
+/// For a mode written without layers (Multichannel, Indexed, Bitmap): a note per type layer whose
+/// free warp or distort is therefore not kept as editable type.
+pub(crate) fn flat_warnings(doc: &Document) -> Vec<String> {
+    doc.walk()
+        .iter()
+        .filter(|(_, _, l)| matches!(&l.content, LayerContent::Text(t) if !t.distortions.is_empty()))
+        .map(|(_, _, l)| {
+            format!(
+                "layer \"{}\": type with a free warp or distort (beyond Photoshop) is not kept as type: {:?} documents have no layers in Photoshop, so it is part of the flattened image only",
+                l.name, doc.mode
+            )
+        })
+        .collect()
+}
+
 fn convert(doc: &Document, layers: &mut [Layer], warnings: &mut Vec<String>, depth: usize) {
     for l in layers.iter_mut() {
         match &mut l.content {
@@ -188,5 +203,27 @@ mod tests {
         assert!(!warnings.iter().any(|w| w.contains("Smart Object")), "{warnings:?}");
         let back = crate::import("t.psd", &file.to_bytes().unwrap()).unwrap().document;
         assert!(matches!(back.layers[0].content, LayerContent::Text(_)));
+    }
+
+    /// The bent-type warning also reaches the file's warnings on the Multichannel and the
+    /// Indexed/Bitmap paths, which write the document without going through the layered export.
+    #[test]
+    fn the_bent_type_warning_survives_multichannel_and_bitmap_export_without_claiming_a_smart_object() {
+        for mode in [photocraft_color::ColorMode::Multichannel, photocraft_color::ColorMode::Bitmap] {
+            let mut doc = Document::new("t", photocraft_geom::Size::new(300, 120), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+            let fmt = doc.pixel_format();
+            let mut t = TextLayer { text: "Hello".into(), size_pt: 40.0, transform: Affine::translate(20.0, 80.0), ..Default::default() };
+            let mut eng = photocraft_text::shared().lock().unwrap();
+            crate::text_import::render_bounded(&mut eng, &mut t, 72.0, fmt);
+            drop(eng);
+            let b = t.cache.as_ref().unwrap().content_bounds();
+            let r = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
+            t.distortions.push(TypeDistortion { frame: t.transform, kind: TypeDistortionKind::Warp(Warp::custom(BezierMesh::identity(r, 1, 1), r)) });
+            doc.layers.push(Layer::new("Bent", LayerContent::Text(t)));
+            doc.mode = mode;
+            let (_, warnings) = crate::document_to_psd_with(&doc, &Default::default());
+            assert!(warnings.iter().any(|w| w.contains("\"Bent\"") && w.contains("not kept as type") && !w.contains("Smart Object")), "{mode:?}: {warnings:?}");
+            assert!(!warnings.iter().any(|w| w.contains("written as a Smart Object")), "{mode:?}: {warnings:?}");
+        }
     }
 }
