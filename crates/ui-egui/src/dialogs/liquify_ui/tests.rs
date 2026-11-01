@@ -1036,7 +1036,10 @@ fn frame_diagnostics_reset_per_stroke_and_are_reported() {
     let d = app.distort.liquify.as_ref().unwrap();
     assert_eq!(d.frame_max_ms, 0.0, "a new stroke starts its own maximum");
     let v = d.describe();
-    assert!(v.get("frameMs").is_some() && v.get("frameMaxMs").is_some() && v.get("dabMs").is_some(), "{v}");
+    assert_eq!(v["dabMs"].as_f64(), Some(d.dab_ms), "{v}");
+    assert_eq!(v["frameMs"].as_f64(), Some(d.frame_ms), "{v}");
+    assert_eq!(v["frameMaxMs"].as_f64(), Some(d.frame_max_ms), "{v}");
+    assert_eq!(v["frameEvents"].as_u64(), Some(d.frame_events as u64), "{v}");
 }
 
 /// A drag shorter than a dab spacing moves the picture at once, and the release keeps it.

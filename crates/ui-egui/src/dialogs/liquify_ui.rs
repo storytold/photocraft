@@ -320,6 +320,7 @@ impl LiquifyDialog {
             "dabMs": self.dab_ms,
             "frameMs": self.frame_ms,
             "frameMaxMs": self.frame_max_ms,
+            "frameEvents": self.frame_events,
             "fullResolutionPreview": self.view_bounds.is_some(),
             "previewMs": self.preview_ms,
             "smartFilter": self.smart_filter,
@@ -524,7 +525,10 @@ impl LiquifyDialog {
             return;
         }
         let (w, h) = (bounds.width() as usize, bounds.height() as usize);
-        let Some(len) = w.checked_mul(h).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS) else {
+        // Too many pixels, or a side past the GPU's texture limit (a wide, shallow document at a
+        // low zoom): the whole-layer proxy, sized to the limit, stands in.
+        let fits = w.checked_mul(h).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS && w.max(h) <= ctx.input(|i| i.max_texture_side));
+        let Some(len) = fits else {
             self.view_bounds = None;
             self.view_tex = None;
             self.view_dirty = None;
