@@ -176,10 +176,19 @@ pub fn horizontal_nav_keys() -> (egui::Key, egui::Key) {
 
 /// Wrap a floating window's (or dialog's) content: in a right-to-left UI the body's blocks
 /// right-align and its nested rows mirror; in a left-to-right UI the content draws unchanged.
-/// Call once at the top of each `egui::Window` body closure.
+/// Call once at the top of each `egui::Window` body closure. As in [`popup_body`], the sizing
+/// pass runs in an LTR scope: under the mirrored [`body_layout`] the fork right-anchors every
+/// child frame and grows the measured `min_rect` leftward, so width-reading rows balloon the
+/// window and the slack lands on the reading-end side.
 pub fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
     if is_rtl() {
-        ui.with_layout(body_layout(), add)
+        if ui.is_sizing_pass() {
+            let _ltr = direction_scope(Dir::Ltr);
+            let inner = add(ui);
+            egui::InnerResponse::new(inner, ui.response())
+        } else {
+            ui.with_layout(body_layout(), add)
+        }
     } else {
         let inner = add(ui);
         egui::InnerResponse::new(inner, ui.response())
