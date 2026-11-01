@@ -126,6 +126,8 @@ fn layer_supported(l: &Layer, clipped: &[Layer], depth: u32) -> bool {
                 && stack_supported(&g.children, depth + 1)
         }
         LayerContent::Adjustment(a) => ink_adjustment(a) && separable(l.blend),
+        // Deep samples are float RGBA with depth; they are not CMYK-separable.
+        LayerContent::Deep(_) => false,
     };
     content && clipped.iter().filter(|c| c.visible).all(|c| plain(c) && (cmyk_pixels(c) || adjusts_inks(c)) && separable(c.blend))
 }

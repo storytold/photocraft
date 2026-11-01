@@ -176,7 +176,50 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
             Ok(lowest_id)
         } else {
             let top_id = *ids.last().ok_or_else(|| EngineError::Other("Merge Layers needs two or more layers".into()))?;
-            let top = doc.layer(top_id).ok_or(EngineError::NoLayer(top_id))?.clone();
+            let top = solo.layers.last().or_else(|| doc.layer(top_id)).cloned().ok_or(EngineError::NoLayer(top_id))?;
+
+            if solo.layers.iter().all(|l| matches!(l.content, LayerContent::Deep(_))) {
+                // A deep selection merges its samples and stays deep (Nuke's DeepMerge); the
+                // upper layers must composite as-is (see `pixels::deep_merge_blocker`).
+                for l in solo.layers.iter().skip(1) {
+                    if let Some(what) = crate::pixels::deep_merge_blocker(l) {
+                        return Err(EngineError::Other(format!(
+                            "layer \"{}\" has {what}; sample merging would drop it. Flatten or rasterize the layer to bake it in first",
+                            l.name
+                        )));
+                    }
+                }
+                let mut data: Option<photocraft_doc::DeepData> = None;
+                for l in &solo.layers {
+                    if let LayerContent::Deep(d) = &l.content
+                        && let Some(acc) = data.as_mut()
+                    {
+                        *acc = acc.merge(d).map_err(|e| EngineError::Other(format!("layer \"{}\": {e}", top.name)))?;
+                    } else if let LayerContent::Deep(d) = &l.content {
+                        data = Some(d.clone());
+                    }
+                }
+                let mut merged = Layer::new(
+                    top.name.clone(),
+                    LayerContent::Deep(data.unwrap_or_else(|| photocraft_doc::DeepData {
+                        x: 0,
+                        y: 0,
+                        width: 1,
+                        height: 1,
+                        channels: Vec::new(),
+                        counts: vec![0, 0],
+                    })),
+                );
+                merged.locks = top.locks;
+                let mid = merged.id;
+                for id in &ids[..ids.len() - 1] {
+                    doc.remove(*id);
+                }
+                *doc.layer_mut(top_id).ok_or(EngineError::NoLayer(top_id))? = merged;
+                *active = Some(mid);
+                return Ok(mid);
+            }
+
             let fmt = doc.pixel_format();
             let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
             let mut merged = Layer::raster(top.name.clone(), fmt);

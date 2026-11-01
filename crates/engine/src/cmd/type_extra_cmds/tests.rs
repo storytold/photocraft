@@ -108,9 +108,12 @@ fn vertical_orientation_renders_columns_inside_the_canvas() {
     assert!(l.vertical && l.lines.len() == 2);
     let [x0, y0, x1, y1] = l.bounds().unwrap();
     assert!(x1 > 0.0 && x0 < -40.0 && y0 >= -1e-3 && y1 > 60.0, "{:?}", l.bounds());
-    // Bad layer ids fail cleanly. Not a small number like 9999: ids come from one process-wide
-    // counter, so in a full test run a layer made above can get it (#3343).
-    assert!(s.execute("type.orientation.vertical", json!({"layer": u64::MAX})).is_err());
+
+    // Bad layer ids fail cleanly.
+    // Layer ids come from a process-global counter, so a small fake id can exist once enough
+    // layers were made in the same process (the corpus job walks PSDs with thousands of layers).
+    // 999_999 is the house style for an unreachable id, like the other param tests.
+    assert!(s.execute("type.orientation.vertical", json!({"layer": 999_999})).is_err());
 }
 
 #[test]
