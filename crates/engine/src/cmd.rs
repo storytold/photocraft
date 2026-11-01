@@ -152,6 +152,7 @@ pub mod type_spell_cmds;
 pub mod type_styles_cmds;
 pub mod updates_cmds;
 pub(super) mod variables_cmds;
+mod vector_clipboard;
 pub mod vector_cmds;
 pub(super) mod video_cmds;
 pub mod vp_cmds;

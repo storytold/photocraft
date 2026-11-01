@@ -475,11 +475,42 @@ pub(super) fn stop_to(_: &str, p: &Value) -> Option<Descriptor> {
 }
 
 pub(super) fn paste_from(d: &Descriptor) -> Mapped {
+    // As is a class, not text or an enum; unknown forms must not fall back to raster paste.
+    if let Some(value) = d.get("As  ") {
+        let mode = match value {
+            D::Class(value) if value.class_id.is("Pxel") => "pixels",
+            D::Class(value) if value.class_id.is("Path") => "path",
+            D::Class(value) if value.class_id.is("shapeClass") => "shape",
+            _ => return Mapped::Unsupported { harmless: false },
+        };
+        if !matches!(d.get("inPlace"), None | Some(D::Boolean(false))) || d.get("null").is_some() {
+            return Mapped::Unsupported { harmless: false };
+        }
+        if d.get("AntA").is_some_and(|v| !matches!(v, D::Enumerated { type_id, value } if type_id.is("Annt") && value.is("Anno"))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        return step("edit.paste", json!({"as": mode}));
+    }
     none(if get_bool(d, "inPlace") == Some(true) { "edit.pasteSpecial.pasteInPlace" } else { "edit.paste" })
 }
 
-pub(super) fn paste_to(id: &str, _: &Value) -> Option<Descriptor> {
+pub(super) fn paste_to(id: &str, p: &Value) -> Option<Descriptor> {
     let mut d = desc("null");
+    if let Some(mode) = p.get("as") {
+        if id != "edit.paste"
+            || ["center", "inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| p.get(key).is_some())
+            || p.get("target").is_some_and(|v| v.as_str() != Some("pixels"))
+        {
+            return None;
+        }
+        let id = match mode.as_str()? {
+            "pixels" => "Pxel",
+            "path" => "Path",
+            "shape" => "shapeClass",
+            _ => return None,
+        };
+        d = d.with("As  ", D::Class(class(id)));
+    }
     if id == "edit.pasteSpecial.pasteInPlace" {
         d = d.with("inPlace", D::Boolean(true));
     }
