@@ -4587,6 +4587,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Select and Mask was closed: another layer was selected	Izaberi i maskiraj je zatvoren: izabran je drugi sloj
 	Select Layer Under Cursor	Izaberi sloj ispod kursora
 	Drag to move the selected path	Prevucite da pomerite izabranu putanju
+	Add  (hold {key} to subtract)	Dodaj  (držite {key} za oduzimanje)
+	Subtract  (hold {key} to add)	Oduzimanje  (držite {key} za dodavanje)
 
 # Shape Fill/Stroke popover and colour swatches opening the Color Picker
 	Recently Used Colors	Nedavno korišćene boje

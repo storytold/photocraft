@@ -3536,6 +3536,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Refine Hair needs hair detection, which isn't available yet	Haare verbessern benötigt eine Haarerkennung, die noch nicht verfügbar ist
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
+	Add  (hold {key} to subtract)	Hinzufügen  ({key} gedrückt halten zum Subtrahieren)
+	Subtract  (hold {key} to add)	Subtrahieren  ({key} gedrückt halten zum Hinzufügen)
 
 # Shape Fill/Stroke popover and colour swatches opening the Color Picker
 	Color Picker	Farbwähler

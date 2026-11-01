@@ -4265,6 +4265,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Select and Mask was closed: its document is no longer the active one	Selecteren en maskeren is gesloten: het document is niet meer het actieve document
 	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 	Select Layer Under Cursor	Laag onder cursor selecteren
+	Add  (hold {key} to subtract)	Toevoegen  (houd {key} ingedrukt om af te trekken)
+	Subtract  (hold {key} to add)	Aftrekken  (houd {key} ingedrukt om toe te voegen)
 
 # Shape Fill/Stroke popover and colour swatches opening the Color Picker
 	Recently Used Colors	Recent gebruikte kleuren

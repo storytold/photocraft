@@ -4242,6 +4242,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Current Layer:	Geçerli Katman:
 	Underlying Layer:	Alttaki Katman:
 	Drag to move the selected path	Seçili yolu taşımak için sürükleyin
+	Add  (hold {key} to subtract)	Ekle  (çıkarmak için {key} tuşunu basılı tutun)
+	Subtract  (hold {key} to add)	Çıkar  (eklemek için {key} tuşunu basılı tutun)
 
 # Shape Fill/Stroke popover and colour swatches opening the Color Picker
 	Recently Used Colors	Son Kullanılan Renkler

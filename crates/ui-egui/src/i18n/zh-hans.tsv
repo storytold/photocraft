@@ -3190,6 +3190,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Select and Mask was closed: its document is no longer the active one	已关闭“选择与蒙版”：其文档不再是当前文档
 	Select and Mask was closed: another layer was selected	已关闭“选择与蒙版”：已选择另一个图层
 	Drag to move the selected path	拖动以移动选中的路径
+	Add  (hold {key} to subtract)	添加（按住 {key} 减去）
+	Subtract  (hold {key} to add)	减去（按住 {key} 添加）
 
 # Shape Fill/Stroke popover and colour swatches opening the Color Picker
 	Color Picker	拾色器
