@@ -242,7 +242,9 @@ fn reset_keyed_overrides_is_idempotent_and_restores_disabled_shortcuts() {
 #[test]
 fn preferences_reset_removes_keyed_overrides() {
     let mut p = Preferences::default();
-    for (path, value) in [("shortcuts.edit.undo", json!("Ctrl+Z")), ("menus.colors.edit.fill", json!("red"))] {
+    for (path, value) in
+        [("shortcuts.edit.undo", json!("Ctrl+Z")), ("menus.colors.edit.fill", json!("red")), ("collapsedActionSets.folder.gridColor", json!(false))]
+    {
         p.set(path, value).unwrap();
         assert!(p.get(path).is_some());
         p.reset(Some(path)).unwrap();
@@ -250,6 +252,39 @@ fn preferences_reset_removes_keyed_overrides() {
         p.reset(Some(path)).unwrap();
     }
     assert_eq!(p, Preferences::default());
+}
+
+#[test]
+fn action_folder_preferences_use_literal_names_and_boolean_values() {
+    let mut s = session();
+    let folders = json!({"Retouch": true, "folder.gridColor": false});
+    // A full preference object must restore the map, including literal dotted names.
+    s.execute("prefs.set", json!({"path": "", "value": {"collapsedActionSets": folders}})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets"})).unwrap(), folders);
+    for collapsed in [true, false] {
+        s.execute("prefs.set", json!({"path": "collapsedActionSets.folder.gridColor", "value": collapsed})).unwrap();
+        assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets.folder.gridColor"})).unwrap(), collapsed);
+    }
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs(), s.prefs());
+    for params in [
+        json!({"path": "collapsedActionSets.folder.gridColor", "value": "false"}),
+        json!({"path": "collapsedActionSets", "value": {"Other": true, "Bad": 1}}),
+        json!({"path": "", "value": {"collapsedActionSets": {"Other": true, "Bad": null}}}),
+        json!({"values": {"collapsedActionSets.Other": true, "collapsedActionSets.Wrong": []}}),
+    ] {
+        let before = s.prefs_value();
+        assert!(s.execute("prefs.set", params.clone()).is_err(), "{params}");
+        assert_eq!(s.prefs_value(), before);
+    }
+    for _ in 0..2 {
+        s.execute("prefs.reset", json!({"path": "collapsedActionSets.folder.gridColor"})).unwrap();
+        assert!(s.execute("prefs.get", json!({"path": "collapsedActionSets.folder.gridColor"})).is_err());
+    }
+    assert_eq!(s.execute("prefs.get", json!({"path": "collapsedActionSets.Retouch"})).unwrap(), true);
+    s.execute("prefs.set", json!({"path": "", "value": {"collapsedActionSets": {}}})).unwrap();
+    assert!(s.prefs().collapsed_action_sets.is_empty());
 }
 
 #[test]
