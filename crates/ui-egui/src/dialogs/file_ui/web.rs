@@ -433,27 +433,18 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     });
 }
 
-/// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
-/// value when it changed, compared with the value the widget was given so a field that only
-/// clamps does not count as an edit.
+/// A size row's editor, in the two-column grid's second column: a field showing `shown`, named by
+/// the row's caption (`cap`). Returns the typed value when it changed, compared with the value
+/// the widget was given so a field that only clamps does not count as an edit.
 /// A single-line edit whose text reads right-to-left in a right-to-left UI; a left-to-right UI
 /// keeps egui's default edit, unchanged.
-fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::RangeInclusive<f32>, unit: &str, decimals: u32) -> Option<f64> {
-    let t = Tokens::get(ui.ctx());
+fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::RangeInclusive<f32>, unit: &str, decimals: u32, cap: egui::Id) -> Option<f64> {
     let passed = (shown as f32).clamp(*range.start(), *range.end());
     let mut v = passed;
-    // `egui::Grid` ignores the interface direction, so the cells are emitted in reading order:
-    // the label at the reading start, the field after it.
-    crate::text::direction::grid_cells(
-        ui,
-        |ui| {
-            ui.label(egui::RichText::new(label).color(t.text_dim));
-        },
-        |ui| {
-            crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
-        },
-    );
-    ui.end_row();
+    let resp = crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(label));
+    if cap != egui::Id::NULL {
+        resp.labelled_by(cap);
+    }
     (v != passed).then_some(f64::from(v))
 }
 
@@ -471,21 +462,26 @@ fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc:
         f.insert("height".into(), json!(height));
     };
     let max = MAX_PX as f32;
-    // The fork's `Grid` cannot start under a right-to-left cursor; the size rows stay LTR and
-    // their cells keep their order in either direction.
-    let (width, height, percent) = crate::direction::ltr_vertical(ui, |ui| {
-        egui::Grid::new("web-size")
-            .num_columns(2)
-            .show(ui, |ui| {
-                (
-                    size_field(ui, tl!("Width"), w, 1.0..=max, "px", 0),
-                    size_field(ui, tl!("Height"), h, 1.0..=max, "px", 0),
-                    size_field(ui, tl!("Percent"), pct, 1.0..=1000.0, "%", 2),
-                )
-            })
-            .inner
-    })
-    .inner;
+    // The size rows are a two-column label/editor grid: left-to-right it is the plain
+    // `egui::Grid`, right-to-left the labels hug the reading start with the same column
+    // geometry (`label_w` = the widest label, as the LTR grid's first column sizes to it).
+    let ctx = ui.ctx().clone();
+    let t = Tokens::get(&ctx);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label_w = ["Width", "Height", "Percent"]
+        .into_iter()
+        .map(|l| ui.painter().layout_no_wrap(tl!(l).to_string(), font.clone(), egui::Color32::PLACEHOLDER).size().x)
+        .fold(ui.spacing().interact_size.x, f32::max);
+    let spacing = ui.spacing().item_spacing;
+    let mut width = None;
+    let mut height = None;
+    let mut percent = None;
+    crate::text::direction::settings_grid(ui, "web-size", [spacing.x, spacing.y], label_w, None, |row| {
+        let caption = |l: &str| egui::WidgetText::from(egui::RichText::new(tl!(l)).color(t.text_dim));
+        row(caption("Width"), &mut |ui: &mut egui::Ui, cap: egui::Id| width = size_field(ui, "Width", w, 1.0..=max, "px", 0, cap));
+        row(caption("Height"), &mut |ui: &mut egui::Ui, cap: egui::Id| height = size_field(ui, "Height", h, 1.0..=max, "px", 0, cap));
+        row(caption("Percent"), &mut |ui: &mut egui::Ui, cap: egui::Id| percent = size_field(ui, "Percent", pct, 1.0..=1000.0, "%", 2, cap));
+    });
     let side = match (width, height) {
         (Some(v), _) => resize_from_side(w0, h0, v.round(), h, lock, true).ok(),
         (_, Some(v)) => resize_from_side(w0, h0, w, v.round(), lock, false).ok(),
@@ -685,5 +681,11 @@ mod rtl_tests {
         assert!(rtl.original.left() > rtl.two_up.right(), "RTL: the tabs read right to left: {:?} {:?}", rtl.original, rtl.two_up);
         assert!(rtl.preview.left() > rtl.preset.right(), "RTL: the preview leads the settings: {:?} {:?}", rtl.preview, rtl.preset);
         assert!(rtl.width_label.left() > rtl.width_field.right(), "RTL: the grid's label leads its field: {:?} {:?}", rtl.width_label, rtl.width_field);
+
+        // The label<->field gap is the LTR formula (`label_w - label_width + spacing.x`) in both
+        // directions, so the mirrored row keeps the LTR column geometry.
+        let ltr_gap = ltr.width_field.left() - ltr.width_label.right();
+        let rtl_gap = rtl.width_label.left() - rtl.width_field.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the label-field gap mirrors the LTR formula: LTR {ltr_gap} px, RTL {rtl_gap} px");
     }
 }
