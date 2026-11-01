@@ -548,6 +548,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.new.layer", json!({"name": "Ink", "opacity": 0.5, "mode": "Multiply"})),
         ("layer.new.group", json!({"name": "G"})),
         ("layer.groupLayers", json!({})),
+        ("layer.linkLayers", json!({"linked": true})),
+        ("layer.linkLayers", json!({"linked": false})),
         ("layer.new.layerViaCopy", json!({})),
         ("layer.newFillLayer.solidColor", json!({"color": "#336699"})),
         ("layer.newAdjustmentLayer.hueSaturation", json!({})),

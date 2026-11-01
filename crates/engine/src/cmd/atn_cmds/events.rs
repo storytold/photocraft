@@ -1,6 +1,6 @@
 const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly"), ("LghO", "lightenOnly"), ("Anst", "anisotropic")];
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
-use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class};
+use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class, target_ref};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
@@ -173,6 +173,21 @@ fn clipping_from(d: &Descriptor, id: &str) -> Mapped {
 
 fn clipping_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", layer_ref(p)?))
+}
+
+// Target matching follows #10628's Link Layers adapter. Recorded Link and Unlink
+// need explicit state: replaying the UI toggle can perform the opposite operation.
+fn link_from(d: &Descriptor, linked: bool) -> Mapped {
+    if *d == desc("null").with("null", target_ref("Lyr ")) {
+        step("layer.linkLayers", json!({"linked": linked}))
+    } else {
+        Mapped::Unsupported { harmless: false }
+    }
+}
+
+fn link_to(p: &Value, linked: bool) -> Option<Descriptor> {
+    let p = p.as_object()?;
+    (p.len() == 1 && p.get("linked") == Some(&Value::Bool(linked))).then(|| desc("null").with("null", target_ref("Lyr ")))
 }
 
 /// A clipping mask event: `clipping_from` / `clipping_to` with one command id.
@@ -353,6 +368,15 @@ pub(super) const EVENTS: &[Event] = &[
     },
     Event { code: "Dplc", name: "duplicate", label: "Duplicate", ids: &["layer.duplicate", "image.duplicate"], from: duplicate_from, to: duplicate_to },
     // Layers.
+    Event { code: "", name: "linkSelectedLayers", label: "Link Layers", ids: &["layer.linkLayers"], from: |d| link_from(d, true), to: |_, p| link_to(p, true) },
+    Event {
+        code: "",
+        name: "unlinkSelectedLayers",
+        label: "Unlink Layers",
+        ids: &["layer.linkLayers"],
+        from: |d| link_from(d, false),
+        to: |_, p| link_to(p, false),
+    },
     Event {
         code: "Mk  ",
         name: "make",
