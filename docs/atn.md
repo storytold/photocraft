@@ -243,6 +243,24 @@ index inside a group puts the layer into that group.
 
 PhotoCraft's `document.activate {"offset"}` refuses to wrap (#7103); the reference application wraps.
 
+### Layer comps
+
+Measured with three comps (CompA, CompB, CompC) that each show a different layer, applied with
+`applyComp` and every reference form. The document's `compsList` gives each comp's `title`, `itemIndex`
+(1-based), `ID` (long) and `selection`.
+
+| Form | Result |
+|---|---|
+| By name (`name`) | Applies that comp. An unknown name fails. |
+| By index (`indx`) | 1-based, in panel order. 0, negative and past-the-end indexes are **accepted and change nothing**. |
+| By ID (`Idnt`) | Applies the comp with that `ID`. An unknown ID fails. |
+| By offset (`rele`) | Always fails, for every offset. |
+| Ordinal (`Ordn`) `Trgt`, `Nxt `, `Prvs` | Applies the current (last applied) comp; `Nxt ` and `Prvs` do not move. |
+| Ordinal `Frst`, `Lst `, `Al  ` | Applies the **first** comp (also for `Lst `). |
+
+Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import reads only the
+name form today; the index, ID and ordinal forms load as kept steps.
+
 ## Newer events (string ID only)
 
 The events the reference application records for the menu items PhotoCraft has that are neither mapped
@@ -318,9 +336,19 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 | Canvas Size | only the changed side; `canvasExtensionColorType` `FrgC` for the foreground colour | |
 | Convert Mode, several layers, "Don't Flatten" | `T   ` as a **class** (`Grys`), `Fltt` false, `Rstr` false | With `Fltt` and `Rstr` the step plays without the flatten question. |
 | New Group with a colour | `Usng` (`Clr ` label), `layerSectionStart`, `layerSectionEnd`, top-level `Nm  ` | |
+| Shear (`Shr `) | `ShrP` list of `Pnt ` (`Hrzn`, `Vrtc` doubles), `UndA` (`WrpA` wrap around, `RptE` repeat edge pixels), `ShrS` long, `ShrE` long | The dialog writes whole numbers: `Hrzn` -64..63 (dragging past the grid clamps), `Vrtc` 1..128 with the first point at 1 and the last at 128; dragging a point out of the grid deletes it. `ShrS` is 0 and `ShrE` the last point's index (count - 1). Script runs take any value unclamped and crashed on far-off `ShrE`/`ShrS` or a first `Vrtc` below 1. |
+| Gradient tool, classic (`Grdn` / `gradientClassEvent`) | `From`, `T   ` points in pixels; `Opct` percent, `Md  ` blend mode, `Type` (`GrdT`: `Lnr `, `Rdl `, `Angl`, `Rflc`, `Dmnd`), `Rvrs` bool, `Dthr` bool, `UsMs` bool (transparency), `gradientsInterpolationMethod` (`Perc` perceptual, …), `Grad` gradient object (as in Gradient Map) | Recorded in that order. `Opct`, `Md  ` and `Rvrs` appear only when they differ from 100 %, Normal and off; `Dthr` and `UsMs` only when on. The five types are the only accepted values. A step without `Grad` fails. |
+| Gradient tool, default mode | two steps: Make (`null` = class `contentLayer`, `Usng` = `Type` gradient layer object) then Set (`null` = `contentLayer` target, `T   ` = the same object plus `Algn` false) | The object: `Dthr`, `gradientsInterpolationMethod`, `Angl` angle, `Type`, `Scl ` percent, `Ofst` (`Hrzn`, `Vrtc` percent), `Grad`. The new tool makes a gradient fill layer; Make holds the first click, Set the finished drag. |
+| Content-Aware Fill (`cafWorkspace`) | `cafSamplingRegion` (`cafSamplingRegionRectangular`, …), `cafSampleAllLayers` bool, `cafColorAdaptationLevel` (`cafColorAdaptationDefault`, …), `cafRotationAmount` (`cafRotationAmountNone`, …), `cafScale` bool, `cafMirror` bool, `cafOutput` (`cafOutputToNewLayer`, …) | Runs on the selection, which is recorded as its own step before it. |
+| Perspective Warp (`perspectiveWarpTransform`) | `null` = layer target, `Md  ` (`perspectiveWarpMode`: `warp`), `referenceRect` rectangle in pixels, `vertices` list of points in pixels (the layout quad), `warpedVertices` (the same points after warping), `quads` list of `indices` (4 vertex indexes each) | Layout and warp are one step. |
+| Print (`print`) then Print One Copy (`printOneCopy`) | `print`: `null` = reference `printOutput` property of the target document; `printOutput` (`PstS`, `Inte`, `printSixteenBit`, `printerName` text, `printProofSetup`), `printViewProofSetup`, `printOutputOptions` (caption, marks, `Bckg` colour, `BrdT`, `Bld `, `Rslt`, `vectorData`, `PgPs`, `Left`, `Top `, `Scl `, crop rectangle), `osSpecificPrintInfo` raw data, `Cptn` text. `printOneCopy` has no keys. | Pressing Print in the dialog records both steps. |
+| Create Droplet (`CrtD`) | `In  ` alias: the droplet file; `Fldr` bool (include subfolders); `Usng` reference to the action; then the Batch keys below (destination, file naming, error log) when set | The same settings as Batch, with the droplet file instead of a source folder. |
+| Sky Replacement (`skyReplacement`) | `shiftEdge` double, `borderSmoothness` long (fade edge, default 50), `Brgh` long, `temperature` long, `harmonizationOpacity` long (35), `foregroundLightingOpacity` long, `lightingMode` blend mode (`Mltp`), `edgeLightingOpacity` long (70), `skyReplacementOutput` (`skyReplacementOutputToNewSheets` new layers, …), `Idnt` text (the sky preset's id), `Nm  ` text (its name), `File` alias (the sky image) | Scale and Flip are **not** in the step: with 150 % and Flip on, the returned keys were the same. `foregroundLightingOpacity` is computed from the sky (44 and 29 for two skies). Without a chosen sky the dialog returns no keys. |
 
 **Not recordable:** Edit > Purge (no step is recorded; this version's Purge menu has Clipboard,
-Histories, All and Video Cache, no Undo).
+Histories, All and Video Cache, no Undo); File > Export > Export As (the file is written, no step is
+recorded). Convert Stroke to Fill (`vectorStrokeToFill`) was not available in the measured version, even
+on a shape layer with a stroke and its path component selected, and it is not in the path context menu.
 
 ### Batch
 
@@ -347,12 +375,12 @@ descriptor itself (`Btch`, as the dialog returns it):
 | `Nm  ` / `lowerCase` / `upperCase` | Document Name / document name / DOCUMENT NAME |
 | `oneDigit` `twoDigit` `threeDigit` `fourDigit` | 1, 2, 3, 4 digit serial number |
 | `lowerCaseSerial` / `upperCaseSerial` | serial letter (a, b, c…) / (A, B, C…) |
-| `mmddyy` `yyyymmdd` `yymmdd` `yyddmm` `ddmmyy` | dates |
+| `mmddyy` `mmdd` `yyyymmdd` `yymmdd` `yyddmm` `ddmmyy` `ddmm` | dates |
 | `lowerCaseExtension` / `upperCaseExtension` | extension / EXTENSION |
 
 The extension component has no dot: Document Name + extension + 3 digit serial + "_pc", starting at 5,
-named `other.png` → `otherpng005_pc` (the saved file then gets its own extension). The two remaining date
-entries (mmdd, ddmm) did not accept `mmdd`/`ddmm`; their values are still unknown.
+named `other.png` → `otherpng005_pc` (the saved file then gets its own extension). The two short date
+entries are `mmdd` and `ddmm` (on 1 November they give `1101` and `0111`).
 
 ### Actions panel menu
 
@@ -1070,10 +1098,10 @@ All commands exist in PhotoCraft (`filter.distort.*`); only the `.atn` mapping i
 
 | Key | String ID | Type | Unit | Default | Allowed |
 |---|---|---|---|---|---|
-| `ShrP` | shearPoints | list |  | list[2] | list of `Pnt ` points (`Hrzn`, `Vrtc`); default two points (0, 1) and (0, 128); limits pending |
+| `ShrP` | shearPoints | list |  | list[2] | list of `Pnt ` points (`Hrzn`, `Vrtc`) from top to bottom; default two points (0, 1) and (0, 128). The dialog writes whole numbers: `Hrzn` -64..63 (dragging past the grid edge clamps), `Vrtc` 1..128 with the first point at 1 and the last at 128; dragging a point out of the grid deletes it. A script run accepts any value without clamping (e.g. `Hrzn` ±10000, fractions) and crashed on a first point with `Vrtc` < 1: clamp to the dialog ranges on import |
 | `UndA` | undefinedArea | enumerated |  | `WrpA` wrapAround | `RptE` repeatEdgePixels, `WrpA` wrapAround |
-| `ShrS` | shearStart | integer |  | 0 | limits pending, see "Events that need a step recorded through their dialog" |
-| `ShrE` | shearEnd | integer |  | 1 | limits pending, see "Events that need a step recorded through their dialog" |
+| `ShrS` | shearStart | integer |  | 0 | index of the first curve point; the dialog always writes 0 |
+| `ShrE` | shearEnd | integer |  | 1 | index of the last curve point (point count - 1); the dialog writes it. Script runs with other values change the result, and far-off values (`ShrE` 100 or 1000, `ShrS` -1000) crashed the application: on import accept only `ShrS` 0 and `ShrE` = point count - 1, otherwise keep the step as a kept step |
 
 Nested values as recorded (defaults):
 ```
@@ -1667,12 +1695,8 @@ their tables will be added once a recorded step was read.
 
 | Event | Why |
 |---|---|
-| Shear | Probing the point list made the application fail; the limits come from the dialog. |
 | Trace Contour | The step's level and edge are applied, but the returned descriptor always shows the defaults (level 128, upper). Lower (`Lwr `) is valid; levels at or below 0 and at or above 255 give the same image. |
-| Gradient tool | The drag needs a full gradient object (see Gradient Map in group E for its form). |
-| Create Droplet, Print | File and printer settings come from their dialogs. (Batch is measured: see Measured through dialogs and recordings.) |
-| Perspective Warp, Content-Aware Fill workspace, Export As, Quick Export | Interactive workspaces; their recorded steps were not read yet. |
-| Sky Replacement, Convert Stroke to Fill | Need a sky photo and a selected path component. (The smart object commands, Rasterize All and Convert Type to Shape are measured: see Newer events.) |
+| Quick Export | Not read yet; Export As records no step (see Measured through dialogs and recordings). |
 | Generative Fill (`syntheticFill`) | AI feature: in PhotoCraft this goes through the shared AI layer; until then such steps stay kept steps. |
 
 ### Recorded under another event
