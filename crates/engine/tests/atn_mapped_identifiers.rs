@@ -366,16 +366,60 @@ fn review_10702_transparency_names_resolve_at_playback() {
             assert!(s.execute("select.loadSelection", json!({"channel":"transparency","layer":layer})).is_err());
             assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![0.0, 1.0]);
         }
-        if name == "merged" {
-            for sentinel in ["merged", ""] {
-                let native = Action::new("Recorded", vec![("select.loadSelection".into(), json!({"channel":"transparency","layer":sentinel}))]);
-                let reloaded = recorded(AtnEvent::Code(*b"setd"), saved(&native).descriptor.unwrap());
-                let (id, params) = &reloaded.steps[0];
-                s.execute(id, params.clone()).unwrap();
-                let doc = &s.active().unwrap().doc;
-                assert_eq!(doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]), vec![1.0, 1.0]);
-            }
+        for sentinel in ["merged", ""] {
+            let native = Action::new("Recorded", vec![("select.loadSelection".into(), json!({"channel":"transparency","layer":sentinel}))]);
+            let reloaded = recorded(AtnEvent::Code(*b"setd"), saved(&native).descriptor.unwrap());
+            let (id, params) = &reloaded.steps[0];
+            s.execute(id, params.clone()).unwrap();
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]), vec![1.0, 1.0]);
         }
+    }
+}
+
+/// A group has no supported transparency plane and must not overwrite a real selection.
+#[test]
+fn group_transparency_sources_fail_without_changing_selection() {
+    use photocraft_doc::LayerId;
+    use photocraft_geom::Rect;
+
+    for name in ["Group", "merged", ""] {
+        let mut s = sized_document(2, 1, 72);
+        let child = LayerId(s.execute("layer.new.layer", json!({"name":"Child"})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("Child pixels", |doc, _| {
+            doc.layer_mut(child).unwrap().surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 2, 1), &[1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+            Ok(())
+        })
+        .unwrap();
+        let group = LayerId(s.execute("layer.groupLayers", json!({"name":"Group"})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("Group name", |doc, _| {
+            doc.layer_mut(group).unwrap().name = name.into();
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
+        s.execute("edit.fill", json!({"color":"#ffffff"})).unwrap();
+        s.execute("select.loadSelection", json!({"channel":"transparency","layer":"Child"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![1.0, 0.0]);
+        let descriptor = Descriptor::new("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }])).with(
+            "T   ",
+            D::Reference(vec![
+                ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") },
+                ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul(name) },
+            ]),
+        );
+        let action = recorded(AtnEvent::Code(*b"setd"), descriptor.clone());
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.past_len();
+        let (id, params) = &action.steps[0];
+        let result = s.execute(id, params.clone());
+        let alpha = s.active().unwrap().doc.selection.as_ref().map(|mask| mask.read_region(Rect::from_xywh(0, 0, 2, 1)));
+        assert!(result.is_err(), "group {name:?} returned {result:?} with selection {alpha:?}");
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+        assert_eq!(saved(&action).descriptor, Some(descriptor));
     }
 }
 
