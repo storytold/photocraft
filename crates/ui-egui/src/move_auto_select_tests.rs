@@ -257,3 +257,23 @@ fn shift_click_adds_shape_layers_one_after_another() {
     selected.sort_by_key(|l| l.0);
     assert_eq!(selected, ids);
 }
+
+/// #8208: with Show Transform Controls on, one click outside a resized box both commits the
+/// resize and Auto-Selects the layer under the pointer; it no longer takes a second click.
+#[test]
+fn one_click_accepts_a_resized_box_and_picks_the_layer_under_it() {
+    let (mut app, a, b) = app();
+    app.ui.tool_options.move_show_transform = true;
+    crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+    // Resize B's box to twice its size from its top-left corner.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad[2] = [t.quad[2][0] + 16.0, t.quad[2][1] + 16.0];
+    t.quad[1][0] += 16.0;
+    t.quad[3][1] += 16.0;
+    let click = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, click);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 16.0, y: 16.0 }, click);
+    assert!(app.ui.transform.is_none(), "the click accepted the box");
+    assert_eq!(bounds(&app, b), Rect::new(40, 40, 72, 72), "B keeps its resize");
+    assert_eq!(active(&app), Some(a), "and the same click selected A");
+}
