@@ -782,3 +782,45 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
         assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_admission_counts_cancelled_workers_until_they_finish() {
+    // Dropping the senders releases every worker even if an assertion unwinds.
+    let mut gates = Vec::new();
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for _ in 0..MAX_BACKGROUND_JOBS {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        gates.push(tx);
+        ids.push(job(s
+            .start_job(
+                "test.gated",
+                json!({}),
+                "gated",
+                false,
+                move |_| {
+                    let _ = rx.recv();
+                    Ok(())
+                },
+                |_, ()| Ok(Value::Null),
+            )
+            .unwrap()));
+    }
+    let rejected = s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("over-limit worker ran") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    for id in ids {
+        assert!(s.cancel_job(id));
+    }
+    assert!(s.jobs.running.is_empty());
+    assert_eq!(s.jobs.draining.len(), MAX_BACKGROUND_JOBS);
+    let rejected =
+        s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("draining workers bypassed the cap") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    drop(gates);
+    for handle in s.jobs.draining.drain(..) {
+        handle.join().unwrap();
+    }
+    let id = job(s.start_job("test.resumed", json!({}), "resumed", false, |_| Ok(()), |_, ()| Ok(json!("resumed"))).unwrap());
+    assert_eq!(s.wait_job(id).unwrap(), json!("resumed"));
+}
