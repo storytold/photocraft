@@ -426,6 +426,45 @@ mod tests {
         r.add_hue(f32::INFINITY);
         assert!(r.bounds.iter().all(|v| v.is_finite()));
     }
+
+    /// The eyedropper rules at their edges: the 0/360 seam, the one-turn limit on adding, and
+    /// subtracting at and between the span's ends. Expected bounds are worked out by hand from
+    /// the doc comments (and come back canonical: centre in -30..330).
+    #[test]
+    fn hue_range_eyedroppers_edge_cases() {
+        type Pick = fn(&mut super::HueRange, f32);
+        type Case = (&'static str, [f32; 4], Pick, f32, [f32; 4]);
+        let (sample, add, sub): (Pick, Pick, Pick) = (super::HueRange::sample_hue, super::HueRange::add_hue, super::HueRange::subtract_hue);
+        const REDS: [f32; 4] = [-45.0, -15.0, 15.0, 45.0];
+        // Fully on 30..280: 250° span plus two 30° fades leaves 49° of room in the turn.
+        const WIDE: [f32; 4] = [0.0, 30.0, 280.0, 310.0];
+        // Fully on 30..150, middle 90.
+        const MID: [f32; 4] = [0.0, 30.0, 150.0, 180.0];
+        let cases: [Case; 17] = [
+            ("sample 0", WIDE, sample, 0.0, REDS),
+            ("sample 359: 314..404 shifted down a turn", WIDE, sample, 359.0, [-46.0, -16.0, 14.0, 44.0]),
+            ("add 350 from above the seam: lower end moves down 15", [-25.0, 5.0, 35.0, 65.0], add, 350.0, [-40.0, -10.0, 35.0, 65.0]),
+            ("add 10 from below the seam: upper end moves up 15", [-65.0, -35.0, -5.0, 25.0], add, 10.0, [-65.0, -35.0, 10.0, 40.0]),
+            ("add 0 from below the seam: upper end lands on it", [-65.0, -35.0, -5.0, 25.0], add, 0.0, [-65.0, -35.0, 0.0, 30.0]),
+            ("add 340 to reds: 5 down beats 325 up", REDS, add, 340.0, [-50.0, -20.0, 15.0, 45.0]),
+            ("add 335, 55 up: capped at the 49 of room", WIDE, add, 335.0, [0.0, 30.0, 329.0, 359.0]),
+            ("add 340, 50 down: capped at the 49 of room", WIDE, add, 340.0, [-49.0, -19.0, 280.0, 310.0]),
+            ("add to a full turn (no room): no change", [0.0, 30.0, 329.0, 359.0], add, 345.0, [0.0, 30.0, 329.0, 359.0]),
+            ("subtract 80, nearer the lower end: it moves to 95", MID, sub, 80.0, [65.0, 95.0, 150.0, 180.0]),
+            ("subtract 100, nearer the upper end: it moves to 85", MID, sub, 100.0, [0.0, 30.0, 85.0, 115.0]),
+            ("subtract the exact middle 90: the lower end moves", MID, sub, 90.0, [75.0, 105.0, 150.0, 180.0]),
+            ("subtract the lower end 30", MID, sub, 30.0, [15.0, 45.0, 150.0, 180.0]),
+            ("subtract the upper end 150", MID, sub, 150.0, [0.0, 30.0, 135.0, 165.0]),
+            ("subtract 345 = the reds' lower end -15, across the seam", REDS, sub, 345.0, [-30.0, 0.0, 15.0, 45.0]),
+            ("subtract 32 near the lower end: never past the upper end", [0.0, 30.0, 40.0, 70.0], sub, 32.0, [10.0, 40.0, 40.0, 70.0]),
+            ("subtract 38 near the upper end: never past the lower end", [0.0, 30.0, 40.0, 70.0], sub, 38.0, [0.0, 30.0, 30.0, 60.0]),
+        ];
+        for (what, start, pick, deg, want) in cases {
+            let mut r = super::HueRange { bounds: start, ..super::HueRange::neutral(0) };
+            pick(&mut r, deg);
+            assert_eq!(r.bounds, want, "{what}");
+        }
+    }
     use super::*;
 
     #[test]
