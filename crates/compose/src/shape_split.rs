@@ -15,9 +15,10 @@ use photocraft_raster::Surface;
 /// (fill, stroke), last use, and the shape's pixels the stroke was fitted to (kept alive so
 /// their tile addresses, part of the key, can't be reused).
 type Entry = ((Surface, Surface), u64, Option<Surface>);
+type Cache = (HashMap<u64, Entry>, u64);
 
-fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
-    static C: OnceLock<Mutex<(HashMap<u64, Entry>, u64)>> = OnceLock::new();
+fn cache() -> &'static Mutex<Cache> {
+    static C: OnceLock<Mutex<Cache>> = OnceLock::new();
     C.get_or_init(|| Mutex::new((HashMap::new(), 0)))
 }
 
@@ -31,6 +32,37 @@ const BUDGET: usize = 8 << 20;
 /// Pixel bytes retained by the parts and their source; overflow makes the entry oversized.
 fn entry_bytes(parts: &(Surface, Surface), source: Option<&Surface>) -> usize {
     [&parts.0, &parts.1].into_iter().chain(source).flat_map(|s| s.tiles().map(|(_, t)| t.bytes().len())).fold(0, usize::saturating_add)
+}
+
+fn get(c: &Mutex<Cache>, key: u64) -> Option<(Surface, Surface)> {
+    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+    c.1 += 1;
+    let tick = c.1;
+    let entry = c.0.get_mut(&key)?;
+    entry.1 = tick;
+    Some(entry.0.clone())
+}
+
+fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>) {
+    let new_bytes = entry_bytes(parts, source);
+    // Don't cache entries that hold no pixels or exceed the byte budget.
+    if new_bytes == 0 || new_bytes > BUDGET {
+        return;
+    }
+    let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
+    // Another caller may have filled this key while we rendered. Charge its replacement once.
+    c.0.remove(&key);
+    // Least recently used first, until the new entry fits the byte budget.
+    loop {
+        let held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
+        if held.saturating_add(new_bytes) <= BUDGET {
+            break;
+        }
+        let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
+        c.0.remove(&old);
+    }
+    let tick = c.1;
+    c.0.insert(key, (parts.clone(), tick, source.cloned()));
 }
 
 /// Drop every cached split (Edit › Purge › All), returning its retained pixel bytes. Callers may
@@ -60,14 +92,8 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         }
     }
     let key = h.finish();
-    {
-        let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-        c.1 += 1;
-        let tick = c.1;
-        if let Some(e) = c.0.get_mut(&key) {
-            e.1 = tick;
-            return Some(e.0.clone());
-        }
+    if let Some(parts) = get(cache(), key) {
+        return Some(parts);
     }
     let fmt = PixelFormat::RGBA8.with_sample(depth);
     let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
@@ -76,23 +102,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     if let Some(cache) = &sh.cache {
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
     }
-    let new_bytes = entry_bytes(&parts, sh.cache.as_ref());
-    // Don't cache entries that hold no pixels or exceed the byte budget.
-    if new_bytes == 0 || new_bytes > BUDGET {
-        return Some(parts);
-    }
-    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    // Least recently used first, until the new entry fits the byte budget.
-    loop {
-        let held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
-        if held.saturating_add(new_bytes) <= BUDGET {
-            break;
-        }
-        let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
-        c.0.remove(&old);
-    }
-    let tick = c.1;
-    c.0.insert(key, (parts.clone(), tick, sh.cache.clone()));
+    insert(cache(), key, &parts, sh.cache.as_ref());
     Some(parts)
 }
 
@@ -214,6 +224,86 @@ mod tests {
 
     fn held() -> usize {
         cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum()
+    }
+
+    fn tile(sample: SampleType, value: f32) -> Surface {
+        let mut surface = Surface::new(PixelFormat::RGBA8.with_sample(sample));
+        surface.fill_rect(Rect::new(0, 0, 1, 1), &[value, value, value, 1.0]);
+        surface
+    }
+
+    /// A hit protects that exact entry while the oldest untouched entry is evicted.
+    #[test]
+    fn split_cache_evicts_the_exact_least_recently_used_entry() {
+        let c = Mutex::new(Cache::default());
+        let parts = (tile(SampleType::F32, 0.25), tile(SampleType::F32, 0.5));
+        let source = tile(SampleType::U8, 0.75);
+        let bytes = entry_bytes(&parts, Some(&source));
+        let slots = (BUDGET / bytes) as u64;
+        assert!(slots >= 2);
+        for key in 0..slots {
+            assert!(get(&c, key).is_none());
+            insert(&c, key, &parts, Some(&source));
+        }
+        assert!(get(&c, 0).is_some());
+        assert!(get(&c, slots).is_none());
+        insert(&c, slots, &parts, Some(&source));
+        let c = c.lock().unwrap();
+        assert_eq!(c.0.len(), slots as usize);
+        assert!(!c.0.contains_key(&1));
+        for key in (0..=slots).filter(|key| *key != 1) {
+            assert!(c.0.contains_key(&key), "entry {key} must survive");
+        }
+        assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), bytes * slots as usize);
+    }
+
+    /// Replacement accounts only the new parts/source and releases the previous tile owners.
+    #[test]
+    fn split_cache_replacement_updates_bytes_and_releases_old_surfaces() {
+        let c = Mutex::new(Cache::default());
+        let old_parts = (tile(SampleType::U8, 0.25), tile(SampleType::U8, 0.5));
+        let source = tile(SampleType::U8, 0.75);
+        let old_part = std::sync::Arc::downgrade(old_parts.0.tiles().next().unwrap().1);
+        let old_source = std::sync::Arc::downgrade(source.tiles().next().unwrap().1);
+        assert!(get(&c, 7).is_none());
+        insert(&c, 7, &old_parts, Some(&source));
+        drop(old_parts);
+        drop(source);
+        assert!(old_part.upgrade().is_some() && old_source.upgrade().is_some());
+        let new_parts = (tile(SampleType::F32, 0.5), tile(SampleType::F32, 0.75));
+        let source = tile(SampleType::U16, 0.25);
+        let expected = entry_bytes(&new_parts, Some(&source));
+        insert(&c, 7, &new_parts, Some(&source));
+        assert!(old_part.upgrade().is_none() && old_source.upgrade().is_none());
+        assert_eq!(get(&c, 7).unwrap().0.pixel(0, 0), new_parts.0.pixel(0, 0));
+        let c = c.lock().unwrap();
+        assert_eq!(c.0.len(), 1);
+        assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), expected);
+    }
+
+    /// Two callers may miss before either renders; the second completion replaces the first.
+    #[test]
+    fn split_cache_duplicate_misses_do_not_evict_unrelated_entries() {
+        let c = Mutex::new(Cache::default());
+        let parts = (tile(SampleType::F32, 0.25), tile(SampleType::F32, 0.5));
+        let bytes = entry_bytes(&parts, None);
+        let slots = (BUDGET / bytes) as u64;
+        assert!(slots >= 2);
+        for key in 0..slots - 1 {
+            assert!(get(&c, key).is_none());
+            insert(&c, key, &parts, None);
+        }
+        // These are the lookup/insert lock acquisitions of two overlapping cold splits.
+        assert!(get(&c, slots - 1).is_none());
+        assert!(get(&c, slots - 1).is_none());
+        insert(&c, slots - 1, &parts, None);
+        insert(&c, slots - 1, &parts, None);
+        let c = c.lock().unwrap();
+        assert_eq!(c.0.len(), slots as usize, "replacing the first result must not evict a neighbor");
+        for key in 0..slots {
+            assert!(c.0.contains_key(&key), "entry {key} must survive");
+        }
+        assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), bytes * slots as usize);
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and
