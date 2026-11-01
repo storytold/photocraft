@@ -6,28 +6,15 @@ use serde_json::Value;
 use crate::manifest::FORMAT_VERSION;
 use crate::{FormatError, Result};
 
-pub(crate) type Step = fn(&mut Value) -> Result<()>;
+pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
 /// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
 /// the only version.
 pub(crate) const STEPS: &[Step] = &[];
 
-/// Upgrade `v` in place to `target` using `steps`.
+/// Upgrade `v` in place to `target` using `steps`, with craft-pcraft-format's runner.
 pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
-    let found = v.get("format_version").and_then(Value::as_u64).ok_or_else(|| FormatError::corrupt("manifest has no format_version"))?;
-    let found = u32::try_from(found).map_err(|_| FormatError::corrupt("format_version out of range"))?;
-    if found == 0 {
-        return Err(FormatError::corrupt("format_version 0 is invalid"));
-    }
-    if found > target {
-        return Err(FormatError::TooNew { found, supported: target });
-    }
-    for ver in found..target {
-        let step = steps.get(ver as usize - 1).ok_or_else(|| FormatError::Unsupported(format!("no migration from format {ver}")))?;
-        step(v)?;
-        v["format_version"] = Value::from(ver + 1);
-    }
-    Ok(found)
+    craft_pcraft_format::migrate(v, steps, target)
 }
 
 pub(crate) fn migrate(v: &mut Value) -> Result<u32> {
