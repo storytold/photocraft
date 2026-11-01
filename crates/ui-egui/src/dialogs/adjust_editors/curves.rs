@@ -231,6 +231,36 @@ fn write_map(v: &mut Value, key: &str, map: &[f32]) {
     v[key] = json!(map.iter().map(|o| (o * 100.0).round() / 100.0).collect::<Vec<_>>());
 }
 
+/// A point curve reflected about the diagonal: each point's input and output swap. Points that
+/// land on an input already taken (a flat run before) keep the first.
+pub(super) fn reflect_points(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let mut out: Vec<[f32; 2]> = pts.iter().map(|q| [q[1], q[0]]).collect();
+    out.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    out.dedup_by(|b, a| a[0] == b[0]);
+    if out.len() < 2 { vec![[0.0, 0.0], [255.0, 255.0]] } else { out }
+}
+
+/// A drawn curve (one output per input level) reflected about the diagonal: its samples swap
+/// input and output and are read back at every level, linearly between them.
+pub(super) fn reflect_map(map: &[f32]) -> Vec<f32> {
+    let last = map.len().saturating_sub(1).max(1) as f32;
+    let mut pts: Vec<[f32; 2]> = map.iter().enumerate().map(|(k, o)| [o / 255.0 * last, k as f32]).collect();
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    (0..map.len())
+        .map(|k| {
+            let x = k as f32;
+            let i = pts.partition_point(|q| q[0] < x);
+            match (i.checked_sub(1).and_then(|j| pts.get(j)), pts.get(i)) {
+                (Some(a), Some(b)) if b[0] > a[0] => a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]),
+                (_, Some(b)) => b[1],
+                (Some(a), None) => a[1],
+                (None, None) => x,
+            }
+        })
+        .map(|level| level / last * 255.0)
+        .collect()
+}
+
 /// Switches the Curves values between point editing and the pencil: the engine draws the point
 /// curves into maps, or fits points to the drawn maps (Photoshop's two curve buttons).
 fn set_pencil(v: &mut Value, pencil: bool, gray: bool) -> bool {
@@ -290,6 +320,16 @@ fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, cx: &EditorCx) -
             let mut map = read_map(v, key);
             adjust_params::smooth_curve_map(&mut map);
             write_map(v, key, &map);
+            e.add(Edit::discrete(true));
+        }
+        // Swaps input and output, making the inverse tone curve (#9216).
+        let reflect = widgets::secondary_button(ui, tl!("Reflect"), 0.0).on_hover_text(tl!("Reflect the curve about the diagonal"));
+        if reflect.clicked() {
+            if pencil {
+                write_map(v, key, &reflect_map(&read_map(v, key)));
+            } else {
+                v[key] = json!(reflect_points(&read_curve(v, key)).iter().map(|q| [q[0].round(), q[1].round()]).collect::<Vec<_>>());
+            }
             e.add(Edit::discrete(true));
         }
     });

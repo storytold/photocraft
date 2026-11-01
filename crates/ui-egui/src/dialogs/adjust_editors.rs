@@ -227,6 +227,29 @@ fn label(ui: &mut egui::Ui, text: &str) {
 mod tests {
     use super::*;
 
+    /// #9216: Reflect swaps input and output, so a curve and its reflection compose to identity.
+    #[test]
+    fn reflect_swaps_input_and_output() {
+        use super::curves::{reflect_map, reflect_points};
+        assert_eq!(reflect_points(&[[0.0, 0.0], [64.0, 128.0], [255.0, 255.0]]), [[0.0, 0.0], [128.0, 64.0], [255.0, 255.0]]);
+        assert_eq!(reflect_points(&[[0.0, 255.0], [255.0, 0.0]]), [[0.0, 255.0], [255.0, 0.0]], "an inverted curve is its own reflection");
+        // A flat run keeps one point per input.
+        assert_eq!(reflect_points(&[[0.0, 0.0], [100.0, 0.0], [255.0, 255.0]]), [[0.0, 0.0], [255.0, 255.0]]);
+        // The drawn map of a gamma curve, reflected, is its inverse.
+        let n = photocraft_doc::adjust::CURVE_MAP_LEN;
+        let last = (n - 1) as f32;
+        let gamma: Vec<f32> = (0..n).map(|k| (k as f32 / last).powf(2.0) * 255.0).collect();
+        let back = reflect_map(&gamma);
+        for (k, o) in back.iter().enumerate() {
+            let want = (k as f32 / last).sqrt() * 255.0;
+            assert!((o - want).abs() < 2.0, "level {k}: {o} vs {want}");
+        }
+        let identity: Vec<f32> = (0..n).map(|k| k as f32 / last * 255.0).collect();
+        for (a, b) in reflect_map(&identity).iter().zip(&identity) {
+            assert!((a - b).abs() < 1e-3);
+        }
+    }
+
     #[test]
     fn saturation_track_follows_the_hue() {
         // The Saturation slider track recolours with the hue (UI-217-16).
