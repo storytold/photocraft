@@ -290,6 +290,13 @@ fn assert_overwritten_alias_acknowledgement(destination: &str, status: &str, res
     assert!(writer_state.is_dirty(), "the later physical-copy upload can have replaced the same resource too");
     assert_eq!(writer_state.revision, 8);
     assert!(!host.bound(writer));
+    assert_independent_alias_checkpoints(&app, &host, physical, other_alias, homonym, stale);
+    assert!(!host.pending_for(first));
+    assert!(!host.pending_for(physical));
+}
+
+fn assert_independent_alias_checkpoints(app: &PhotocraftApp, host: &Host, physical: DocId, other_alias: DocId, homonym: DocId, stale: bool) {
+    let documents = app.session.documents();
     let physical_state = documents.iter().find(|state| state.doc.id == physical).unwrap();
     assert_eq!(physical_state.path.as_deref(), Some("/device/drawing.psd"));
     assert_eq!(physical_state.saved_revision, 11);
@@ -304,8 +311,6 @@ fn assert_overwritten_alias_acknowledgement(destination: &str, status: &str, res
     assert_eq!(local.saved_revision, 13);
     assert!(!local.is_dirty());
     assert_eq!(app.session.active().unwrap().doc.id, homonym);
-    assert!(!host.pending_for(first));
-    assert!(!host.pending_for(physical));
 }
 
 #[test]
