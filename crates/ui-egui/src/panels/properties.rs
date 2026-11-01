@@ -260,8 +260,11 @@ fn adjustments_grid_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ];
     let mut run = None;
     // The column count matches the old wrapped flow of 30 pt buttons with 2 pt spacing.
-    // row_width reads max_rect in RTL, where the fork's available-width read balloons.
-    let cols = ((crate::direction::row_width(ui) + 2.0) / 32.0).floor().max(1.0) as usize;
+    // row_width reads max_rect in RTL, where the fork's available-width read balloons, so the
+    // count is capped by the visible width: a scroll area's content max_rect grows past the
+    // viewport once the grid itself is wide, which would otherwise unwrap every button.
+    let width = crate::direction::row_width(ui).min(ui.clip_rect().width());
+    let cols = ((width + 2.0) / 32.0).floor().max(1.0) as usize;
     if !crate::direction::is_rtl() {
         crate::direction::ltr_grid(ui, "adjustments-grid", cols, vec2(2.0, 2.0), |ui| {
             for (kind, icon, tip) in items {
