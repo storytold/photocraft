@@ -873,12 +873,12 @@ mod rtl_row_twin {
     fn the_input_output_row_keeps_ltr_gap_and_mirrors_under_rtl() {
         let ltr = harness(Dir::Ltr);
         let rtl = harness(Dir::Rtl);
-        let (ltr_in_l, ltr_in_r) = span(&ltr, "Input:");
+        let (_, ltr_in_r) = span(&ltr, "Input:");
         let (ltr_out_l, _) = span(&ltr, "Output:");
         assert!(ltr_in_r <= ltr_out_l, "LTR reads Input then Output: {ltr_in_r} vs {ltr_out_l}");
         let ltr_gap = ltr_out_l - ltr_in_r;
-        let (rtl_in_l, rtl_in_r) = span(&rtl, "Input:");
-        let (rtl_out_l, rtl_out_r) = span(&rtl, "Output:");
+        let (rtl_in_l, _) = span(&rtl, "Input:");
+        let (_, rtl_out_r) = span(&rtl, "Output:");
         assert!(rtl_out_r <= rtl_in_l, "RTL reads Output then Input: {rtl_out_r} vs {rtl_in_l}");
         let rtl_gap = rtl_in_l - rtl_out_r;
         assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
