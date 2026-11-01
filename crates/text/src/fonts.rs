@@ -110,11 +110,18 @@ pub const INDIC_FAMILIES: &[&[&str]] = &[
     MALAYALAM_FAMILIES,
     SINHALA_FAMILIES,
 ];
+/// Symbol and math families for signs no text face has, such as ⌖ (U+2316) and ⤒ (U+2912):
+/// Windows (Segoe UI Symbol), macOS (Apple Symbols) and Linux (Noto, under the name fontconfig
+/// gives, "Noto Sans Symbols 2", and the "Noto Sans Symbols2" some packages use). They come after
+/// every other candidate, the emoji fonts included, so they only draw what those lack and an emoji
+/// keeps its colour face (#8689, as storytold/figcraft#1163).
+pub const SYMBOL_FAMILIES: &[&str] = &["Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"];
 /// Broad-coverage and emoji fonts, tried after the CJK script fonts so shared Han characters get
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
 
-/// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]).
+/// Every fallback family candidate, CJK ordered for `order` (see [`crate::cjk::script_order`]),
+/// with the [`SYMBOL_FAMILIES`] last.
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
     v.extend_from_slice(THAI_FAMILIES);
@@ -138,6 +145,7 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
         v.extend_from_slice(crate::cjk::families(*s));
     }
     v.extend_from_slice(FALLBACK_LAST);
+    v.extend_from_slice(SYMBOL_FAMILIES);
     v
 }
 
