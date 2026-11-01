@@ -497,7 +497,7 @@ pub(crate) fn levels_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> b
         .ctx()
         .data(|data| data.get_temp::<(u64, Value)>(values_id))
         .filter(|(cached_revision, _)| *cached_revision == revision)
-        .map_or(canonical, |(_, values)| values);
+        .map_or_else(|| canonical.clone(), |(_, values)| values);
     let hist = mask_levels_histogram(ui.ctx(), doc_id, revision, layer_id.0, index, stack, size);
     let cx = crate::adjust_editors::EditorCx {
         mem: egui::Id::unique(("mask-levels", doc_id, layer_id.0, index)),
@@ -544,11 +544,14 @@ pub(crate) fn levels_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> b
     }
     if edit.commit {
         let scale = 1.0 / 255.0;
-        let black = values["inBlack"].as_f64().unwrap_or(0.0) as f32 * scale;
-        let white = values["inWhite"].as_f64().unwrap_or(255.0) as f32 * scale;
-        let out_black = values["outBlack"].as_f64().unwrap_or(0.0) as f32 * scale;
-        let out_white = values["outWhite"].as_f64().unwrap_or(255.0) as f32 * scale;
-        let next_gamma = values["gamma"].as_f64().unwrap_or(1.0) as f32;
+        // The editor displays input/output levels as integer byte values. Keep the underlying
+        // normalized f32 value for untouched controls instead of quantizing it on an unrelated
+        // gamma or visibility edit.
+        let black = preserve_level_value(&values, &canonical, "inBlack", input_black, scale);
+        let white = preserve_level_value(&values, &canonical, "inWhite", input_white, scale);
+        let out_black = preserve_level_value(&values, &canonical, "outBlack", output_black, scale);
+        let out_white = preserve_level_value(&values, &canonical, "outWhite", output_white, scale);
+        let next_gamma = preserve_level_value(&values, &canonical, "gamma", gamma, 1.0);
         if black != input_black || white != input_white || out_black != output_black || out_white != output_white || next_gamma != gamma {
             actions.push((
                 "uv.maskPaint.modify".to_string(),
@@ -591,6 +594,12 @@ pub(crate) fn levels_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> b
         ui.ctx().data_mut(|data| data.insert_temp(levels_picker_id(), LevelsPicker { doc: doc_id, layer: layer_id.0, index, point, tool: app.ui.tool }));
     }
     true
+}
+
+fn preserve_level_value(values: &Value, canonical: &Value, key: &str, original: f32, scale: f32) -> f32 {
+    let original_display = canonical[key].as_f64().unwrap_or_default();
+    let current_display = values[key].as_f64().unwrap_or(original_display);
+    if current_display == original_display { original } else { current_display as f32 * scale }
 }
 
 /// A small, distributed histogram of the editable prefix before the selected Levels layer.
@@ -1075,6 +1084,17 @@ mod tests {
         mask_paint::{Paint, Stack},
     };
     use photocraft_raster::Surface;
+
+    #[test]
+    fn levels_keeps_unedited_float_values_when_other_controls_are_committed() {
+        let canonical = json!({"inBlack":85.0,"gamma":1.25,"inWhite":221.0,"outBlack":13.0,"outWhite":242.0});
+        let changed = json!({"inBlack":85.0,"gamma":1.5,"inWhite":221.0,"outBlack":13.0,"outWhite":242.0});
+        let source_black = 0.333_333_34;
+        let source_white = 0.867_123;
+        assert_eq!(preserve_level_value(&changed, &canonical, "inBlack", source_black, 1.0 / 255.0), source_black);
+        assert_eq!(preserve_level_value(&changed, &canonical, "inWhite", source_white, 1.0 / 255.0), source_white);
+        assert_eq!(preserve_level_value(&changed, &canonical, "gamma", 1.25, 1.0), 1.5);
+    }
 
     #[test]
     fn mask_effect_rows_require_expansion_and_mask_target_has_no_selected_child() {

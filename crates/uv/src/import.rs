@@ -1,8 +1,8 @@
 //! Mesh import entry points.
 
 mod fbx;
-use crate::{Corner, Error, MAX_FILE_BYTES, MAX_TRIANGLES, MAX_VERTICES, Material, Result, Scene, Triangle};
-use std::collections::BTreeMap;
+use crate::{Corner, Error, MAX_FILE_BYTES, MAX_MATERIALS, MAX_TRIANGLES, MAX_VERTICES, Material, Result, Scene, Triangle};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 // Earcut's worst-case work is quadratic in the number of polygon corners. Keep
@@ -60,6 +60,7 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
     let mut scene = Scene::default();
     scene.materials.push(Material::default());
     let mut material_names = BTreeMap::new();
+    let mut loaded_mtl_paths = BTreeSet::new();
     let mut uvs: Vec<[f64; 2]> = Vec::new();
     let mut normals = Vec::new();
     let mut material = 0;
@@ -96,8 +97,15 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
             }
             "mtllib" => {
                 let path = parts.collect::<Vec<_>>().join(" ");
+                if !loaded_mtl_paths.insert(path.clone()) {
+                    continue;
+                }
                 match resolve(&path) {
                     Ok(bytes) => {
+                        if bytes.len() as u64 > MAX_FILE_BYTES {
+                            return Err(Error("Material library exceeds 256 MiB".into()));
+                        }
+                        check_mtl_material_budget(&bytes)?;
                         let (materials, _) = tobj::load_mtl_buf(&mut std::io::BufReader::new(bytes.as_slice())).map_err(|e| Error(e.to_string()))?;
                         for m in materials {
                             if m.normal_texture.is_some() {
@@ -105,8 +113,18 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                             }
                             let c = m.diffuse.unwrap_or([1.0; 3]);
                             let texture = m.diffuse_texture.map(|s| Path::new(&path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned());
-                            material_names.insert(m.name.clone(), scene.materials.len());
-                            scene.materials.push(Material {
+                            let index = if let Some(index) = material_names.get(&m.name).copied() {
+                                index
+                            } else {
+                                if scene.materials.len() >= MAX_MATERIALS {
+                                    return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+                                }
+                                let index = scene.materials.len();
+                                material_names.insert(m.name.clone(), index);
+                                scene.materials.push(Material::default());
+                                index
+                            };
+                            let material = Material {
                                 name: m.name,
                                 color: [c[0], c[1], c[2], m.dissolve.unwrap_or(1.0)],
                                 base_color: texture,
@@ -128,7 +146,10 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
                                         .map(|s| (kind, Path::new(&path).parent().unwrap_or(Path::new("")).join(s).to_string_lossy().into_owned()))
                                 })
                                 .collect(),
-                            });
+                            };
+                            if let Some(slot) = scene.materials.get_mut(index) {
+                                *slot = material;
+                            }
                         }
                     }
                     Err(e) => scene.warnings.push(format!("MTL {path}: {e}; assign textures manually")),
@@ -136,11 +157,16 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
             }
             "usemtl" => {
                 let name = parts.collect::<Vec<_>>().join(" ");
-                material = *material_names.entry(name.clone()).or_insert_with(|| {
-                    let id = scene.materials.len();
-                    scene.materials.push(Material { name, ..Material::default() });
-                    id
-                });
+                if let Some(index) = material_names.get(&name).copied() {
+                    material = index;
+                } else {
+                    if scene.materials.len() >= MAX_MATERIALS {
+                        return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+                    }
+                    material = scene.materials.len();
+                    scene.materials.push(Material { name: name.clone(), ..Material::default() });
+                    material_names.insert(name, material);
+                }
             }
             "f" => {
                 let mut face = Vec::new();
@@ -168,6 +194,22 @@ fn obj(bytes: &[u8], resolve: &mut impl FnMut(&str) -> Result<Vec<u8>>) -> Resul
         }
     }
     Ok(scene)
+}
+
+fn check_mtl_material_budget(bytes: &[u8]) -> Result<()> {
+    let declarations = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| {
+            let line = line.iter().position(|byte| !byte.is_ascii_whitespace()).and_then(|start| line.get(start..)).unwrap_or_default();
+            line.starts_with(b"newmtl") && line.get(b"newmtl".len()).is_some_and(u8::is_ascii_whitespace)
+        })
+        // The default material occupies one of the runtime material slots.
+        .take(MAX_MATERIALS)
+        .count();
+    if declarations >= MAX_MATERIALS {
+        return Err(Error(format!("MTL exceeds the {MAX_MATERIALS}-material import limit")));
+    }
+    Ok(())
 }
 
 fn index(s: &str, len: usize) -> Result<usize> {
@@ -259,7 +301,7 @@ mod tests {
         for index in 1..=MAX_FACE_CORNERS {
             source.push_str(&format!("v {index} 0 0\nvt {index} 0\n"));
         }
-        source.push_str("f");
+        source.push('f');
         for index in 1..=MAX_FACE_CORNERS + 1 {
             source.push_str(&format!(" {index}/{index}"));
         }
@@ -276,5 +318,45 @@ mod tests {
         }
         assert!(budget.account_face(MAX_FACE_CORNERS).is_err());
         assert!(TriangulationBudget::default().account_face(MAX_FACE_CORNERS + 1).is_err());
+    }
+
+    #[test]
+    fn mtl_material_budget_rejects_excess_before_material_parser_allocates() {
+        let mut source = b"newmtl material_0\n".to_vec();
+        for index in 1..MAX_MATERIALS {
+            source.extend_from_slice(format!("newmtl material_{index}\n").as_bytes());
+        }
+        let error = obj(b"mtllib many-materials.mtl\n", &mut |_| Ok(source.clone())).unwrap_err();
+        assert!(error.to_string().contains("MTL exceeds the 4096-material import limit"));
+
+        let at_limit = (0..MAX_MATERIALS - 1).map(|i| format!("newmtl material_{i}\n")).collect::<String>();
+        assert!(check_mtl_material_budget(at_limit.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn repeated_mtl_reference_is_resolved_once() {
+        let source = b"mtllib materials.mtl\nmtllib materials.mtl\n";
+        let mut resolve_calls = 0;
+        let result = obj(source, &mut |_| {
+            resolve_calls += 1;
+            Ok(b"newmtl fabric\nKd 0.5 0.4 0.3\n".to_vec())
+        });
+        assert!(result.is_ok());
+        assert_eq!(resolve_calls, 1);
+    }
+
+    #[test]
+    fn mtl_reuses_material_created_by_earlier_usemtl() {
+        let source = b"usemtl fabric\nmtllib materials.mtl\n";
+        let result = obj(source, &mut |_| Ok(b"newmtl fabric\nKd 0.5 0.4 0.3\n".to_vec())).unwrap();
+        assert_eq!(result.materials.len(), 2);
+        assert_eq!(result.materials.get(1).map(|material| material.color[..3].to_vec()), Some(vec![0.5, 0.4, 0.3]));
+    }
+
+    #[test]
+    fn obj_rejects_excess_material_names_as_they_are_added() {
+        let source = (0..MAX_MATERIALS).map(|index| format!("usemtl material_{index}\n")).collect::<String>();
+        let error = obj(source.as_bytes(), &mut |_| Err(Error("unused resolver".into()))).unwrap_err();
+        assert!(error.to_string().contains("4096-material import limit"));
     }
 }

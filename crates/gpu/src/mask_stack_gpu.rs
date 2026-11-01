@@ -13,6 +13,8 @@ use wgpu::util::DeviceExt;
 
 const SHADER: &str = include_str!("mask_stack_gpu.wgsl");
 const MAX_MASK_FILL_MAP_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_MASK_GPU_WORKING_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_MASK_CPU_SYNC_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Reusable pipelines for rendering editable mask stacks to a caller-owned GPU target.
 pub struct MaskStackRenderer {
@@ -122,6 +124,11 @@ impl RenderCache {
 }
 
 impl MaskStackRenderer {
+    /// Check full-resolution texture and host-sync costs before callers allocate the final target.
+    pub fn validate_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(), String> {
+        Self::validate(stack)?;
+        validate_stack_allocation_budget(stack, size)
+    }
     /// Validate a stack without allocating textures or uploading source pixels.
     pub fn validate(stack: &Stack) -> Result<(), String> {
         if stack.base.channels() == 0 {
@@ -640,6 +647,7 @@ impl MaskStackRenderer {
         }
         let has_blur =
             stack.layers.iter().any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { radius } if *radius > 0));
+        Self::validate_allocation_budget(stack, size)?;
         if self.cache.as_ref().is_none_or(|cache| cache.owner_key != owner_key || cache.size != size) {
             self.cache = Some(create_render_cache(device, size, owner_key));
         }
@@ -1084,6 +1092,52 @@ impl MaskStackRenderer {
     }
 }
 
+fn validate_stack_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(), String> {
+    let pixels = u64::from(size[0]).checked_mul(u64::from(size[1])).ok_or("Mask-stack pixel count overflow")?;
+    // Base + final target + four ping-pong textures. Blur adds the shell-ID map and
+    // checkpoint texture below; this bounds the worst configuration before creation.
+    let mut gpu_bytes = pixels.checked_mul(8 + 8 + 32 + 8).ok_or("Mask-stack GPU allocation size overflow")?;
+    let mut largest_cpu_sync = pixels
+        .checked_mul((stack.base.channels() as u64).checked_mul(4).and_then(|read| read.checked_add(8)).ok_or("Mask base sync size overflow")?)
+        .ok_or("Mask base sync size overflow")?;
+    for layer in stack.layers.iter().filter(|layer| layer.visible && layer.opacity > 0.0) {
+        // `write_surface_region` temporarily holds decoded f32 samples and encoded RGBA16F.
+        // Bound the host allocation before reading a full-canvas surface into that buffer.
+        let texture_bpp = if matches!(&layer.kind, EffectKind::Paint) && rgba8_compatible(&layer.surface) { 4 } else { 8 };
+        let sync_bytes = pixels
+            .checked_mul(
+                (layer.surface.channels() as u64).checked_mul(4).and_then(|read| read.checked_add(texture_bpp)).ok_or("Mask-stack CPU sync size overflow")?,
+            )
+            .ok_or("Mask-stack CPU sync size overflow")?;
+        largest_cpu_sync = largest_cpu_sync.max(sync_bytes);
+        gpu_bytes = gpu_bytes
+            .checked_add(pixels.checked_mul(texture_bpp).ok_or("Mask-stack GPU allocation size overflow")?)
+            .ok_or("Mask-stack GPU allocation size overflow")?;
+        if let Some(map) = layer.fill_map.as_ref() {
+            let fill_pixels = u64::from(layer.fill_map_size[0]).checked_mul(u64::from(layer.fill_map_size[1])).ok_or("Mask Fill allocation size overflow")?;
+            let fill_bytes = fill_pixels.checked_mul(4).ok_or("Mask Fill allocation size overflow")?;
+            gpu_bytes = gpu_bytes.checked_add(fill_bytes).ok_or("Mask-stack GPU allocation size overflow")?;
+            let map_sync = fill_pixels
+                .checked_mul((map.channels() as u64).checked_mul(4).and_then(|read| read.checked_add(4)).ok_or("Mask Fill sync size overflow")?)
+                .ok_or("Mask Fill sync size overflow")?;
+            largest_cpu_sync = largest_cpu_sync.max(map_sync);
+        }
+    }
+    if stack.layers.iter().any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { radius } if *radius > 0)) {
+        // One shell-ID map and one blurred-stack checkpoint are added when blur is enabled.
+        gpu_bytes = gpu_bytes
+            .checked_add(pixels.checked_mul(16 + 8).ok_or("Mask-stack GPU allocation size overflow")?)
+            .ok_or("Mask-stack GPU allocation size overflow")?;
+    }
+    if gpu_bytes > MAX_MASK_GPU_WORKING_BYTES {
+        return Err("Mask stack exceeds the GPU working-set limit".into());
+    }
+    if largest_cpu_sync > MAX_MASK_CPU_SYNC_BYTES {
+        return Err("Mask stack exceeds the bounded CPU upload/readback limit".into());
+    }
+    Ok(())
+}
+
 enum MaskLayer {
     Paint(usize),
     Fill {
@@ -1185,7 +1239,13 @@ fn write_fill_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &Sur
         return Err("Mask Fill image has no channels".into());
     }
     let values = surface.try_read_region(rect).map_err(|error| error.to_string())?;
-    let bytes: Vec<u8> = values.chunks_exact(channels).flat_map(|pixel| pixel[0].to_le_bytes()).collect();
+    let byte_len =
+        (rect.width() as usize).checked_mul(rect.height() as usize).and_then(|pixels| pixels.checked_mul(4)).ok_or("Mask Fill upload size overflow")?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(byte_len).map_err(|_| "Not enough memory for Mask Fill upload")?;
+    for pixel in values.chunks_exact(channels) {
+        bytes.extend_from_slice(&pixel[0].to_le_bytes());
+    }
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -1439,7 +1499,13 @@ fn write_surface_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &
         if channels != 4 {
             return Err("Compact GPU Paint texture requires four channels".into());
         }
-        let bytes: Vec<u8> = values.chunks_exact(4).flat_map(|pixel| pixel.iter().map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+        let byte_len =
+            (rect.width() as usize).checked_mul(rect.height() as usize).and_then(|pixels| pixels.checked_mul(4)).ok_or("Mask Paint upload size overflow")?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(byte_len).map_err(|_| "Not enough memory for Mask Paint upload")?;
+        for pixel in values.chunks_exact(4) {
+            bytes.extend(pixel.iter().map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8));
+        }
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture,
@@ -1453,7 +1519,9 @@ fn write_surface_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &
         );
         return Ok(());
     }
-    let mut bytes = Vec::with_capacity(rect.width() as usize * rect.height() as usize * 8);
+    let byte_len = (rect.width() as usize).checked_mul(rect.height() as usize).and_then(|pixels| pixels.checked_mul(8)).ok_or("Mask upload size overflow")?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(byte_len).map_err(|_| "Not enough memory for mask upload")?;
     for pixel in values.chunks_exact(channels) {
         let alpha = if channels >= 4 { pixel[3] } else { 1.0 };
         for value in [pixel[0], 0.0, 0.0, alpha] {
@@ -1511,6 +1579,12 @@ fn params(size: [u32; 2], stage: u32, radius: u32, opacity: f32, blend: i32, val
 #[cfg(test)]
 mod mask_stack_gpu_tests {
     use super::*;
+
+    #[test]
+    fn allocation_budget_rejects_oversized_canvas_before_gpu_setup() {
+        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [16_384, 16_384]).is_err());
+    }
 
     #[test]
     fn disjoint_damage_regions_stay_separate_until_blur_halos_overlap() {

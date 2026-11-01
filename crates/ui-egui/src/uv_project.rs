@@ -107,6 +107,7 @@ pub(crate) struct Ui {
     prompt: Option<(String, Value)>,
     skip_once: bool,
     exit_approved: bool,
+    cancel_workspace: Option<String>,
     pub(crate) parked_view: Option<Value>,
 }
 pub(crate) fn dirty(app: &PhotocraftApp) -> bool {
@@ -188,9 +189,11 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bo
     if id == "file.exit" && app.session.uv_workspace.active {
         // The project has already been answered; native prompts now cover only ordinary docs.
         let previous_workspace = app.ui.workspace.clone();
+        app.uv_cache.project.cancel_workspace = Some(previous_workspace.clone());
         app.ui.workspace = "Essentials".into();
         if let Err(error) = crate::uv_workspace::sync_workspace(app) {
             app.ui.workspace = previous_workspace;
+            app.uv_cache.project.cancel_workspace = None;
             app.ui.status = error;
             app.ui.status_error = true;
             app.uv_cache.project.exit_approved = false;
@@ -290,6 +293,12 @@ pub(crate) fn guard_exit(app: &mut PhotocraftApp) -> bool {
 }
 pub(crate) fn cancel_exit(app: &mut PhotocraftApp) {
     app.uv_cache.project.exit_approved = false;
+    if let Some(workspace) = app.uv_cache.project.cancel_workspace.take()
+        && let Err(error) = crate::menus::workspace_ui::select_workspace_named(app, workspace)
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
 }
 
 pub(crate) fn prompt_open(app: &PhotocraftApp) -> bool {
@@ -420,6 +429,33 @@ mod container_tests {
         assert!(intercept(&mut app, "file.exit", &json!({})));
         assert!(app.discard.is_none());
         assert_eq!(app.uv_cache.project.prompt.as_ref().unwrap().0, "file.exit");
+    }
+
+    #[test]
+    fn canceling_ordinary_document_exit_restores_the_3d_workspace() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let mut app = app();
+        let path = std::env::temp_dir().join(format!("uv-exit-cancel-{}.pcuv", std::process::id()));
+        save_to(&mut app, path.to_string_lossy().into_owned()).unwrap();
+        assert!(!dirty(&app), "the UV project is saved before exercising the ordinary document prompt");
+
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.painting", json!({})).unwrap();
+        app.run("edit.fill", json!({"color":"#00ff00"})).unwrap();
+        assert!(app.session.active().unwrap().is_dirty(), "the ordinary document must prompt on exit");
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.threeD", json!({})).unwrap();
+
+        assert!(!guard_exit(&mut app), "a clean UV project should proceed to the ordinary document prompt");
+        assert_eq!(app.ui.workspace, "Essentials", "exit checks ordinary documents in their native workspace");
+        assert!(crate::discard_ui::intercept(&mut app, "file.exit", &Value::Null));
+        assert!(app.discard.is_some(), "the ordinary document prompt is open");
+
+        cancel_exit(&mut app);
+
+        assert_eq!(app.ui.workspace, "3D", "canceling exit restores the workspace active before the prompt");
+        assert!(app.session.uv_workspace.active, "the 3D document bank is restored with its workspace");
+        assert!(app.session.uv_workspace.parked()[0].is_dirty(), "cancel preserves the ordinary document's unsaved changes");
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -540,22 +540,23 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
     let gray_mask_hides_materials = gray_mask_hides_all_materials(app, cache);
     let slots = app.session.uv.all_bindings().filter(|id| id.is_some()).count().max(1);
     let gpu_limit = cache.gpu.as_ref().map(|g| g.max_texture_side());
-    if let Some(limit) = gpu_limit {
-        let mut bytes = 0u64;
-        for id in app.session.uv.all_bindings().flatten() {
-            if let Some(st) = app.session.documents().iter().find(|st| st.doc.id == *id) {
+    let mut bytes = 0u64;
+    for id in app.session.uv.all_bindings().flatten() {
+        if let Some(st) = app.session.documents().iter().find(|st| st.doc.id == *id) {
+            if let Some(limit) = gpu_limit {
                 if st.doc.size.width > limit || st.doc.size.height > limit {
                     return Err(crate::i18n::fmt(
                         tl!("Source map {width} × {height} exceeds the GPU limit of {limit}. Maps are not downscaled automatically."),
                         &[("width", &st.doc.size.width.to_string()), ("height", &st.doc.size.height.to_string()), ("limit", &limit.to_string())],
                     ));
                 }
-                bytes = bytes.saturating_add(u64::from(st.doc.size.width) * u64::from(st.doc.size.height) * 16);
             }
+            let map_bytes = u64::from(st.doc.size.width).saturating_mul(u64::from(st.doc.size.height)).saturating_mul(16);
+            bytes = bytes.saturating_add(map_bytes);
         }
-        if bytes > 4 * 1024 * 1024 * 1024 {
-            return Err(tl!("Source maps require more than 4 GiB of CPU cache. Remove unused material bindings; maps are not downscaled automatically.").into());
-        }
+    }
+    if bytes > 4 * 1024 * 1024 * 1024 {
+        return Err(tl!("Source maps require more than 4 GiB of CPU cache. Remove unused material bindings; maps are not downscaled automatically.").into());
     }
     // GPU uses the source size. The small float-map budget belongs only to the CPU fallback.
     let texture_side = gpu_limit.map_or_else(|| (16_777_216.0 / slots as f64).sqrt().floor().clamp(1.0, 2048.0), f64::from);

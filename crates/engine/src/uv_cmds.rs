@@ -431,7 +431,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     // aborting an otherwise valid mesh import.
     for (i, m) in scene.materials.iter().enumerate() {
         for (normal, filename, embedded) in [(false, &m.base_color, &m.embedded), (true, &m.normal_map, &m.embedded_normal)] {
-            let Some(bytes) = embedded.clone().or_else(|| filename.as_ref().and_then(|p| read(p).ok())) else {
+            let Some(bytes) = embedded.clone().or_else(|| filename.as_ref().and_then(|p| read(p).ok()).map(Arc::<[u8]>::from)) else {
                 if let Some(path) = filename {
                     scene.warnings.push(format!("{}: missing texture {path}; assign a replacement", m.name));
                 }
@@ -786,16 +786,40 @@ pub(crate) fn cached_padding(
     Ok(mask)
 }
 
-fn selection_surface(s: &mut Session, p: &Value) -> Result<(DocId, Surface)> {
+#[derive(Clone, Copy)]
+struct SelectionSettings {
+    guard: f64,
+    horizontal: f64,
+    vertical: f64,
+    feather: f64,
+    open_borders: bool,
+    padding: f64,
+}
+
+fn selection_settings(s: &Session, p: &Value) -> Result<SelectionSettings> {
+    let settings = SelectionSettings {
+        guard: number(p, "guard", s.uv.guard)?,
+        horizontal: number(p, "horizontal", s.uv.horizontal)?,
+        vertical: number(p, "vertical", s.uv.vertical)?,
+        feather: number(p, "feather", s.uv.feather)?,
+        open_borders: boolean(p, "openBorders", s.uv.open_borders)?,
+        padding: number(p, "padding", s.uv.padding)?,
+    };
+    if [settings.guard, settings.horizontal, settings.vertical, settings.feather, settings.padding]
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1024.0).contains(value))
+    {
+        return Err(err("guard, feather and padding must be in 0..1024"));
+    }
+    Ok(settings)
+}
+
+fn selection_surface(s: &mut Session, p: &Value, settings: SelectionSettings) -> Result<(DocId, Surface)> {
     let material = material(s, p)?;
     let id = bindings(s).get(material).copied().flatten().ok_or_else(|| err("No texture document assigned"))?;
     let (width, height) =
         s.documents().iter().find(|d| d.doc.id == id).map(|d| (d.doc.size.width, d.doc.size.height)).ok_or_else(|| err("The texture document is closed"))?;
-    let guard = number(p, "guard", s.uv.guard)?;
-    let feather = number(p, "feather", s.uv.feather)?;
-    let horizontal = number(p, "horizontal", s.uv.horizontal)?;
-    let vertical = number(p, "vertical", s.uv.vertical)?;
-    let padding = number(p, "padding", s.uv.padding)?;
+    let SelectionSettings { guard, feather, horizontal, vertical, open_borders, padding } = settings;
     let occupancy = cached_occupancy(s, material, width, height, [0, 0])?;
     let scene = s.uv.scene.as_ref().cloned().ok_or_else(|| err("No mesh"))?;
     let topology = s.uv.topology.as_ref().cloned().ok_or_else(|| err("No topology"))?;
@@ -809,19 +833,7 @@ fn selection_surface(s: &mut Session, p: &Value) -> Result<(DocId, Surface)> {
     let mask = topology
         .mask_with_padding_masks(
             &scene,
-            &MaskOptions {
-                width,
-                height,
-                material,
-                tile: [0, 0],
-                selected,
-                guard,
-                horizontal,
-                vertical,
-                feather,
-                open_borders: boolean(p, "openBorders", s.uv.open_borders)?,
-                padding,
-            },
+            &MaskOptions { width, height, material, tile: [0, 0], selected, guard, horizontal, vertical, feather, open_borders, padding },
             &occupancy,
             Some(&padding_masks),
         )
@@ -834,7 +846,8 @@ fn selection_surface(s: &mut Session, p: &Value) -> Result<(DocId, Surface)> {
     Ok((id, surface))
 }
 fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
-    let (id, surface) = selection_surface(s, p)?;
+    let settings = selection_settings(s, p)?;
+    let (id, surface) = selection_surface(s, p, settings)?;
     let index = s.documents().iter().position(|d| d.doc.id == id).ok_or(EngineError::NoDocument)?;
     s.set_active(index);
     let owned = surface.clone();
@@ -845,12 +858,12 @@ fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
     let live: BTreeSet<_> = s.documents().iter().map(|d| d.doc.id.0).collect();
     s.uv.selection_masks.retain(|id, _| live.contains(id));
     s.uv.selection_masks.insert(id.0, owned);
-    s.uv.guard = number(p, "guard", s.uv.guard)?;
-    s.uv.horizontal = number(p, "horizontal", s.uv.horizontal)?;
-    s.uv.vertical = number(p, "vertical", s.uv.vertical)?;
-    s.uv.feather = number(p, "feather", s.uv.feather)?;
-    s.uv.open_borders = boolean(p, "openBorders", s.uv.open_borders)?;
-    s.uv.padding = number(p, "padding", s.uv.padding)?;
+    s.uv.guard = settings.guard;
+    s.uv.horizontal = settings.horizontal;
+    s.uv.vertical = settings.vertical;
+    s.uv.feather = settings.feather;
+    s.uv.open_borders = settings.open_borders;
+    s.uv.padding = settings.padding;
     Ok(json!({"selected":true,"guard":s.uv.guard}))
 }
 pub(crate) fn has_selection(s: &Session) -> bool {
@@ -883,7 +896,8 @@ pub(crate) fn deselect(s: &mut Session) -> Result<()> {
     result
 }
 fn paint_layer(s: &mut Session, p: &Value) -> Result<Value> {
-    let (id, surface) = selection_surface(s, p)?;
+    let settings = selection_settings(s, p)?;
+    let (id, surface) = selection_surface(s, p, settings)?;
     let index = s.documents().iter().position(|d| d.doc.id == id).ok_or(EngineError::NoDocument)?;
     s.set_active(index);
     let layer = s.edit("UV protected paint layer", |doc, _| {

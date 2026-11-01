@@ -267,13 +267,21 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let id = target(s, p)?;
     let index = index(p)?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let mask = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or_else(|| bad("Layer has no mask"))?;
-    let stack = mask.paint.as_mut().ok_or_else(|| bad("Mask has no Paint layers"))?;
-    if index >= stack.layers.len() {
-        return Err(bad("Paint layer is out of range"));
+    let was_clean = st.revision == st.saved_revision;
+    {
+        let mask = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or_else(|| bad("Layer has no mask"))?;
+        let stack = mask.paint.as_mut().ok_or_else(|| bad("Mask has no Paint layers"))?;
+        if index >= stack.layers.len() {
+            return Err(bad("Paint layer is out of range"));
+        }
+        stack.active = index;
     }
-    stack.active = index;
     st.active_layer = Some(id);
+    st.revision = st.revision.saturating_add(1);
+    if was_clean {
+        st.saved_revision = st.revision;
+    }
+    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
     Ok(Value::Null)
 }
 fn modify(s: &mut Session, p: &Value) -> Result<Value> {
@@ -315,6 +323,17 @@ fn modify(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad("Fill bounds must have positive size"));
             }
             Ok(out)
+        })
+        .transpose()?;
+    let bounds = bounds
+        .map(|[x0, y0, x1, y1]| {
+            let requested = photocraft_geom::Rect::new(x0, y0, x1, y1);
+            let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+            let clipped = requested.intersect(&canvas);
+            if clipped.is_empty() {
+                return Err(bad("Fill bounds do not overlap the canvas"));
+            }
+            Ok([clipped.x0, clipped.y0, clipped.x1, clipped.y1])
         })
         .transpose()?;
     let effect_changed = fill_value.is_some()

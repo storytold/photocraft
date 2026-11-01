@@ -94,6 +94,64 @@ fn textures_auto_open_and_uv_selection_is_one_undo_step() {
 }
 
 #[test]
+fn uv_selection_commands_reject_out_of_range_settings_before_mutation() {
+    let mut s = scene();
+    choose(&mut s);
+    let before = s.active().unwrap();
+    let doc_id = before.doc.id;
+    let revision = before.revision;
+    let layer_count = before.doc.layers.len();
+
+    assert!(s.execute("uv.mask.apply", json!({"guard":1025})).is_err());
+    let after_mask = s.active().unwrap();
+    assert_eq!(after_mask.doc.id, doc_id);
+    assert_eq!(after_mask.revision, revision);
+    assert!(after_mask.doc.selection.is_none());
+    assert_eq!(after_mask.doc.layers.len(), layer_count);
+
+    assert!(s.execute("uv.layer.create", json!({"guard":1025})).is_err());
+    let after_layer = s.active().unwrap();
+    assert_eq!(after_layer.doc.id, doc_id);
+    assert_eq!(after_layer.revision, revision);
+    assert!(after_layer.doc.selection.is_none());
+    assert_eq!(after_layer.doc.layers.len(), layer_count);
+}
+
+#[test]
+fn mask_paint_select_invalidates_revision_without_dirtying_a_clean_document() {
+    let mut s = scene();
+    s.execute("uv.texture.create", json!({"material":0,"width":128,"height":128,"depth":8})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("uv.maskPaint.add", json!({"kind":"paint"})).unwrap();
+    s.execute("uv.maskPaint.add", json!({"kind":"fill"})).unwrap();
+    let path = std::env::temp_dir().join(format!("uv-mask-select-{}.pcuv", std::process::id()));
+    s.execute("uv.project.save", json!({"path":path})).unwrap();
+    let before = s.active().unwrap().revision;
+
+    s.execute("uv.maskPaint.select", json!({"index":0})).unwrap();
+
+    let after = s.active().unwrap();
+    assert!(after.revision > before, "selection changes the serialized active effect and invalidates revision-keyed UI caches");
+    assert!(!after.is_dirty(), "selecting an effect is UI state and should keep a previously clean document clean");
+    assert!(after.last_damage.is_some_and(|damage| damage.is_empty()), "effect selection invalidates revision-keyed previews without pixel damage");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mask_paint_fill_bounds_are_clipped_to_the_canvas() {
+    let mut s = scene();
+    s.execute("uv.texture.create", json!({"material":0,"width":128,"height":128,"depth":8})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("uv.maskPaint.add", json!({"kind":"fill"})).unwrap();
+    s.execute("uv.maskPaint.modify", json!({"index":0,"bounds":[-32,-16,200,180]})).unwrap();
+
+    let st = s.active().unwrap();
+    let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    let fill = &layer.mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0];
+    assert_eq!(fill.fill_bounds, Some([0, 0, 128, 128]));
+}
+
+#[test]
 fn zero_coverage_is_explicit_and_blocks_destructive_fill() {
     let mut s = scene();
     s.execute("uv.mask.apply", json!({})).unwrap();

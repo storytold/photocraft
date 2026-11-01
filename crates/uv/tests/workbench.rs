@@ -211,7 +211,9 @@ fn depth_pick_is_independent_of_triangle_submission_order() {
 #[test]
 fn embedded_fbx_diffuse_texture_is_available_without_external_files() {
     let scene = fixture("two-shells-embedded.fbx");
-    assert!(scene.materials.iter().any(|m| m.embedded.as_deref().is_some_and(|bytes| bytes.starts_with(b"\x89PNG\r\n\x1a\n"))));
+    let index = scene.materials.iter().position(|m| m.embedded.as_deref().is_some_and(|bytes| bytes.starts_with(b"\x89PNG\r\n\x1a\n"))).unwrap();
+    let saved_scene = scene.clone();
+    assert!(std::sync::Arc::ptr_eq(scene.materials[index].embedded.as_ref().unwrap(), saved_scene.materials[index].embedded.as_ref().unwrap()));
     assert_eq!(Topology::build(&scene).unwrap().shells.len(), 2);
 }
 

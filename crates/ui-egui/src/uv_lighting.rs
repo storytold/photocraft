@@ -61,6 +61,24 @@ pub(crate) fn refresh_gpu(app: &mut PhotocraftApp, maps: &mut SurfaceMaps) -> Re
     refresh_impl(app, maps, true)
 }
 fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool) -> Result<(), String> {
+    // This refresh can materialize complete CPU documents before trying the GPU path. Reject
+    // unreasonable source sets first so neither display_doc nor a failed GPU upload can trigger
+    // an unbounded full-resolution allocation.
+    let mut checked = Vec::new();
+    let mut cpu_bytes = 0u64;
+    for id in app.session.uv.all_bindings().flatten() {
+        if checked.contains(id) {
+            continue;
+        }
+        checked.push(*id);
+        if let Some(st) = app.session.documents().iter().find(|st| st.doc.id == *id) {
+            let map_bytes = u64::from(st.doc.size.width).saturating_mul(u64::from(st.doc.size.height)).saturating_mul(16);
+            cpu_bytes = cpu_bytes.saturating_add(map_bytes);
+        }
+    }
+    if cpu_bytes > 4 * 1024 * 1024 * 1024 {
+        return Err("Source maps require more than 4 GiB of CPU cache; remove unused material bindings or reduce their resolution".into());
+    }
     let monitor = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()).map(|d| d.monitor.clone());
     let monitor = monitor.as_deref().unwrap_or(photocraft_cms::Builtin::Srgb.profile());
     let hash = monitor.content_hash();

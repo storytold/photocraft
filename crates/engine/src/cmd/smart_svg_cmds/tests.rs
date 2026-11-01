@@ -107,6 +107,7 @@ fn shared_instances_keep_placement_filters_masks_and_one_undo_transaction() {
             linked: true,
             density: 0.5,
             feather: 1.0,
+            paint: None,
         });
         let duplicate = layer.id;
         doc.layers.push(layer);

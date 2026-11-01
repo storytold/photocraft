@@ -140,6 +140,51 @@ fn native_mask_gpu_path_emits_authoritative_round_dabs_and_cpu_replay_matches() 
 }
 
 #[test]
+fn native_mask_gpu_cpu_fallback_preserves_disconnected_segments() {
+    let (s, id) = native_mask_gpu_session();
+    let mut s = s;
+    s.edit("add downstream Blur to enable disconnected mask strokes", |doc, _| {
+        let stack = doc.layer_mut(id).and_then(|layer| layer.mask.as_mut()).and_then(|mask| mask.paint.as_mut()).ok_or(EngineError::NoLayer(id))?;
+        stack.layers.push(photocraft_doc::mask_paint::Paint {
+            name: "Blur".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: photocraft_doc::mask_paint::EffectKind::Blur { radius: 4 },
+        });
+        Ok(())
+    })
+    .unwrap();
+    let params = json!({
+        "target":"mask",
+        "points":[[8.5,8.5,1.0]],
+        "brush":{"size":8,"pressureSize":false,"hardness":0.4,"opacity":0.8,"flow":0.5},
+        "smoothing":0.35,
+        "color":"#ffffff"
+    });
+    let mut gpu = LiveStroke::begin_with_native_mask_gpu_brush(&s, "paint.stroke", &params).unwrap();
+    gpu.break_segment().unwrap();
+    gpu.push(&[StrokePoint::new(56.5, 8.5, 1.0)]).unwrap();
+    gpu.break_segment().unwrap();
+    gpu.push(&[StrokePoint::new(8.5, 56.5, 0.7)]).unwrap();
+
+    let mut cpu = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    cpu.break_segment().unwrap();
+    cpu.push(&[StrokePoint::new(56.5, 8.5, 1.0)]).unwrap();
+    cpu.break_segment().unwrap();
+    cpu.push(&[StrokePoint::new(8.5, 56.5, 0.7)]).unwrap();
+    gpu.fallback_native_mask_gpu_to_cpu().unwrap();
+
+    let actual = gpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
+    let expected = cpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
+    assert!(same_pixels(actual, expected, Rect::new(0, 0, 64, 64)), "CPU fallback must keep each disconnected stroke segment isolated");
+}
+
+#[test]
 fn native_mask_gpu_readback_patch_commits_through_one_existing_undo_step() {
     let (mut s, id) = native_mask_gpu_session();
     let params = json!({

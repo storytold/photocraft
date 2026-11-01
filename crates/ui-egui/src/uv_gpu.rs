@@ -54,6 +54,11 @@ impl GpuEnvironment {
         output: Option<&(u64, Image)>,
     ) -> Result<Self, String> {
         let device = &rs.device;
+        validate_environment_images(device.limits().max_texture_dimension_2d, &source.specular)?;
+        validate_environment_images(device.limits().max_texture_dimension_2d, std::slice::from_ref(&source.diffuse))?;
+        if let Some((_, image)) = output {
+            validate_environment_images(device.limits().max_texture_dimension_2d, std::slice::from_ref(image))?;
+        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uv environment"),
             entries: &[
@@ -82,7 +87,14 @@ impl GpuEnvironment {
                 view_formats: &[],
             });
             for (mip, im) in levels.iter().enumerate() {
-                let data: Vec<_> = im.rgba.iter().flat_map(|p| p.iter().flat_map(|x| crate::gpu_canvas::f32_to_f16(*x).to_le_bytes())).collect();
+                let byte_len = im.rgba.len().checked_mul(8).ok_or("Environment upload size overflow")?;
+                let mut data = Vec::new();
+                data.try_reserve_exact(byte_len).map_err(|_| "Not enough memory for environment upload")?;
+                for pixel in &im.rgba {
+                    for value in pixel {
+                        data.extend_from_slice(&crate::gpu_canvas::f32_to_f16(*value).to_le_bytes());
+                    }
+                }
                 rs.queue.write_texture(
                     wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: mip as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                     &data,
@@ -322,6 +334,27 @@ fn valid_symmetry_plane(corners: &[[f32; 3]; 4]) -> bool {
 fn extent(size: [u32; 2]) -> wgpu::Extent3d {
     wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 }
 }
+const MAX_UV_GPU_MAP_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ENVIRONMENT_TEXTURE_BYTES: u64 = 512 * 1024 * 1024;
+fn validate_environment_images(max_side: u32, levels: &[Image]) -> Result<(), String> {
+    let mut total_bytes = 0u64;
+    for image in levels {
+        if image.width == 0
+            || image.height == 0
+            || image.width > max_side as usize
+            || image.height > max_side as usize
+            || image.width.checked_mul(image.height) != Some(image.rgba.len())
+        {
+            return Err("Invalid UV environment image dimensions or length".into());
+        }
+        let bytes = u64::try_from(image.rgba.len()).ok().and_then(|pixels| pixels.checked_mul(8)).ok_or("UV environment texture size overflow")?;
+        total_bytes = total_bytes.checked_add(bytes).ok_or("UV environment texture size overflow")?;
+        if total_bytes > MAX_ENVIRONMENT_TEXTURE_BYTES {
+            return Err("UV environment texture exceeds the 512 MiB upload limit".into());
+        }
+    }
+    Ok(())
+}
 fn texture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages, label: &str) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -403,6 +436,22 @@ impl Renderer {
             return;
         }
         let rejection_key = (source.owner_key, size, source.shell_key, configuration_key);
+        let max_side = self.rs.device.limits().max_texture_dimension_2d;
+        let allocation = if size.contains(&0) || size.iter().any(|side| *side > max_side) {
+            Err("Gray mask dimensions exceed the GPU texture limit".to_owned())
+        } else {
+            photocraft_gpu::MaskStackRenderer::validate_allocation_budget(stack, size)
+        };
+        if let Err(error) = allocation {
+            log::warn!("GPU Gray mask preview fell back to its CPU cache: {error}");
+            if let Some(input) = source.brush_preview.as_ref() {
+                Self::fail_gray_mask_brush_input(input, error);
+            }
+            self.mask_stack_renderer.clear_cache();
+            self.set_gray_mask_source(None);
+            self.gray_mask_rejected = Some(rejection_key);
+            return;
+        }
         if self.gray_mask_rejected == Some(rejection_key) {
             if let Some(input) = source.brush_preview.as_ref() {
                 Self::fail_gray_mask_brush_input(input, "Gray mask GPU configuration is unsupported");
@@ -1468,6 +1517,13 @@ impl Renderer {
             || image.is_some_and(|im| im.width > max as usize || im.height > max as usize || im.width.checked_mul(im.height) != Some(im.rgba.len()))
         {
             return Err("Invalid material image dimensions or length".into());
+        }
+        let upload_bytes = u64::from(size[0])
+            .checked_mul(u64::from(size[1]))
+            .and_then(|pixels| pixels.checked_mul(if normal { 8 } else { 4 }))
+            .ok_or("Material texture size overflow")?;
+        if upload_bytes > MAX_UV_GPU_MAP_BYTES {
+            return Err("Material texture exceeds the 512 MiB GPU upload limit".into());
         }
         if let (Some(im), Some((expected, [x, y, w, h]))) = (image, hint)
             && previous.as_ref().is_some_and(|old| old.source == MapSource::Cpu && old.key == expected && old.size == size)

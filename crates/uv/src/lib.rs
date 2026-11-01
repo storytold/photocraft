@@ -11,6 +11,7 @@ pub mod topology;
 pub mod wrap;
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +20,8 @@ pub struct Error(pub String);
 
 pub const MAX_TRIANGLES: usize = 1_000_000;
 pub const MAX_VERTICES: usize = 3_000_000;
+/// Upper bound on imported material records, including the generated default material.
+pub const MAX_MATERIALS: usize = 4_096;
 pub const MAX_PIXELS: usize = 16_777_216;
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -33,9 +36,9 @@ pub struct Material {
     #[serde(default)]
     pub maps: std::collections::BTreeMap<preview::Channel, String>,
     #[serde(skip)]
-    pub embedded: Option<Vec<u8>>,
+    pub embedded: Option<Arc<[u8]>>,
     #[serde(skip)]
-    pub embedded_normal: Option<Vec<u8>>,
+    pub embedded_normal: Option<Arc<[u8]>>,
 }
 
 impl Default for Material {
@@ -84,6 +87,9 @@ impl Scene {
         }
         if self.triangles.len() > MAX_TRIANGLES || self.positions.len() > MAX_VERTICES {
             return Err(Error("Model exceeds the mesh budget (1M triangles / 3M vertices)".into()));
+        }
+        if self.materials.len() > MAX_MATERIALS {
+            return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material limit")));
         }
         if self.positions.iter().flatten().any(|x| !x.is_finite() || x.abs() > 1e15) {
             return Err(Error("Model contains invalid positions".into()));

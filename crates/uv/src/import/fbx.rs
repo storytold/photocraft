@@ -1,11 +1,14 @@
 //! Binary FBX static meshes, preserving per-corner UV and control-point identities.
-use crate::{Corner, Error, MAX_VERTICES, Material, Result, Scene};
+use crate::{Corner, Error, MAX_MATERIALS, MAX_VERTICES, Material, Result, Scene};
 use fbxcel::{
     low::v7400::AttributeValue as A,
     tree::{any::AnyTree, v7400::NodeHandle},
 };
 use glam::{DMat4, DQuat, DVec3, EulerRot};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
 // `fbxcel::AnyTree` owns every node and attribute, including arrays which the
 // mesh importer may never use. Bound that allocation before constructing it.
@@ -260,6 +263,13 @@ fn transform(n: NodeHandle<'_>, geometric: bool) -> DMat4 {
         * t(-sp)
 }
 
+type Connection = (i64, i64, String);
+type ConnectionIndex = HashMap<i64, Vec<usize>>;
+
+fn connected<'a>(connections: &'a [Connection], index: &'a ConnectionIndex, id: i64) -> impl Iterator<Item = &'a Connection> + 'a {
+    index.get(&id).into_iter().flatten().filter_map(|&i| connections.get(i))
+}
+
 pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
     if !bytes.starts_with(b"Kaydara FBX Binary") {
         return Err(Error("This build imports binary FBX 7.4+; export FBX as Binary from Maya (ASCII FBX is not supported)".into()));
@@ -269,7 +279,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
     let AnyTree::V7400(_, tree, _) = tree else { return Err(Error("Unsupported FBX version".into())) };
     let root = tree.root();
     let objects = child(root, "Objects").ok_or_else(|| Error("FBX Objects missing".into()))?;
-    let connections: Vec<(i64, i64, String)> = child(root, "Connections")
+    let connections: Vec<Connection> = child(root, "Connections")
         .map(|c| {
             c.children_by_name("C")
                 .filter_map(|n| {
@@ -279,38 +289,50 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
                 .collect()
         })
         .unwrap_or_default();
+    let mut incoming = ConnectionIndex::new();
+    let mut outgoing = ConnectionIndex::new();
+    for (i, (from, to, _)) in connections.iter().enumerate() {
+        outgoing.entry(*from).or_default().push(i);
+        incoming.entry(*to).or_default().push(i);
+    }
     let by_id: BTreeMap<i64, NodeHandle<'_>> = objects.children().filter_map(|n| Some((id(n)?, n))).collect();
+    // Decode each embedded Video payload once. FBX commonly connects one Video to several
+    // texture/material nodes; Arc clones keep those materials on the same backing allocation.
+    let embedded_videos: BTreeMap<i64, Arc<[u8]>> = objects
+        .children_by_name("Video")
+        .filter_map(|video| {
+            let video_id = id(video)?;
+            let bytes = child(video, "Content")?.attributes().first()?.get_binary()?;
+            Some((video_id, Arc::<[u8]>::from(bytes)))
+        })
+        .collect();
     let mut scene = Scene::default();
     let mut materials = BTreeMap::new();
     for m in objects.children_by_name("Material") {
         let Some(mid) = id(m) else { continue };
+        // Reserve one slot for the generated default material.
+        if scene.materials.len() >= MAX_MATERIALS.saturating_sub(1) {
+            return Err(Error(format!("Model exceeds the {MAX_MATERIALS}-material import limit")));
+        }
         let color = vector(m, "DiffuseColor", DVec3::ONE);
-        let texture = connections
-            .iter()
-            .filter(|(_, to, prop)| *to == mid && (prop == "DiffuseColor" || prop == "Diffuse" || prop == "BaseColor"))
+        let texture = connected(&connections, &incoming, mid)
+            .filter(|(_, _, prop)| matches!(prop.as_str(), "DiffuseColor" | "Diffuse" | "BaseColor"))
             .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"));
         let filename = texture.and_then(|t| text(t, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(t, "FileName"))).map(str::to_owned);
         let embedded = texture.and_then(id).and_then(|tid| {
-            connections.iter().find_map(|(from, to, _)| {
-                if *to != tid {
-                    return None;
-                }
+            connected(&connections, &incoming, tid).find_map(|(from, _, _)| {
                 let video = by_id.get(from).copied().filter(|n| n.name() == "Video")?;
-                child(video, "Content")?.attributes().first()?.get_binary().map(|b| b.to_vec())
+                embedded_videos.get(&id(video)?).cloned()
             })
         });
-        let normal_texture = connections
-            .iter()
-            .filter(|(_, to, prop)| *to == mid && (prop == "NormalMap" || prop == "normalCamera"))
+        let normal_texture = connected(&connections, &incoming, mid)
+            .filter(|(_, _, prop)| matches!(prop.as_str(), "NormalMap" | "normalCamera"))
             .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"));
         let normal_map = normal_texture.and_then(|t| text(t, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(t, "FileName"))).map(str::to_owned);
         let embedded_normal = normal_texture.and_then(id).and_then(|tid| {
-            connections.iter().find_map(|(from, to, _)| {
-                if *to != tid {
-                    return None;
-                }
+            connected(&connections, &incoming, tid).find_map(|(from, _, _)| {
                 let video = by_id.get(from).copied().filter(|n| n.name() == "Video")?;
-                child(video, "Content")?.attributes().first()?.get_binary().map(|b| b.to_vec())
+                embedded_videos.get(&id(video)?).cloned()
             })
         });
         let mut maps = BTreeMap::new();
@@ -323,9 +345,8 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
             (crate::preview::Channel::Roughness, &["Roughness", "DiffuseRoughness"][..]),
             (crate::preview::Channel::Emissive, &["EmissiveColor", "Emissive", "Emission"][..]),
         ] {
-            if let Some(texture) = connections
-                .iter()
-                .filter(|(_, to, prop)| *to == mid && properties.contains(&prop.as_str()))
+            if let Some(texture) = connected(&connections, &incoming, mid)
+                .filter(|(_, _, prop)| properties.contains(&prop.as_str()))
                 .find_map(|(from, _, _)| by_id.get(from).copied().filter(|n| n.name() == "Texture"))
                 && let Some(name) = text(texture, "RelativeFilename").filter(|s| !s.is_empty()).or_else(|| text(texture, "FileName"))
             {
@@ -372,7 +393,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
         let material_indices = material_layer.and_then(|n| ints(n, "Materials").ok()).unwrap_or_default();
         let all_same = material_layer.and_then(|n| text(n, "MappingInformationType")) == Some("AllSame");
         let models: Vec<NodeHandle<'_>> =
-            connections.iter().filter(|(from, _, _)| *from == gid).filter_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model")).collect();
+            connected(&connections, &outgoing, gid).filter_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model")).collect();
         if models.is_empty() {
             scene.warnings.push("Unconnected FBX geometry skipped".into());
         }
@@ -382,9 +403,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
             let mut current = mid;
             let mut seen = BTreeSet::new();
             seen.insert(mid);
-            while let Some(parent) =
-                connections.iter().filter(|(from, _, _)| *from == current).find_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model"))
-            {
+            while let Some(parent) = connected(&connections, &outgoing, current).find_map(|(_, to, _)| by_id.get(to).copied().filter(|n| n.name() == "Model")) {
                 current = id(parent).ok_or_else(|| Error("Missing parent id".into()))?;
                 if seen.len() >= 128 || !seen.insert(current) {
                     return Err(Error("Cyclic or overly deep FBX hierarchy".into()));
@@ -400,7 +419,7 @@ pub(super) fn load(bytes: &[u8], uv_set: usize) -> Result<Scene> {
             if integer(model, "InheritType") != 0 {
                 scene.warnings.push("FBX nondefault transform inheritance is approximated; freeze mesh transforms for exact placement".into());
             }
-            let attached: Vec<usize> = connections.iter().filter(|(_, to, _)| *to == mid).filter_map(|(from, _, _)| materials.get(from).copied()).collect();
+            let attached: Vec<usize> = connected(&connections, &incoming, mid).filter_map(|(from, _, _)| materials.get(from).copied()).collect();
             let offset = scene.positions.len();
             if offset.saturating_add(vertices.len() / 3) > MAX_VERTICES {
                 return Err(Error("Too many FBX vertices".into()));

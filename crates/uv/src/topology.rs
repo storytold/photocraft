@@ -9,6 +9,8 @@ use std::{
 const MAX_OCCUPANCY_PIXELS: usize = 16_384 * 16_384;
 const MAX_SHELL_ID_PIXELS: usize = 64 * 1024 * 1024;
 const MAX_PADDING_CANDIDATES: usize = 16 * 1024 * 1024;
+const MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES: usize = 1_000_000;
+const MAX_UV_RASTER_CANDIDATES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Shell {
@@ -176,19 +178,27 @@ impl Topology {
                 s.triangles.push(i);
             }
         }
+        let mut neighbor_entries = 0usize;
         for list in edges.values() {
             if list.len() > 2 {
                 result.non_manifold_edges += 1;
             }
             let same_uv = matches!(list.as_slice(), [a,b] if continuous(a,b));
-            for a in list {
-                let Some(&shell) = result.triangle_shell.get(a.triangle) else { continue };
-                let peers: BTreeSet<usize> = list.iter().filter_map(|b| result.triangle_shell.get(b.triangle).copied()).filter(|s| *s != shell).collect();
+            let shells: BTreeSet<usize> = list.iter().filter_map(|edge| result.triangle_shell.get(edge.triangle).copied()).collect();
+            let entries = shells.len().checked_mul(shells.len().saturating_sub(1)).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
+            neighbor_entries = neighbor_entries.checked_add(entries).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
+            if neighbor_entries > MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES {
+                return Err(Error(format!("Non-manifold UV topology exceeds the {MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES}-neighbor budget")));
+            }
+            for &shell in &shells {
                 if let Some(s) = result.shells.get_mut(shell) {
-                    s.neighbors.extend(peers.iter().copied());
+                    s.neighbors.extend(shells.iter().copied().filter(|peer| *peer != shell));
                 }
-                if list.len() != 2 || !same_uv || !peers.is_empty() {
-                    result.boundaries.push(Boundary { shell, uv: a.uv, shared: list.len() > 1 });
+            }
+            for edge in list {
+                let Some(&shell) = result.triangle_shell.get(edge.triangle) else { continue };
+                if list.len() != 2 || !same_uv || shells.len() > 1 {
+                    result.boundaries.push(Boundary { shell, uv: edge.uv, shared: list.len() > 1 });
                 }
             }
         }
@@ -229,9 +239,11 @@ impl Topology {
         }
         let mut occupancy = OccupancyMask { width, height, material, tile, bits: filled(n.div_ceil(8), 0u8)? };
         let point = |uv: [f64; 2]| [(uv[0] - f64::from(tile[0])) * w as f64, (1.0 - (uv[1] - f64::from(tile[1]))) * h as f64];
+        let mut raster_candidates = 0usize;
         for triangle in scene.triangles.iter().filter(|t| t.material == material) {
             let pts = triangle.corners.map(|c| point(c.uv));
             let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
+            account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
             for y in y0..y1 {
                 for x in x0..x1 {
                     let covered = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
@@ -261,6 +273,7 @@ impl Topology {
         if materials.is_empty() || materials.iter().any(|material| *material >= scene.materials.len()) {
             return Err(Error("Material is out of range".into()));
         }
+        let material_set: BTreeSet<usize> = materials.iter().copied().collect();
         let (w, h) = (width as usize, height as usize);
         let n = w
             .checked_mul(h)
@@ -271,7 +284,8 @@ impl Topology {
         }
         let mut ids = filled(n, 0u32)?;
         let point = |uv: [f64; 2]| [(uv[0] - f64::from(tile[0])) * w as f64, (1.0 - (uv[1] - f64::from(tile[1]))) * h as f64];
-        for (triangle_id, triangle) in scene.triangles.iter().enumerate().filter(|(_, triangle)| materials.contains(&triangle.material)) {
+        let mut raster_candidates = 0usize;
+        for (triangle_id, triangle) in scene.triangles.iter().enumerate().filter(|(_, triangle)| material_set.contains(&triangle.material)) {
             let shell_id = self.triangle_shell.get(triangle_id).copied().ok_or_else(|| Error("UV topology does not match the scene".into()))?;
             if self.shells.get(shell_id).is_none_or(|shell| shell.material != triangle.material) {
                 return Err(Error("UV topology does not match the scene material".into()));
@@ -279,6 +293,7 @@ impl Topology {
             let shell = u32::try_from(shell_id).ok().and_then(|id| id.checked_add(1)).ok_or_else(|| Error("UV shell ID exceeds the raster format".into()))?;
             let pts = triangle.corners.map(|corner| point(corner.uv));
             let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
+            account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
             for y in y0..y1 {
                 for x in x0..x1 {
                     let covered = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
@@ -370,10 +385,12 @@ impl Topology {
         }
         let point = |uv: [f64; 2]| [(uv[0] - f64::from(tile[0])) * w as f64, (1.0 - (uv[1] - f64::from(tile[1]))) * h as f64];
         let mut samples = filled(n, 0u8)?;
+        let mut raster_candidates = 0usize;
         for shell in selected.iter().filter_map(|i| self.shells.get(*i)) {
             for t in shell.triangles.iter().filter_map(|i| scene.triangles.get(*i)) {
                 let pts = t.corners.map(|c| point(c.uv));
                 let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
+                account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
                 for y in y0..y1 {
                     for x in x0..x1 {
                         // Four samples give subpixel shells a useful, antialiased boundary.
@@ -400,6 +417,7 @@ impl Topology {
             for e in self.boundaries.iter().filter(|e| selected.contains(&e.shell) && (e.shared || *open_borders)) {
                 let pts = e.uv.map(point);
                 let (x0, y0, x1, y1) = bounds(&pts, radius, w, h);
+                account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
                 let scaled = |p: [f64; 2]| [p[0] / radii[0], p[1] / radii[1]];
                 let scaled_pts = pts.map(scaled);
                 for y in y0..y1 {
@@ -443,6 +461,15 @@ impl Topology {
         }
         Ok(mask)
     }
+}
+
+fn account_raster_candidates(total: &mut usize, x0: usize, y0: usize, x1: usize, y1: usize) -> Result<()> {
+    let area = x1.saturating_sub(x0).checked_mul(y1.saturating_sub(y0)).ok_or_else(|| Error("UV raster candidate budget overflow".into()))?;
+    *total = total.checked_add(area).ok_or_else(|| Error("UV raster candidate budget overflow".into()))?;
+    if *total > MAX_UV_RASTER_CANDIDATES {
+        return Err(Error(format!("UV rasterization exceeds the {MAX_UV_RASTER_CANDIDATES}-candidate budget")));
+    }
+    Ok(())
 }
 
 pub struct MaskOptions {
@@ -631,5 +658,52 @@ mod shell_id_map_tests {
         let reversed = overlapping_scene(true);
         let reversed_topology = Topology::build(&reversed).unwrap();
         assert_eq!(reversed_topology.shell_id_map(&reversed, 8, 8, 0, [0, 0]).unwrap(), ids);
+    }
+}
+
+#[cfg(test)]
+mod import_budget_tests {
+    use super::*;
+    use crate::{Corner, Material, Scene, Triangle};
+
+    #[test]
+    fn pathological_non_manifold_edge_is_rejected_before_neighbor_clique_build() {
+        let incident_triangles = 1_001usize;
+        let mut positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+        let mut triangles = Vec::with_capacity(incident_triangles);
+        for index in 0..incident_triangles {
+            let third_vertex = positions.len();
+            positions.push([0.0, 1.0, index as f64]);
+            triangles.push(Triangle {
+                material: 0,
+                corners: [
+                    Corner { vertex: 0, uv: [0.0, 0.0], normal: None },
+                    Corner { vertex: 1, uv: [1.0, 0.0], normal: None },
+                    Corner { vertex: third_vertex, uv: [0.5, 0.5], normal: None },
+                ],
+            });
+        }
+        let scene = Scene { positions, triangles, materials: vec![Material::default()], warnings: Vec::new() };
+        let error = Topology::build(&scene).unwrap_err();
+        assert!(error.to_string().contains("neighbor budget"));
+    }
+
+    #[test]
+    fn occupancy_rejects_excessive_triangle_bbox_work_before_raster_loop() {
+        let scene = Scene {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            triangles: vec![Triangle {
+                material: 0,
+                corners: [
+                    Corner { vertex: 0, uv: [0.0, 0.0], normal: None },
+                    Corner { vertex: 1, uv: [1.0, 0.0], normal: None },
+                    Corner { vertex: 2, uv: [0.0, 1.0], normal: None },
+                ],
+            }],
+            materials: vec![Material::default()],
+            warnings: Vec::new(),
+        };
+        let error = Topology::default().occupancy_mask(&scene, 16_384, 16_384, 0, [0, 0]).unwrap_err();
+        assert!(error.to_string().contains("candidate budget"));
     }
 }
