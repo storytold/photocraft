@@ -1,5 +1,5 @@
 use super::batch::{batch_runs, run_starts, submit_batch, tile_grid};
-use super::consts::{FLUSH_BYTES, FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
+use super::consts::{FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
 use super::convert::lut_texture;
 use super::kit::FrameRes;
 use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, lru_victims, scoped_work, uniform_buffer_len};
@@ -195,7 +195,7 @@ impl Compositor {
             let focused = |r: &Rect| !cell_rect((r.x0.div_euclid(p), r.y0.div_euclid(p)), page).intersect(&f).is_empty();
             cells.sort_by_key(focused);
         }
-        let flush_bytes = FLUSH_BYTES.min(self.memory_budget() / 8).max(16 << 20);
+        let flush_bytes = self.flush_bytes();
         stats.cells = cells.len();
         // The previous intermediate submit (see `submit_batch`).
         let mut last_submit: Option<wgpu::SubmissionIndex> = None;

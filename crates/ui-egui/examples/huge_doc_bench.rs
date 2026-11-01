@@ -193,7 +193,9 @@ fn main() {
 
     // The compositor budget the app would use: Memory Usage (default 8 GB, `--memory-mb`) less
     // the document's pixels, within a quarter of RAM (`PHOTOCRAFT_RAM_MB` simulates a smaller
-    // machine). The view is the first viewport (`view`) or the whole document (`full`).
+    // machine), and where the GPU shares system memory, small for a document too large to keep
+    // a second copy of (#9007). The view is the first viewport (`view`) or the whole document
+    // (`full`).
     let allowance = arg(&args, "--memory-mb").and_then(|v| v.parse::<u64>().ok()).unwrap_or(8192) << 20;
     let pixels: u64 = doc
         .walk()
@@ -203,7 +205,7 @@ fn main() {
         .sum();
     let ram = photocraft_ui_egui::gpu_canvas::physical_memory();
     let vram = g.video_memory();
-    let budget = photocraft_ui_egui::gpu_canvas::memory_budget(allowance, pixels, ram, vram, 0);
+    let budget = g.budget_for(&doc, allowance, pixels, 0);
     g.set_memory_budget(budget);
     println!(
         "RAM {} MB, VRAM {} MB, document pixels {} MB, Memory Usage {} MB -> GPU budget {} MB",
