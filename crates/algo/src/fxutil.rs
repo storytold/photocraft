@@ -119,6 +119,11 @@ fn box_line_n(line: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<
     let norm = 1.0 / (2 * r + 1) as f64;
     // A tap clamps only within `r` (or `r + 1`) of an end. Between those the index is plain, so
     // the bulk of the line skips the clamp and the bounds check; the arithmetic is unchanged.
+    // The invariant that makes the plain indices safe: the middle runs while `x >= r` and
+    // `x <= w - r - 2`, where `x - r >= 0` and `x + r + 1 <= w - 1`. `first` is `r` (a line
+    // shorter than the radius has no middle: `first = w`) and `last` is `w - (r + 1)`, never
+    // below `first`; outside that span both taps clamp, which is the same sum, so every index
+    // stays inside the untouched copy `src[..w * n]` for any `w`, `r` and `n <= MAXC`.
     let first = r.min(w);
     let last = w.saturating_sub(r + 1).max(first);
     // f64 sums: rounding must not depend on where a window starts (tile independence).
@@ -276,6 +281,71 @@ pub(crate) fn add_sample_premul(src: &Image, x: f32, y: f32, clip: Rect, alpha: 
         } else {
             for c in 0..n {
                 acc[c] += px[c] * a;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{box_line_n, box_rows_n};
+
+    /// The pre-split row pass, kept verbatim as the reference: one clamped accumulator per
+    /// channel, stepped with `clamp(x + r + 1) - clamp(x - r)`.
+    fn reference_line(line: &[f32], w: usize, n: usize, r: usize) -> Vec<f32> {
+        let norm = 1.0 / (2 * r + 1) as f64;
+        let at = |x: isize, c: usize| line[(x.clamp(0, w as isize - 1) as usize) * n + c] as f64;
+        let mut out = vec![0.0f32; w * n];
+        for c in 0..n {
+            let mut acc: f64 = (-(r as isize)..=r as isize).map(|x| at(x, c)).sum();
+            for x in 0..w {
+                out[x * n + c] = (acc * norm) as f32;
+                acc += at(x as isize + r as isize + 1, c) - at(x as isize - r as isize, c);
+            }
+        }
+        out
+    }
+
+    fn line(w: usize, n: usize, seed: u32) -> Vec<f32> {
+        let mut s = seed | 1;
+        (0..w * n)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s >> 8) as f32 / 16_777_216.0
+            })
+            .collect()
+    }
+
+    /// The split row pass is bit-identical to the clamped one it replaced, including the widths
+    /// (and radii) where the line is shorter than the window and no plain-index middle exists.
+    #[test]
+    fn split_row_pass_matches_the_clamped_reference() {
+        let mut scratch = Vec::new();
+        for r in 1..=50usize {
+            for w in [1usize, 2, 3, 5, 7, 13, 32, 64, r.saturating_sub(1).max(1), r, r + 1, r + 2] {
+                for n in 1..=4usize {
+                    let src = line(w, n, (r * 1013 + w * 31 + n) as u32);
+                    let mut got = src.clone();
+                    box_line_n(&mut got, w, n, r, &mut scratch);
+                    assert_eq!(got, reference_line(&src, w, n, r), "w {w} n {n} r {r}");
+                }
+            }
+        }
+    }
+
+    /// A whole buffer, several rows, and a trailing partial row left alone as before.
+    #[test]
+    fn split_row_pass_matches_the_clamped_reference_over_a_buffer() {
+        for (w, h, n, r) in [(9usize, 4usize, 3usize, 2usize), (1, 3, 4, 7), (24, 5, 1, 24), (6, 6, 2, 50)] {
+            let src = line(w * h, n, (w * 7 + h * 13 + r) as u32);
+            let mut got = src.clone();
+            box_rows_n(&mut got, w, n, r);
+            for row in 0..h {
+                let a = &src[row * w * n..(row + 1) * w * n];
+                let b = &got[row * w * n..(row + 1) * w * n];
+                assert_eq!(b, &reference_line(a, w, n, r)[..], "w {w} h {h} n {n} r {r} row {row}");
             }
         }
     }
