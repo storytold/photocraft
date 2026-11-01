@@ -219,12 +219,13 @@ fn draw(ctx: &Context, open: &Open) -> Option<Action> {
     let screen = ctx.content_rect();
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(180.0, 170.0), |r| r.size());
     // The menu hangs from the pointer at its reading-start edge: its left edge left-to-right, its
-    // right edge right-to-left, clamped to the window either way.
+    // right edge right-to-left (the Area's pivot), clamped to the window either way.
     let rtl = crate::direction::is_rtl();
-    let x = if rtl { open.pos.x - size.x } else { open.pos.x };
-    let pos = egui::pos2(x.min(screen.right() - size.x).max(screen.left()), open.pos.y.min(screen.bottom() - size.y).max(screen.top()));
+    let pivot = if rtl { egui::Align2::RIGHT_TOP } else { egui::Align2::LEFT_TOP };
+    let x = if rtl { open.pos.x.min(screen.right()).max(screen.left() + size.x) } else { open.pos.x.min(screen.right() - size.x).max(screen.left()) };
+    let pos = egui::pos2(x, open.pos.y.min(screen.bottom() - size.y).max(screen.top()));
     let mut chosen = None;
-    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    egui::Area::new(id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             let t = crate::theme::Tokens::get(ui.ctx());
             let v = &mut ui.style_mut().visuals;
@@ -282,7 +283,7 @@ fn apply(ctx: &Context, field: Id, action: Action) {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Id, Key, Modifiers, OutputCommand, PointerButton, Pos2, vec2};
+    use egui::{Event, Id, Key, Modifiers, OutputCommand, PointerButton, Pos2, pos2, vec2};
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
@@ -472,5 +473,39 @@ mod tests {
         let menu = h.ctx.memory(|m| m.area_rect(super::menu_id())).expect("the menu is drawn");
         let want = at.x.min(screen(&h).right()).max(screen(&h).left() + menu.width());
         assert!((menu.right() - want).abs() < 1.0, "RTL: the menu's right edge hangs from the pointer ({menu:?} vs pointer x {at:?})");
+    }
+
+    /// Twin of the menu Area's placement: the pointer anchors the menu's left edge in LTR
+    /// (LEFT_TOP pivot) and its right edge in RTL (RIGHT_TOP pivot); the size is the same both
+    /// ways, and a pointer past the screen edge clamps the menu onto the window.
+    #[test]
+    fn the_edit_menu_area_pivot_mirrors_under_rtl() {
+        let place = |dir: crate::direction::Dir, at: Pos2| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let open = super::Open { field: Id::unique("f"), pos: at, has_selection: false, surrender: egui::SurrenderFocusOn::default() };
+            let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), ..Default::default() };
+            // Two passes: the Area's first pass measures, the second places it.
+            let mut out = ctx.run_ui(raw.clone(), |_| {
+                super::draw(&ctx, &open);
+            });
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(raw, |_| {
+                super::draw(&ctx, &open);
+            });
+            out.textures_delta.clear();
+            ctx.memory(|m| m.area_rect(super::menu_id())).expect("the menu is placed")
+        };
+        let at = egui::pos2(200.0, 100.0);
+        let ltr = place(crate::direction::Dir::Ltr, at);
+        let rtl = place(crate::direction::Dir::Rtl, at);
+        assert!((ltr.width() - rtl.width()).abs() < 1.0, "the menu keeps its width both ways: {ltr:?} {rtl:?}");
+        assert!((ltr.left() - at.x).abs() < 1.0, "ltr: the left edge hangs from the pointer: {ltr:?}");
+        assert!((rtl.right() - at.x).abs() < 1.0, "rtl: the right edge hangs from the pointer: {rtl:?}");
+        let at = egui::pos2(400.5, 100.0);
+        let ltr = place(crate::direction::Dir::Ltr, at);
+        let rtl = place(crate::direction::Dir::Rtl, at);
+        assert!(ltr.right() <= 400.01 && rtl.right() <= 400.01 && rtl.left() >= -0.01, "a pointer past the edge clamps the menu onto the window: {ltr:?} {rtl:?}");
     }
 }
