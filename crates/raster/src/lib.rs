@@ -1161,7 +1161,8 @@ impl Surface {
 
     /// Convert to another pixel format (depth and/or model; colour models via [`convert_pixel`]).
     pub fn convert(&self, to: PixelFormat) -> Surface {
-        let mut out = Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()));
+        let mut px = convert_pixel(&self.format, &to, &self.default_pixel());
+        let mut out = Surface::with_default(to, &px);
         let from_n = self.channels();
         let mut src = vec![0.0f32; from_n];
         // Each distinct tile converts once; coordinates sharing it share the result (#4531).
@@ -1177,7 +1178,7 @@ impl Surface {
                 for (k, v) in src.iter_mut().enumerate() {
                     *v = read_sample(&t.data, self.format.sample, i * from_n + k);
                 }
-                let px = convert_pixel(&self.format, &to, &src);
+                convert_pixel_into(&self.format, &to, &src, &mut px);
                 for (k, v) in px.iter().enumerate() {
                     write_sample(&mut dst.data, to.sample, i * to.channels() + k, *v);
                 }
@@ -1191,7 +1192,8 @@ impl Surface {
 
     /// Convert a surface while reserving each replacement tile fallibly.
     pub fn try_convert(&self, to: PixelFormat) -> Result<Surface, AllocationError> {
-        let mut out = Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()));
+        let mut px = convert_pixel(&self.format, &to, &self.default_pixel());
+        let mut out = Surface::with_default(to, &px);
         let from_n = self.channels();
         let mut src = Vec::new();
         src.try_reserve_exact(from_n).map_err(|_| AllocationError::NotEnoughMemory { bytes: from_n * std::mem::size_of::<f32>() })?;
@@ -1208,7 +1210,7 @@ impl Surface {
                 for (k, v) in src.iter_mut().enumerate() {
                     *v = read_sample(&t.data, self.format.sample, i * from_n + k);
                 }
-                let px = convert_pixel(&self.format, &to, &src);
+                convert_pixel_into(&self.format, &to, &src, &mut px);
                 for (k, v) in px.iter().enumerate() {
                     write_sample(&mut dst.data, to.sample, i * to.channels() + k, *v);
                 }
@@ -1252,6 +1254,19 @@ pub fn convert_pixel(from: &PixelFormat, to: &PixelFormat, px: &[f32]) -> Vec<f3
     }
     let rgba = to_rgba(from, px);
     from_rgba(to, rgba)
+}
+
+/// Fill a reusable destination pixel, preserving channels directly when only depth or alpha changes.
+fn convert_pixel_into(from: &PixelFormat, to: &PixelFormat, px: &[f32], out: &mut [f32]) {
+    if from.mode == to.mode {
+        let n = from.mode.color_channels();
+        out[..n].copy_from_slice(&px[..n]);
+        if to.alpha {
+            out[n] = if from.alpha { px[n] } else { 1.0 };
+        }
+    } else {
+        from_rgba_into(to, to_rgba(from, px), out);
+    }
 }
 
 pub fn to_rgba(format: &PixelFormat, px: &[f32]) -> [f32; 4] {

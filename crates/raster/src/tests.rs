@@ -480,6 +480,88 @@ fn convert_depths_and_models() {
     assert_eq!(back.pixel(1, 1), vec![1.0, 1.0, 1.0, 1.0]);
 }
 
+/// Reusing the pixel buffer preserves the allocating converter's exact floating-point results.
+#[test]
+fn reusable_conversion_matches_allocating_pixels() {
+    let modes = [
+        ColorMode::Bitmap,
+        ColorMode::Grayscale,
+        ColorMode::Indexed,
+        ColorMode::Rgb,
+        ColorMode::Cmyk,
+        ColorMode::Lab,
+        ColorMode::Multichannel,
+        ColorMode::Duotone,
+    ];
+    for from_mode in modes {
+        for to_mode in modes {
+            for from_alpha in [false, true] {
+                for to_alpha in [false, true] {
+                    let from = PixelFormat::new(from_mode, SampleType::F32, from_alpha);
+                    let to = PixelFormat::new(to_mode, SampleType::F32, to_alpha);
+                    let mut out = vec![0.0; to.channels()];
+                    for values in [[0.2, 0.4, 0.6, 0.3, 0.7], [-0.0, 1.5, -0.25, 0.5, 0.0], [f32::NAN, 0.1, f32::INFINITY, 0.0, 1.0]] {
+                        let expected = convert_pixel(&from, &to, &values);
+                        convert_pixel_into(&from, &to, &values, &mut out);
+                        assert_eq!(
+                            out.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            "{from:?} -> {to:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Both surface paths preserve encoded pixels, sparse defaults and shared tile ownership.
+#[test]
+fn reusable_surface_conversion_preserves_defaults_pixels_and_sharing() {
+    for mode in [
+        ColorMode::Bitmap,
+        ColorMode::Grayscale,
+        ColorMode::Indexed,
+        ColorMode::Rgb,
+        ColorMode::Cmyk,
+        ColorMode::Lab,
+        ColorMode::Multichannel,
+        ColorMode::Duotone,
+    ] {
+        for (depth, next) in [(SampleType::U8, SampleType::U16), (SampleType::U16, SampleType::F32), (SampleType::F32, SampleType::U8)] {
+            for alpha in [false, true] {
+                let from = PixelFormat::new(mode, depth, alpha);
+                let mut source = Surface::with_default(from, &[0.2, 0.4, 0.6, 0.3, 0.7]);
+                source.write_pixel(-1, 0, &[0.7, 0.5, 0.3, 0.1, 0.9]);
+                if depth == SampleType::F32 {
+                    source.write_pixel(-2, 0, &[f32::from_bits(0x7fc1_2345), -0.0, f32::INFINITY, f32::NEG_INFINITY, 1.5]);
+                }
+                let tile = source.tile(TileCoord::new(-1, 0)).unwrap().clone();
+                source.put_tiles([(TileCoord::new(1, 1), tile.clone())]);
+                let before = tile.bytes().to_vec();
+                for to in [from, PixelFormat::new(mode, next, !alpha), PixelFormat::RGBA8.with_sample(next)] {
+                    let default = convert_pixel(&from, &to, &source.default_pixel());
+                    let mut encoded = vec![0; to.bytes_per_pixel()];
+                    encode_pixel(&to, &default, &mut encoded);
+                    let mut expected = encoded.repeat((TILE_SIZE * TILE_SIZE) as usize);
+                    for x in [-2, -1] {
+                        let at = (TILE_SIZE + x) as usize * to.bytes_per_pixel();
+                        encode_pixel(&to, &convert_pixel(&from, &to, &source.pixel(x, 0)), &mut expected[at..at + to.bytes_per_pixel()]);
+                    }
+                    for out in [source.convert(to), source.try_convert(to).unwrap()] {
+                        assert_eq!(out.tile_count(), 2);
+                        assert_eq!(out.to_interleaved(Rect::new(0, 0, 1, 1)), encoded);
+                        let first = out.tile(TileCoord::new(-1, 0)).unwrap();
+                        assert_eq!(first.bytes(), expected, "{from:?} -> {to:?}");
+                        assert!(Arc::ptr_eq(first, out.tile(TileCoord::new(1, 1)).unwrap()));
+                    }
+                }
+                assert_eq!(tile.bytes(), before, "conversion must not modify the source");
+            }
+        }
+    }
+}
+
 #[test]
 fn rgba_from_gray_and_cmyk() {
     let mut g = Surface::new(PixelFormat::GRAYA8);
