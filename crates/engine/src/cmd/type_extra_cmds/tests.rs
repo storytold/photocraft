@@ -541,6 +541,27 @@ fn camel_case_and_underscore_postscript_names_resolve_to_their_installed_faces()
     }
 }
 
+/// #10265: Photoshop writes the font name with a "Roman" (or "Regular") suffix (e.g. "Josefin Sans Roman")
+/// in PSD files. When the base family is installed, it must be recognized without emitting a missing font warning.
+#[test]
+fn psd_family_name_with_roman_or_regular_suffix_matches_installed_family() {
+    let mut fonts = photocraft_text::FontDb::new();
+    fonts.register_font_data(renamed_face(&photocraft_text::fonts::INTER_REGULAR, "Josefin Sans", "JosefinSans-Regular"));
+    assert!(fonts.has_family("Josefin Sans"));
+    assert!(fonts.has_family("Josefin Sans Roman"));
+    assert!(fonts.has_family("Josefin Sans Regular"));
+    assert!(!fonts.has_family("Josefin Sans Bold"));
+
+    let style_roman = photocraft_doc::text::CharStyle { font_family: "Josefin Sans Roman".into(), postscript_name: None, ..Default::default() };
+    assert!(!style_font_missing(&mut fonts, &style_roman));
+
+    let style_regular = photocraft_doc::text::CharStyle { font_family: "Josefin Sans Regular".into(), postscript_name: None, ..Default::default() };
+    assert!(!style_font_missing(&mut fonts, &style_regular));
+
+    let style_missing = photocraft_doc::text::CharStyle { font_family: "Uninstalled Font Roman".into(), postscript_name: None, ..Default::default() };
+    assert!(style_font_missing(&mut fonts, &style_missing));
+}
+
 /// #7332: the shell asks for an opened file's missing fonts on the UI thread. A document without
 /// type must answer without the shared text engine, whose first use waits for the installed-font
 /// scan (minutes on some machines). The engine is held locked meanwhile, which used to block it.
