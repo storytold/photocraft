@@ -396,6 +396,34 @@ mod tests {
         assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("path.copy"), "an action recording replays the copy a later paste relies on");
     }
 
+    /// A recorded path.copy replays and populates the clipboard a later paste relies on: the
+    /// journal flag protects the recording, this protects the playback.
+    #[test]
+    fn a_recorded_copy_replays_and_pastes() {
+        let rect = json!({"subpaths": [{"closed": true, "knots": [[100, 20], [140, 20], [140, 60], [100, 60]]}]});
+        let mut s = session();
+        s.execute("path.set", json!({"name": "work", "path": rect})).unwrap();
+        s.execute("actions.record", json!({"name": "Copy component"})).unwrap();
+        s.execute("path.copy", json!({"subpaths": [0]})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        let action = s.actions.list[0].clone();
+        // A fresh session replays the recording (name-based target)…
+        let mut fresh = session();
+        fresh.execute("path.set", json!({"name": "work", "path": rect})).unwrap();
+        fresh.actions.list.push(action);
+        let played = fresh.execute("actions.play", json!({"action": "Copy component"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let clip = fresh.path_clipboard.as_ref().expect("the replayed copy populated the path clipboard");
+        assert_eq!(clip.subpaths.len(), 1);
+        assert_eq!(clip.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(100.0, 20.0));
+        // …and the clip it left pastes.
+        let r = fresh.execute("path.paste", json!({"center": [100, 50]})).unwrap();
+        assert_eq!(r["name"], json!("Pasted Path"));
+    }
+
+    /// Paste into a document at a different resolution keeps the components' scale: the session
+    /// clipboard is shared across documents, and path components are resolution-independent
+    /// vectors — translated to the paste centre, never scaled.
     #[test]
     fn paste_into_another_document_keeps_the_components_scale() {
         let mut s = session();
@@ -412,7 +440,31 @@ mod tests {
         assert_eq!(r["name"], json!("Pasted Path"));
         let doc = &s.active().unwrap().doc;
         let pasted = doc.paths.iter().find(|q| q.name == "Pasted Path").expect("pasted into the active document");
-        assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(180.0, 130.0), "translated by (+80, +110), not scaled");
+        let anchors: Vec<_> = pasted.path.subpaths[0].knots.iter().map(|k| k.anchor).collect();
+        assert_eq!(
+            anchors,
+            vec![
+                photocraft_geom::Point::new(180.0, 130.0),
+                photocraft_geom::Point::new(220.0, 130.0),
+                photocraft_geom::Point::new(220.0, 170.0),
+                photocraft_geom::Point::new(180.0, 170.0),
+            ],
+            "every knot translated by (+80, +110), not scaled"
+        );
+    }
+
+    #[test]
+    fn a_channel_copy_replaces_the_path_clipboard() {
+        let mut s = session();
+        let id = two_rects(&mut s);
+        s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
+        assert!(s.path_clipboard.is_some());
+        // Copying a colour channel produces a pixel clip on the one clipboard.
+        s.execute("channel.target", json!({"channel": "red"})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        assert!(s.path_clipboard.is_none(), "a channel copy replaces the path clip");
+        assert!(s.clipboard.is_some());
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
     }
 
     #[test]

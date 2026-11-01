@@ -155,6 +155,9 @@ pub(crate) fn copies_alpha_channel(s: &Session) -> bool {
 #[path = "channel_clip/tests.rs"]
 mod tests;
 
+/// Edit › Copy of the targeted colour channel(s) as a grayscale (or tint-preserving) clip,
+/// sized to the selection. The pixel clip replaces a path clip on the one clipboard, and is
+/// replaced by one.
 pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source = Some(crate::commands::layer_param(s, p)?)
@@ -192,14 +195,10 @@ pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_chann
         }
         surface.try_write_region(r, &out)?;
     }
-    s.clipboard = Some(Clip {
-        surface,
-        bounds: area,
-        layers: None,
-        resolution: Some(st.doc.resolution_dpi),
-        source: Some(st.doc.id),
-        components: (colors.len() > 1).then(|| colors.indices().collect()),
-    });
+    // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
+    let (resolution, source) = (Some(st.doc.resolution_dpi), Some(st.doc.id));
+    s.path_clipboard = None;
+    s.clipboard = Some(Clip { surface, bounds: area, layers: None, resolution, source, components: (colors.len() > 1).then(|| colors.indices().collect()) });
     Ok(json!({"bounds":[area.x0,area.y0,area.width(),area.height()],"colors":colors.indices().collect::<Vec<_>>()}))
 }
 

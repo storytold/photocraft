@@ -67,8 +67,12 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
     if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
         let _ = app.import_os_clipboard();
     }
+    // The intercept only takes the plain menu/shortcut form: explicit params address the
+    // command elsewhere (a mask, a channel, a layer), and a live component selection must not
+    // redirect a caller's request (review on #10482).
+    let plain = params.as_object().map_or(params.is_null(), |o| o.is_empty());
     match id {
-        "edit.copy" | "edit.cut" => {
+        "edit.copy" | "edit.cut" if plain => {
             let params = live_selection(app)?;
             let cmd = if id == "edit.copy" { "path.copy" } else { "path.cut" };
             let r = app.run(cmd, params);
@@ -218,6 +222,17 @@ mod tests {
         assert_eq!(shape(&app).1.path.subpaths.len(), 2, "undo restores the cut component");
     }
 
+    /// The intercept only takes the plain Edit › Copy/Cut: an explicit target (here a colour
+    /// channel) keeps its own dispatch — a selected component must not redirect the request.
+    #[test]
+    fn copy_with_explicit_params_keeps_its_pixel_target() {
+        let (mut app, _) = two_squares_inner_selected();
+        app.run("edit.copy", json!({"target": {"color": 0}})).unwrap();
+        assert!(app.session.path_clipboard.is_none(), "the component was not hijacked");
+        assert!(app.session.clipboard.is_some(), "the channel copied as a pixel clip");
+        assert_eq!(shape(&app).1.path.subpaths.len(), 2, "the shape is untouched");
+    }
+
     /// Paste precedence, one clipboard: an unchanged OS clipboard leaves the path paste alone;
     /// a newer OS image supersedes the path clip and ⌘V pastes the pixels.
     #[test]
@@ -254,6 +269,8 @@ mod tests {
         app.ui.direct_selection = Default::default();
         app.run("edit.copy", json!({})).unwrap();
         assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "the pixel copy replaced the path clip");
+        // Select the inner square again, so the paste runs beside a component selection.
+        crate::path_components::press(&mut app, [80.0, 80.0], false);
         let layers = app.session.active().unwrap().doc.walk().len();
         app.run("edit.paste", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.walk().len(), layers + 1, "the pixel clip pasted as a new layer");
