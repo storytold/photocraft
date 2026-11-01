@@ -362,14 +362,12 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     if rows.any() || !appearance.is_empty() {
         pref_group(ui, "Appearance", |ui| {
             if rows.any() {
-                // The theme rows are owned by appearance.rs and draw into a Grid themselves: the
-                // grid stays physical left-to-right (the fork's Grid cannot place cells under an
-                // RTL cursor) in a core LTR scope, and grid_cells inside appearance_rows emits the
-                // cells in reading order. min_col_width keeps the LTR column geometry identical.
-                crate::text::direction::ltr_vertical(ui, |ui| {
-                    egui::Grid::new(("prefs-grid", "interface-appearance")).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0).show(ui, |ui| {
-                        appearance_rows(ui, obj, system, rows);
-                    });
+                // The theme rows are owned by appearance.rs and emitted through the grid's `row`
+                // closure like every other settings grid. LTR this is the plain 2-column Grid
+                // with min_col_width 150.0; RTL the label column leads at the reading start.
+                let ctx = ui.ctx().clone();
+                crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-appearance"), [14.0, 7.0], 150.0, Some(150.0), |row| {
+                    appearance_rows(&ctx, obj, system, rows, row);
                 });
             }
             if !appearance.is_empty() {
