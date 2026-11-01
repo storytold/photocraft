@@ -40,7 +40,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
     if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             row_label(ui, "Style");
             ui.spacing_mut().item_spacing.x = 3.0;
             for (value, name) in STYLES {
@@ -56,7 +56,7 @@ fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, min * 100.0..=max * 100.0, "%") {
             let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
         }
-        ui.horizontal_wrapped(|ui| {
+        ui.allocate_ui_with_layout(ui.available_size_before_wrap(), crate::direction::row().with_cross_align(egui::Align::Min), |ui| {
             let mut value = reverse;
             if widgets::checkbox(ui, &mut value, "Reverse").changed() {
                 let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "reverse": value}));
@@ -88,7 +88,7 @@ fn row_label(ui: &mut egui::Ui, name: &str) -> egui::Response {
 /// Scrubbing/typing commits once, as the existing Properties fields do.
 fn numeric_row(ui: &mut egui::Ui, id: &str, name: &str, current: f32, range: std::ops::RangeInclusive<f32>, suffix: &str) -> Option<f32> {
     ui.push_id(id, |ui| {
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             let label = row_label(ui, name);
             let key = ui.scope_id().with("draft");
             let mut value = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(current);
@@ -152,7 +152,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
                 ui.data_mut(|d| d.remove::<Marker>(key));
                 return;
             };
-            ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
                 row_label(ui, "Color");
                 let (rect, response) = ui.allocate_exact_size(vec2(88.0, 24.0), Sense::click());
                 let rgb = color.to_rgb();
@@ -201,7 +201,7 @@ pub(super) fn stop_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, sink: Sink
             return;
         }
     }
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.add_space(72.0 + ui.spacing().item_spacing.x);
         ui.add_enabled_ui(count > 2, |ui| {
             let response = icons::button(ui, "trash", 24.0, false, "Delete");
@@ -439,5 +439,30 @@ mod tests {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(fill(h.state()), before);
+    }
+
+    /// The Gradient Options rows follow reading order: the first style button and the Reverse
+    /// checkbox lead their rows at the reading start — left in LTR, right in RTL.
+    #[test]
+    fn options_rows_follow_reading_order() {
+        use crate::direction::{Dir, direction_scope};
+        use egui::accesskit::Role;
+        let panel_dir = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut h = Harness::builder().with_size(vec2(280.0, 800.0)).build_ui_state(panel, app());
+            PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+            h
+        };
+        let ltr = panel_dir(Dir::Ltr);
+        let rtl = panel_dir(Dir::Rtl);
+        let lin = |h: &Harness<'_, PhotocraftApp>| h.get_by_label("Linear Gradient").rect();
+        let dia = |h: &Harness<'_, PhotocraftApp>| h.get_by_label("Diamond Gradient").rect();
+        assert!(lin(&ltr).left() < dia(&ltr).left(), "LTR: linear leads: {:?} {:?}", lin(&ltr), dia(&ltr));
+        assert!(lin(&rtl).left() > dia(&rtl).left(), "RTL: linear leads at the right: {:?} {:?}", lin(&rtl), dia(&rtl));
+        let rev = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::CheckBox, "Reverse").rect();
+        let dit = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::CheckBox, "Dither").rect();
+        assert!(rev(&ltr).left() < dit(&ltr).left(), "LTR: reverse leads: {:?} {:?}", rev(&ltr), dit(&ltr));
+        assert!(rev(&rtl).left() > dit(&rtl).left(), "RTL: reverse leads at the right: {:?} {:?}", rev(&rtl), dit(&rtl));
     }
 }

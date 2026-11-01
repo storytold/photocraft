@@ -644,7 +644,7 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_space(6.0);
                     preset_stops_editor(app, ui);
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
                         if widgets::secondary_button(ui, tl!("Save As Preset"), 0.0)
                             .on_hover_text(tl!("Adds the current gradient to the Gradients panel"))
                             .clicked()
@@ -1040,3 +1040,41 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::editor_window;
+    use crate::direction::{Dir, direction_scope};
+    use crate::{PhotocraftApp, Services};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    /// The Gradient Editor window's button row follows reading order: Save As Preset leads the
+    /// Gradients button at the reading start — left in LTR, right in RTL.
+    #[test]
+    fn editor_button_row_follows_reading_order() {
+        let row = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+            app.ui.panels.gradient_editor = true;
+            let mut h = Harness::builder().with_size(egui::vec2(500.0, 400.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().cumulative_pass_nr() == 0 {
+                        PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::Studio);
+                        return;
+                    }
+                    editor_window(app, ui.ctx());
+                },
+                app,
+            );
+            h.run_steps(3);
+            (h.get_by_label("Save As Preset").rect(), h.get_by_label("Gradients").rect())
+        };
+        let (ltr_save, ltr_panel) = row(Dir::Ltr);
+        assert!(ltr_save.left() < ltr_panel.left(), "LTR: Save As Preset leads: {ltr_save:?} {ltr_panel:?}");
+        let (rtl_save, rtl_panel) = row(Dir::Rtl);
+        assert!(rtl_save.left() > rtl_panel.left(), "RTL: Save As Preset leads at the right: {rtl_save:?} {rtl_panel:?}");
+    }
+}
