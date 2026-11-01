@@ -3175,3 +3175,93 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
 }
+
+/// Native component references import, select the same target as the command and export again.
+#[test]
+fn select_color_components_import_play_and_round_trip() {
+    for (mode, channels) in [
+        ("rgb", &["red", "green", "blue"][..]),
+        ("cmyk", &["cyan", "magenta", "yellow", "black"][..]),
+        ("lab", &["lightness", "a", "b"][..]),
+        ("gray", &["gray"][..]),
+    ] {
+        for depth in [8, 16, 32] {
+            for channel in channels {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 2, "height": 1, "mode": mode, "depth": depth})).unwrap();
+                let expected = s.execute("channel.target", json!({"channel": channel})).unwrap();
+                s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+                let selection = desc("null").with("null", channel_ref(Some(channel)));
+                let data = set_of("Components", vec![("Pick", vec![item("select", "Select", Some(selection))])]);
+                let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+                assert_eq!(loaded["unsupported"], json!([]), "{mode}/{depth}/{channel}");
+                let played = s.execute("actions.play", json!({"action": "Pick"})).unwrap();
+                assert!(played.get("failed").is_none(), "{played}");
+                assert_eq!(s.execute("channel.list", json!({})).unwrap(), expected, "{mode}/{depth}/{channel}");
+                let saved = s.execute("actions.save", json!({"set": "Components"})).unwrap();
+                let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+                assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions.list[0].steps);
+            }
+        }
+    }
+}
+
+/// Unknown targets and selection modes retain their failure instead of selecting another channel.
+#[test]
+fn select_color_components_preserve_unsupported_selection_shapes() {
+    let chained = vec![
+        ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code("Cyn") },
+        ReferenceItem::Identifier { class: class("Dcmn"), id: 7 },
+    ];
+    for selection in [
+        desc("null").with("null", channel_ord("Xxxx")),
+        desc("null").with("null", channel_ref(Some("cyan"))).with("selectionModifier", enm("selectionModifierType", "addToSelection")),
+        desc("null").with("null", D::Reference(chained)),
+        desc("null").with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Ordn"), value: code("Cyn") }])),
+    ] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 1, "mode": "cmyk"})).unwrap();
+        let data = set_of("Unknown", vec![("Pick", vec![item("select", "Select", Some(selection.clone()))])]);
+        let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+        assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1);
+        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        let target = s.execute("channel.list", json!({})).unwrap();
+        let played = s.execute("actions.play", json!({"action": "Pick"})).unwrap();
+        assert_eq!(played["failed"]["id"], PHOTOSHOP_STEP);
+        assert_eq!(s.execute("channel.list", json!({})).unwrap(), target);
+        let saved = s.execute("actions.save", json!({"set": "Unknown"})).unwrap();
+        let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&selection));
+    }
+    for params in [
+        json!({"channel": {"color": "cyan"}, "extend": true}),
+        json!({"channel": {"color": "cyan"}, "colors": [0, 1]}),
+        json!({"channel": 0}),
+        json!({"channel": null}),
+        json!({"channel": {"alpha": 0}}),
+        json!({"channel": "cyan"}),
+    ] {
+        assert!(super::steps_layer::select_to("channel.target", &params).is_none(), "{params}");
+    }
+    assert!(super::steps_layer::select_to("channel.target", &json!({"channel": {"color": "CYAN"}, "extend": false})).is_some());
+    let gray = set_of("Gray", vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ord("Gry"))))])]);
+    let bytes = photocraft_paint::tile::b64_decode(&gray).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps[0], ("channel.target".into(), json!({"channel": "composite"})));
+}
+
+/// A CMYK component cannot retarget a same-named alpha channel when replayed on RGB.
+#[test]
+fn select_color_components_do_not_fall_back_to_alpha_names() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2, "height": 1, "mode": "rgb"})).unwrap();
+    s.execute("channel.new", json!({"name": "cyan"})).unwrap();
+    for channel in [json!("cyan"), json!(0), json!({"alpha": 0})] {
+        assert_eq!(s.execute("channel.target", json!({"channel": channel})).unwrap()["target"]["kind"], "alpha");
+    }
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let data = set_of("Components", vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ref(Some("cyan")))))])]);
+    assert_eq!(s.execute("actions.load", json!({"data": data})).unwrap()["unsupported"], json!([]));
+    let played = s.execute("actions.play", json!({"action": "Pick"})).unwrap();
+    assert_eq!(played["failed"]["id"], "channel.target");
+    assert_eq!(s.execute("channel.list", json!({})).unwrap()["target"]["kind"], "composite");
+}
