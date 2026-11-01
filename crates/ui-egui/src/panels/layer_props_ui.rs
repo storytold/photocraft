@@ -220,7 +220,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         };
         ui.label(provenance).on_hover_text(format!("{}: {} · {}", tl!("Suggested role"), tl!(role_label(suggestion_role)), tl!(suggestion.evidence)));
         let mut role = selected.to_owned();
-        craft_ui::ComboBox::from_id_salt(("artboard-semantic-role", layer.id.0)).selected_text(selected_label).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt(("artboard-semantic-role", layer.id.0)).selected_text(selected_label).show_ui(ui, |ui| {
             for (value, label) in photocraft_engine::artboard_cmds::SEMANTIC_ROLES {
                 let text = if *value == "auto" {
                     format!("{} · {}: {}", tl!("Auto"), tl!("suggested"), tl!(role_label(suggestion_role)))
@@ -230,6 +230,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 ui.selectable_value(&mut role, (*value).to_owned(), text);
             }
         });
+        let _ = combo.response.accessible_name(tl!("Semantic role"));
         let apply_similar = role != "auto" && ui.small_button(tl!("Apply role to similar layers")).clicked();
         if apply_similar {
             run.push(("layer.artboard.semanticRole.set".into(), json!({"layer":layer.id.0,"role":role,"applyToSimilar":true})));
@@ -276,7 +277,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let original = (mode.clone(), horizontal.clone(), vertical.clone(), flow.clone());
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Mode")).color(t.text_dim).size(12.0));
-            craft_ui::ComboBox::from_id_salt(("artboard-layout-mode", layer.id.0))
+            let combo = craft_ui::ComboBox::from_id_salt(("artboard-layout-mode", layer.id.0))
                 .selected_text(tl!(match mode.as_str() {
                     "stretch" => "Stretch",
                     "fill" => "Fill",
@@ -288,6 +289,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                         ui.selectable_value(&mut mode, key.to_owned(), tl!(label));
                     }
                 });
+            let _ = combo.response.accessible_name(tl!("Layout mode"));
         });
         egui::Grid::new(("artboard-anchor-picker", layer.id.0)).spacing([2.0, 2.0]).show(ui, |ui| {
             for v in ["top", "center", "bottom"] {
@@ -326,7 +328,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Text reflow")).color(t.text_dim).size(12.0));
-            craft_ui::ComboBox::from_id_salt(("artboard-text-flow", layer.id.0))
+            let combo = craft_ui::ComboBox::from_id_salt(("artboard-text-flow", layer.id.0))
                 .selected_text(tl!(match flow.as_str() {
                     "rewrap" => "Rewrap",
                     "rewrap_auto_height" => "Rewrap with auto height",
@@ -343,6 +345,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                         ui.selectable_value(&mut flow, key.to_owned(), tl!(label));
                     }
                 });
+            let _ = combo.response.accessible_name(tl!("Text flow"));
         });
         ui.label(tl!("Size limits in pixels (0 = none)"));
         let mut limits_changed = false;
@@ -352,12 +355,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             ui.label(tl!("Height"));
             ui.end_row();
             ui.label(tl!("Minimum"));
-            limits_changed |= ui.add(egui::DragValue::new(&mut min_width).range(0..=1_000_000).speed(1)).changed();
-            limits_changed |= ui.add(egui::DragValue::new(&mut min_height).range(0..=1_000_000).speed(1)).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut min_width).range(0..=1_000_000).speed(1)).accessible_name(tl!("Minimum width")).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut min_height).range(0..=1_000_000).speed(1)).accessible_name(tl!("Minimum height")).changed();
             ui.end_row();
             ui.label(tl!("Maximum"));
-            limits_changed |= ui.add(egui::DragValue::new(&mut max_width).range(0..=1_000_000).speed(1)).changed();
-            limits_changed |= ui.add(egui::DragValue::new(&mut max_height).range(0..=1_000_000).speed(1)).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut max_width).range(0..=1_000_000).speed(1)).accessible_name(tl!("Maximum width")).changed();
+            limits_changed |= ui.add(egui::DragValue::new(&mut max_height).range(0..=1_000_000).speed(1)).accessible_name(tl!("Maximum height")).changed();
             ui.end_row();
         });
         let invalid_limits = min_width > 0 && max_width > 0 && min_width > max_width || min_height > 0 && max_height > 0 && min_height > max_height;
