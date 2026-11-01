@@ -1,0 +1,22 @@
+category	language	loc
+DevOps/Test	Autoconf	309
+DevOps/Test	Docker ignore	18
+DevOps/Test	Dockerfile	48
+DevOps/Test	Powershell	257
+DevOps/Test	Python	210
+DevOps/Test	Rust	200478
+DevOps/Test	Shell	933
+DevOps/Test	TOML	2669
+DevOps/Test	XML	33
+DevOps/Test	YAML	597
+Excluded	JSON	3801
+Excluded	License	167
+Excluded	Markdown	8784
+Excluded	Plain Text	960
+Excluded	Rust	46
+Excluded	SVG	2227
+Excluded	TOML	27
+System	HTML	30
+System	Rust	256463
+System	TOML	8
+System	WebGPU Shading Language	1136
