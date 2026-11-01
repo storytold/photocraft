@@ -257,6 +257,25 @@ fn noise_is_deterministic_monochrome_and_centred() {
     }
 }
 
+/// RGB8 goldens from 799e1296's original Add Noise, before monochrome sampling was hoisted.
+#[test]
+fn monochrome_noise_matches_original_rgb8_bytes() {
+    let area = Rect::new(0, 0, 3, 2);
+    let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, false));
+    source.fill_rect(area, &[0.5, 0.5, 0.5]);
+    let rgb_bytes = |surface: &Surface| surface.read_region(area).iter().map(|v| (v * 255.0).round() as u8).collect::<Vec<_>>();
+    let cases: [(Distribution, [u8; 18]); 2] = [
+        (Distribution::Uniform, [65, 65, 65, 96, 96, 96, 134, 134, 134, 67, 67, 67, 86, 86, 86, 118, 118, 118]),
+        (Distribution::Gaussian, [105, 105, 105, 104, 104, 104, 117, 117, 117, 103, 103, 103, 167, 167, 167, 136, 136, 136]),
+    ];
+    for (distribution, expected) in cases {
+        let monochrome = apply(&source, &FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: true, seed: 1 }, area, area, None);
+        assert_eq!(rgb_bytes(&monochrome).as_slice(), expected.as_slice(), "{distribution:?}");
+        let colored = apply(&source, &FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: false, seed: 1 }, area, area, None);
+        assert!(rgb_bytes(&colored).chunks_exact(3).any(|pixel| pixel[0] != pixel[1] || pixel[1] != pixel[2]), "{distribution:?}");
+    }
+}
+
 #[test]
 fn median_and_dust_remove_a_speck() {
     let mut s = flat(SampleType::F32, R, [0.2, 0.2, 0.2, 1.0]);
