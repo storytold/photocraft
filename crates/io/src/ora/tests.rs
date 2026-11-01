@@ -583,3 +583,14 @@ fn plain_documents_lose_nothing() {
     cmyk.mode = ColorMode::Cmyk;
     assert_eq!(losses(&cmyk).len(), 1, "a document OpenRaster can't hold at all");
 }
+
+#[test]
+fn short_versions_count_as_explicit_group_isolation() {
+    for v in ["1", "1.0", "0.1", "0.0.6"] {
+        assert!(uses_explicit_group_isolation(Some(v)), "version {v:?} should be >= 0.0.6");
+    }
+    for v in ["0", "0.0", "0.0.5"] {
+        assert!(!uses_explicit_group_isolation(Some(v)), "version {v:?} should be < 0.0.6");
+    }
+    assert!(!uses_explicit_group_isolation(None));
+}
