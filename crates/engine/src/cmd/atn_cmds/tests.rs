@@ -3265,3 +3265,60 @@ fn select_color_components_do_not_fall_back_to_alpha_names() {
     assert_eq!(played["failed"]["id"], "channel.target");
     assert_eq!(s.execute("channel.list", json!({})).unwrap()["target"]["kind"], "composite");
 }
+
+/// Nested color indices take precedence over the object's single-color fallback at runtime.
+#[test]
+fn select_channel_export_rejects_nested_color_selections() {
+    for colors in [vec![0, 1], vec![1]] {
+        let params = json!({"channel":{"color":"cyan","colors":colors}});
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":2,"height":1,"mode":"cmyk"})).unwrap();
+        s.execute("channel.target", params.clone()).unwrap();
+        assert_eq!(s.active().unwrap().channel_view.selected_colors, colors);
+        s.actions.list.push(Action::new("Nested", vec![("channel.target".into(), params.clone())]));
+        assert!(s.execute("actions.save", json!({"action":"Nested"})).is_err(), "{params} must not become a single Cyan selection");
+        let skipped = s.execute("actions.save", json!({"action":"Nested","skipUnsupported":true})).unwrap();
+        assert_eq!(skipped["skipped"], json!([{"action":"Nested","step":0,"id":"channel.target"}]));
+        let bytes = photocraft_paint::tile::b64_decode(skipped["data"].as_str().unwrap()).unwrap();
+        assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());
+        assert_eq!(s.actions.list[0].steps[0].1, params);
+    }
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("Cyan", vec![("channel.target".into(), json!({"channel":{"color":"CYAN"},"extend":false}))]));
+    let saved = s.execute("actions.save", json!({"action":"Cyan"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, vec![("channel.target".into(), json!({"channel":{"color":"cyan"}}))]);
+}
+
+/// A typed Gray target must retain its failure on RGB instead of becoming portable composite.
+#[test]
+fn select_channel_export_rejects_mode_specific_gray_objects() {
+    for color in ["gray", "GRAY", "GrAy"] {
+        for mode in ["gray", "rgb"] {
+            let params = json!({"channel":{"color":color}});
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":2,"height":1,"mode":mode})).unwrap();
+            assert_eq!(s.execute("channel.target", params.clone()).is_ok(), mode == "gray");
+            s.actions.list.push(Action::new("Gray object", vec![("channel.target".into(), params.clone())]));
+            assert!(s.execute("actions.save", json!({"action":"Gray object"})).is_err(), "{mode}/{color} must not become composite");
+            let skipped = s.execute("actions.save", json!({"action":"Gray object","skipUnsupported":true})).unwrap();
+            assert_eq!(skipped["skipped"], json!([{"action":"Gray object","step":0,"id":"channel.target"}]));
+            let bytes = photocraft_paint::tile::b64_decode(skipped["data"].as_str().unwrap()).unwrap();
+            assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());
+            assert_eq!(s.actions.list[0].steps[0].1, params);
+        }
+    }
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("Portable", vec![("channel.target".into(), json!({"channel":"composite"}))]));
+    let saved = s.execute("actions.save", json!({"action":"Portable"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions.list[0].steps);
+    let gray = set_of("Gray", vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ord("Gry"))))])]);
+    let mut rgb = Session::new();
+    rgb.execute("file.new", json!({"width":2,"height":1,"mode":"rgb"})).unwrap();
+    rgb.execute("actions.load", json!({"data":gray})).unwrap();
+    assert_eq!(rgb.actions.list[0].steps[0], ("channel.target".into(), json!({"channel":"composite"})));
+    assert!(rgb.execute("actions.play", json!({"action":"Pick"})).unwrap().get("failed").is_none());
+}

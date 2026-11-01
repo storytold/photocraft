@@ -88,7 +88,10 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
             d.with("MkVs", D::Boolean(false))
         }
         "channel.target" => {
-            if p.get("colors").is_some() || p.get("extend").is_some_and(|v| v != &Value::Bool(false)) {
+            if p.get("colors").is_some()
+                || p.get("channel").and_then(|channel| channel.get("colors")).is_some()
+                || p.get("extend").is_some_and(|v| v != &Value::Bool(false))
+            {
                 return None;
             }
             let v = match p.get("channel") {
@@ -98,7 +101,14 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
                     "composite" => "RGB ",
                     _ => return None,
                 },
-                Some(channel) => lookup_back(CHANNELS, &channel.get("color")?.as_str()?.to_ascii_lowercase())?,
+                Some(channel) => {
+                    let color = channel.get("color")?.as_str()?.to_ascii_lowercase();
+                    // Gry imports as portable composite, unlike a mode-specific Gray object.
+                    if color == "gray" {
+                        return None;
+                    }
+                    lookup_back(CHANNELS, &color)?
+                }
             };
             desc("null").with("null", enumerated("Chnl", "Chnl", v)).with("MkVs", D::Boolean(false))
         }
