@@ -586,6 +586,30 @@ fn grayscale_curves_preset_over_a_recalled_pencil_red_map_renders_the_preset_alo
     assert!((after - expected).abs() < 1.0 / 255.0, "Darker alone renders {expected}, got {after}");
 }
 
+/// The Curves dialog's dropdowns as (label, value).
+fn combo_boxes(h: &Harness<'_, PhotocraftApp>) -> Vec<(String, String)> {
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.accesskit_node().value().map(|v| v.to_string()).unwrap_or_default()))
+        .collect()
+}
+
+/// #9221: the presets are RGB curves, so a CMYK or Lab document's Curves has no Preset menu; an
+/// RGB one does (grayscale: `grayscale_curves_shows_presets_with_stale_channel_keys`).
+#[test]
+fn curves_preset_menu_is_absent_in_cmyk_and_lab_documents() {
+    for (mode, shown) in [("rgb", true), ("cmyk", false), ("lab", false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_in_mode(mode));
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        let menus = combo_boxes(&h);
+        assert!(menus.iter().any(|(l, _)| l == "Channel:"), "{mode}: the Curves editor is drawn (menus: {menus:?})");
+        assert_eq!(menus.iter().any(|(l, _)| l == "Preset"), shown, "{mode}: the Preset menu (menus: {menus:?})");
+        assert_eq!(h.query_by_label("Preset:").is_some(), shown, "{mode}: the Preset: label");
+        crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    }
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
