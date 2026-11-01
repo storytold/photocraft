@@ -8,6 +8,7 @@ use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, s
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -67,6 +68,37 @@ pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_la
         (false, Some(surf)) => f(&SurfaceSampler(surf), doc),
         _ => f(&CompositeSampler(doc), doc),
     }
+}
+
+/// Where Select Subject looks: the picture's rectangle when `layer` holds a photo that doesn't
+/// fill the canvas (placed, or the canvas grown). The photo would otherwise stand out from the
+/// empty canvas around it as the subject, and the result would be its whole rectangle, which a
+/// Stroke then outlines (#8235). The whole canvas when sampling all layers, and for a cut-out,
+/// where the empty pixels around the object are what set it apart.
+pub(crate) fn subject_area(doc: &Document, layer: Option<LayerId>, all_layers: bool) -> Rect {
+    let canvas = doc.bounds();
+    let Some(s) = layer.and_then(|id| doc.layer(id)).and_then(Layer::surface).filter(|_| !all_layers) else { return canvas };
+    let empty_around = s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0);
+    let b = s.content_bounds().intersect(&canvas);
+    if empty_around && fills_its_box(s, b) { b } else { canvas }
+}
+
+/// Whether `s` is opaque nearly all the way round just inside `b`, as a photo's rectangle is. A
+/// cut-out only touches its box in places. Two pixels in, past a transformed photo's soft edge.
+fn fills_its_box(s: &Surface, b: Rect) -> bool {
+    let (x0, y0, x1, y1) = (b.x0 + 2, b.y0 + 2, b.x1 - 3, b.y1 - 3);
+    if x1 <= x0 || y1 <= y0 {
+        return false;
+    }
+    let across = (x0..=x1).flat_map(|x| [(x, y0), (x, y1)]);
+    let down = (y0 + 1..y1).flat_map(|y| [(x0, y), (x1, y)]);
+    let alpha = s.channels().saturating_sub(1);
+    let (mut opaque, mut all) = (0u64, 0u64);
+    for (x, y) in across.chain(down) {
+        opaque += u64::from(s.sample_channel(x, y, alpha) >= 0.5);
+        all += 1;
+    }
+    opaque * 10 >= all * 9
 }
 
 /// Stores `region` combined with the current selection by `m` as one history step.
@@ -314,7 +346,8 @@ fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
         c.region.clone()
     } else {
         let doc = std::sync::Arc::clone(&d.doc);
-        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds())).map(std::sync::Arc::new);
+        let area = subject_area(&doc, d.active_layer, all_layers);
+        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, _| subject::select_subject(smp, area)).map(std::sync::Arc::new);
         s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
         region
     };

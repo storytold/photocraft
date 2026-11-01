@@ -18,7 +18,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::Value;
 
-use crate::smartselect_cmds::with_doc_sampler;
+use crate::smartselect_cmds::{subject_area, with_doc_sampler};
 use crate::{EngineError, Result};
 
 const CMD: &str = "select.refineEdge";
@@ -280,7 +280,8 @@ pub fn apply_one(doc: &Document, layer: Option<LayerId>, base: Option<Surface>, 
             combine(region, mode(*add))
         }
         SelectionEdit::Subject { mode, sample_all_layers } => {
-            let region = with_doc_sampler(doc, layer, *sample_all_layers, |smp, doc| subject::select_subject(smp, doc.bounds()));
+            let area = subject_area(doc, layer, *sample_all_layers);
+            let region = with_doc_sampler(doc, layer, *sample_all_layers, |smp, _| subject::select_subject(smp, area));
             combine(region, *mode)
         }
         SelectionEdit::Clear => None,

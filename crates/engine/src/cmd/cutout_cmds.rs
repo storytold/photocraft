@@ -6,11 +6,10 @@
 use photocraft_algo::matting::{self, RefineParams};
 use photocraft_algo::segment::subject;
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask};
-use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
-use crate::smartselect_cmds::with_doc_sampler;
+use crate::smartselect_cmds::{subject_area, with_doc_sampler};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "layer.removeBackground";
@@ -36,17 +35,6 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     check(&d.doc, crate::active_layer_of(s)?)
 }
 
-/// Where the subject is looked for: the layer's own pixels within the canvas. A photo that
-/// doesn't fill the canvas (placed, or the canvas grown) would otherwise stand out from the
-/// empty canvas around it as the subject, and the mask would reveal its whole rectangle, which a
-/// Stroke then outlines (#8235). The whole canvas when sampling all layers.
-fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
-    let Some(s) = l.surface().filter(|_| !sample_all) else { return canvas };
-    let empty_around = s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0);
-    let b = s.content_bounds().intersect(&canvas);
-    if empty_around && !b.is_empty() { b } else { canvas }
-}
-
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -54,7 +42,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     check(doc, layer).map_err(EngineError::Other)?;
     let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
     let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
-    let area = subject_area(layer, doc.bounds(), sample_all);
+    let area = subject_area(doc, Some(id), sample_all);
     crate::jobs::edit_job(
         s,
         "Remove Background",
@@ -107,6 +95,7 @@ mod tests {
     use super::*;
     use photocraft_algo::segment::Rng;
     use photocraft_doc::LayerId;
+    use photocraft_geom::Rect;
 
     fn session_with(w: u32, h: u32, depth: u32, px: impl Fn(u32, u32) -> [f32; 3]) -> Session {
         let mut s = Session::new();

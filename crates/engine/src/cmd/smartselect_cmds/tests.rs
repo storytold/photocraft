@@ -268,6 +268,165 @@ fn select_subject_samples_the_selected_layer_else_the_composite() {
     assert!(sel_iou(&s, 200, 160, &inside) > 0.9);
 }
 
+/// One layer holding `f` (straight RGBA) on a transparent canvas.
+fn layer_doc(w: u32, h: u32, depth: u32, mode: &str, f: impl Fn(i32, i32) -> [f32; 4]) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "mode": mode, "background": "transparent"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let b = doc.bounds();
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let (fmt, clear) = (surf.format(), surf.default_pixel());
+        let mut data = Vec::new();
+        for y in b.y0..b.y1 {
+            for x in b.x0..b.x1 {
+                let px = f(x, y);
+                if px[3] > 0.0 {
+                    data.extend(photocraft_raster::from_rgba(&fmt, px));
+                } else {
+                    data.extend_from_slice(&clear);
+                }
+            }
+        }
+        surf.write_region(b, &data);
+        surf.prune();
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+fn area_of(s: &Session) -> Rect {
+    let d = s.active().unwrap();
+    subject_area(&d.doc, d.active_layer, false)
+}
+
+/// The photo's rectangle when the layer holds a photo, the canvas for anything else.
+#[test]
+fn subject_area_is_a_photos_rectangle_and_the_canvas_for_a_cut_out() {
+    const PHOTO: [f32; 4] = [0.4, 0.5, 0.6, 1.0];
+    let (canvas, photo) = (Rect::new(0, 0, 120, 100), Rect::new(20, 10, 100, 90));
+    let in_photo = move |x: i32, y: i32| photo.contains(x, y);
+    // Pixels from `photo`'s edge, 1 on the rim.
+    let rim = move |x: i32, y: i32| (x - photo.x0).min(photo.x1 - 1 - x).min(y - photo.y0).min(photo.y1 - 1 - y) + 1;
+    let keep = move |on: bool| if on { PHOTO } else { [0.0; 4] };
+    for (depth, mode) in [(8, "rgb"), (16, "rgb"), (32, "rgb"), (8, "gray"), (16, "cmyk"), (16, "lab")] {
+        let area = |f: &dyn Fn(i32, i32) -> [f32; 4]| area_of(&layer_doc(120, 100, depth, mode, f));
+        assert_eq!(area(&|x, y| keep(in_photo(x, y))), photo, "photo, {mode} {depth}");
+        // A transformed photo's outer pixels are only partly covered.
+        let soft = |x: i32, y: i32| if !in_photo(x, y) { [0.0; 4] } else { [PHOTO[0], PHOTO[1], PHOTO[2], if rim(x, y) <= 2 { 0.1 } else { 1.0 }] };
+        assert_eq!(area(&soft), photo, "soft edge, {mode} {depth}");
+        // Rounded corners, here 8 px of the rim at each corner.
+        let rounded = |x: i32, y: i32| keep(in_photo(x, y) && (x - 60).abs() + (y - 50).abs() < 72);
+        assert_eq!(area(&rounded), photo, "rounded corners, {mode} {depth}");
+        // A cut-out: a disc, and an octagon that reaches its box for 30 px of each 80 px side.
+        assert_eq!(area(&|x, y| keep((x - 60).pow(2) + (y - 50).pow(2) < 40 * 40)), canvas, "disc, {mode} {depth}");
+        assert_eq!(area(&|x, y| keep(in_photo(x, y) && (x - 60).abs() + (y - 50).abs() < 55)), canvas, "octagon, {mode} {depth}");
+        // Nothing to go on: no pixels, or too few to have a rim.
+        assert_eq!(area(&|_, _| [0.0; 4]), canvas, "empty, {mode} {depth}");
+        assert_eq!(area(&|x, y| keep((10..15).contains(&x) && (10..15).contains(&y))), canvas, "tiny, {mode} {depth}");
+    }
+    // A photo running off the canvas: the part on it.
+    let mut s = layer_doc(120, 100, 8, "rgb", |_, _| [0.0; 4]);
+    s.edit("paint", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let (r, px) = (Rect::new(-20, 10, 60, 90), photocraft_raster::from_rgba(&surf.format(), PHOTO));
+        surf.write_region(r, &px.iter().copied().cycle().take(80 * 80 * px.len()).collect::<Vec<f32>>());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(area_of(&s), Rect::new(0, 10, 60, 90));
+    // Sampling all layers, a layer that isn't there, and no layer.
+    let d = s.active().unwrap();
+    assert_eq!(subject_area(&d.doc, d.active_layer, true), canvas);
+    assert_eq!(subject_area(&d.doc, Some(photocraft_doc::LayerId(u64::MAX)), false), canvas);
+    assert_eq!(subject_area(&d.doc, None, false), canvas);
+    let (s, _) = disc(8);
+    assert_eq!(area_of(&s), Rect::new(0, 0, 200, 160), "the Background has no alpha");
+}
+
+/// `disc` as a layer on a bigger canvas, the way a placed photo sits. The photo is now at (30, 30).
+fn disc_on_a_bigger_canvas(depth: u32) -> (Session, impl Fn(i32, i32) -> bool) {
+    let (mut s, inside) = disc(depth);
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 260, "height": 220, "anchor": "center"})).unwrap();
+    (s, move |x, y| inside(x - 30, y - 30))
+}
+
+fn mask_iou(s: &Session, w: i32, h: i32, truth: impl Fn(i32, i32) -> bool) -> f32 {
+    let d = s.active().unwrap();
+    let m = d.doc.layer(d.active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
+    let (mut i, mut u) = (0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (m.value(x, y) >= 0.5, truth(x, y));
+            i += (a && b) as i32;
+            u += (a || b) as i32;
+        }
+    }
+    i as f32 / u.max(1) as f32
+}
+
+/// The empty canvas around a photo is not its background: every way of finding the subject finds
+/// it in the photo, not the photo's rectangle (#8235).
+#[test]
+fn subject_on_a_layer_smaller_than_the_canvas_is_the_subject_not_the_layer() {
+    for depth in [8, 16, 32] {
+        let (mut s, inside) = disc_on_a_bigger_canvas(depth);
+        s.execute("select.subject", json!({})).unwrap();
+        let v = sel_iou(&s, 260, 220, &inside);
+        assert!(v > 0.9, "depth {depth}: Select Subject IoU {v}");
+        // Select and Mask's Select Subject button, which the workspace sends with this flag.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("select.refineEdge", json!({"edits": [{"tool": "subject", "sampleAllLayers": false}]})).unwrap();
+        let v = sel_iou(&s, 260, 220, &inside);
+        assert!(v > 0.9, "depth {depth}: Select and Mask IoU {v}");
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("layer.maskAllObjects", json!({})).unwrap();
+        let v = mask_iou(&s, 260, 220, &inside);
+        assert!(v > 0.9, "depth {depth}: Mask All Objects IoU {v}");
+    }
+}
+
+/// A placed photo is a smart object: its pixels are the layer's cache.
+#[test]
+fn subject_on_a_smart_object_smaller_than_the_canvas_is_the_subject_not_the_layer() {
+    let (mut s, inside) = disc_on_a_bigger_canvas(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("select.subject", json!({})).unwrap();
+    let v = sel_iou(&s, 260, 220, &inside);
+    assert!(v > 0.9, "Select Subject IoU {v}");
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.maskAllObjects", json!({})).unwrap();
+    let v = mask_iou(&s, 260, 220, &inside);
+    assert!(v > 0.9, "Mask All Objects IoU {v}");
+}
+
+/// Inside its box a cut-out runs out of the frame, which reads as background, so a cut-out is
+/// looked for on the canvas.
+#[test]
+fn subject_on_a_cut_out_is_the_whole_object() {
+    let inside = |x: i32, y: i32| {
+        let (dx, dy) = ((x - 120).abs(), (y - 100).abs());
+        dx < 90 && dy < 70 && dx + dy < 130
+    };
+    let nz = noise_field(240, 200, 3);
+    for depth in [8, 16, 32] {
+        let px = |x: i32, y: i32| {
+            let n = 0.05 * nz[(y * 240 + x) as usize];
+            let t = ((x + y) as f32 * 0.35).sin() * 0.5 + 0.5;
+            if inside(x, y) { [(0.85 + 0.05 * t + n).clamp(0.0, 1.0), (0.2 + 0.3 * t + n).clamp(0.0, 1.0), (0.15 + n).clamp(0.0, 1.0), 1.0] } else { [0.0; 4] }
+        };
+        let mut s = layer_doc(240, 200, depth, "rgb", px);
+        s.execute("select.subject", json!({})).unwrap();
+        let v = sel_iou(&s, 240, 200, inside);
+        assert!(v > 0.9, "depth {depth}: Select Subject IoU {v}");
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("layer.removeBackground", json!({})).unwrap();
+        let v = mask_iou(&s, 240, 200, inside);
+        assert!(v > 0.9, "depth {depth}: Remove Background IoU {v}");
+    }
+}
+
 /// #2865: a repeat on unchanged pixels reuses the last mask (an identical selection, even
 /// after Deselect); sampling something else or a pixel edit computes it again.
 #[test]
