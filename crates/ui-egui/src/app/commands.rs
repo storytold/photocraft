@@ -258,6 +258,11 @@ impl PhotocraftApp {
         }
     }
 
+    /// Bring the shell's per-document state back in line with the engine's open documents, after
+    /// a command may have opened, closed or reordered them: tool work in progress that belongs to
+    /// another document or tool is cancelled, each view and window follows its document to its new
+    /// index (an untracked view keeps its own), and, with Open Documents as Tabs off, a document
+    /// that has just appeared gets a floating window of its own.
     pub fn sync_views(&mut self) {
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
@@ -305,10 +310,15 @@ impl PhotocraftApp {
         self.ui.views = views.into_iter().map(Option::unwrap_or_default).collect();
         self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
         if !self.session.prefs().workspace.open_documents_as_tabs {
+            // Each new document floats in a window of its own, as Photoshop opens them with
+            // Open Documents as Tabs off: floating, so it isn't a tab as well (#9728). The
+            // preference decides where a document opens; the ones already open stay where they
+            // are, and Window › Arrange › Consolidate All to Tabs docks them.
+            const FLOATING_ONLY: bool = true;
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx, false);
+                    crate::view_cmds::float_window(self, idx, idx, FLOATING_ONLY);
                 }
             }
         }
