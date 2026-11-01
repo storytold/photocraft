@@ -525,6 +525,61 @@ mod properties_rtl_tests {
         }
     }
 
+    #[test]
+    fn probe_area_sizing() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let id = egui::Id::unique("probe-area");
+            let mut inner_max = None;
+            let mut grid_avail = None;
+            let mut full = ctx.run_ui(input, |ui| {
+                let frame = egui::Frame::NONE.inner_margin(egui::Margin::same(14));
+                egui::Area::new(id).order(egui::Order::Middle).fixed_pos(egui::pos2(12.0, 44.0)).show(ui.ctx(), |ui| {
+                    frame.show(ui, |ui| {
+                        ui.set_width(292.0);
+                        inner_max = Some(ui.max_rect());
+                        grid_avail = Some(ui.available_width());
+                        crate::direction::ltr_grid(ui, "probe-grid", 16, egui::vec2(2.0, 2.0), |ui| {
+                            for _ in 0..16 {
+                                ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+                            }
+                        });
+                    });
+                });
+            });
+            full.textures_delta.clear();
+            let area = ctx.memory(|m| m.area_rect(id)).unwrap();
+            eprintln!("PROBE {dir:?}: area={area:?} inner_max={inner_max:?} grid_avail={grid_avail:?}");
+        }
+    }
+
+    #[test]
+    fn probe_card_rtl() {
+        let _rtl = direction_scope(Dir::Rtl);
+        let h = harness(true);
+        let card = card_rect(&h);
+        let header = h.get_by_label("Add an adjustment").rect();
+        let first = h.get_by_label("Brightness/Contrast").rect();
+        let last = h.get_by_label("Color Lookup").rect();
+        eprintln!("PROBE card={card:?} header={header:?} first={first:?} last={last:?}");
+    }
+
+    #[test]
+    fn probe_docked_rtl() {
+        let _rtl = direction_scope(Dir::Rtl);
+        let h = docked_harness();
+        let header = h.get_by_label("Add an adjustment").rect();
+        let first = h.get_by_label("Brightness/Contrast").rect();
+        let last = h.get_by_label("Color Lookup").rect();
+        eprintln!("PROBE docked header={header:?} first={first:?} last={last:?}");
+    }
+
     /// Twin of the migrated `ltr_grid` adjustments strip: cell order stays left-to-right in
     /// both directions (the strip is physical), with equal gaps.
     #[test]
