@@ -1,5 +1,7 @@
 //! Copy and paste a layer's pixel mask from the mask-thumbnail menu.
 
+use std::borrow::Cow;
+
 use photocraft_doc::{LayerId, LayerMask};
 use serde_json::{Value, json};
 
@@ -19,9 +21,24 @@ fn require_layer_id(cmd: &str, p: &Value) -> Result<()> {
     }
 }
 
+/// `{"layer": null}` is an omitted layer. [`targets`] treats a present key as one named layer,
+/// which would paste only the active layer of a multi-selection.
+fn omit_null_layer(p: &Value) -> Cow<'_, Value> {
+    if p.get("layer").is_some_and(Value::is_null) {
+        let mut q = p.clone();
+        if let Some(obj) = q.as_object_mut() {
+            obj.remove("layer");
+        }
+        Cow::Owned(q)
+    } else {
+        Cow::Borrowed(p)
+    }
+}
+
 /// Layers Paste Layer Mask writes: the named layer, or every selected layer that is not fully locked.
 fn paste_ids(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
-    let ids = targets(s, p)?;
+    let p = omit_null_layer(p);
+    let ids = targets(s, &p)?;
     if ids.len() < 2 {
         return Ok(ids);
     }
@@ -158,5 +175,87 @@ mod tests {
         s.execute("edit.purge.clipboard", json!({})).unwrap();
         assert!(s.layer_mask_clipboard.is_none());
         assert!(!s.is_enabled("layer.layerMask.paste"));
+    }
+
+    /// A mask on `Src`, copied. Density 50 and feather 2 distinguish it from a later mask.
+    fn copied_mask(s: &mut Session) -> LayerMask {
+        s.execute("layer.new.layer", json!({"name": "Src"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 8})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"density": 50, "feather": 2})).unwrap();
+        let src = s.active().unwrap().active_layer.unwrap();
+        let mask = s.active().unwrap().doc.layer(src).unwrap().mask.clone().unwrap();
+        s.execute("layer.layerMask.copy", json!({})).unwrap();
+        mask
+    }
+
+    #[test]
+    fn a_null_layer_pastes_onto_every_selected_layer_in_one_step() {
+        let mut s = session();
+        let copied = copied_mask(&mut s);
+        s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+        let a = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
+        let b = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+        let before = s.active().unwrap().history.past_len();
+        let got = s.execute("layer.layerMask.paste", json!({"layer": null})).unwrap();
+        let mut ids: Vec<u64> = got["layers"].as_array().unwrap().iter().filter_map(|v| v.as_u64()).collect();
+        ids.sort_unstable();
+        let mut want = vec![a.0, b.0];
+        want.sort_unstable();
+        assert_eq!(ids, want);
+        for id in [a, b] {
+            let pasted = s.active().unwrap().doc.layer(id).unwrap().mask.clone().unwrap();
+            assert_eq!(pasted.density, copied.density);
+            assert_eq!(pasted.feather, copied.feather);
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), before + 1);
+        s.undo();
+        assert!(s.active().unwrap().doc.layer(a).unwrap().mask.is_none());
+        assert!(s.active().unwrap().doc.layer(b).unwrap().mask.is_none());
+    }
+
+    #[test]
+    fn pasting_over_a_mask_restores_it_on_undo() {
+        let mut s = session();
+        let copied = copied_mask(&mut s);
+        s.execute("layer.new.layer", json!({"name": "Held"})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"density": 10, "feather": 7})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let original = s.active().unwrap().doc.layer(id).unwrap().mask.clone().unwrap();
+        assert_ne!(original.density, copied.density);
+        let before = s.active().unwrap().history.past_len();
+        s.execute("layer.layerMask.paste", json!({})).unwrap();
+        let replaced = s.active().unwrap().doc.layer(id).unwrap().mask.clone().unwrap();
+        assert_eq!(replaced.density, copied.density);
+        assert_eq!(replaced.feather, copied.feather);
+        assert_eq!(s.active().unwrap().history.past_len(), before + 1);
+        s.undo();
+        assert_eq!(s.active().unwrap().doc.layer(id).unwrap().mask.as_ref(), Some(&original));
+    }
+
+    #[test]
+    fn pasting_onto_a_smart_object_sets_its_layer_mask_and_leaves_the_filter_mask() {
+        let mut s = session();
+        let copied = copied_mask(&mut s);
+        s.execute("layer.selectBottom", json!({})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        let id = LayerId(s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap());
+        {
+            let layer = s.active().unwrap().doc.layer(id).unwrap();
+            let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { panic!("expected a smart object") };
+            assert!(layer.mask.is_none());
+            assert!(sm.filter_mask.is_none());
+        }
+        s.execute("layer.layerMask.paste", json!({"layer": id.0})).unwrap();
+        let layer = s.active().unwrap().doc.layer(id).unwrap();
+        let pasted = layer.mask.clone().unwrap();
+        assert_eq!(pasted.density, copied.density);
+        assert_eq!(pasted.feather, copied.feather);
+        let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { panic!("paste left the smart object") };
+        assert!(sm.filter_mask.is_none());
     }
 }
