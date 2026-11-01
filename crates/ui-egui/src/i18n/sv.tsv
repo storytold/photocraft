@@ -2812,6 +2812,7 @@ fontWeight	Italic	Kursiv
 # Shared Layer Style color picker
 	Color Picker (Layer Style Color)	Färgväljare (lagerstilsfärg)
 	Auto Hide Notifications	Dölj aviseringar automatiskt
+	Use global menu bar	Använd global menyrad
 	Notification Duration (seconds)	Visningstid för aviseringar (sekunder)
 	Bundle Arrow-Key Nudges	Samla stegvisa flyttningar med piltangenterna
 	Nudge Bundle Pause (ms)	Paus för gruppering av stegvisa flyttningar (ms)

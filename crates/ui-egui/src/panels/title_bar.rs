@@ -69,7 +69,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 // With the macOS menu bar the menus are at the top of the screen instead. Either way
                 // this is the menus' inner edge, facing the title.
-                let menus_end = if app.services.native_menu.is_some() {
+                // A global menu host (Linux) serves them too, except in full-screen modes (see
+                // `appmenu::in_window_titles`).
+                let menus_end = if app.services.native_menu.is_some() || !crate::appmenu::in_window_titles(app) {
                     if rtl { ui.cursor().right() } else { ui.cursor().left() }
                 } else {
                     crate::menus::menu_bar(app, ui)

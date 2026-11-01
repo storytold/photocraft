@@ -54,6 +54,9 @@ impl PhotocraftApp {
         self.drain_captures(ctx);
         self.drain_control(ctx);
         native_menu::run(self, ctx);
+        // The Linux global menu: publish deferred model refreshes and drain menu activations
+        // (each activation dispatches like an in-window menu click).
+        crate::appmenu::tick(self, ctx);
         view_cmds::leave_full_screen_without_document(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {

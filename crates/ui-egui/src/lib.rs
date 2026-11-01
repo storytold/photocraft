@@ -24,6 +24,7 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+pub mod appmenu;
 mod brush_mode_menu;
 pub mod canvas;
 pub mod control;
@@ -703,6 +704,23 @@ pub struct PhotocraftApp {
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
+    /// The Linux global-menu exporter, started once on the first frame (`appmenu`; `None`
+    /// everywhere else, when there is no D-Bus session, or when opted out). Only the
+    /// exporter's platforms declare these (the web build's frame loop must not touch an
+    /// `Instant`, whose `now()` panics on wasm32-unknown-unknown).
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    global_menu: Option<photocraft_appmenu::AppMenu>,
+    /// The global-menu start was already tried and failed (no session bus, or opted out):
+    /// don't retry every frame.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    global_menu_unavailable: bool,
+    /// When the global menu was last published (a 1 Hz duty cycle, `appmenu`).
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    global_menu_last: Option<std::time::Instant>,
+    /// A registrar is actually serving the global menu for this app's windows (`appmenu`
+    /// mirrors this every frame from the exporter): the in-window menu bar then hides,
+    /// because the host's menu bar owns the menus.
+    global_menu_hosted: bool,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }

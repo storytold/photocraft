@@ -199,6 +199,13 @@ impl PhotocraftApp {
             min_frame_ms: None,
             last_frame_start_ms: 0.0,
             jobs: Default::default(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+            global_menu: None,
+            #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+            global_menu_unavailable: false,
+            #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+            global_menu_last: None,
+            global_menu_hosted: false,
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
