@@ -3308,3 +3308,27 @@ fn oil_paint_with_a_wrong_typed_setting_is_kept() {
         ],
     );
 }
+
+#[test]
+fn smart_sharpen_with_a_wrong_typed_setting_is_kept() {
+    kept_when_wrong_typed(
+        "smartSharpen",
+        &[
+            ("presetKind", text("presetKindDefault")),
+            ("useLegacy", D::Integer(0)),
+            ("moreAccurate", D::Integer(1)),
+            ("blur", text("motionBlur")),
+            ("Amnt", D::Boolean(true)),
+            ("Rds ", text("2")),
+            ("Rds", text("2")),
+        ],
+    );
+}
+
+/// `only_keys` admits a code without its space padding, so the mapper reads it too: an
+/// unpadded `Rds` radius is the step's radius, not the default 1 (#10610).
+#[test]
+fn smart_sharpen_reads_an_unpadded_radius() {
+    let d = desc("null").with("Amnt", pct(150.0)).with("Rds", px(2.5));
+    assert_eq!(mapped(newer("smartSharpen", d)), ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})));
+}

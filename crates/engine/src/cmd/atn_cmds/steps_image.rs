@@ -1,6 +1,6 @@
 use super::descriptors::{
-    PX, Target, ang, boolean, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, num,
-    pct, px, ref_class, target, trimmed,
+    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target,
+    long, num, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -575,21 +575,28 @@ pub(super) fn oil_paint_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// asks for what the command does not do (another blur, More Accurate, the newer filter, a
 /// preset) keeps it as a Photoshop step.
 pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
+    match smart_sharpen_params(d) {
+        Some(p) => step("filter.sharpen.smartSharpen", Value::Object(p)),
+        None => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let keys = ["presetKind", "useLegacy", "Amnt", "Rds", "moreAccurate", "blur"];
     let as_recorded = only_keys(d, &keys)
-        && get_enum(d, "presetKind").is_none_or(|k| k == "presetKindCustom")
-        && get_bool(d, "useLegacy") != Some(false)
-        && get_bool(d, "moreAccurate") != Some(true)
-        && get_enum(d, "blur").is_none_or(|b| b == "lensBlur");
+        && setting(d, "presetKind", enumerated, "presetKindCustom".into())? == "presetKindCustom"
+        && setting(d, "useLegacy", boolean, true)?
+        && !setting(d, "moreAccurate", boolean, false)?
+        && setting(d, "blur", enumerated, "lensBlur".into())? == "lensBlur";
     if !as_recorded {
-        return Mapped::Unsupported { harmless: false };
+        return None;
     }
     let mut p = Map::new();
-    for (key, param, default) in [("Amnt", "amount", 200.0), ("Rds ", "radius", 1.0)] {
-        p.insert(param.into(), get_num(d, key).unwrap_or(default).into());
+    for (key, param, default) in [("Amnt", "amount", 200.0), ("Rds", "radius", 1.0)] {
+        p.insert(param.into(), setting(d, key, num, default)?.into());
     }
     p.insert("reduceNoise".into(), 0.into());
-    step("filter.sharpen.smartSharpen", Value::Object(p))
+    Some(p)
 }
 
 /// Every key in recorded order. The legacy filter has no noise reduction, so only a step that
