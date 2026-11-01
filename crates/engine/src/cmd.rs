@@ -55,6 +55,7 @@ pub mod adjust_cmds;
 mod adjust_params;
 pub mod ai_account_cmds;
 pub mod ai_cmds;
+pub mod ai_provider_cmds;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
@@ -1300,6 +1301,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::background_cmds::specs());
     v.extend(ai_cmds::specs());
     v.extend(ai_account_cmds::specs());
+    v.extend(ai_provider_cmds::specs());
     v.extend(crate::file_cmds::specs());
     v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());

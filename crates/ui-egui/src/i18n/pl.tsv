@@ -4160,3 +4160,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Użyj pełnej instalacji Codex; skopiowanie wyłącznie codex.exe może pominąć składniki edycji obrazów.
 	AI Edit	Edycja z AI
 	Codex Account	Konto Codex
+# Image API and related UI (original translations).
+	Image service	Usługa obrazów
+	Codex (ChatGPT subscription)	Codex (subskrypcja ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Widoczne płótno i instrukcja są wysyłane do skonfigurowanej usługi. Dostawca może naliczać opłaty za korzystanie z niej.
+	Model ID	Identyfikator modelu
+	API address and protocol	Adres i protokół API
+	API address	Adres API
+	API protocol	Protokół API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Własne usługi muszą obsługiwać wybrany protokół edycji obrazów. Zmiana adresu wymaga klucza dla tego adresu.
+	API key	Klucz API
+	API key configured — leave empty to keep it	Klucz API skonfigurowany — pozostaw puste, aby go zachować
+	Remember API key in system credential store	Zapisz klucz API w systemowym magazynie poświadczeń
+	The API key is available for this session only.	Klucz API jest dostępny tylko w tej sesji.
+	Save API settings	Zapisz ustawienia API
+	Remove API key	Usuń klucz API
+	API configured. Saving settings does not generate an image.	API skonfigurowane. Zapisanie ustawień nie generuje obrazu.
+	Save your API settings before editing.	Zapisz ustawienia API przed rozpoczęciem edycji.
+	API settings saved	Ustawienia API zapisane
+	Enter a valid API key without whitespace	Wpisz prawidłowy klucz API bez białych znaków
+	API key removed	Klucz API usunięty
+	Could not load API settings	Nie udało się wczytać ustawień API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Wynik zostanie dopasowany do płótna i dodany jako nowa warstwa. Istniejące warstwy zostaną zachowane.
+	AI Edit via API	Edycja z AI przez API
+	AI Provider Settings	Ustawienia dostawcy AI

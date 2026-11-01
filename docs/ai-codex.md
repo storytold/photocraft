@@ -1,5 +1,9 @@
 # Codex image editing (desktop prototype)
 
+This guide records the Codex-only extraction and its validation. A dependent contribution
+adds explicitly selected [image API services](ai-api.md); select Codex in the service chooser
+to use the account flow described here. Its historical test counts are not API acceptance.
+
 This optional backend edits the visible canvas using an installed Codex App Server and
 its ChatGPT sign-in. It is an experimental contribution toward [#41](https://github.com/storytold/photocraft/issues/41),
 not a claim of Generative Fill, Generative Expand or Photoshop AI parity. The upstream
@@ -33,7 +37,7 @@ Menu and toolbar entry points require an open document.
 
 `photocraft-gen` (L4) defines `ImageProvider`, `EditRequest` and `EditResult`; the provider owns
 transport/authentication, while the engine owns document conversion, validation and history.
-Only Codex is implemented in this contribution. It has no API-key backend or automatic fallback.
+Codex never falls back to the separately configured API backends.
 
 The engine exports a flattened visible canvas as an sRGB 8-bit PNG through the existing ICC
 conversion path. Hidden layers, the document name, EXIF and XMP are omitted. The instruction

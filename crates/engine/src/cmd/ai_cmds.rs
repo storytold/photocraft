@@ -49,9 +49,38 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+fn run_api(s: &mut Session, p: &Value) -> Result<Value> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let provider = p
+            .get("provider")
+            .and_then(Value::as_str)
+            .filter(|s| photocraft_gen::api_config::PROVIDERS.contains(s))
+            .ok_or_else(|| EngineError::BadParams { cmd: "edit.ai.api".into(), msg: "Explicitly choose provider gemini, seedream or flux".into() })?;
+        let prompt = p
+            .get("prompt")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty() && s.len() <= 16_000)
+            .ok_or_else(|| EngineError::BadParams { cmd: "edit.ai.api".into(), msg: "prompt must contain 1–16000 bytes of text".into() })?;
+        enabled(s).map_err(EngineError::Other)?;
+        let implementation = s.ai_api.provider(provider).map_err(|e| EngineError::Other(e.to_string()))?;
+        edit_named_provider(s, prompt.into(), Arc::new(implementation), provider.into())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, p);
+        Err(EngineError::Other("AI editing requires the desktop app".into()))
+    }
+}
+
 /// Injection seam for alternative services and deterministic offline tests.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn edit_with_provider(s: &mut Session, prompt: String, provider: Arc<dyn ImageProvider>) -> Result<Value> {
+    edit_named_provider(s, prompt, provider, "codex".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn edit_named_provider(s: &mut Session, prompt: String, provider: Arc<dyn ImageProvider>, name: String) -> Result<Value> {
     if prompt.trim().is_empty() || prompt.len() > 16_000 {
         return Err(EngineError::BadParams { cmd: COMMAND.into(), msg: "prompt must contain 1–16000 bytes of text".into() });
     }
@@ -59,7 +88,12 @@ pub fn edit_with_provider(s: &mut Session, prompt: String, provider: Arc<dyn Ima
     let snapshot = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let intent = s.color.settings.intent();
     let bpc = s.color.settings.bpc;
-    let label = "Codex";
+    let label = match name.as_str() {
+        "gemini" => "Gemini",
+        "seedream" => "Seedream",
+        "flux" => "FLUX",
+        _ => "Codex",
+    };
     crate::jobs::run(
         s,
         "AI Edit",
@@ -136,22 +170,34 @@ pub fn edit_with_provider(s: &mut Session, prompt: String, provider: Arc<dyn Ima
                 Ok(())
             })?;
             s.select_layer(id)?;
-            Ok(json!({"layer":id.0,"provider":"codex","resizedToCanvas":resized,"sourceWidth":source_width,"sourceHeight":source_height}))
+            Ok(json!({"layer":id.0,"provider":name,"resizedToCanvas":resized,"sourceWidth":source_width,"sourceHeight":source_height}))
         },
     )
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec {
-        id: COMMAND,
-        label: "AI Edit…",
-        menu: &["Edit"],
-        shortcut: None,
-        params: r#"{"prompt":"instruction"} -> {layer,provider}; sends visible canvas to installed Codex using ChatGPT sign-in; desktop only, no API fallback"#,
-        enabled,
-        run,
-        journal: true,
-    }]
+    vec![
+        CommandSpec {
+            id: COMMAND,
+            label: "AI Edit…",
+            menu: &["Edit"],
+            shortcut: None,
+            params: r#"{"prompt":"instruction"} -> {layer,provider}; sends visible canvas to installed Codex using ChatGPT sign-in; desktop only, no API fallback"#,
+            enabled,
+            run,
+            journal: true,
+        },
+        CommandSpec {
+            id: "edit.ai.api",
+            label: "AI Edit via API",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"prompt":"instruction","provider":"gemini|seedream|flux"} -> {layer,provider}; explicitly selected API may incur charges; no fallback"#,
+            enabled,
+            run: run_api,
+            journal: true,
+        },
+    ]
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -159,6 +205,77 @@ mod tests {
     use super::*;
     struct Echo;
 
+    #[test]
+    fn flux_result_is_one_named_layer_with_undo_and_redo() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":6,"depth":16})).unwrap();
+        let original = s.active().unwrap().doc.layers[0].id;
+        let result = edit_named_provider(&mut s, "test edit".into(), Arc::new(Echo), "flux".into()).unwrap();
+        assert_eq!(result["provider"], "flux");
+        assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+        assert!(s.active().unwrap().doc.layers[1].name.contains("FLUX"));
+        assert_eq!(s.active().unwrap().doc.layers[0].id, original);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+    }
+
+    #[test]
+    fn explicit_api_command_imports_png_and_jpeg_as_one_named_undoable_layer() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use std::io::{Read, Write};
+        for (provider, extension) in [("gemini", "png"), ("seedream", "jpg")] {
+            let mut source = Session::new();
+            source.execute("file.new", json!({"width":16,"height":12,"background":"#ff0000"})).unwrap();
+            let bytes = photocraft_io::export(&source.active().unwrap().doc, extension, &Default::default()).unwrap().bytes;
+            let data = STANDARD.encode(&bytes);
+            let body =
+                if provider == "gemini" { json!({"status":"completed","output_image":{"data":data}}) } else { json!({"data":[{"b64_json":data}]}) }.to_string();
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}/edit", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let n = stream.read(&mut chunk).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&chunk[..n]);
+                    if let Some(index) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&request[..index]).to_ascii_lowercase();
+                        let length =
+                            headers.lines().find_map(|line| line.strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap();
+                        if request.len() >= index + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                    .unwrap();
+            });
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":8,"height":6,"depth":16})).unwrap();
+            let profile = photocraft_gen::api_config::Profile { endpoint, ..photocraft_gen::api_config::preset(provider).unwrap() };
+            s.ai_api.save(provider, profile, Some("offline-test-key"), false).unwrap();
+            let before = s.active().unwrap().doc.layers[0].clone();
+            let result = s.execute("edit.ai.api", json!({"provider":provider,"prompt":"Make it yellow"})).unwrap();
+            assert_eq!(result["provider"], provider);
+            assert_eq!(result["resizedToCanvas"], true);
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.layers.len(), 2);
+            assert_eq!(doc.layers[0].id, before.id);
+            assert_eq!(doc.layers[1].surface().unwrap().format().sample, doc.depth);
+            assert!(doc.layers[1].name.contains(if provider == "gemini" { "Gemini" } else { "Seedream" }));
+            assert!(!format!("{:?}", s.journal).contains("offline-test-key"));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.layers.len(), 1);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+            server.join().unwrap();
+        }
+    }
     impl ImageProvider for Echo {
         fn edit(&self, r: &photocraft_gen::EditRequest<'_>, _: &dyn Fn() -> bool) -> std::result::Result<photocraft_gen::EditResult, ProviderError> {
             assert_eq!(r.prompt, "test edit");

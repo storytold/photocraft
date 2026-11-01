@@ -4796,3 +4796,28 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Bruk hele Codex-installasjonen; kopiering av bare codex.exe kan utelate bilderedigeringskomponenter.
 	AI Edit	KI-redigering
 	Codex Account	Codex-konto
+# Image API and related UI (original translations).
+	Image service	Bildetjeneste
+	Codex (ChatGPT subscription)	Codex (ChatGPT-abonnement)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Det synlige lerretet og instruksjonen sendes til den konfigurerte tjenesten. Leverandøren kan kreve betaling for bruken.
+	Model ID	Modell-ID
+	API address and protocol	API-adresse og protokoll
+	API address	API-adresse
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Egne tjenester må støtte den valgte bilderedigeringsprotokollen. Endring av adressen krever en nøkkel for den adressen.
+	API key	API-nøkkel
+	API key configured — leave empty to keep it	API-nøkkel konfigurert — la feltet stå tomt for å beholde den
+	Remember API key in system credential store	Lagre API-nøkkelen i systemets legitimasjonslager
+	The API key is available for this session only.	API-nøkkelen er bare tilgjengelig i denne økten.
+	Save API settings	Lagre API-innstillinger
+	Remove API key	Fjern API-nøkkel
+	API configured. Saving settings does not generate an image.	API er konfigurert. Lagring av innstillinger genererer ikke et bilde.
+	Save your API settings before editing.	Lagre API-innstillingene før redigering.
+	API settings saved	API-innstillinger lagret
+	Enter a valid API key without whitespace	Skriv inn en gyldig API-nøkkel uten blanktegn
+	API key removed	API-nøkkel fjernet
+	Could not load API settings	API-innstillingene kunne ikke lastes inn
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Resultatet tilpasses lerretet og legges til som et nytt lag. Eksisterende lag bevares.
+	AI Edit via API	KI-redigering via API
+	AI Provider Settings	Innstillinger for KI-leverandør

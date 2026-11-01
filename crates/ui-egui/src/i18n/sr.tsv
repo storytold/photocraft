@@ -4620,3 +4620,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Koristite celu Codex instalaciju; kopiranje samo datoteke codex.exe može izostaviti komponente za uređivanje slika.
 	AI Edit	AI uređivanje
 	Codex Account	Codex nalog
+# Image API and related UI (original translations).
+	Image service	Usluga za slike
+	Codex (ChatGPT subscription)	Codex (ChatGPT pretplata)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Vidljivo platno i uputstvo šalju se podešenoj usluzi. Pružalac usluge može naplatiti korišćenje.
+	Model ID	ID modela
+	API address and protocol	API adresa i protokol
+	API address	API adresa
+	API protocol	API protokol
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Prilagođene usluge moraju podržavati izabrani protokol za uređivanje slika. Promena adrese zahteva ključ za tu adresu.
+	API key	API ključ
+	API key configured — leave empty to keep it	API ključ je podešen — ostavite prazno da biste ga zadržali
+	Remember API key in system credential store	Sačuvaj API ključ u sistemskom skladištu akreditiva
+	The API key is available for this session only.	API ključ je dostupan samo tokom ove sesije.
+	Save API settings	Sačuvaj API podešavanja
+	Remove API key	Ukloni API ključ
+	API configured. Saving settings does not generate an image.	API je podešen. Čuvanje podešavanja ne generiše sliku.
+	Save your API settings before editing.	Sačuvajte API podešavanja pre uređivanja.
+	API settings saved	API podešavanja su sačuvana
+	Enter a valid API key without whitespace	Unesite važeći API ključ bez belina
+	API key removed	API ključ je uklonjen
+	Could not load API settings	API podešavanja nije moguće učitati
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Rezultat se prilagođava platnu i dodaje kao novi sloj. Postojeći slojevi se čuvaju.
+	AI Edit via API	AI uređivanje putem API-ja
+	AI Provider Settings	Podešavanja AI pružaoca

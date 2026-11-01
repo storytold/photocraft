@@ -8,8 +8,26 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+base64 = "0.23"
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "system-proxy"] }
+tokio = { version = "1", features = ["rt", "time", "net"] }
+url = "2"
+tempfile = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "=3.6.3", default-features = false, features = ["async-secret-service", "async-io", "crypto-rust"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"

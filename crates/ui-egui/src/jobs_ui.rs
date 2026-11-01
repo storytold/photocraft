@@ -448,7 +448,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
 }
 
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
-    let label = if e.command == "edit.ai.codex" { crate::i18n::t(&e.label).to_owned() } else { e.label.clone() };
+    let label = if matches!(e.command.as_str(), "edit.ai.codex" | "edit.ai.api") { crate::i18n::t(&e.label).to_owned() } else { e.label.clone() };
     // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like
     // Photoshop's cue. Cancelling is the user's own action and stays silent.
     if matches!(e.outcome, JobOutcome::Done(_))

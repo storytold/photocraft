@@ -4298,3 +4298,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Gebruik de volledige Codex-installatie; als je alleen codex.exe kopieert, kunnen beeldbewerkingsonderdelen ontbreken.
 	AI Edit	AI-bewerking
 	Codex Account	Codex-account
+# Image API and related UI (original translations).
+	Image service	Afbeeldingsdienst
+	Codex (ChatGPT subscription)	Codex (ChatGPT-abonnement)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Het zichtbare canvas en de instructie worden naar de ingestelde dienst gestuurd. De aanbieder kan gebruikskosten in rekening brengen.
+	Model ID	Model-ID
+	API address and protocol	API-adres en protocol
+	API address	API-adres
+	API protocol	API-protocol
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Eigen diensten moeten het gekozen beeldbewerkingsprotocol ondersteunen. Een gewijzigd adres vereist een sleutel voor dat adres.
+	API key	API-sleutel
+	API key configured — leave empty to keep it	API-sleutel ingesteld — laat leeg om deze te behouden
+	Remember API key in system credential store	API-sleutel opslaan in de referentieopslag van het systeem
+	The API key is available for this session only.	De API-sleutel is alleen tijdens deze sessie beschikbaar.
+	Save API settings	API-instellingen opslaan
+	Remove API key	API-sleutel verwijderen
+	API configured. Saving settings does not generate an image.	API ingesteld. Het opslaan van instellingen genereert geen afbeelding.
+	Save your API settings before editing.	Sla je API-instellingen op voordat je gaat bewerken.
+	API settings saved	API-instellingen opgeslagen
+	Enter a valid API key without whitespace	Voer een geldige API-sleutel zonder witruimte in
+	API key removed	API-sleutel verwijderd
+	Could not load API settings	API-instellingen konden niet worden geladen
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Het resultaat wordt aan het canvas aangepast en als nieuwe laag toegevoegd. Bestaande lagen blijven behouden.
+	AI Edit via API	AI-bewerking via API
+	AI Provider Settings	Instellingen van AI-aanbieder

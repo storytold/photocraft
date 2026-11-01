@@ -4048,3 +4048,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Hãy dùng bản cài đặt Codex đầy đủ; chỉ sao chép codex.exe có thể thiếu thành phần chỉnh sửa hình ảnh.
 	AI Edit	Chỉnh sửa bằng AI
 	Codex Account	Tài khoản Codex
+# Image API and related UI (original translations).
+	Image service	Dịch vụ hình ảnh
+	Codex (ChatGPT subscription)	Codex (gói đăng ký ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Khung vẽ đang hiển thị và chỉ dẫn được gửi tới dịch vụ đã cấu hình. Nhà cung cấp có thể tính phí sử dụng.
+	Model ID	ID mô hình
+	API address and protocol	Địa chỉ và giao thức API
+	API address	Địa chỉ API
+	API protocol	Giao thức API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Dịch vụ tùy chỉnh phải hỗ trợ giao thức chỉnh sửa hình ảnh đã chọn. Đổi địa chỉ yêu cầu khóa cho địa chỉ đó.
+	API key	Khóa API
+	API key configured — leave empty to keep it	Đã cấu hình khóa API — để trống để giữ nguyên
+	Remember API key in system credential store	Lưu khóa API trong kho thông tin xác thực của hệ thống
+	The API key is available for this session only.	Khóa API chỉ khả dụng trong phiên này.
+	Save API settings	Lưu cấu hình API
+	Remove API key	Xóa khóa API
+	API configured. Saving settings does not generate an image.	Đã cấu hình API. Lưu cấu hình không tạo hình ảnh.
+	Save your API settings before editing.	Hãy lưu cấu hình API trước khi chỉnh sửa.
+	API settings saved	Đã lưu cấu hình API
+	Enter a valid API key without whitespace	Nhập khóa API hợp lệ không có khoảng trắng
+	API key removed	Đã xóa khóa API
+	Could not load API settings	Không thể tải cấu hình API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Kết quả được khớp với khung vẽ và thêm thành lớp mới. Các lớp hiện có được giữ nguyên.
+	AI Edit via API	Chỉnh sửa bằng AI qua API
+	AI Provider Settings	Cấu hình nhà cung cấp AI

@@ -4453,3 +4453,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Utiliza la instalación completa de Codex; copiar solo codex.exe puede omitir componentes de edición de imágenes.
 	AI Edit	Edición con IA
 	Codex Account	Cuenta de Codex
+# Image API and related UI (original translations).
+	Image service	Servicio de imágenes
+	Codex (ChatGPT subscription)	Codex (suscripción de ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Se envían el lienzo visible y las instrucciones al servicio configurado. El proveedor puede cobrar por su uso.
+	Model ID	ID del modelo
+	API address and protocol	Dirección y protocolo de API
+	API address	Dirección de API
+	API protocol	Protocolo de API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Los servicios personalizados deben admitir el protocolo de edición seleccionado. Al cambiar la dirección, se necesita una clave para esa dirección.
+	API key	Clave de API
+	API key configured — leave empty to keep it	Clave de API configurada — deja el campo vacío para conservarla
+	Remember API key in system credential store	Guardar la clave de API en el almacén de credenciales del sistema
+	The API key is available for this session only.	La clave de API solo estará disponible durante esta sesión.
+	Save API settings	Guardar configuración de API
+	Remove API key	Eliminar clave de API
+	API configured. Saving settings does not generate an image.	API configurada. Guardar la configuración no genera ninguna imagen.
+	Save your API settings before editing.	Guarda la configuración de API antes de editar.
+	API settings saved	Configuración de API guardada
+	Enter a valid API key without whitespace	Introduce una clave de API válida sin espacios
+	API key removed	Clave de API eliminada
+	Could not load API settings	No se pudo cargar la configuración de API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	El resultado se ajustará al lienzo y se añadirá como una capa nueva. Las capas existentes se conservarán.
+	AI Edit via API	Edición con IA mediante API
+	AI Provider Settings	Configuración del proveedor de IA

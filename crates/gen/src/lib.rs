@@ -1,9 +1,15 @@
-//! Replaceable image editing providers. No API-key provider or automatic fallback.
+//! Replaceable image editing providers. Service selection is explicit; never fall back.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod api;
+pub mod api_config;
+pub mod api_error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod api_settings;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod codex;
 
@@ -14,9 +20,9 @@ pub enum Error {
     #[error("AI edit timed out")]
     Timeout,
     #[error("{0}")]
-    Provider(String),
-    #[error("{0}")]
     RuntimeUnavailable(String),
+    #[error("{0}")]
+    Provider(String),
     #[error("image service I/O: {0}")]
     Io(#[from] std::io::Error),
 }

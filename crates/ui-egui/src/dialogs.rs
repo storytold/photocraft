@@ -919,7 +919,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
+    let (cmd, params) = crate::ai_api_ui::edit_command(&d.fields, cmd, params);
     let result = app.run(&cmd, params.clone());
+    if crate::ai_account_ui::owns(&d.fields) {
+        crate::ai_api_ui::closed(app);
+    }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -1048,6 +1052,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     if crate::ai_account_ui::owns(&closed.fields) {
         crate::ai_account_ui::closed(app);
+        crate::ai_api_ui::closed(app);
     }
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {

@@ -4461,3 +4461,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Használja a teljes Codex-telepítést; csak a codex.exe másolásakor hiányozhatnak a képszerkesztési összetevők.
 	AI Edit	AI-szerkesztés
 	Codex Account	Codex-fiók
+# Image API and related UI (original translations).
+	Image service	Képszolgáltatás
+	Codex (ChatGPT subscription)	Codex (ChatGPT-előfizetés)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	A látható vásznat és az utasítást a beállított szolgáltatásnak küldjük. A szolgáltató használati díjat számíthat fel.
+	Model ID	Modellazonosító
+	API address and protocol	API-cím és protokoll
+	API address	API-cím
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Az egyéni szolgáltatásnak támogatnia kell a kiválasztott képszerkesztési protokollt. A cím módosításához az adott címhez tartozó kulcs szükséges.
+	API key	API-kulcs
+	API key configured — leave empty to keep it	API-kulcs beállítva — megtartásához hagyja üresen
+	Remember API key in system credential store	API-kulcs mentése a rendszer hitelesítőadat-tárolójába
+	The API key is available for this session only.	Az API-kulcs csak ebben a munkamenetben érhető el.
+	Save API settings	API-beállítások mentése
+	Remove API key	API-kulcs eltávolítása
+	API configured. Saving settings does not generate an image.	Az API beállítva. A beállítások mentése nem hoz létre képet.
+	Save your API settings before editing.	Szerkesztés előtt mentse az API-beállításokat.
+	API settings saved	API-beállítások mentve
+	Enter a valid API key without whitespace	Adjon meg érvényes, szóköz nélküli API-kulcsot
+	API key removed	API-kulcs eltávolítva
+	Could not load API settings	Az API-beállítások nem tölthetők be
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Az eredményt a vászonhoz igazítjuk, és új rétegként adjuk hozzá. A meglévő rétegek megmaradnak.
+	AI Edit via API	AI-szerkesztés API-n keresztül
+	AI Provider Settings	AI-szolgáltató beállításai

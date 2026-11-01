@@ -3564,3 +3564,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Gunakan instalasi Codex yang lengkap; menyalin codex.exe saja dapat melewatkan komponen pengeditan gambar.
 	AI Edit	Pengeditan AI
 	Codex Account	Akun Codex
+# Image API and related UI (original translations).
+	Image service	Layanan gambar
+	Codex (ChatGPT subscription)	Codex (langganan ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Kanvas yang terlihat dan instruksi dikirim ke layanan yang dikonfigurasi. Penyedia layanan dapat mengenakan biaya penggunaan.
+	Model ID	ID model
+	API address and protocol	Alamat dan protokol API
+	API address	Alamat API
+	API protocol	Protokol API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Layanan kustom harus mendukung protokol pengeditan gambar yang dipilih. Mengubah alamat memerlukan kunci untuk alamat tersebut.
+	API key	Kunci API
+	API key configured — leave empty to keep it	Kunci API sudah diatur — kosongkan untuk mempertahankannya
+	Remember API key in system credential store	Simpan kunci API di penyimpanan kredensial sistem
+	The API key is available for this session only.	Kunci API hanya tersedia selama sesi ini.
+	Save API settings	Simpan pengaturan API
+	Remove API key	Hapus kunci API
+	API configured. Saving settings does not generate an image.	API sudah dikonfigurasi. Menyimpan pengaturan tidak menghasilkan gambar.
+	Save your API settings before editing.	Simpan pengaturan API sebelum mengedit.
+	API settings saved	Pengaturan API disimpan
+	Enter a valid API key without whitespace	Masukkan kunci API yang valid tanpa spasi
+	API key removed	Kunci API dihapus
+	Could not load API settings	Pengaturan API tidak dapat dimuat
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Hasilnya disesuaikan dengan kanvas dan ditambahkan sebagai lapisan baru. Lapisan yang ada tetap dipertahankan.
+	AI Edit via API	Pengeditan AI melalui API
+	AI Provider Settings	Pengaturan penyedia AI

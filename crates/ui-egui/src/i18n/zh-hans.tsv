@@ -3226,3 +3226,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	请保留完整的 Codex 安装目录，单独复制 codex.exe 可能缺少图片编辑组件。
 	AI Edit	AI 编辑
 	Codex Account	Codex 账户
+# Image API and related UI (original translations).
+	Image service	图片服务
+	Codex (ChatGPT subscription)	Codex（ChatGPT 订阅）
+	Doubao / Seedream	豆包 / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	将当前可见画布和指令发送至所配置的服务，使用费用由该服务商收取。
+	Model ID	模型名称
+	API address and protocol	API 地址与协议
+	API address	完整 API 请求地址
+	API protocol	API 协议
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	自定义服务须支持所选图片编辑协议。更换地址后，需要填写对应地址的密钥。
+	API key	API 密钥
+	API key configured — leave empty to keep it	已配置 API 密钥，留空保留原密钥
+	Remember API key in system credential store	将密钥记在本机系统凭据库
+	The API key is available for this session only.	密钥仅在本次运行期间可用。
+	Save API settings	保存 API 配置
+	Remove API key	移除 API 密钥
+	API configured. Saving settings does not generate an image.	API 已配置。保存配置不会生成图片。
+	Save your API settings before editing.	请先保存 API 配置，再开始编辑。
+	API settings saved	API 配置已保存
+	Enter a valid API key without whitespace	密钥包含空格、换行或无效字符，请重新复制完整密钥。首尾空白会自动忽略。
+	API key removed	API 密钥已移除
+	Could not load API settings	无法加载 API 配置
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	结果将适配画布尺寸并添加为新图层，保留已有图层。
+	AI Edit via API	通过 API 进行 AI 编辑
+	AI Provider Settings	AI 服务配置

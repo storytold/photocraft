@@ -4218,3 +4218,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex のインストール全体を使用してください。codex.exe のみをコピーすると、画像編集コンポーネントが不足する場合があります。
 	AI Edit	AI 編集
 	Codex Account	Codex アカウント
+# Image API and related UI (original translations).
+	Image service	画像サービス
+	Codex (ChatGPT subscription)	Codex（ChatGPT サブスクリプション）
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	表示中のキャンバスと指示を設定したサービスに送信します。使用料金はサービス提供元から請求される場合があります。
+	Model ID	モデル ID
+	API address and protocol	API アドレスとプロトコル
+	API address	API アドレス
+	API protocol	API プロトコル
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	カスタムサービスは選択した画像編集プロトコルに対応している必要があります。アドレスを変更すると、そのアドレス用のキーが必要です。
+	API key	API キー
+	API key configured — leave empty to keep it	API キー設定済み — 空欄で既存のキーを維持
+	Remember API key in system credential store	システムの資格情報ストアに API キーを保存
+	The API key is available for this session only.	API キーは今回のセッションでのみ使用できます。
+	Save API settings	API 設定を保存
+	Remove API key	API キーを削除
+	API configured. Saving settings does not generate an image.	API は設定済みです。設定の保存では画像は生成されません。
+	Save your API settings before editing.	編集する前に API 設定を保存してください。
+	API settings saved	API 設定を保存しました
+	Enter a valid API key without whitespace	空白を含まない有効な API キーを入力してください
+	API key removed	API キーを削除しました
+	Could not load API settings	API 設定を読み込めませんでした
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	結果はキャンバスに合わせ、新しいレイヤーとして追加されます。既存のレイヤーは保持されます。
+	AI Edit via API	API 経由の AI 編集
+	AI Provider Settings	AI プロバイダー設定

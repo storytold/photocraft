@@ -4797,3 +4797,28 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Käytä koko Codex-asennusta; pelkän codex.exe-tiedoston kopiointi voi jättää kuvanmuokkausosia pois.
 	AI Edit	Tekoälymuokkaus
 	Codex Account	Codex-tili
+# Image API and related UI (original translations).
+	Image service	Kuvapalvelu
+	Codex (ChatGPT subscription)	Codex (ChatGPT-tilaus)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Näkyvä kangas ja ohje lähetetään määritettyyn palveluun. Palveluntarjoaja voi veloittaa käytöstä.
+	Model ID	Mallin tunnus
+	API address and protocol	API-osoite ja protokolla
+	API address	API-osoite
+	API protocol	API-protokolla
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Oman palvelun on tuettava valittua kuvanmuokkausprotokollaa. Osoitteen vaihtaminen vaatii kyseisen osoitteen avaimen.
+	API key	API-avain
+	API key configured — leave empty to keep it	API-avain määritetty — säilytä se jättämällä kenttä tyhjäksi
+	Remember API key in system credential store	Tallenna API-avain järjestelmän tunnistetietosäilöön
+	The API key is available for this session only.	API-avain on käytettävissä vain tässä istunnossa.
+	Save API settings	Tallenna API-asetukset
+	Remove API key	Poista API-avain
+	API configured. Saving settings does not generate an image.	API on määritetty. Asetusten tallennus ei luo kuvaa.
+	Save your API settings before editing.	Tallenna API-asetukset ennen muokkausta.
+	API settings saved	API-asetukset tallennettu
+	Enter a valid API key without whitespace	Anna kelvollinen API-avain ilman tyhjemerkkejä
+	API key removed	API-avain poistettu
+	Could not load API settings	API-asetuksia ei voitu ladata
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Tulos sovitetaan kankaaseen ja lisätään uutena tasona. Nykyiset tasot säilyvät.
+	AI Edit via API	Tekoälymuokkaus API:n kautta
+	AI Provider Settings	Tekoälypalveluntarjoajan asetukset

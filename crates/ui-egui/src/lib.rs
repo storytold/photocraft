@@ -54,6 +54,7 @@ pub mod texel_guard;
 pub mod theme;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
 pub mod ai_account_ui;
+pub mod ai_api_ui;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
 pub mod widgets;

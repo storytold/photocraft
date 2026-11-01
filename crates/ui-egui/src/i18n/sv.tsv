@@ -4794,3 +4794,28 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Använd hela Codex-installationen; om bara codex.exe kopieras kan komponenter för bildredigering saknas.
 	AI Edit	AI-redigering
 	Codex Account	Codex-konto
+# Image API and related UI (original translations).
+	Image service	Bildtjänst
+	Codex (ChatGPT subscription)	Codex (ChatGPT-abonnemang)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Den synliga arbetsytan och instruktionen skickas till den inställda tjänsten. Tjänsteleverantören kan ta ut användningsavgifter.
+	Model ID	Modell-ID
+	API address and protocol	API-adress och protokoll
+	API address	API-adress
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Egna tjänster måste stödja det valda protokollet för bildredigering. Om adressen ändras krävs en nyckel för den adressen.
+	API key	API-nyckel
+	API key configured — leave empty to keep it	API-nyckel inställd — lämna tomt för att behålla den
+	Remember API key in system credential store	Spara API-nyckeln i systemets lagring för autentiseringsuppgifter
+	The API key is available for this session only.	API-nyckeln är endast tillgänglig under den här sessionen.
+	Save API settings	Spara API-inställningar
+	Remove API key	Ta bort API-nyckeln
+	API configured. Saving settings does not generate an image.	API är inställt. Att spara inställningarna skapar ingen bild.
+	Save your API settings before editing.	Spara API-inställningarna innan du redigerar.
+	API settings saved	API-inställningarna har sparats
+	Enter a valid API key without whitespace	Ange en giltig API-nyckel utan blanksteg
+	API key removed	API-nyckeln har tagits bort
+	Could not load API settings	API-inställningarna kunde inte läsas in
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Resultatet anpassas till arbetsytan och läggs till som ett nytt lager. Befintliga lager bevaras.
+	AI Edit via API	AI-redigering via API
+	AI Provider Settings	Inställningar för AI-leverantör

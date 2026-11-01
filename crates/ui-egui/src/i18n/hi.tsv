@@ -616,3 +616,28 @@ cameraRaw	Yellow	पीला
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex की पूरी स्थापना का उपयोग करें; केवल codex.exe कॉपी करने से चित्र-संपादन घटक छूट सकते हैं।
 	AI Edit	AI संपादन
 	Codex Account	Codex खाता
+# Image API and related UI (original translations).
+	Image service	चित्र सेवा
+	Codex (ChatGPT subscription)	Codex (ChatGPT सदस्यता)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	दिखाई दे रहा कैनवस और निर्देश निर्धारित सेवा को भेजे जाते हैं। सेवा प्रदाता उपयोग के लिए शुल्क ले सकता है।
+	Model ID	मॉडल ID
+	API address and protocol	API पता और प्रोटोकॉल
+	API address	API पता
+	API protocol	API प्रोटोकॉल
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	कस्टम सेवा को चुने गए चित्र-संपादन प्रोटोकॉल का समर्थन करना चाहिए। पता बदलने पर उस पते की कुंजी आवश्यक है।
+	API key	API कुंजी
+	API key configured — leave empty to keep it	API कुंजी सेट है — इसे बनाए रखने के लिए खाली छोड़ें
+	Remember API key in system credential store	API कुंजी सिस्टम के क्रेडेंशियल स्टोर में सहेजें
+	The API key is available for this session only.	API कुंजी केवल इस सत्र में उपलब्ध है।
+	Save API settings	API सेटिंग सहेजें
+	Remove API key	API कुंजी हटाएँ
+	API configured. Saving settings does not generate an image.	API सेट है। सेटिंग सहेजने से चित्र नहीं बनता।
+	Save your API settings before editing.	संपादन से पहले API सेटिंग सहेजें।
+	API settings saved	API सेटिंग सहेजी गईं
+	Enter a valid API key without whitespace	बिना रिक्त स्थान वाली मान्य API कुंजी दर्ज करें
+	API key removed	API कुंजी हटाई गई
+	Could not load API settings	API सेटिंग लोड नहीं हो सकीं
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	परिणाम कैनवस के आकार में ढालकर नई परत के रूप में जोड़ा जाएगा। मौजूदा परतें सुरक्षित रहेंगी।
+	AI Edit via API	API से AI संपादन
+	AI Provider Settings	AI प्रदाता सेटिंग

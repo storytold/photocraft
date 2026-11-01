@@ -93,13 +93,20 @@ pub fn closed(app: &mut PhotocraftApp) {
 
 pub fn can_confirm(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
     !owns(fields)
-        || (app.ui.ai_account.status.state == State::Connected
-            && fields.get("prompt").and_then(Value::as_str).is_some_and(|prompt| !prompt.trim().is_empty() && prompt.len() <= 16_000))
+        || ((if crate::ai_api_ui::selected(fields) == "codex" {
+            app.ui.ai_account.status.state == State::Connected
+        } else {
+            crate::ai_api_ui::can_confirm(app, fields)
+        }) && fields.get("prompt").and_then(Value::as_str).is_some_and(|prompt| !prompt.trim().is_empty() && prompt.len() <= 16_000))
 }
 
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     tick(app, ui.ctx());
     ui.set_max_width(440.0);
+    if crate::ai_api_ui::selector(app, ui, fields) {
+        crate::ai_api_ui::body(app, ui, fields);
+        return;
+    }
     let state = app.ui.ai_account.status.state.clone();
     let text = match state {
         State::Unknown => tl!("Codex account has not been checked"),

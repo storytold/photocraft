@@ -3572,3 +3572,28 @@ curves	Smooth	تنعيم
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	استخدم تثبيت Codex الكامل؛ فقد يؤدي نسخ codex.exe وحده إلى فقدان مكوّنات تحرير الصور.
 	AI Edit	تحرير بالذكاء الاصطناعي
 	Codex Account	حساب Codex
+# Image API and related UI (original translations).
+	Image service	خدمة الصور
+	Codex (ChatGPT subscription)	Codex (اشتراك ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	تُرسل مساحة الرسم الظاهرة والتعليمات إلى الخدمة المُعدّة. قد يفرض مزوّد الخدمة رسوم استخدام.
+	Model ID	معرّف النموذج
+	API address and protocol	عنوان API والبروتوكول
+	API address	عنوان API
+	API protocol	بروتوكول API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	يجب أن تدعم الخدمات المخصّصة بروتوكول تحرير الصور المحدد. يتطلب تغيير العنوان مفتاحًا لذلك العنوان.
+	API key	مفتاح API
+	API key configured — leave empty to keep it	مفتاح API مُعدّ — اتركه فارغًا للاحتفاظ به
+	Remember API key in system credential store	حفظ مفتاح API في مخزن بيانات اعتماد النظام
+	The API key is available for this session only.	مفتاح API متاح لهذه الجلسة فقط.
+	Save API settings	حفظ إعدادات API
+	Remove API key	إزالة مفتاح API
+	API configured. Saving settings does not generate an image.	تم إعداد API. لا يؤدي حفظ الإعدادات إلى توليد صورة.
+	Save your API settings before editing.	احفظ إعدادات API قبل التحرير.
+	API settings saved	حُفظت إعدادات API
+	Enter a valid API key without whitespace	أدخل مفتاح API صالحًا دون مسافات بيضاء
+	API key removed	أُزيل مفتاح API
+	Could not load API settings	تعذّر تحميل إعدادات API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	ستُضبط النتيجة لتناسب مساحة الرسم وتُضاف كطبقة جديدة. ستُحفظ الطبقات الحالية.
+	AI Edit via API	تحرير بالذكاء الاصطناعي عبر API
+	AI Provider Settings	إعدادات مزوّد الذكاء الاصطناعي

@@ -4241,3 +4241,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Χρησιμοποιήστε την πλήρη εγκατάσταση του Codex· η αντιγραφή μόνο του codex.exe ενδέχεται να παραλείψει στοιχεία επεξεργασίας εικόνων.
 	AI Edit	Επεξεργασία με ΤΝ
 	Codex Account	Λογαριασμός Codex
+# Image API and related UI (original translations).
+	Image service	Υπηρεσία εικόνων
+	Codex (ChatGPT subscription)	Codex (συνδρομή ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Ο ορατός καμβάς και η οδηγία αποστέλλονται στη ρυθμισμένη υπηρεσία. Ο πάροχος ενδέχεται να χρεώσει τη χρήση.
+	Model ID	Αναγνωριστικό μοντέλου
+	API address and protocol	Διεύθυνση και πρωτόκολλο API
+	API address	Διεύθυνση API
+	API protocol	Πρωτόκολλο API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Οι προσαρμοσμένες υπηρεσίες πρέπει να υποστηρίζουν το επιλεγμένο πρωτόκολλο επεξεργασίας εικόνας. Η αλλαγή διεύθυνσης απαιτεί κλειδί για τη νέα διεύθυνση.
+	API key	Κλειδί API
+	API key configured — leave empty to keep it	Το κλειδί API έχει ρυθμιστεί — αφήστε κενό για να διατηρηθεί
+	Remember API key in system credential store	Αποθήκευση κλειδιού API στον χώρο διαπιστευτηρίων του συστήματος
+	The API key is available for this session only.	Το κλειδί API είναι διαθέσιμο μόνο σε αυτή τη συνεδρία.
+	Save API settings	Αποθήκευση ρυθμίσεων API
+	Remove API key	Αφαίρεση κλειδιού API
+	API configured. Saving settings does not generate an image.	Το API έχει ρυθμιστεί. Η αποθήκευση ρυθμίσεων δεν δημιουργεί εικόνα.
+	Save your API settings before editing.	Αποθηκεύστε τις ρυθμίσεις API πριν από την επεξεργασία.
+	API settings saved	Οι ρυθμίσεις API αποθηκεύτηκαν
+	Enter a valid API key without whitespace	Εισαγάγετε έγκυρο κλειδί API χωρίς κενά
+	API key removed	Το κλειδί API αφαιρέθηκε
+	Could not load API settings	Δεν ήταν δυνατή η φόρτωση των ρυθμίσεων API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Το αποτέλεσμα προσαρμόζεται στον καμβά και προστίθεται ως νέο επίπεδο. Τα υπάρχοντα επίπεδα διατηρούνται.
+	AI Edit via API	Επεξεργασία με ΤΝ μέσω API
+	AI Provider Settings	Ρυθμίσεις παρόχου ΤΝ

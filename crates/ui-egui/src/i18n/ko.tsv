@@ -3761,3 +3761,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex 설치 전체를 사용하세요. codex.exe만 복사하면 이미지 편집 구성 요소가 누락될 수 있습니다.
 	AI Edit	AI 편집
 	Codex Account	Codex 계정
+# Image API and related UI (original translations).
+	Image service	이미지 서비스
+	Codex (ChatGPT subscription)	Codex(ChatGPT 구독)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	표시된 캔버스와 지침을 설정된 서비스로 전송합니다. 서비스 제공업체가 사용 요금을 청구할 수 있습니다.
+	Model ID	모델 ID
+	API address and protocol	API 주소 및 프로토콜
+	API address	API 주소
+	API protocol	API 프로토콜
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	사용자 지정 서비스는 선택한 이미지 편집 프로토콜을 지원해야 합니다. 주소를 변경하면 해당 주소의 키가 필요합니다.
+	API key	API 키
+	API key configured — leave empty to keep it	API 키 설정됨 — 기존 키를 유지하려면 비워 두세요
+	Remember API key in system credential store	시스템 자격 증명 저장소에 API 키 저장
+	The API key is available for this session only.	API 키는 이번 세션에서만 사용할 수 있습니다.
+	Save API settings	API 설정 저장
+	Remove API key	API 키 제거
+	API configured. Saving settings does not generate an image.	API가 설정되었습니다. 설정을 저장해도 이미지는 생성되지 않습니다.
+	Save your API settings before editing.	편집하기 전에 API 설정을 저장하세요.
+	API settings saved	API 설정이 저장되었습니다
+	Enter a valid API key without whitespace	공백이 없는 유효한 API 키를 입력하세요
+	API key removed	API 키가 제거되었습니다
+	Could not load API settings	API 설정을 불러올 수 없습니다
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	결과는 캔버스에 맞춰 새 레이어로 추가됩니다. 기존 레이어는 유지됩니다.
+	AI Edit via API	API를 통한 AI 편집
+	AI Provider Settings	AI 제공업체 설정

@@ -4252,3 +4252,28 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Використовуйте повну інсталяцію Codex: копіювання лише codex.exe може не включати компоненти редагування зображень.
 	AI Edit	Редагування з ШІ
 	Codex Account	Обліковий запис Codex
+# Image API and related UI (original translations).
+	Image service	Сервіс зображень
+	Codex (ChatGPT subscription)	Codex (підписка ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Видиме полотно та інструкцію буде надіслано налаштованому сервісу. Постачальник може стягувати плату за використання.
+	Model ID	ID моделі
+	API address and protocol	Адреса та протокол API
+	API address	Адреса API
+	API protocol	Протокол API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Власні сервіси мають підтримувати вибраний протокол редагування зображень. Зміна адреси потребує ключа для цієї адреси.
+	API key	Ключ API
+	API key configured — leave empty to keep it	Ключ API налаштовано — залиште поле порожнім, щоб зберегти його
+	Remember API key in system credential store	Зберігати ключ API в системному сховищі облікових даних
+	The API key is available for this session only.	Ключ API доступний лише в поточному сеансі.
+	Save API settings	Зберегти налаштування API
+	Remove API key	Видалити ключ API
+	API configured. Saving settings does not generate an image.	API налаштовано. Збереження налаштувань не створює зображення.
+	Save your API settings before editing.	Перед редагуванням збережіть налаштування API.
+	API settings saved	Налаштування API збережено
+	Enter a valid API key without whitespace	Введіть дійсний ключ API без пробільних символів
+	API key removed	Ключ API видалено
+	Could not load API settings	Не вдалося завантажити налаштування API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Результат буде підігнано до полотна й додано як новий шар. Наявні шари буде збережено.
+	AI Edit via API	Редагування з ШІ через API
+	AI Provider Settings	Налаштування постачальника ШІ
