@@ -574,8 +574,13 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
     for (i, (l, r)) in lp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
         let (x, y) = (src.x0 + (i % w) as i32, src.y0 + (i / w) as i32);
         let k = sel.sample_channel(x, y, 0);
-        l[n - 1] *= k;
-        r[n - 1] *= 1.0 - k;
+        // The selection lifts its share of a pixel's coverage, up to all of it, as moving selected
+        // pixels does (`float_cmds::cut_piece`, #7655): after a move the selection is the moved
+        // pixels' alpha, and multiplying left a × (1 − a) of every soft edge behind (#10461).
+        let a = l[n - 1];
+        let lifted = a.min(k.max(0.0));
+        l[n - 1] = lifted;
+        r[n - 1] = (a - lifted).max(0.0);
         // Likewise an unselected pixel leaves nothing in the lifted surface, so its bounds are the
         // selected pixels' (what a stretch repeats at the edge, #3773).
         if l[n - 1] <= 0.0 {
