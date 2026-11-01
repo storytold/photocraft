@@ -130,6 +130,7 @@ fn point_to_paragraph_reserves_spaces_on_each_line() {
         let mut s = session(8);
         let r = s.execute("type.create", json!({"x": 150, "y": 50, "text": "H    \nHH", "font": "Inter", "size": 48, "align": align})).unwrap();
         let id = LayerId(r["layer"].as_u64().unwrap());
+        let point = text(&s, id).clone();
         let before = ink(&s, id);
         s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
         assert_eq!(ink(&s, id), before, "conversion moved multiline text: {align}");
@@ -139,6 +140,16 @@ fn point_to_paragraph_reserves_spaces_on_each_line() {
         assert_eq!(l.lines.len(), 2, "unexpected wrap: {align}");
         assert_eq!(l.lines[0].range, 0..6, "appended I moved off the first line: {align}");
         assert_eq!(l.lines[1].range, 7..9, "second line was clipped: {align}");
+        let mut visible = point;
+        replace_text(&mut visible, "H    ".len(), "H    ".len(), "I");
+        refresh_at(st.doc.resolution_dpi, st.doc.pixel_format(), &mut visible);
+        let visible = visible.cache.as_ref().unwrap();
+        let edited_layer = text(&s, id).clone();
+        let region = visible.content_bounds().union(&ink(&s, id));
+        assert!(
+            edited_layer.cache.as_ref().unwrap().read_region(region) == visible.read_region(region),
+            "rendering differs from the visible-I point-text control: {align}"
+        );
     }
 }
 
