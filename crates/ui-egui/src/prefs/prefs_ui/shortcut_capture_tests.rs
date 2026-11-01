@@ -136,6 +136,22 @@ fn toolbar_shortcuts_participate_in_conflict_resolution() {
     assert_eq!(crate::shortcut_dispatch::take_log(&ctx).last().map(|i| i.0.as_str()), Some("edit.search"));
 }
 
+#[test]
+fn shortcut_category_navigation_is_kept_between_frames() {
+    let (mut h, id) = dialog(1.0, "edit.search", "");
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("shortcutPath".into(), json!(["Edit"]));
+    f.insert("shortcutShowAll".into(), json!(false));
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "shortcutPath"), json!(["Edit"]));
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(false));
+
+    h.get_by_label("‹ Back").click();
+    h.run_steps(2);
+    assert_eq!(field(&h, id, "shortcutPath"), json!([]), "Back returns to the parent menu");
+    assert_eq!(field(&h, id, "shortcutShowAll"), json!(true));
+}
+
 /// Click the selected command's shortcut button, then press `modifier` and `k` like a keyboard:
 /// the modifier key goes down first (its own key event), then the key with the modifier held.
 fn capture(h: &mut Harness<'_, PhotocraftApp>, button: &str, modifier: Key, held: Modifiers, k: Key) {

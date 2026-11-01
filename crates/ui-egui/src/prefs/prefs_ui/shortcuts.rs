@@ -325,105 +325,261 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         }
     }
     let needle = filter.to_ascii_lowercase();
-    egui::ScrollArea::vertical().max_height(420.0).id_salt("shortcuts-scroll").show(ui, |ui| {
-        let mut last_top = String::new();
-        egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(ui, |ui| {
-            for (id, label, path, def) in &items {
-                if tab == 1 && crate::tool_shortcuts::tool(id).is_some() {
-                    continue;
+    // Shown in the Keyboard Shortcuts tab: matches the search, and isn't an empty row with no key.
+    let eligible = |id: &str, label: &str, def: &Option<String>, cur: &Option<String>, alts: &[String], path: &[String]| {
+        !(path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty()) && {
+            let (shown_path, shown_label) = shown(id, label, path);
+            // Match what is shown and the English name (commands are documented in English).
+            let hay =
+                format!("{} {} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, id, cur.clone().unwrap_or_default(), alts.join(" "))
+                    .to_lowercase();
+            needle.is_empty() || hay.contains(&needle) || id.to_ascii_lowercase().contains(&needle)
+        }
+    };
+    let mut menu_path: Vec<String> = f.get("shortcutPath").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let mut show_all = f.get("shortcutShowAll").and_then(Value::as_bool).unwrap_or(true);
+    if tab == 0 {
+        // Keep a stale dialog path from hiding every row if its menu disappeared.
+        if !menu_path.is_empty() && menu_path[0] != "Other" && !items.iter().any(|(_, _, path, _)| path.starts_with(&menu_path)) {
+            menu_path.clear();
+            show_all = true;
+        }
+        let is_in_menu = |path: &[String], parent: &[String]| {
+            if parent.first().is_some_and(|name| name == "Other") { path.is_empty() } else { path.starts_with(parent) }
+        };
+        let row_shown = |id: &str, label: &str, def: &Option<String>, path: &[String]| {
+            let cur = eff(&overrides, id, def);
+            let alts = eff_alts(&alt_overrides, id, cur.as_deref());
+            eligible(id, label, def, &cur, &alts, path)
+        };
+        let mut children = Vec::new();
+        if menu_path.first().is_none_or(|name| name != "Other") {
+            for (_, _, path, _) in &items {
+                if is_in_menu(path, &menu_path)
+                    && path.len() > menu_path.len()
+                    && let Some(child) = path.get(menu_path.len())
+                    && !children.contains(child)
+                {
+                    children.push(child.clone());
                 }
-                let cur = eff(&overrides, id, def);
-                let alts = eff_alts(&alt_overrides, id, cur.as_deref());
-                let (shown_path, shown_label) = shown(id, label, path);
-                // Match what is shown and the English name (commands are documented in English).
-                let hay =
-                    format!("{} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "))
-                        .to_lowercase();
-                if !needle.is_empty() && !hay.contains(&needle) && !id.to_ascii_lowercase().contains(&needle) {
-                    continue;
-                }
-                if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
-                    continue;
-                }
-                let top = shown_path.first().cloned().unwrap_or_else(|| tl!("Other").into());
-                if top != last_top {
-                    ui.label(RichText::new(&top).font(crate::theme::semibold(12.5)).color(t.text));
-                    ui.label("");
-                    ui.label("");
-                    ui.end_row();
-                    last_top = top;
-                }
-                let name = match shown_path.get(1..) {
-                    Some(rest) if !rest.is_empty() => format!("{} › {}", rest.join(" › "), shown_label),
-                    _ => shown_label,
-                };
-                let sel = selected == *id;
-                let name_row = ui.selectable_label(sel, RichText::new(format!("   {name}")).color(t.text_dim));
-                if name_row.clicked() {
-                    selected = id.clone();
-                }
-                if tab == 0 {
-                    let text = if sel && capture && !capture_alt {
-                        tl!("Press keys…").to_string()
-                    } else {
-                        cur.as_deref().map(crate::shortcuts::pretty).unwrap_or_default()
-                    };
-                    let changed = overrides.contains_key(id) || alt_overrides.contains_key(id);
-                    let r = ui.add(
-                        egui::Button::new(RichText::new(tl!(&text)).size(12.0).color(if changed { t.accent_text } else { t.text })).min_size(vec2(120.0, 18.0)),
-                    );
-                    // An unassigned shortcut shows no text: name it by the command it binds.
-                    let r = if text.is_empty() { r.labelled_by(name_row.id) } else { r };
-                    if r.clicked() {
-                        selected = id.clone();
-                        capture = true;
-                        capture_alt = false;
-                        message.clear();
-                        message_warning = false;
+            }
+        }
+        let all_count = items.iter().filter(|(id, label, path, def)| is_in_menu(path, &menu_path) && row_shown(id, label, def, path)).count();
+        let child_counts: Vec<usize> = children
+            .iter()
+            .map(|child| {
+                items
+                    .iter()
+                    .filter(|(id, label, path, def)| {
+                        path.get(menu_path.len()) == Some(child) && is_in_menu(path, &menu_path) && row_shown(id, label, def, path)
+                    })
+                    .count()
+            })
+            .collect();
+        let breadcrumb = if menu_path.is_empty() {
+            tl!("All").to_string()
+        } else {
+            menu_path.iter().map(|part| crate::i18n::tr(crate::i18n::current(), part)).collect::<Vec<_>>().join(" › ")
+        };
+        ui.label(RichText::new(breadcrumb).font(crate::theme::semibold(12.5)).color(t.text));
+        ui.add_space(4.0);
+        let panel_width = ui.available_width();
+        let left_width = panel_width * 0.25;
+        let right_width = panel_width - left_width;
+        ui.allocate_ui_with_layout(vec2(panel_width, 420.0), egui::Layout::left_to_right(egui::Align::Min), |columns| {
+            columns.spacing_mut().item_spacing.x = 0.0;
+            let panel_rect = columns.max_rect();
+            columns.allocate_ui_with_layout(vec2(left_width, 420.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("shortcuts-category-scroll").show(ui, |ui| {
+                    if !menu_path.is_empty() && ui.selectable_label(false, RichText::new(format!("‹ {}", tl!("Back"))).color(t.text_dim)).clicked() {
+                        menu_path.pop();
+                        show_all = true;
                     }
-                    // The further keys (F3 beside ⌘C), each removable on its own, as Photoshop
-                    // lists them as rows of their own (#3665).
-                    ui.horizontal(|ui| {
-                        for k in &alts {
-                            let b = egui::Button::new(RichText::new(format!("{}  ×", crate::shortcuts::pretty(k))).size(11.0).color(t.text)).small();
-                            if ui.add(b).on_hover_text(tl!("Delete Shortcut")).clicked() {
-                                alt_overrides.insert(id.clone(), alts.iter().filter(|x| *x != k).cloned().collect());
+                    if ui.selectable_label(show_all, RichText::new(format!("{}  {all_count}", tl!("All"))).color(t.text)).clicked() {
+                        show_all = true;
+                    }
+                    let mut open = None;
+                    for (child, count) in children.iter().zip(&child_counts) {
+                        let title = crate::i18n::tr(crate::i18n::current(), child);
+                        if ui.selectable_label(false, RichText::new(format!("{title}  {count} ›")).color(t.text)).clicked() {
+                            open = Some(child.clone());
+                        }
+                    }
+                    if let Some(child) = open {
+                        menu_path.push(child);
+                        show_all = false;
+                    }
+                });
+            });
+            columns.allocate_ui_with_layout(vec2(right_width, 420.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("shortcuts-list-scroll").show(ui, |ui| {
+                    egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(false).show(ui, |ui| {
+                        for (id, label, path, def) in &items {
+                            let cur = eff(&overrides, id, def);
+                            let alts = eff_alts(&alt_overrides, id, cur.as_deref());
+                            let in_current_menu = is_in_menu(path, &menu_path) && (show_all || path.len() == menu_path.len());
+                            if !in_current_menu || !eligible(id, label, def, &cur, &alts, path) {
+                                continue;
+                            }
+                            let (shown_path, shown_label) = shown(id, label, path);
+                            let remaining_path = if menu_path.first().is_some_and(|name| name == "Other") {
+                                Vec::new()
+                            } else {
+                                shown_path.iter().skip(menu_path.len()).cloned().collect::<Vec<_>>()
+                            };
+                            let name = if remaining_path.is_empty() { shown_label } else { format!("{} › {shown_label}", remaining_path.join(" › ")) };
+                            let sel = selected == *id;
+                            let name_row = ui.selectable_label(sel, RichText::new(name).color(t.text_dim));
+                            if name_row.clicked() {
                                 selected = id.clone();
-                                message = tl!("Shortcut removed.").into();
+                            }
+                            let text = if sel && capture && !capture_alt {
+                                tl!("Press keys…").to_string()
+                            } else {
+                                cur.as_deref().map(crate::shortcuts::pretty).unwrap_or_default()
+                            };
+                            let changed = overrides.contains_key(id) || alt_overrides.contains_key(id);
+                            let r = ui.add(
+                                egui::Button::new(RichText::new(tl!(&text)).size(12.0).color(if changed { t.accent_text } else { t.text }))
+                                    .min_size(vec2(120.0, 18.0)),
+                            );
+                            // An unassigned shortcut shows no text: name it by the command it binds.
+                            let r = if text.is_empty() { r.labelled_by(name_row.id) } else { r };
+                            if r.clicked() {
+                                selected = id.clone();
+                                capture = true;
+                                capture_alt = false;
+                                message.clear();
                                 message_warning = false;
                             }
-                        }
-                        if sel && capture && capture_alt {
-                            ui.label(RichText::new(tl!("Press keys…")).size(11.0).color(t.accent_text));
-                        }
-                        if changed {
-                            ui.label(RichText::new(tl!("modified")).color(t.text_faint).size(10.5));
+                            // The further keys (F3 beside ⌘C), each removable on its own, as Photoshop
+                            // lists them as rows of their own (#3665).
+                            ui.horizontal(|ui| {
+                                for k in &alts {
+                                    let b = egui::Button::new(RichText::new(format!("{}  ×", crate::shortcuts::pretty(k))).size(11.0).color(t.text)).small();
+                                    if ui.add(b).on_hover_text(tl!("Delete Shortcut")).clicked() {
+                                        alt_overrides.insert(id.clone(), alts.iter().filter(|x| *x != k).cloned().collect());
+                                        selected = id.clone();
+                                        message = tl!("Shortcut removed.").into();
+                                        message_warning = false;
+                                    }
+                                }
+                                if sel && capture && capture_alt {
+                                    ui.label(RichText::new(tl!("Press keys…")).size(11.0).color(t.accent_text));
+                                }
+                                if changed {
+                                    ui.label(RichText::new(tl!("modified")).color(t.text_faint).size(10.5));
+                                }
+                            });
+                            ui.end_row();
                         }
                     });
-                } else {
-                    // Edit › Menus, Keyboard Shortcuts, Preferences, Save and Exit always stay (#5096).
-                    let hideable = photocraft_engine::prefs::MenuCustomization::hideable(id);
-                    let mut visible = !hideable || !hidden.contains(id);
-                    ui.add_enabled_ui(hideable, |ui| crate::widgets::checkbox(ui, &mut visible, tl!("Visible")));
-                    if visible {
-                        hidden.retain(|h| h != id);
-                    } else if !hidden.contains(id) {
-                        hidden.push(id.clone());
-                    }
-                    let mut col = colors.get(id).cloned().unwrap_or_else(|| "none".into());
-                    let opts: Vec<(String, &str)> =
-                        ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"].iter().map(|c| (c.to_string(), *c)).collect();
-                    crate::widgets::dropdown(ui, &format!("menu-color-{id}"), tl!("Color"), &mut col, &opts, 90.0);
-                    if col == "none" {
-                        colors.remove(id);
-                    } else {
-                        colors.insert(id.clone(), col);
-                    }
-                }
-                ui.end_row();
-            }
+                });
+            });
+            columns.painter().vline(panel_rect.left() + left_width, panel_rect.top()..=panel_rect.bottom(), egui::Stroke::new(1.0, t.separator));
         });
-    });
+    } else {
+        egui::ScrollArea::vertical().max_height(420.0).id_salt("shortcuts-scroll").show(ui, |ui| {
+            let mut last_top = String::new();
+            egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(ui, |ui| {
+                for (id, label, path, def) in &items {
+                    if tab == 1 && crate::tool_shortcuts::tool(id).is_some() {
+                        continue;
+                    }
+                    let cur = eff(&overrides, id, def);
+                    let alts = eff_alts(&alt_overrides, id, cur.as_deref());
+                    let (shown_path, shown_label) = shown(id, label, path);
+                    // Match what is shown and the English name (commands are documented in English).
+                    let hay =
+                        format!("{} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, cur.clone().unwrap_or_default(), alts.join(" "))
+                            .to_lowercase();
+                    if !needle.is_empty() && !hay.contains(&needle) && !id.to_ascii_lowercase().contains(&needle) {
+                        continue;
+                    }
+                    if tab == 0 && path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
+                        continue;
+                    }
+                    let top = shown_path.first().cloned().unwrap_or_else(|| tl!("Other").into());
+                    if top != last_top {
+                        ui.label(RichText::new(&top).font(crate::theme::semibold(12.5)).color(t.text));
+                        ui.label("");
+                        ui.label("");
+                        ui.end_row();
+                        last_top = top;
+                    }
+                    let name = match shown_path.get(1..) {
+                        Some(rest) if !rest.is_empty() => format!("{} › {}", rest.join(" › "), shown_label),
+                        _ => shown_label,
+                    };
+                    let sel = selected == *id;
+                    let name_row = ui.selectable_label(sel, RichText::new(format!("   {name}")).color(t.text_dim));
+                    if name_row.clicked() {
+                        selected = id.clone();
+                    }
+                    if tab == 0 {
+                        let text = if sel && capture && !capture_alt {
+                            tl!("Press keys…").to_string()
+                        } else {
+                            cur.as_deref().map(crate::shortcuts::pretty).unwrap_or_default()
+                        };
+                        let changed = overrides.contains_key(id) || alt_overrides.contains_key(id);
+                        let r = ui.add(
+                            egui::Button::new(RichText::new(tl!(&text)).size(12.0).color(if changed { t.accent_text } else { t.text }))
+                                .min_size(vec2(120.0, 18.0)),
+                        );
+                        // An unassigned shortcut shows no text: name it by the command it binds.
+                        let r = if text.is_empty() { r.labelled_by(name_row.id) } else { r };
+                        if r.clicked() {
+                            selected = id.clone();
+                            capture = true;
+                            capture_alt = false;
+                            message.clear();
+                            message_warning = false;
+                        }
+                        // The further keys (F3 beside ⌘C), each removable on its own, as Photoshop
+                        // lists them as rows of their own (#3665).
+                        ui.horizontal(|ui| {
+                            for k in &alts {
+                                let b = egui::Button::new(RichText::new(format!("{}  ×", crate::shortcuts::pretty(k))).size(11.0).color(t.text)).small();
+                                if ui.add(b).on_hover_text(tl!("Delete Shortcut")).clicked() {
+                                    alt_overrides.insert(id.clone(), alts.iter().filter(|x| *x != k).cloned().collect());
+                                    selected = id.clone();
+                                    message = tl!("Shortcut removed.").into();
+                                    message_warning = false;
+                                }
+                            }
+                            if sel && capture && capture_alt {
+                                ui.label(RichText::new(tl!("Press keys…")).size(11.0).color(t.accent_text));
+                            }
+                            if changed {
+                                ui.label(RichText::new(tl!("modified")).color(t.text_faint).size(10.5));
+                            }
+                        });
+                    } else {
+                        // Edit › Menus, Keyboard Shortcuts, Preferences, Save and Exit always stay (#5096).
+                        let hideable = photocraft_engine::prefs::MenuCustomization::hideable(id);
+                        let mut visible = !hideable || !hidden.contains(id);
+                        ui.add_enabled_ui(hideable, |ui| crate::widgets::checkbox(ui, &mut visible, tl!("Visible")));
+                        if visible {
+                            hidden.retain(|h| h != id);
+                        } else if !hidden.contains(id) {
+                            hidden.push(id.clone());
+                        }
+                        let mut col = colors.get(id).cloned().unwrap_or_else(|| "none".into());
+                        let opts: Vec<(String, &str)> =
+                            ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"].iter().map(|c| (c.to_string(), *c)).collect();
+                        crate::widgets::dropdown(ui, &format!("menu-color-{id}"), tl!("Color"), &mut col, &opts, 90.0);
+                        if col == "none" {
+                            colors.remove(id);
+                        } else {
+                            colors.insert(id.clone(), col);
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    }
     ui.add_space(6.0);
     if tab == 0 {
         ui.horizontal(|ui| {
@@ -494,6 +650,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 }
                 selected = with.to_string();
                 filter.clear();
+                menu_path.clear();
+                show_all = true;
                 message = tl!("Choose a new shortcut for this command, or leave it without one.").into();
                 message_warning = false;
                 conflict = None;
@@ -537,6 +695,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     }
     f.insert("message".into(), json!(message));
     f.insert("messageWarning".into(), json!(message_warning));
+    f.insert("shortcutPath".into(), json!(menu_path));
+    f.insert("shortcutShowAll".into(), json!(show_all));
 }
 
 /// A command's keys as the dialog stands, main key first: the edited main key (or its default)
