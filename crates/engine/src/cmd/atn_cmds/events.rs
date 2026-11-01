@@ -476,6 +476,7 @@ pub(super) const EVENTS: &[Event] = &[
     target_event!("textLoadDefaultTypeStyles", "Load Default Type Styles", "type.loadDefaultTypeStyles"),
     target_event!("textSaveDefaultTypeStyles", "Save Default Type Styles", "type.saveDefaultTypeStyles"),
     target_event!("recordMeasurements", "Record Measurements", "image.analysis.recordMeasurements"),
+    target_event!("CropPhotosAuto0001", "Crop and Straighten Photos", "file.automate.cropAndStraightenPhotos"),
     Event { code: "", name: "linkSelectedLayers", label: "Link Layers", ids: &["layer.linkLayers"], from: |d| link_from(d, true), to: |_, p| link_to(p, true) },
     Event {
         code: "",

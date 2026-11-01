@@ -33,6 +33,7 @@ are kept as Photoshop steps for lossless saving, rather than partially replayed.
 | `textLoadDefaultTypeStyles` | `type.loadDefaultTypeStyles` |
 | `textSaveDefaultTypeStyles` | `type.saveDefaultTypeStyles` |
 | `recordMeasurements` | `image.analysis.recordMeasurements` |
+| `CropPhotosAuto0001` | `file.automate.cropAndStraightenPhotos` |
 
 These events and Link/Unlink accept either an empty descriptor or an explicit
 current-layer target. Save retains which form was imported. Other targets or
@@ -43,6 +44,15 @@ Playback uses each native command's normal preconditions and current state.
 Isolate Layers toggles the panel view. Type defaults are saved in the current
 session. Record Measurements uses the current selection/ruler/count and data
 point configuration.
+
+Crop and Straighten Photos runs the existing native scan operation once. It
+requires a selected, visible layer with no pixel or full lock, including locks
+and visibility inherited from groups. It creates a document for each detected
+photo within the current selection and leaves the source document unchanged.
+The separately recorded `CropPhotos0001` helper remains a complete kept Photoshop
+step. Playback stops at that unsupported helper before subsequent duplicate/crop
+steps can run. This mapping covers the parent event, not complete recordings
+that contain those generated helper steps.
 
 ## Type to Shape and radius-only Shape Blur
 

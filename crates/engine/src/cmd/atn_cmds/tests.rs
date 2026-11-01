@@ -565,6 +565,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("file.automate.cropAndStraightenPhotos", json!({})),
+        ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
         ("layer.new.layerViaCopy", json!({})),
         ("layer.newFillLayer.solidColor", json!({"color": "#336699"})),
         ("layer.newAdjustmentLayer.hueSaturation", json!({})),

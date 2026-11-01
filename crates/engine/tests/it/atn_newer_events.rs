@@ -223,6 +223,7 @@ const TARGET_EVENTS: &[(&str, &str)] = &[
     ("textLoadDefaultTypeStyles", "type.loadDefaultTypeStyles"),
     ("textSaveDefaultTypeStyles", "type.saveDefaultTypeStyles"),
     ("recordMeasurements", "image.analysis.recordMeasurements"),
+    ("CropPhotosAuto0001", "file.automate.cropAndStraightenPhotos"),
 ];
 
 fn targeted(event: &str, explicit: bool) -> Descriptor {
@@ -305,6 +306,120 @@ fn target_events_keep_unknown_targets_and_refuse_native_options() {
         let action = Action::new("A", vec![("layer.linkLayers".into(), json!({"linked": linked, "_atnNoTarget": false}))]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
+}
+
+fn scan_fixture() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 480, "height": 340, "background": "#fafafa"})).unwrap();
+    let st = s.active_mut().unwrap();
+    let id = st.active_layer.unwrap();
+    let surface = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+    for (x, y, w, h, color) in [(40, 60, 160, 110, [0.6, 0.1, 0.1, 1.0]), (290, 180, 150, 120, [0.1, 0.2, 0.6, 1.0])] {
+        surface.fill_rect(photocraft_doc::Rect::new(x, y, x + w, y + h), &color);
+    }
+    s.execute("select.rect", json!({"x": 270, "y": 160, "width": 190, "height": 160})).unwrap();
+    s
+}
+
+fn assert_cropped_scan(s: &Session) {
+    assert_eq!(s.documents().len(), 2);
+    let doc = &s.documents()[1].doc;
+    assert!((i64::from(doc.size.width) - 150).abs() <= 4);
+    assert!((i64::from(doc.size.height) - 120).abs() <= 4);
+    let color = doc.layers[0].surface().unwrap().rgba(doc.size.width as i32 / 2, doc.size.height as i32 / 2);
+    assert!(color[2] > 0.5 && color[0] < 0.2, "{color:?}");
+}
+
+#[test]
+fn crop_parent_creates_the_selected_photo_without_changing_the_scan() {
+    for explicit in [false, true] {
+        let mut s = scan_fixture();
+        let source = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        load_targeted(&mut s, "CropPhotosAuto0001", "file.automate.cropAndStraightenPhotos", explicit);
+        assert!(s.is_enabled("file.automate.cropAndStraightenPhotos"));
+        play(&mut s);
+        assert_cropped_scan(&s);
+        assert_eq!(s.documents()[0].doc, source);
+        assert_eq!(s.documents()[0].history.past_len(), history);
+    }
+}
+
+#[test]
+fn crop_parent_refuses_ineligible_layers_without_document_or_history_changes() {
+    for case in ["missing", "stale", "hidden", "hidden-parent", "pixels", "locked-parent", "indexed"] {
+        let mut s = scan_fixture();
+        let st = s.active_mut().unwrap();
+        let id = st.active_layer.unwrap();
+        let doc = Arc::make_mut(&mut st.doc);
+        match case {
+            "missing" => st.active_layer = None,
+            "stale" => st.active_layer = Some(LayerId::fresh()),
+            "hidden" => doc.layer_mut(id).unwrap().visible = false,
+            "pixels" => doc.layer_mut(id).unwrap().locks.pixels = true,
+            "indexed" => doc.mode = photocraft_doc::ColorMode::Indexed,
+            _ => {
+                let mut group = Layer::group("Parent", std::mem::take(&mut doc.layers));
+                group.visible = case != "hidden-parent";
+                group.locks.all = case == "locked-parent";
+                doc.layers.push(group);
+            }
+        }
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        assert!(!s.is_enabled("file.automate.cropAndStraightenPhotos"), "{case}");
+        load_targeted(&mut s, "CropPhotosAuto0001", "file.automate.cropAndStraightenPhotos", false);
+        let report = s.execute("actions.play", json!({"action": "A", "set": "Links"})).unwrap();
+        assert_eq!(report["ran"], 0, "{case}: {report}");
+        assert_eq!(report["failed"]["id"], "file.automate.cropAndStraightenPhotos", "{case}: {report}");
+        assert_eq!(s.documents().len(), 1);
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    assert!(!Session::new().is_enabled("file.automate.cropAndStraightenPhotos"));
+}
+
+#[test]
+fn crop_parent_without_photos_fails_without_creating_documents() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 80, "background": "white"})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    load_targeted(&mut s, "CropPhotosAuto0001", "file.automate.cropAndStraightenPhotos", false);
+    let report = s.execute("actions.play", json!({"action": "A", "set": "Links"})).unwrap();
+    assert_eq!(report["ran"], 0, "{report}");
+    assert!(report["failed"]["error"].as_str().unwrap().contains("no photos found"), "{report}");
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn crop_parent_runs_once_and_the_kept_helper_stops_the_duplicate_crop_tail() {
+    let mut f = atn::parse(&file("CropPhotosAuto0001", Descriptor::new("cjsp"))).unwrap();
+    let helper = Descriptor::new("null").with("Vl  ", D::List([0.0, 0.0, 150.0, 0.0, 150.0, 120.0, 0.0, 120.0].into_iter().map(D::Double).collect()));
+    f.actions[0].items.push(AtnItem { event: AtnEvent::name("CropPhotos0001"), descriptor: Some(helper.clone()), ..Default::default() });
+    let tail = Action::new("Tail", vec![("image.duplicate".into(), json!({})), ("image.crop".into(), json!({"x": 1, "y": 1, "width": 10, "height": 10}))]);
+    let (bytes, skipped) = atn_cmds::export("Tail", &[&tail], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    f.actions[0].items.extend(atn::parse(&bytes).unwrap().actions[0].items.clone());
+    let mut s = scan_fixture();
+    let source = s.active().unwrap().doc.clone();
+    let report = load(&mut s, &atn::write(&f).unwrap());
+    assert_eq!(report["unsupported"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        s.actions.list[0].steps.iter().map(|step| step.0.as_str()).collect::<Vec<_>>(),
+        ["file.automate.cropAndStraightenPhotos", "actions.photoshopStep", "image.duplicate", "image.crop"]
+    );
+    let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+    let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[1].descriptor, Some(helper));
+    let report = s.execute("actions.play", json!({"action": "A", "set": "Links"})).unwrap();
+    assert_eq!(report["ran"], 1, "{report}");
+    assert_eq!(report["failed"]["step"], 1);
+    assert_eq!(report["failed"]["id"], "actions.photoshopStep");
+    assert_cropped_scan(&s);
+    assert_eq!(s.documents()[0].doc, source);
 }
 
 #[test]
