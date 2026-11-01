@@ -776,7 +776,7 @@ fn fixed_size_field(ui: &mut egui::Ui, px: &mut f32, units: widgets::FieldUnits,
         *px = unit.to_px(f64::from(v), dpi, extent, ppi).clamp(1.0, FIXED_SIZE_MAX_PX) as f32;
     }
     let mut picked = None;
-    resp.context_menu(|ui| picked = crate::rulers::unit_menu(ui, unit));
+    resp.context_menu(|ui| picked = crate::menus::popup_body(ui, |ui| crate::rulers::unit_menu(ui, unit)));
     picked
 }
 
@@ -950,12 +950,12 @@ mod tests {
         };
         let (ltr_before, ltr_after) = strip(Dir::Ltr);
         let ltr_lead = ltr_before.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
-        assert!(ltr_lead >= 5.0 && ltr_lead < 100.0, "LTR leading end at the left: {ltr_lead}");
+        assert!((5.0..100.0).contains(&ltr_lead), "LTR leading end at the left: {ltr_lead}");
         let ltr_trail = ltr_after.iter().map(|r| r.max.x).fold(f32::NEG_INFINITY, f32::max);
         assert!(ltr_trail <= 460.0, "LTR trailing end scrolled into view: {ltr_trail}");
         let (rtl_before, rtl_after) = strip(Dir::Rtl);
         let rtl_lead = rtl_before.iter().map(|r| r.max.x).fold(f32::NEG_INFINITY, f32::max);
-        assert!(rtl_lead > 400.0 && rtl_lead <= 455.0, "RTL leading end at the right: {rtl_lead}");
+        assert!((400.0..=455.0).contains(&rtl_lead), "RTL leading end at the right: {rtl_lead}");
         let rtl_trail = rtl_after.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
         assert!(rtl_trail > -1.0, "RTL trailing end scrolled into view: {rtl_trail}");
     }
