@@ -223,6 +223,7 @@ impl Ex {
         let mut bytes = Vec::with_capacity(row_len * h_of(r) * s.format().bytes_per_pixel());
         for part in parts {
             bytes.extend_from_slice(&part);
+            photocraft_raster::scratch::give(part);
         }
         if self.fmt.mode == ColorMode::Lab && self.fmt.sample == SampleType::U16 {
             crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, false);
