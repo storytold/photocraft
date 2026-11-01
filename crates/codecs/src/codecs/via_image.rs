@@ -251,6 +251,7 @@ fn to_dynamic(img: &Image) -> Result<DynamicImage, CodecError> {
     })
 }
 
+/// Encode a planned image, borrowing compatible BMP, QOI and Radiance HDR pixels.
 pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let fmt = image_format(f).ok_or_else(|| CodecError::unsupported(f, "not handled by image backend"))?;
     if let Some((mw, mh)) = f.max_dimensions()
@@ -262,6 +263,19 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
     // Targa is written by our encoder: the image crate's RLE packets cross scanlines (#6382).
     if f == Format::Tga {
         return super::tga::encode(&img);
+    }
+    // Image validates the interleaved buffer size; these encoders can borrow its bytes.
+    let color = match (f, img.layout(), img.sample_type()) {
+        (Format::Bmp | Format::Qoi, ChannelLayout::Rgb, SampleType::U8) => Some(image::ColorType::Rgb8),
+        (Format::Bmp | Format::Qoi, ChannelLayout::Rgba, SampleType::U8) => Some(image::ColorType::Rgba8),
+        (Format::Qoi, _, _) => return Err(CodecError::InvalidImage("QOI requires RGB8 or RGBA8 pixels".into())),
+        (Format::Hdr, ChannelLayout::Rgb, SampleType::F32) => Some(image::ColorType::Rgb32F),
+        _ => None,
+    };
+    if let Some(color) = color {
+        let mut cursor = Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut cursor, img.data(), img.width(), img.height(), color, fmt).map_err(|e| CodecError::encode(f, e))?;
+        return Ok(cursor.into_inner());
     }
     let dynimg = to_dynamic(&img)?;
     let mut cursor = Cursor::new(Vec::new());
@@ -277,6 +291,32 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
         }
     }
     Ok(cursor.into_inner())
+}
+
+#[cfg(test)]
+mod qoi_tests {
+    use super::*;
+
+    /// Invalid internal plans reach the guard; public encode supplies a supported conversion.
+    #[test]
+    fn unsupported_plans_return_invalid_image() {
+        let src = Image::new(2, 1, ChannelLayout::Rgba, SampleType::U8).unwrap();
+        let opts = EncodeOptions::default();
+        for (layout, sample) in [
+            (ChannelLayout::Gray, SampleType::U8),
+            (ChannelLayout::GrayA, SampleType::U8),
+            (ChannelLayout::Rgb, SampleType::U16),
+            (ChannelLayout::Rgba, SampleType::U16),
+            (ChannelLayout::Rgb, SampleType::F16),
+            (ChannelLayout::Rgba, SampleType::F32),
+        ] {
+            assert!(
+                matches!(encode(Format::Qoi, &src, Plan { layout, sample }, &opts),
+                    Err(CodecError::InvalidImage(message)) if message == "QOI requires RGB8 or RGBA8 pixels"),
+                "{layout:?}/{sample:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -318,5 +358,25 @@ mod indexed_tests {
         assert!(encode_bmp_indexed(2, 1, &[0, 2], &pal).is_err(), "index past the table");
         assert!(encode_bmp_indexed(1, 1, &[0], &[]).is_err(), "no colours");
         assert!(encode_bmp_indexed(1, 1, &[0], &[[0; 3]; 257]).is_err(), "more than 256 colours");
+    }
+}
+
+#[cfg(test)]
+mod bmp_tests {
+    use super::*;
+
+    /// Direct writes retain BMP headers, channel order, alpha and padded rows.
+    #[test]
+    fn borrowed_pixels_match_dynamic_encoding() {
+        for layout in [ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for width in 1..=5 {
+                let pixels = (0..width as usize * 3 * layout.channels()).map(|i| (i * 73) as u8).collect();
+                let img = Image::from_u8(width, 3, layout, pixels).unwrap();
+                let mut expected = Cursor::new(Vec::new());
+                to_dynamic(&img).unwrap().write_to(&mut expected, ImageFormat::Bmp).unwrap();
+                let actual = encode(Format::Bmp, &img, Plan { layout, sample: SampleType::U8 }, &EncodeOptions::default()).unwrap();
+                assert_eq!(actual, expected.into_inner(), "{layout:?}/{width}");
+            }
+        }
     }
 }
