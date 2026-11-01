@@ -374,11 +374,11 @@ fn save_round_trips_through_photoshop_events() {
     assert_eq!(t.actions.list, first);
 
     // A step with no Photoshop equivalent fails unless skipped.
-    s.actions.list.push(Action::new("Ours", vec![("filter.render.clouds".into(), json!({}))]));
+    s.actions.list.push(Action::new("Ours", vec![("unsupported.forTest".into(), json!({}))]));
     let e = s.execute("actions.save", json!({"action": "Ours"})).unwrap_err().to_string();
-    assert!(e.contains("filter.render.clouds"), "{e}");
+    assert!(e.contains("unsupported.forTest"), "{e}");
     let r = s.execute("actions.save", json!({"action": "Ours", "skipUnsupported": true})).unwrap();
-    assert_eq!(r["skipped"], json!([{"action": "Ours", "step": 0, "id": "filter.render.clouds"}]));
+    assert_eq!(r["skipped"], json!([{"action": "Ours", "step": 0, "id": "unsupported.forTest"}]));
     assert_eq!(r["set"], "Ours");
 }
 
@@ -476,6 +476,8 @@ fn settings_at_the_value_the_event_plays_still_export() {
 #[test]
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
+        ("filter.render.clouds", json!({})),
+        ("filter.render.differenceClouds", json!({})),
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),
         ("filter.sharpen.unsharpMask", json!({"amount": 120, "radius": 1.5, "threshold": 3})),
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),

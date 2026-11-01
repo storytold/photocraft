@@ -185,6 +185,22 @@ macro_rules! clipping_event {
 /// Every Photoshop event PhotoCraft maps. The order matters only for the panel label.
 pub(super) const EVENTS: &[Event] = &[
     // Filters.
+    Event {
+        code: "Clds",
+        name: "clouds",
+        label: "Clouds",
+        ids: &["filter.render.clouds"],
+        from: |d| super::steps_render::clouds_from("filter.render.clouds", d),
+        to: super::steps_render::clouds_to,
+    },
+    Event {
+        code: "DfrC",
+        name: "differenceClouds",
+        label: "Difference Clouds",
+        ids: &["filter.render.differenceClouds"],
+        from: |d| super::steps_render::clouds_from("filter.render.differenceClouds", d),
+        to: super::steps_render::clouds_to,
+    },
     ev!("GsnB", "gaussianBlur", "Gaussian Blur", "filter.blur.gaussianBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!(
         "UnsM",
