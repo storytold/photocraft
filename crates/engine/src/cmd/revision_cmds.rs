@@ -268,6 +268,46 @@ fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list_json(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
 
+/// Topmost visible, non-background layer whose content bounds contain `pt`, if any.
+fn layer_at_point(doc: &Document, pt: [f64; 2]) -> Option<LayerId> {
+    let canvas = doc.bounds();
+    let (x, y) = (pt[0].round() as i32, pt[1].round() as i32);
+    for (_, _, layer) in doc.walk().into_iter().rev() {
+        if doc.is_background(layer.id) || !layer.visible {
+            continue;
+        }
+        let b = photocraft_compose::layer_bounds(layer, canvas);
+        if !b.is_empty() && b.contains(x, y) {
+            return Some(layer.id);
+        }
+    }
+    None
+}
+
+/// Re-bind markers whose bound layer was deleted: the frame re-tracks the topmost visible,
+/// non-background layer under its centre (the replacement layer), or is unbound when nothing is
+/// there. Returns whether anything changed. Runs at the start of `revision.detect`, so deleting a
+/// bound layer and placing its replacement re-binds automatically.
+fn repair_bindings(d: &mut Document) -> bool {
+    // Collect the frames whose bound layer is gone first, so the centre lookups below do not
+    // clash with the mutable borrow of the marker list.
+    let stale: Vec<(usize, [f64; 2])> = d
+        .revision_markers
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.layer_id.is_some_and(|id| d.layer(id).is_none()))
+        .map(|(i, m)| (i, [m.pos[0] + m.size[0] / 2.0, m.pos[1] + m.size[1] / 2.0]))
+        .collect();
+    if stale.is_empty() {
+        return false;
+    }
+    for (i, centre) in stale {
+        // The bound layer is gone: bind to the layer now under the frame centre, if any.
+        d.revision_markers[i].layer_id = layer_at_point(d, centre);
+    }
+    true
+}
+
 fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.detect";
     let one = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
@@ -278,6 +318,9 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, format!("no revision marker {i}")));
     }
     s.edit("Check Revision Markers", |d, _| {
+        // A marker whose bound layer was deleted (and replaced) re-binds to the layer now under
+        // its frame before pixels are compared, so the box keeps following the content.
+        repair_bindings(d);
         let indices: Vec<usize> = (0..d.revision_markers.len()).filter(|&i| one.is_none_or(|o| o == i)).collect();
         for i in indices {
             let m = d.revision_markers[i].clone();
@@ -430,6 +473,31 @@ mod tests {
         s.execute("revision.snapshot", json!({})).unwrap();
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["done"], json!(false));
+    }
+
+    #[test]
+    fn rebind_after_layer_deleted() {
+        // Deleting a bound layer and placing a replacement over the same area re-binds the marker
+        // to the new layer on the next detect, so the box keeps following the content.
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.execute("layer.list", json!({})).unwrap();
+        let old = layers["layers"].as_array().unwrap()[0]["id"].as_u64().unwrap();
+        s.execute("revision.set", json!({"index": 0, "layerId": old})).unwrap();
+        // Delete the bound layer, then add a replacement filled over the same area.
+        s.execute("layer.delete", json!({"layer": old})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.execute("layer.list", json!({})).unwrap();
+        let new = layers["layers"].as_array().unwrap()[0]["id"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 60, "height": 40})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.0, 0.0, 1.0]})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        // Detect re-binds to the replacement layer now under the frame and flags it changed.
+        s.execute("revision.detect", json!({})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["layerId"], json!(new), "re-bound to the replacement layer");
+        assert_eq!(v["markers"][0]["done"], json!(true), "content changed vs the old snapshot → green");
     }
 
     #[test]

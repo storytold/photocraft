@@ -195,6 +195,9 @@ impl PhotocraftApp {
                 // its framed content was edited, with no manual Check All.
                 if self.session.active().is_some_and(|st| !st.doc.revision_markers.is_empty()) && should_auto_detect(id) {
                     self.ui.revision_detect_pending = true;
+                    // Remember when this edit happened: the auto-detect debounces off the latest
+                    // edit (see `revision_auto_detect`), so a finished edit turns green promptly.
+                    self.ui.revision_detect_at = gpu_canvas::now_ms() as f64 / 1000.0;
                 }
                 let removed = self.session.take_samplers_removed();
                 if removed > 0 && !self.ui.status_error {

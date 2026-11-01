@@ -33,15 +33,16 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
-    /// Run a pending automatic `revision.detect` once it is due (throttled, so rapid edits batch
-    /// into one re-check): a marker turns green right after its framed content changed, with no
-    /// manual Check All. `revision.detect` itself never schedules another one.
+    /// Run a pending automatic `revision.detect` once it is due (debounced: re-check ~0.25 s after
+    /// the latest edit, whose time stamp is refreshed on every edit, so continuous strokes batch
+    /// into one re-check and a finished edit turns green promptly). `revision.detect` itself never
+    /// schedules another one.
     pub(crate) fn revision_auto_detect(&mut self) {
         if !self.ui.revision_detect_pending {
             return;
         }
         let now = gpu_canvas::now_ms() as f64 / 1000.0;
-        if now - self.ui.revision_detect_at < 0.5 {
+        if now - self.ui.revision_detect_at < 0.25 {
             return;
         }
         self.ui.revision_detect_at = now;
