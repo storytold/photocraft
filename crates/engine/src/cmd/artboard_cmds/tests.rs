@@ -840,3 +840,81 @@ fn from_layers_defaults_are_the_selected_layers_size() {
     assert_eq!(from_layers_defaults(&s), Some(("Artboard 1".to_string(), [100, 80])), "an empty layer: the canvas");
     assert_eq!(from_layers_defaults(&Session::new()), None);
 }
+
+#[test]
+fn new_layers_made_with_an_artboard_selected_go_inside_it() {
+    // Photoshop 26.2: with an artboard itself selected, New Layer, fill layers and adjustment
+    // layers land on top of that board's contents.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let board = LayerId(b["layer"].as_u64().unwrap());
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": "Board B"})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let kids = doc(&s).layer(board).and_then(Layer::children).unwrap();
+        assert_eq!(kids.last().map(|l| l.id), Some(id), "{cmd} lands on top of the selected board's contents");
+    }
+    assert_eq!(doc(&s).layer(board).and_then(Layer::children).map(<[Layer]>::len), Some(5));
+}
+
+/// The five commands `new_layers_made_with_an_artboard_selected_go_inside_it` checks.
+fn new_layer_commands() -> [(&'static str, serde_json::Value); 5] {
+    [
+        ("layer.new.layer", json!({})),
+        ("layer.newFillLayer.solidColor", json!({"color": "#c82828"})),
+        ("layer.newFillLayer.gradient", json!({})),
+        ("gradient.fill.create", json!({"from": [0, 0], "to": [100, 0]})),
+        ("layer.newAdjustmentLayer.invert", json!({})),
+    ]
+}
+
+#[test]
+fn new_layers_made_with_a_layer_in_an_artboard_selected_go_directly_above_it() {
+    // #9311 review: with a layer inside a board selected (not the board), a new layer goes
+    // directly above that layer, inside the board, not on top of the board's contents.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let board = LayerId(b["layer"].as_u64().unwrap());
+    let mut inside = Vec::new();
+    for name in ["low", "high"] {
+        s.execute("layer.select", json!({"name": "Board B"})).unwrap();
+        inside.push(LayerId(s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap()));
+    }
+    let (low, high) = (inside[0], inside[1]);
+    let board_path = doc(&s).path_of(board).unwrap();
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": "low"})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let mut above_low = doc(&s).path_of(low).unwrap();
+        *above_low.last_mut().unwrap() += 1;
+        assert_eq!(doc(&s).path_of(id), Some(above_low), "{cmd} lands directly above the selected layer");
+        assert_eq!(doc(&s).path_of(id).map(|p| p[..p.len() - 1].to_vec()), Some(board_path.clone()), "{cmd} stays in the board");
+        let kids = doc(&s).layer(board).and_then(Layer::children).unwrap();
+        assert_eq!(kids.last().map(|l| l.id), Some(high), "{cmd} doesn't go on top of the board's contents");
+    }
+    assert_eq!(doc(&s).layer(board).and_then(Layer::children).map(<[Layer]>::len), Some(7));
+}
+
+#[test]
+fn new_layers_made_with_a_top_level_layer_selected_stay_at_the_top_level() {
+    // #9311 review: with no artboard selected (a top-level layer outside every board), a new
+    // layer goes directly above that layer at the top level, in no board.
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"x": 0, "y": 0, "width": 50, "height": 50, "name": "Board A"})).unwrap();
+    s.execute("layer.new.artboard", json!({"x": 60, "y": 0, "width": 40, "height": 50, "name": "Board B"})).unwrap();
+    let loose = add_square(&mut s, Rect::new(52, 10, 58, 20), [0.0, 0.0, 1.0, 1.0]);
+    let name = doc(&s).layer(loose).unwrap().name.clone();
+    let boards: Vec<usize> = doc(&s).artboards().iter().map(|(b, ..)| doc(&s).layer(*b).and_then(Layer::children).map_or(0, <[Layer]>::len)).collect();
+    for (cmd, p) in new_layer_commands() {
+        s.execute("layer.select", json!({"name": name})).unwrap();
+        let id = LayerId(s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap());
+        let loose_at = doc(&s).path_of(loose).unwrap();
+        assert_eq!(loose_at.len(), 1, "the selected layer is at the top level");
+        assert_eq!(doc(&s).path_of(id), Some(vec![loose_at[0] + 1]), "{cmd} lands directly above the selected layer, at the top level");
+        assert_eq!(doc(&s).artboard_of(id), None, "{cmd} goes in no board");
+    }
+    let after: Vec<usize> = doc(&s).artboards().iter().map(|(b, ..)| doc(&s).layer(*b).and_then(Layer::children).map_or(0, <[Layer]>::len)).collect();
+    assert_eq!(after, boards, "no board gained a layer");
+}
