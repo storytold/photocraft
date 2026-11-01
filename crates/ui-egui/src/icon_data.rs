@@ -85,6 +85,8 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("layers", include_bytes!("../../../assets/icons/layers.svg")),
     ("link", include_bytes!("../../../assets/icons/link.svg")),
     ("link-2", include_bytes!("../../../assets/icons/link-2.svg")),
+    // PhotoCraft original: the Brushes panel's Columns view (two columns of list lines).
+    ("list-columns", include_bytes!("../../../assets/icons/list-columns.svg")),
     ("lock", include_bytes!("../../../assets/icons/lock.svg")),
     ("lock-open", include_bytes!("../../../assets/icons/lock-open.svg")),
     ("lollipop", include_bytes!("../../../assets/icons/lollipop.svg")),

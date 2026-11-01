@@ -4357,6 +4357,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} já está em uso por {commands} e será removido de lá quando você clicar em OK.
 	Grid view	Visualização em grade
 	List view	Visualização em lista
+	Columns view	Visualização em colunas
 	New Brush Preset	Nova predefinição de pincel
 	Toggle the Brush Settings panel	Alternar o painel Configurações do pincel
 	Scroll menu up	Rolar o menu para cima

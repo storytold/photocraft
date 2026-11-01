@@ -436,3 +436,107 @@ fn preview_scale_is_clamped_to_its_range() {
     assert_eq!(grid_cell_width(52.0, 0.0), 26.0);
     assert_eq!(grid_cell_width(52.0, f32::INFINITY), 52.0);
 }
+
+#[test]
+fn only_the_columns_view_puts_list_rows_side_by_side() {
+    // List keeps one row per line at every preview size, however wide the panel.
+    for (w, scale) in [(280.0, 1.0), (1200.0, 1.0), (400.0, 0.6), (1200.0, 0.5), (1200.0, 2.0)] {
+        assert_eq!(list_columns(w, 0.0, scale, false), (w, 1), "{w} at {scale}");
+    }
+    // Columns fits as many rows as the width takes, at the standard size too; each column takes
+    // its share of the room past the indent.
+    assert_eq!(list_columns(400.0, 0.0, 0.6, true), (198.0, 2));
+    assert_eq!(list_columns(700.0, 16.0, 0.5, true).1, 4);
+    assert_eq!(list_columns(620.0, 0.0, 1.0, true).1, 2);
+    assert_eq!(list_columns(280.0, 0.0, 1.0, true), (280.0, 1));
+    for w in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+        let (col_w, cols) = list_columns(w, 0.0, 0.5, true);
+        assert!(cols >= 1 && col_w.is_finite() && col_w >= 0.0, "{w}: {col_w} {cols}");
+    }
+}
+
+/// Resizing the floating panel and changing the preview size: List keeps one row per line, and
+/// Columns keeps reading order (each row right of the one before on its line, or on a later line).
+#[test]
+fn list_rows_keep_their_order_while_the_panel_and_previews_change() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 760})).unwrap();
+    let names: Vec<String> = app.session.tools.presets.iter().take(4).map(|p| p.name.clone()).collect();
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        app
+    });
+    for view in [BrushesView::List, BrushesView::Columns] {
+        let mut side_by_side = false;
+        for (width, scale) in [(420, 0.6), (900, 0.6), (900, 1.0), (300, 0.5), (420, 2.0)] {
+            let app = h.state_mut();
+            app.ui.brushes_panel.view = view;
+            app.ui.brushes_panel.scale = scale;
+            app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": width, "height": 760})).unwrap();
+            h.run_steps(4);
+            let rects: Vec<Rect> = names.iter().map(|n| h.get_by_role_and_label(Role::Button, n).rect()).collect();
+            for (a, b) in rects.iter().zip(&rects[1..]) {
+                let same_line = (a.top() - b.top()).abs() < 0.5;
+                side_by_side |= same_line;
+                let in_order = if same_line { b.left() > a.right() } else { b.top() >= a.bottom() - 0.5 };
+                assert!(in_order && (view == BrushesView::Columns || !same_line), "{view:?} {width} at {scale}: {a:?} then {b:?}");
+            }
+        }
+        assert_eq!(side_by_side, view == BrushesView::Columns, "{view:?}");
+    }
+}
+
+/// A tall Brushes panel: the list fills it, the footer at its bottom (the list used to stop at
+/// 640 pt and leave the rest empty).
+#[test]
+fn the_brushes_list_fills_a_tall_panel() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 1340})).unwrap();
+    app.ui.brushes_panel.view = BrushesView::List;
+    let footer = format!("{} presets", app.session.tools.presets.len());
+    let mut h = Harness::builder().with_size(vec2(1200.0, 1400.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+        app
+    });
+    h.run_steps(6);
+    let bottom = h.get_by_label(&footer).rect().bottom();
+    assert!(bottom > 1400.0 - 60.0, "the footer sits at the panel's bottom: {bottom}");
+}
+
+/// Rows sharing a line in the Columns view: a preset dropped on another's right half lands after
+/// it, by the pointer's side as in the grid. The List view, at the same small previews, keeps
+/// comparing heights, so the same drop on the row's upper half lands before it.
+#[test]
+fn a_brush_dropped_on_a_rows_upper_right_lands_by_the_views_rule() {
+    for view in [BrushesView::Columns, BrushesView::List] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("window.panel.float", json!({"panel": "brushes", "x": 20, "y": 20, "width": 420, "height": 760})).unwrap();
+        app.ui.brushes_panel.view = view;
+        app.ui.brushes_panel.scale = 0.6;
+        let names: Vec<String> = app.session.tools.presets.iter().take(3).map(|p| p.name.clone()).collect();
+        let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
+            app
+        });
+        h.run_steps(4);
+        let rect = |h: &Harness<'_, PhotocraftApp>, n: &str| h.get_by_role_and_label(Role::Button, n).rect();
+        let (first, second, third) = (rect(&h, &names[0]), rect(&h, &names[1]), rect(&h, &names[2]));
+        let columns = (first.top() - second.top()).abs() < 0.5 && third.top() > first.bottom();
+        assert_eq!(columns, view == BrushesView::Columns, "{view:?}: {first:?} {second:?} {third:?}");
+        // Onto the third's upper right quarter.
+        let target = egui::pos2(third.right() - 8.0, third.top() + 3.0);
+        h.hover_at(first.center());
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: first.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for p in [first.center() + vec2(0.0, 12.0), target] {
+            h.event(egui::Event::PointerMoved(p));
+            h.run_steps(2);
+        }
+        h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        let order: Vec<&str> = h.state().session.tools.presets.iter().take(3).map(|p| p.name.as_str()).collect();
+        let want = if view == BrushesView::Columns { [&names[1], &names[2], &names[0]] } else { [&names[1], &names[0], &names[2]] };
+        assert_eq!(order, want.map(String::as_str), "{view:?}");
+    }
+}

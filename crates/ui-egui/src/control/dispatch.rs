@@ -815,7 +815,7 @@ impl BrushSet {
 
 fn brushes_view_param(p: &Value) -> std::result::Result<Option<crate::brush_panel::BrushesView>, String> {
     let Some(v) = p.get("brushesView") else { return Ok(None) };
-    serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, grid)"))
+    serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("brushesView: {e} (list, columns, grid)"))
 }
 
 fn check_picker_parts(app: &PhotocraftApp, parts: [Option<bool>; 3]) -> std::result::Result<(), String> {
