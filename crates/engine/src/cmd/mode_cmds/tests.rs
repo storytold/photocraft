@@ -309,6 +309,16 @@ fn color_table_presets_and_entries() {
 }
 
 #[test]
+fn color_table_rejects_malformed_hex_colours() {
+    let mut s = session(16, 16, 8, "rgb");
+    s.execute("image.mode.indexedColor", json!({"palette": "uniform", "colors": 8, "dither": "none", "forced": "none"})).unwrap();
+    assert!(s.execute("image.mode.colorTable", json!({"colors": ["#+f+f+f"]})).is_err());
+    for bad in ["#+f+f+f", "#ff0000zz", "#ff00001", "##ff0000", "#ff000"] {
+        assert!(s.execute("image.mode.colorTable", json!({"entries": {"0": bad}})).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn clearing_color_table_transparency_restores_indexed_pixels() {
     let pixel = |s: &mut Session| -> [f32; 4] { serde_json::from_value(s.execute("document.pixel", json!({"x": 5, "y": 8})).unwrap()).unwrap() };
     let mut s = Session::new();
