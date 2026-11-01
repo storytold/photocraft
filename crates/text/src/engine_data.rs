@@ -409,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn raw_strings_above_ascii_keep_their_bytes() {
+        let v = parse(b"<< /2 (\xE9\xC0\xFF) >>").unwrap();
+        assert_eq!(v.get("2"), Some(&Value::RawString("\u{E9}\u{C0}\u{FF}".into())));
+        let bytes = write(&v);
+        assert!(bytes.windows(5).any(|w| w == b"(\xE9\xC0\xFF)"), "{bytes:?}");
+        assert_eq!(parse(&bytes).unwrap(), v);
+
+        // A char past Latin-1 has no single byte, so the string goes out as UTF-16
+        let edited = write(&Value::Dict(vec![("2".into(), Value::RawString("\u{15F}".into()))]));
+        assert!(edited.windows(4).any(|w| w == b"\xFE\xFF\x01\x5F"), "{edited:?}");
+    }
+
+    #[test]
     fn write_parse_roundtrip() {
         let v = parse(SAMPLE).unwrap();
         let bytes = write(&v);
