@@ -20,7 +20,7 @@ const STREAM_MIN_BYTES: u64 = 32 << 20;
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_flat_with(name, bytes, &Interrupt::NONE)
+    import_flat_with_limit(name, bytes, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
 }
 
 /// [`import_flat`] with cancellation and progress: checked after the decode and around the
