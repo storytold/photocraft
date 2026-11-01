@@ -121,16 +121,15 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
         }
     }
     let scan_end = js_sys::Date::now() + SCAN_MS;
-    for name in names.iter().take(MAX_ENTRIES * 2) {
+    // Only a claimed page's sidecars and bundles are read. The record limit applies after that
+    // filter: IndexedDB lists keys in name order, so limiting the names first could leave a claimed
+    // session's pair past the first 128 names unread on every launch. The total cap is not tracked
+    // here: the write transaction checks it against what is actually stored.
+    let eligible = names.iter().filter(|n| session_of(n).is_some_and(|s| claimed.contains(&s)) && (n.ends_with(".pcraft") || n.ends_with(".json")));
+    for name in eligible.take(MAX_ENTRIES * 2) {
         if js_sys::Date::now() >= scan_end {
             log::warn!("Crash recovery stopped reading records: the scan took too long");
             break;
-        }
-        let mine = session_of(name).is_some_and(|s| claimed.contains(&s));
-        // Only a claimed page's sidecars and bundles are read. The total cap is not tracked here:
-        // the write transaction checks it against what is actually stored.
-        if !mine || !(name.ends_with(".pcraft") || name.ends_with(".json")) {
-            continue;
         }
         let blob = match get_blob(db, name, scan_end).await {
             Ok(Some(blob)) => blob,
