@@ -752,18 +752,21 @@ mod rtl_tests {
         fn items(dir: crate::direction::Dir) -> (egui::Rect, egui::Rect) {
             let _scope = crate::direction::direction_scope(dir);
             let ctx = egui::Context::default();
+            let mut out = None;
             ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.with_layout(crate::direction::row(), |ui| {
-                        let a = ui.label("A");
-                        let b = ui.label("B");
-                        (a.rect, b.rect)
+                out = Some(
+                    ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.with_layout(crate::direction::row(), |ui| {
+                            let a = ui.label("A");
+                            let b = ui.label("B");
+                            (a.rect, b.rect)
+                        })
+                        .inner
                     })
-                    .inner
-                })
-                .inner
-            })
-            .inner
+                    .inner,
+                );
+            });
+            out.unwrap()
         }
         let (ltr_a, ltr_b) = items(crate::direction::Dir::Ltr);
         let (rtl_a, rtl_b) = items(crate::direction::Dir::Rtl);
