@@ -1,7 +1,7 @@
 //! Photoshop's channel and colour steps (#10609): Split Channels, Merge Spot Channel, Trap and
 //! Match Color, with the keys Photoshop records.
 
-use super::descriptors::{boolean, desc, num, px, trimmed};
+use super::descriptors::{PX, boolean, desc, num, px, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
@@ -53,12 +53,22 @@ pub(super) fn merge_spot_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// Trap's widest width: Photoshop clamps larger ones to it.
 const MAX_TRAP: f64 = 32767.0;
 
-/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number keeps the Photoshop step.
+/// A width in `#Pxl`, the unit Trap saves: a width in another unit (points, millimetres) or
+/// without one would load as that many pixels and save back as pixels.
+fn pixels(v: &D) -> Option<f64> {
+    match v {
+        D::UnitFloat { unit, value } if *unit == PX && value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
+/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number of pixels keeps the Photoshop
+/// step.
 pub(super) fn trap_from(d: &Descriptor) -> Mapped {
     if !only_keys(d, &["Wdth"]) {
         return Mapped::Unsupported { harmless: false };
     }
-    match setting(d, "Wdth", |v| num(v).map(Some), None) {
+    match setting(d, "Wdth", |v| pixels(v).map(Some), None) {
         Some(Some(w)) => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
         Some(None) => step("image.trap", json!({})),
         None => Mapped::Unsupported { harmless: false },

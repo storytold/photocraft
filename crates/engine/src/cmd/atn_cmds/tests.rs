@@ -3308,3 +3308,20 @@ fn channel_and_color_steps_with_a_non_numeric_setting_are_kept() {
         assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{name} with {key} = {v:?} was mapped");
     }
 }
+
+/// Trap saves its width as `#Pxl`, so a width in another unit, or without one, stays a
+/// Photoshop step instead of loading as that many pixels and saving back as pixels (#10609).
+#[test]
+fn trap_width_not_in_pixels_is_kept() {
+    for v in [
+        D::UnitFloat { unit: *b"#Pnt", value: 2.0 },
+        D::UnitFloat { unit: *b"#Mlm", value: 2.0 },
+        D::UnitFloat { unit: *b"#Prc", value: 2.0 },
+        D::Double(2.0),
+        D::Integer(2),
+    ] {
+        let m = channel_step("Trap", desc("null").with("Wdth", v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "Wdth {v:?} was mapped");
+    }
+    assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(2.5))), Mapped::Steps(_)));
+}
