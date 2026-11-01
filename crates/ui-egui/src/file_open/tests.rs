@@ -180,17 +180,20 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let names = vec!["photo.png".to_string(), "brushes.abr".to_string()];
+    let doc = app.session.active().unwrap().doc.id;
     // No pointer known: nothing is placed.
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false]);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [None, None]);
     let at = Rc::new(std::cell::Cell::new(egui::pos2(400.0, 300.0)));
     let reported = at.clone();
     app.services.cursor_pos = Some(Box::new(move |_: &egui::Context| Some(reported.get())));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [true, false]);
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [Some(doc), None]);
     at.set(egui::pos2(20.0, 20.0));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
+    assert_eq!(app.dropped_on_canvas(&ctx, &names), [None, None], "off the canvas: opened");
     let layers = layer_count(&app);
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    inbox.lock().unwrap().extend([(doc, "photo.png".to_string(), png_bytes(4, 3)), (doc, "bad.png".to_string(), b"bad".to_vec())]);
+    crate::file_open::take_place_inbox(&mut app);
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -536,6 +539,188 @@ fn a_separate_drop_applies_the_open_transform_and_places_at_once() {
     assert!(app.drop_places.is_empty());
     crate::transform_tool::commit(&mut app);
     assert_eq!(history_steps(&app), steps + 2);
+}
+
+/// A context with its first frames run, so a repaint request comes from what runs next.
+fn settled_ctx() -> egui::Context {
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    }
+    assert!(!ctx.has_requested_repaint(), "idle");
+    ctx
+}
+
+/// #8492: with Skip Transform when Placing on, several files dropped on the canvas are all placed
+/// without Free Transform, one per frame (a repaint asks for the next while files remain), so a
+/// large drop doesn't hold the UI until the whole queue is decoded. A file that can't be placed
+/// takes its frame too.
+#[test]
+fn skip_transform_when_placing_places_one_queued_drop_per_frame() {
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    let files = [("one", true), ("bad", false), ("two", true), ("three", true)];
+    for (name, good) in files {
+        let bytes = if good { png_bytes(4, 3) } else { b"bad".to_vec() };
+        app.queue_place(crate::file_open::DropPlace::Bytes(format!("{name}.png"), bytes));
+    }
+    let mut placed = 0;
+    for (frame, (name, good)) in files.into_iter().enumerate() {
+        let ctx = settled_ctx();
+        app.place_next_dropped(&ctx);
+        placed += usize::from(good);
+        assert!(app.ui.transform.is_none(), "{name}: no Free Transform opens");
+        assert_eq!((layer_count(&app), history_steps(&app)), (layers + placed, steps + placed), "{name}: one Place Embedded step");
+        if good {
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, name);
+        } else {
+            assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("bad.png")), "{:?}", app.ui.notices);
+        }
+        let left = files.len() - frame - 1;
+        assert_eq!(app.drop_places.len(), left, "{name}: one file per frame");
+        assert_eq!(ctx.has_requested_repaint(), left > 0, "{name}: another frame is asked for while files remain");
+    }
+}
+
+/// Queued canvas drops belong to the document they were dropped on: selecting another tab before
+/// their turn still places them there (without Free Transform, which needs the active canvas), and
+/// once that document is closed they are reported instead of placed in another.
+#[test]
+fn queued_drops_go_to_the_document_they_were_dropped_on() {
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let source = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    for name in ["one.png", "two.png", "three.png"] {
+        app.queue_place(crate::file_open::DropPlace::Bytes(name.into(), png_bytes(4, 3)));
+    }
+    app.place_next_dropped(&settled_ctx());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let other_layers = layer_count(&app);
+    app.place_next_dropped(&settled_ctx());
+    assert_eq!(app.session.active().unwrap().doc.id, other, "the selected tab stays selected");
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the other document");
+    assert!(app.ui.transform.is_none());
+    let source_doc = |app: &PhotocraftApp| app.session.documents().iter().find(|st| st.doc.id == source).map(|st| st.doc.layers.len());
+    assert_eq!(source_doc(&app), Some(layers + 2));
+    app.refocus(source).unwrap();
+    app.session.execute("file.close", json!({"save": false})).unwrap();
+    app.sync_views();
+    assert_eq!(source_doc(&app), None);
+    app.place_next_dropped(&settled_ctx());
+    assert!(app.drop_places.is_empty());
+    assert_eq!(layer_count(&app), other_layers, "a closed document's file goes nowhere else");
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("three.png")), "{:?}", app.ui.notices);
+}
+
+/// With Free Transform to open (Skip Transform when Placing off, the default), a file whose
+/// document isn't selected when its turn comes waits for that tab rather than being placed
+/// without its box; files dropped on the selected tab meanwhile don't queue behind it.
+#[test]
+fn a_queued_drop_waits_for_its_tab_while_free_transform_is_on() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let source = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    app.queue_place(crate::file_open::DropPlace::Bytes("for-source.png".into(), png_bytes(4, 3)));
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other_layers = layer_count(&app);
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none());
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the selected document");
+    assert_eq!(app.drop_places.len(), 1, "the file waits for its tab");
+    // A file dropped on the selected tab is placed at once, in Free Transform.
+    app.queue_place(crate::file_open::DropPlace::Bytes("for-other.png".into(), png_bytes(4, 3)));
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), other_layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    crate::transform_tool::commit(&mut app);
+    // Back on its tab, the waiting file is placed there, in Free Transform.
+    app.refocus(source).unwrap();
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert_eq!(app.session.active().unwrap().doc.id, source);
+    assert_eq!(layer_count(&app), layers + 1);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "for-source");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
+/// A web drop is read asynchronously after the shell routed it: a tab selected while it was read
+/// doesn't receive it. It goes to the document [`PhotocraftApp::dropped_on_canvas`] named.
+#[test]
+fn a_web_drop_read_after_a_tab_switch_goes_to_the_document_it_was_dropped_on() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
+    let source = app.session.active().unwrap().doc.id;
+    let layers = layer_count(&app);
+    let [Some(doc)] = app.dropped_on_canvas(&ctx, &["photo.png".to_string()])[..] else { panic!("placed on the canvas") };
+    assert_eq!(doc, source);
+    // The read is still pending when another tab is selected.
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let (other, other_layers) = (app.session.active().unwrap().doc.id, layer_count(&app));
+    inbox.lock().unwrap().push((doc, "photo.png".into(), png_bytes(4, 3)));
+    crate::file_open::take_place_inbox(&mut app);
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.session.active().unwrap().doc.id, other, "the selected tab stays selected");
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the selected document");
+    assert_eq!(app.drop_places.len(), 1, "it waits for its tab");
+    app.refocus(source).unwrap();
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), layers + 1, "placed in the document it was dropped on");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
+/// A web drop whose document is closed while the browser reads it is reported, not placed in the
+/// document selected when it arrives.
+#[test]
+fn a_web_drop_whose_document_closed_while_read_is_reported() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
+    let [Some(doc)] = app.dropped_on_canvas(&ctx, &["photo.png".to_string()])[..] else { panic!("placed on the canvas") };
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other_layers = layer_count(&app);
+    app.refocus(doc).unwrap();
+    app.session.execute("file.close", json!({"save": false})).unwrap();
+    app.sync_views();
+    inbox.lock().unwrap().push((doc, "photo.png".into(), png_bytes(4, 3)));
+    crate::file_open::take_place_inbox(&mut app);
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the document left open");
+    assert!(app.ui.transform.is_none());
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("photo.png")), "{:?}", app.ui.notices);
+}
+
+/// #8492: Skip Transform when Placing only concerns the interactive place. `file.placeEmbedded`
+/// with a `path` (actions, scripts, the control channel, MCP) runs the engine command, which never
+/// opens Free Transform, whatever the preference.
+#[test]
+fn a_scripted_place_never_opens_free_transform() {
+    let dir = std::env::temp_dir().join(format!("pc-scripted-place-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dot.png");
+    std::fs::write(&path, png_bytes(4, 3)).unwrap();
+    let mut app = app_with_canvas();
+    for skip in [false, true] {
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        let layers = layer_count(&app);
+        app.run("file.placeEmbedded", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(layer_count(&app), layers + 1, "skip={skip}");
+        assert!(app.ui.transform.is_none(), "skip={skip}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.

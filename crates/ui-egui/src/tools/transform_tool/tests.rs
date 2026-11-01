@@ -549,6 +549,23 @@ fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     assert!(app.transform_preview.is_none(), "the transform preview should end");
 }
 
+/// #8492: Preferences ▸ General ▸ Skip Transform when Placing (off by default) places a file
+/// without opening Free Transform on it, as in the reference app.
+#[test]
+fn skip_transform_when_placing_leaves_the_place_without_a_box() {
+    for skip in [false, true] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+        app.sync_views();
+        let placed = app.session.active().unwrap().active_layer.unwrap();
+        begin_placed(&mut app, &egui::Context::default()).unwrap();
+        assert_eq!(app.ui.transform.is_some(), !skip, "skip {skip}: Free Transform opens only with the preference off");
+        assert!(app.session.active().unwrap().doc.layer(placed).is_some(), "skip {skip}: the placed layer stays");
+    }
+}
+
 /// Polls the app's background jobs until they have all landed.
 fn land_jobs(app: &mut PhotocraftApp) {
     let ctx = egui::Context::default();

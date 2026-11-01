@@ -6,6 +6,7 @@
 //! are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
 /// A request from the operating system, delivered by the platform shell through
@@ -40,6 +41,29 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+}
+
+impl DropPlace {
+    fn name(&self) -> String {
+        match self {
+            DropPlace::File(f) => dropped_name(f),
+            DropPlace::Bytes(name, _) => name.clone(),
+        }
+    }
+}
+
+/// A [`DropPlace`] bound to the document it was dropped on, so a file whose turn comes after the
+/// user switched tabs still lands there.
+pub(crate) struct QueuedPlace {
+    doc: DocId,
+    what: DropPlace,
+}
+
+/// Queue the web drops read since the last frame, each for the document named when it was dropped
+/// ([`PhotocraftApp::dropped_on_canvas`]), not the one selected now.
+pub(crate) fn take_place_inbox(app: &mut PhotocraftApp) {
+    let arrived = app.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
+    app.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| QueuedPlace { doc, what: DropPlace::Bytes(name, bytes) }));
 }
 
 /// `warnings` from an import, plus one for each font family the active document's type uses that
@@ -238,7 +262,7 @@ impl PhotocraftApp {
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
-                self.drop_places.push_back(DropPlace::File(f));
+                self.queue_place(DropPlace::File(f));
                 continue;
             }
             match self.open_dropped_file(&f, &name, slot) {
@@ -250,18 +274,19 @@ impl PhotocraftApp {
     }
 
     /// Which of the files called `names`, dropped onto the window just now, are placed on the
-    /// active document's canvas rather than opened, for a shell that reads dropped files itself
+    /// active document's canvas rather than opened (that document's id; `None` opens the file),
+    /// for a shell that reads dropped files itself
     /// (the browser reads them asynchronously, so the web shell can't hand them to
     /// [`open_dropped`](Self::open_dropped)). It delivers those through
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
     /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
     /// Transform still open is applied first (#4833).
-    pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
+    pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<Option<DocId>> {
         let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
-        let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
-        let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
-        if places.contains(&true) && self.ui.transform.is_some() {
+        let canvas = (self.drop_target(ctx, at) == DropTarget::Canvas).then(|| self.active_doc_id().ok()).flatten();
+        let places: Vec<Option<DocId>> = names.iter().map(|n| canvas.filter(|_| !crate::preset_files_ui::is_preset_file(n))).collect();
+        if places.iter().any(Option::is_some) && self.ui.transform.is_some() {
             crate::transform_tool::commit(self);
         }
         places
@@ -300,33 +325,58 @@ impl PhotocraftApp {
         Ok(self.run("document.move", serde_json::json!({"document": docs, "to": slot})).is_ok())
     }
 
+    /// Queue a file dropped on the canvas for the active document (the one whose canvas it was
+    /// dropped on); with no document open it can't be placed and is reported.
+    pub(crate) fn queue_place(&mut self, what: DropPlace) {
+        match self.active_doc_id() {
+            Ok(doc) => self.drop_places.push_back(QueuedPlace { doc, what }),
+            Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &what.name()), ("error", &e)])),
+        }
+    }
+
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
+    /// Each file goes to the document it was dropped on: with Free Transform to open, a file
+    /// dropped on another tab waits until that tab is selected again (files for the selected one
+    /// go first); with Skip Transform when Placing on, it's placed there at once. A closed
+    /// document's files are reported, not placed elsewhere. With Skip Transform when Placing on,
+    /// one file is handled per frame, so a large drop doesn't hold the UI until the whole queue is
+    /// decoded.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
+        let one_per_frame = self.session.prefs().general.skip_transform_when_placing;
         while self.ui.transform.is_none() {
-            let Some(next) = self.drop_places.pop_front() else { return };
-            let (name, placed) = match next {
-                DropPlace::File(f) if f.path().is_absolute() => {
-                    (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
-                }
-                DropPlace::File(f) => {
-                    let name = dropped_name(&f);
-                    let placed = crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&name, bytes, None));
-                    (name, placed)
-                }
-                DropPlace::Bytes(name, bytes) => {
-                    let placed = self.place_bytes(&name, bytes, None);
-                    (name, placed)
-                }
-            };
+            let selected = self.session.active().map(|st| st.doc.id);
+            let docs = self.session.documents();
+            let due = |q: &QueuedPlace| one_per_frame || Some(q.doc) == selected || !docs.iter().any(|st| st.doc.id == q.doc);
+            let Some(QueuedPlace { doc, what }) = self.drop_places.iter().position(due).and_then(|i| self.drop_places.remove(i)) else { return };
+            let name = what.name();
+            let active = selected == Some(doc);
+            let placed = if active { self.place_dropped(what) } else { self.with_document(doc, |app| app.place_dropped(what)) };
             match placed {
-                Ok(_) => {
+                Ok(_) if active => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
                     }
                 }
+                Ok(_) => {}
                 Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &e)])),
             }
+            // No transform started (Skip Transform when Placing): the next file on the next frame.
+            if one_per_frame && self.ui.transform.is_none() && !self.drop_places.is_empty() {
+                ctx.request_repaint();
+                return;
+            }
+        }
+    }
+
+    /// Place one queued file as a layer of the active document.
+    fn place_dropped(&mut self, what: DropPlace) -> Result<serde_json::Value, String> {
+        match what {
+            DropPlace::File(f) if f.path().is_absolute() => {
+                path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path})))
+            }
+            DropPlace::File(f) => crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&dropped_name(&f), bytes, None)),
+            DropPlace::Bytes(name, bytes) => self.place_bytes(&name, bytes, None),
         }
     }
 

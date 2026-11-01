@@ -268,7 +268,11 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
 /// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
+/// With Preferences ▸ General ▸ Skip Transform when Placing on, the place stands as it is.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if app.session.prefs().general.skip_transform_when_placing {
+        return Ok(());
+    }
     begin(app, ctx)?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.made = Some(MadeLayer::Place);
