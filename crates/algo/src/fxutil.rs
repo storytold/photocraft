@@ -359,6 +359,18 @@ mod tests {
             let bits = |v: &Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
             assert_eq!(bits(&a), bits(&b), "{w}x{h}x{n} r{r} diverged");
         }
+        // Every radius 1 to 50 at a width the gather spans in several strips (19 columns, runs of
+        // 3), and at a height shorter than the radius: the same bytes as the strided walk.
+        for r in 1..=50usize {
+            for (w, h, n) in [(19usize, 1122usize, 4usize), (13, 3, 1), (7, 1, 2)] {
+                let mut a = ramp(w, h, n);
+                let mut b = a.clone();
+                box_cols_n(&mut a, w, h, n, r);
+                box_cols_strided(&mut b, w, h, n, r);
+                let bits = |v: &Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(&a), bits(&b), "{w}x{h}x{n} r{r} diverged");
+            }
+        }
     }
 
     /// `cargo test -p photocraft-algo --release --lib -- --nocapture cols_timing`
