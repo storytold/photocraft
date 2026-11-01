@@ -221,6 +221,119 @@ fn enum_value<'a>(d: &'a Descriptor, key: &str, ty: &str) -> &'a Id {
     value
 }
 
+/// Make's opacity belongs to the layer around the adjustment descriptor.
+fn adjustment_make(t: Descriptor, opacity: Option<D>) -> Descriptor {
+    let mut using = Descriptor::new("AdjL").with("Type", D::Descriptor(t));
+    if let Some(opacity) = opacity {
+        using = using.with("Opct", opacity);
+    }
+    Descriptor::new("null").with("null", D::Reference(vec![ReferenceItem::Class(class("AdjL"))])).with("Usng", D::Descriptor(using))
+}
+
+/// Ported from #8659: the saved event changes, while legacy imports and pixel results agree.
+#[test]
+fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
+    let d = Descriptor::new("Vbrn").with("vibrance", D::Integer(47)).with("Strt", D::Integer(-19));
+    for depth in [8, 16] {
+        for event in [AtnEvent::name("vibrance"), AtnEvent::Code(*b"Vbrn")] {
+            let action = recorded(event, d.clone());
+            assert_eq!(action.steps, vec![("image.adjustments.vibrance".into(), json!({"vibrance":47,"saturation":-19}))]);
+            let written = saved(&action);
+            assert_eq!(written.event, AtnEvent::name("vibrance"), "Vibrance must save by its string event");
+            assert_eq!(written.descriptor, Some(d.clone()));
+            let create = || {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width":4,"height":3,"depth":depth})).unwrap();
+                s.execute("edit.fill", json!({"contents":"color","color":"#6594c2"})).unwrap();
+                s
+            };
+            let mut actual = create();
+            replay_saved(&mut actual, &action);
+            let mut expected = create();
+            expected.execute("image.adjustments.vibrance", action.steps[0].1.clone()).unwrap();
+            for channel in 0..4 {
+                assert_eq!(
+                    actual.active().unwrap().doc.layers[0].surface().unwrap().sample_channel(1, 1, channel),
+                    expected.active().unwrap().doc.layers[0].surface().unwrap().sample_channel(1, 1, channel)
+                );
+            }
+        }
+    }
+}
+
+/// The reported Gradient Map Make and the metadata-only default both round-trip atomically.
+#[test]
+fn recorded_adjustment_opacity_keeps_gradient_settings_and_defaults() {
+    let full =
+        saved(&Action::new("Recorded", vec![("image.adjustments.gradientMap".into(), json!({"stops":[[0,"#0000ff"],[1,"#ff0000"]]}))])).descriptor.unwrap();
+    let default = Descriptor::new("GdMp").with("presetKind", enm("presetKindType", "presetKindDefault"));
+    for t in [full, default] {
+        let action = recorded(AtnEvent::Code(*b"Mk  "), adjustment_make(t.clone(), Some(D::UnitFloat { unit: *b"#Prc", value: 70.0 })));
+        assert_eq!(action.steps.len(), 1);
+        assert_eq!(action.steps[0].0, "layer.newAdjustmentLayer.gradientMap");
+        assert_eq!(action.steps[0].1["opacity"], json!(179.0 / 255.0), "Make must retain surrounding opacity");
+        if t.get("Grad").is_some() {
+            assert_eq!(action.steps[0].1["stops"], json!([[0, "#0000ff"], [1, "#ff0000"]]));
+        }
+        let written = saved(&action).descriptor.unwrap();
+        let Some(D::Descriptor(using)) = written.get("Usng") else { panic!("missing adjustment metadata") };
+        assert!(matches!(using.get("Opct"),Some(D::UnitFloat{unit,value}) if unit==b"#Prc" && (*value-179.0/255.0*100.0).abs()<1e-10));
+        for depth in [8, 16] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":4,"height":3,"depth":depth})).unwrap();
+            let base = s.active().unwrap().active_layer.unwrap();
+            replay_saved(&mut s, &action);
+            let state = s.active().unwrap();
+            assert_eq!(state.doc.layers.len(), 2);
+            assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().opacity, 179.0_f32 / 255.0);
+            assert_eq!(state.doc.layer(base).unwrap().opacity, 1.0);
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.layers.len(), 1, "one undo removes the complete Make");
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+        }
+    }
+}
+
+/// Invalid supplied opacity cannot become a silent default or create a layer.
+#[test]
+fn adjustment_opacity_validation_and_endpoints_are_atomic() {
+    let t = Descriptor::new("GdMp").with("presetKind", enm("presetKindType", "presetKindDefault"));
+    for bad in [
+        D::UnitFloat { unit: *b"#Pxl", value: 70.0 },
+        D::UnitFloat { unit: *b"#Prc", value: -1.0 },
+        D::UnitFloat { unit: *b"#Prc", value: 101.0 },
+        D::Text(UnicodeString::new_nul("70")),
+        D::Boolean(false),
+        D::Double(f64::NAN),
+    ] {
+        let action = recorded(AtnEvent::Code(*b"Mk  "), adjustment_make(t.clone(), Some(bad)));
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        saved(&action);
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":3})).unwrap();
+    for bad in [json!(null), json!("70"), json!(-0.1), json!(1.1)] {
+        let before = s.execute("document.inspect", json!({})).unwrap();
+        assert!(s.execute("layer.newAdjustmentLayer.gradientMap", json!({"opacity":bad})).is_err());
+        assert_eq!(s.execute("document.inspect", json!({})).unwrap(), before);
+        assert!(
+            atn_cmds::export("Identifiers", &[&Action::new("Bad", vec![("layer.newAdjustmentLayer.gradientMap".into(), json!({"opacity":bad}))])], &[], false)
+                .is_err()
+        );
+    }
+    for opacity in [None, Some(0.0), Some(1.0)] {
+        let p = opacity.map_or_else(|| json!({}), |opacity| json!({"opacity":opacity}));
+        s.execute("layer.newAdjustmentLayer.gradientMap", p.clone()).unwrap();
+        let state = s.active().unwrap();
+        assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().opacity, opacity.unwrap_or(1.0));
+        let action = Action::new("Recorded", vec![("layer.newAdjustmentLayer.gradientMap".into(), p)]);
+        let reloaded = recorded(AtnEvent::Code(*b"Mk  "), saved(&action).descriptor.unwrap());
+        assert_eq!(reloaded.steps, action.steps);
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+}
+
 /// Canonical event names and old code imports share the existing gradient parameters.
 #[test]
 fn gradient_map_writes_the_named_event_and_keeps_legacy_code_imports() {
