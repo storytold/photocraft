@@ -293,6 +293,10 @@ pub struct Jobs {
     /// Workers of cancelled jobs that may still be unwinding (native).
     #[cfg(not(target_arch = "wasm32"))]
     draining: Vec<std::thread::JoinHandle<()>>,
+    /// A closed document's cancelled workers still hold its snapshot: release the scratch pool
+    /// as they exit, since the release at close came too early for their buffers (#10479).
+    #[cfg(not(target_arch = "wasm32"))]
+    release_on_drain: bool,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
 }
@@ -672,7 +676,14 @@ impl Session {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.jobs.draining.retain(|h| !h.is_finished());
+        {
+            let before = self.jobs.draining.len();
+            self.jobs.draining.retain(|h| !h.is_finished());
+            if self.jobs.release_on_drain && self.jobs.draining.len() < before {
+                photocraft_raster::scratch::release();
+                self.jobs.release_on_drain = !self.jobs.draining.is_empty();
+            }
+        }
         std::mem::take(&mut self.jobs.events)
     }
 
@@ -753,8 +764,13 @@ impl Session {
     /// cancel latency with it). Native only; returns at once on wasm.
     pub fn join_cancelled_jobs(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        for h in self.jobs.draining.drain(..) {
-            let _ = h.join();
+        {
+            for h in self.jobs.draining.drain(..) {
+                let _ = h.join();
+            }
+            if std::mem::take(&mut self.jobs.release_on_drain) {
+                photocraft_raster::scratch::release();
+            }
         }
     }
 
@@ -771,6 +787,11 @@ impl Session {
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) {
         let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
         for id in ids {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.jobs.release_on_drain |= self.cancel_job(id);
+            }
+            #[cfg(target_arch = "wasm32")]
             self.cancel_job(id);
         }
     }

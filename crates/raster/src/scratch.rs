@@ -13,7 +13,7 @@
 //! [`IDLE_RELEASE_SECS`], so every host (app, CLI, tests) gives memory back the same way.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 /// Buffers with less capacity than this are cheap from the heap and are never retained.
@@ -32,6 +32,7 @@ static BUDGET: AtomicUsize = AtomicUsize::new(DEFAULT_BUDGET);
 static MISS_FLOOR: AtomicUsize = AtomicUsize::new(DEFAULT_MISS_FLOOR);
 static RETAINED: AtomicUsize = AtomicUsize::new(0);
 static USES: AtomicU64 = AtomicU64::new(0);
+static IDLE_RELEASE: AtomicBool = AtomicBool::new(true);
 
 /// Seconds without a [`take`] or [`give`] after which the idle thread releases the pool.
 pub const IDLE_RELEASE_SECS: u64 = 2;
@@ -48,7 +49,7 @@ fn start_idle_release() {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(IDLE_RELEASE_SECS));
                     let now = uses();
-                    if now == seen && retained_bytes() > 0 {
+                    if now == seen && retained_bytes() > 0 && IDLE_RELEASE.load(Ordering::Relaxed) {
                         release();
                     }
                     seen = now;
@@ -302,6 +303,12 @@ pub fn set_budget(bytes: usize) {
 /// Set the pooled bytes a miss never evicts (default [`DEFAULT_MISS_FLOOR`]).
 pub fn set_miss_floor(bytes: usize) {
     MISS_FLOOR.store(bytes, Ordering::Relaxed);
+}
+
+/// Let the idle thread release the pool (the default) or not. Tests that check
+/// [`retained_bytes`] turn it off, so a slow runner can't have the pool emptied under them.
+pub fn set_idle_release(on: bool) {
+    IDLE_RELEASE.store(on, Ordering::Relaxed);
 }
 
 /// Bytes currently held by the pool.
