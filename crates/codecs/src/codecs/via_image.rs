@@ -251,7 +251,7 @@ fn to_dynamic(img: &Image) -> Result<DynamicImage, CodecError> {
     })
 }
 
-/// Encode a planned image, borrowing compatible QOI and Radiance HDR pixels.
+/// Encode a planned image, borrowing compatible BMP, QOI and Radiance HDR pixels.
 pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let fmt = image_format(f).ok_or_else(|| CodecError::unsupported(f, "not handled by image backend"))?;
     if let Some((mw, mh)) = f.max_dimensions()
@@ -266,8 +266,8 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
     }
     // Image validates the interleaved buffer size; these encoders can borrow its bytes.
     let color = match (f, img.layout(), img.sample_type()) {
-        (Format::Qoi, ChannelLayout::Rgb, SampleType::U8) => Some(image::ColorType::Rgb8),
-        (Format::Qoi, ChannelLayout::Rgba, SampleType::U8) => Some(image::ColorType::Rgba8),
+        (Format::Bmp | Format::Qoi, ChannelLayout::Rgb, SampleType::U8) => Some(image::ColorType::Rgb8),
+        (Format::Bmp | Format::Qoi, ChannelLayout::Rgba, SampleType::U8) => Some(image::ColorType::Rgba8),
         (Format::Qoi, _, _) => return Err(CodecError::InvalidImage("QOI requires RGB8 or RGBA8 pixels".into())),
         (Format::Hdr, ChannelLayout::Rgb, SampleType::F32) => Some(image::ColorType::Rgb32F),
         _ => None,
@@ -358,5 +358,25 @@ mod indexed_tests {
         assert!(encode_bmp_indexed(2, 1, &[0, 2], &pal).is_err(), "index past the table");
         assert!(encode_bmp_indexed(1, 1, &[0], &[]).is_err(), "no colours");
         assert!(encode_bmp_indexed(1, 1, &[0], &[[0; 3]; 257]).is_err(), "more than 256 colours");
+    }
+}
+
+#[cfg(test)]
+mod bmp_tests {
+    use super::*;
+
+    /// Direct writes retain BMP headers, channel order, alpha and padded rows.
+    #[test]
+    fn borrowed_pixels_match_dynamic_encoding() {
+        for layout in [ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for width in 1..=5 {
+                let pixels = (0..width as usize * 3 * layout.channels()).map(|i| (i * 73) as u8).collect();
+                let img = Image::from_u8(width, 3, layout, pixels).unwrap();
+                let mut expected = Cursor::new(Vec::new());
+                to_dynamic(&img).unwrap().write_to(&mut expected, ImageFormat::Bmp).unwrap();
+                let actual = encode(Format::Bmp, &img, Plan { layout, sample: SampleType::U8 }, &EncodeOptions::default()).unwrap();
+                assert_eq!(actual, expected.into_inner(), "{layout:?}/{width}");
+            }
+        }
     }
 }
