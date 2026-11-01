@@ -91,6 +91,10 @@ pub struct DocM {
     /// Web slices (user and layer-based; layer ids are remapped on load).
     #[serde(default, skip_serializing_if = "photocraft_doc::Slices::is_empty")]
     pub slices: photocraft_doc::Slices,
+    /// Revision markers: red boxes over content that must be changed (see
+    /// `photocraft_doc::revision`); `done` markers turned green by detection.
+    #[serde(default)]
+    pub revision_markers: Vec<photocraft_doc::RevisionMarker>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

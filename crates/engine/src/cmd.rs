@@ -129,6 +129,7 @@ pub mod print_cmds;
 pub mod rasterize_style_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
+pub mod revision_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
@@ -1425,6 +1426,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::jobs::specs());
     v.extend(crate::wia_cmds::specs());
     v.extend(crate::rasterize_style_cmds::specs());
+    v.extend(crate::revision_cmds::specs());
     v.extend(crate::variables_cmds::specs());
     v.extend(crate::plugin_cmds::specs());
     v.extend(crate::group_view_cmds::specs());

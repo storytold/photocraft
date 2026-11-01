@@ -3,6 +3,7 @@ use super::info::info_panel;
 use super::layers::{channels, layers};
 use super::navigator::navigator;
 use super::properties::{adjustments_grid, properties_body};
+use super::revision_panel::panel as revision_panel;
 use super::{PhotocraftApp, Stroke, Tokens, icons, pos2};
 
 // ----------------------------------------------------------------------------- dock
@@ -116,7 +117,8 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
         (Group::History, _) => crate::comps_ui::panel(app, ui),
         (Group::Layers, 0) => layers(app, ui),
         (Group::Layers, 1) => channels(app, ui),
-        (Group::Layers, _) => crate::vector_ui::paths_panel(app, ui),
+        (Group::Layers, 2) => crate::vector_ui::paths_panel(app, ui),
+        (Group::Layers, _) => revision_panel(app, ui),
         (Group::Brushes, _) => crate::brushes_tab::show(app, ui),
     }
 }

@@ -282,6 +282,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         notes: d.notes.clone(),
         text_styles: d.text_styles.clone(),
         slices: d.slices.clone(),
+        revision_markers: d.revision_markers.clone(),
     }
 }
 
@@ -708,6 +709,7 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
+            revision_markers: m.revision_markers.clone(),
         })
     }
 

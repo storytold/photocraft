@@ -100,8 +100,25 @@ pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(Layer
         }
         crate::commands::translate_layer(before, l, dx, dy);
         crate::vector_cmds::translate_vectors(before, l, dx as f64, dy as f64);
+        // Revision markers bound to this layer follow the content, so the box keeps framing the
+        // same piece of the manual / 说明书 after the layer is moved.
+        shift_markers_for_layer(doc, id, dx, dy);
     }
     Ok(())
+}
+
+/// Shift every revision marker bound to `id` by whole pixels (box follows its content when the
+/// layer moves with the Move tool or `layer.translate`).
+pub(crate) fn shift_markers_for_layer(doc: &mut Document, id: LayerId, dx: i32, dy: i32) {
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    for m in &mut doc.revision_markers {
+        if m.layer_id == Some(id) {
+            m.pos[0] += f64::from(dx);
+            m.pos[1] += f64::from(dy);
+        }
+    }
 }
 
 /// Does a move aimed at the layer mask (`"target":"mask"`) move `l`'s mask alone? Only an
@@ -321,6 +338,9 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
             continue;
         }
         shift_shown(doc, l, dx, dy);
+        // The drag preview shifts bound revision markers along, so the box follows live while
+        // the Move tool drags (the commit in `move_layers` moves them for real).
+        shift_markers_for_layer(&mut out, id, dx, dy);
     }
     Ok(out)
 }

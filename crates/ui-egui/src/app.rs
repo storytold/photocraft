@@ -33,6 +33,24 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// Run a pending automatic `revision.detect` once it is due (throttled, so rapid edits batch
+    /// into one re-check): a marker turns green right after its framed content changed, with no
+    /// manual Check All. `revision.detect` itself never schedules another one.
+    pub(crate) fn revision_auto_detect(&mut self) {
+        if !self.ui.revision_detect_pending {
+            return;
+        }
+        let now = gpu_canvas::now_ms() as f64 / 1000.0;
+        if now - self.ui.revision_detect_at < 0.5 {
+            return;
+        }
+        self.ui.revision_detect_at = now;
+        self.ui.revision_detect_pending = false;
+        if self.session.active().is_some_and(|st| !st.doc.revision_markers.is_empty()) {
+            let _ = self.run("revision.detect", json!({}));
+        }
+    }
+
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
@@ -247,6 +265,7 @@ impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.logic_frame(ctx, frame);
         self.finish_type_reset_logic(ctx);
+        self.revision_auto_detect();
     }
 
     /// Drain the platform's optional WinTab queue before the frame's input is processed.

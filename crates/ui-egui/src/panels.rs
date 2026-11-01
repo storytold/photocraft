@@ -55,6 +55,7 @@ mod panel_state;
 pub mod preset_panels;
 mod properties;
 pub mod props_layout;
+pub(super) mod revision_panel;
 pub mod smart_ui;
 mod status_bar;
 pub mod swatches_ui;

@@ -47,6 +47,7 @@ mod start_screen;
 mod strokes;
 pub(crate) mod tabs;
 mod textures;
+pub(super) mod revision_overlay;
 pub(super) mod tile_overlay;
 pub mod tool_cursor;
 pub mod tool_feedback;
@@ -1376,6 +1377,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     {
         crate::rulers::draw_guides(app, painter, xf, doc);
     }
+    crate::canvas::revision_overlay::draw(app, painter, xf, doc);
     // The selection's ants go over the grid and guides, as in Photoshop (#10671).
     painter.extend(ants);
     // The pending crop frame shows on its own document only, not on the other tiles (#1918).

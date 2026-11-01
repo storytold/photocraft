@@ -1210,6 +1210,13 @@ fn read_initial_metadata(
                 doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
             }
             crate::channel_map::ALPHA_IDENTIFIERS if !multichannel => {}
+            crate::revision_map::REVISION_MARKERS => {
+                if let Some(markers) = crate::revision_map::decode(&resource.data) {
+                    doc.revision_markers = markers;
+                } else {
+                    doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
+                }
+            }
             id if MAPPED_RESOURCES.contains(&id) => {}
             id => doc.metadata.psd_resources.push((id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone()))),
         }

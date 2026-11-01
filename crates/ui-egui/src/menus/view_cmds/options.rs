@@ -74,6 +74,7 @@ pub(super) fn show_slot<'a>(s: &'a mut Show, key: &str) -> Option<&'a mut bool> 
         "count" => &mut s.count,
         "canvasGuides" => &mut s.canvas_guides,
         "artboardGuides" => &mut s.artboard_guides,
+        "revisionMarkers" => &mut s.revision_markers,
         _ => return None,
     })
 }

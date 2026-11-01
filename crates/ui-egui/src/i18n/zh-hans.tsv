@@ -3320,3 +3320,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	自动调整画布大小
 	Keep Relative Position During Layer Reordering	重新排列图层时保持相对位置
 	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小
+# Revision markers (red/green boxes over content that must be changed in a manual / 说明书).
+	Revision	修订
+	Add from Selection	从选区添加
+	Check All	全部检测
+	Re-snapshot All	全部重新快照
+	Unbind	解除绑定
+	Bind Layer	绑定图层
+	Marker	标记
+	Select the content to change with the Rectangular Marquee, then press Add from Selection.	用矩形选框框住要修改的内容，然后点击「从选区添加」。红框表示内容尚未修改，检测到改动后变绿框。
+	No layer found under this marker; select a layer and bind it manually.	该标记框内没有找到对应图层，请先在图层面板选中图层再绑定。

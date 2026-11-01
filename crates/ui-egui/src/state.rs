@@ -473,6 +473,13 @@ pub struct UiState {
     /// version, which shows the default layout: saved again unchanged until the layout changes.
     #[serde(skip)]
     pub docking_kept: Option<serde_json::Map<String, serde_json::Value>>,
+    /// An edit command just ran with revision markers present: re-run `revision.detect` soon, so a
+    /// marker turns green right after its content changed (throttled in `revision_auto_detect`).
+    #[serde(skip)]
+    pub revision_detect_pending: bool,
+    /// Wall-clock seconds of the last automatic revision detect (throttle anchor).
+    #[serde(skip)]
+    pub revision_detect_at: f64,
     /// Panels belonging to explicitly collapsed custom tab groups.
     #[serde(default)]
     pub docking_collapsed: Vec<String>,
@@ -647,6 +654,8 @@ impl Default for UiState {
             docking: None,
             docking_returns: Default::default(),
             docking_kept: None,
+            revision_detect_pending: false,
+            revision_detect_at: 0.0,
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,

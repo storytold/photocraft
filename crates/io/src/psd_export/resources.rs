@@ -96,6 +96,10 @@ pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bo
     if !crate::guides_map::keep_resource(doc, id, data) {
         return false;
     }
+    // Revision markers: replaced by the document's own list when it has one.
+    if !crate::revision_map::keep_resource(doc, id) {
+        return false;
+    }
     // A preserved clipping-path resource is only valid while it names the current one.
     if id == crate::vector_map::CLIPPING_PATH {
         let n = usize::from(data.first().copied().unwrap_or(0));

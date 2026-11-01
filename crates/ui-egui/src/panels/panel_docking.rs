@@ -40,6 +40,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("layers", "Layers", Group::Layers),
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),
+    ("revision", "Revision", Group::Layers),
     ("brushes", "Brushes", Group::Brushes),
 ];
 
@@ -205,6 +206,43 @@ fn legacy_workspace(app: &PhotocraftApp) -> Workspace {
     let layout = legacy(app);
     let hidden = migration_hidden(app, &layout);
     Workspace { hidden, ..Workspace::new(layout) }
+}
+
+/// A workspace saved before a panel existed (e.g. the revision panel) has no place for it.
+/// Each missing native member joins its group's first tab group on draw, and its hidden-tab
+/// record (written by [`sync_visibility`] when the panel was absent) is cleared, so new panels
+/// appear in saved workspaces too (#revision).
+fn with_native_members(app: &mut PhotocraftApp, mut layout: Layout<String>) -> Layout<String> {
+    let pro = app.ui.theme.is_pro();
+    let mut pending: Vec<&mut Node<String>> = Vec::new();
+    if let Some(root) = layout.root.as_mut() {
+        pending.push(root);
+    }
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Split { first, second, .. } => pending.extend([first.as_mut(), second.as_mut()]),
+            Node::Dock { columns, .. } => {
+                for group in columns.iter_mut().flat_map(|c| &mut c.groups) {
+                    for native in Group::ALL {
+                        let is_native = group.panels.iter().any(|p| native.tabs(pro).iter().any(|label| normalize(label) == Some(p.as_str())));
+                        if !is_native {
+                            continue;
+                        }
+                        for (index, label) in native.tabs(pro).iter().enumerate() {
+                            let Some(id) = normalize(label) else { continue };
+                            if group.panels.iter().any(|p| p == id) {
+                                continue;
+                            }
+                            group.panels.push(id.to_owned());
+                            app.ui.dock.show_tab(native, index, pro);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    layout
 }
 
 /// The workspace commands change: the customized one, or the native dock's. The lock is the
@@ -547,8 +585,15 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         set_dock_width(app, width.clamp(*range.start(), *range.end()));
     }
     native_dock_width(app, ui.ctx());
-    let layout = match &app.ui.docking {
-        Some(workspace) => workspace.layout.clone(),
+    let saved = app.ui.docking.as_ref().map(|workspace| workspace.layout.clone());
+    let layout = match saved {
+        Some(layout) => {
+            let layout = with_native_members(app, layout);
+            if let Some(workspace) = app.ui.docking.as_mut() {
+                workspace.layout = layout.clone();
+            }
+            layout
+        }
         None => legacy(app),
     };
     let collapsed = collapsed_members(app, &layout);

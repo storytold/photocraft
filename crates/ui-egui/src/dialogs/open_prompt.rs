@@ -350,6 +350,12 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
+    // Revision markers come in from the file (PSD private resource / .pcraft): run one detection
+    // pass right away, so boxes whose framed content changed since the file was saved turn green
+    // before the user works on the manual (see `photocraft_engine`'s `revision.detect`).
+    if app.session.active().is_some_and(|st| !st.doc.revision_markers.is_empty()) {
+        let _ = app.run("revision.detect", serde_json::json!({}));
+    }
     crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
     Ok(json!({"document": index, "action": action}))
 }

@@ -190,6 +190,12 @@ impl PhotocraftApp {
                     self.ui.status_error = false;
                 }
                 self.sync_views();
+                // Revision markers re-check themselves after any command that can change pixels
+                // (paint, fills, layer moves, undo/redo...), so a marker turns green as soon as
+                // its framed content was edited, with no manual Check All.
+                if self.session.active().is_some_and(|st| !st.doc.revision_markers.is_empty()) && should_auto_detect(id) {
+                    self.ui.revision_detect_pending = true;
+                }
                 let removed = self.session.take_samplers_removed();
                 if removed > 0 && !self.ui.status_error {
                     // A canvas-size change (crop, Canvas Size, Image Size, rotation) dropped Color
@@ -405,3 +411,15 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+/// Whether a successful command should schedule an automatic `revision.detect`. Selection, view,
+/// panel, file, channel and other non-pixel commands are skipped; anything that can change what a
+/// marker frames (paint, edit, layer, image, history, path, type commits...) is checked.
+fn should_auto_detect(id: &str) -> bool {
+    const SKIP: [&str; 18] = [
+        "actions.", "channel.", "document.", "dock.", "file.", "grid.", "guides.", "help.",
+        "navigator.", "panel.", "preferences.", "revision.", "select.", "tool.", "type.",
+        "view.", "window.", "workspace.",
+    ];
+    !SKIP.iter().any(|prefix| id.starts_with(prefix))
+}
