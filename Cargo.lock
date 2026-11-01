@@ -4975,6 +4975,8 @@ version = "0.18.0"
 dependencies = [
  "arboard",
  "async-io",
+ "base64 0.22.1",
+ "blake3",
  "chrono",
  "clap",
  "core-graphics2",
@@ -5003,9 +5005,12 @@ dependencies = [
  "photocraft-raster",
  "photocraft-tablet",
  "photocraft-ui-egui",
+ "plist",
  "resvg",
  "rfd",
  "ron",
+ "roxmltree 0.21.1",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tempfile",
@@ -5160,6 +5165,7 @@ dependencies = [
 name = "photocraft-engine"
 version = "0.18.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "craft-print",
@@ -5262,6 +5268,7 @@ dependencies = [
  "craft-docpath",
  "crc32fast",
  "flate2",
+ "imagesize",
  "miniz_oxide 0.9.1",
  "photocraft-affinity",
  "photocraft-algo",
