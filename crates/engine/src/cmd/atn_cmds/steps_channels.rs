@@ -5,6 +5,7 @@ use super::descriptors::{PX, boolean, desc, px, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
+use std::ops::RangeInclusive;
 
 /// Whether every key of `d` is one of `keys` (codes compare without their space padding).
 fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
@@ -93,14 +94,16 @@ pub(super) fn trap_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("Wdth", px(width)))
 }
 
-/// Match Color's integer keys in recorded order: (key, param, default).
-const MATCH_COLOR: &[(&str, &str, i32)] = &[("Lght", "luminance", 100), ("ClrR", "intensity", 100), ("Fade", "fade", 0)];
+/// Match Color's integer keys in recorded order: (key, param, default, the command's range).
+const MATCH_COLOR: &[(&str, &str, i32, RangeInclusive<i32>)] =
+    &[("Lght", "luminance", 100, 1..=200), ("ClrR", "intensity", 100, 1..=200), ("Fade", "fade", 0, 0..=100)];
 
 /// Match Color (`matchColor`) without a source, as Photoshop records it (`noReference`). A
 /// step that matches another image (`noReference` false, or not a Boolean) names no source
 /// here, so it keeps the Photoshop step, as does a setting that isn't an integer: the step
 /// saves its settings as integers, so it couldn't write a fraction, a large integer or a unit
-/// back as recorded.
+/// back as recorded. A setting outside the command's range keeps the step too: the command
+/// would clamp it, and Photoshop's handling of it wasn't measured.
 pub(super) fn match_color_from(d: &Descriptor) -> Mapped {
     match match_color_params(d) {
         Some(p) => step("image.adjustments.matchColor", Value::Object(p)),
@@ -113,9 +116,9 @@ fn match_color_params(d: &Descriptor) -> Option<serde_json::Map<String, Value>> 
         return None;
     }
     let mut p = serde_json::Map::new();
-    for (key, param, default) in MATCH_COLOR {
+    for (key, param, default, range) in MATCH_COLOR {
         let integer = |v: &D| match v {
-            D::Integer(n) => Some(Value::from(*n)),
+            D::Integer(n) if range.contains(n) => Some(Value::from(*n)),
             _ => None,
         };
         p.insert((*param).into(), setting(d, key, integer, Value::from(*default))?);
@@ -124,7 +127,8 @@ fn match_color_params(d: &Descriptor) -> Option<serde_json::Map<String, Value>> 
 }
 
 /// Every key in recorded order. A source document or layer, Neutralize or a selection option
-/// has no key in the event, so such a step is refused; the integers refuse a fraction.
+/// has no key in the event, so such a step is refused; the integers refuse a fraction or a
+/// value outside the command's range, which it plays clamped.
 pub(super) fn match_color_to(_: &str, p: &Value) -> Option<Descriptor> {
     let off = |k: &str| p.get(k).is_none_or(|v| v.is_null() || *v == Value::Bool(false));
     if !pixel_target(p)
@@ -134,12 +138,12 @@ pub(super) fn match_color_to(_: &str, p: &Value) -> Option<Descriptor> {
         return None;
     }
     let mut d = desc("null");
-    for (key, param, default) in MATCH_COLOR {
+    for (key, param, default, range) in MATCH_COLOR {
         let n = match p.get(*param) {
             None | Some(Value::Null) => f64::from(*default),
             Some(v) => v.as_f64()?,
         };
-        if n.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n) {
+        if n.fract() != 0.0 || !(f64::from(*range.start())..=f64::from(*range.end())).contains(&n) {
             return None;
         }
         d = d.with(key, D::Integer(n as i32));

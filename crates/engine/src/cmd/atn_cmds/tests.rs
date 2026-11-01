@@ -3356,3 +3356,21 @@ fn trap_width_below_one_pixel_is_kept() {
     assert_eq!(d.items, desc("null").with("Wdth", px(1.0)).items);
     assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(1.0))), Mapped::Steps(_)));
 }
+
+/// Match Color's Luminance and Color Intensity take 1..200 and Fade 0..100, and Photoshop's
+/// handling of a recorded value outside them wasn't measured: such a step stays a Photoshop
+/// step rather than being clamped, and a PhotoCraft step outside them is refused on export
+/// instead of written as a value the command plays clamped (#10609).
+#[test]
+fn match_color_setting_outside_its_range_is_kept() {
+    for (key, n) in [("Lght", 0), ("Lght", 201), ("ClrR", 0), ("ClrR", 201), ("Fade", -1), ("Fade", 101)] {
+        let m = channel_step("matchColor", desc("null").with(key, D::Integer(n)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{key} = {n} was mapped");
+    }
+    let edges = desc("null").with("Lght", D::Integer(1)).with("ClrR", D::Integer(200)).with("Fade", D::Integer(100));
+    assert!(matches!(channel_step("matchColor", edges), Mapped::Steps(_)));
+    for p in [json!({"luminance": 0}), json!({"luminance": 201}), json!({"intensity": 0}), json!({"fade": -1}), json!({"fade": 101})] {
+        assert!(export_item("image.adjustments.matchColor", &p, "S").is_none(), "{p} exported");
+    }
+    assert!(export_item("image.adjustments.matchColor", &json!({"luminance": 1, "intensity": 200, "fade": 100}), "S").is_some());
+}
