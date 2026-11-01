@@ -598,3 +598,107 @@ fn displace_reads_no_gap_to_a_far_off_canvas_pixel() {
     };
     assert_eq!(displaced(1_000_000), displaced(48 + 100));
 }
+
+/// Adds a document whose Background is `level` (8-bit) in red and green, split at `split` in x: the
+/// map's left part is `left`, the rest `level`.
+fn displace_map_document(s: &mut Session, (w, h): (i32, i32), split: i32, left: f32, level: f32) {
+    s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+    s.edit("map", |doc, _| {
+        let bg = doc.layers[0].id;
+        let surf = doc.layer_mut(bg).unwrap().surface_mut().unwrap();
+        surf.fill_rect(photocraft_geom::Rect::new(0, 0, split, h), &[left / 255.0, left / 255.0, 0.5, 1.0]);
+        surf.fill_rect(photocraft_geom::Rect::new(split, 0, w, h), &[level / 255.0, level / 255.0, 0.5, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Adds a transparent `w`×`h` document of `depth` whose layer's pixels in `area` are coded with
+/// their position: red is x and green is y, in 8-bit levels.
+fn coded_layer_document(s: &mut Session, (w, h): (i32, i32), depth: u32, area: photocraft_geom::Rect) {
+    s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "background": "transparent"})).unwrap();
+    s.edit("coded", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        for y in area.y0..area.y1 {
+            for x in area.x0..area.x1 {
+                surf.write_pixel(x, y, &[x as f32 / 255.0, y as f32 / 255.0, 0.0, 1.0]);
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Where the active layer's (or smart object's) pixel at (x, y) was sampled from, read back from
+/// its coded red and green.
+fn sampled_from(s: &Session, x: i32, y: i32) -> (i32, i32) {
+    let d = s.active().unwrap();
+    let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    let r = photocraft_geom::Rect::new(x, y, x + 1, y + 1);
+    let px = match &l.content {
+        LayerContent::Smart(sm) => sm.cache.as_ref().unwrap().read_region(r),
+        _ => l.surface().unwrap().read_region(r),
+    };
+    ((px[0] * 255.0).round() as i32, (px[1] * 255.0).round() as i32)
+}
+
+/// FredApps on #10462: on a layer inside the canvas, Displace's frame is still the canvas, as
+/// before #10462 and as Photoshop measured in #10444. The map's left half is level 128 and its
+/// right half 160: stretched over the 256 px canvas at 25 % it leaves x 110 and moves x 140 by
+/// 8 px; stretched over the layer's pixels (x 32 to 160) it would move x 110 too.
+#[test]
+fn displace_frames_the_canvas_on_a_layer_inside_it() {
+    let mut s = Session::new();
+    displace_map_document(&mut s, (256, 64), 128, 128.0, 160.0);
+    coded_layer_document(&mut s, (256, 64), 8, photocraft_geom::Rect::new(32, 0, 160, 64));
+    s.execute("filter.distort.displace", json!({"horizontal": 25, "vertical": 0, "fit": "stretch", "undefinedAreas": "repeat", "mapDocument": 0})).unwrap();
+    for (x, dx) in [(110, 0), (140, 8)] {
+        assert_eq!(sampled_from(&s, x, 10), (x + dx, 10), "x {x} moves {dx} px");
+    }
+}
+
+/// FredApps on #10462: Wrap Around on a layer past the canvas wraps around the far side of the
+/// frame, the layer's: at 100 % a level-96 map samples x 12 from 32 px left, x 236 of the 256 px
+/// layer, not x 108 as wrapping around the 128 px canvas would.
+#[test]
+fn displace_wraps_around_the_far_side_of_a_layer_past_the_canvas() {
+    for smart in [false, true] {
+        let mut s = Session::new();
+        displace_map_document(&mut s, (8, 8), 0, 96.0, 96.0);
+        coded_layer_document(&mut s, (256, 256), 8, photocraft_geom::Rect::new(0, 0, 256, 256));
+        s.execute("image.canvasSize", json!({"width": 128, "height": 128, "anchor": "topLeft"})).unwrap();
+        if smart {
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        }
+        s.execute("filter.distort.displace", json!({"horizontal": 100, "vertical": 0, "fit": "stretch", "undefinedAreas": "wrap", "mapDocument": 0})).unwrap();
+        assert_eq!(sampled_from(&s, 12, 64), (236, 64), "smart object: {smart}");
+        assert_eq!(sampled_from(&s, 60, 64), (28, 64), "smart object: {smart}");
+    }
+}
+
+/// FredApps on #10462: at 0 % both ways Displace leaves the layer exactly as it was, bit for bit,
+/// with a map far from its zero, at every depth and on a layer past the canvas too.
+#[test]
+fn displace_at_zero_scale_leaves_the_pixels_bit_for_bit() {
+    for depth in [8, 16, 32] {
+        for past_canvas in [false, true] {
+            let mut s = Session::new();
+            displace_map_document(&mut s, (8, 8), 4, 0.0, 255.0);
+            coded_layer_document(&mut s, (256, 256), depth, photocraft_geom::Rect::new(16, 8, 240, 200));
+            if past_canvas {
+                s.execute("image.canvasSize", json!({"width": 128, "height": 128, "anchor": "topLeft"})).unwrap();
+            }
+            let layer = |s: &Session| {
+                let d = s.active().unwrap();
+                let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+                let b = surf.content_bounds();
+                (b, surf.read_region(b.union(&d.doc.bounds())))
+            };
+            let before = layer(&s);
+            for fit in ["stretch", "tile"] {
+                s.execute("filter.distort.displace", json!({"horizontal": 0, "vertical": 0, "fit": fit, "undefinedAreas": "wrap", "mapDocument": 0})).unwrap();
+                assert!(layer(&s) == before, "{depth}-bit, past the canvas: {past_canvas}, {fit}: changed");
+            }
+        }
+    }
+}
