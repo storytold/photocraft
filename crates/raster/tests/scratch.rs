@@ -311,3 +311,15 @@ fn a_miss_keeps_the_floor() {
     set_miss_floor(DEFAULT_MISS_FLOOR);
     release();
 }
+
+#[test]
+fn a_failed_reservation_releases_the_pool_and_retries_before_giving_up() {
+    let _g = serial();
+    release();
+    // Unmatched buffers under the miss floor stay pooled on a miss.
+    give(vec![0u8; 4 * MIN_POOLED_BYTES]);
+    assert!(retained_bytes() > 0);
+    // No allocator can reserve this: the call fails, but not before the pool was emptied.
+    assert!(try_take_exact(isize::MAX as usize, 0u8).is_none());
+    assert_eq!(retained_bytes(), 0);
+}
