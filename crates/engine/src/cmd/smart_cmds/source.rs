@@ -351,6 +351,43 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
     ((k * 16.0).ceil() / 16.0).clamp(1.0 / 16.0, 64.0)
 }
 
+/// Converts `src`, a file decoded with its embedded profile, into an RGB `dest`'s profile
+/// (relative colorimetric, black-point compensation, as for SVG sources), as Photoshop converts a
+/// placed file. An untagged source, or one in another mode, is taken as it is.
+pub(crate) fn source_into_profile(src: &mut Document, dest: &Document) -> Result<()> {
+    if dest.mode != ColorMode::Rgb || src.mode != ColorMode::Rgb || src.icc_profile.is_none() {
+        return Ok(());
+    }
+    let to = crate::color_cmds::document_profile(dest);
+    if crate::color_cmds::document_profile(src).same_colors(&to) {
+        return Ok(());
+    }
+    crate::color_cmds::convert_document(src, &to, photocraft_cms::Intent::RelativeColorimetric, true)
+}
+
+/// [`source_image`] in `doc`'s colours: a source with an embedded profile is converted into
+/// `doc`'s ([`source_into_profile`]). The profile is part of the cache key, so assigning a
+/// different profile cannot reuse old colours.
+pub(super) fn source_image_in(file_name: &str, bytes: &[u8], doc: &Document) -> Result<SourceImage> {
+    let fmt = doc.pixel_format();
+    if doc.mode != ColorMode::Rgb {
+        return source_image(file_name, bytes, fmt);
+    }
+    let mut h = blake3::Hasher::new();
+    h.update(b"source-icc\0");
+    h.update(bytes);
+    h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+    let key = (*h.finalize().as_bytes(), fmt);
+    if let Some(img) = cache_get(&key) {
+        return Ok(img);
+    }
+    let mut src = decode_source(file_name, bytes)?;
+    source_into_profile(&mut src, doc)?;
+    let img = SourceImage { surface: Arc::new(flattened_source(&src, fmt)?), bounds: src.bounds() };
+    cache_put(key, img.clone());
+    Ok(img)
+}
+
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
     let key = cache_key(bytes, fmt);

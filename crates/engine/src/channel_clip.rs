@@ -85,7 +85,7 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     if bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
-    s.clipboard = Some(Clip { components: None, surface, bounds, layers: None, resolution: Some(doc.resolution_dpi), source: Some(doc.id) });
+    s.clipboard = Some(Clip { components: None, surface, bounds, layers: None, resolution: Some(doc.resolution_dpi), source: Some(doc.id), profile: None });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
 
@@ -195,6 +195,7 @@ pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_chann
         layers: None,
         resolution: Some(st.doc.resolution_dpi),
         source: Some(st.doc.id),
+        profile: None,
         components: (colors.len() > 1).then(|| colors.indices().collect()),
     });
     Ok(json!({"bounds":[area.x0,area.y0,area.width(),area.height()],"colors":colors.indices().collect::<Vec<_>>()}))

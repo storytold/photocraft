@@ -243,9 +243,13 @@ pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 
+/// An image read from the OS clipboard: width, height, RGBA8 pixels, and the ICC profile embedded
+/// in the copied file (`None` when it had none), so Paste can convert it into the document's.
+pub type ClipboardImage = (u32, u32, Vec<u8>, Option<Vec<u8>>);
+
 /// Read an RGBA8 image from the OS clipboard. `Ok(None)` means no image is available;
 /// `Err` means the contents could not be read and must not invalidate the internal copy.
-pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String>>;
+pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<ClipboardImage>, String>>;
 
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;

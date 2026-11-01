@@ -17,7 +17,8 @@ fn new_clipboard_document_rejects_an_unrepresentable_origin() {
     let mut s = Session::new();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard = Some(Clip { components: None, surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None, source: None });
+    s.clipboard =
+        Some(Clip { components: None, surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None, source: None, profile: None });
     let result = new_from_clipboard(&mut s);
     assert!(result.unwrap_err().to_string().contains("clipboard origin"));
     assert!(s.execute("file.newFromClipboard", json!({})).is_err());
@@ -57,6 +58,7 @@ fn paste_centers_clipboard_bounds_near_coordinate_limits() {
             layers: None,
             resolution: None,
             source: None,
+            profile: None,
         };
         let (dx, dy) = paste_offset(&clip, DocId(1), Rect::new(0, 0, 20, 20), &json!({}), false);
         assert_eq!(i64::from(origin) + i64::from(dx), 9);
@@ -239,7 +241,7 @@ fn external_clip_session(w: i32, h: i32, cw: i32, ch: i32) -> Session {
     s.execute("file.new", json!({"width": w, "height": h})).unwrap();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.fill_rect(Rect::new(0, 0, cw, ch), &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard = Some(Clip { components: None, surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None, source: None });
+    s.clipboard = Some(Clip { components: None, surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None, source: None, profile: None });
     s
 }
 
@@ -302,6 +304,7 @@ fn paste_offset_clamp_survives_extreme_coordinates() {
         layers: None,
         resolution: None,
         source: None,
+        profile: None,
     };
     let (dx, dy) = paste_offset(&clip, DocId(1), Rect::new(i32::MIN, i32::MIN, i32::MIN + 4, i32::MIN + 4), &json!({}), false);
     assert_eq!((dx, dy), (i32::MIN, i32::MIN), "an unrepresentable shift saturates instead of wrapping");
@@ -1451,13 +1454,13 @@ fn lift_reference(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Clip {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Clip { components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None };
+        return Clip { components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, profile: None };
     }
     let px = lift_region(src, sel, area, with_alpha.channels()).unwrap();
     out.try_write_region(area, &px).unwrap();
     out.prune();
     let bounds = out.content_bounds();
-    Clip { components: None, surface: out, bounds, layers: None, resolution: None, source: None }
+    Clip { components: None, surface: out, bounds, layers: None, resolution: None, source: None, profile: None }
 }
 
 fn noise(fmt: PixelFormat, r: Rect, seed: u32) -> Surface {

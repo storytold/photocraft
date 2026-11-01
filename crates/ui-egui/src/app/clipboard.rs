@@ -57,8 +57,8 @@ impl PhotocraftApp {
                 return Err(error);
             }
         };
-        let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
-        let Some((w, h, bytes)) = image else {
+        let image = image.filter(|(w, h, bytes, _)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        let Some((w, h, bytes, icc)) = image else {
             if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
                 self.session.clipboard = None;
                 self.clip_external = false;
@@ -73,8 +73,9 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
+        let profile = icc.map(std::sync::Arc::new);
         self.session.clipboard =
-            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
+            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None, profile });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;

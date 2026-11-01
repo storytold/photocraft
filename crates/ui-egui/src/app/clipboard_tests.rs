@@ -10,7 +10,7 @@ fn os_clipboard_bridge() {
             *a.lock().unwrap() = Some((w, h, px.to_vec()));
             Ok(())
         })),
-        clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))),
+        clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None))))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(Session::new(), services);
@@ -71,7 +71,11 @@ fn failed_clipboard_reads_preserve_editable_contents_until_retry() {
                 Ok(())
             })),
             clipboard_get_image: Some(Box::new(move || {
-                if unavailable.load(Ordering::SeqCst) { Err("clipboard is busy".into()) } else { Ok(read.lock().unwrap().clone()) }
+                if unavailable.load(Ordering::SeqCst) {
+                    Err("clipboard is busy".into())
+                } else {
+                    Ok(read.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
+                }
             })),
             ..Default::default()
         };
@@ -120,7 +124,11 @@ fn internal_only_clipboard_remains_usable_when_native_access_fails() {
             let services = Services {
                 clipboard_set_image: Some(Box::new(|_, _, _| Err("clipboard unavailable".into()))),
                 clipboard_get_image: Some(Box::new(move || {
-                    if failed.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(read.lock().unwrap().clone()) }
+                    if failed.load(Ordering::SeqCst) {
+                        Err("clipboard unavailable".into())
+                    } else {
+                        Ok(read.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
+                    }
                 })),
                 ..Default::default()
             };
@@ -179,7 +187,11 @@ fn newer_unexported_copies_do_not_track_an_older_os_signature() {
                         Ok(())
                     })),
                     clipboard_get_image: Some(Box::new(move || {
-                        if failed_read.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(read.lock().unwrap().clone()) }
+                        if failed_read.load(Ordering::SeqCst) {
+                            Err("clipboard unavailable".into())
+                        } else {
+                            Ok(read.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
+                        }
                     })),
                     ..Default::default()
                 };
@@ -236,7 +248,7 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
         let failed = unavailable.clone();
         let services = Services {
             clipboard_get_image: Some(Box::new(move || {
-                if failed.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))) }
+                if failed.load(Ordering::SeqCst) { Err("clipboard unavailable".into()) } else { Ok(Some((3, 2, [255u8, 0, 0, 255].repeat(6), None))) }
             })),
             ..Default::default()
         };
@@ -266,7 +278,7 @@ fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize
     let (b, n) = (os.clone(), reads.clone());
     let get = move || {
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(b.lock().unwrap().clone())
+        Ok(b.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
     };
     let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
     app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
@@ -304,7 +316,7 @@ fn os_clipboard_image_becomes_a_new_document() {
     let (b, n) = (os.clone(), Arc::clone(&reads));
     let get = move || {
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(b.lock().unwrap().clone())
+        Ok(b.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
     };
     let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
     let ctx = egui::Context::default();
@@ -333,6 +345,29 @@ fn os_clipboard_image_becomes_a_new_document() {
     assert!(crate::discard_ui::intercept(&mut app, "file.close", &serde_json::json!({})), "Close must ask before discarding clipboard pixels");
 }
 
+/// An image copied in another app with an embedded profile (a file copied in Files) pastes in
+/// its own colours: Adobe RGB values convert into the sRGB document instead of landing as they are.
+#[test]
+fn os_clipboard_image_converts_from_its_embedded_profile() {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    let adobe = [145u8, 85, 75];
+    let icc = Builtin::AdobeRgbCompat.profile().to_bytes().to_vec();
+    let px = [adobe[0], adobe[1], adobe[2], 255].repeat(4);
+    let get = move || Ok(Some((2, 2, px.clone(), Some(icc.clone()))));
+    let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
+    app.session.execute("file.new", serde_json::json!({"width": 2, "height": 2, "profile": "srgb"})).unwrap();
+    app.sync_views();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.paste", serde_json::json!({})).unwrap();
+    let d = app.session.active().unwrap();
+    let got = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(0, 0);
+    let t = Transform::new(Builtin::AdobeRgbCompat.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
+    let mut want = [0.0f32; 3];
+    t.convert_f32(&adobe.map(|v| f32::from(v) / 255.0), 3, &mut want, 3, false);
+    for k in 0..3 {
+        assert!((got[k] - want[k]).abs() < 1.5 / 255.0, "pasted {got:?}, want {want:?}");
+    }
+}
+
 #[test]
 fn pasting_an_empty_or_non_image_os_clipboard_is_a_quiet_no_op() {
     let (os, reads) = (OsClip::default(), Arc::default());
@@ -354,7 +389,7 @@ fn idle_frames_never_read_the_os_clipboard() {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let get = move || {
             n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(b.lock().unwrap().clone())
+            Ok(b.lock().unwrap().clone().map(|(w, h, px)| (w, h, px, None)))
         };
         let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(Box::new(get)), ..Default::default() });
         app.session.execute("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
