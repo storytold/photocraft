@@ -93,7 +93,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
         );
         ui.add_space(14.0);
         ui.vertical(|ui| {
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.label(tl!("Name:"));
                 let mut text = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
                 let id = ui.scope_id().with("new-brush-preset-name");
@@ -115,7 +115,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
             check(ui, f, "captureSize", tl!("Capture Brush Size in Preset"));
             check(ui, f, "toolSettings", tl!("Include Tool Settings"));
             // Include Color belongs to the tool settings: only with them, as in Photoshop.
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.add_space(20.0);
                 ui.add_enabled_ui(on(f, "toolSettings"), |ui| check(ui, f, "color", tl!("Include Color")));
             });
@@ -162,3 +162,53 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 #[cfg(test)]
 mod tests;
+
+/// The Name row mirrors in a right-to-left UI: the caption sits at the reading start and the
+/// field follows it, the exact mirror of the left-to-right row.
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::kittest::Queryable;
+
+    /// The dialog body drawn in `dir`, with the column it draws in.
+    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>, egui::Rect)>, egui::Rect) {
+        let _dir = direction_scope(dir);
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(520.0, 320.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, s: &mut (PhotocraftApp, Map<String, Value>, egui::Rect)| {
+                    s.2 = ui.max_rect();
+                    let _ = body(&s.0, ui, &mut s.1, true);
+                },
+                (app, open_fields(), egui::Rect::ZERO),
+            );
+        h.run_steps(2);
+        let col = h.state().2;
+        (h, col)
+    }
+
+    fn open_fields() -> Map<String, Value> {
+        let mut f = Map::new();
+        f.insert(MARK.into(), json!(true));
+        f.insert("name".into(), json!("Preset 1"));
+        f
+    }
+
+    /// The row reads from the right in a right-to-left UI and keeps its left-to-right order and
+    /// gaps otherwise.
+    #[test]
+    fn the_name_row_mirrors_in_a_right_to_left_ui() {
+        let (ltr, ltr_col) = harness(Dir::Ltr);
+        let ltr_field = ltr.get_by_role(egui::accesskit::Role::TextInput).rect();
+        assert!(ltr_field.left() - ltr_col.left() > 30.0, "LTR: the caption comes before the field: {ltr_field:?} in {ltr_col:?}");
+
+        let (rtl, rtl_col) = harness(Dir::Rtl);
+        let rtl_field = rtl.get_by_role(egui::accesskit::Role::TextInput).rect();
+        assert!(rtl_col.right() - rtl_field.right() > 30.0, "RTL: the caption comes after the field: {rtl_field:?} in {rtl_col:?}");
+        let centre = ltr_col.left() + rtl_col.right();
+        assert!((ltr_field.left() + rtl_field.right() - centre).abs() < 1.0, "the field mirrors: {ltr_field:?} / {rtl_field:?}");
+    }
+}

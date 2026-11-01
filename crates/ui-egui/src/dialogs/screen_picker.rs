@@ -375,6 +375,16 @@ fn frame(ui: &mut egui::Ui, shared: &Shared, image: &ScreenImage, texture: &egui
         }
     });
 }
+/// A loupe chrome line's galley, based in the UI's direction in a right-to-left UI; left-to-right
+/// keeps egui's automatic paragraph direction, unchanged.
+fn loupe_text_job(text: String, font: egui::FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    if crate::direction::is_rtl() {
+        job.direction = crate::direction::text_direction();
+    }
+    job
+}
+
 fn loupe(ui: &egui::Ui, image: &ScreenImage, screen: Rect, pos: Pos2, pixel: (usize, usize), zoom: usize, rgb: Option<[f32; 3]>) {
     let (x, y) = pixel;
     let t = crate::theme::Tokens::get(ui.ctx());
@@ -384,8 +394,8 @@ fn loupe(ui: &egui::Ui, image: &ScreenImage, screen: Rect, pos: Pos2, pixel: (us
     let pixel = image.pixel(x, y).unwrap_or(Color32::BLACK);
     let color = rgb.map(crate::color_picker_ui::hex).unwrap_or_else(|| format!("#{:02x}{:02x}{:02x}", pixel.r(), pixel.g(), pixel.b()));
     let label = p.layout_no_wrap(format!("{}   {}×", color.to_uppercase(), zoom), egui::FontId::monospace(12.0), t.text);
-    let hint = p.layout_no_wrap(tl!("Click to pick · Esc to cancel").to_owned(), egui::FontId::proportional(11.0), t.text);
-    let wheel = p.layout_no_wrap(tl!("Scroll to zoom").to_owned(), egui::FontId::proportional(11.0), t.text);
+    let hint = p.layout_job(loupe_text_job(tl!("Click to pick · Esc to cancel").to_owned(), egui::FontId::proportional(11.0), t.text));
+    let wheel = p.layout_job(loupe_text_job(tl!("Scroll to zoom").to_owned(), egui::FontId::proportional(11.0), t.text));
     let width = (11.0 * cell + 12.0).max(label.size().x + 16.0).max(hint.size().x + 16.0).max(wheel.size().x + 16.0);
     let size = vec2(width, 11.0 * cell + 76.0);
     let desired = pos + vec2(24.0, 24.0);
@@ -609,5 +619,19 @@ mod tests {
         assert!(!tick(&mut app, &ctx));
         assert_eq!(take(&ctx, id), None);
         assert_eq!(app.session.tools.foreground, foreground);
+    }
+
+    /// The loupe's chrome lines base their paragraph direction on the UI direction in a
+    /// right-to-left UI; left-to-right keeps egui's automatic direction, unchanged.
+    #[test]
+    fn loupe_text_job_bases_its_direction_on_the_ui_direction() {
+        use crate::direction::{Dir, direction_scope};
+        let font = egui::FontId::proportional(11.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = loupe_text_job("Click to pick".to_owned(), font.clone(), Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::Auto, "ltr keeps egui's automatic direction");
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = loupe_text_job("Click to pick".to_owned(), font, Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
     }
 }

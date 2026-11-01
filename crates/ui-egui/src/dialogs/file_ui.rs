@@ -512,3 +512,46 @@ mod web_clock_tests {
         assert_eq!(advance_preview(2, 3, 2.0, 10.0, 9.0), (2, 9.0));
     }
 }
+
+/// The number row mirrors in a right-to-left UI: the caption sits at the reading start and the
+/// value field follows it, the exact mirror of the left-to-right row.
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::kittest::Queryable;
+
+    /// The number row drawn in `dir`, with the column it draws in.
+    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, (Map<String, Value>, egui::Rect)>, egui::Rect) {
+        let _dir = direction_scope(dir);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(400.0, 80.0))
+            .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, s: &mut (Map<String, Value>, egui::Rect)| {
+                    s.1 = ui.max_rect();
+                    number(ui, &mut s.0, "width", "Width", 1.0..=1000.0, "px", 10.0);
+                },
+                (Map::new(), egui::Rect::ZERO),
+            );
+        h.run_steps(2);
+        let col = h.state().1;
+        (h, col)
+    }
+
+    /// The row reads from the right in a right-to-left UI and keeps its left-to-right order and
+    /// gaps otherwise.
+    #[test]
+    fn the_number_row_mirrors_in_a_right_to_left_ui() {
+        let (ltr, ltr_col) = harness(Dir::Ltr);
+        let ltr_field = ltr.get_by_label("Width").rect();
+        assert!(ltr_field.left() - ltr_col.left() > 30.0, "LTR: the caption comes before the field: {ltr_field:?} in {ltr_col:?}");
+
+        let (rtl, rtl_col) = harness(Dir::Rtl);
+        let rtl_field = rtl.get_by_label("Width").rect();
+        assert!(rtl_col.right() - rtl_field.right() > 30.0, "RTL: the caption comes after the field: {rtl_field:?} in {rtl_col:?}");
+        // The field mirrors about the column's centre.
+        let centre = ltr_col.left() + rtl_col.right();
+        assert!((ltr_field.left() + rtl_field.right() - centre).abs() < 1.0, "the field mirrors: {ltr_field:?} / {rtl_field:?}");
+    }
+}

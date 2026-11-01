@@ -377,6 +377,16 @@ fn context(ui: &mut egui::Ui, has_selection: bool, view: &mut CameraRawScopeStat
     }
 }
 
+/// The hover sample badge's single-line galley, based in the UI's direction in a right-to-left
+/// UI; left-to-right keeps egui's automatic paragraph direction, unchanged.
+fn sample_badge_job(text: String, font: FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+    if crate::direction::is_rtl() {
+        job.direction = crate::direction::text_direction();
+    }
+    job
+}
+
 fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, height: f32) {
     let t = Tokens::get(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), height), Sense::click_and_drag());
@@ -392,7 +402,7 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
         let [r, g, b] = sample.rgb.map(|x| x * 255.0);
         let text = format!("R {r:.0}   G {g:.0}   B {b:.0}");
         let font = crate::theme::mono(11.0);
-        let galley = ui.painter().layout_no_wrap(text, font, t.text);
+        let galley = ui.painter().layout_job(sample_badge_job(text, font, t.text));
         let width = (galley.size().x + 12.0).min((rect.width() - 2.0 * corner - 4.0).max(1.0));
         let badge = Rect::from_center_size(pos2(rect.center().x, rect.top() + 13.0), vec2(width, 20.0));
         ui.painter().rect_filled(badge, t.radius_sm, t.card.gamma_multiply(0.65));
@@ -699,4 +709,21 @@ pub(crate) fn shortcuts(ctx: &egui::Context, view: &mut CameraRawScopeState) {
             view.sampler_tool = !view.sampler_tool;
         }
     });
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn sample_badge_job_bases_its_direction_on_the_ui_direction() {
+        let font = FontId::monospace(11.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = sample_badge_job("R 1   G 2   B 3".to_owned(), font.clone(), Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::Auto, "ltr keeps egui's automatic direction");
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = sample_badge_job("R 1   G 2   B 3".to_owned(), font, Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
+    }
 }

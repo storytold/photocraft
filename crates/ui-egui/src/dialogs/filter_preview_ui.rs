@@ -513,4 +513,36 @@ mod tests {
         assert_eq!(f.get(ZOOM_FIELD), Some(&json!(1.0)));
         assert_eq!(f.get(CENTER_Y_FIELD), Some(&json!(0.0)));
     }
+
+    /// The zoom row (−, percentage, +) reads from the right in a right-to-left UI and keeps its
+    /// left-to-right order and gaps otherwise.
+    #[test]
+    fn the_zoom_row_mirrors_in_a_right_to_left_ui() {
+        use crate::direction::{Dir, direction_scope};
+        use egui_kittest::kittest::Queryable;
+
+        let buttons = |dir: Dir| {
+            let _dir = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let id = crate::filter_dialog::open(&mut app, "filter.stylize.emboss").unwrap();
+            let fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(480.0, 400.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+                .build_ui_state(|ui, s: &mut (PhotocraftApp, u64, Map<String, Value>)| window(&s.0, s.1, ui, &mut s.2), (app, id, fields));
+            h.run_steps(3);
+            (h.get_by_label("Zoom out").rect(), h.get_by_label("Zoom in").rect())
+        };
+
+        let (ltr_minus, ltr_plus) = buttons(Dir::Ltr);
+        assert!(ltr_minus.right() < ltr_plus.left(), "LTR: minus comes before plus: {ltr_minus:?} {ltr_plus:?}");
+        let (rtl_minus, rtl_plus) = buttons(Dir::Rtl);
+        assert!(rtl_minus.left() > rtl_plus.right(), "RTL: the row mirrors, minus after plus: {rtl_minus:?} {rtl_plus:?}");
+        // The mirrored row keeps the same gap between the buttons and the same span.
+        assert!((ltr_plus.left() - ltr_minus.right() - (rtl_minus.left() - rtl_plus.right())).abs() < 2.0, "the gap is kept: {ltr_minus:?} {ltr_plus:?} / {rtl_minus:?} {rtl_plus:?}");
+        let ltr_span = ltr_minus.union(ltr_plus).width();
+        let rtl_span = rtl_minus.union(rtl_plus).width();
+        assert!((ltr_span - rtl_span).abs() < 2.0, "the row width is kept: {ltr_span} / {rtl_span}");
+    }
 }
