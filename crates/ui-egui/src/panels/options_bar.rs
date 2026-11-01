@@ -182,6 +182,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, 58.0);
             smoothing_options(ui, b);
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             if icons::button(ui, "circle-dot", 24.0, b.pressure_size, tl!("Always use pressure for size")).clicked() {
                 b.pressure_size = !b.pressure_size;
@@ -231,6 +234,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, 66.0);
+            if app.ui.tool == Tool::Eraser {
+                widgets::checkbox(ui, &mut app.ui.tool_options.erase_to_history, tl!("Erase to History"));
+            }
             widgets::vline(ui, 22.0);
             widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"));
             widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"));

@@ -297,3 +297,41 @@ fn b_cycles_brush_pencil_mixer_brush_and_color_replacement() {
     assert_eq!(Tool::from_name("pencil"), Some(Tool::Pencil));
     assert_eq!(Tool::from_name("mixerBrush"), Some(Tool::MixerBrush));
 }
+
+#[test]
+fn the_eraser_with_erase_to_history_paints_the_source_state_in_every_mode_even_on_a_layer_made_since() {
+    for mode in ["brush", "pencil", "block"] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        let before = layer(&app).surface().unwrap().rgba(60, 40);
+        assert!(before[3] > 0.99, "{before:?}");
+        // State 1 = after the stroke; the layer made next did not exist then.
+        app.run("history.setSource", json!({"state": 1})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01);
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
+        app.ui.tool_options.eraser_mode = mode.into();
+        // Without the option the Eraser erases: the empty layer stays empty.
+        drag(&mut app, &[(55.0, 40.0), (65.0, 40.0)], Modifiers::NONE);
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01, "{mode}");
+        app.ui.tool_options.erase_to_history = true;
+        drag(&mut app, &[(55.0, 40.0), (65.0, 40.0)], Modifiers::NONE);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["eraseToHistory"]), ("paint.historyBrush", &json!(true)), "{mode}");
+        assert_eq!((p["pencil"] == json!(true), p["block"] == json!(true)), (mode == "pencil", mode == "block"), "{mode}");
+        let s = layer(&app).surface().unwrap().clone();
+        let after = s.rgba(60, 40);
+        assert!(after[3] > 0.99 && (0..3).all(|i| (after[i] - before[i]).abs() < 0.01), "{mode}: {after:?} vs {before:?}");
+        // The hard tips leave only whole pixels: painted back in full or untouched.
+        if mode != "brush" {
+            for y in 0..80 {
+                for x in 0..120 {
+                    let a = s.rgba(x, y)[3];
+                    assert!(a == 0.0 || a == 1.0, "{mode}: partial alpha {a} at ({x},{y})");
+                }
+            }
+        }
+    }
+}

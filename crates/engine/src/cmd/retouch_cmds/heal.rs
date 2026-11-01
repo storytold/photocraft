@@ -70,12 +70,22 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// The History Brush's source: the targeted surface (pixels, mask, channel) as it was in History
 /// panel row `state` or snapshot `snapshot` (default: the source set in the History panel,
 /// `history.setSource`, else the oldest state still held, the "Open" state unless trimmed).
+/// A layer that did not exist in that state has no pixels there, and the History Brush refuses it
+/// as Photoshop's does; with `eraseToHistory` (the Eraser's Erase to History option) it paints the
+/// state's visible image instead.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
-    crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
-        .cloned()
-        .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))
+    match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
+        Ok(surf) => Ok(surf.clone()),
+        Err(_) if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels => {
+            let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or(EngineError::NoDocument)?;
+            let mut flat = Surface::new(fmt);
+            composite_region(&source_doc, None, SampleLayers::All, source_doc.bounds(), fmt).write(&mut flat);
+            Ok(flat)
+        }
+        Err(_) => Err(EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into())),
+    }
 }
 
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {

@@ -668,6 +668,33 @@ fn history_brush_refuses_a_locked_destination_when_source_is_unlocked() {
     assert!(pixel[0] > 0.99 && pixel[1] < 0.01, "{pixel:?}");
 }
 
+/// Erase to History paints a layer made since the source state from that state's visible image, at
+/// every depth and through the Brush, Pencil and Block tips; the History Brush alone still refuses.
+#[test]
+fn erase_to_history_paints_the_source_states_visible_image_at_every_depth() {
+    for depth in [8u64, 16, 32] {
+        for tip in ["brush", "pencil", "block"] {
+            let mut s = session(40, 20, depth, "rgb");
+            s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+            let red = rgba(&s, 20, 10);
+            // State 1 = after the stroke; the layer made next did not exist then.
+            s.execute("layer.new.layer", json!({})).unwrap();
+            let stroke = json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 1});
+            assert!(s.execute("paint.historyBrush", stroke.clone()).is_err(), "depth {depth} {tip}: the History Brush refuses a new layer");
+            let mut p = stroke;
+            p["eraseToHistory"] = json!(true);
+            match tip {
+                "pencil" => p["pencil"] = json!(true),
+                "block" => p["block"] = json!(true),
+                _ => {}
+            }
+            s.execute("paint.historyBrush", p).unwrap();
+            let got = rgba(&s, 20, 10);
+            assert!(got[3] > 0.99 && (0..3).all(|i| (got[i] - red[i]).abs() < 0.01), "depth {depth} {tip}: {got:?} vs {red:?}");
+        }
+    }
+}
+
 #[test]
 fn history_brush_errors_when_layer_is_new() {
     let mut s = session(20, 20, 8, "rgb");

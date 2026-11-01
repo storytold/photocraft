@@ -507,6 +507,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
+            // Erase to History: the Eraser's brush stroke paints the History panel's source back.
+            let tool = crate::eraser_ui::drag_tool(app, tool);
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             app.drag = Some(drag);
