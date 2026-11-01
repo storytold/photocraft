@@ -775,7 +775,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 |---|---|---|---|---|---|---|
 | `Dstr` | distortion | integer |  | 5 | 0 .. 20 (out-of-range values are clamped) | maps to our `distortion` (same range and default) |
 | `Smth` | smoothness | integer |  | 3 | 1 .. 15 (out-of-range values are clamped) | same |
-| `TxtT` | textureType | enumerated |  | `TxFr` texTypeFrosted | `TxBr` texTypeBrick, `TxBu` texTypeBurlap, `TxCa` texTypeCanvas, `TxSt` texTypeSandstone |  |
+| `TxtT` | textureType | enumerated |  | `TxFr` texTypeFrosted | `TxFr` texTypeFrosted, `TxBr` texTypeBrick, `TxBu` texTypeBurlap, `TxCa` texTypeCanvas, `TxSt` texTypeSandstone |  |
 | `Scln` | scaling | integer |  | 100 | 50 .. 200 (out-of-range values are clamped) | same |
 | `InvT` | invertTexture | boolean |  | false |  |  |
 

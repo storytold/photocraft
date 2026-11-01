@@ -15,7 +15,10 @@ fn normal_paste_preserves_newer_internal_copy_for_later_paste_as() {
     app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
     app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
     app.run("edit.copy", json!({})).unwrap();
-    app.run("edit.paste", json!({})).unwrap();
-    app.run("edit.paste", json!({"as": "pixels"})).unwrap();
+    let pasted = app.run("edit.paste", json!({})).unwrap();
+    assert!(pasted["layer"].as_u64().is_some(), "normal paste did not insert a layer: {pasted}");
+    let pasted_as = app.run("edit.paste", json!({"as": "pixels"})).unwrap();
+    assert!(pasted_as["layer"].as_u64().is_some(), "Paste As did not insert a layer: {pasted_as}");
+    assert_ne!(pasted["layer"], pasted_as["layer"]);
     assert_eq!(app.run("document.pixel", json!({"x": 4, "y": 3})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
 }

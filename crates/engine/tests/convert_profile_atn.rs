@@ -59,7 +59,7 @@ fn absolute_and_unknown_intents_remain_distinct_with_conversion_flags() {
         let mut d = descriptor();
         d.items.retain(|(key, _)| !key.is("Inte"));
         d.items.push((Id::new("Inte"), D::Enumerated { type_id: Id::new("Inte"), value: Id::new(code) }));
-        let mut s = Session::new();
+        let mut s = intent_fixture();
         let result = load(&mut s, &recorded(d.clone()));
         let saved = atn::parse(&save(&mut s)).unwrap();
         let saved = saved.actions[0].items[0].descriptor.as_ref().unwrap();
@@ -70,6 +70,15 @@ fn absolute_and_unknown_intents_remain_distinct_with_conversion_flags() {
             assert_eq!(result["unsupported"], json!([]));
             assert_eq!(s.actions.list[0].steps[0].1["intent"], json!("absolute"));
             assert_eq!(saved.get("Inte"), Some(&D::Enumerated { type_id: Id::new("Inte"), value: Id::new("AClr") }));
+            let mut absolute = intent_fixture();
+            absolute.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "absolute", "bpc": false})).unwrap();
+            let mut relative = intent_fixture();
+            relative.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "relative", "bpc": false})).unwrap();
+            assert_ne!(rendered(&absolute), rendered(&relative), "the profile pair must distinguish rendering intents");
+            let played = s.execute("actions.play", json!({"action": "Convert"})).unwrap();
+            assert_eq!(played["ran"], 1);
+            assert!(played.get("failed").is_none(), "{played}");
+            assert_eq!(rendered(&s), rendered(&absolute));
         }
     }
 }
@@ -86,6 +95,15 @@ fn fixture() -> Session {
     doc.layers.push(layer);
     let mut s = Session::new();
     s.add_document(doc, None);
+    s
+}
+
+/// A darker media white makes absolute and relative conversion produce different pixels.
+fn intent_fixture() -> Session {
+    let mut s = fixture();
+    let mut profile = Builtin::LinearSrgb.profile().clone();
+    profile.white_point = profile.white_point.map(|value| value * 0.5);
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(profile.with_encoded_bytes().to_bytes());
     s
 }
 
