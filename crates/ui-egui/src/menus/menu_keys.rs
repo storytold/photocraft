@@ -645,7 +645,8 @@ mod tests {
     fn menu_row_mirrors_label_shortcut_and_gutter() {
         use crate::direction::{Dir, direction_scope};
         // (galley text, galley rect, x of the first glyph of `needle` in that galley)
-        let render = |dir: Dir| -> Vec<(String, egui::Rect, Vec<(char, f32)>)> {
+        type Text = (String, egui::Rect, Vec<(char, f32)>);
+        let render = |dir: Dir| -> Vec<Text> {
             let _scope = direction_scope(dir);
             let ctx = egui::Context::default();
             ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
@@ -669,8 +670,8 @@ mod tests {
             out.textures_delta.clear();
             texts
         };
-        let at = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
-        let glyph = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
+        let at = |v: &[Text], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
+        let glyph = |v: &[Text], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
         let rtl = render(Dir::Rtl);
         let (inch, pix, sc) = (at(&rtl, "Inches").unwrap().1, at(&rtl, "Pixels").unwrap().1, at(&rtl, "Ctrl").unwrap().1);
         assert!(inch.right() > 240.0 - 32.0 && pix.right() > 240.0 - 32.0, "rtl: the labels hug the right edge: {inch:?} {pix:?}");
