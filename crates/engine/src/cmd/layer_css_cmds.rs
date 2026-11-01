@@ -14,11 +14,12 @@
 //!
 //! Not written: strokes (`border`), layer effects (`box-shadow`, `text-shadow`), gradients as
 //! CSS gradients, blend modes (`mix-blend-mode`), fill opacity, the styles of later runs and
-//! paragraphs, and the geometry of other shapes (live polygons, stars and lines, and custom
-//! paths), which get the rule of their box. Groups and adjustment layers have no rule.
+//! paragraphs, the corners of a rounded rectangle scaled unequally (elliptical, while it keeps
+//! one radius per corner), and the geometry of other shapes (live polygons, stars and lines, and
+//! custom paths), which get the rule of their box. Groups and adjustment layers have no rule.
 
 use photocraft_doc::text::{TextAlign, TextShape};
-use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape};
+use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape, Path};
 use photocraft_geom::Point;
 use serde_json::{Value, json};
 
@@ -88,6 +89,17 @@ fn rgb(c: &photocraft_color::Color) -> String {
     format!("rgb({r}, {g}, {b})")
 }
 
+/// Whether `path` is the outline `live` draws: every anchor of one is an anchor of the other,
+/// within a hundredth of a pixel, in any order or direction (a flipped shape runs the other way).
+/// A live rectangle scaled unequally keeps one radius per corner, but its path keeps the corners
+/// it was drawn with, now elliptical, so the two differ.
+fn draws(live: &LiveShape, path: &Path) -> bool {
+    let anchors = |p: &Path| p.subpaths.iter().flat_map(|s| s.knots.iter().map(|k| k.anchor)).collect::<Vec<_>>();
+    let (have, want) = (anchors(path), anchors(&photocraft_vector::shapes::live_path(live)));
+    let among = |p: &Point, q: &[Point]| q.iter().any(|q| (p.x - q.x).abs() < 0.01 && (p.y - q.y).abs() < 0.01);
+    have.iter().all(|p| among(p, &want)) && want.iter().all(|p| among(p, &have))
+}
+
 /// The rule for one layer, `z` its place in the stack from the bottom (1-based); `None` for a
 /// layer CSS can't describe (groups, adjustments) or one with nothing to place.
 pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
@@ -136,9 +148,10 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
         LayerContent::Shape(sh) => {
             // A live rounded rectangle's corners, before the fill as Photoshop writes them: one
             // value when all four are equal, else top-left, top-right, bottom-right, bottom-left.
+            // Scaled unequally, its corners are elliptical though it keeps one radius each: none.
             // A live ellipse fills its box, which half the box's size on each axis rounds to.
             match &sh.live {
-                Some(LiveShape::Rect { radii, .. }) if radii.iter().any(|&r| r > 0.0) => {
+                Some(live @ LiveShape::Rect { radii, .. }) if radii.iter().any(|&r| r > 0.0) && draws(live, &sh.path) => {
                     let px = |r: f64| format!("{}px", number(r.max(0.0)));
                     let all = if radii.iter().all(|&r| r == radii[0]) { px(radii[0]) } else { radii.map(px).join(" ") };
                     props.push(("border-radius", all));
