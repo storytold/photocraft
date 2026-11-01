@@ -20,12 +20,17 @@ pub enum ChanRef {
     VectorMask,
 }
 
+/// Resolve channel references; a color-name object cannot fall back to a named alpha channel.
 pub fn parse_ref(v: &Value, doc: &Document) -> Option<ChanRef> {
     let mode = edit_mode(doc);
     match v {
         Value::Number(n) => n.as_u64().map(|i| ChanRef::Alpha(i as usize)),
         Value::Object(o) => {
-            if let Some(k) = o.get("color").and_then(Value::as_u64) {
+            if let Some(name) = o.get("color").and_then(Value::as_str) {
+                let names = color_names(mode);
+                let k = names.iter().position(|n| n.eq_ignore_ascii_case(name))?;
+                Some(if names.len() == 1 { ChanRef::Composite } else { ChanRef::Color(k) })
+            } else if let Some(k) = o.get("color").and_then(Value::as_u64) {
                 Some(ChanRef::Color(k as usize))
             } else {
                 o.get("alpha").and_then(Value::as_u64).map(|i| ChanRef::Alpha(i as usize))

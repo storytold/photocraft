@@ -206,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Target Channel",
             [],
             None,
-            r##"{"channel":"composite"|"mask"|"vectorMask"|"red|green|blue|…"|index|name="composite","colors":[index,…]?,"extend":bool=false} (colors selects native colour components only; extend toggles one colour channel, as Shift-click; all components select the composite)"##,
+            r##"{"channel":"composite"|"mask"|"vectorMask"|"red|green|blue|…"|index|name|{"color":index|name}|{"alpha":index}="composite","colors":[index,…]?,"extend":bool=false} (a color object selects only a native component, never a named alpha channel; colors selects native colour components only; extend toggles one colour channel, as Shift-click; all components select the composite)"##,
             has_doc,
             target_cmd
         ),
