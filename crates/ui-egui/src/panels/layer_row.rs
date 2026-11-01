@@ -524,7 +524,7 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
         ctx.data_mut(|d| d.insert_temp(on_mask_id, on_mask));
     }
     if !eye_resp.secondary_clicked() && !eye_resp.context_menu_opened() {
-        crate::menus::context_menu(&resp, |ui| {
+        crate::menus::context_menu(resp, |ui| {
             crate::widgets::style_spectrum_popup_menu(ui);
             if ui.ctx().data(|d| d.get_temp::<bool>(on_mask_id)).unwrap_or(false) {
                 crate::layer_menu_ui::show_mask(app, ui, l, actions);
