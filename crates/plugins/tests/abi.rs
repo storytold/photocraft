@@ -220,6 +220,37 @@ fn malformed_and_oversized_modules_are_refused() {
 }
 
 #[test]
+fn a_file_that_is_not_wasm_is_named_by_what_it_actually_is() {
+    // #10362: Plug-ins > Install Plug-in with a Photoshop plug-in (.8bt) said only "not a
+    // WebAssembly binary", which tells the person holding that file nothing. The magic number adds
+    // what the file looks like; an unrecognised header keeps the old message byte for byte.
+    const OLD: &str = "not a valid plug-in module: not a WebAssembly binary (missing \\0asm header)";
+    for (name, bytes, format) in [
+        ("windows dll or .8bt", &b"MZ\x90\x00\x03\0"[..], "Windows"),
+        ("linux .so", &[0x7f, b'E', b'L', b'F', 2, 1, 1][..], "Linux"),
+        ("macos mach-o 32", &[0xce, 0xfa, 0xed, 0xfe, 7, 1][..], "macOS"),
+        ("macos mach-o 64", &[0xcf, 0xfa, 0xed, 0xfe, 7, 1][..], "macOS"),
+        ("macos fat mach-o", &[0xca, 0xfe, 0xba, 0xbe, 0, 0][..], "macOS"),
+        ("macos fat reversed", &[0xbe, 0xba, 0xfe, 0xca, 0, 0][..], "macOS"),
+        ("zip archive", &b"PK\x03\x04\x14\0"[..], "zip"),
+        ("empty zip archive", &b"PK\x05\x06\0\0"[..], "zip"),
+    ] {
+        let Err(e) = Plugin::load(bytes, Limits::default()) else { panic!("{name} was accepted") };
+        assert!(matches!(e, Error::Module(_)), "{name}: {e}");
+        let m = e.to_string();
+        assert!(m.contains("WebAssembly"), "{name}: {m}");
+        assert!(m.contains(format), "{name}: {m}");
+        assert!(!m.contains('\n'), "{name}: {m}");
+        eprintln!("{name}: {m}");
+    }
+    // Nothing recognised: today's message, exactly, so anything keyed on it keeps working.
+    for bytes in [&b"junkjunk"[..], &b"x"[..], &b""[..]] {
+        let Err(e) = Plugin::load(bytes, Limits::default()) else { panic!("{bytes:?} was accepted") };
+        assert_eq!(e.to_string(), OLD);
+    }
+}
+
+#[test]
 fn a_code_section_claiming_no_functions_but_many_bytes_is_refused() {
     // Header, then a code section (id 10) declaring 2000 bytes whose function count is 0, cut off
     // after the count (a truncated download) or padded to its full size. The spec makes the
