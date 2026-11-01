@@ -32,27 +32,25 @@ fn relative_model_filename_loads_material_and_discovered_textures() {
     assert!(output.status.success(), "Child test failed:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
 }
 
-fn file() -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "photocraft-reimport-{}-{}.obj",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-    ));
+fn file() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mesh.obj");
     std::fs::write(&path, obj("A", "B", 1.0)).unwrap();
-    path
+    (dir, path)
 }
 fn obj(first: &str, second: &str, x: f32) -> String {
     format!("v 0 0 0\nv {x} 0 0\nv 0 1 0\nv 1 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nusemtl {first}\nf 1/1 2/2 3/3\nusemtl {second}\nf 2/2 4/4 3/3\n")
 }
 fn rewrite_with_different_size(path: &std::path::Path, content: String) {
     let before = std::fs::metadata(path).unwrap().len();
+    let content = if content.len() as u64 == before { format!("{content}# fixture rewrite\n") } else { content };
     std::fs::write(path, content).unwrap();
     let after = std::fs::metadata(path).unwrap().len();
     assert_ne!(before, after, "fixture rewrite must change the source size independent of timestamp granularity");
 }
 #[test]
 fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_name() {
-    let path = file();
+    let (_temp, path) = file();
     let mut s = Session::new();
     s.execute("uv.model.import", json!({"path":path})).unwrap();
     let a = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "A").unwrap();
@@ -83,7 +81,7 @@ fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_nam
 
 #[test]
 fn reimport_rebuilds_bound_blur_cache_for_new_topology_without_adding_history() {
-    let path = file();
+    let (_temp, path) = file();
     let mut s = Session::new();
     s.execute("uv.model.import", json!({"path":path})).unwrap();
     let material = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "A").unwrap();
@@ -138,7 +136,7 @@ fn reimport_rebuilds_bound_blur_cache_for_new_topology_without_adding_history() 
 }
 #[test]
 fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
-    let path = file();
+    let (_temp, path) = file();
     let project = path.with_extension("pcuv");
     let mut s = Session::new();
     s.execute("uv.model.import", json!({"path":path})).unwrap();
@@ -156,7 +154,7 @@ fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
 }
 #[test]
 fn failed_or_partial_reimport_keeps_previous_mesh_and_missing_source_is_reported() {
-    let path = file();
+    let (_temp, path) = file();
     let mut s = Session::new();
     s.execute("uv.model.import", json!({"path":path})).unwrap();
     let old = s.uv.scene.clone().unwrap();

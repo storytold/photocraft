@@ -489,6 +489,16 @@ fn mask_blur_matches_cpu_across_page_edges_canvas_edges_and_stack_prefixes() {
     let gpu_pixels = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).expect("GPU Blur render");
     let diff = worst_diff(&cpu.px, &gpu_pixels);
     assert!(diff.0 <= TOL, "mask Blur parity: {:.2}/255 at index {}", diff.0 * 255.0, diff.1);
+    let clip = Rect::new(cell - 8, 3, cell + 12, 14);
+    let clipped_cpu = photocraft_compose::render(&doc, clip);
+    let clipped_gpu = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, clip).expect("clipped GPU Blur render after full checkpoint");
+    let clipped_diff = worst_diff(&clipped_cpu.px, &clipped_gpu);
+    assert!(
+        clipped_diff.0 <= TOL,
+        "clipped Blur must match a full CPU reference after checkpoint reuse: {:.2}/255 at index {}",
+        clipped_diff.0 * 255.0,
+        clipped_diff.1
+    );
     assert_eq!(g.comp.page_size(), 1024, "padded source textures fit within the simulated device limit");
 
     let at = |x: usize, y: usize| cpu.px[y * width as usize + x][3];

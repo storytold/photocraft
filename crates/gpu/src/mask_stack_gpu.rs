@@ -1097,18 +1097,23 @@ fn validate_stack_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(),
         .checked_mul((stack.base.channels() as u64).checked_mul(4).and_then(|read| read.checked_add(8)).ok_or("Mask base sync size overflow")?)
         .ok_or("Mask base sync size overflow")?;
     for layer in stack.layers.iter().filter(|layer| layer.visible && layer.opacity > 0.0) {
-        // `write_surface_region` temporarily holds decoded f32 samples and encoded RGBA16F.
-        // Bound the host allocation before reading a full-canvas surface into that buffer.
-        let texture_bpp = if matches!(&layer.kind, EffectKind::Paint) && rgba8_compatible(&layer.surface) { 4 } else { 8 };
-        let sync_bytes = pixels
-            .checked_mul(
-                (layer.surface.channels() as u64).checked_mul(4).and_then(|read| read.checked_add(texture_bpp)).ok_or("Mask-stack CPU sync size overflow")?,
-            )
-            .ok_or("Mask-stack CPU sync size overflow")?;
-        largest_cpu_sync = largest_cpu_sync.max(sync_bytes);
-        gpu_bytes = gpu_bytes
-            .checked_add(pixels.checked_mul(texture_bpp).ok_or("Mask-stack GPU allocation size overflow")?)
-            .ok_or("Mask-stack GPU allocation size overflow")?;
+        if matches!(&layer.kind, EffectKind::Paint) {
+            // Only Paint owns a full-canvas source texture. Bound the temporary decoded and
+            // encoded upload buffers before reading its surface.
+            let texture_bpp = if rgba8_compatible(&layer.surface) { 4 } else { 8 };
+            let sync_bytes = pixels
+                .checked_mul(
+                    (layer.surface.channels() as u64)
+                        .checked_mul(4)
+                        .and_then(|read| read.checked_add(texture_bpp))
+                        .ok_or("Mask-stack CPU sync size overflow")?,
+                )
+                .ok_or("Mask-stack CPU sync size overflow")?;
+            largest_cpu_sync = largest_cpu_sync.max(sync_bytes);
+            gpu_bytes = gpu_bytes
+                .checked_add(pixels.checked_mul(texture_bpp).ok_or("Mask-stack GPU allocation size overflow")?)
+                .ok_or("Mask-stack GPU allocation size overflow")?;
+        }
         if let Some(map) = layer.fill_map.as_ref() {
             let fill_pixels = u64::from(layer.fill_map_size[0]).checked_mul(u64::from(layer.fill_map_size[1])).ok_or("Mask Fill allocation size overflow")?;
             let fill_bytes = fill_pixels.checked_mul(4).ok_or("Mask Fill allocation size overflow")?;
@@ -1580,6 +1585,26 @@ mod mask_stack_gpu_tests {
     fn allocation_budget_rejects_oversized_canvas_before_gpu_setup() {
         let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
         assert!(MaskStackRenderer::validate_allocation_budget(&stack, [16_384, 16_384]).is_err());
+    }
+
+    #[test]
+    fn allocation_budget_does_not_count_a_fill_cache_as_a_full_canvas_texture() {
+        let stack = Stack {
+            base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]),
+            layers: vec![photocraft_doc::mask_paint::Paint {
+                name: "Fill".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Fill { value: 0.5, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false },
+            }],
+            active: 0,
+        };
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [6_000, 6_000]).is_ok());
     }
 
     #[test]

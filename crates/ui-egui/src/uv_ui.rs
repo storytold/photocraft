@@ -1036,6 +1036,7 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
                 let mut previous_cache = std::mem::take(&mut app.uv_cache);
                 let mut gpu = previous_cache.gpu.take();
                 if let Some(renderer) = &mut gpu {
+                    crate::canvas::fail_native_mask_gpu_brush(app);
                     renderer.clear();
                 }
                 app.uv_cache = Cache {
@@ -1643,6 +1644,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::uv_paint::finish(app, &mut cache.paint);
         cache.geometry = None;
         if let Some(gpu) = &mut cache.gpu {
+            crate::canvas::fail_native_mask_gpu_brush(app);
             gpu.clear();
         }
         cache.refreshed = None;
@@ -1834,6 +1836,7 @@ pub(crate) fn main_view(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(id) => gpu_image = Some(id),
             Err(e) => {
                 state.status = format!("3D GPU: {e}. CPU fallback.");
+                crate::canvas::fail_native_mask_gpu_brush(app);
                 cache.gpu = None;
                 cache.keys.fill((0, 0, 0, 0));
                 cache.refreshed = None;
@@ -4513,7 +4516,7 @@ mod tests {
                 (1.0 - (xy[1] + f64::from(c[7])) * f64::from(c[5])) as f32 * 0.5 * rect.height(),
             );
         let uv: [f64; 2] = std::array::from_fn(|i| triangle.uv.iter().map(|p| f64::from(p[i])).sum::<f64>() / 3.0);
-        let pixel = [(uv[0] * f64::from(side)) as i32, ((1.0 - uv[1]) * f64::from(side)) as i32];
+        let pixel = [(uv[0] * side as f64) as i32, ((1.0 - uv[1]) * side as f64) as i32];
         let material = app.session.uv.material;
         let before = app.session.active().unwrap().doc.clone();
         harness.event(egui::Event::PointerMoved(point));

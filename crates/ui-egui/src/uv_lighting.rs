@@ -7,6 +7,7 @@ use photocraft_uv::{
 use std::sync::Arc;
 
 pub(crate) const MAPS: [Channel; 5] = [Channel::Color, Channel::Metallic, Channel::Roughness, Channel::Ao, Channel::Emissive];
+const MAX_CPU_MAP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub(crate) type Key = (u64, u64, u64, u64);
 pub(crate) type RegionHint = (Key, Vec<[u32; 4]>);
 #[derive(Clone)]
@@ -61,24 +62,9 @@ pub(crate) fn refresh_gpu(app: &mut PhotocraftApp, maps: &mut SurfaceMaps) -> Re
     refresh_impl(app, maps, true)
 }
 fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool) -> Result<(), String> {
-    // This refresh can materialize complete CPU documents before trying the GPU path. Reject
-    // unreasonable source sets first so neither display_doc nor a failed GPU upload can trigger
-    // an unbounded full-resolution allocation.
-    let mut checked = Vec::new();
+    // Charge only maps that will be composited on CPU. GPU-composited Color/Emissive slots do
+    // not need a full-resolution CPU image, and one oversized slot must not block other maps.
     let mut cpu_bytes = 0u64;
-    for id in app.session.uv.all_bindings().flatten() {
-        if checked.contains(id) {
-            continue;
-        }
-        checked.push(*id);
-        if let Some(st) = app.session.documents().iter().find(|st| st.doc.id == *id) {
-            let map_bytes = u64::from(st.doc.size.width).saturating_mul(u64::from(st.doc.size.height)).saturating_mul(16);
-            cpu_bytes = cpu_bytes.saturating_add(map_bytes);
-        }
-    }
-    if cpu_bytes > 4 * 1024 * 1024 * 1024 {
-        return Err("Source maps require more than 4 GiB of CPU cache; remove unused material bindings or reduce their resolution".into());
-    }
     let monitor = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()).map(|d| d.monitor.clone());
     let monitor = monitor.as_deref().unwrap_or(photocraft_cms::Builtin::Srgb.profile());
     let hash = monitor.content_hash();
@@ -121,10 +107,22 @@ fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool
                 // material maps canonical while the Fill controls move; release refreshes them.
                 continue;
             }
-            let revision = app.session.documents().get(index).map_or(0, |s| s.revision);
-            let gpu_candidate =
-                allow_gpu.then(|| crate::uv_mask_paint_preview::gpu_display_doc(app, index).unwrap_or_else(|| crate::canvas::display_doc(app, index)));
-            let gpu_candidate = gpu_candidate.and_then(|(doc, live)| gpu_color_encoding(&doc, channel).map(|encoding| (doc, live, encoding)));
+            let (revision, size, encoding) = {
+                let source = &app.session.documents()[index];
+                (source.revision, [source.doc.size.width, source.doc.size.height], if allow_gpu { gpu_color_encoding(&source.doc, channel) } else { None })
+            };
+            if encoding.is_none() && !reserve_cpu_map_budget(&mut cpu_bytes, size) {
+                maps.images[kind][material] = None;
+                maps.gpu[kind][material] = None;
+                maps.keys[kind][material] = Key::default();
+                maps.regions[kind][material] = None;
+                maps.snapshots[kind][material] = None;
+                continue;
+            }
+            let gpu_candidate = encoding.map(|encoding| {
+                let (doc, live) = crate::uv_mask_paint_preview::gpu_display_doc(app, index).unwrap_or_else(|| crate::canvas::display_doc(app, index));
+                (doc, live, encoding)
+            });
             // A spatial Fill's GPU snapshot is parameter-current and does not enqueue a CPU
             // materialization. Fall back to the coalesced CPU path only when this map cannot use
             // the GPU planner.
@@ -213,6 +211,43 @@ fn refresh_impl(app: &mut PhotocraftApp, maps: &mut SurfaceMaps, allow_gpu: bool
         }
     }
     Ok(())
+}
+
+fn reserve_cpu_map_budget(used: &mut u64, size: [u32; 2]) -> bool {
+    let Some(bytes) = u64::from(size[0]).checked_mul(u64::from(size[1])).and_then(|pixels| pixels.checked_mul(16)) else { return false };
+    let Some(total) = used.checked_add(bytes) else { return false };
+    if total > MAX_CPU_MAP_BYTES {
+        return false;
+    }
+    *used = total;
+    true
+}
+
+#[cfg(test)]
+mod allocation_budget_tests {
+    use super::*;
+
+    #[test]
+    fn cpu_map_budget_counts_only_admitted_cpu_slots() {
+        let mut used = 0;
+        for _ in 0..4 {
+            assert!(reserve_cpu_map_budget(&mut used, [8192, 8192]));
+        }
+        assert_eq!(used, MAX_CPU_MAP_BYTES);
+        assert!(!reserve_cpu_map_budget(&mut used, [8192, 8192]), "the fifth 8192² CPU slot is skipped");
+
+        let mut used = 3 * 1024 * 1024 * 1024;
+        assert!(!reserve_cpu_map_budget(&mut used, [8193, 8192]));
+        assert!(reserve_cpu_map_budget(&mut used, [8192, 8192]), "a rejected slot does not consume budget for later maps");
+    }
+
+    #[test]
+    fn cpu_map_budget_rejects_dimension_and_sum_overflow() {
+        let mut used = 0;
+        assert!(!reserve_cpu_map_budget(&mut used, [u32::MAX, u32::MAX]));
+        used = u64::MAX;
+        assert!(!reserve_cpu_map_budget(&mut used, [1, 1]));
+    }
 }
 pub(crate) fn identity_lut() -> Image {
     Image {

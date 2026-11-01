@@ -55,6 +55,10 @@ fn native_mask_gpu_preflight_keeps_unsupported_strokes_on_cpu_from_the_start() {
     });
     assert!(LiveStroke::can_use_native_mask_gpu_brush(&s, "paint.stroke", &params));
 
+    let mut behind = params.clone();
+    behind["mode"] = json!("behind");
+    assert!(!LiveStroke::can_use_native_mask_gpu_brush(&s, "paint.stroke", &behind), "Behind strokes need CPU compositing semantics");
+
     let mut pressure_size = params.clone();
     pressure_size["brush"]["pressureSize"] = json!(true);
     assert!(!LiveStroke::can_use_native_mask_gpu_brush(&s, "paint.stroke", &pressure_size));
@@ -182,11 +186,34 @@ fn native_mask_gpu_cpu_fallback_preserves_disconnected_segments() {
     let actual = gpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
     let expected = cpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
     assert!(same_pixels(actual, expected, Rect::new(0, 0, 64, 64)), "CPU fallback must keep each disconnected stroke segment isolated");
+
+    let more = [StrokePoint::new(24.5, 56.5, 0.9), StrokePoint::new(48.5, 48.5, 0.6)];
+    gpu.push(&more).unwrap();
+    cpu.push(&more).unwrap();
+    let actual = gpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
+    let expected = cpu.doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
+    assert!(same_pixels(actual, expected, Rect::new(0, 0, 64, 64)), "continuing after fallback preserves live dab spacing and disconnected islands");
 }
 
 #[test]
 fn native_mask_gpu_readback_patch_commits_through_one_existing_undo_step() {
     let (mut s, id) = native_mask_gpu_session();
+    s.edit("add downstream Blur", |doc, _| {
+        let stack = doc.layer_mut(id).and_then(|layer| layer.mask.as_mut()).and_then(|mask| mask.paint.as_mut()).ok_or(EngineError::NoLayer(id))?;
+        stack.layers.push(photocraft_doc::mask_paint::Paint {
+            name: "Blur".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: photocraft_doc::mask_paint::EffectKind::Blur { radius: 4 },
+        });
+        Ok(())
+    })
+    .unwrap();
     let params = json!({
         "target":"mask",
         "points":[[8.5,8.5,1.0]],
@@ -203,6 +230,7 @@ fn native_mask_gpu_readback_patch_commits_through_one_existing_undo_step() {
     let _ = live.finish_native_mask_gpu_dabs();
     let patch = NativeMaskGpuPatch { rect: Rect::new(8, 8, 9, 9), pixels_rgba8: vec![255, 255, 255, 255] };
     assert_eq!(live.apply_native_mask_gpu_patches(&[patch]).unwrap(), Rect::new(8, 8, 9, 9));
+    assert_eq!(live.mask_preview_commit_damage, Rect::new(4, 4, 13, 13), "GPU readback includes the downstream Blur halo in commit refresh damage");
     s.offer_live_stroke(live).unwrap();
     let mut commit = params;
     commit["points"] = json!([[8.5, 8.5, 1.0], [20.5, 8.5, 1.0]]);
@@ -215,6 +243,34 @@ fn native_mask_gpu_readback_patch_commits_through_one_existing_undo_step() {
     s.undo();
     let restored = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().active_paint_surface().unwrap();
     assert_eq!(restored.pixel(8, 8), [0.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn cadence_mask_preview_tracks_blur_expanded_commit_damage_on_cpu_route() {
+    let (mut s, id) = native_mask_gpu_session();
+    s.edit("add downstream Blur", |doc, _| {
+        let stack = doc.layer_mut(id).and_then(|layer| layer.mask.as_mut()).and_then(|mask| mask.paint.as_mut()).ok_or(EngineError::NoLayer(id))?;
+        stack.layers.push(photocraft_doc::mask_paint::Paint {
+            name: "Blur".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: photocraft_doc::mask_paint::EffectKind::Blur { radius: 4 },
+        });
+        Ok(())
+    })
+    .unwrap();
+    let params = json!({"target":"mask","points":[[8.5,8.5,1.0]],"size":8,"color":"#ffffff","brush":{"hardness":0.5,"opacity":1.0,"flow":1.0}});
+    let mut live = LiveStroke::begin_with(&s, "paint.stroke", &params).unwrap();
+    live.mask_preview_cadence = Some(std::time::Duration::from_secs(10));
+    let changed = live.push(&[StrokePoint::new(32.5, 32.5, 1.0)]).unwrap();
+    let expected = changed.inflate(4).intersect(&Rect::new(0, 0, 64, 64));
+    let committed = live.mask_preview_commit_damage;
+    assert!(committed.x0 <= expected.x0 && committed.y0 <= expected.y0 && committed.x1 >= expected.x1 && committed.y1 >= expected.y1);
 }
 
 fn surface(s: &Session) -> Surface {

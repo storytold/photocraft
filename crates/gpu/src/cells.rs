@@ -89,6 +89,10 @@ impl Compositor {
         if chunks.is_empty() {
             return;
         }
+        // Prefix chunks are captured at the output chunk origin. Halo-expanded work starts at
+        // a different logical origin, so those checkpoints cannot be restored with the current
+        // copy/capture offsets. Keep the safe full render for halo plans.
+        let checkpoint = checkpoint.filter(|_| plan.mask_halo == 0);
         let halo = plan.mask_halo as i32;
         let work_chunks: Vec<Rect> = chunks.iter().map(|chunk| chunk.inflate(halo)).collect();
         // Chunks may hold different checkpoints: bind from the lowest one any of them resumes at.

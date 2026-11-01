@@ -195,7 +195,8 @@ with unchanged target pixels (including fully masked strokes) do not add empty U
 The pending 3D stroke enables keyboard Undo even before its first history entry exists.
 Advanced directional/smoothing brush dynamics in Wrap are not an exact replay of the 2D
 trajectory; UV mode retains the complete native stroke route. Opacity is a cutout channel,
-not sorted translucent-glass blending. The current Material renderer remains lit Color + Normal.
+not sorted translucent-glass blending. PBR Material rendering also supports the bound metallic,
+roughness, occlusion and emissive maps described below.
 
 
 ## Environment and PBR
@@ -220,7 +221,7 @@ File > 3D Import > Export Textures (formerly Save All Textures) finishes an acti
 
 The right side of the view toolbar now selects the 2D map separately, without a Material entry. Changing a global 3D map follows it in 2D; choosing the 2D map leaves the 3D display mode alone. Choosing Material retains the current 2D map. The selected 2D map remains the native editable document/paint target. Both channel preferences round-trip in scene view metadata.
 
-The UV shell tool supports LMB rectangle drags in the texture canvas and model viewport. Its options choose touched or entirely enclosed shells; Shift adds and Ctrl subtracts (Alt subtraction remains available for 2D clicks). Rectangle picking operates on the active material/texture set, using exact triangle/rectangle intersections. In 3D it selects by projected geometry, including back-facing portions; it is not a visible-fragment-only lasso. The mask is rasterized once on release. Single shell clicks, transformed 2D canvases and Maya navigation retain their existing routes.
+The UV shell tool supports LMB rectangle drags in the texture canvas and model viewport. Its options choose touched or entirely enclosed shells; Shift adds and Ctrl subtracts (Alt subtraction remains available for 2D clicks). Rectangle picking operates on the active material/texture set, using exact triangle/rectangle intersections. In 3D, Visible only selects front-facing visible fragments; Through mesh also selects occluded and back-facing portions. The mask is rasterized once on release. Single shell clicks, transformed 2D canvases and Maya navigation retain their existing routes.
 
 Clone Stamp/Healing source picking in 3D uses Ctrl+LMB so Alt+LMB remains Maya orbit. The temporary Ctrl Move tool no longer intercepts the source pick. Clone Stamp shares its native source image/transform/overlay settings with a UV-triangle projection on the model; a BVH visibility query rejects occluded preview triangles without GPU readback. Retouch painting retains Paint UV mode.
 

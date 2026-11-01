@@ -295,7 +295,7 @@ pub(crate) fn native_mask_gpu_brush_active(app: &PhotocraftApp) -> bool {
 }
 
 #[cfg(feature = "uv-workbench")]
-pub(crate) fn fail_native_mask_gpu_brush(app: &mut PhotocraftApp) {
+pub(crate) fn fail_native_mask_gpu_brush(app: &PhotocraftApp) {
     if let Some(bridge) = app.live_stroke.as_ref().and_then(|live| live.native_mask_gpu.as_ref()) {
         bridge.failed.store(true, Ordering::Release);
     }
@@ -388,7 +388,18 @@ pub(crate) fn complete_native_mask_gpu_release(app: &mut PhotocraftApp) -> bool 
         }
         return true;
     }
-    let result = bridge.patches.lock().ok().and_then(|mut mailbox| mailbox.take());
+    let result = match bridge.patches.lock() {
+        Ok(mut mailbox) => mailbox.take(),
+        Err(_) => {
+            bridge.failed.store(true, Ordering::Release);
+            if !bridge.fallback_applied {
+                let damage = stroke.fallback_native_mask_gpu_to_cpu().unwrap_or(DRect::EMPTY);
+                live.damage.push(damage);
+                bridge.fallback_applied = true;
+            }
+            return true;
+        }
+    };
     let Some(result) = result else { return false };
     match result {
         Ok(patches) => {
@@ -1040,4 +1051,93 @@ pub(crate) fn multiple_color_target(app: &PhotocraftApp) -> bool {
     matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))
         && photocraft_engine::mask_view_cmds::current(st).is_none()
         && photocraft_engine::color_channels::selected(&app.session).is_some_and(|colors| colors.len() > 1)
+}
+
+#[cfg(all(test, feature = "uv-workbench"))]
+mod native_mask_gpu_bridge_tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use serde_json::json;
+
+    fn app_with_live_gpu_stroke() -> PhotocraftApp {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":64,"height":64,"background":"transparent"})).unwrap();
+        let layer = session.active().unwrap().active_layer.unwrap();
+        let base = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        let paint = Paint {
+            name: "GPU source".into(),
+            visible: true,
+            opacity: 1.0,
+            blend: photocraft_color::BlendMode::Normal,
+            surface: photocraft_raster::Surface::new(PixelFormat::RGBA8),
+            fill_map: None,
+            fill_map_size: [0, 0],
+            fill_bounds: None,
+            kind: EffectKind::Paint,
+        };
+        let state = session.active_mut().unwrap();
+        std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask = Some(LayerMask {
+            surface: base.clone(),
+            enabled: true,
+            linked: true,
+            density: 1.0,
+            feather: 0.0,
+            paint: Some(Stack { base, layers: vec![paint], active: 0 }),
+        });
+        let params = json!({
+            "target":"mask",
+            "points":[[8.5,8.5,1.0]],
+            "brush":{"size":8,"pressureSize":false,"hardness":0.5,"opacity":0.8,"flow":0.4},
+            "smoothing":0.0
+        });
+        let stroke = photocraft_engine::brush_cmds::LiveStroke::begin_with_native_mask_gpu_brush(&session, "paint.stroke", &params).unwrap();
+        let state = session.active().unwrap();
+        let (doc, revision) = (state.doc.id, state.revision);
+        let bridge = NativeMaskGpuBridge {
+            stroke_key: 1,
+            begin: None,
+            pending_dabs: Arc::new(Mutex::new(VecDeque::new())),
+            release_requested: Arc::new(AtomicBool::new(false)),
+            failed: Arc::new(AtomicBool::new(false)),
+            patches: Arc::new(Mutex::new(None)),
+            fallback_applied: false,
+        };
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.live_stroke = Some(LiveStroke {
+            preview_failed: false,
+            stroke: EngineStroke::Brush(Box::new(stroke)),
+            doc,
+            revision,
+            key: 1,
+            damage: Vec::new(),
+            native_mask_gpu: Some(bridge),
+            fed: 1,
+        });
+        app
+    }
+
+    #[test]
+    fn renderer_removal_marks_bridge_failed_and_completes_cpu_fallback() {
+        let mut app = app_with_live_gpu_stroke();
+        fail_native_mask_gpu_brush(&mut app);
+        assert!(complete_native_mask_gpu_release(&mut app), "a removed renderer must not leave release waiting for readback");
+        assert!(!native_mask_gpu_brush_active(&app), "the native route is switched off after CPU replay");
+    }
+
+    #[test]
+    fn poisoned_patch_mailbox_is_a_failure_instead_of_a_pending_release() {
+        let mut app = app_with_live_gpu_stroke();
+        let patches = Arc::clone(&app.live_stroke.as_ref().unwrap().native_mask_gpu.as_ref().unwrap().patches);
+        let _ = std::thread::spawn(move || {
+            let _mailbox = patches.lock().unwrap();
+            panic!("poison the GPU patch mailbox for the regression test");
+        })
+        .join();
+        assert!(complete_native_mask_gpu_release(&mut app), "a poisoned mailbox must trigger CPU replay");
+        assert!(!native_mask_gpu_brush_active(&app));
+    }
 }

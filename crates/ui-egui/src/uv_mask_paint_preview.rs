@@ -56,8 +56,14 @@ struct FillMaskWorker {
     cancel_epoch: Arc<AtomicU64>,
 }
 
+type FillMaskSampleFn = dyn Fn(FillMaskJob, &AtomicU64) -> Option<FillMaskProxy> + Send + Sync;
+
 impl FillMaskWorker {
     fn new() -> Option<Self> {
+        Self::with_sampler(Arc::new(sample_fill_mask))
+    }
+
+    fn with_sampler(sample: Arc<FillMaskSampleFn>) -> Option<Self> {
         let state = Arc::new((Mutex::new(FillMaskWorkerState::default()), Condvar::new()));
         let thread_state = state.clone();
         let cancel_epoch = Arc::new(AtomicU64::new(0));
@@ -79,7 +85,7 @@ impl FillMaskWorker {
                         state.running = true;
                         job
                     };
-                    let result = sample_fill_mask(job, &thread_cancel_epoch);
+                    let result = sample(job, &thread_cancel_epoch);
                     let (lock, _) = &*thread_state;
                     let mut state = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     if !state.stopping {
@@ -98,8 +104,9 @@ impl FillMaskWorker {
         let (lock, wake) = &*self.state;
         let mut state = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.stopping {
-            // Keep one running sample and replace any queued sample with the latest pointer state.
-            job.token = self.cancel_epoch.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+            // Replace queued samples while allowing the current bounded sample to finish. The
+            // preview can show that result until the next accepted sample replaces it.
+            job.token = self.cancel_epoch.load(Ordering::Relaxed);
             state.job = Some(job);
             wake.notify_one();
         }
@@ -512,6 +519,83 @@ fn sample_fill_mask(job: FillMaskJob, cancel_epoch: &AtomicU64) -> Option<FillMa
         size: job.size,
         values: Arc::new(values.into_iter().map(|value| value.clamp(0.0, 1.0)).collect()),
     })
+}
+
+#[cfg(test)]
+mod fill_worker_tests {
+    use super::*;
+    use std::sync::Barrier;
+
+    fn job(key: u64, token: u64) -> FillMaskJob {
+        FillMaskJob {
+            generation: 1,
+            doc: DocId(1),
+            revision: 2,
+            layer: LayerId(3),
+            index: 0,
+            key,
+            token,
+            canvas: photocraft_geom::Rect::new(0, 0, 1, 1),
+            size: [1, 1],
+            stack: Stack { base: photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8), layers: Vec::new(), active: 0 },
+        }
+    }
+
+    #[test]
+    fn replacing_queued_fill_jobs_does_not_cancel_the_running_sample() {
+        let first_started = Arc::new(Barrier::new(2));
+        let first_release = Arc::new(Barrier::new(2));
+        let second_started = Arc::new(Barrier::new(2));
+        let second_release = Arc::new(Barrier::new(2));
+        let sample: Arc<FillMaskSampleFn> = {
+            let first_started = first_started.clone();
+            let first_release = first_release.clone();
+            let second_started = second_started.clone();
+            let second_release = second_release.clone();
+            Arc::new(move |job: FillMaskJob, epoch: &AtomicU64| {
+                match job.key {
+                    10 => {
+                        first_started.wait();
+                        first_release.wait();
+                    }
+                    20 => {
+                        second_started.wait();
+                        second_release.wait();
+                    }
+                    _ => unreachable!("test submits only its two gated jobs"),
+                }
+                (epoch.load(Ordering::Relaxed) == job.token).then(|| FillMaskProxy {
+                    generation: job.generation,
+                    doc: job.doc,
+                    revision: job.revision,
+                    layer: job.layer,
+                    index: job.index,
+                    key: job.key,
+                    size: job.size,
+                    values: Arc::new(vec![job.key as f32]),
+                })
+            })
+        };
+        let worker = FillMaskWorker::with_sampler(sample).unwrap();
+        let epoch = worker.cancel_epoch.load(Ordering::Relaxed);
+        worker.submit(job(10, epoch));
+        first_started.wait();
+        worker.submit(job(20, epoch));
+        assert_eq!(worker.cancel_epoch.load(Ordering::Relaxed), epoch);
+        first_release.wait();
+        second_started.wait();
+        assert_eq!(worker.take_result().unwrap().key, 10, "the running stale-key sample is still published");
+        second_release.wait();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let latest = loop {
+            if let Some(result) = worker.take_result() {
+                break result;
+            }
+            assert!(Instant::now() < deadline, "the latest coalesced sample completes");
+            std::thread::yield_now();
+        };
+        assert_eq!(latest.key, 20);
+    }
 }
 
 pub(crate) fn current_fill_gray_mask(app: &PhotocraftApp, idx: usize) -> bool {
