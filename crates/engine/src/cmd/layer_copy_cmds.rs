@@ -60,87 +60,110 @@ fn center(r: Rect) -> [f64; 2] {
 }
 
 /// The part of `l`'s pixels its layer masks show: what Photoshop centres a pasted layer on (#9681).
-/// An enabled, fully dense mask crops the layer's (or group's) bounds to the pixels it reveals
-/// that hold ink (a group's, or a layer with effects, to everywhere it reveals); a disabled
-/// one, or one below 100 % density, hides nothing completely and crops nothing. An enabled vector
-/// mask at full density, unfeathered, crops to its path's bounds the same way; feathered or
-/// inverted (it shows what lies outside the path), it crops nothing.
+/// A layer with an enabled pixel or vector mask is cropped to the pixels where its effective mask
+/// (as the compositor applies it: density, feather, the path's own coverage) and its ink are both
+/// above zero; a group's ink is where its children show theirs. One below 100 % density hides
+/// nothing completely and crops nothing; without a mask the layer's (or children's) bounds stand.
 fn shown_bounds(l: &Layer) -> Option<Rect> {
-    let r = match &l.content {
-        LayerContent::Group(g) => g.children.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
-        _ => crate::layer_multi_cmds::layer_bounds(l)?,
-    };
-    // The vector mask hides everything outside its path's control bounds (a superset of the path).
-    let path = l
-        .vector_mask
-        .as_ref()
-        .filter(|v| v.enabled && v.density >= 1.0 && v.feather <= 0.0 && !v.path.inverted)
-        .and_then(|v| v.path.control_bounds())
-        .map(|(x0, y0, x1, y1)| Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32));
-    let r = path.map_or(r, |p| r.intersect(&p));
-    let pixel = l.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0);
-    let r = match pixel {
-        None if path.is_none() => r,
-        _ => {
-            // Ink: the layer's own alpha. Effects reach past it, so a layer with them uses the mask alone.
-            let ink = l.surface().filter(|s| s.format().alpha && !photocraft_compose::effects::has_effects(l));
-            let n = ink.map_or(0, |s| s.channels());
-            let (mut mask_row, mut ink_row) = (Vec::new(), Vec::new());
-            // The x span of row `y` of `area` where `hit(i)` holds for sample `i`, as a 1-row rect.
-            let span = |area: Rect, y: i32, hit: &dyn Fn(usize) -> bool| {
-                let w = area.width() as usize;
-                let (a, b) = ((0..w).find(|i| hit(*i))?, (0..w).rev().find(|i| hit(*i))?);
-                let (a, b) = (area.x0.saturating_add(a as i32), area.x0.saturating_add(b as i32));
-                Some(Rect::new(a, y, b.saturating_add(1), y.saturating_add(1)))
-            };
-            // Rows one at a time, so a large sparse layer never needs its whole rectangle in memory.
-            let row = |y: i32, area: Rect| Rect::new(area.x0, y, area.x1, y.saturating_add(1));
-            if let Some(m) = pixel.filter(|m| m.feather.is_finite() && m.feather > 0.0) {
-                // A feathered mask shows pixels as far as the compositor carries its blur, from
-                // mask samples inside the layer's bounds or within that reach of them.
-                let sigma = photocraft_vector::feather::feather_sigma(m.feather);
-                let reach = photocraft_vector::feather::grow(r, sigma);
-                let mut open = Rect::EMPTY;
-                for y in reach.y0..reach.y1 {
-                    m.surface.read_region_into(row(y, reach), &mut mask_row);
-                    if let Some(sp) = span(reach, y, &|i| mask_row[i] > 0.0) {
-                        open = open.union(&sp);
-                    }
+    let masked = l.mask.as_ref().is_some_and(|m| m.enabled) || l.vector_mask.as_ref().is_some_and(|v| v.enabled);
+    if !masked {
+        return match &l.content {
+            LayerContent::Group(g) => Some(g.children.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b))).filter(|r| !r.is_empty()),
+            _ => crate::layer_multi_cmds::layer_bounds(l),
+        };
+    }
+    let shown = Shown::new(l)?;
+    let b = shown.bounds;
+    // Rows one at a time, so a large sparse layer never needs its whole rectangle in memory.
+    let mut row = vec![false; b.width() as usize];
+    let mut r = Rect::EMPTY;
+    for y in b.y0..b.y1 {
+        shown.row(y, b.x0, &mut row);
+        if let (Some(a), Some(z)) = (row.iter().position(|h| *h), row.iter().rposition(|h| *h)) {
+            let (a, z) = (b.x0.saturating_add(a as i32), b.x0.saturating_add(z as i32));
+            r = r.union(&Rect::new(a, y, z.saturating_add(1), y.saturating_add(1)));
+        }
+    }
+    (!r.is_empty()).then_some(r)
+}
+
+/// Where a layer shows ink, sampled a row at a time for [`shown_bounds`].
+struct Shown<'a> {
+    /// Where it can show anything: its pixels' bounds, or its children's.
+    bounds: Rect,
+    ink: Ink<'a>,
+    mask: Option<ShownMask<'a>>,
+}
+
+enum Ink<'a> {
+    /// Everywhere in the bounds: no alpha, or effects that reach past it.
+    All,
+    Alpha(&'a photocraft_raster::Surface),
+    /// A group's: where its children show theirs.
+    Children(Vec<Shown<'a>>),
+}
+
+enum ShownMask<'a> {
+    /// An unfeathered pixel mask alone, read as it is (with its density).
+    Pixel(&'a photocraft_doc::LayerMask),
+    /// Pixel × vector mask, each feathered, as the compositor applies them.
+    Combined(photocraft_raster::Surface),
+}
+
+impl<'a> Shown<'a> {
+    fn new(l: &'a Layer) -> Option<Self> {
+        let fx = photocraft_compose::effects::has_effects(l);
+        let (bounds, ink) = match &l.content {
+            LayerContent::Group(g) if !fx => {
+                let kids: Vec<_> = g.children.iter().filter_map(Shown::new).collect();
+                (kids.iter().fold(Rect::EMPTY, |a, k| a.union(&k.bounds)), Ink::Children(kids))
+            }
+            _ => (crate::layer_multi_cmds::layer_bounds(l)?, l.surface().filter(|s| s.format().alpha && !fx).map_or(Ink::All, Ink::Alpha)),
+        };
+        if bounds.is_empty() {
+            return None;
+        }
+        // Everything that can reach into the bounds through either mask's feather.
+        let sigma = |f: f32| photocraft_compose::masks::feather_sigma(f);
+        let reach = l.mask.iter().map(|m| sigma(m.feather)).chain(l.vector_mask.iter().map(|v| sigma(v.feather))).fold(0.0, f32::max);
+        let combined = photocraft_compose::masks::combined_mask(l, photocraft_vector::feather::grow(bounds, reach));
+        let mask = combined.map(ShownMask::Combined).or_else(|| l.mask.as_ref().filter(|m| m.enabled).map(ShownMask::Pixel));
+        Some(Self { bounds, ink, mask })
+    }
+
+    /// Whether each pixel of row `y` from x `x0` (as many as `out` holds) shows ink, into `out`.
+    fn row(&self, y: i32, x0: i32, out: &mut [bool]) {
+        out.fill(false);
+        let row = Rect::new(x0, y, x0.saturating_add(out.len() as i32), y.saturating_add(1)).intersect(&self.bounds);
+        if row.is_empty() {
+            return;
+        }
+        let Some(out) = out.get_mut((row.x0 - x0) as usize..(row.x1 - x0) as usize) else { return };
+        let mut buf = Vec::new();
+        match &self.ink {
+            Ink::All => out.fill(true),
+            Ink::Alpha(s) => {
+                s.read_region_into(row, &mut buf);
+                let n = s.channels();
+                for (o, px) in out.iter_mut().zip(buf.chunks_exact(n)) {
+                    *o = px[n - 1] > 0.0;
                 }
-                let lit = if open.is_empty() { open } else { photocraft_vector::feather::grow(open, sigma).intersect(&r) };
-                match ink {
-                    Some(s) if !lit.is_empty() => {
-                        let mut shown = Rect::EMPTY;
-                        for y in lit.y0..lit.y1 {
-                            s.read_region_into(row(y, lit), &mut ink_row);
-                            if let Some(sp) = span(lit, y, &|i| ink_row[i * n + n - 1] > 0.0) {
-                                shown = shown.union(&sp);
-                            }
-                        }
-                        shown
-                    }
-                    _ => lit,
+            }
+            Ink::Children(kids) => {
+                let mut kid = vec![false; out.len()];
+                for k in kids {
+                    k.row(y, row.x0, &mut kid);
+                    out.iter_mut().zip(&kid).for_each(|(o, h)| *o |= *h);
                 }
-            } else {
-                // A hard mask (or the vector mask's path alone): the pixels it reveals that hold ink.
-                let mut shown = Rect::EMPTY;
-                for y in r.y0..r.y1 {
-                    if let Some(m) = pixel {
-                        m.surface.read_region_into(row(y, r), &mut mask_row);
-                    }
-                    if let Some(s) = ink {
-                        s.read_region_into(row(y, r), &mut ink_row);
-                    }
-                    let hit = |i: usize| pixel.is_none_or(|_| mask_row[i] > 0.0) && ink.is_none_or(|_| ink_row[i * n + n - 1] > 0.0);
-                    if let Some(sp) = span(r, y, &hit) {
-                        shown = shown.union(&sp);
-                    }
-                }
-                shown
             }
         }
-    };
-    (!r.is_empty()).then_some(r)
+        match &self.mask {
+            Some(ShownMask::Pixel(m)) => m.values_into(row, &mut buf),
+            Some(ShownMask::Combined(c)) => c.read_region_into(row, &mut buf),
+            None => return,
+        }
+        out.iter_mut().zip(&buf).for_each(|(o, v)| *o &= *v > 0.0);
+    }
 }
 
 /// Restore missing shape caches, or refresh every shape for a changed canvas, including groups.

@@ -127,8 +127,8 @@ fn a_centred_copy_ignores_empty_pixels_the_mask_reveals() {
     assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 55, 30));
 }
 
-/// #10422 review: a feathered mask shows pixels as far out as the compositor carries its blur
-/// (three sigmas and two pixels), so a 3 px feather on an opening at x 9 still shows x 4..9.
+/// #10422 review: a feathered mask shows pixels as far out as the compositor carries its blur, so
+/// a 3 px feather on an opening at x 9 still shows x 4..9.
 #[test]
 fn a_feathered_masks_shown_part_reaches_as_far_as_its_blur() {
     let (mut s, paint) = two_docs(40, 30, 8);
@@ -157,9 +157,9 @@ fn a_feathered_opening_beside_the_ink_still_shows_it() {
     })
     .unwrap();
     let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
-    // The blur reaches back over the whole square (x 4..14), which is centred as a whole, rather
-    // than the source canvas's centre standing in for an empty measure.
-    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+    // The blur reaches back to x 6 (the compositor's mask is 0 at x 4 and 5), so the shown x 6..14
+    // is centred (dx 20), rather than the source canvas's centre standing in for an empty measure.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(24, 20, 34, 30));
 }
 
 /// #10422 review: a mask below 100 % density hides nothing completely, so it crops nothing: the
@@ -233,6 +233,57 @@ fn a_centred_copy_centres_the_part_its_vector_mask_shows() {
     // is centred (dx 21, dy 14), not the opening's empty pixels right of it.
     let left = json!({"subpaths": [{"knots": [[0, 0], [20, 0], [20, 30], [0, 30]]}]});
     assert_eq!(centred(left, Some((30, 6, 4, 10)), |_| {}), Rect::new(25, 20, 55, 30));
+}
+
+/// #10422 review: a vector mask shows what its path covers, not its path's control rectangle. A
+/// triangle with corners (0, 0), (40, 0), (0, 30) covers the square (x 4..14, y 6..16) and hides a
+/// second patch at x 30..34, y 20..24 inside the same rectangle.
+#[test]
+fn a_vector_masks_shown_part_is_what_its_path_covers() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 30, "y": 20, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": {"subpaths": [{"knots": [[0, 0], [40, 0], [0, 30]]}]}})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
+/// #10422 review: a group's mask shows only where its children show ink. Children at x 4..14 and
+/// x 30..34 (y 6..16) under a group mask opening x 0..25: the empty gap x 14..25 the opening also
+/// covers shows nothing, so only the first child's square is shown.
+#[test]
+fn a_group_masks_shown_part_is_where_its_children_show_ink() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.new.layer", json!({"name": "other"})).unwrap();
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 25, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": group})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
+/// #10422 review: separate feathered openings show only as far as each one's blur reaches, not
+/// over the rectangle spanning both. Openings at x 0..20, y 0..20 and x 75..95, y 75..95 (3 px
+/// feather) show the square (x 4..14, y 6..16) and a patch at x 78..85, y 78..85; a patch at
+/// x 88..96, y 0..10 lies between them, far past either blur, and stays hidden.
+#[test]
+fn separate_feathered_openings_show_only_what_their_blur_reaches() {
+    let (mut s, paint) = two_docs(100, 100, 8);
+    for (x, y, w, h) in [(78, 78, 7, 7), (88, 0, 8, 10)] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": w, "height": h})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    }
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20, "antiAlias": false})).unwrap();
+    s.execute("select.rect", json!({"x": 75, "y": 75, "width": 20, "height": 20, "antiAlias": false, "mode": "add"})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 85, 85)));
 }
 
 #[test]
