@@ -181,6 +181,23 @@ fn ctrl_move_can_disable_snapping_after_releasing_and_pressing_ctrl_again() {
     assert_eq!(mover_bounds(&app).x0, 300);
 }
 
+#[test]
+fn ctrl_pressed_during_move_disables_snapping() {
+    let mut app = app_with_box();
+    app.ui.tool = Tool::Move;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+    let at = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    crate::canvas::tool_event(&mut app, at, m);
+    assert!(app.prefs_rt.snap_lines.iter().any(|l| l.vertical && l.pos == 300.0 && l.kind.is_smart()));
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    crate::canvas::tool_event(&mut app, at, ctrl);
+    assert!(app.prefs_rt.snap.as_ref().unwrap().disabled);
+    assert!(app.prefs_rt.snap_lines.is_empty());
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303);
+}
+
 /// Ctrl-started moves obey View Snap and the screen-space threshold, including release-only input.
 #[test]
 fn ctrl_move_respects_view_snap_and_screen_space_tolerance() {

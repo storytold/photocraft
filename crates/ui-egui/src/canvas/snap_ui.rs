@@ -2,9 +2,11 @@
 //! document, snaps tool gestures (Move tool, marquees, crop, shapes, pen anchors, Free Transform
 //! handles and guides), and draws smart guides (magenta alignment lines) while layers move.
 //!
-//! Snapping is on when View › Snap (⇧⌘;) is; pressing Ctrl during a drag turns it off, except when
-//! Ctrl started a layer move or is the corner-distortion modifier. Smart guides follow View › Show › Smart Guides and also snap the Move
-//! tool to other layers' edges and centres. The threshold is 8 screen pixels at the current zoom.
+//! Snapping is on when View › Snap (⇧⌘;) is. Ctrl temporarily turns it off, except when it starts
+//! a layer move or is the corner-distortion modifier. Releasing Ctrl ends the layer-move exception;
+//! pressing it again disables snapping. Smart guides follow View › Show › Smart Guides and also
+//! snap the Move tool to other layers' edges and centres. The threshold is 8 screen pixels at the
+//! current zoom.
 
 use egui::{Color32, Stroke, pos2};
 use photocraft_doc::LayerId;
