@@ -242,6 +242,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
                 return Err(err("truncated raster"));
             }
             let le = scale < 0.0;
+            let magnitude = scale.abs();
             // Write native-endian bytes straight into the output buffer: a separate `Vec<f32>`
             // would double the budgeted allocation (#2938).
             let row_bytes = row * 4;
@@ -254,7 +255,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
                 };
                 for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
                     let v = if le { f32::from_le_bytes(*s) } else { f32::from_be_bytes(*s) };
-                    *d = v.to_ne_bytes();
+                    *d = (v * magnitude).to_ne_bytes();
                 }
             }
             Image::from_raw(w, h, layout, SampleType::F32, out)
