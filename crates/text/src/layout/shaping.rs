@@ -14,7 +14,7 @@ use super::style::{
     SYNTHETIC_SMALL_CAPS_SCALE, SmallCapsMode, drawn_style, effective_horizontal_scale, feature_list, hangul_runs, probe_smcp, small_caps_mode, style_props,
 };
 use super::vertical::vertical_class;
-use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, VClass};
+use super::{Env, FORCED_LINE_BREAK, Flow, KINSOKU_LINE_BREAK_OVERRIDE, LRM, RLM, RunBrush, Slot, VClass, forbidden_line_start};
 use crate::fonts::FontDb;
 use crate::layout::DEFAULT_TAB_STOP_PT;
 
@@ -322,6 +322,12 @@ impl<'a> Para<'a> {
     fn shape(&self, lcx: &mut LayoutContext<RunBrush>, fcx: &mut parley::FontContext, tab_spacing: &[f32], roman_spacing: &[f32]) -> Layout<RunBrush> {
         let env = self.env;
         let mut b = lcx.ranged_builder(fcx, &self.ptext, 1.0, false);
+        // 行頭禁則 (JIS X 4051) in vertical type: no line may begin with a small kana, the
+        // long-vowel mark, a closing bracket, sentence punctuation or an iteration mark.
+        // Horizontal type keeps Unicode's UAX #14 breaks as before.
+        if env.vertical {
+            b.set_line_break_override(Some(KINSOKU_LINE_BREAK_OVERRIDE));
+        }
         // Paragraph-start style as the default (covers the direction mark and empty
         // paragraphs), then every run piece intersecting this paragraph.
         for p in style_props(&env.styles[self.si0], env.k, &self.fallback, self.si0 as u32, env.small_caps[self.si0]) {
@@ -332,6 +338,16 @@ impl<'a> Para<'a> {
         // word run out of the box. Point text has no width to overflow.
         if env.is_box {
             b.push_default(StyleProperty::OverflowWrap(parley::style::OverflowWrap::BreakWord));
+            if env.vertical {
+                // 行頭禁則: no emergency (BreakWord) break before a line-start-forbidden
+                // character either, or the box would still start a column with one when
+                // the column overflows; such a character hangs on the previous column.
+                for (i, ch) in self.ptext.char_indices() {
+                    if forbidden_line_start(ch) {
+                        b.push(StyleProperty::OverflowWrap(parley::style::OverflowWrap::Normal), i..i + ch.len_utf8());
+                    }
+                }
+            }
         }
         for ri in self.si0..self.si_end {
             self.push_run_piece(&mut b, ri);
