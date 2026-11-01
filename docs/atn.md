@@ -159,6 +159,10 @@ with cell size 2, and Trace Contour imports with its upper edge. Saving a native
 that omits these parameters preserves its native behavior: Mosaic cell size 10 and
 Trace Contour lower edge. Explicit imported values stay explicit, including changed
 Trace Contour levels and edges that the reference application applies but does not echo.
+Trace Contour maps levels within PhotoCraft's native `0..255` range unchanged.
+Other recorded levels remain kept steps with their descriptors and flags intact;
+native commands outside that range refuse export. This is a native support limit,
+not a measurement of the reference application's dialog range, which remains pending.
 
 Mosaic accepts a unitless pixel value on import and writes a `#Pxl` unit double.
 Other fields keep their documented integer, boolean and enum types. Unknown keys,
