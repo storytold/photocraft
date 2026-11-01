@@ -52,6 +52,28 @@ fn save(s: &mut Session) -> Vec<u8> {
     photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()
 }
 
+/// Preserve absolute intent and keep unrepresentable intent settings as complete steps.
+#[test]
+fn absolute_and_unknown_intents_remain_distinct_with_conversion_flags() {
+    for code in ["AClr", "AbsC", "futureIntent"] {
+        let mut d = descriptor();
+        d.items.retain(|(key, _)| !key.is("Inte"));
+        d.items.push((Id::new("Inte"), D::Enumerated { type_id: Id::new("Inte"), value: Id::new(code) }));
+        let mut s = Session::new();
+        let result = load(&mut s, &recorded(d.clone()));
+        let saved = atn::parse(&save(&mut s)).unwrap();
+        let saved = saved.actions[0].items[0].descriptor.as_ref().unwrap();
+        if code == "futureIntent" {
+            assert_eq!(result["unsupported"].as_array().unwrap().len(), 1);
+            assert_eq!(saved, &d);
+        } else {
+            assert_eq!(result["unsupported"], json!([]));
+            assert_eq!(s.actions.list[0].steps[0].1["intent"], json!("absolute"));
+            assert_eq!(saved.get("Inte"), Some(&D::Enumerated { type_id: Id::new("Inte"), value: Id::new("AClr") }));
+        }
+    }
+}
+
 /// A cached placed layer over black separates flatten order, rasterization and U8 dither.
 fn fixture() -> Session {
     let mut doc = Document::new("Linear source", Size::new(256, 256), ColorMode::Rgb, SampleType::U8);

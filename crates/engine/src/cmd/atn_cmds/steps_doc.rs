@@ -339,6 +339,7 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Import pixel or percentage dimensions and their recorded style-scaling option.
 pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     let mut percent: Option<f64> = None;
@@ -380,9 +381,17 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     if p.is_empty() {
         return Mapped::Unsupported { harmless: false };
     }
+    // An omitted recorded flag preserves style sizes; native calls still default to scaling.
+    let scale_styles = match d.get("scaleStyles") {
+        None => false,
+        Some(D::Boolean(value)) => *value,
+        Some(_) => return Mapped::Unsupported { harmless: false },
+    };
+    p.insert("scaleStyles".into(), scale_styles.into());
     step("image.imageSize", Value::Object(p))
 }
 
+/// Export effective style scaling with the existing Image Size dimensions.
 pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
     if jnum(p, "resolution").is_some()
@@ -418,7 +427,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(i) = jstr(p, "resample").filter(|r| *r != "none") {
         d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, i)?));
     }
-    Some(d)
+    Some(d.with("scaleStyles", D::Boolean(jbool(p, "scaleStyles").unwrap_or(true))))
 }
 
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
@@ -577,7 +586,8 @@ pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
             };
             p[param] = json!(value);
         }
-        if let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) {
+        if d.get("Inte").is_some() {
+            let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) else { return Mapped::Unsupported { harmless: false } };
             p["intent"] = json!(i);
         }
         if let Some(b) = get_bool(d, "MpBl") {

@@ -623,7 +623,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.smartObjects.editContents", json!({})),
         ("layer.smartObjects.updateModifiedContent", json!({})),
         ("paint.bucket", json!({"x": 10, "y": 20, "tolerance": 32, "antiAlias": true, "contiguous": false, "opacity": 100})),
-        ("image.imageSize", json!({"percent": 200, "resample": "bicubicAutomatic"})),
+        ("image.imageSize", json!({"percent": 200, "resample": "bicubicAutomatic", "scaleStyles": true})),
         ("file.placeEmbedded", json!({"path": "/tmp/logo.png", "scale": 50})),
         ("file.placeLinked", json!({"path": "/tmp/logo.png"})),
         ("file.openAs", json!({"path": "/tmp/a.psd"})),
@@ -663,7 +663,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
         ("layer.fill.pattern.set", json!({"pattern": "1 -R2.jpg"})),
         ("image.mode.bitmap", json!({"method": "threshold"})),
-        ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
+        ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true, "scaleStyles": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
         // COPYCAT, AJ_Actions2023 and the Line and Color tutorial set.
         ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
@@ -1493,7 +1493,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert_eq!(more_steps[4].1, json!({"foreground": "#000000"}));
     assert!(more.unsupported.is_empty());
     assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
-    assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic"}));
+    assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic", "scaleStyles": true}));
     assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false}));
     assert_eq!(rest_steps[4].1, json!({"path": "/Users/me/logo.png", "scale": 50}));
     assert_eq!(rest_steps[5].1, json!({"path": "/Users/me/in.psd"}));
