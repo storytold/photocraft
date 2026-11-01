@@ -255,6 +255,9 @@ impl eframe::App for PhotocraftApp {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         self.inject_synthetic(ctx, raw_input);
+        // The Alt key's own press and release decide ⌥ for the pointer events after them: on Windows
+        // a touchpad click can carry a modifier state that misses a held Alt (#10544).
+        crate::alt_keys::fold_alt(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);
         self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
