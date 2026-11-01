@@ -791,18 +791,62 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
         assert!((want > 0.5) == (x < 32), "Color Range at {x}: {want}");
     }
     s.execute("select.deselect", json!({})).unwrap();
-    // Red sampled, blue then subtracted: only red changes.
+    // Red sampled, blue then subtracted. Blue is far from the red sample here, so subtracting it
+    // changes nothing; `replace_color_subtracting_inside_the_added_range_takes_a_colour_out` has
+    // a subtraction that does.
     s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[24, 16]], "order": ["+", "-"]}))).unwrap();
     assert!(changed(rgba(&s, 4, 16), before.0) > 0.1);
-    assert_eq!(rgba(&s, 24, 16), before.1, "the subtracted blue stays");
     assert_eq!(rgba(&s, 40, 16), before.2);
     // Bad samples are refused, naming this command.
     let err = s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[999, 16]]}))).unwrap_err();
     assert!(err.to_string().contains("replaceColor") && err.to_string().contains("outside"), "{err}");
 }
 
-/// A malformed `subtractPoints` is refused even with one sample, where the single-colour path
-/// would otherwise ignore it (CodeRabbit review on #10443).
+/// FredApps review on #10443: a subtracted sample inside the added range. Photoshop's Subtract
+/// from Sample reshapes the samples' Lab box (`LabRange::subtract`): a subtracted colour inside
+/// it pulls the nearer edge onto itself, so it stays matched and the added colour beyond that
+/// edge drops out. Two added greys span dark to light; subtracting a grey near the light end
+/// leaves the light one unreplaced.
+#[test]
+fn replace_color_subtracting_inside_the_added_range_takes_a_colour_out() {
+    let grey = |v: f32| [v, v, v, 1.0];
+    // Dark grey (x < 12), mid grey (subtracted), light grey, black (never sampled).
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| match x {
+        ..12 => grey(0.25),
+        12..24 => grey(0.65),
+        24..36 => grey(0.75),
+        _ => grey(0.0),
+    });
+    let at = [(4, 16), (16, 16), (28, 16), (40, 16)];
+    let before: Vec<_> = at.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let added = json!({"fuzziness": 20, "lightness": -50, "points": [[4, 16], [28, 16]]});
+    // Added only: the box spans dark to light, so all three greys are replaced.
+    s.execute("image.adjustments.replaceColor", added.clone()).unwrap();
+    for (i, &(x, y)) in at[..3].iter().enumerate() {
+        assert!(changed(rgba(&s, x, y), before[i]) > 0.1, "grey {i} is in the added range");
+    }
+    assert_eq!(rgba(&s, 40, 16), before[3]);
+    s.execute("edit.undo", json!({})).unwrap();
+    // Mid grey subtracted: the light end moves onto it, so the light grey is left alone.
+    let mut subtracted = added.clone();
+    subtracted["subtractPoints"] = json!([[16, 16]]);
+    subtracted["order"] = json!(["+", "+", "-"]);
+    s.execute("image.adjustments.replaceColor", subtracted.clone()).unwrap();
+    assert!(changed(rgba(&s, 4, 16), before[0]) > 0.1, "the dark grey is still replaced");
+    assert!(changed(rgba(&s, 16, 16), before[1]) > 0.1, "the subtracted grey stays matched, at the new edge");
+    assert_eq!(rgba(&s, 28, 16), before[2], "the light grey beyond it is taken out");
+    assert_eq!(rgba(&s, 40, 16), before[3]);
+    // Select › Color Range agrees for the same clicks.
+    s.execute("edit.undo", json!({})).unwrap();
+    let mut range = subtracted;
+    range.as_object_mut().unwrap().remove("lightness");
+    s.execute("select.colorRange", range).unwrap();
+    let sel = doc(&s).selection.clone().unwrap();
+    let covered: Vec<bool> = at.iter().map(|&(x, y)| sel.read_region(Rect::from_xywh(x, y, 1, 1))[0] > 0.5).collect();
+    assert_eq!(covered, [true, true, false, false]);
+}
+
 /// #10443 review: with only Subtract from Sample clicks, the dialog's From colour is what the
 /// subtraction starts from, not the foreground (black here), so the red is still replaced.
 #[test]
@@ -814,7 +858,10 @@ fn replace_color_subtract_only_starts_from_the_from_colour() {
     let p = json!({"color": "#d91a1a", "hue": 120, "fuzziness": 40, "points": [], "subtractPoints": [[24, 16]]});
     s.execute("image.adjustments.replaceColor", p).unwrap();
     assert_ne!(rgba(&s, 4, 16), r0, "the From colour (red) is replaced");
-    assert_eq!(rgba(&s, 24, 16), b0, "the subtracted blue is left alone");
+    // Blue is outside the From colour's range anyway: subtracting from a single colour doesn't
+    // reshape its range, as in Photoshop (see
+    // `replace_color_subtracting_inside_the_added_range_takes_a_colour_out`).
+    assert_eq!(rgba(&s, 24, 16), b0, "blue isn't matched");
 }
 
 /// #10443 review: a `null` From colour means the foreground, for the subtract-only matcher too.
@@ -830,6 +877,8 @@ fn replace_color_subtract_only_reads_a_null_colour_as_the_foreground() {
     assert_ne!(rgba(&s, 4, 16), r0, "the foreground (red) is replaced");
 }
 
+/// A malformed `subtractPoints` is refused even with one sample, where the single-colour path
+/// would otherwise ignore it (CodeRabbit review on #10443).
 #[test]
 fn replace_color_refuses_malformed_subtract_points() {
     let mut s = session(8, "rgb");
