@@ -1,7 +1,7 @@
 //! Photoshop's channel and colour steps (#10609): Split Channels, Merge Spot Channel, Trap and
 //! Match Color, with the keys Photoshop records.
 
-use super::descriptors::{PX, boolean, desc, num, px, trimmed};
+use super::descriptors::{PX, boolean, desc, px, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
@@ -93,7 +93,9 @@ const MATCH_COLOR: &[(&str, &str, i32)] = &[("Lght", "luminance", 100), ("ClrR",
 
 /// Match Color (`matchColor`) without a source, as Photoshop records it (`noReference`). A
 /// step that matches another image (`noReference` false, or not a Boolean) names no source
-/// here, so it keeps the Photoshop step, as does a setting that isn't a number.
+/// here, so it keeps the Photoshop step, as does a setting that isn't an integer: the step
+/// saves its settings as integers, so it couldn't write a fraction, a large integer or a unit
+/// back as recorded.
 pub(super) fn match_color_from(d: &Descriptor) -> Mapped {
     match match_color_params(d) {
         Some(p) => step("image.adjustments.matchColor", Value::Object(p)),
@@ -107,7 +109,11 @@ fn match_color_params(d: &Descriptor) -> Option<serde_json::Map<String, Value>> 
     }
     let mut p = serde_json::Map::new();
     for (key, param, default) in MATCH_COLOR {
-        p.insert((*param).into(), setting(d, key, |v| num(v).map(Value::from), Value::from(*default))?);
+        let integer = |v: &D| match v {
+            D::Integer(n) => Some(Value::from(*n)),
+            _ => None,
+        };
+        p.insert((*param).into(), setting(d, key, integer, Value::from(*default))?);
     }
     Some(p)
 }

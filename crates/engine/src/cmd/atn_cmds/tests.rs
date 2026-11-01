@@ -3325,3 +3325,19 @@ fn trap_width_not_in_pixels_is_kept() {
     }
     assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(2.5))), Mapped::Steps(_)));
 }
+
+/// Match Color saves its settings as integers, so a recorded value it couldn't save back as
+/// the same integer stays a Photoshop step instead of loading and then failing to save (#10609).
+#[test]
+fn match_color_setting_that_cannot_be_saved_back_is_kept() {
+    for (key, v) in [
+        ("Lght", D::Double(99.5)),
+        ("Lght", D::Double(100.0)),
+        ("ClrR", D::LargeInteger(1 << 40)),
+        ("ClrR", D::LargeInteger(80)),
+        ("Fade", D::UnitFloat { unit: *b"#Prc", value: 25.0 }),
+    ] {
+        let m = channel_step("matchColor", desc("null").with(key, v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{key} = {v:?} was mapped");
+    }
+}
