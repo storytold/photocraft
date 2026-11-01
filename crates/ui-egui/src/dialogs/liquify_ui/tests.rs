@@ -1038,13 +1038,7 @@ fn release_and_repress_in_one_frame_make_two_strokes() {
     let gap = c + vec2(60.0, 0.0);
     let again = c + vec2(80.0, 0.0);
     let end = c + vec2(90.0, 0.0);
-    let events = vec![
-        button(a, false),
-        egui::Event::PointerMoved(gap),
-        egui::Event::PointerMoved(again),
-        button(again, true),
-        egui::Event::PointerMoved(end),
-    ];
+    let events = vec![button(a, false), egui::Event::PointerMoved(gap), egui::Event::PointerMoved(again), button(again, true), egui::Event::PointerMoved(end)];
     frame(&mut app, &ctx, events);
     let d = app.distort.liquify.as_ref().unwrap();
     assert_eq!(d.strokes.len(), 1, "the release ended the first stroke");
