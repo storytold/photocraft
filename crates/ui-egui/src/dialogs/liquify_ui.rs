@@ -268,7 +268,8 @@ pub struct LiquifyDialog {
     /// Preview (P): off, the image is drawn unwarped while strokes still change the field, as
     /// Photoshop's Preview checkbox does (#7905). Every opening starts with it on.
     pub preview: bool,
-    /// The undisplaced field drawn while Preview is off (made when it's first turned off).
+    /// The undisplaced field drawn while Preview is off. It is as large as `field`, so it exists
+    /// only while Preview is off: made when Preview is turned off, freed when it's turned back on.
     identity: Option<LiquifyField>,
 }
 
@@ -460,9 +461,7 @@ impl LiquifyDialog {
         if on == self.preview {
             return;
         }
-        if !on && self.identity.is_none() {
-            self.identity = Some(LiquifyField::new(self.canvas, self.cell));
-        }
+        self.identity = (!on).then(|| LiquifyField::new(self.canvas, self.cell));
         self.preview = on;
         self.dirty = Some([0, 0, self.proxy.w, self.proxy.h]);
         self.render_dirty();

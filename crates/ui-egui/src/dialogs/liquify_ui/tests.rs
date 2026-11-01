@@ -1124,3 +1124,24 @@ fn ok_with_preview_off_applies_the_warp() {
     assert_eq!(unpreviewed, commit_with(true).1, "the same warp as with Preview on");
 }
 
+/// The identity field (as large as the image's field) exists only while Preview is off: turning
+/// Preview back on frees it, and closing the dialog drops it.
+#[test]
+fn the_identity_field_exists_only_while_preview_is_off() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    let identity = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().identity.is_some();
+    assert!(!identity(&app), "not made while Preview is on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app));
+    control(&mut app, &json!({"preview": true})).unwrap();
+    assert!(!identity(&app), "freed when Preview is turned back on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app), "made again when Preview is turned off again");
+    control(&mut app, &json!({"cancel": true})).unwrap();
+    assert!(app.distort.liquify.is_none(), "closing drops the dialog and its identity field");
+    open(&mut app, &ctx).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview && d.identity.is_none(), "a new opening starts with Preview on and no identity field");
+}
