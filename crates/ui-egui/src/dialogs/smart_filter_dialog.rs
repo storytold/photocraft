@@ -149,7 +149,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     // a right-to-left UI the blocks sit at the reading start and the nested rows read from the
     // right; a left-to-right UI keeps the default layout.
     ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("Mode"));
             let mut blend = fields.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
             let options: Vec<_> = BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
@@ -235,7 +235,7 @@ fn viewport(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             ui.add(egui::Image::new(&image.texture).fit_to_exact_size(size * zoom / 100.0));
         });
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if widgets::secondary_button(ui, "−", 32.0).clicked() {
             fields.insert("__zoom".into(), json!((zoom / 2.0).max(0.1)));
         }
