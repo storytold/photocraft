@@ -28,7 +28,7 @@
 //! The Windows calls go through safe `winsafe` wrappers; the workspace forbids `unsafe`, and
 //! winsafe can't wrap a raw handle without it, so the window is found by its handle instead.
 
-pub use platform::service;
+pub use platform::{raise_service, service};
 
 #[cfg(target_os = "windows")]
 mod platform {
@@ -62,6 +62,20 @@ mod platform {
         let hwnd = find_window(target)?;
         reapply(&hwnd);
         Some(Box::new(move || reapply(&hwnd)))
+    }
+
+    /// Raise the main window within its existing window level, even when it already has focus.
+    /// Activation remains the UI's decision; this neither makes the window topmost nor moves it.
+    pub fn raise_service(cc: &eframe::CreationContext<'_>) -> Option<Box<dyn FnMut()>> {
+        let target = match cc.window_handle().ok()?.as_raw() {
+            RawWindowHandle::Win32(h) => h.hwnd.get(),
+            _ => return None,
+        };
+        let hwnd = find_window(target)?;
+        Some(Box::new(move || {
+            let _ =
+                hwnd.SetWindowPos(HwndPlace::Place(co::HWND_PLACE::TOP), POINT::new(), SIZE::new(), co::SWP::NOMOVE | co::SWP::NOSIZE | co::SWP::NOACTIVATE);
+        }))
     }
 
     /// The top-level window with the given raw handle. `EnumWindows` hands out real `HWND`s, so
@@ -340,6 +354,11 @@ mod platform {
 #[cfg(not(target_os = "windows"))]
 mod platform {
     use photocraft_ui_egui::WindowFrameFn;
+
+    /// Other window systems keep the toolkit's normal focus handling.
+    pub fn raise_service(_cc: &eframe::CreationContext<'_>) -> Option<Box<dyn FnMut()>> {
+        None
+    }
 
     pub fn service(_cc: &eframe::CreationContext<'_>, _custom_titlebar: bool) -> Option<WindowFrameFn> {
         None

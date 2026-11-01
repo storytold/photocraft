@@ -640,6 +640,7 @@ fn main() -> eframe::Result {
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
             app.services.window_frame = window_frame::service(cc, custom_titlebar);
+            app.services.raise_window = window_frame::raise_service(cc);
             // Linux: the desktop's caption buttons (GNOME's, KDE's) on the sides its layout puts them.
             if custom_titlebar {
                 app.services.caption_style = caption_style::service();

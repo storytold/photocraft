@@ -474,6 +474,9 @@ pub struct Services {
     /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
     /// decorated or the platform needs no fixing.
     pub window_frame: Option<WindowFrameFn>,
+    /// Raise the main native window without changing its size, position or activation.
+    /// Used after lowering floating panels, including when the main window already has focus.
+    pub raise_window: Option<Box<dyn FnMut()>>,
     /// How the custom title bar's caption buttons look and where they sit (Linux: the desktop's
     /// style and button layout). Read every frame, with the context to wake when it changes;
     /// `None` keeps Windows' buttons at the right end.
