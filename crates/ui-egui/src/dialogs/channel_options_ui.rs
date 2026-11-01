@@ -122,7 +122,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn body_blocks(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let quick = f.get("channel").and_then(Value::as_str) == Some("quickMask");
     if let Some(mut name) = f.get("name").and_then(Value::as_str).map(str::to_string) {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Name:"));
             if crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(200.0)).accessible_name(tl!("Name")).changed() {
                 f.insert("name".into(), json!(name));
@@ -148,7 +148,7 @@ fn body_blocks(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.add_space(4.0);
     crate::widgets::section_label(ui, tl!("Color"));
     crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, "");
         let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
         let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -170,7 +170,7 @@ fn body_blocks(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn mask_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // The host leaves the body on the default layout, so the body mirrors itself.
     ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Color:"));
             let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
             let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -247,7 +247,7 @@ pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // right-to-left UI the blocks read from the right and the rows inside them mirror with them.
     ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Name:"));
             if crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(200.0)).accessible_name(tl!("Name")).changed() {
                 f.insert("name".into(), json!(name));
@@ -255,7 +255,7 @@ pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         });
         crate::widgets::section_label(ui, tl!("Ink Characteristics"));
         crate::widgets::hairline(ui);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Color:"));
             let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
             let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
