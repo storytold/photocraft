@@ -39,6 +39,15 @@ pub(super) struct Preview {
 }
 
 impl Preview {
+    /// Nothing to preview for state `generation` (a Custom area not painted yet): the image is
+    /// shown unfilled, with no error.
+    fn clear(&mut self, generation: u64) {
+        self.shown = generation;
+        self.tex = None;
+        self.pending_image = None;
+        self.error = None;
+    }
+
     /// Takes the result of the preview of state `generation`: an image to upload, or the error,
     /// which stands for that state until it changes (the same preview is not started again).
     fn finish(&mut self, generation: u64, r: Result<(Rect, egui::ColorImage), String>) {
@@ -172,7 +181,11 @@ pub(super) fn refresh(app: &mut PhotocraftApp) {
 /// Computes the preview now, on this thread (tests and the control channel).
 pub(super) fn wait_preview(app: &mut PhotocraftApp) -> Result<(), String> {
     let (doc, layer, p, want, limit) = {
-        let w = app.distort.caf.as_ref().ok_or("Content-Aware Fill is not open")?;
+        let w = app.distort.caf.as_mut().ok_or("Content-Aware Fill is not open")?;
+        if w.awaiting_custom_area() {
+            w.preview.clear(w.preview.want);
+            return Ok(());
+        }
         let st = app.session.active().ok_or("no document")?;
         (st.doc.clone(), w.layer, plan_params(w, true), w.preview.want, w.texture_limit)
     };
@@ -285,6 +298,10 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
         }
     }
     if pv.running.is_some() || pv.shown == pv.want || dragging {
+        return;
+    }
+    if w.awaiting_custom_area() {
+        w.preview.clear(w.preview.want);
         return;
     }
     let Some(doc) = doc else { return };

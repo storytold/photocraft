@@ -51,6 +51,8 @@ use view::view_image;
 
 /// Longest side of the document proxy shown in the view (px).
 const PROXY_SIDE: usize = 1600;
+/// The panel's hint while Custom has no sampling area yet (#10621).
+const CUSTOM_HINT: &str = "Paint with the Sampling Brush to add a sampling area.";
 const LEFT_W: f32 = 48.0;
 const BAR_H: f32 = 36.0;
 const PANEL_W: f32 = 300.0;
@@ -285,6 +287,7 @@ impl CafWorkspace {
             "settings": self.opts.to_json(),
             "previewReady": self.preview.tex.is_some() && self.preview.shown == self.preview.want,
             "previewError": self.preview.error,
+            "previewHint": self.awaiting_custom_area().then_some(CUSTOM_HINT),
             "error": self.error,
         })
     }
@@ -343,6 +346,12 @@ impl CafWorkspace {
         let strokes: usize = self.strokes.iter().chain(self.cur.iter()).map(|s| s.points.len()).sum();
         let lassos: usize = self.fill_edits.iter().map(|e| e.get("points").and_then(Value::as_array).map_or(0, Vec::len)).sum();
         strokes + lassos
+    }
+
+    /// Custom sampling with nothing painted yet. Photoshop shows the image unfilled and a hint to
+    /// paint with the Sampling Brush there, not an error, and so does the workspace (#10621).
+    fn awaiting_custom_area(&self) -> bool {
+        self.opts.sampling == "custom" && !self.strokes.iter().chain(self.cur.iter()).any(|s| s.add)
     }
 
     /// The preview is out of date.

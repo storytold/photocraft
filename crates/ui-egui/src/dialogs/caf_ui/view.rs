@@ -204,6 +204,8 @@ fn caf_props_panel(
     });
     if let Some(e) = w.error.as_ref().or(w.preview.error.as_ref()) {
         ui.label(egui::RichText::new(e.as_str()).color(t.danger).size(11.0));
+    } else if w.awaiting_custom_area() {
+        ui.label(egui::RichText::new(tl!("Paint with the Sampling Brush to add a sampling area.")).color(t.text_dim).size(11.0));
     }
 }
 

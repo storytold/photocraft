@@ -505,3 +505,24 @@ fn keys_wait_while_the_overlay_colour_picker_is_open() {
     press(&mut app, &ctx, Key::Z, Modifiers::COMMAND);
     assert_eq!(ws(&app).describe()["sampledProxyPixels"].as_u64(), Some(all));
 }
+
+/// Picking Custom before anything is painted is how Photoshop starts it: the preview shows the
+/// image unfilled and the panel a hint to paint with the Sampling Brush, not the fill's
+/// "custom sampling needs `area`…" refusal (#10621). The first added stroke previews the fill.
+#[test]
+fn custom_sampling_with_nothing_painted_hints_instead_of_failing() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let d = control(&mut app, &json!({"sampling": "custom", "waitPreview": true})).unwrap();
+    assert!(d["previewError"].is_null(), "{d}");
+    assert!(d["error"].is_null(), "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert!(ws(&app).preview.pending_image.is_none() && ws(&app).preview.tex.is_none(), "the image is shown unfilled");
+    // A subtracting stroke paints nothing in an empty area: still the hint.
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0]], "size": 8, "alt": true}, "waitPreview": true})).unwrap();
+    assert!(d["previewError"].is_null() && d["previewHint"] == json!(CUSTOM_HINT), "{d}");
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}, "waitPreview": true})).unwrap();
+    assert!(d["previewHint"].is_null(), "{d}");
+    assert!(d["previewError"].is_null(), "{d}");
+    assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
+}
