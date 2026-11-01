@@ -527,6 +527,26 @@ fn smart_filter_params_merge_or_replace() {
     assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "undo brings the old params back");
 }
 
+/// `replace` takes the filter's complete settings: they must be an object, and must read as this
+/// filter's (a wrong type or out-of-range value is refused, a missing key takes its default); a
+/// refused edit leaves the filter and the history as they were.
+#[test]
+fn smart_filter_replace_validates_the_new_params() {
+    let mut s = smart_session();
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [50, 30, 20, 0]})).unwrap();
+    let before = smart_filters_of(&s)[0].params.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [json!(5), json!([1, 2]), json!({"monochrome": "yes"}), json!({"red": "x"})] {
+        let r = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": bad, "replace": true}));
+        assert!(r.is_err(), "{bad} is refused");
+    }
+    assert_eq!(smart_filters_of(&s)[0].params, before, "a refused edit changes nothing");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "and adds no history step");
+    // Without `replace` a non-object still takes the slot (as before); an empty object takes the defaults.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {}, "replace": true})).unwrap();
+    assert_eq!(smart_filters_of(&s)[0].params, json!({}));
+}
+
 /// A selection becomes the smart filter's mask, and the adjustment with its own command
 /// (Shadows/Highlights) records a filter too.
 #[test]
