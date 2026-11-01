@@ -1447,3 +1447,35 @@ fn slice_modes_are_validated() {
         assert_eq!(decode(&path).dimensions(), (64, 48), "{mode}");
     }
 }
+
+#[test]
+fn a_whole_image_path_with_slice_numbers_is_refused() {
+    // CodeRabbit review on PR #10557: `path` alone writes the whole image as one file, so slice
+    // `numbers` with it were ignored and every slice came out in that file. It is refused; `dir`
+    // exports the chosen slices.
+    let dir = tmp("path-numbers");
+    let (mut s, left, right) = two_slices();
+    let path = format!("{dir}/web.png");
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "numbers": [right]}), "use `dir`");
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "dir": "", "numbers": [left, right]}), "use `dir`");
+    // Valid calls still work: `path` alone is the whole image; with `slices`, the chosen slices
+    // go next to it; `dir` with `numbers` writes those slices.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path})).unwrap();
+    assert_eq!(r["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+    let names = |r: &Value| r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect::<Vec<_>>();
+    let out = tmp("path-numbers-selected");
+    let r = s
+        .execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": format!("{out}/web.png"), "slices": "selected", "numbers": [right]}))
+        .unwrap();
+    assert_eq!(names(&r), ["right.png"]);
+    let out = tmp("path-numbers-dir");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": format!("{out}/web.png"), "dir": out, "numbers": [left]})).unwrap();
+    assert_eq!(names(&r), ["left.png"]);
+    // A document without slices is one image: its only slice number is the whole image.
+    let mut s = session(8);
+    let out = tmp("path-numbers-none");
+    let whole = format!("{out}/whole.png");
+    s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": whole, "numbers": [1]})).unwrap();
+    assert_eq!(decode(&whole).dimensions(), (64, 48));
+}

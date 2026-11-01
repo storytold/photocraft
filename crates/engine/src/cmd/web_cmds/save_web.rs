@@ -205,6 +205,12 @@ fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<Sl
         let what = if missing.len() == 1 { "slice" } else { "slices" };
         return Err(bad(cmd, format!("no {what} numbered {list} (the document's slices are 1–{count})")));
     }
+    // `path` alone is the whole image in one file (with `slices` too, the slices go next to it):
+    // the chosen slices would be ignored, so a document with slices refuses it.
+    let given = |k: &str| p.get(k).and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+    if given("path") && !given("dir") && p.get("slices").is_none() && count > 1 {
+        return Err(bad(cmd, "`path` writes the whole image as one file: to export the slices in `numbers`, use `dir`"));
+    }
     Ok(SlicePick::Numbers(numbers))
 }
 
