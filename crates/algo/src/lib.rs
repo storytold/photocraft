@@ -941,14 +941,14 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
 /// alpha keeps its usual polarity.
 fn min_max_ink(src: &Image, out: Rect, ctx: &Ctx, radius: f32, max: bool, preserve: Preserve) -> Vec<f32> {
     if !fxutil::subtractive(ctx) {
-        return other::min_max_preserve(src, out, radius, max, preserve);
+        return other::min_max_preserve(src, out, radius, max, preserve, ctx.alpha);
     }
     let n = src.ch.max(1);
     let cc = if ctx.alpha { n - 1 } else { n };
     let flip = |data: &mut [f32]| data.chunks_exact_mut(n).for_each(|px| px.iter_mut().take(cc).for_each(|v| *v = 1.0 - *v));
     let mut inv = src.clone();
     flip(&mut inv.data);
-    let mut res = other::min_max_preserve(&inv, out, radius, max, preserve);
+    let mut res = other::min_max_preserve(&inv, out, radius, max, preserve, ctx.alpha);
     flip(&mut res);
     res
 }
