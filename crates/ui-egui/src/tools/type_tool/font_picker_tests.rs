@@ -1264,6 +1264,59 @@ fn wheel_over_the_closed_font_button_steps_through_the_families() {
     assert_eq!(h.state().current, "Family 00", "stops at the first family");
 }
 
+/// Idle fields do not prepare catalog rows; actual wheel input still uses the shown order.
+#[test]
+fn closed_font_fields_prepare_rows_only_for_navigation() {
+    for size in [1000, 5000] {
+        for localized in [false, true] {
+            let mut h = harness_with(FontPreview::Off);
+            h.state_mut().families = (0..size).map(|i| format!("Family {i:04}")).collect();
+            h.state_mut().current = "Family 0000".into();
+            if localized {
+                let labels: HashMap<_, _> = h.state().families.iter().enumerate().map(|(i, f)| (f.clone(), format!("Å Family {:04}", size - i))).collect();
+                h.ctx.data_mut(|d| d.insert_temp(super::font_labels_id(), std::sync::Arc::new(labels)));
+            }
+            let builds = || super::fonts::MENU_ROWS_BUILT.with(std::cell::Cell::get);
+            let before = builds();
+            h.run_steps(10);
+            assert_eq!(builds(), before, "{size}/{localized}: no rows for idle frames");
+            assert_eq!(h.state().current, "Family 0000");
+            let button = h.query_all_by_role(Role::TextInput).next().unwrap().rect().center();
+            h.hover_at(button);
+            h.run();
+            assert_eq!(builds(), before, "hover alone does not navigate");
+            for (index, unit) in [egui::MouseWheelUnit::Line, egui::MouseWheelUnit::Point].into_iter().enumerate() {
+                let step = match unit {
+                    egui::MouseWheelUnit::Point => h.ctx.options(|o| o.input_options.line_scroll_speed),
+                    _ => 1.0,
+                };
+                let current = h.state().current.clone();
+                let before = builds();
+                for half in 0..2 {
+                    h.event(egui::Event::MouseWheel {
+                        source: egui::MouseWheelSource::Unknown,
+                        unit,
+                        delta: vec2(0.0, step * if localized { 0.5 } else { -0.5 }),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: Modifiers::NONE,
+                    });
+                    h.run();
+                    if half == 0 {
+                        assert_eq!(h.state().current, current, "the first half-notch stays pending");
+                        assert_eq!(builds(), before, "pending wheel fractions do not build rows");
+                    }
+                }
+                assert!(builds() > before, "the completed notch uses the real row builder");
+                assert_eq!(h.state().current, format!("Family {:04}", index + 1), "{size}/{localized}/{unit:?}: shown alphabetical order");
+                assert!(popup_rect(&h).is_none());
+                let after = builds();
+                h.run_steps(10);
+                assert_eq!(builds(), after);
+            }
+        }
+    }
+}
+
 #[test]
 fn wheel_over_the_closed_button_keeps_a_stable_order_with_recents() {
     let mut h = harness_with_recents(FontPreview::Medium, vec![]);
@@ -1615,6 +1668,56 @@ fn the_preview_sets_the_type_layers_text_or_the_selection_being_typed() {
         ed.caret = 400;
     }
     assert_eq!(super::preview_text(&app), None, "an out-of-range selection is blank, not a panic");
+}
+
+/// The preview matches trimming and joining nonempty lines before taking 60 Unicode scalars.
+#[test]
+fn preview_prefix_preserves_whitespace_unicode_and_character_ranges() {
+    let cases = [
+        String::new(),
+        " \t\u{a0}\u{2003}".into(),
+        "\n \t alpha \t beta  \r\n\n\u{2028}\u{a0}gamma\u{2003}\u{2029} delta \t".into(),
+        "🙂e\u{301}中abc  ".repeat(20),
+        format!("{}  \nX", "a".repeat(59)),
+        format!("{}\tX", "a".repeat(59)),
+        format!("{}\t \r\n", "a".repeat(59)),
+        format!("{}\t \r\nB", "a".repeat(58)),
+        format!("{}a\nb", " ".repeat(4096)),
+        "a".repeat(4096),
+        format!("{}{}\u{2028}X", "a".repeat(59), " ".repeat(4096)),
+        format!("{}{}", "a".repeat(59), " ".repeat(4096)),
+        format!("{}{}\nX", "🙂".repeat(59), "\u{3000}".repeat(100)),
+        format!("{}\u{3000}X", "🙂".repeat(59)),
+        format!("{}\u{3000}", "🙂".repeat(59)),
+        "a\n".repeat(2000),
+    ];
+    for text in cases {
+        let chars = text.chars().count();
+        for range in [
+            None,
+            Some([0, 0]),
+            Some([0, 1]),
+            Some([1, 61]),
+            Some([2, 400]),
+            Some([60, 130]),
+            Some([chars.saturating_sub(4), chars + 2]),
+            Some([chars + 1, chars + 100]),
+            Some([9, 3]),
+        ] {
+            let (start, len) = range.map_or((0, usize::MAX), |[a, b]| (a, b.saturating_sub(a)));
+            // The original, complete normalization is an independent reference for the prefix.
+            let chosen: String = text.chars().skip(start).take(len).collect();
+            let joined = chosen.split(['\n', '\r', '\u{2028}', '\u{2029}']).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            let expected: String = joined.chars().take(60).collect();
+            let expected = (!expected.is_empty()).then_some(expected);
+            assert_eq!(super::fonts::preview_line(text.chars().skip(start).take(len)), expected, "{range:?}/{chars} characters");
+        }
+    }
+    let text = "🙂".repeat(4096);
+    let mut read = 0;
+    let prefix = super::fonts::preview_line(text.chars().inspect(|_| read += 1)).unwrap();
+    assert_eq!(prefix, "🙂".repeat(60));
+    assert_eq!(read, 60, "a complete prefix does not read the remaining text");
 }
 
 /// Minimizing the window (a zero-size screen for a few frames) and restoring it must not leave
