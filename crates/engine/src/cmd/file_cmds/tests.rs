@@ -1586,8 +1586,24 @@ fn reveal_in_finder_on_windows_passes_the_clicked_tabs_saved_path() {
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "other"})).unwrap();
 
     let r = s.execute("file.revealInFinder", json!({"document": 0, "dryRun": true})).unwrap();
-    assert_eq!(r["program"], "explorer");
+    // The Windows Explorer by full path: a bare name would first find an explorer.exe in the app's folder.
+    let explorer = crate::layer_menu_cmds::windows_root(std::env::var_os("SystemRoot")).join("explorer.exe");
+    assert_eq!(r["program"], json!(explorer.to_string_lossy()));
     assert_eq!(r["args"], json!(["/select,", r"C:\项目 图片\海报 🖼.png"]));
+}
+
+/// Windows tools run from the Windows folder `SystemRoot` names, and from `C:\Windows` when it is
+/// unset or relative (which would resolve against the working directory).
+#[cfg(windows)]
+#[test]
+fn the_windows_folder_falls_back_when_system_root_is_unset_or_relative() {
+    use crate::layer_menu_cmds::windows_root;
+    use std::path::PathBuf;
+    assert_eq!(windows_root(Some(r"D:\WinNT".into())), PathBuf::from(r"D:\WinNT"));
+    assert_eq!(windows_root(None), PathBuf::from(r"C:\Windows"));
+    assert_eq!(windows_root(Some(r"Windows".into())), PathBuf::from(r"C:\Windows"));
+    assert_eq!(windows_root(Some(r"\Windows".into())), PathBuf::from(r"C:\Windows"));
+    assert_eq!(windows_root(Some("".into())), PathBuf::from(r"C:\Windows"));
 }
 
 /// "Include All Subfolders" (AUTO-219-5, #3753): Batch and Image Processor take the images in
