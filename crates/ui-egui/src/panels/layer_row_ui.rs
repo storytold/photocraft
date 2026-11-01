@@ -514,7 +514,7 @@ mod popup_twin_tests {
             let mut session = photocraft_engine::Session::new();
             session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
             session.execute("layer.new.layer", json!({})).unwrap();
-            let mut app = PhotocraftApp::new(session, crate::Services::default());
+            let mut app = crate::PhotocraftApp::new(session, crate::Services::default());
             let strip = Rect::from_min_size(Pos2::ZERO, vec2(220.0, 400.0));
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
