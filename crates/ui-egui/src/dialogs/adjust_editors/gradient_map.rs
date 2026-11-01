@@ -169,7 +169,7 @@ fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     // Photoshop's gradient picker: the same library as the Gradient tool and Gradients panel
     // (built-in groups and the user's own), Foreground/Background resolved to the current colours.
     let [fg, bg] = cx.swatches.map(|c| [c[0], c[1], c[2], 1.0]);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Preset:"));
         let mut picked = None;
         let (press, close) = crate::press_menu::PressCombo::before(ui, cx.mem.with("gm-preset"));
@@ -237,7 +237,7 @@ fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 remove = crate::icons::button(ui, "x", 20.0, false, tl!("Remove stop")).clicked();
             });
         });
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Location:"));
             let mut loc = s.0 * 100.0;
             let rl = widgets::value_field(ui, &mut loc, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Location:"));
@@ -273,7 +273,7 @@ fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         e.changed = true;
     }
     ui.data_mut(|d| d.insert_temp(selection, selected));
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         for (key, text) in [("reverse", tl!("Reverse")), ("dither", tl!("Dither"))] {
             let mut b = flag(v, key, false);
             if widgets::checkbox(ui, &mut b, text).changed() {
@@ -503,3 +503,54 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Gradient Map editor over an empty parameter set, drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                let _dir = crate::direction::direction_scope(dir);
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("gm-twin"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                gradient_map(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The migrated Reverse/Dither row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_reverse_dither_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let box_role = egui::accesskit::Role::CheckBox;
+        let ltr_rev = ltr.get_by_role_and_label(box_role, "Reverse").rect();
+        let ltr_dith = ltr.get_by_role_and_label(box_role, "Dither").rect();
+        assert!(ltr_rev.left() < ltr_dith.left(), "LTR reads Reverse then Dither: {ltr_rev:?} {ltr_dith:?}");
+        let ltr_gap = ltr_dith.left() - ltr_rev.right();
+        let rtl_rev = rtl.get_by_role_and_label(box_role, "Reverse").rect();
+        let rtl_dith = rtl.get_by_role_and_label(box_role, "Dither").rect();
+        assert!(rtl_rev.left() > rtl_dith.left(), "RTL mirrors the row: {rtl_rev:?} {rtl_dith:?}");
+        let rtl_gap = rtl_rev.left() - rtl_dith.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
+    }
+}
