@@ -90,6 +90,18 @@ Priorities: important infrastructure first, then low-hanging parity, then the lo
 
 When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower it).
 
+### Claiming an issue
+
+Contributors can't assign themselves, so the claim is a **draft PR plus a comment**. Fresh issues get taken within minutes, and comments alone get overlooked, so claim before you write any code. Before you start on an issue:
+
+1. **Check it's free.** Read its comments (`gh issue view N --comments`): a comment that **starts with** `I'm working on this` (quoted replies don't count) less than 72 hours old means it is taken. So does an open PR for it, unless it is an expired claim (a draft holding only the WIP commit, see below): check the issue's *Development* sidebar (it lists the PRs linked to the issue), then search open PRs by number **and** by feature keywords (`gh pr list --state open --limit 200 --search "N"`, `--search "<keywords>"`; a text search, so it also finds PRs that only mention the number), since some PRs cover an issue without naming it.
+2. **Claim it.** Open a draft PR from an empty commit (`git commit --allow-empty -m "WIP: <title> (#N)"`, push, `gh pr create --draft`) with `Fixes #N` in the body, then comment `I'm working on this.` on the issue (one line; details may follow).
+3. **Push progress often.** Commit and push to the draft as you go, even half-done work, so others can see the claim is alive and how far it got.
+4. **Re-check before every push and before marking it ready.** If a competing PR appeared, keep whichever one is further along: if yours is still empty or behind, hand over (comment on theirs, close your draft). Progress matters, not credit.
+5. **If you stop**, remove your claim right away: delete your `I'm working on this.` comment, close the draft (GitHub can't delete PRs) and delete its branch. Never leave an empty draft or a stale claim behind.
+
+A claim (the comment and a draft that holds only the WIP commit) expires after 72 hours with no new commit, comment or PR update, each of which restarts the 72 hours; you may then take the issue and mention the old claim in your comment. An open PR with real work in it keeps covering the issue: ask there before starting your own.
+
 ## 5. Before you finish a task
 
 ```sh
