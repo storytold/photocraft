@@ -313,13 +313,24 @@ fn a_miss_keeps_the_floor() {
 }
 
 #[test]
-fn a_failed_reservation_releases_the_pool_and_retries_before_giving_up() {
+fn a_failed_reservation_releases_the_pool() {
     let _g = serial();
     release();
     // Unmatched buffers under the miss floor stay pooled on a miss.
     give(vec![0u8; 4 * MIN_POOLED_BYTES]);
     assert!(retained_bytes() > 0);
-    // No allocator can reserve this: the call fails, but not before the pool was emptied.
+    // No allocator can reserve this: the call fails, but not before the pool was emptied. (The
+    // retry after the release isn't observable here: it needs an allocator that fails once.)
     assert!(try_take_exact(isize::MAX as usize, 0u8).is_none());
     assert_eq!(retained_bytes(), 0);
+}
+
+#[test]
+fn a_successful_miss_keeps_unmatched_pooled_buffers() {
+    let _g = serial();
+    release();
+    give(vec![0u8; 4 * MIN_POOLED_BYTES]);
+    assert!(try_take_exact(2 * MIN_POOLED_BYTES, 0u8).is_some());
+    assert_eq!(retained_bytes(), 4 * MIN_POOLED_BYTES, "within the miss floor, nothing is dropped");
+    release();
 }
