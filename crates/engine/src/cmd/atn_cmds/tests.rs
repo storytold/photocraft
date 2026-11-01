@@ -3434,10 +3434,12 @@ fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
 }
 
 /// Focus Area, Select Sky and Remove Background, mapped from the empty steps Photoshop records,
-/// play: each step runs its command on a red disc on a blue ground (#10610).
+/// play and do their work: on a textured red disc against a smooth blue sky over textured ground,
+/// Focus Area selects the textured ground, Select Sky the sky, and Remove Background masks the
+/// layer. Each step plays on its own so a step that runs without finding anything fails (#10610).
 #[test]
 fn newer_feature_selection_steps_play() {
-    let (w, h) = (96u32, 80u32);
+    let (w, h) = (160u32, 100u32);
     let mut s = Session::new();
     s.execute("file.new", json!({"width": w, "height": h})).unwrap();
     s.edit("paint", |doc, _| {
@@ -3446,9 +3448,17 @@ fn newer_feature_selection_steps_play() {
         let mut data = Vec::with_capacity((w * h) as usize * n);
         for y in 0..h {
             for x in 0..w {
-                let (dx, dy) = (x as f32 - 48.0, y as f32 - 40.0);
-                let c = if dx * dx + dy * dy <= 22.0 * 22.0 { [0.85, 0.2, 0.15] } else { [0.25, 0.45, 0.7] };
-                data.extend_from_slice(&c[..n.min(3)]);
+                let nz = (((x * 7919 + y * 104_729) % 97) as f32 / 97.0 - 0.5) * 0.25;
+                let (dx, dy) = (x as f32 - 80.0, y as f32 - 40.0);
+                let c = if dx * dx + dy * dy <= 22.0 * 22.0 {
+                    [0.85 + nz * 0.5, 0.2 + nz, 0.15]
+                } else if y < 60 {
+                    let t = y as f32 / 60.0;
+                    [0.25 + 0.4 * t, 0.5 + 0.3 * t, 0.9 + 0.05 * t]
+                } else {
+                    [0.35 + nz, 0.3 + nz, 0.15]
+                };
+                data.extend_from_slice(&c.map(|v| v.clamp(0.0, 1.0))[..n.min(3)]);
                 if n == 4 {
                     data.push(1.0);
                 }
@@ -3458,11 +3468,25 @@ fn newer_feature_selection_steps_play() {
         Ok(())
     })
     .unwrap();
-    let steps = ["focusMask", "selectSky", "removeBackground"].map(|name| mapped(newer(name, desc("null"))));
-    s.actions.list.push(Action::new("Select", steps.to_vec()));
-    let played = s.execute("actions.play", json!({"action": "Select"})).unwrap();
-    assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(played["ran"], 3, "{played}");
+    let play = |s: &mut Session, name: &str| {
+        s.actions.list.push(Action::new(name, vec![mapped(newer(name, desc("null")))]));
+        let played = s.execute("actions.play", json!({"action": name})).unwrap();
+        assert!(played.get("failed").is_none(), "{name}: {played}");
+        assert_eq!(played["ran"], 1, "{name}: {played}");
+    };
+    let selected = |s: &Session, x: i32, y: i32| s.active().unwrap().doc.selection.as_ref().map(|m| m.sample_channel(x, y, 0));
+
+    play(&mut s, "focusMask");
+    assert!(selected(&s, 20, 85).is_some_and(|v| v > 0.5), "Focus Area left the textured ground out");
+    assert!(selected(&s, 20, 15).is_some_and(|v| v < 0.5), "Focus Area took the smooth sky");
+    s.execute("select.deselect", json!({})).unwrap();
+
+    play(&mut s, "selectSky");
+    assert!(selected(&s, 20, 15).is_some_and(|v| v > 0.9), "Select Sky left the sky out");
+    assert!(selected(&s, 20, 85).is_some_and(|v| v < 0.1), "Select Sky took the ground");
+
+    play(&mut s, "removeBackground");
+    assert!(s.active().unwrap().doc.layers[0].mask.is_some(), "Remove Background set no mask");
 }
 
 /// `filter.stylize.oilPaint` takes a stylization and scale of 0.1..10 and a cleanliness, bristle
