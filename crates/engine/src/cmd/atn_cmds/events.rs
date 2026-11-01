@@ -213,6 +213,28 @@ fn target_only_to(_: &str, p: &Value) -> Option<Descriptor> {
     target_descriptor(p)
 }
 
+const SHAPE_BLUR: &[F] = &[F("Rds ", "radius", Kind::Px)];
+
+fn shape_blur_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    let Some(p) = fields_from(d, SHAPE_BLUR) else { return unsupported };
+    let p = Value::Object(p);
+    if shape_blur_to("filter.blur.shapeBlur", &p).is_some_and(|expected| d.items == expected.items) { step("filter.blur.shapeBlur", p) } else { unsupported }
+}
+
+fn shape_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !params(p, &["radius"]) {
+        return None;
+    }
+    if let Some(radius) = p.get("radius") {
+        let radius = radius.as_f64()?;
+        if !radius.is_finite() || !(5.0..=1000.0).contains(&radius) {
+            return None;
+        }
+    }
+    fields_to(p, SHAPE_BLUR, desc("null"))
+}
+
 // Recorded Link and Unlink need explicit state: replaying the UI toggle can
 // perform the opposite operation. Target matching follows #10628's adapter.
 fn link_from(d: &Descriptor, linked: bool) -> Mapped {
@@ -310,6 +332,7 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("MtnB", "motionBlur", "Motion Blur", "filter.blur.motionBlur", &[F("Angl", "angle", Kind::Ang), F("Dstn", "distance", Kind::Px)]),
     ev!("", "boxblur", "Box Blur", "filter.blur.boxBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!("", "surfaceBlur", "Surface Blur", "filter.blur.surfaceBlur", &[F("Rds ", "radius", Kind::Px), F("Thsh", "threshold", Kind::Long)]),
+    Event { code: "", name: "shapeBlur", label: "Shape Blur", ids: &["filter.blur.shapeBlur"], from: shape_blur_from, to: shape_blur_to },
     ev!(
         "SmrB",
         "smartBlur",
@@ -467,6 +490,7 @@ pub(super) const EVENTS: &[Event] = &[
         name: "make",
         label: "Make",
         ids: &[
+            "type.convertToShape",
             "layer.new.layer",
             "layer.new.group",
             "layer.groupLayers",

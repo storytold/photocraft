@@ -36,10 +36,14 @@ fn target() -> D {
 }
 
 fn target_class(class_id: &str) -> D {
+    ordinal_target(class_id, "Trgt")
+}
+
+fn ordinal_target(class_id: &str, ordinal: &str) -> D {
     D::Reference(vec![ReferenceItem::Enumerated {
         class: Class { name: UnicodeString::new_nul(""), class_id: Id::new(class_id) },
         type_id: Id::new("Ordn"),
-        value: Id::new("Trgt"),
+        value: Id::new(ordinal),
     }])
 }
 
@@ -49,7 +53,14 @@ fn file(event: &str, descriptor: Descriptor) -> Vec<u8> {
         expanded: false,
         actions: vec![AtnAction {
             name: UnicodeString::new_nul("A"),
-            items: vec![AtnItem { event: AtnEvent::name(event), descriptor: Some(descriptor), ..Default::default() }],
+            items: vec![AtnItem {
+                event: match event.as_bytes() {
+                    [a, b, c, d] => AtnEvent::Code([*a, *b, *c, *d]),
+                    _ => AtnEvent::name(event),
+                },
+                descriptor: Some(descriptor),
+                ..Default::default()
+            }],
             ..Default::default()
         }],
         warnings: vec![],
@@ -65,6 +76,13 @@ fn play(s: &mut Session) {
     let report = s.execute("actions.play", json!({"action": "A", "set": "Links"})).unwrap();
     assert!(report.get("failed").is_none(), "{report}");
     assert_eq!(report["ran"], 1, "{report}");
+}
+
+fn saved_item(s: &mut Session) -> AtnItem {
+    let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    atn::parse(&bytes).unwrap().actions[0].items[0].clone()
 }
 
 #[test]
@@ -456,6 +474,137 @@ fn measurement_event_records_actual_selected_area() {
         assert_eq!(s.analysis.log[0].values["source"], "Selection");
         assert_eq!(s.analysis.log[0].values["area"].as_f64(), Some(4.0));
         assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+fn class_reference(class_id: &str) -> D {
+    D::Reference(vec![ReferenceItem::Class(Class { name: UnicodeString::new_nul(""), class_id: Id::new(class_id) })])
+}
+
+fn make_type_descriptor() -> Descriptor {
+    Descriptor::new("Mk  ").with("null", class_reference("contentLayer")).with("Usng", target_class("textLayer"))
+}
+
+#[test]
+fn make_type_shape_roundtrips_and_converts_actual_glyphs_with_undo() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 80, "background": "white"})).unwrap();
+    let id = LayerId(s.execute("type.create", json!({"text": "oil", "size": 24, "x": 8, "y": 48})).unwrap()["layer"].as_u64().unwrap());
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
+    let before = s.active().unwrap().doc.clone();
+    assert_eq!(load(&mut s, &file("Mk  ", make_type_descriptor()))["unsupported"], json!([]));
+    assert_eq!(s.actions.list[0].steps, [("type.convertToShape".into(), json!({}))]);
+    let saved = saved_item(&mut s);
+    assert_eq!(saved.event, AtnEvent::Code(*b"Mk  "));
+    let mut canonical = make_type_descriptor();
+    canonical.class_id = Id::new("null");
+    assert_eq!(saved.descriptor, Some(canonical.clone()));
+    assert_eq!(load(&mut s, &file("Mk  ", canonical))["unsupported"], json!([]));
+    play(&mut s);
+    let layer = s.active().unwrap().doc.layer(id).unwrap();
+    let LayerContent::Shape(shape) = &layer.content else { panic!("Type was not converted to Shape") };
+    assert!(!shape.path.subpaths.is_empty());
+    assert!(!layer.psd_blocks.iter().any(|(key, _)| key == b"TySh"));
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[test]
+fn make_type_shape_keeps_wrong_references_and_preserves_fill_mappings() {
+    for descriptor in [
+        Descriptor::new("null").with("null", class_reference("contentLayer")),
+        Descriptor::new("null").with("null", class_reference("contentLayer")).with("Usng", target_class("Lyr ")),
+        Descriptor::new("null").with("null", class_reference("contentLayer")).with("Usng", ordinal_target("textLayer", "Frnt")),
+        make_type_descriptor().with("extra", D::Boolean(true)),
+        make_type_descriptor().with("Usng", target_class("textLayer")),
+    ] {
+        let mut s = Session::new();
+        assert_eq!(load(&mut s, &file("Mk  ", descriptor.clone()))["unsupported"].as_array().unwrap().len(), 1);
+        assert_eq!(saved_item(&mut s).descriptor, Some(descriptor));
+    }
+    for (id, p) in [("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})), ("layer.newFillLayer.pattern", json!({"pattern": "Grid"}))] {
+        let action = Action::new("A", vec![(id.into(), p)]);
+        let (bytes, skipped) = atn_cmds::export("Links", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let mut s = Session::new();
+        assert_eq!(load(&mut s, &bytes)["unsupported"], json!([]));
+        assert_eq!(s.actions.list[0].steps[0].0, id);
+    }
+    let action = Action::new("A", vec![("type.convertToShape".into(), json!({"layer": 1}))]);
+    assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
+}
+
+fn radius_descriptor(radius: f64) -> Descriptor {
+    Descriptor::new("shapeBlur").with("Rds ", D::UnitFloat { unit: *b"#Pxl", value: radius })
+}
+
+fn impulse_fixture() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 9, "height": 9, "background": "transparent"})).unwrap();
+    s.edit("impulse fixture", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_doc::Rect::new(4, 4, 5, 5), &[1.0, 1.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+#[test]
+fn radius_only_shape_blur_roundtrips_and_changes_pixels_including_default() {
+    for radius in [None, Some(5.0)] {
+        let mut s = impulse_fixture();
+        let d = radius.map_or_else(|| Descriptor::new("shapeBlur"), radius_descriptor);
+        assert_eq!(load(&mut s, &file("shapeBlur", d.clone()))["unsupported"], json!([]));
+        let saved = saved_item(&mut s);
+        assert_eq!(saved.event, AtnEvent::name("shapeBlur"));
+        let mut canonical = d;
+        canonical.class_id = Id::new("null");
+        assert_eq!(saved.descriptor, Some(canonical.clone()));
+        assert_eq!(load(&mut s, &file("shapeBlur", canonical))["unsupported"], json!([]));
+        let before = s.active().unwrap().doc.clone();
+        let pixels = photocraft_compose::flatten(&before).px;
+        play(&mut s);
+        let blurred = photocraft_compose::flatten(&s.active().unwrap().doc).px;
+        assert_ne!(blurred, pixels);
+        let mut direct = impulse_fixture();
+        direct.execute("filter.blur.shapeBlur", json!({"radius": radius.unwrap_or(10.0)})).unwrap();
+        assert_eq!(blurred, photocraft_compose::flatten(&direct.active().unwrap().doc).px);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn shape_blur_radius_boundaries_keep_their_value_without_running_large_kernels() {
+    for radius in [5.0, 10.0, 1000.0] {
+        let mut s = Session::new();
+        let mut canonical = radius_descriptor(radius);
+        assert_eq!(load(&mut s, &file("shapeBlur", canonical.clone()))["unsupported"], json!([]));
+        assert_eq!(s.actions.list[0].steps[0].1["radius"].as_f64(), Some(radius));
+        canonical.class_id = Id::new("null");
+        assert_eq!(saved_item(&mut s).descriptor, Some(canonical));
+    }
+}
+
+#[test]
+fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
+    let custom = Descriptor::new("customShape").with("Nm  ", D::Text(UnicodeString::new_nul("Star"))).with("Idnt", D::Text(UnicodeString::new_nul("asset-id")));
+    for descriptor in [
+        radius_descriptor(4.0),
+        radius_descriptor(1001.0),
+        radius_descriptor(f64::NAN),
+        radius_descriptor(f64::INFINITY),
+        Descriptor::new("shapeBlur").with("Rds ", D::UnitFloat { unit: *b"#Prc", value: 10.0 }),
+        radius_descriptor(10.0).with("customShape", D::Descriptor(custom)).with("keyOriginType", D::Integer(9)),
+        radius_descriptor(10.0).with("extra", D::Boolean(true)),
+    ] {
+        let mut s = Session::new();
+        assert_eq!(load(&mut s, &file("shapeBlur", descriptor.clone()))["unsupported"].as_array().unwrap().len(), 1);
+        assert_eq!(saved_item(&mut s).descriptor.unwrap().to_bytes(), descriptor.to_bytes());
+    }
+    for p in [json!({"radius": 0}), json!({"radius": 1001}), json!({"radius": null}), json!({"radius": 10, "shape": "circle"}), json!({"target": "mask"})] {
+        let action = Action::new("A", vec![("filter.blur.shapeBlur".into(), p)]);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
 

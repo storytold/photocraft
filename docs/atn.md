@@ -44,6 +44,23 @@ Isolate Layers toggles the panel view. Type defaults are saved in the current
 session. Record Measurements uses the current selection/ruler/count and data
 point configuration.
 
+## Type to Shape and radius-only Shape Blur
+
+| Photoshop form | PhotoCraft command |
+| --- | --- |
+| Make `contentLayer`, `Usng` a `textLayer` / `Ordn.Trgt` reference | `type.convertToShape` |
+| `shapeBlur`, optional `Rds ` in pixels, 5–1000 | `filter.blur.shapeBlur` |
+
+Convert Type to Shape retains the Make event and its two references; it does not
+export a separate `convertToShape` event. Other Make forms, including Solid Color
+and Pattern fill layers, retain their existing mappings.
+
+Shape Blur maps the issue's radius-only form through the existing filter. An
+omitted radius uses the native factory value of 10. Later dialog forms containing
+`customShape` or `keyOriginType` stay complete kept steps. Native explicit shape
+choices cannot be exported into a radius-only descriptor. No custom shape asset
+lookup or new blur kernel is supplied by this mapping.
+
 ## Smart Object file operations
 
 | Photoshop event | Meaningful descriptor keys | PhotoCraft command |
