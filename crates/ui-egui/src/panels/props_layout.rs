@@ -315,7 +315,7 @@ mod rtl_row_tests {
             let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
             app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
-            let mut h = Harness::builder().with_size(egui::vec2(360.0, 300.0)).build_ui_state(
+            let mut h = Harness::builder().with_size(egui::vec2(420.0, 300.0)).build_ui_state(
                 |ui, app: &mut crate::PhotocraftApp| {
                     if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                         let content = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().content.clone();
