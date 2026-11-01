@@ -208,6 +208,15 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+fn refuse_colour_set_copy_drag(app: &mut PhotocraftApp, mods: egui::Modifiers) -> bool {
+    if !mods.alt || crate::move_ui::color_target(app).is_none_or(|colors| colors.len() <= 1) {
+        return false;
+    }
+    app.ui.status = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels".into();
+    app.ui.status_error = true;
+    true
+}
+
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
@@ -222,9 +231,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 app.guide_drag = Some(guide);
                 return true;
             }
-            if mods.alt && crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
-                app.ui.status = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels".into();
-                app.ui.status_error = true;
+            if refuse_colour_set_copy_drag(app, mods) {
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -378,8 +385,11 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // without one) it moves the whole layer, ⌘⌥ a duplicate of it. It never combines
             // selections.
             if command_moves_layer(app, tool, [x, y], mods) {
+                if refuse_colour_set_copy_drag(app, mods) {
+                    return;
+                }
                 if mods.alt
-                    && let Err(e) = app.run("layer.duplicate", json!({"inPlace": true}))
+                    && let Err(e) = crate::move_ui::duplicate_for_drag(app)
                 {
                     app.ui.status = e;
                     app.ui.status_error = true;

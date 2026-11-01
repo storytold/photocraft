@@ -24,10 +24,25 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
         return None;
     }
     let st = app.session.active()?;
-    if !matches!(st.channel_view.target, ChannelTarget::Color(_)) {
+    if photocraft_engine::mask_view_cmds::current(st).is_some() || !matches!(st.channel_view.target, ChannelTarget::Color(_)) {
         return None;
     }
     photocraft_engine::color_channels::selected(&app.session)
+}
+
+/// Copying for a Move drag keeps a shown mask on the copy. Otherwise changing the active layer
+/// ends the mask view and can expose retained colour rows as a different movement target.
+pub(crate) fn duplicate_for_drag(app: &mut PhotocraftApp) -> Result<serde_json::Value, String> {
+    let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
+    let copied = app.run("layer.duplicate", json!({"inPlace": true}))?;
+    if let Some(viewed) = viewed {
+        let mode = match viewed.mode {
+            photocraft_engine::mask_view_cmds::MaskViewMode::Gray => "gray",
+            photocraft_engine::mask_view_cmds::MaskViewMode::Overlay => "overlay",
+        };
+        app.run("view.layerMask", json!({"mask": if viewed.filter { "filter" } else { "layer" }, "mode": mode}))?;
+    }
+    Ok(copied)
 }
 
 /// Does the gesture move selected pixels, either as a floating piece or as native colour samples?
@@ -213,8 +228,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         return None;
     }
     let st = app.session.documents().get(idx)?;
-    let ChannelTarget::Color(_) = st.channel_view.target else { return None };
-    let colors = photocraft_engine::color_channels::selected(&app.session)?;
+    let colors = color_target(app)?;
     let layer = st.active_layer?;
     if st.doc.selection.is_some() || photocraft_engine::float_cmds::floating(st).is_some() {
         return None;
@@ -356,12 +370,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
     // A native colour target (#6068): the drag moves those components of the active layer, as
     // `layer.translate` will on release, and the layer itself stays.
-    let channel = match st.channel_view.target {
-        photocraft_engine::channel_cmds::ChannelTarget::Color(_) if !mask_target => {
-            st.active_layer.zip(photocraft_engine::color_channels::selected(&app.session))
-        }
-        _ => None,
-    };
+    let channel = st.active_layer.zip(color_target(app));
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
         let ids = match channel {

@@ -878,3 +878,99 @@ fn colour_set_selected_drag_does_not_snap_to_its_starting_selection() {
         assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 9, 26, 25));
     }
 }
+
+#[test]
+fn colour_set_command_alt_drag_from_selection_tools_is_refused_before_duplication() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagicWand] {
+        let (mut app, _) = selected_pixels(16);
+        app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+        app.ui.tool = tool;
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let view = app.session.active().unwrap().channel_view.clone();
+        let m = egui::Modifiers { command: true, mac_cmd: true, alt: true, ..Default::default() };
+        drag(&mut app, [30.0, 30.0], [40.0, 30.0], m);
+        let st = app.session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&st.doc, &before), "{tool:?}: refusal must precede duplicating or moving pixels");
+        assert_eq!(st.history.past_len(), history, "{tool:?}");
+        assert_eq!(st.channel_view, view, "{tool:?}");
+        assert!(app.ui.status_error, "{tool:?}: explain the unsupported gesture");
+        assert!(app.drag.is_none());
+    }
+}
+
+#[test]
+fn colour_set_retained_behind_filter_mask_view_moves_the_whole_smart_object() {
+    for colors in [vec![0], vec![0, 2]] {
+        for mode in ["gray", "overlay"] {
+            let (mut app, _) = selected_pixels(16);
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("filter mask", |doc, _| {
+                    let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("not a smart object") };
+                    sm.filter_mask = Some(photocraft_doc::LayerMask::hide_all());
+                    Ok(())
+                })
+                .unwrap();
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            app.run("view.layerMask", json!({"mask": "filter", "mode": mode})).unwrap();
+            app.ui.tool_options.move_auto_select = false;
+            assert!(super::color_target(&app).is_none(), "{mode}, {colors:?}: the shown filter mask overrides colour rows");
+            app.run("layer.lockLayers", json!({"pixels": true})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let oracle = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 10, 5, false).unwrap();
+            let m = egui::Modifiers::NONE;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 26.0, y: 21.0, pressure: 1.0 }, m);
+            assert_eq!(crate::canvas::selection_shown_offset(&app), None, "whole-object movement does not carry a single layer's selection");
+            let shown = super::display_doc(&mut app, 0).unwrap().0;
+            assert_eq!(shown.layer(id), oracle.layer(id), "{mode}, {colors:?}: preview follows whole-object routing");
+            assert_eq!(shown.selection, before.selection);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 26.0, y: 21.0 }, m);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(id), oracle.layer(id), "{mode}, {colors:?}: pixel lock permits object movement");
+            assert_eq!(st.doc.selection, before.selection);
+            assert_eq!(st.history.past_len(), history + 1);
+            assert!(app.session.undo());
+            assert_eq!(app.session.active().unwrap().doc.layer(id), before.layer(id));
+        }
+    }
+}
+
+#[test]
+fn colour_set_filter_mask_view_keeps_its_target_when_alt_drag_duplicates() {
+    for mode in ["gray", "overlay"] {
+        let (mut app, _) = selected_pixels(16);
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let original = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("filter mask", |doc, _| {
+                let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(original).unwrap().content else { panic!("not a smart object") };
+                sm.filter_mask = Some(photocraft_doc::LayerMask::hide_all());
+                Ok(())
+            })
+            .unwrap();
+        app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+        app.run("view.layerMask", json!({"mask": "filter", "mode": mode})).unwrap();
+        app.ui.tool_options.move_auto_select = false;
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let oracle = photocraft_engine::layer_multi_cmds::moved_target(&before, &[original], 10, 5, false).unwrap();
+        drag(&mut app, [16.0, 16.0], [26.0, 21.0], egui::Modifiers::ALT);
+        assert!(!app.ui.status_error, "{mode}: {}", app.ui.status);
+        let st = app.session.active().unwrap();
+        let copy = st.active_layer.unwrap();
+        assert_ne!(copy, original);
+        assert_eq!(st.doc.layer(original), before.layer(original), "the original object stays put");
+        let photocraft_doc::LayerContent::Smart(moved) = &st.doc.layer(copy).unwrap().content else { panic!("copy is not smart") };
+        let photocraft_doc::LayerContent::Smart(expected) = &oracle.layer(original).unwrap().content else { panic!("oracle is not smart") };
+        assert_eq!(moved.transform, expected.transform, "{mode}: the copy moves as a whole object");
+        assert_eq!(st.doc.selection, before.selection, "the selection is not a native colour target");
+        assert_eq!(photocraft_engine::mask_view_cmds::current(st).unwrap().layer, copy, "view target follows the copied mask");
+        assert_eq!(st.history.past_len(), history + 1, "copy and movement share one undo step");
+        assert!(app.session.undo());
+        assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+    }
+}

@@ -94,7 +94,7 @@ pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
-    match app.run("layer.duplicate", json!({"inPlace": true})) {
+    match crate::move_ui::duplicate_for_drag(app) {
         // The state just before the copy's: in non-linear history the copy's step also moved
         // the later states in front of it (`History::record`), and those must stay.
         Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
