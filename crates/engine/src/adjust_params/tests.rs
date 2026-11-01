@@ -513,6 +513,18 @@ fn exposure_gray_point_refuses_a_black_sample() {
     assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::NeutralGray, [0.0; 3], ColorMode::Rgb).is_err());
 }
 
+/// #9288 review: no picker touches Gamma (Photoshop leaves it alone).
+#[test]
+fn exposure_eyedroppers_leave_gamma_alone() {
+    let base = json!({"gamma": 1.5});
+    for picker in [CurvesEyedropper::Black, CurvesEyedropper::NeutralGray, CurvesEyedropper::White] {
+        match exposure_eyedropper(&base, picker, [64.0 / 255.0; 3], ColorMode::Rgb).unwrap() {
+            Adjustment::Exposure { gamma, .. } => assert_eq!(gamma, 1.5, "{picker:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
