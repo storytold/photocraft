@@ -713,3 +713,18 @@ fn a_live_segment_without_strength_leaves_nothing_to_take_back() {
         assert_eq!(f.is_identity(), !shown, "{case}");
     }
 }
+
+/// The provisional dab of one live segment is taken back before the next: a field reused across two
+/// segments has a tail after the first, and none after a second segment that has no strength.
+#[test]
+fn the_next_live_segment_takes_back_the_provisional_dab() {
+    let s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 200.0);
+    let mut f = LiquifyField::new(Rect::new(0, 0, 300, 200), 2.0);
+    f.stroke_begin(&s, [100.0, 100.0, 1.0]);
+    f.stroke_segment_live(&s, [100.0, 100.0, 1.0], [100.5, 100.0, 1.0], 16.0);
+    assert!(f.tail.is_some(), "the first segment leaves a provisional dab");
+    assert!(!f.is_identity());
+    f.stroke_segment_live(&s, [100.5, 100.0, 1.0], [100.5, 100.0, 0.0], 16.0);
+    assert!(f.tail.is_none(), "the next segment took it back");
+    assert!(f.is_identity(), "and nothing of it is left in the field");
+}
