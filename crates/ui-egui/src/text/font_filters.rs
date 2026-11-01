@@ -119,30 +119,33 @@ pub(crate) fn format_tip(format: FontFormat) -> &'static str {
 /// The class list's width; the filter buttons sit above it.
 pub(crate) const CLASS_COLUMN_WIDTH: f32 = 118.0;
 
+/// The filter buttons' square size; Clear matches their height.
+pub(crate) const FILTER_BUTTON_SIZE: f32 = 22.0;
+
 /// The filter buttons: the class-list toggle and the three filters. Returns true when a filter
 /// changed.
 pub(crate) fn filter_buttons(ui: &mut egui::Ui, filters: &mut FontFilters) -> bool {
     let before = filters.clone();
     let (icon, tip) = if filters.hide_classes { ("chevrons-right", tl!("Show Font Classes")) } else { ("chevrons-left", tl!("Hide Font Classes")) };
-    if crate::icons::button(ui, icon, 22.0, false, tip).clicked() {
+    if crate::icons::button(ui, icon, FILTER_BUTTON_SIZE, false, tip).clicked() {
         filters.hide_classes = !filters.hide_classes;
     }
-    if crate::icons::button(ui, "font-variable", 22.0, filters.variable, tl!("Show Variable Fonts")).clicked() {
+    if crate::icons::button(ui, "font-variable", FILTER_BUTTON_SIZE, filters.variable, tl!("Show Variable Fonts")).clicked() {
         filters.variable = !filters.variable;
     }
     let tip = if filters.favorites { tl!("Show All Fonts") } else { tl!("Show Favorite Fonts") };
-    if crate::icons::button(ui, if filters.favorites { "star-filled" } else { "star" }, 22.0, filters.favorites, tip).clicked() {
+    if crate::icons::button(ui, if filters.favorites { "star-filled" } else { "star" }, FILTER_BUTTON_SIZE, filters.favorites, tip).clicked() {
         filters.favorites = !filters.favorites;
     }
-    if crate::icons::button(ui, "font-similar", 22.0, filters.similar, tl!("Show Similar Fonts")).clicked() {
+    if crate::icons::button(ui, "font-similar", FILTER_BUTTON_SIZE, filters.similar, tl!("Show Similar Fonts")).clicked() {
         filters.similar = !filters.similar;
     }
     *filters != before
 }
 
-/// Clear All: turns every filter off. Returns true when it did.
+/// Clear: turns every filter off, as tall as the filter buttons beside it. Returns true when it did.
 pub(crate) fn clear_all(ui: &mut egui::Ui, filters: &mut FontFilters) -> bool {
-    let clicked = ui.add_enabled(filters.any(), egui::Button::new(tl!("Clear All")).small()).clicked();
+    let clicked = ui.add_enabled_ui(filters.any(), |ui| crate::widgets::compact_button(ui, tl!("Clear"), FILTER_BUTTON_SIZE)).inner.clicked();
     if clicked {
         filters.clear();
     }

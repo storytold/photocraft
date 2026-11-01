@@ -51,6 +51,7 @@ fn harness_sized(preview: FontPreview, recents: Vec<String>, size: egui::Vec2) -
         },
         state,
     );
+    crate::theme::install_fonts(&h.ctx);
     h.run();
     h
 }
@@ -216,6 +217,7 @@ fn two_fields_keep_their_names_and_queries_independent() {
         },
         ["Family 00".to_string(), "Family 00".to_string()],
     );
+    crate::theme::install_fonts(&h.ctx);
     h.run();
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
     h.run();
@@ -621,6 +623,7 @@ fn the_first_arrow_after_a_pick_keeps_the_focus_between_neighbours() {
             },
             state,
         );
+        crate::theme::install_fonts(&h.ctx);
         h.run();
         open(&mut h);
         if enter {
@@ -713,6 +716,7 @@ fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
         },
         app,
     );
+    crate::theme::install_fonts(&h.ctx);
     crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
@@ -1221,6 +1225,7 @@ fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
         },
         app,
     );
+    crate::theme::install_fonts(&h.ctx);
     crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(4);
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
@@ -1339,6 +1344,7 @@ fn library_harness_with(
         },
         state,
     );
+    crate::theme::install_fonts(&h.ctx);
     h.run();
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
     h.run();
@@ -1470,9 +1476,9 @@ fn variable_and_similar_filters_and_clear_all() {
     h.run();
     assert!(h.query_by_label("Family 03").is_some());
     assert!(h.query_by_label("Family 00").is_none() && h.query_by_label("Zeta Sans").is_none());
-    h.get_by_label("Clear All").click();
+    h.get_by_label("Clear").click();
     h.run();
-    assert!(h.query_by_label("Family 10").is_some(), "Clear All turns every filter off");
+    assert!(h.query_by_label("Family 10").is_some(), "Clear turns every filter off");
     // Similar to the current Family 00 (a serif): the serifs first, sans after, unknown never.
     h.get_by_label("Show Similar Fonts").click();
     h.run();
@@ -1480,6 +1486,15 @@ fn variable_and_similar_filters_and_clear_all() {
     let (current, serif, sans) = (top("Family 00").unwrap(), top("Family 02").unwrap(), top("Zeta Sans").unwrap());
     assert!(current < serif && serif < sans, "{current} {serif} {sans}");
     assert!(h.query_by_label("Family 10").is_none(), "fonts that can't be compared aren't listed");
+}
+
+/// #10084: the font picker Clear button is as tall as the filter buttons in its row.
+#[test]
+fn clear_button_matches_the_filter_buttons_height() {
+    let h = filter_harness();
+    let filter = h.get_by_label("Show Similar Fonts").rect();
+    let clear = h.get_by_label("Clear").rect();
+    assert!((clear.height() - filter.height()).abs() < 1.0, "Clear ({}) should be as tall as the filter buttons ({})", clear.height(), filter.height());
 }
 
 /// With Show Similar Fonts on, the arrows step down the list made for the font current when it
@@ -1652,6 +1667,7 @@ fn a_menu_opened_from_the_right_edge_stays_narrow_after_a_minimize() {
         },
         state,
     );
+    crate::theme::install_fonts(&h.ctx);
     h.run();
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
     h.run_steps(4);
