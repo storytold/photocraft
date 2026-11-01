@@ -769,7 +769,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             return;
         }
         let mut changed = false;
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Channel:")).color(t.text_dim).size(12.0));
             let mut ch = channel;
             let options = channel_options(s.mode);
@@ -787,7 +787,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let hover = graph(app, ui, &s, channel, colored, 100.0);
         // Source: only for documents with several layers.
         if s.layers > 1 {
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Source:")).color(t.text_dim).size(12.0));
                 let mut src = opts.source;
                 let mut options = vec![(HistSourceChoice::EntireImage, "Entire Image"), (HistSourceChoice::SelectedLayer, "Selected Layer")];
@@ -1006,5 +1006,40 @@ mod rtl_layout {
         let (mean, level) = (0, 4);
         assert!(ltr.stats[mean].center().x < ltr.stats[level].center().x, "ltr: Mean: left of Level:: {:?} {:?}", ltr.stats[mean], ltr.stats[level]);
         assert!(rtl.stats[mean].center().x > rtl.stats[level].center().x, "rtl: Mean: right of Level:: {:?} {:?}", rtl.stats[mean], rtl.stats[level]);
+    }
+}
+
+/// Twin of the migrated Channel/Source `dialog_row` rows: item order mirrors only under
+/// RTL, and the item gap is identical in both directions.
+#[cfg(test)]
+mod rtl_row_twin {
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn migrated_dialog_row_mirrors_item_order_only_under_rtl() {
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            ctx.run_ui(input, |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    out.push(ui.label("aaa").rect);
+                    out.push(ui.label("b").rect);
+                });
+            });
+            out
+        };
+        let ltr = rects(Dir::Ltr);
+        let rtl = rects(Dir::Rtl);
+        assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
+        assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
+        let ltr_gap = ltr[1].left() - ltr[0].right();
+        let rtl_gap = rtl[1].right() - rtl[0].left();
+        assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
     }
 }
