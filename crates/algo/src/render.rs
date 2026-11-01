@@ -26,25 +26,35 @@ fn cloud_hash(x: i32, y: i32, seed: u32) -> f32 {
     (h & 0x00ff_ffff) as f32 / 0x00ff_ffff as f32
 }
 
-/// The lattice cells an octave spans over `period` pixels at `freq` cells per pixel, when that is
-/// a whole number: the lattice then wraps there and the octave tiles. `None` otherwise.
-fn wrap_cells(period: Option<f32>, freq: f32) -> Option<i32> {
-    let cells = period? * freq;
-    let n = cells.round();
-    ((cells - n).abs() < 1e-3 && n >= 1.0 && n < i32::MAX as f32).then_some(n as i32)
+/// Four times Clouds' cloud size (the lattice cell of its first octave) for bounds of `w` × `h`:
+/// the size is a quarter of the longer side, 16..512 px, so in quarter pixels it is a whole
+/// number and whether a lattice fits a side is exact (see [`wrap_cells`]).
+fn cloud_scale(w: u32, h: u32) -> u32 {
+    w.max(h).clamp(64, 2048)
 }
 
-/// Smooth value noise, summed over octaves (fBm), in 0..1. `period` (x, y) makes it repeat every
-/// that many pixels along an axis, octave by octave where the lattice fits (see [`tile_period`]).
-fn clouds_value(x: f32, y: f32, base: f32, seed: u32, period: (Option<f32>, Option<f32>)) -> f32 {
-    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0 / base, 0.0);
+/// The lattice cells octave `octave` spans over `period` pixels, when that is a whole number: its
+/// cells are `scale / 4 / 2^octave` px (`scale` from [`cloud_scale`]), so `period` holds exactly
+/// `4 · period · 2^octave / scale` of them. The lattice then wraps there and the octave tiles.
+/// `None` otherwise, however close (512 px hold 1.0005 cells of 511.75 px).
+fn wrap_cells(period: Option<u32>, scale: u32, octave: u32) -> Option<i32> {
+    let span = (u64::from(period?) * 4) << octave;
+    let scale = u64::from(scale);
+    (scale > 0 && span.is_multiple_of(scale)).then(|| i32::try_from(span / scale).ok()).flatten().filter(|n| *n >= 1)
+}
+
+/// Smooth value noise, summed over octaves (fBm), in 0..1, with cells of `scale / 4` px (see
+/// [`cloud_scale`]). `period` (x, y) makes it repeat every that many pixels along an axis,
+/// octave by octave where the lattice fits (see [`tile_period`]).
+fn clouds_value(x: f32, y: f32, scale: u32, seed: u32, period: (Option<u32>, Option<u32>)) -> f32 {
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 4.0 / scale as f32, 0.0);
     for o in 0..8u32 {
         let (fx, fy) = (x * freq, y * freq);
         let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
         let (tx, ty) = (fx - ix as f32, fy - iy as f32);
         let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
         let s = seed.wrapping_add(o * 7919);
-        let (wx, wy) = (wrap_cells(period.0, freq), wrap_cells(period.1, freq));
+        let (wx, wy) = (wrap_cells(period.0, scale, o), wrap_cells(period.1, scale, o));
         // The cell's two lattice lines on an axis, wrapped once per octave where it tiles.
         let lines = |i: i32, n: Option<i32>| match n {
             Some(n) => {
@@ -74,8 +84,8 @@ fn clouds_value(x: f32, y: f32, base: f32, seed: u32, period: (Option<f32>, Opti
 /// the longer one and at least 16 px (512 × 300 tiles along x), but a shorter one only when that
 /// quarter divides it (256 × 1024 tiles both ways, 256 × 300 along neither). Photoshop's
 /// behaviour at mixed sizes is unmeasured.
-fn tile_period(size: u32) -> Option<f32> {
-    (size >= 2 && size.is_power_of_two()).then_some(size as f32)
+fn tile_period(size: u32) -> Option<u32> {
+    (size >= 2 && size.is_power_of_two()).then_some(size)
 }
 
 /// Clouds between the foreground and background colours; Difference Clouds subtracts them from
@@ -84,13 +94,13 @@ fn tile_period(size: u32) -> Option<f32> {
 pub(crate) fn clouds(src: &Image, out: Rect, ctx: &Ctx, seed: u32, difference: bool, colours: ([f32; 4], [f32; 4])) -> Vec<f32> {
     let n = src.ch;
     let (fg, bg) = colours;
-    let base = (ctx.bounds.width().max(ctx.bounds.height()) as f32 / 4.0).clamp(16.0, 512.0);
+    let scale = cloud_scale(ctx.bounds.width(), ctx.bounds.height());
     let period = (tile_period(ctx.bounds.width()), tile_period(ctx.bounds.height()));
     let mut res = src.crop(out);
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
         let (x, y) = xy(out, i);
         let (x, y) = (x - ctx.bounds.x0, y - ctx.bounds.y0);
-        let t = clouds_value(x as f32, y as f32, base, seed, period);
+        let t = clouds_value(x as f32, y as f32, scale, seed, period);
         let c: [f32; 3] = std::array::from_fn(|k| fg[k] + (bg[k] - fg[k]) * t);
         if difference {
             let p = rgba(ctx, px);
@@ -365,13 +375,13 @@ pub(crate) fn lighting(src: &Image, out: Rect, ctx: &Ctx, spec: &LightingSpec) -
 
 #[cfg(test)]
 mod clouds_tests {
-    use super::{clouds_value, tile_period};
+    use super::{cloud_scale, clouds_value, tile_period, wrap_cells};
 
     /// The mean jump between neighbouring values across the wrap seam and inside the pattern.
     fn jumps(w: u32, h: u32) -> (f32, f32) {
-        let base = (w.max(h) as f32 / 4.0).clamp(16.0, 512.0);
+        let scale = cloud_scale(w, h);
         let period = (tile_period(w), tile_period(h));
-        let v = |x: u32, y: u32| clouds_value(x as f32, y as f32, base, 7, period);
+        let v = |x: u32, y: u32| clouds_value(x as f32, y as f32, scale, 7, period);
         let seam = (0..h).map(|y| (v(w - 1, y) - v(0, y)).abs()).sum::<f32>() / h as f32;
         let inside = (0..h).map(|y| (v(w / 2, y) - v(w / 2 + 1, y)).abs()).sum::<f32>() / h as f32;
         (seam, inside)
@@ -379,9 +389,9 @@ mod clouds_tests {
 
     /// [`jumps`] down the columns: across the seam from the last row to the first, and inside.
     fn row_jumps(w: u32, h: u32) -> (f32, f32) {
-        let base = (w.max(h) as f32 / 4.0).clamp(16.0, 512.0);
+        let scale = cloud_scale(w, h);
         let period = (tile_period(w), tile_period(h));
-        let v = |x: u32, y: u32| clouds_value(x as f32, y as f32, base, 7, period);
+        let v = |x: u32, y: u32| clouds_value(x as f32, y as f32, scale, 7, period);
         let seam = (0..w).map(|x| (v(x, h - 1) - v(x, 0)).abs()).sum::<f32>() / w as f32;
         let inside = (0..w).map(|x| (v(x, h / 2) - v(x, h / 2 + 1)).abs()).sum::<f32>() / w as f32;
         (seam, inside)
@@ -398,7 +408,7 @@ mod clouds_tests {
         assert!(seam < inside * 3.0 + 0.01, "bottom row into the top: seam {seam} vs {inside}");
         let (seam, inside) = jumps(300, 200);
         assert!(seam > inside * 3.0, "300 × 200 doesn't tile: seam {seam} vs {inside}");
-        assert_eq!(tile_period(256), Some(256.0));
+        assert_eq!(tile_period(256), Some(256));
         assert_eq!(tile_period(300), None);
         assert_eq!(tile_period(1), None);
     }
@@ -408,7 +418,7 @@ mod clouds_tests {
     #[test]
     fn clouds_at_other_sizes_are_unchanged() {
         let (w, h) = (300u32, 200u32);
-        let base = (w.max(h) as f32 / 4.0).clamp(16.0, 512.0);
+        let scale = cloud_scale(w, h);
         let period = (tile_period(w), tile_period(h));
         let before = [
             (0u32, 0u32, 0.366_656_63f32),
@@ -421,7 +431,32 @@ mod clouds_tests {
             (212, 157, 0.899_339_4),
         ];
         for (x, y, want) in before {
-            assert_eq!(clouds_value(x as f32, y as f32, base, 7, period), want, "({x}, {y})");
+            assert_eq!(clouds_value(x as f32, y as f32, scale, 7, period), want, "({x}, {y})");
+        }
+    }
+
+    /// 512 × 2047: a power-of-two width whose lattice doesn't fit it (the cloud size is
+    /// 2047 / 4 = 511.75 px, so 512 px hold 1.0005 cells), so no octave wraps and the values are
+    /// upstream's before #8999 (computed with its `clouds_value`, seed 7).
+    #[test]
+    fn clouds_whose_lattice_nearly_fits_are_unchanged() {
+        let (w, h) = (512u32, 2047u32);
+        let scale = cloud_scale(w, h);
+        let period = (tile_period(w), tile_period(h));
+        assert_eq!(period.0, Some(512));
+        assert_eq!((0..8).find_map(|o| wrap_cells(period.0, scale, o)), None, "no octave fits");
+        assert_eq!(wrap_cells(Some(256), cloud_scale(256, 1024), 0), Some(1));
+        let before = [
+            (0u32, 0u32, 0.366_656_63f32),
+            (1, 0, 0.365_521_55),
+            (37, 11, 0.285_922),
+            (0, 1000, 0.307_037_9),
+            (511, 1000, 0.814_692_74),
+            (256, 1023, 0.612_607_2),
+            (511, 2046, 0.960_405),
+        ];
+        for (x, y, want) in before {
+            assert_eq!(clouds_value(x as f32, y as f32, scale, 7, period), want, "({x}, {y})");
         }
     }
 }
