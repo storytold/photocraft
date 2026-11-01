@@ -1,5 +1,5 @@
 use super::preview::{Base, Preview, cancel_preview, compute_base, plan_params, points_limit, rebase, refresh};
-use super::{CMD, CafOpts, CafTool, CafWorkspace, MAX_CAF_EDITS, MAX_CAF_POINTS, PROXY_SIDE, PhotocraftApp, REMEMBERED, Rect, Step, Value};
+use super::{CMD, CUSTOM_HINT, CafOpts, CafTool, CafWorkspace, MAX_CAF_EDITS, MAX_CAF_POINTS, PROXY_SIDE, PhotocraftApp, REMEMBERED, Rect, Step, Value};
 
 /// Opens the workspace on the active layer and its selection.
 pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
@@ -42,6 +42,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         base_px: vec![false; pw * ph],
         hole_px: vec![false; pw * ph],
         mask: vec![false; pw * ph],
+        sampled_any: std::cell::Cell::new(None),
         pressed: false,
         texture_limit: 2048,
         image_tex: None,
@@ -80,6 +81,9 @@ fn remember(app: &mut PhotocraftApp, opts: &CafOpts) {
 pub fn apply(app: &mut PhotocraftApp) -> Result<Value, String> {
     let Some(w) = app.distort.caf.as_mut() else { return Err("Content-Aware Fill is not open".into()) };
     w.end_stroke();
+    if w.awaiting_custom_area() {
+        return Err(CUSTOM_HINT.into());
+    }
     let p = plan_params(w, true);
     let opts = w.opts.clone();
     remember(app, &opts);

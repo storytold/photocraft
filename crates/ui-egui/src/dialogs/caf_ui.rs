@@ -251,6 +251,9 @@ pub struct CafWorkspace {
     base_px: Vec<bool>,
     hole_px: Vec<bool>,
     mask: Vec<bool>,
+    /// Whether `mask` has a pixel outside the fill area, worked out when first asked after the
+    /// mask changes (`None` until then).
+    sampled_any: std::cell::Cell<Option<bool>>,
     /// The pointer is down on the view with a tool: one press is one `Down`, egui's drag (which
     /// starts a few pixels later) continues it.
     pressed: bool,
@@ -310,6 +313,7 @@ impl CafWorkspace {
     fn paint(&mut self, s: &SamplingStroke) {
         let (s, area) = (self.proxy_stroke(s), self.proxy_area());
         paint_strokes(&mut self.mask, area, &[s]);
+        self.sampled_any.set(None);
         self.overlay_dirty = true;
     }
 
@@ -338,6 +342,7 @@ impl CafWorkspace {
         let strokes: Vec<SamplingStroke> = self.strokes.iter().chain(self.cur.iter()).map(|s| self.proxy_stroke(s)).collect();
         let area = self.proxy_area();
         paint_strokes(&mut self.mask, area, &strokes);
+        self.sampled_any.set(None);
         self.overlay_dirty = true;
     }
 
@@ -348,10 +353,21 @@ impl CafWorkspace {
         strokes + lassos
     }
 
-    /// Custom sampling with nothing painted yet. Photoshop shows the image unfilled and a hint to
-    /// paint with the Sampling Brush there, not an error, and so does the workspace (#10621).
+    /// Custom sampling with nothing painted yet, or everything painted erased again. Photoshop
+    /// shows the image unfilled and a hint to paint with the Sampling Brush there, not an error,
+    /// and so does the workspace (#10621); Apply and OK say the same instead of running the fill.
     fn awaiting_custom_area(&self) -> bool {
-        self.opts.sampling == "custom" && !self.strokes.iter().chain(self.cur.iter()).any(|s| s.add)
+        self.opts.sampling == "custom" && (!self.strokes.iter().chain(self.cur.iter()).any(|s| s.add) || !self.sampled_any())
+    }
+
+    /// The sampling area (as the overlay shows it) has a pixel outside the fill area.
+    fn sampled_any(&self) -> bool {
+        if let Some(any) = self.sampled_any.get() {
+            return any;
+        }
+        let any = self.mask.iter().zip(&self.hole_px).any(|(m, h)| *m && !*h);
+        self.sampled_any.set(Some(any));
+        any
     }
 
     /// The preview is out of date.

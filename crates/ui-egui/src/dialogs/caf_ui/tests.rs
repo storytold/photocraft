@@ -526,3 +526,32 @@ fn custom_sampling_with_nothing_painted_hints_instead_of_failing() {
     assert!(d["previewError"].is_null(), "{d}");
     assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
 }
+
+/// Erasing everything the Sampling Brush added in Custom leaves the area as empty as before
+/// anything was painted: the same hint, the image unfilled, and Apply and OK say so too instead of
+/// running the fill into "nothing to sample from" (or, with nothing painted at all, the fill's
+/// "custom sampling needs `area`…" refusal).
+#[test]
+fn custom_sampling_erased_again_hints_and_apply_and_ok_do_not_run_the_fill() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply with nothing painted");
+    control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}})).unwrap();
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8, "alt": true}, "waitPreview": true})).unwrap();
+    assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
+    assert!(d["previewError"].is_null(), "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert!(ws(&app).preview.pending_image.is_none() && ws(&app).preview.tex.is_none(), "the image is shown unfilled");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+    assert_eq!(control(&mut app, &json!({"commit": true})).unwrap_err(), CUSTOM_HINT, "OK");
+    commit(&mut app);
+    assert!(app.distort.caf.is_some(), "OK keeps the workspace open");
+    assert_eq!(ws(&app).error.as_deref(), Some(CUSTOM_HINT));
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
+    // Painting again previews the fill.
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}, "waitPreview": true})).unwrap();
+    assert!(d["previewHint"].is_null() && d["previewError"].is_null() && d["error"].is_null(), "{d}");
+    assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
+}
