@@ -68,3 +68,20 @@ fn a_cancelled_job_of_a_closed_document_returns_its_buffers_once_it_exits() {
     s.join_cancelled_jobs();
     assert_eq!(scratch::retained_bytes(), 0);
 }
+
+#[test]
+fn a_job_cancelled_before_its_document_closes_still_returns_its_buffers() {
+    let _q = Quiet::new();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2048, "height": 2048})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+    let Started::Job(id) = s.start("filter.blur.gaussianBlur", json!({"radius": 60})).unwrap() else {
+        panic!("Gaussian Blur runs as a background job");
+    };
+    // Cancelled first: the worker is already off the running list when the document closes.
+    assert!(s.cancel_job(id));
+    s.close(0);
+    scratch::give(vec![0u8; scratch::MIN_POOLED_BYTES]);
+    s.join_cancelled_jobs();
+    assert_eq!(scratch::retained_bytes(), 0);
+}
