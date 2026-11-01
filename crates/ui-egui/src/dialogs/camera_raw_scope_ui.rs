@@ -1,6 +1,6 @@
 //! Camera Raw scope interaction. View state is in UiState; filter edits still commit through
 //! the existing filter.cameraRaw command. Image analysis is cached per completed proxy revision.
-use crate::{camera_raw_ui::CameraRawDialog, state::CameraRawScopeState, theme::Tokens, widgets};
+use crate::{camera_raw_ui::CameraRawDialog, state::CameraRawScopeState, theme::Tokens};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::{
     camera_raw::CameraRaw,
@@ -364,15 +364,23 @@ fn context_menu(response: &egui::Response, has_selection: bool, view: &mut Camer
 }
 
 fn context(ui: &mut egui::Ui, has_selection: bool, view: &mut CameraRawScopeState) {
-    widgets::checkbox(ui, &mut view.lab, tl!("Show Lab Color Readouts"));
-    widgets::checkbox(ui, &mut view.vectorscope, tl!("Show Vectorscope"));
+    // Menu rows, not `widgets::checkbox`: the fork lays a popup body's widget atoms out left
+    // to right, so a checkbox inside a menu stays anchored at the popup's left edge; the
+    // shared row mirrors, with the state in the checkmark column at the reading start.
+    let toggle = |ui: &mut egui::Ui, on: &mut bool, label: &str| {
+        if crate::menu_keys::menu_row(ui, label, None, *on, true).clicked() {
+            *on = !*on;
+        }
+    };
+    toggle(ui, &mut view.lab, tl!("Show Lab Color Readouts"));
+    toggle(ui, &mut view.vectorscope, tl!("Show Vectorscope"));
     if view.vectorscope {
         if has_selection {
-            widgets::checkbox(ui, &mut view.selected_region, tl!("Show Selected Region"));
+            toggle(ui, &mut view.selected_region, tl!("Show Selected Region"));
         }
-        widgets::checkbox(ui, &mut view.red_right, tl!("Show Red at 3 o'clock"));
+        toggle(ui, &mut view.red_right, tl!("Show Red at 3 o'clock"));
         let mut skin = !view.hide_skin_line;
-        widgets::checkbox(ui, &mut skin, tl!("Show Skin Tone Indicator"));
+        toggle(ui, &mut skin, tl!("Show Skin Tone Indicator"));
         view.hide_skin_line = !skin;
     }
 }
