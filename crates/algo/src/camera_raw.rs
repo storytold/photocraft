@@ -1428,4 +1428,23 @@ mod tests {
         develop(&mut a, 4, 4, &CameraRaw { exposure: 0.5, ..Default::default() }, true);
         assert!(a[0][0] > 2.0);
     }
+
+    /// A Gaussian narrower than 0.3 px has no box radii, so it returns its input unchanged, and
+    /// Texture on a proxy that small changes nothing.
+    #[test]
+    fn a_gaussian_below_0_3_px_leaves_the_image_alone() {
+        assert!(spatial::gauss_radii(0.29).is_empty());
+        assert!(!spatial::gauss_radii(0.3).is_empty());
+        let (w, h) = (64usize, 48usize);
+        let v: Vec<f32> = (0..w * h).map(|i| ((i * 37) % 101) as f32 / 100.0).collect();
+        assert_eq!(gauss(&v, w, h, 0.29), v);
+        assert_eq!(box_means(&v, w, h, &[]), v);
+        assert_ne!(gauss(&v, w, h, 1.0), v);
+        let src: Vec<[f32; 4]> = v.iter().map(|&x| [x, 1.0 - x, 0.5 * x, 1.0]).collect();
+        let base = CameraRaw { contrast: 10.0, pixel_scale: 0.1, ..Default::default() };
+        let (mut plain, mut textured) = (src.clone(), src);
+        develop(&mut plain, w, h, &base, false);
+        develop(&mut textured, w, h, &CameraRaw { texture: 80.0, ..base }, false);
+        assert_eq!(plain, textured);
+    }
 }
