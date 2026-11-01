@@ -4264,6 +4264,8 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+	Rotate View Left	Nézet forgatása balra
+	Rotate View Right	Nézet forgatása jobbra
 	Show file name in title	Fájlnév megjelenítése a címben
 	50% Threshold	50%-os küszöb
 	Pattern Dither	Mintázatos keverés

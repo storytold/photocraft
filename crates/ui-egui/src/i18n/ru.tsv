@@ -3353,6 +3353,8 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+	Rotate View Left	Повернуть вид влево
+	Rotate View Right	Повернуть вид вправо
 	Show file name in title	Показывать имя файла в заголовке
 	50% Threshold	Порог 50%
 	Pattern Dither	Регулярный дизеринг

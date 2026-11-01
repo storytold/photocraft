@@ -4417,6 +4417,8 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+	Rotate View Left	Rotiraj prikaz ulevo
+	Rotate View Right	Rotiraj prikaz udesno
 	Show file name in title	Prikaži naziv datoteke u naslovu
 	50% Threshold	Prag 50%
 	Pattern Dither	Dither šarom

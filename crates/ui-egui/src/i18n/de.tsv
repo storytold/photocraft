@@ -3390,6 +3390,8 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+	Rotate View Left	Ansicht nach links drehen
+	Rotate View Right	Ansicht nach rechts drehen
 	Show file name in title	Dateiname im Titel anzeigen
 	50% Threshold	50 %-Schwellenwert
 	Pattern Dither	Musterdither

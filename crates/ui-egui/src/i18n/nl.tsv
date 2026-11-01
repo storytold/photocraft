@@ -4131,6 +4131,8 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+	Rotate View Left	Weergave naar links draaien
+	Rotate View Right	Weergave naar rechts draaien
 	Show file name in title	Bestandsnaam in titel weergeven
 	50% Threshold	50% drempel
 	Pattern Dither	Patroondithering

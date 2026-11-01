@@ -3840,6 +3840,8 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+	Rotate View Left	Xoay chế độ xem sang trái
+	Rotate View Right	Xoay chế độ xem sang phải
 	Show file name in title	Hiển thị tên tệp trong tiêu đề
 	50% Threshold	Ngưỡng 50%
 	Pattern Dither	Hòa sắc họa tiết

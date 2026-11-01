@@ -4496,6 +4496,8 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+	Rotate View Left	Ruota vista a sinistra
+	Rotate View Right	Ruota vista a destra
 	Show file name in title	Mostra nome file nel titolo
 	50% Threshold	Soglia 50%
 	Pattern Dither	Dithering pattern
