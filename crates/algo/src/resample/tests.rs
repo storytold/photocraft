@@ -428,6 +428,7 @@ fn white_on_transparent_shrinks_like_black() {
         .flat_map(|f| [PixelFormat::RGBA32F, PixelFormat::RGBA8].map(|p| (f, p)))
     {
         let white = resize_surface(&disc(1.0, fmt), k, k, filter);
+        let mut opaque = 0;
         let black = resize_surface(&disc(0.0, fmt), k, k, filter);
         for y in 0..56 {
             for x in 0..56 {
@@ -436,9 +437,16 @@ fn white_on_transparent_shrinks_like_black() {
                 assert!(b[3] <= 1e-3 || (w[3] - b[3]).abs() < 1e-3, "{filter:?} {fmt:?} alpha at {x},{y}: {w:?} vs {b:?}");
                 if w[3] > 1e-3 {
                     assert!(w[0] > 0.9 && w[1] > 0.9 && w[2] > 0.9, "{filter:?} {fmt:?} dark fringe at {x},{y}: {w:?}");
+                    assert!(w[0] < 1.0 + 1e-3 && w[1] < 1.0 + 1e-3 && w[2] < 1.0 + 1e-3, "{filter:?} {fmt:?} over-bright at {x},{y}: {w:?}");
                     assert!(b[0] < 0.1, "{filter:?} {fmt:?} black fringe at {x},{y}: {b:?}");
+                }
+                // Fully covered pixels are opaque, pure white.
+                if w[3] > 0.99 {
+                    opaque += 1;
+                    assert!(w[0] > 0.99 && w[1] > 0.99 && w[2] > 0.99, "{filter:?} {fmt:?} opaque pixel not white at {x},{y}: {w:?}");
                 }
             }
         }
+        assert!(opaque > 100, "{filter:?} {fmt:?} no opaque white coverage: {opaque}");
     }
 }
