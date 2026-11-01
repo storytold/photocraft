@@ -499,6 +499,31 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "fileHandling.autosave", "value": false})).is_ok());
 }
 
+/// The raw editor that Edit/Develop in Raw Editor runs is the user's choice: automation can't set
+/// it in any form the engine accepts, alone, in a batch, with its section or with all preferences.
+#[test]
+fn automation_cannot_choose_the_external_raw_editor() {
+    let editor = "/usr/bin/darktable";
+    for path in ["rawDefaults.externalEditor", ".rawDefaults.externalEditor", "rawDefaults..externalEditor", "rawDefaults.externalEditor."] {
+        assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": path, "value": editor})).is_err(), "{path}");
+    }
+    for (path, value) in [("rawDefaults", serde_json::json!({"externalEditor": editor})), ("", serde_json::json!({"rawDefaults": {"externalEditor": editor}}))]
+    {
+        assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": path, "value": value})).is_err(), "{path:?}");
+    }
+    for values in [
+        serde_json::json!({"interface.language": "fr", "rawDefaults.externalEditor": editor}),
+        serde_json::json!({".rawDefaults.externalEditor": editor}),
+        serde_json::json!({"rawDefaults": {"externalEditor": editor}}),
+    ] {
+        assert!(authorize_engine_command("prefs.set", &serde_json::json!({"values": values})).is_err(), "{values}");
+        assert!(authorize_engine_step("prefs.set", &serde_json::json!({"values": values})).is_err(), "{values}");
+    }
+    // The rest of Camera Raw Defaults stays open to automation.
+    assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "rawDefaults.demosaic", "value": "ahd"})).is_ok());
+    assert!(authorize_engine_command("prefs.set", &serde_json::json!({"values": {"rawDefaults.applyAutoTone": true}})).is_ok());
+}
+
 #[test]
 fn registry_filesystem_path_params_are_classified() {
     let probe = serde_json::json!({

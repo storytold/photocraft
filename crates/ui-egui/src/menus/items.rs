@@ -40,6 +40,8 @@ pub fn is_live(id: &str) -> bool {
 /// catalogue spells it differently (Filter › "Other…").
 const PLACE_AFTER: &[(&str, &str)] = &[
     ("file.newFromClipboard", "file.new"),
+    ("file.editInRawEditor", "file.openExrParts"),
+    ("file.developInRawEditor", "file.editInRawEditor"),
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
