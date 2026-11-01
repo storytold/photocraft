@@ -130,7 +130,20 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
             break;
         }
-        let resolved = match actions_cmds::playback_params(&app.session, id, p) {
+        let menu = id == photocraft_engine::atn_cmds::MENU_ITEM;
+        let menu_command = if menu {
+            match photocraft_engine::atn_cmds::menu_item_command(p) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                    break;
+                }
+            }
+        } else {
+            None
+        };
+        let id = menu_command.unwrap_or(id);
+        let resolved = match if menu { Ok(json!({})) } else { actions_cmds::playback_params(&app.session, id, p) } {
             Ok(p) => p,
             Err(e) => {
                 failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
@@ -146,11 +159,29 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
         }
+        if menu && app.automation_input {
+            failed = Some(json!({"step": i, "id": id, "error": format!("interactive-required: `{id}` needs its menu item dialog")}));
+            break;
+        }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
-        if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
+        if menu || (action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id))) {
             let label = label_of(id);
-            let dialog = crate::dialogs::open_command_dialog(app, id, &label);
+            let dialog = if menu {
+                // Use the same populated Image Size dialog as the native menu, after the
+                // concrete command's gate and enablement check, rather than a bare confirm.
+                if let Err(e) = app.session.precheck(id, p) {
+                    failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                    break;
+                }
+                let Some(dialog) = crate::sizing::open(app, id) else {
+                    failed = Some(json!({"step": i, "id": id, "error": "no document"}));
+                    break;
+                };
+                dialog
+            } else {
+                crate::dialogs::open_command_dialog(app, id, &label)
+            };
             let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
             if let Some(d) = app.ui.dialog_mut(dialog) {
                 if let Some(o) = p.as_object() {
@@ -332,7 +363,9 @@ fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
 }
 
 fn step_label(id: &str, params: &Value) -> String {
-    if id == "actions.play" {
+    if id == photocraft_engine::atn_cmds::MENU_ITEM {
+        photocraft_engine::atn_cmds::menu_item_command(params).map(label_of).unwrap_or_else(|_| label_of(id))
+    } else if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         format!("{}: {target}", label_of(id))
     } else if id == "layer.select" {
@@ -579,6 +612,14 @@ impl PausedPlaybacks {
     fn take(&mut self, token: &Value) -> Option<PausedPlayback> {
         token.as_u64().and_then(|token| self.paused.remove(&token))
     }
+}
+
+/// Judge the dialog's final settings under the playback gate as well as the current gate.
+pub(crate) fn authorize_dialog(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>, id: &str, params: &Value) -> Result<(), String> {
+    if let Some(gate) = fields.get(RESUME).and_then(Value::as_u64).and_then(|token| app.paused_playbacks.paused.get(&token)).and_then(|paused| paused.gate) {
+        gate(id, params).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// A step dialog confirmed: continue the action after it (`dialogs::confirm` calls this).

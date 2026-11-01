@@ -66,10 +66,12 @@ fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) 
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = match (event_for(&item.event), &item.descriptor) {
-            (Some(e), Some(d)) => (e.from)(d),
-            (Some(e), None) => (e.from)(&Descriptor::default()),
-            (None, _) => Mapped::Unsupported { harmless: false },
+        let menu = item.descriptor.is_none().then(|| super::menu_item::from_event(&item.event)).flatten();
+        let mapped = match (menu, event_for(&item.event), &item.descriptor) {
+            (Some(p), _, _) => Mapped::Steps(vec![(super::MENU_ITEM.into(), p)]),
+            (_, Some(e), Some(d)) => (e.from)(d),
+            (_, Some(e), None) => (e.from)(&Descriptor::default()),
+            (_, None, _) => Mapped::Unsupported { harmless: false },
         };
         let (new_steps, enabled) = match mapped {
             Mapped::Steps(s) => (s, item.enabled),
@@ -121,6 +123,9 @@ pub struct Skipped {
 }
 
 pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
+    if id == super::MENU_ITEM {
+        return super::menu_item::export(params);
+    }
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
         let event = match params.get("eventKind") {

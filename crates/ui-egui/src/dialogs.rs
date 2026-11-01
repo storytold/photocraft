@@ -925,7 +925,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
-    let result = app.run(&cmd, params.clone());
+    let result = crate::actions::authorize_dialog(app, &d.fields, &cmd, &params).and_then(|()| app.run(&cmd, params.clone()));
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =

@@ -2,6 +2,7 @@
 
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;
+mod atn_menu_item;
 mod batch_export_options;
 mod camera_raw_histogram;
 mod camera_raw_localization;
