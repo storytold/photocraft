@@ -3006,3 +3006,36 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
     }
 }
+
+/// #10544: a click is replayed with the Alt of its press for the tools whose ⌥-click matters, and
+/// with the release's modifiers for every other tool.
+#[test]
+fn a_click_is_replayed_with_the_alt_of_its_press_for_alt_click_tools_only() {
+    use egui::Modifiers;
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Gradient, Tool::PaintBucket, Tool::CloneStamp, Tool::Healing, Tool::MixerBrush] {
+        assert!(strokes::click_modifiers(tool, Modifiers::NONE, true).alt, "{tool:?}: Alt at the press");
+        assert!(!strokes::click_modifiers(tool, Modifiers::NONE, false).alt, "{tool:?}: no Alt at the press");
+        assert!(strokes::click_modifiers(tool, Modifiers::ALT, false).alt, "{tool:?}: Alt at the release only");
+        assert!(strokes::click_modifiers(tool, Modifiers::SHIFT, true).shift, "{tool:?}: the rest is the release's");
+    }
+    for tool in [Tool::Eraser, Tool::Move, Tool::RectMarquee, Tool::Zoom, Tool::Eyedropper] {
+        assert!(!strokes::click_modifiers(tool, Modifiers::NONE, true).alt, "{tool:?}: only the ⌥-click tools latch");
+    }
+}
+
+/// The press of this frame inside the canvas decides the latched Alt; a press outside, a release
+/// and the other buttons never do.
+#[test]
+fn the_press_alt_comes_from_the_first_primary_press_inside_the_canvas() {
+    use egui::{Event, Modifiers, PointerButton};
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+    let press = |pos: Pos2, button, pressed, modifiers| Event::PointerButton { pos, button, pressed, modifiers };
+    let inside = Pos2::new(10.0, 10.0);
+    let outside = Pos2::new(300.0, 10.0);
+    assert_eq!(strokes::press_alt_in(&[], rect), None);
+    assert_eq!(strokes::press_alt_in(&[press(inside, PointerButton::Primary, true, Modifiers::ALT)], rect), Some(true));
+    assert_eq!(strokes::press_alt_in(&[press(inside, PointerButton::Primary, true, Modifiers::NONE)], rect), Some(false));
+    assert_eq!(strokes::press_alt_in(&[press(inside, PointerButton::Primary, false, Modifiers::ALT)], rect), None, "a release");
+    assert_eq!(strokes::press_alt_in(&[press(inside, PointerButton::Secondary, true, Modifiers::ALT)], rect), None, "the right button");
+    assert_eq!(strokes::press_alt_in(&[press(outside, PointerButton::Primary, true, Modifiers::ALT)], rect), None, "outside the canvas");
+}
