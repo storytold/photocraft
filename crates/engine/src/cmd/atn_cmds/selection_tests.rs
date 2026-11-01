@@ -53,6 +53,13 @@ fn group_f_load_save_preserves_recorded_descriptors() {
     for mode in ["AddT", "SbtF", "IntW"] {
         cases.push((mode, None, rectangle([-0.1, -0.1, 0.3, 0.2], false)));
     }
+    let mut ellipse = rectangle([1.5, 2.5, 8.5, 10.5], true);
+    ellipse.items.last_mut().unwrap().1 = D::Boolean(false);
+    cases.push(("AddT", Some("addTo"), ellipse));
+    cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.5)).with("Md  ", enm("BlnM", "Scrn"))));
+    for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
+        cases.push(("Dstr", Some("distort"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
+    }
     for (id, name, d) in cases {
         let mut events = Vec::new();
         if !id.is_empty() {
@@ -74,6 +81,22 @@ fn group_f_load_save_preserves_recorded_descriptors() {
     }
 }
 
+/// Fade writes native defaults and clamps only its documented opacity range.
+#[test]
+fn fade_defaults_and_opacity_limits_are_explicit() {
+    let native = export_item("edit.fade", &json!({}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(native, desc("null").with("Opct", pct(100.0)).with("Md  ", enm("BlnM", "Nrml")));
+    for (opacity, expected) in [(-5.0, 0.0), (0.0, 0.0), (100.0, 100.0), (105.0, 100.0)] {
+        let bytes = file(AtnEvent::Code(*b"Fade"), desc("null").with("Opct", pct(opacity)).with("Md  ", enm("BlnM", "Nrml")));
+        let loaded = import(&bytes).unwrap();
+        assert!(loaded.unsupported.is_empty());
+        assert_eq!(loaded.actions[0].steps[0].1["opacity"].as_f64(), Some(expected));
+        let saved = export("Group F", &[&loaded.actions[0]], &[], false).unwrap().0;
+        let d = atn::parse(&saved).unwrap().actions[0].items[0].descriptor.clone().unwrap();
+        assert_eq!(d, desc("null").with("Opct", pct(expected)).with("Md  ", enm("BlnM", "Nrml")));
+    }
+}
+
 /// Native exports keep their current event; only imported old mask/merge steps select old IDs.
 #[test]
 fn group_f_legacy_origin_is_allowlisted_and_does_not_replace_native_events() {
@@ -85,6 +108,7 @@ fn group_f_legacy_origin_is_allowlisted_and_does_not_replace_native_events() {
     }
     assert!(export_item("edit.definePattern", &json!({"_atnEvent":"MrgL"}), "S").is_none());
     assert!(export_item("select.rect", &json!({"x":0,"y":0,"width":1,"height":1,"mode":"replace","_atnBounds":[0,0,1,1]}), "S").is_none());
+    assert!(export_item("select.rect", &json!({"x":0,"y":0,"width":2,"height":1,"mode":"add","_atnBounds":[0,0,1,1]}), "S").is_none());
 }
 
 /// Missing settings, unknown enums, repeated keys and wrong targets stay kept with their flags.
