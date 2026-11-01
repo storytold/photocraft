@@ -3,12 +3,12 @@
 //! - The wheel scrolls up and down; ⇧ or ⌘/Ctrl + wheel scrolls sideways.
 //! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch (eased or instant, see below).
 //!   ⇧/Shift + ⌥/Alt + wheel snaps to the next zoom ladder level instead.
-//!   On Windows and Linux Ctrl + ⌥/Alt + wheel is the same zoom gesture (`alt_gesture`, #10488):
-//!   the windowing layer reports a held Ctrl as both `ctrl` and `command`, and Ctrl + Alt + wheel
-//!   was doing nothing before. Ctrl + Alt + ⇧ + wheel, on the other hand, is a dead gesture today:
-//!   the filter below drops the notch and the snap branch never sees it either (pinned by a test in
-//!   `wheel_nav/tests.rs`). Whether it should zoom like ⌥ + wheel or snap like ⌥ + ⇧ is open on
-//!   #10488: there is no measured Photoshop evidence for the combination, so no behaviour is claimed.
+//!   On Windows and Linux Ctrl + ⌥/Alt + wheel (no ⇧) is the same zoom gesture (`alt_gesture`,
+//!   #10488): the windowing layer reports a held Ctrl as both `ctrl` and `command`, and Ctrl + Alt +
+//!   wheel was doing nothing before. Ctrl + Alt + ⇧ + wheel is deliberately left exactly as it was
+//!   before #10488 (a plain scroll with Zoom with Scroll Wheel off, nothing with it on; pinned by a
+//!   test in `wheel_nav/tests.rs`). Which Photoshop behaviour it should have is open on #10488:
+//!   there is no measured Photoshop evidence for the combination.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls; ⇧/Shift + wheel snaps to the next zoom ladder level.
 //! - A trackpad pinch zooms around the pointer, unless Preferences › Enhanced Controls ›
@@ -349,16 +349,21 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zo
 ///
 /// winit reports a held Ctrl on Windows (and Linux) as BOTH `ctrl` and `command`, so a plain
 /// `!command` test excluded Ctrl + Alt + wheel there and left it doing nothing. `command` is only
-/// forgiven together with `ctrl` AND without `mac_cmd`. On macOS egui-winit sets `command` and
-/// `mac_cmd` from the Command key and `ctrl` from Control, so ⌘ + ⌥ and ⌘ + ⌃ + ⌥ both stay out of
-/// the zoom gesture and are left to egui's own scroll handling; on Windows and Linux `mac_cmd` is
-/// never set. AltGr cannot be told apart here and does not need to be: on Windows, winit
-/// (`get_agnostic_mods`) removes ctrl and alt from `ModifiersChanged` while AltGr is down on a
-/// layout that has one, and on X11/Wayland AltGr is `ISO_Level3_Shift` (Mod5), which is neither. On egui 0.37 that is not a sideways
-/// fold either: with Alt held, both the horizontal (`⇧ | ⌘`) and the vertical (`⌥`) scroll patterns
-/// match, so `wheel_state` folds nothing and the delta stays vertical.
+/// forgiven together with `ctrl`, without `mac_cmd` and without ⇧: Ctrl + Alt + ⇧ + wheel keeps
+/// the behaviour it had before #10488 (it is not an Alt gesture). On macOS egui-winit sets
+/// `command` and `mac_cmd` from the Command key and `ctrl` from Control, so ⌘ + ⌥ and ⌘ + ⌃ + ⌥
+/// both stay out of the zoom gesture and are left to egui's own scroll handling; on Windows and
+/// Linux `mac_cmd` is never set.
+///
+/// AltGr: on Windows, winit (`get_agnostic_mods`) removes ctrl and alt from the modifier state
+/// while AltGr is down on a layout that has one, and on X11/Wayland AltGr is `ISO_Level3_Shift`
+/// (Mod5), which is neither; so AltGr does not arrive as Ctrl + Alt. It is not excluded here
+/// though: egui-winit also turns the physical AltRight key into a `Key::AltRight` event, and
+/// `wheel_events` sets `alt` from it (the #8049 fallback), so AltGr + wheel can reach this
+/// function with `alt` set and `command` clear and zoom like ⌥. Not verified on a physical AltGr
+/// keyboard; behaviour deliberately unchanged.
 fn alt_gesture(m: &Modifiers) -> bool {
-    m.alt && (!m.command || (m.ctrl && !m.mac_cmd))
+    m.alt && (!m.command || (m.ctrl && !m.mac_cmd && !m.shift))
 }
 
 /// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
@@ -412,15 +417,10 @@ pub fn read_with(
     // The wheel events that belong to the gesture in progress: Shift+Alt (snap zoom), Alt-only
     // (continuous zoom), Shift-only (snap zoom with zoom_with_wheel), or plain (scroll/zoom).
     // The Alt branches take [`alt_gesture`], so Ctrl + Alt (Windows' ctrl + command mirror) counts
-    // as Alt here too, and the ⇧-snap branches stay as they were. `latest_shift` above keeps its
-    // stricter test, so a Ctrl + Alt + ⇧ notch is dropped by the alt branch (`!m.shift`) and the
-    // snap branch never takes it either. With Zoom with Scroll Wheel off that combination is a dead
-    // gesture; with the preference on it zooms nothing either - `alt != zoom_with_wheel` is false,
-    // the zoom arms are skipped, and the notch reaches the view as a plain pan through egui's own
-    // smoothed scroll delta (one notch = 40 points, no zoom, no snap, in either Animated Zoom
-    // mode). All four preference combinations are pinned in `wheel_nav/tests.rs`. Which Photoshop
-    // gesture it should be is open on #10488 - do not quietly "fix" it in passing without measured
-    // evidence for the choice.
+    // as Alt here too. Ctrl + Alt + ⇧ does not (`alt_gesture` refuses it, `latest_shift` keeps its
+    // strict test): it is neither alt nor shift here, as before #10488, so the notch is a plain
+    // scroll with Zoom with Scroll Wheel off and nothing with it on. Pinned in `wheel_nav/tests.rs`;
+    // which Photoshop gesture it should be is open on #10488.
     // `instant`: the part of `raw` egui leaves unsmoothed (a trackpad; see `wheel_events`).
     let (raw, instant) = wheel
         .iter()

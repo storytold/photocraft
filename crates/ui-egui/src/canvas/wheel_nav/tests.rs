@@ -635,44 +635,29 @@ fn each_modifier_maps_like_photoshop() {
     let (pan, zoom, _) = gesture(vec![vec![wheel(Vec2::new(0.0, 0.25), ctrl_alt)]], false, true);
     let speed = egui::InputOptions::default().scroll_zoom_speed;
     assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.25).exp()).abs() < 1e-4, "a fractional Ctrl + ⌥ step zooms once: {pan:?} {zoom}");
-    // Review 4432102938 asks what Ctrl + ⌥ + ⇧ + wheel does, and asks for an assertion rather than
-    // only a comment. The comment above the wheel filter used to claim it "zooms continuously
-    // instead of snapping", as did the module doc and the parity row; all three are corrected in
-    // this commit, because the filter rejects the notch instead: with `ctrl` held `latest_shift` is
-    // false (it excludes ctrl and command), so the alt branch runs and its `!m.shift` drops the
-    // notch out of `raw`, while `shift` stays false, so it never reaches the snap branch either.
-    // Zoom with Scroll Wheel off, Animated Zoom off. Asserting the claimed continuous zoom first
-    // failed exactly that way:
-    // "Ctrl + ⌥ + ⇧ + wheel zooms 10%, at once: [0.0 0.0] 1 snaps 0".
-    // Review 4433950859: those two assertions and that "nothing at all" only hold with Zoom with
-    // Scroll Wheel OFF, and the comment, the parity row and the wheel_nav.rs filter comment stated
-    // the no-action result without that condition. With the preference ON, `alt != zoom_with_wheel`
-    // is false, the zoom arms are skipped, and the notch reaches the view through egui's own
-    // smoothed scroll delta (which the `raw` filter never gates) as a plain pan. Measured over a
-    // second with one notch: pan [0.0 40.0], zoom 1.0, snaps 0 - with Animated Zoom off AND on (it
-    // only spreads the same 40 points over later frames). The four combinations below pin all of it
-    // so the gesture cannot change silently; whether it should zoom like ⌥ + wheel or behave
-    // exactly like ⌥ + ⇧ (snap) is the open question for the maintainer on #10488 - this repo has
-    // no measured Photoshop evidence for the combination, so no behaviour was invented here.
+    // Ctrl + ⌥ + ⇧ + wheel keeps the behaviour it had on main before #10488, in all four
+    // combinations of Zoom with Scroll Wheel and Animated Zoom (measured on origin/main with a
+    // probe test): with the preference off the notch is a plain vertical scroll (pan [0 40], no
+    // zoom, no snap); with it on the notch does nothing at all. `alt_gesture` refuses the
+    // ctrl + command mirror together with ⇧, so the classification sees neither alt nor shift,
+    // exactly as `!command && !ctrl` did. Which Photoshop gesture the combination should be is
+    // open on #10488 (no measured evidence), so it is pinned, not chosen.
     let ctrl_alt_shift = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
-    let (pan, zoom, snaps) = one(ctrl_alt_shift);
-    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "Ctrl + ⌥ + ⇧ + wheel is dead with Zoom with Scroll Wheel off: {pan:?} {zoom} snaps {snaps}");
-    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], false, false, true);
-    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and stays dead with the preference off, Animated Zoom on: {pan:?} {zoom} snaps {snaps}");
-    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, false);
-    assert!(
-        near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0,
-        "with the preference on it pans through the scroll fallback: {pan:?} {zoom} snaps {snaps}"
-    );
-    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, true);
-    assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0, "eased with Animated Zoom on, the same 40 points: {pan:?} {zoom} snaps {snaps}");
+    for animated in [false, true] {
+        let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], false, false, animated);
+        assert!(
+            near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0 && snaps == 0,
+            "Ctrl + ⌥ + ⇧ + wheel scrolls as before with the preference off (animated {animated}): {pan:?} {zoom} snaps {snaps}"
+        );
+        let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], true, false, animated);
+        assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and does nothing with the preference on (animated {animated}): {pan:?} {zoom} snaps {snaps}");
+    }
     // Without the Windows ctrl mirror the same wheel does snap, so only the ctrl half kills it.
     let (pan, zoom, snaps) = one(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
     assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 1, "⌥ + ⇧ + wheel still snaps: {pan:?} {zoom} snaps {snaps}");
     // macOS ⌘ + ⌥ (command set, ctrl not) is deliberately NOT the zoom gesture: it is left to egui's
-    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the rows above: with Zoom
-    // with Scroll Wheel off it is not even a scroll; with the preference on the notch pans), and
-    // which of the two readings is right is the open question on #10488.
+    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the rows above, unchanged
+    // from before #10488); which behaviour is right for it is the open question on #10488.
     let (pan, zoom, _) = one(Modifiers { alt: true, ..CMD });
     assert!(zoom == 1.0 && pan != Vec2::ZERO, "⌘ + ⌥ + wheel keeps scrolling: {pan:?} {zoom}");
 }
@@ -1093,8 +1078,30 @@ fn alt_gesture_is_per_platform_modifier_shape() {
 fn mac_cmd_alt_wheel_does_not_zoom() {
     let notch = Vec2::new(0.0, 1.0);
     let cmd_alt = Modifiers { mac_cmd: true, command: true, ctrl: true, alt: true, ..Modifiers::NONE };
-    let (_, zoom, _) = gesture(vec![vec![wheel(notch, cmd_alt)]], false, false);
+    let (pan, zoom, _) = gesture(vec![vec![wheel(notch, cmd_alt)]], false, false);
     assert!((zoom - 1.0).abs() < 1e-6, "⌘ + ⌃ + ⌥ + wheel must not zoom: {zoom}");
+    assert!(pan != Vec2::ZERO, "⌘ + ⌃ + ⌥ + wheel keeps scrolling: {pan:?}");
     let (_, zoom, _) = gesture(vec![vec![wheel(notch, Modifiers { ctrl: true, command: true, alt: true, ..Modifiers::NONE })]], false, false);
     assert!(zoom > 1.0, "Ctrl + Alt + wheel zooms on Windows/Linux: {zoom}");
+}
+
+#[test]
+fn alt_key_press_before_the_wheel_counts_as_alt_modifier() {
+    // `wheel_events` adds ⌥ from an Alt key event when the wheel's own modifiers miss it (#8049):
+    // the same frame with the key press and a modifier-less wheel must equal the wheel with `alt`.
+    let notch = Vec2::new(0.0, 1.0);
+    let key = |pressed| Event::Key { key: Key::AltRight, physical_key: Some(Key::AltRight), pressed, repeat: false, modifiers: Modifiers::NONE };
+    for animated in [false, true] {
+        let via_key = gesture_with(vec![vec![key(true), wheel(notch, Modifiers::NONE)]], false, false, animated);
+        let via_mods = gesture_with(vec![vec![wheel(notch, Modifiers::ALT)]], false, false, animated);
+        assert_eq!(via_key, via_mods, "AltRight key press + wheel == wheel with alt (animated {animated})");
+        assert!(via_key.1 > 1.0, "and it zooms: {via_key:?}");
+    }
+}
+
+#[test]
+fn ctrl_alt_shift_mirror_is_not_an_alt_gesture() {
+    let m = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
+    assert!(!alt_gesture(&m), "Ctrl + Alt + Shift keeps its pre-#10488 behaviour");
+    assert!(alt_gesture(&Modifiers { alt: true, shift: true, ..Modifiers::NONE }), "Alt + Shift is still the snap gesture");
 }
