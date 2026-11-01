@@ -7,6 +7,126 @@ use photocraft_psd::{
 };
 use serde_json::json;
 
+/// A small marked document makes canvas translation and image resampling distinguishable.
+fn sized_document(width: u32, height: u32, dpi: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":width,"height":height,"background":"white"})).unwrap();
+    s.execute("image.imageSize", json!({"resolution":dpi,"resample":"none"})).unwrap();
+    s.edit("Mark", |doc, _| {
+        doc.layers[0].surface_mut().unwrap().write_region(photocraft_geom::Rect::from_xywh(0, 0, 1, 1), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// Replay saved bytes, so the geometry witness covers import, export and execution together.
+fn replay_saved(s: &mut Session, action: &Action) {
+    let (bytes, _) = atn_cmds::export("Identifiers", &[action], &[], false).unwrap();
+    let imported = atn_cmds::import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    assert_eq!(imported.actions[0].steps, action.steps);
+    s.actions.list = imported.actions;
+    let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+    assert_eq!(result["ran"], 1);
+    assert!(result.get("failed").is_none(), "{result}");
+}
+
+/// Percent canvas dimensions use each playback document and leave its pixels unscaled.
+#[test]
+fn recorded_canvas_percent_resolves_at_playback_and_keeps_an_omitted_side() {
+    for both_sides in [false, true] {
+        let mut d = Descriptor::new("null")
+            .with("Wdth", D::UnitFloat { unit: *b"#Prc", value: 200.0 })
+            .with("Hrzn", enm("HrzL", "Left"))
+            .with("Vrtc", enm("VrtL", "Top "));
+        if both_sides {
+            d = d.with("Hght", D::UnitFloat { unit: *b"#Prc", value: 200.0 });
+        }
+        let action = recorded(AtnEvent::Code(*b"CnvS"), d);
+        assert_eq!(action.steps[0].0, "image.canvasSize", "recorded canvas percentages must map");
+        assert_eq!(action.steps[0].1["units"], "percent");
+        assert!(matches!(saved(&action).descriptor.unwrap().get("Wdth"), Some(D::UnitFloat {unit,value}) if unit==b"#Prc" && *value==200.0));
+        for (width, height) in [(40, 30), (10, 15)] {
+            let mut s = sized_document(width, height, 72);
+            replay_saved(&mut s, &action);
+            assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(width * 2, if both_sides { height * 2 } else { height }));
+            assert_eq!(s.execute("document.pixel", json!({"x":0,"y":0})).unwrap(), json!([1, 0, 0, 1]));
+            assert_eq!(s.execute("document.pixel", json!({"x":1,"y":0})).unwrap(), json!([1, 1, 1, 1]), "canvas expansion must not stretch the mark");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(width, height));
+        }
+    }
+}
+
+/// Physical dimensions retain points and resolve current dpi before rounding or style scaling.
+#[test]
+fn recorded_image_points_use_current_resolution_and_keep_style_scaling() {
+    use photocraft_color::{BlendMode, Color};
+    use photocraft_doc::{Effect, Effects, FxCommon, FxPaint, StrokeFx, StrokePosition};
+    for dpi in [72, 144] {
+        for scale_styles in [None, Some(false), Some(true)] {
+            let mut d = Descriptor::new("null")
+                .with("Wdth", D::UnitFloat { unit: *b"#Rlt", value: 72.0 })
+                .with("CnsP", D::Boolean(true))
+                .with("Intr", enm("Intp", "Nrst"));
+            if let Some(value) = scale_styles {
+                d = d.with("scaleStyles", D::Boolean(value));
+            }
+            let action = recorded(AtnEvent::Code(*b"ImgS"), d);
+            assert_eq!(action.steps[0].0, "image.imageSize", "recorded point dimensions must map");
+            assert_eq!(action.steps[0].1["units"], "pt");
+            assert_eq!(action.steps[0].1["width"], 72);
+            assert!(matches!(saved(&action).descriptor.unwrap().get("Wdth"), Some(D::UnitFloat {unit,value}) if unit==b"#Rlt" && *value==72.0));
+            let mut s = sized_document(40, 20, dpi);
+            s.edit("Style", |doc, _| {
+                doc.layers[0].effects = Effects {
+                    enabled: true,
+                    items: vec![Effect::Stroke(StrokeFx {
+                        common: FxCommon::new(BlendMode::Normal, 1.0),
+                        size: 20.0,
+                        position: StrokePosition::Outside,
+                        paint: FxPaint::Color(Color::rgb(0.0, 0.0, 1.0)),
+                        overprint: false,
+                    })],
+                    ..Default::default()
+                };
+                Ok(())
+            })
+            .unwrap();
+            replay_saved(&mut s, &action);
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.size, photocraft_geom::Size::new(dpi, dpi / 2));
+            let Effect::Stroke(stroke) = &doc.layers[0].effects.items[0] else { panic!("stroke lost") };
+            assert_eq!(stroke.size, if scale_styles.unwrap_or(false) { 20.0 * dpi as f32 / 40.0 } else { 20.0 });
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(40, 20));
+        }
+    }
+    let d = Descriptor::new("null").with("Wdth", D::UnitFloat { unit: *b"#Rlt", value: 0.36 }).with("Intr", enm("Intp", "Nrst"));
+    let action = recorded(AtnEvent::Code(*b"ImgS"), d);
+    let mut s = sized_document(40, 20, 300);
+    replay_saved(&mut s, &action);
+    assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(2, 1), "round pixels after point conversion");
+}
+
+/// The layered false/false recording writes a class and explicit layer-retaining choices.
+#[test]
+fn recorded_mode_uses_a_class_and_retains_layers_with_false_flags() {
+    let d = Descriptor::new("null").with("T   ", D::Class(class("Grys"))).with("Fltt", D::Boolean(false)).with("Rstr", D::Boolean(false));
+    let action = recorded(AtnEvent::Code(*b"CnvM"), d);
+    assert_eq!(action.steps, vec![("image.mode.grayscale".into(), json!({}))]);
+    let written = saved(&action).descriptor.unwrap();
+    assert!(matches!(written.get("T   "),Some(D::Class(c)) if c.class_id.is("Grys")), "mode target must save as a class");
+    assert_eq!(written.get("Fltt"), Some(&D::Boolean(false)));
+    assert_eq!(written.get("Rstr"), Some(&D::Boolean(false)));
+    let mut s = sized_document(4, 2, 72);
+    s.execute("layer.new.layer", json!({"name":"Second"})).unwrap();
+    replay_saved(&mut s, &action);
+    assert_eq!(s.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale);
+    assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+}
+
 fn class(id: &str) -> Class {
     Class { name: UnicodeString::new_nul(""), class_id: Id::new(id) }
 }
