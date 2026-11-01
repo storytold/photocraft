@@ -883,8 +883,22 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     {
         let d = xf.to_doc(p);
         app.ui.canvas_tool_menu = None;
-        // No layers there (the pasteboard, with the Move tool): its colour menu instead.
-        if !crate::layer_pick_ui::open(app, ctx, [p.x, p.y], d[0], d[1]) && !mods.command && crate::canvas_tool_menu::pasteboard_at(app, tool, d) {
+        // ⌥ with the Move tool selects the topmost layer there at once, without the menu, also
+        // inside a group with Auto-Select on Group, as in Photoshop (#8484). The ⌥ held at the
+        // press or latched counts, as for the other right-click gestures.
+        let right = buttons.right_mods;
+        let alt_pick = tool == Tool::Move && right.alt && !right.command;
+        let pasteboard = crate::canvas_tool_menu::pasteboard_at(app, tool, d);
+        // On the pasteboard ⌥ opens its colour menu, also where a fill layer (which covers every
+        // point) would be hit: nothing shows there to pick.
+        if alt_pick && pasteboard {
+            crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
+        } else if !(alt_pick && crate::layer_pick_ui::select_topmost(app, d[0], d[1]))
+            && !crate::layer_pick_ui::open(app, ctx, [p.x, p.y], d[0], d[1])
+            && !mods.command
+            && pasteboard
+        {
+            // No layers there (the pasteboard, with the Move tool): its colour menu instead.
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         }
     }

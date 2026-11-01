@@ -176,8 +176,18 @@ pub(crate) fn gesture_mods(ctx: &Context, mods: egui::Modifiers) -> egui::Modifi
         (i.pointer.button_pressed(egui::PointerButton::Secondary), i.pointer.secondary_down(), i.pointer.button_released(egui::PointerButton::Secondary))
     });
     if pressed {
-        ctx.data_mut(|d| d.insert_temp(key, mods));
-        return mods;
+        // The press event's own modifiers: a quick click can press, release ⌥ and release the
+        // button within one frame, whose modifiers are those after the ⌥ release.
+        let at_press = ctx
+            .input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::PointerButton { button: egui::PointerButton::Secondary, pressed: true, modifiers, .. } => Some(*modifiers),
+                    _ => None,
+                })
+            })
+            .unwrap_or(mods);
+        ctx.data_mut(|d| d.insert_temp(key, at_press));
+        return at_press;
     }
     if !down && !released {
         ctx.data_mut(|d| d.remove::<egui::Modifiers>(key));
