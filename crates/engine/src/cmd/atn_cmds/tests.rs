@@ -485,6 +485,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("filter.stylize.oilPaint", json!({"lighting": false, "stylization": 6.5, "cleanliness": 3, "scale": 2, "bristleDetail": 7, "angle": 45, "shine": 2})),
+        ("filter.sharpen.smartSharpen", json!({"amount": 150, "radius": 2.5, "reduceNoise": 0})),
+        ("select.focusArea", json!({})),
+        ("select.sky", json!({"sampleAllLayers": false})),
+        ("layer.removeBackground", json!({})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3174,4 +3179,102 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// A Photoshop step of one of the newer features, as its event reference records it (#10610).
+fn newer(name: &str, d: Descriptor) -> Mapped {
+    (events::event_for(&AtnEvent::name(name)).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
+}
+
+fn mapped(m: Mapped) -> (String, Value) {
+    match m {
+        Mapped::Steps(mut s) if s.len() == 1 => s.remove(0),
+        _ => panic!("not one step"),
+    }
+}
+
+/// Oil Paint, Smart Sharpen, Focus Area, Select Sky and Remove Background load with the keys and
+/// defaults Photoshop records; Oil Paint's and Select Sky's defaults differ from the commands'
+/// and are written out (#10610).
+#[test]
+fn newer_feature_steps_load_with_photoshops_defaults() {
+    let oil = desc("null")
+        .with("lightingOn", D::Boolean(true))
+        .with("stylization", D::Double(4.0))
+        .with("cleanliness", D::Double(2.299_999_952_316_28))
+        .with("brushScale", D::Double(0.800_000_011_920_93))
+        .with("microBrush", D::Double(10.0))
+        .with("LghD", D::Integer(-60))
+        .with("specularity", D::Double(1.299_999_952_316_28));
+    let expected_oil = json!({"lighting": true, "stylization": 4.0, "cleanliness": 2.299_999_952_316_28, "scale": 0.800_000_011_920_93,
+        "bristleDetail": 10.0, "angle": -60.0, "shine": 1.299_999_952_316_28});
+    assert_eq!(mapped(newer("oilPaint", oil.clone())), ("filter.stylize.oilPaint".into(), expected_oil.clone()));
+    assert_eq!(mapped(newer("oilPaint", desc("null"))).1, expected_oil, "a missing key takes Photoshop's default");
+    let sharpen = desc("null")
+        .with("presetKind", enm("presetKindType", "presetKindCustom"))
+        .with("useLegacy", D::Boolean(true))
+        .with("Amnt", pct(200.0))
+        .with("Rds ", px(1.0))
+        .with("moreAccurate", D::Boolean(false))
+        .with("blur", enm("blurType", "lensBlur"));
+    assert_eq!(
+        mapped(newer("smartSharpen", sharpen.clone())),
+        ("filter.sharpen.smartSharpen".into(), json!({"amount": 200.0, "radius": 1.0, "reduceNoise": 0}))
+    );
+    assert_eq!(mapped(newer("selectSky", desc("null"))), ("select.sky".into(), json!({"sampleAllLayers": false})));
+    assert_eq!(mapped(newer("focusMask", desc("null"))), ("select.focusArea".into(), json!({})));
+    assert_eq!(mapped(newer("removeBackground", desc("null"))), ("layer.removeBackground".into(), json!({})));
+
+    // Written back, they carry the same keys in the same order.
+    let back = |id: &str, p: Value| export_item(id, &p, "S").unwrap_or_else(|| panic!("{id} does not export")).descriptor.unwrap();
+    assert_eq!(back("filter.stylize.oilPaint", expected_oil).items, oil.items);
+    assert_eq!(back("filter.sharpen.smartSharpen", json!({"amount": 200, "radius": 1, "reduceNoise": 0})).items, sharpen.items);
+
+    // Oil Paint and Smart Sharpen play.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    let action = Action::new(
+        "Paint",
+        vec![
+            ("filter.stylize.oilPaint".into(), mapped(newer("oilPaint", desc("null"))).1),
+            ("filter.sharpen.smartSharpen".into(), mapped(newer("smartSharpen", desc("null"))).1),
+        ],
+    );
+    s.actions.list.push(action);
+    let played = s.execute("actions.play", json!({"action": "Paint"})).unwrap();
+    assert_eq!(played["ran"], 2, "{played}");
+}
+
+/// What the commands cannot do keeps the Photoshop step instead of playing something else
+/// (#10610).
+#[test]
+fn newer_feature_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(newer("smartSharpen", desc("null").with("blur", enm("blurType", "motionBlur")))));
+    assert!(kept(newer("smartSharpen", desc("null").with("moreAccurate", D::Boolean(true)))));
+    assert!(kept(newer("smartSharpen", desc("null").with("useLegacy", D::Boolean(false)))));
+    assert!(kept(newer("smartSharpen", desc("null").with("presetKind", enm("presetKindType", "presetKindDefault")))));
+    assert!(kept(newer("focusMask", desc("null").with("Rng ", D::Double(3.0)))));
+    assert!(kept(newer("removeBackground", desc("null").with("Lyr ", D::Integer(1)))));
+    assert!(kept(newer("selectSky", desc("null").with("smartRadius", D::Boolean(true)))));
+    assert!(kept(newer("oilPaint", desc("null").with("Angl", D::Integer(3)))));
+}
+
+/// Settings the events have no key for refuse the step rather than replay differently (#10610).
+#[test]
+fn newer_feature_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("filter.sharpen.smartSharpen", json!({"amount": 150})),
+        ("filter.sharpen.smartSharpen", json!({"amount": 150, "reduceNoise": 10})),
+        ("filter.stylize.oilPaint", json!({"angle": 10.5})),
+        ("filter.stylize.oilPaint", json!({"target": "mask"})),
+        ("select.focusArea", json!({"range": 0.3})),
+        ("select.sky", json!({"mode": "add"})),
+        ("select.sky", json!({"threshold": 70})),
+        ("layer.removeBackground", json!({"layer": 3})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    assert!(export_item("select.sky", &json!({"mode": "replace", "threshold": 50, "softness": 50}), "S").is_some());
 }

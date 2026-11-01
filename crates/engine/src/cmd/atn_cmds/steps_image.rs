@@ -453,3 +453,145 @@ pub(super) fn radial_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
     }
     fields_to(p, RADIAL_BLUR_FIELDS, desc("null"))
 }
+
+// ------------------------------------------------------------------ newer features (#10610)
+
+/// Whether every key of `d` is one of `keys` (codes compare without their space padding).
+fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
+    d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
+fn sets_only(p: &Value, allowed: &[&str]) -> bool {
+    p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
+}
+
+/// Focus Area (`focusMask`) and Remove Background (`removeBackground`): Photoshop runs both with
+/// an empty descriptor. A step that carries settings keeps them as a Photoshop step.
+pub(super) fn bare_from(d: &Descriptor, id: &str) -> Mapped {
+    if d.items.is_empty() { step(id, json!({})) } else { Mapped::Unsupported { harmless: false } }
+}
+
+/// Only a step with no settings writes the empty descriptor; any setting would be lost.
+pub(super) fn bare_to(_: &str, p: &Value) -> Option<Descriptor> {
+    sets_only(p, &[]).then(|| desc("null"))
+}
+
+/// Select Sky (`selectSky`): `sampleAllLayers` only, false when the step leaves it out
+/// (the command's own default is true).
+pub(super) fn select_sky_from(d: &Descriptor) -> Mapped {
+    if !only_keys(d, &["sampleAllLayers"]) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    step("select.sky", json!({"sampleAllLayers": get_bool(d, "sampleAllLayers").unwrap_or(false)}))
+}
+
+/// The event has no mode, threshold or softness: only their replay values survive.
+pub(super) fn select_sky_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let at = |k: &str, v: Value| p.get(k).is_none_or(|x| x.is_null() || *x == v || (x.as_f64().is_some() && x.as_f64() == v.as_f64()));
+    if !sets_only(p, &["sampleAllLayers", "mode", "threshold", "softness"])
+        || !at("mode", json!("replace"))
+        || !at("threshold", json!(50))
+        || !at("softness", json!(50))
+    {
+        return None;
+    }
+    let all = match p.get("sampleAllLayers") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool()?,
+    };
+    Some(desc("null").with("sampleAllLayers", D::Boolean(all)))
+}
+
+/// Oil Paint's keys in recorded order: (key, param, Photoshop's default, the command's default).
+const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
+    ("stylization", "stylization", 4.0, 4.0),
+    ("cleanliness", "cleanliness", 2.299_999_952_316_28, 5.0),
+    ("brushScale", "scale", 0.800_000_011_920_93, 1.0),
+    ("microBrush", "bristleDetail", 10.0, 5.0),
+];
+
+/// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
+/// command's for cleanliness, scale, bristle detail and shine, so they are written out.
+pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
+    let keys = ["lightingOn", "stylization", "cleanliness", "brushScale", "microBrush", "LghD", "specularity"];
+    if !only_keys(d, &keys) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let mut p = Map::new();
+    p.insert("lighting".into(), get_bool(d, "lightingOn").unwrap_or(true).into());
+    for (key, param, ps, _) in OIL_PAINT {
+        p.insert((*param).into(), get_num(d, key).unwrap_or(*ps).into());
+    }
+    p.insert("angle".into(), get_num(d, "LghD").unwrap_or(-60.0).into());
+    p.insert("shine".into(), get_num(d, "specularity").unwrap_or(1.299_999_952_316_28).into());
+    step("filter.stylize.oilPaint", Value::Object(p))
+}
+
+/// Every key in recorded order, the command's defaults for what the step leaves out. The light
+/// direction is an integer: a fractional angle would replay rounded, so the step is refused.
+pub(super) fn oil_paint_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !pixel_target(p) || !sets_only(p, &["target", "lighting", "stylization", "cleanliness", "scale", "bristleDetail", "angle", "shine"]) {
+        return None;
+    }
+    let num = |k: &str, default: f64| match p.get(k) {
+        None | Some(Value::Null) => Some(default),
+        Some(v) => v.as_f64().filter(|n| n.is_finite()),
+    };
+    let lighting = match p.get("lighting") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool()?,
+    };
+    let angle = num("angle", -60.0)?;
+    if angle.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&angle) {
+        return None;
+    }
+    let mut d = desc("null").with("lightingOn", D::Boolean(lighting));
+    for (key, param, _, ours) in OIL_PAINT {
+        d = d.with(key, D::Double(num(param, *ours)?));
+    }
+    Some(d.with("LghD", D::Integer(angle as i32)).with("specularity", D::Double(num("shine", 1.0)?)))
+}
+
+/// Smart Sharpen (`smartSharpen`), as Photoshop records it without its dialog: the legacy
+/// filter, removing Lens Blur, with no noise reduction (so `reduceNoise` is 0). A step that
+/// asks for what the command does not do (another blur, More Accurate, the newer filter, a
+/// preset) keeps it as a Photoshop step.
+pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
+    let keys = ["presetKind", "useLegacy", "Amnt", "Rds", "moreAccurate", "blur"];
+    let as_recorded = only_keys(d, &keys)
+        && get_enum(d, "presetKind").is_none_or(|k| k == "presetKindCustom")
+        && get_bool(d, "useLegacy") != Some(false)
+        && get_bool(d, "moreAccurate") != Some(true)
+        && get_enum(d, "blur").is_none_or(|b| b == "lensBlur");
+    if !as_recorded {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let mut p = Map::new();
+    for (key, param, default) in [("Amnt", "amount", 200.0), ("Rds ", "radius", 1.0)] {
+        p.insert(param.into(), get_num(d, key).unwrap_or(default).into());
+    }
+    p.insert("reduceNoise".into(), 0.into());
+    step("filter.sharpen.smartSharpen", Value::Object(p))
+}
+
+/// Every key in recorded order. The legacy filter has no noise reduction, so only a step that
+/// sets `reduceNoise` to 0 is written (the command reduces noise by 10 when it is left out).
+pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !pixel_target(p) || !sets_only(p, &["target", "amount", "radius", "reduceNoise"]) || p.get("reduceNoise").and_then(Value::as_f64) != Some(0.0) {
+        return None;
+    }
+    let num = |k: &str, default: f64| match p.get(k) {
+        None | Some(Value::Null) => Some(default),
+        Some(v) => v.as_f64().filter(|n| n.is_finite()),
+    };
+    Some(
+        desc("null")
+            .with("presetKind", enm("presetKindType", "presetKindCustom"))
+            .with("useLegacy", D::Boolean(true))
+            .with("Amnt", pct(num("amount", 100.0)?))
+            .with("Rds ", px(num("radius", 1.0)?))
+            .with("moreAccurate", D::Boolean(false))
+            .with("blur", enm("blurType", "lensBlur")),
+    )
+}
