@@ -1017,3 +1017,19 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
+
+/// The footer's frame diagnostics: the longest frame gap resets with each stroke, and the
+/// control channel reports them with the dab and preview times.
+#[test]
+fn frame_diagnostics_reset_per_stroke_and_are_reported() {
+    let mut app = app_with_layer();
+    crate::liquify_ui::open(&mut app, &egui::Context::default()).unwrap();
+    let d = app.distort.liquify.as_mut().unwrap();
+    d.frame_max_ms = 9.0;
+    d.frame_ms = 4.0;
+    pointer(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.frame_max_ms, 0.0, "a new stroke starts its own maximum");
+    let v = d.describe();
+    assert!(v.get("frameMs").is_some() && v.get("frameMaxMs").is_some() && v.get("dabMs").is_some(), "{v}");
+}
