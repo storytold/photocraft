@@ -169,7 +169,7 @@ fn provider_ack_waits_for_raw_type_input_from_the_same_frame_before_closing() {
     provider.result(request, "saved".into(), "resource-one".into()).unwrap();
 
     let raw = egui::RawInput { focused: true, events: vec![egui::Event::Text(" after".into())], ..Default::default() };
-    let _ = ctx.run_ui(raw, |ui| {
+    let mut output = ctx.run_ui(raw, |ui| {
         // eframe runs logic before UI with this same raw input. This is the real Type
         // input handler: its engine edit must not be preempted by the save continuation.
         file_providers::tick(&mut app, ui.ctx());
@@ -179,6 +179,7 @@ fn provider_ack_waits_for_raw_type_input_from_the_same_frame_before_closing() {
         crate::discard_ui::finish_provider_save(&mut app, ui.ctx());
         app.finish_type_reset_pass(ui.ctx());
     });
+    output.textures_delta.clear(); // This input/protocol fixture does not paint.
     let state = app.session.active().unwrap();
     let photocraft_doc::LayerContent::Text(layer) = &state.doc.layer(photocraft_doc::LayerId(text)).unwrap().content else { panic!("text layer") };
     assert_eq!(layer.text, "Before after");
@@ -197,13 +198,15 @@ fn provider_ack_with_only_pointer_input_closes_after_a_settled_ui_pass() {
     let request = resolve_save(&mut app, &provider, &ctx);
     provider.result(request, "saved".into(), "resource-one".into()).unwrap();
     let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))], ..Default::default() };
-    let _ = ctx.run_ui(raw, |ui| {
+    let mut output = ctx.run_ui(raw, |ui| {
         file_providers::tick(&mut app, ui.ctx());
         crate::discard_ui::finish_provider_save(&mut app, ui.ctx());
     });
+    output.textures_delta.clear();
     assert_eq!(app.session.documents().len(), 1);
     assert!(app.has_unsaved_work());
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| crate::discard_ui::finish_provider_save(&mut app, ui.ctx()));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| crate::discard_ui::finish_provider_save(&mut app, ui.ctx()));
+    output.textures_delta.clear();
     assert!(app.session.documents().is_empty());
     assert!(!app.has_unsaved_work());
 }
