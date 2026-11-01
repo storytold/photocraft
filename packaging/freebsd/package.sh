@@ -70,9 +70,9 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 # is built in its own cargo run: built with the binaries, its dev-dependencies' features would be
 # unified into them. cargo reads CARGO_BUILD_TARGET itself, so cross builds need no --target flag.
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif --bins)
+  (cd "$ROOT" && cargo build --release --locked -p photocraft -p photocraft-cli --features heif,jxl --bins)
   if [[ "$CROSS" = 0 ]]; then
-    (cd "$ROOT" && cargo build --release --locked -p photocraft-cli --features heif --example man-and-completions)
+    (cd "$ROOT" && cargo build --release --locked -p photocraft-cli --features heif,jxl --example man-and-completions)
   fi
 fi
 WORK="$CARGO_TARGET_DIR/freebsd-package"

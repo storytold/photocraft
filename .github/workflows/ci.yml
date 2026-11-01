@@ -136,7 +136,7 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format|jxl)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
@@ -163,7 +163,7 @@ jobs:
         LPDEST=photocraft-no-such-printer
       timeout-minutes: 100
       # fmt, clippy, layers, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
-      # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
+      # `--locked --features heif,jxl`, then the missing-translations report (xtask/src/main.rs).
       command: cargo xtask ci
 
   # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
@@ -241,7 +241,7 @@ jobs:
 
       - name: Clippy
         if: matrix.part == 'integration'
-        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --features heif,jxl -- -D warnings
 
       - name: Dependency layering
         if: matrix.part == 'integration'
@@ -262,12 +262,12 @@ jobs:
             unit) targets=(--lib --bins) ;;
             *) targets=(--test '*') ;;
           esac
-          cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
+          cargo nextest run --profile ci --workspace --locked --features heif,jxl "${targets[@]}"
         shell: bash
 
       - name: Doctests
         if: matrix.part == 'unit'
-        run: cargo test --workspace --locked --features heif --doc
+        run: cargo test --workspace --locked --features heif,jxl --doc
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
@@ -308,8 +308,8 @@ jobs:
         with:
           tool: cargo-nextest@0.9.150
 
-      - name: Test without heif
-        run: cargo nextest run -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked --profile ci
+      - name: Test without heif and jxl
+        run: cargo nextest run -p photocraft-heif -p photocraft-jxl -p photocraft-codecs -p photocraft-io --locked --profile ci
 
   corpus:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
@@ -425,6 +425,7 @@ jobs:
           - { crate: codecs, name: decode_tiff }
           - { crate: codecs, name: decode_exr }
           - { crate: codecs, name: decode_heif }
+          - { crate: codecs, name: decode_jxl }
           - { crate: affinity, name: preview }
           - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
