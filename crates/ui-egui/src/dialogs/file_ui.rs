@@ -521,8 +521,10 @@ mod rtl_tests {
     use crate::direction::{Dir, direction_scope};
     use egui_kittest::kittest::Queryable;
 
+    type State = (Map<String, Value>, egui::Rect);
+
     /// The number row drawn in `dir`, with the column it draws in.
-    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, (Map<String, Value>, egui::Rect)>, egui::Rect) {
+    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, State>, egui::Rect) {
         let _dir = direction_scope(dir);
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(400.0, 80.0))

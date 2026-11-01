@@ -827,7 +827,6 @@ fn a_resizable_dialog_shrinks_as_well_as_grows_in_both_directions() {
 /// configured min, and compares the clamped outer (area) rects across a sweep of drag deltas.
 #[test]
 fn w38_over_shrink_clamps_preferences_to_the_same_min_in_both_directions() {
-    use egui::NumExt;
     type Dir = crate::text::direction::Dir;
     let clamped = |dir: Dir, by: egui::Vec2| {
         let _scope = crate::text::direction::direction_scope(dir);

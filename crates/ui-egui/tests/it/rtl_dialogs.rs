@@ -31,16 +31,24 @@ fn window(h: &Harness<'_, PhotocraftApp>) -> egui::Rect {
     h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog window")
 }
 
+/// The dialog's own close box: the "Close" button inside the dialog window. The app title bar's
+/// caption × carries the same label, outside the dialog.
+fn close_box(h: &Harness<'_, PhotocraftApp>, win: &egui::Rect, label: &str) -> egui::Rect {
+    let inside: Vec<egui::Rect> = h.query_all_by_label(label).map(|n| n.rect()).filter(|r| win.contains(r.center())).collect();
+    assert_eq!(inside.len(), 1, "exactly one {label} button in the dialog window: {inside:?}");
+    inside[0]
+}
+
 /// In an Arabic UI the dialog mirrors — title, close box and footer swap ends — and the same
 /// open dialog returns to the English layout when the language switches back.
 #[test]
 fn an_arabic_dialog_mirrors_and_follows_a_live_language_switch() {
     let mut h = harness();
     let title = h.get_by_label(&ar("Gaussian Blur…")).rect();
-    let x = h.get_by_label(&ar("Close")).rect();
+    let win = window(&h);
+    let x = close_box(&h, &win, &ar("Close"));
     let ok = h.get_by_label(&ar("OK")).rect();
     let cancel = h.get_by_label(&ar("Cancel")).rect();
-    let win = window(&h);
     assert!(title.right() > win.center().x, "the title reads from the right: {title:?} in {win:?}");
     assert!(x.right() < title.left(), "the × sits left of the title: {x:?}, {title:?}");
     assert!(x.left() - win.left() < 40.0, "at the band's left end: {x:?} in {win:?}");
@@ -50,10 +58,10 @@ fn an_arabic_dialog_mirrors_and_follows_a_live_language_switch() {
     h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("English is registered");
     h.run_steps(4);
     let title = h.get_by_label("Gaussian Blur").rect();
-    let x = h.get_by_label("Close").rect();
+    let win = window(&h);
+    let x = close_box(&h, &win, "Close");
     let ok = h.get_by_label("OK").rect();
     let cancel = h.get_by_label("Cancel").rect();
-    let win = window(&h);
     assert!(title.left() < win.center().x, "English keeps the title at the left: {title:?} in {win:?}");
     assert!(x.left() > title.right(), "the × stays right of the title: {x:?}, {title:?}");
     assert!(ok.right() < cancel.right(), "English footer order: {ok:?} vs {cancel:?}");

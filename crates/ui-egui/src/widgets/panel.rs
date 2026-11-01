@@ -270,11 +270,12 @@ mod tests {
                 |ui| {
                     let btn = panel_menu_button(ui);
                     btn_rect = btn.rect;
-                    panel_menu_popup(&btn, |ui| {
+                    if let Some(r) = panel_menu_popup(&btn, |ui| {
                         ui.set_min_width(180.0);
                         crate::menu_keys::menu_row(ui, "Panel menu item", None, false, true);
-                    })
-                    .map(|r| popup = r.response.rect);
+                    }) {
+                        popup = r.response.rect;
+                    }
                 },
             );
             texts = out

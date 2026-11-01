@@ -171,8 +171,10 @@ mod rtl_tests {
     use crate::direction::{Dir, direction_scope};
     use egui_kittest::kittest::Queryable;
 
+    type State = (PhotocraftApp, Map<String, Value>, egui::Rect);
+
     /// The dialog body drawn in `dir`, with the column it draws in.
-    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>, egui::Rect)>, egui::Rect) {
+    fn harness(dir: Dir) -> (egui_kittest::Harness<'static, State>, egui::Rect) {
         let _dir = direction_scope(dir);
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let mut h = egui_kittest::Harness::builder()
