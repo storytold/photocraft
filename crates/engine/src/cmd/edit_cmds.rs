@@ -817,7 +817,15 @@ fn transform_again_params(s: &Session, ids: &[LayerId]) -> Result<Value> {
             .ok_or(EngineError::Other("the last transform can't be repeated".into()))?;
             let d = s.active().ok_or(EngineError::NoDocument)?;
             d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;
-            let b = crate::transform_cmds::transform_bounds_of(&d.doc, ids);
+            let target = crate::channel_transform::params(s, &json!({}))?;
+            let b = if crate::channel_transform::is_color(&target) {
+                // Native components belong to the active layer, regardless of other layer rows
+                // selected behind them. Use the same frame as the interactive channel box.
+                crate::channel_transform::source_bounds(&d.doc, d.active_layer, &target)?
+                    .ok_or_else(|| EngineError::Other("no native colour transform frame".into()))?
+            } else {
+                crate::transform_cmds::transform_bounds_of(&d.doc, ids)
+            };
             if b.is_empty() {
                 return Err(EngineError::Other("nothing to transform".into()));
             }

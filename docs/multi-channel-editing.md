@@ -59,6 +59,8 @@ even with a pixel selection. Cancelling restores the original mask view and keep
 A pixel selection permits native-set movement within Background samples while preserving
 Background identity; pixel/all locks and whole-Background position locking still apply.
 Single-channel pointer drags retain the existing floating-selection and keyboard behaviour.
+Transform → Again uses the active native colour frame even if other layer rows are
+selected behind the Channels panel target, including an active Background.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge

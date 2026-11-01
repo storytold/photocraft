@@ -380,6 +380,58 @@ fn far_scalar_presets_fail_without_overflowing_the_frame_center() {
 }
 
 #[test]
+fn repeat_quad_transform_uses_native_frame_despite_other_selected_layers() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for kind in [0, 1, 3] {
+                let mut s = session(mode, depth);
+                let background = s.active().unwrap().active_layer.unwrap();
+                s.execute("layer.new.layer", json!({})).unwrap();
+                s.execute("layer.select", json!({"layer": background.0, "mode": "add"})).unwrap();
+                selection(&mut s, kind);
+                s.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
+                let st = s.active().unwrap();
+                assert_eq!(st.selected_layers().len(), 2);
+                let b = st.doc.selection.as_ref().map_or(st.doc.bounds(), |sel| sel.content_bounds().intersect(&st.doc.bounds()));
+                let rect = [b.x0, b.y0, b.x1, b.y1];
+                let quad = [[b.x0 + 1, b.y0], [b.x1 + 1, b.y0], [b.x1 + 1, b.y1], [b.x0 + 1, b.y1]];
+                // Match the rect+quad journal entry made by the interactive box, rather than
+                // the matrix-only repeat path (which does not resolve a replacement frame).
+                s.execute(
+                    "edit.transform",
+                    json!({"layer": background.0, "target": {"colors": [0, 2]}, "rect": rect, "quad": quad, "interpolation": "nearest"}),
+                )
+                .unwrap();
+                let st = s.active().unwrap();
+                let (before, view, history) = (st.doc.clone(), st.channel_view.clone(), st.history.past_len());
+                let mut oracle = Session::new();
+                oracle.tools.background = s.tools.background;
+                oracle.add_document((*before).clone(), None);
+                oracle
+                    .execute(
+                        "edit.transform",
+                        json!({"layer": background.0, "target": {"colors": [0, 2]}, "matrix": [1, 0, 0, 1, 1, 0], "interpolation": "nearest"}),
+                    )
+                    .unwrap();
+                assert!(s.is_enabled("edit.transform.again"));
+                s.execute("edit.transform.again", json!({})).unwrap();
+                let st = s.active().unwrap();
+                assert!(st.doc.layers == oracle.active().unwrap().doc.layers, "{mode:?}/{depth:?}/{kind}");
+                assert_eq!(st.doc.selection, oracle.active().unwrap().doc.selection);
+                assert_eq!(st.channel_view, view);
+                assert_eq!(st.history.past_len(), history + 1);
+                assert!(st.doc.is_background(background));
+                assert!(s.undo());
+                assert!(s.active().unwrap().doc.layers == before.layers);
+                assert_eq!(s.active().unwrap().doc.selection, before.selection);
+                assert!(s.redo());
+                assert!(s.active().unwrap().doc.layers == oracle.active().unwrap().doc.layers);
+            }
+        }
+    }
+}
+
+#[test]
 fn repeating_a_transform_on_a_copy_refuses_colour_sets_without_side_effects() {
     let mut s = session(ColorMode::Rgb, SampleType::U8);
     s.execute("layer.new.layerFromBackground", json!({})).unwrap();
