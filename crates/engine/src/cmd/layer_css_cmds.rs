@@ -1,11 +1,20 @@
-//! Layer › Copy CSS (#9372): CSS for the selected layers, written as Photoshop writes it. The
+//! Layer › Copy CSS (#9372): CSS for the selected layers, in the form Photoshop writes. The
 //! command returns the text; the shell puts it on the clipboard.
 //!
 //! Each layer is a class named after it (punctuation and spaces become `_`, and a leading digit
-//! gets a `_` in front): a type layer gives its font, colour, line height and alignment, a solid
-//! shape or fill layer its colour, any other layer an image named after it; then the opacity when
-//! it isn't 100 %, the absolute position (and size, except for point type), and its place in the
-//! stack as `z-index`, counted from the bottom layer as 1.
+//! gets a `_` in front). What is written, in this order:
+//! - a type layer: `font-size`, `font-family`, `color`, `line-height` and `text-align`, from its
+//!   first run and first paragraph;
+//! - a live rounded rectangle: `border-radius`;
+//! - a shape or fill layer with a solid colour: `background-color`; any other layer (pixels,
+//!   gradient or pattern fills, smart objects): `background-image`, an image named after it;
+//! - `opacity` when it isn't 100 %;
+//! - `position: absolute`, `left` and `top`, and `width` and `height` except for point type;
+//! - `z-index`, its place in the stack counted from the bottom layer as 1.
+//!
+//! Not written: strokes (`border`), layer effects (`box-shadow`, `text-shadow`), gradients as
+//! CSS gradients, blend modes (`mix-blend-mode`), fill opacity, and the styles of later runs and
+//! paragraphs. Groups and adjustment layers have no rule.
 
 use photocraft_doc::text::{TextAlign, TextShape};
 use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape};
