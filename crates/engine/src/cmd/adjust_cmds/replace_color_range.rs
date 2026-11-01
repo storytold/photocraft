@@ -2,12 +2,22 @@
 use photocraft_algo::{selection, tone};
 use photocraft_cms::{Builtin, TransformOptions};
 use photocraft_doc::SampleType;
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde_json::Value;
 
 use super::{bad, num};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "image.adjustments.replaceColor";
+
+/// Unstored pixels can still be selected when the mask has a nonzero default.
+fn edit_bounds(content: Rect, selected: Option<&Surface>) -> Rect {
+    match selected {
+        Some(mask) if mask.default_pixel().first() == Some(&0.0) => content.intersect(&mask.content_bounds()),
+        _ => content,
+    }
+}
 
 /// Validate original precision before checking order and converting to native f32.
 fn bound(p: &Value, key: &str) -> Result<[f64; 3]> {
@@ -72,7 +82,7 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     s.edit("Replace Color", |doc, _| {
         let selected = doc.selection.clone();
         let surface = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        let rect = surface.content_bounds();
+        let rect = edit_bounds(surface.content_bounds(), selected.as_ref());
         if rect.is_empty() {
             return Ok(Value::Null);
         }
@@ -111,4 +121,25 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
         Ok(Value::Null)
     })
     .map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+
+    #[test]
+    fn selected_work_bounds_preserve_implicit_selection_and_clip_explicit_pixels() {
+        let content = Rect::new(-100, -100, 100, 100);
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        assert_eq!(edit_bounds(content, Some(&mask)), Rect::EMPTY);
+        mask.fill_rect(Rect::new(98, 96, 110, 105), &[0.5]);
+        assert_eq!(edit_bounds(content, Some(&mask)), Rect::new(98, 96, 100, 100));
+        assert_eq!(edit_bounds(content, None), content);
+        for coverage in [0.5, 1.0] {
+            let mut mask = Surface::with_default(PixelFormat::GRAY8, &[coverage]);
+            mask.fill_rect(Rect::new(2, 2, 3, 3), &[0.0]);
+            assert_eq!(edit_bounds(content, Some(&mask)), content, "stored holes do not bound selected pixels");
+        }
+    }
 }

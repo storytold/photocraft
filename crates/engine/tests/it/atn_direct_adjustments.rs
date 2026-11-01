@@ -336,7 +336,7 @@ fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
 
 #[test]
 fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
-    for depth in [8, 16, 32] {
+    for (depth, inverse) in [8, 16, 32].into_iter().flat_map(|depth| [(depth, false), (depth, true)]) {
         let mut d = replace();
         for key in ["Mnm ", "Mxm "] {
             let o = object(&mut d, key);
@@ -353,13 +353,24 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
         assert_eq!(imported.actions[0].steps[0].1["lightness"], 100);
         let mut s = fixture("lab", depth);
         set_lab_pixels(&mut s);
-        s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":1})).unwrap();
+        s.execute("select.rect", json!({"x":1,"y":0,"width":1,"height":1})).unwrap();
+        if inverse {
+            let mut mask = photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[1.0]);
+            mask.fill_rect(photocraft_doc::Rect::new(1, 0, 2, 1), &[0.0]);
+            std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(mask);
+        }
         let before = raw(&s);
         s.actions.list = imported.actions;
         play(&mut s);
         let after = raw(&s);
-        assert!(after[0] > 0.99 && after[4] > 0.99);
-        assert_eq!(&after[8..], &before[8..], "selection must bound the edit");
+        if inverse {
+            assert!(after[0] > 0.99 && after[8] > 0.99);
+            assert_eq!(&after[4..8], &before[4..8], "the selection hole must stay unchanged");
+        } else {
+            assert!(after[4] > 0.99);
+            assert_eq!(&after[..4], &before[..4], "pixels before the selection must stay unchanged");
+            assert_eq!(&after[8..], &before[8..], "pixels after the selection must stay unchanged");
+        }
         assert!(s.undo());
         assert_eq!(raw(&s), before);
         let descriptor = saved(&s).descriptor.unwrap();
