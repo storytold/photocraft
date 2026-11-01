@@ -3333,3 +3333,39 @@ fn custom_reads_an_unpadded_scale() {
     let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Scl", D::Integer(3)).with("Mtrx", identity)) else { panic!("kept") };
     assert_eq!(steps[0].1["scale"], json!(3.0));
 }
+
+/// `filter.other.custom` plays a scale of 1..9999, an offset of -9999..9999 and cells of
+/// -999..999, and clamps anything else: `Scl 0` would play as 1 and save back as 0. Such a step
+/// stays a Photoshop step, as does a matrix of more than 25 cells, and export refuses those
+/// values instead of writing what the command doesn't play (#10607).
+#[test]
+fn custom_outside_the_commands_range_is_kept_and_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let kernel = |cell: i32| D::List((0..25).map(|i| D::Integer(if i == 12 { cell } else { 0 })).collect());
+    let identity = kernel(1);
+    for d in [
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(0)),
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(-10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(10_000)),
+        desc("null").with("Mtrx", kernel(1000)),
+        desc("null").with("Mtrx", kernel(-1000)),
+        desc("null").with("Mtrx", D::List((0..26).map(|_| D::Integer(0)).collect())),
+        desc("null").with("Mtrx", D::List((0..1000).map(|_| D::Integer(0)).collect())),
+    ] {
+        assert!(kept(other_step("Cstm", d.clone())), "{:?} was mapped", d.items);
+    }
+    for (scale, offset, cell) in [(1, -9999, -999), (9999, 9999, 999)] {
+        let d = desc("null").with("Scl ", D::Integer(scale)).with("Ofst", D::Integer(offset)).with("Mtrx", kernel(cell));
+        let Mapped::Steps(steps) = other_step("Cstm", d) else { panic!("{scale} {offset} {cell} kept") };
+        assert_eq!(
+            (&steps[0].1["scale"], &steps[0].1["offset"], &steps[0].1["kernel"][12]),
+            (&json!(f64::from(scale)), &json!(f64::from(offset)), &json!(f64::from(cell)))
+        );
+    }
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1000);
+    for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {
+        assert!(export_item("filter.other.custom", &params, "S").is_none(), "{params} exported");
+    }
+}
