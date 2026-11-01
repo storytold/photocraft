@@ -153,6 +153,48 @@ fn point_to_paragraph_reserves_spaces_on_each_line() {
     }
 }
 
+/// Mixed paragraph alignments share a point anchor, not the first paragraph's box edge.
+#[test]
+fn point_to_paragraph_preserves_mixed_alignment_positions() {
+    for depth in [8, 16, 32] {
+        for first in [TextAlign::Center, TextAlign::Right] {
+            let mut s = session(depth);
+            let r = s.execute("type.create", json!({"x": 150, "y": 50, "text": "H    \nHH    ", "font": "Inter", "size": 30})).unwrap();
+            let id = LayerId(r["layer"].as_u64().unwrap());
+            with_text(&mut s, &json!({"layer": id.0}), "Mixed alignment", |t, _| {
+                t.paragraphs = vec![
+                    photocraft_doc::text::ParagraphRun { len: 6, style: photocraft_doc::text::ParagraphStyle { align: first, ..Default::default() } },
+                    photocraft_doc::text::ParagraphRun { len: 6, style: Default::default() },
+                ];
+                Ok(())
+            })
+            .unwrap();
+            let point = text(&s, id).clone();
+            s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
+            let paragraph = text(&s, id).clone();
+            let before = point.cache.as_ref().unwrap();
+            let after = paragraph.cache.as_ref().unwrap();
+            let region = before.content_bounds().union(&after.content_bounds());
+            assert!(before.read_region(region) == after.read_region(region), "conversion moved mixed paragraphs: {depth}/{first:?}");
+            assert!(s.undo());
+            assert_eq!(text(&s, id), &point);
+            assert!(s.redo());
+            assert_eq!(text(&s, id), &paragraph);
+            s.execute("type.edit", json!({"layer": id.0, "text": "H    \nHH    I"})).unwrap();
+            let mut control = point;
+            let end = control.text.len();
+            replace_text(&mut control, end, end, "I");
+            let st = s.active().unwrap();
+            refresh_at(st.doc.resolution_dpi, st.doc.pixel_format(), &mut control);
+            let expected = control.cache.as_ref().unwrap();
+            let actual = text(&s, id).cache.as_ref().unwrap();
+            let region = expected.content_bounds().union(&actual.content_bounds());
+            assert!(actual.read_region(region) == expected.read_region(region), "appended glyph differs: {depth}/{first:?}");
+            assert_eq!(layout(&st.doc, text(&s, id)).lines.len(), 2);
+        }
+    }
+}
+
 /// Issue #446: vertical type renders vertically (see the test below), so the command's description
 /// must not claim it stays horizontal.
 #[test]

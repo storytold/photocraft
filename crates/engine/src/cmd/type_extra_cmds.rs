@@ -178,13 +178,34 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
         // The layouter emits all runs of a line before advancing to the next line.
         let full_width = l.clusters.chunk_by(|a, b| a.line == b.line).map(|line| line.iter().map(|c| c.advance).sum::<f32>()).fold(0.0, f32::max);
         // A little slack so no line re-wraps; the box keeps the text where it was.
-        let width = (x1 - x0).max(full_width).max(1.0) + indents + (size_px * 0.5).max(4.0);
+        let mut width = (x1 - x0).max(full_width).max(1.0) + indents + (size_px * 0.5).max(4.0);
         let height = (y1 - y0).max(1.0) + size_px * 0.5;
-        let x = match ps.align {
+        let mut x = match ps.align {
             TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
             TextAlign::Right | TextAlign::JustifyRight => -width,
             _ => 0.0,
         };
+        let mut paragraphs = t.paragraph_runs();
+        if paragraphs.iter().any(|p| p.style.align != ps.align) {
+            // Different point-text alignments share the same anchor. Enclose their full
+            // advances, then translate each paragraph's usable span back to that anchor.
+            x = x.min(x0);
+            let right = l.clusters.iter().map(|c| c.x + c.advance).fold(x1, f32::max);
+            width = width.max(right - x + (size_px * 0.5).max(4.0));
+            let k = l.px_per_pt;
+            for p in &mut paragraphs {
+                let s = &mut p.style;
+                let offset = match s.align {
+                    TextAlign::Center | TextAlign::JustifyCenter => -x - (width + (s.start_indent_pt - s.end_indent_pt) * k) / 2.0,
+                    TextAlign::Right | TextAlign::JustifyRight => -x - width + s.end_indent_pt * k,
+                    _ => -x,
+                } / k;
+                // Opposite indent changes preserve the available width and wrapping.
+                s.start_indent_pt += offset;
+                s.end_indent_pt -= offset;
+            }
+            t.paragraphs = paragraphs;
+        }
         let mut probe = t.clone();
         probe.shape = TextShape::Box { x, y: y0, width, height };
         // Box text puts the first baseline at the box top plus the ascender height: measure it and
