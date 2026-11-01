@@ -1029,3 +1029,105 @@ fn colour_set_temporary_move_keeps_shift_constraints_after_releasing_command() {
         }
     }
 }
+
+#[test]
+fn colour_set_copy_guard_rechecks_after_auto_select_ends_mask_view() {
+    for filter in [false, true] {
+        for mode in ["gray", "overlay"] {
+            let (mut app, _) = selected_pixels(16);
+            app.run("select.deselect", json!({})).unwrap();
+            if filter {
+                app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            }
+            let source = app.session.active().unwrap().active_layer.unwrap();
+            if filter {
+                app.session
+                    .edit("filter mask", |doc, _| {
+                        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(source).unwrap().content else { panic!("not smart") };
+                        sm.filter_mask = Some(photocraft_doc::LayerMask::hide_all());
+                        Ok(())
+                    })
+                    .unwrap();
+            } else {
+                app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            }
+            app.run("layer.new.layer", json!({"name": "pick me"})).unwrap();
+            let picked = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("other patch", |doc, _| {
+                    doc.layer_mut(picked).unwrap().surface_mut().unwrap().fill_rect(Rect::new(40, 8, 56, 24), &[1.0; 4]);
+                    Ok(())
+                })
+                .unwrap();
+            app.run("layer.select", json!({"layer": source.0})).unwrap();
+            app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+            app.run("view.layerMask", json!({"mask": if filter { "filter" } else { "layer" }, "mode": mode})).unwrap();
+            assert!(super::color_target(&app).is_none());
+            let before = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            drag(&mut app, [46.0, 16.0], [56.0, 16.0], egui::Modifiers::ALT);
+            let st = app.session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&st.doc, &before), "{filter}/{mode}: no copy or movement after the pick exposes a native set");
+            assert_eq!(st.active_layer, Some(picked), "Auto-Select must exercise the changed target");
+            assert_eq!(st.history.past_len(), history);
+            assert!(app.ui.status_error);
+            assert!(app.drag.is_none());
+        }
+    }
+}
+
+#[test]
+fn colour_set_exposed_before_alt_drag_duplication_cancels_without_moving_the_original() {
+    let (mut app, _) = selected_pixels(16);
+    app.run("select.deselect", json!({})).unwrap();
+    app.ui.tool_options.move_auto_select = false;
+    let before = app.session.active().unwrap().doc.clone();
+    let history = app.session.active().unwrap().history.past_len();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
+    app.session.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 26.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 26.0, y: 16.0 }, egui::Modifiers::ALT);
+    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(app.ui.status_error);
+    assert!(app.drag.is_none());
+}
+
+#[test]
+fn viewed_mask_move_preview_agrees_with_edit_target_precedence() {
+    for edit in ["composite", "alpha", "quick"] {
+        let (mut app, _) = selected_pixels(16);
+        app.run("select.deselect", json!({})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("layer.layerMask.linked", json!({"linked": false})).unwrap();
+        app.session
+            .edit("mask patch", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(4, 6, 8, 10), &[0.0]);
+                Ok(())
+            })
+            .unwrap();
+        if edit == "alpha" {
+            app.run("channel.new", json!({"name": "saved"})).unwrap();
+            app.run("channel.target", json!({"channel": "saved"})).unwrap();
+        } else if edit == "quick" {
+            app.run("select.editInQuickMaskMode", json!({})).unwrap();
+        }
+        app.run("view.layerMask", json!({"mode": "overlay"})).unwrap();
+        app.ui.tool_options.move_auto_select = false;
+        if edit != "composite" {
+            assert!(!app.layer_mask_targeted());
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        let expected = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 10, 5, edit == "composite").unwrap();
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 26.0, y: 21.0, pressure: 1.0 }, m);
+        let shown = super::display_doc(&mut app, 0).unwrap().0;
+        assert!(shown.layers == expected.layers, "{edit}: preview follows target precedence");
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 26.0, y: 21.0 }, m);
+        assert!(app.session.active().unwrap().doc.layers == shown.layers, "{edit}: preview and commit have the same target");
+        assert!(app.session.undo());
+        assert!(app.session.active().unwrap().doc.layers == before.layers);
+    }
+}

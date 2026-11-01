@@ -100,6 +100,10 @@ fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
         Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
         Err(e) => {
             app.ui.status = e;
+            app.ui.status_error = true;
+            app.drag = None;
+            app.move_preview = None;
+            app.move_gpu_preview = None;
             None
         }
     }
@@ -274,7 +278,12 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         app.ui.status_error = true;
         return;
     }
-    let from = if duplicate_first { duplicate(app) } else { None };
+    let from = if duplicate_first {
+        let Some(from) = duplicate(app) else { return };
+        Some(from)
+    } else {
+        None
+    };
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.
         app.nudge_bundle.reset();

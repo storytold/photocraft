@@ -110,6 +110,18 @@ pub fn moves_mask_alone(l: &Layer) -> bool {
     l.mask.as_ref().is_some_and(|m| !m.linked)
 }
 
+/// Whether an implicit Move targets a viewed raster mask. The shell uses the same decision
+/// for its preview; Alpha, vector targets and Quick Mask keep their existing precedence.
+pub fn viewed_mask_is_target(s: &Session) -> bool {
+    use crate::channel_cmds::ChannelTarget;
+    let Some(st) = s.active() else { return false };
+    match st.channel_view.target {
+        ChannelTarget::Alpha(_) | ChannelTarget::VectorMask => false,
+        ChannelTarget::Composite | ChannelTarget::LayerMask if st.doc.quick_mask.is_some() => false,
+        ChannelTarget::Composite | ChannelTarget::LayerMask | ChannelTarget::Color(_) => crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter),
+    }
+}
+
 /// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
 /// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
 pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -143,10 +155,9 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // An explicit target wins. An explicit layer without one retains whole-layer movement,
     // matching the other geometric commands; an implicit Move-tool command follows Channels.
-    let viewed_mask = s.active().and_then(crate::mask_view_cmds::current).filter(|_| p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null));
     let color = if p.get("target").is_some() {
         crate::color_channels::target(s, p)?
-    } else if p.get("layer").is_none_or(Value::is_null) && viewed_mask.is_none() {
+    } else if p.get("layer").is_none_or(Value::is_null) && crate::mask_view_cmds::current(s.active().ok_or(EngineError::NoDocument)?).is_none() {
         if matches!(s.active().ok_or(EngineError::NoDocument)?.channel_view.target, crate::channel_cmds::ChannelTarget::Color(_)) {
             Some(crate::color_channels::selected(s).ok_or_else(|| bad("layer.translate", "the selected colour set is invalid"))?)
         } else {
@@ -167,7 +178,8 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Headless callers need the same viewed-mask routing as the shell's explicit injection.
     // A viewed Smart Filter mask still moves its whole object, not the filter mask alone.
-    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask") || viewed_mask.is_some_and(|view| !view.filter);
+    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask")
+        || (p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null) && viewed_mask_is_target(s));
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));

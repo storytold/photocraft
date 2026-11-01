@@ -49,6 +49,9 @@ Show Transform Controls uses the same native channel frame as Free Transform, in
 on Background samples, and other selected layers do not enlarge that frame. Implicit engine
 Move commands honour viewed raster masks just as the UI does; explicit targets or an explicit
 layer retain their precedence.
+The engine and live Move preview share viewed-mask priority; Alpha and Quick Mask keep
+their existing precedence. Copy refusal is checked after Auto-Select and before duplication,
+and a refused copy cancels the gesture without moving the original.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge

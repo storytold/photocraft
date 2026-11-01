@@ -91,6 +91,45 @@ fn implicit_move_of_viewed_mask_keeps_explicit_target_precedence_at_native_depth
         }
     }
 }
+
+#[test]
+fn implicit_move_preserves_alpha_and_quick_mask_precedence_over_a_layer_mask_view() {
+    for edit in ["alpha", "quick"] {
+        for view in ["gray", "overlay"] {
+            for explicit_mask in [false, true] {
+                let mut s = setup("rgb", 16);
+                s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+                let id = s.active().unwrap().active_layer.unwrap();
+                s.edit("mask patch", |doc, _| {
+                    doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(4, 6, 8, 10), &[0.0]);
+                    Ok(())
+                })
+                .unwrap();
+                if edit == "alpha" {
+                    s.execute("channel.new", json!({"name": "saved"})).unwrap();
+                    s.execute("channel.target", json!({"channel": "saved"})).unwrap();
+                } else {
+                    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+                }
+                s.execute("view.layerMask", json!({"mode": view})).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let expected = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 2, 1, explicit_mask).unwrap();
+                let mut params = json!({"dx": 2, "dy": 1});
+                if explicit_mask {
+                    params["target"] = json!("mask");
+                }
+                s.execute("layer.translate", params).unwrap();
+                let after = &s.active().unwrap().doc;
+                assert!(after.layers == expected.layers, "{edit}, {view}, explicit mask {explicit_mask}: match existing Move scope");
+                assert!(after.channels == before.channels);
+                assert!(after.quick_mask == before.quick_mask);
+                assert!(s.undo());
+                assert!(s.active().unwrap().doc.layers == before.layers);
+            }
+        }
+    }
+}
 fn subset(s: &mut Session) {
     s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
 }

@@ -212,7 +212,7 @@ fn refuse_colour_set_copy_drag(app: &mut PhotocraftApp, mods: egui::Modifiers) -
     if !mods.alt || crate::move_ui::color_target(app).is_none_or(|colors| colors.len() <= 1) {
         return false;
     }
-    app.ui.status = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels".into();
+    app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
     app.ui.status_error = true;
     true
 }
@@ -271,6 +271,10 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 if app.session.active().map(|st| st.selected_layers()) != before {
                     crate::snap_ui::retarget_move(app, [x, y], mods);
                 }
+            }
+            // Picking can end a mask view and expose retained colour rows as the edit target.
+            if refuse_colour_set_copy_drag(app, mods) {
+                return true;
             }
             // A locked layer: no drag, and Photoshop's message once the pointer moves (`move_lock`).
             if crate::move_lock::blocked(app, tool, [x, y], mods) {

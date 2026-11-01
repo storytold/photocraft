@@ -18,6 +18,13 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, TransformSession};
 
+pub(crate) const COPY_SET_DRAG_UNSUPPORTED: &str = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels";
+
+/// Thumbnail targeting supplements the engine's viewed-mask decision, shared with commit.
+fn mask_target(app: &PhotocraftApp) -> bool {
+    app.layer_mask_targeted() || photocraft_engine::layer_multi_cmds::viewed_mask_is_target(&app.session)
+}
+
 /// Effective native colour target; mask viewing and mask thumbnails take precedence.
 pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::color_channels::ColorChannels> {
     if app.layer_mask_targeted() {
@@ -33,6 +40,9 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
 /// Copying for a Move drag keeps a shown mask on the copy. Otherwise changing the active layer
 /// ends the mask view and can expose retained colour rows as a different movement target.
 pub(crate) fn duplicate_for_drag(app: &mut PhotocraftApp) -> Result<serde_json::Value, String> {
+    if color_target(app).is_some_and(|colors| colors.len() > 1) {
+        return Err(COPY_SET_DRAG_UNSUPPORTED.into());
+    }
     let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
     let copied = app.run("layer.duplicate", json!({"inPlace": true}))?;
     if let Some(viewed) = viewed {
@@ -224,7 +234,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
     if let Some(p) = app.move_gpu_preview.as_mut() {
         p.shown = false;
     }
-    if offset == (0, 0) || app.ui.transform.is_some() || app.session.prefs().interface.show_bounding_box_when_dragging_layer || app.layer_mask_targeted() {
+    if offset == (0, 0) || app.ui.transform.is_some() || app.session.prefs().interface.show_bounding_box_when_dragging_layer || mask_target(app) {
         return None;
     }
     let st = app.session.documents().get(idx)?;
@@ -364,7 +374,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.move_preview = None;
         return None;
     };
-    let mask_target = app.layer_mask_targeted();
+    let mask_target = mask_target(app);
     let background = app.session.tools.background;
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
