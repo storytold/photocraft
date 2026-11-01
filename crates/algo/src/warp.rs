@@ -53,8 +53,11 @@ pub fn place_source(
     crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
 }
 
-/// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
-/// warp first (in source space), then `h`.
+/// [`place_source`] through a projective map `h` (source → document; Distort, Perspective). With
+/// a warp, Photoshop moves the warp's control points through `h` and draws that mesh: the result
+/// is a Bezier mesh in the document, not the perspective image of the warped source (they part
+/// by several pixels across a cylinder or a ball seen at an angle). Control points behind the
+/// horizon fall back to the exact image.
 pub fn place_source_projective(
     src: &Surface,
     src_rect: Rect,
@@ -62,6 +65,17 @@ pub fn place_source_projective(
     warp: Option<&photocraft_geom::warp::Warp>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
+        let mesh = w.to_mesh(1, 1);
+        if mesh.points.iter().all(|p| h.w(p[0], p[1]) > 0.0) {
+            let placed = photocraft_geom::warp::Warp::custom(
+                mesh.map_points(|p| {
+                    let (x, y) = h.apply(p[0], p[1]);
+                    [x, y]
+                }),
+                w.bounds,
+            );
+            return Ok(warp_mesh_surface(src, src_rect, &|x, y| placed.map(x, y), Interp::Bicubic));
+        }
         let map = |x: f64, y: f64| {
             let (u, v) = w.map(x, y);
             h.apply(u, v)
@@ -557,6 +571,57 @@ mod tests {
         // The band follows the arch: 40 px lower in the middle, about 36 px a third of the way in.
         assert!(alpha(150, 60) > 0.99 && alpha(150, 20) < 0.01, "mid {} {}", alpha(150, 60), alpha(150, 20));
         assert!(alpha(100, 55) > 0.99 && alpha(100, 20) < 0.01, "third {} {}", alpha(100, 55), alpha(100, 20));
+    }
+
+    /// Warp + perspective: the warp's control points go through the perspective and that mesh is
+    /// drawn (Photoshop's result). Under an affine map that is the exact image, so nothing changes
+    /// for affine placements.
+    #[test]
+    fn perspective_moves_the_warp_control_points() {
+        use crate::transform::Homography;
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+        src.fill_rect(Rect::new(0, 0, 60, 40), &[0.2, 0.2, 0.2, 1.0]);
+        src.fill_rect(Rect::new(29, 9, 31, 11), &[1.0, 1.0, 1.0, 1.0]);
+        let rect = Rect::new(0, 0, 60, 40);
+        let mut m = BezierMesh::identity([0.0, 0.0, 60.0, 40.0], 1, 1);
+        m.points[5] = [26.0, 4.0];
+        m.points[6] = [44.0, 12.0];
+        let warp = Warp::custom(m, [0.0, 0.0, 60.0, 40.0]);
+        // The bright 2 × 2 px dot (source centre (30, 10)) lands where the mapped mesh puts it
+        // (measured on fully opaque, clearly bright pixels: bicubic rings at the layer's edges).
+        let bright = |s: &Surface| {
+            let (mut sx, mut sy, mut n) = (0.0, 0.0, 0.0);
+            for y in -20..120 {
+                for x in -20..200 {
+                    let mut p = [0.0f32; 4];
+                    s.read_pixel(x, y, &mut p);
+                    let v = f64::from(if p[3] > 0.99 && p[0] > 0.3 { p[0] - 0.2 } else { 0.0 });
+                    (sx, sy, n) = (sx + v * (f64::from(x) + 0.5), sy + v * (f64::from(y) + 0.5), n + v);
+                }
+            }
+            (sx / n, sy / n)
+        };
+        let h = Homography([1.6, 0.2, 10.0, 0.1, 1.4, 5.0, 0.004, 0.002, 1.0]);
+        let out = place_source_projective(&src, rect, &h, Some(&warp)).expect("placed");
+        let mesh = warp.to_mesh(1, 1).map_points(|p| {
+            let (x, y) = h.apply(p[0], p[1]);
+            [x, y]
+        });
+        let want = mesh.eval(0.5, 0.25);
+        let (x, y) = bright(&out);
+        assert!((x - want[0]).abs() < 0.3 && (y - want[1]).abs() < 0.3, "dot at ({x}, {y}), mesh says {want:?}");
+        // The exact perspective image of the warped point is elsewhere (the two models differ).
+        let (ex, ey) = {
+            let (u, v) = warp.map(30.0, 10.0);
+            h.apply(u, v)
+        };
+        assert!((ex - want[0]).hypot(ey - want[1]) > 1.0);
+        // Affine: identical to the affine placement.
+        let a = photocraft_geom::Affine { m: [1.5, 0.2, -0.3, 1.2, 7.0, 3.0] };
+        let affine = place_source(&src, rect, &a, Some(&warp)).expect("affine");
+        let proj = place_source_projective(&src, rect, &Homography([1.5, -0.3, 7.0, 0.2, 1.2, 3.0, 0.0, 0.0, 1.0]), Some(&warp)).expect("proj");
+        let (p, q) = (bright(&affine), bright(&proj));
+        assert!((p.0 - q.0).abs() < 1e-6 && (p.1 - q.1).abs() < 1e-6, "{p:?} {q:?}");
     }
 
     #[test]
