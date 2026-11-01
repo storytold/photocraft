@@ -444,3 +444,31 @@ fn bundled_catalogs_are_consistent() {
         }
     }
 }
+
+
+#[test]
+fn lithuanian_plural_rule_handles_compound_counts() {
+    let lt = Lang::from_code("lt").expect("lt registered");
+
+    let counts = [0, 1, 2, 5, 9, 10, 11, 19, 20, 21, 22, 25, 101, 111, 121];
+    let forms: Vec<usize> = counts.into_iter().map(lt.0.plural).collect();
+
+    assert_eq!(
+        forms,
+        [2, 0, 1, 1, 1, 2, 2, 2, 2, 0, 1, 1, 0, 2, 0]
+    );
+
+    for (n, expected) in [
+        (1, "1 elementas"),
+        (2, "2 elementai"),
+        (5, "5 elementai"),
+        (10, "10 elementų"),
+        (21, "21 elementas"),
+        (22, "22 elementai"),
+    ] {
+        assert_eq!(
+            trn(lt, n, "{n} item", "{n} items"),
+            expected
+        );
+    }
+}

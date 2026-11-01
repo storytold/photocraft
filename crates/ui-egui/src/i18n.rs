@@ -117,6 +117,19 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// Lithuanian: 1 → one; 2–9, except 11–19 → few; everything else → other.
+fn plural_lithuanian(n: u64) -> usize {
+    let last = n % 10;
+    let last_two = n % 100;
+
+    if last == 1 && last_two != 11 {
+        0
+    } else if (2..=9).contains(&last) && !(11..=19).contains(&last_two) {
+        1
+    } else {
+        2
+    }
+}
 /// Arabic (CLDR): 0 → zero, 1 → one, 2 → two, n % 100 in 3–10 → few, in 11–99 → many, else other.
 fn plural_arabic(n: u64) -> usize {
     match (n, n % 100) {
@@ -201,7 +214,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -222,7 +235,8 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ko", name: "한국어", source: catalog!("ko"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "pl", name: "Polski", source: catalog!("pl"), plural: plural_polish, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "de", name: "Deutsch", source: catalog!("de"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
+    // Lithuanian.
+    LangInfo { code: "lt", name: "Lietuvių", source: catalog!("lt"), plural: plural_lithuanian, complete_menus: false, catalog: OnceLock::new() },    
     LangInfo { code: "pt-br", name: "Português (Brasil)", source: catalog!("pt-br"), plural: plural_pt, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "el", name: "Ελληνικά", source: catalog!("el"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
