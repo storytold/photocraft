@@ -586,21 +586,37 @@ fn faux_bold_radius_has_a_pixel_floor_that_fades_for_tiny_type() {
 #[test]
 fn faux_bold_at_display_sizes_grows_the_outline_by_size_over_72() {
     let mut e = TextEngine::new();
-    let ink = |e: &mut TextEngine, s: CharStyle| {
-        let (_, r) = e.render(&TextLayer { transform: Affine::translate(10.0, 160.0), ..styled("Hi", s) }, 72.0, PixelFormat::RGBA8);
-        (alpha_sum(&r.surface, r.rect), r.rect)
-    };
-    let base = CharStyle { size_pt: 120.0, ..Default::default() };
-    let (plain, prect) = ink(&mut e, base.clone());
-    let (bold, brect) = ink(&mut e, CharStyle { faux_bold: true, ..base });
-    // The outline grew by size/72 = 1.67 px on every side, so the ink rectangle grows by 3 px.
-    let grew = brect.width() - prect.width();
-    assert!((3..=6).contains(&grew), "width grew {grew} px, expected about 2 * size/72");
-    // Heavier by the perimeter's worth of ink. The flat 3.6% ring this replaces measured 1.95x for
-    // the same text (8 px wider) — the jump a PSD's faux-bold layer shows when a click re-renders
-    // it. Pinned, because a thicker ring here is exactly that regression.
-    let ratio = bold / plain;
-    assert!((1.3..=1.4).contains(&ratio), "{plain} -> {bold}: {ratio}x at 120 px, expected about 1.35x");
+    // Display sizes, including the two ends the issue reported on (75-125 px layers) and the
+    // sizes where the pixel floor hands over to `size/72` (32 px) and where the ring is 1 px
+    // (72 px). The flat 3.6% ring this replaces grew the outline by 0.072 * size instead, so a
+    // regression to it fails the width check at every size but 12 px.
+    let mut ratios = Vec::new();
+    for px in [12.0f32, 32.0, 72.0, 120.0, 200.0] {
+        let ink = |e: &mut TextEngine, s: CharStyle| {
+            let (_, r) = e.render(&TextLayer { transform: Affine::translate(10.0, f64::from(px) * 1.4), ..styled("Hi", s) }, 72.0, PixelFormat::RGBA8);
+            (alpha_sum(&r.surface, r.rect), r.rect)
+        };
+        let base = CharStyle { size_pt: px, ..Default::default() };
+        let (plain, prect) = ink(&mut e, base.clone());
+        let (bold, brect) = ink(&mut e, CharStyle { faux_bold: true, ..base });
+        // The outline grows by the ring on every side, so the ink rectangle grows by twice it.
+        let ring = crate::render::faux_bold_radius(px);
+        let grew = (brect.width() - prect.width()) as f32;
+        assert!((grew - 2.0 * ring).abs() <= 1.5, "{px} px: width grew {grew}, expected about {}", 2.0 * ring);
+        // Heavier by the perimeter's worth of ink. Pinned per size, because a thicker ring here is
+        // exactly the jump a PSD's faux-bold layer shows when a click re-renders it.
+        ratios.push(bold / plain);
+    }
+    // Plain text's ink grows with the size, so the bold/plain ratio falls as the ring does relative
+    // to the stems: 1.9x at 12 px (the floor), about 1.35x at 120 px, 1.24x at 200 px.
+    // The ring is a fixed fraction of the size above the pixel floor, so the ratio does not move
+    // with the size: 1.35x at 32, 72, 120 and 200 px (the flat 3.6% ring measured 1.95x). At 12 px
+    // the floor is 3.75% of the size, so the type reads a little heavier, as Photoshop's does.
+    for (px, r) in [32.0f32, 72.0, 120.0, 200.0].iter().zip(&ratios[1..]) {
+        assert!((1.30..=1.40).contains(r), "{px} px: {r:.2}x, expected about 1.35x");
+    }
+    assert!((1.55..=1.75).contains(&ratios[0]), "12 px: {:.2}x, expected about 1.64x", ratios[0]);
+    assert!(ratios[0] > ratios[4], "the pixel floor fades out: {:.2}x at 12 px, {:.2}x at 200 px", ratios[0], ratios[4]);
 }
 
 /// #3705: Faux bold dilation must scale with horizontal and vertical glyph scaling.
