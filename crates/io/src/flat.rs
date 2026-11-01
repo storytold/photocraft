@@ -16,10 +16,15 @@ const BAND_BYTES: usize = 32 << 20;
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_flat_with_limit(name, bytes, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+}
+
+/// [`import_flat`] with the caller's PSD pixel allowance, which a layered TIFF is held to.
+pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
-        return import_tiff_page(name, bytes, None);
+        return import_tiff_page_with_limit(name, bytes, None, pixel_limit);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
@@ -230,20 +235,24 @@ pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
 /// a second full-size copy (#8169), when the machine has the memory for it (see
 /// [`crate::memory`]).
 pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
+    import_tiff_page_with_limit(name, bytes, page, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+}
+
+fn import_tiff_page_with_limit(name: &str, bytes: &[u8], page: Option<usize>, pixel_limit: u64) -> Result<ImportResult, IoError> {
     let bands = codecs::TiffBands::open(bytes, page, &codecs::Limits::banded())?;
     // A page with layers or extra samples (alpha and spot channels) is decoded whole: the layers
     // and channels are built from the full image. Only one copy of the layer data is kept through
     // that decode.
     if bands.meta.photoshop_layers.as_deref().is_some_and(|l| !l.is_empty()) || bands.extra_samples() > 0 {
         drop(bands);
-        return import_tiff_whole(name, bytes, page);
+        return import_tiff_whole(name, bytes, page, pixel_limit);
     }
     tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES)
 }
 
 /// A layered TIFF, or a flat one with extra samples, decoded whole: the layers are built from the
 /// composite, the channels from the extra samples.
-fn import_tiff_whole(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
+fn import_tiff_whole(name: &str, bytes: &[u8], page: Option<usize>, pixel_limit: u64) -> Result<ImportResult, IoError> {
     // The orientation is applied after the layer check: rotating the composite but not the
     // layers would misalign them, so a layered TIFF keeps its stored orientation.
     let keep = codecs::DecodeOptions { keep_orientation: true, ..Default::default() };
@@ -252,7 +261,7 @@ fn import_tiff_whole(name: &str, bytes: &[u8], page: Option<usize>) -> Result<Im
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
     };
     if let Some(layers) = img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()) {
-        let mut r = crate::tiff_layers::import_layered(name, &img, layers)?;
+        let mut r = crate::tiff_layers::import_layered(name, &img, layers, pixel_limit)?;
         if orientation != 1 {
             r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
         }

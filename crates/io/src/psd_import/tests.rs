@@ -388,3 +388,85 @@ fn layer_bands_end_on_tile_rows_and_cover_the_layer() {
     // A small layer is one band.
     assert_eq!(band_rows(0, 2000, 8000), vec![(0, 2000)]);
 }
+
+/// An allocation or read that fails while the layers are built fails the open, and the merged
+/// image's extra channels are not converted on the way out: that is another full plane per
+/// channel, asked for after the import was already reported as failing.
+#[test]
+fn a_fatal_layer_error_skips_the_extra_channel_conversion() {
+    use photocraft_psd::ReadAt;
+    struct Failing {
+        bytes: Vec<u8>,
+        data: Vec<(u64, u64)>,
+        armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl ReadAt for Failing {
+        fn len(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> photocraft_psd::Result<()> {
+            let end = offset + buf.len() as u64;
+            if self.armed.load(std::sync::atomic::Ordering::SeqCst) && self.data.iter().any(|&(a, b)| offset < b && end > a) {
+                return Err(PsdError::Read("the drive went away".into()));
+            }
+            self.bytes.as_slice().read_at(offset, buf)
+        }
+    }
+    let bytes = crate::psd_export::document_to_psd(&channels_document(SampleType::U8)).to_bytes().unwrap();
+    let whole = PsdFile::from_bytes(&bytes).unwrap();
+    assert!(merged_needed(&whole), "the extra channels come from the merged image");
+    let converted = psd_to_document_global(&whole, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();
+    assert!(converted.3.is_none() && converted.0.channels.len() == 3, "the control file converts its channels");
+
+    let lazy = PsdFile::from_source(photocraft_psd::Source::new(bytes.clone())).unwrap();
+    let data: Vec<(u64, u64)> =
+        lazy.layers().iter().flat_map(|l| &l.channels).filter_map(|c| c.stored.as_ref()).filter(|s| s.len > 0).map(|s| (s.offset, s.offset + s.len)).collect();
+    assert!(!data.is_empty());
+    // Reads fail only once the file is parsed: the layers decode lazily from the source.
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let file = PsdFile::from_source(photocraft_psd::Source::new(Failing { bytes, data, armed: armed.clone() })).unwrap();
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (doc, _, _, fatal) = psd_to_document_global(&file, &photocraft_raster::Interrupt::NONE, None, Vec::new(), false).unwrap();
+    assert!(matches!(fatal, Some(crate::IoError::Read(_))), "{fatal:?}");
+    assert!(doc.channels.is_empty(), "no extra channel was converted after the failure");
+}
+
+/// Only a failed allocation fails the open; a size limit or damaged compressed data still
+/// leaves the layer empty with a damage warning, and the rest of the file opens. A failed
+/// allocation names the layer and its channel.
+#[test]
+fn only_allocation_failures_are_fatal_to_a_layer_channel() {
+    let file = testgen::small(Version::Psd, Compression::Raw);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut cx = Ctx {
+        file: &file,
+        global: Vec::new(),
+        fmt,
+        mask_fmt: PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false),
+        cc: 3,
+        cmyk: false,
+        warnings: Vec::new(),
+        damaged: false,
+        fatal_error: None,
+        dpi: 72.0,
+        txt2: None,
+        filter_effects: Vec::new(),
+        filter_masks: Default::default(),
+        unfiltered: Default::default(),
+        unfiltered_bytes: 0,
+        smart_contents: Default::default(),
+        plld_sizes: Default::default(),
+        vector_previews: Default::default(),
+        ctl: photocraft_raster::Interrupt::NONE,
+        done: 0,
+        uniform: Default::default(),
+        total: 0,
+    };
+    assert!(!cx.channel_failed("Layer 1", 0, &PsdError::LimitExceeded("decoded channel data exceeds MAX_DECODED_BYTES")));
+    assert!(cx.fatal_error.is_none() && cx.damaged);
+    assert!(cx.channel_failed("Layer 1", 2, &PsdError::OutOfMemory("not enough memory for the decoded channel data")));
+    match cx.fatal_error {
+        Some(crate::IoError::OutOfMemory(message)) => assert!(message.contains("layer \"Layer 1\" channel 2"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+}
