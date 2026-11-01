@@ -115,8 +115,7 @@ impl<'a> Shown<'a> {
         let fx = photocraft_compose::effects::has_effects(l);
         let (bounds, ink) = match &l.content {
             LayerContent::Group(g) if !fx => {
-                // Hidden children show nothing: the compositor skips them.
-                let kids: Vec<_> = g.children.iter().filter(|c| c.visible).filter_map(Shown::new).collect();
+                let kids: Vec<_> = shown_children(&g.children).filter_map(Shown::new).collect();
                 (kids.iter().fold(Rect::EMPTY, |a, k| a.union(&k.bounds)), Ink::Children(kids))
             }
             _ => (crate::layer_multi_cmds::layer_bounds(l)?, l.surface().filter(|s| s.format().alpha && !fx).map_or(Ink::All, Ink::Alpha)),
@@ -166,6 +165,25 @@ impl<'a> Shown<'a> {
         }
         out.iter_mut().zip(&buf).for_each(|(o, v)| *o &= *v > 0.0);
     }
+}
+
+/// The children whose ink a group shows, stacked as the compositor stacks them (bottom to top, a
+/// clipped layer clipping to the nearest unclipped one below): the visible ones, less those clipped
+/// to a base. Hidden layers are skipped, and a clipped layer shows only within its base's alpha,
+/// which the base's own measure already covers, or nothing over a hidden base. Over a fill or an
+/// adjustment layer, which has no ink of its own measured here, a clipped layer counts as its own.
+fn shown_children(children: &[Layer]) -> impl Iterator<Item = &Layer> {
+    let mut base: Option<&Layer> = None;
+    children.iter().filter(move |c| {
+        let shows = match base.filter(|_| c.clipped) {
+            Some(b) => b.visible && c.visible && matches!(b.content, LayerContent::Fill(_) | LayerContent::Adjustment(_)),
+            None => c.visible,
+        };
+        if !c.clipped {
+            base = Some(c);
+        }
+        shows
+    })
 }
 
 /// Restore missing shape caches, or refresh every shape for a changed canvas, including groups.

@@ -295,6 +295,58 @@ fn a_group_masks_shown_part_skips_hidden_children() {
     assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
 }
 
+/// #10422 review: a clipped child shows only within its base's alpha, as the compositor clips it,
+/// and nothing over a hidden base. A base at x 4..14 and a layer clipped to it at x 30..40
+/// (y 6..16) under a group mask that reveals all show only the base's square; with the base
+/// hidden, the group shows nothing.
+#[test]
+fn a_group_masks_shown_part_clips_children_to_their_base() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let clip = LayerId(s.execute("layer.new.layer", json!({"name": "clip"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerMask.revealAll", json!({"layer": group.0})).unwrap();
+    s.edit("clip", |d, _| {
+        d.layer_mut(clip).expect("clip").clipped = true;
+        Ok(())
+    })
+    .unwrap();
+    let LayerContent::Group(g) = &doc(&s, 0).layer(group).unwrap().content else { panic!("a group") };
+    assert_eq!(g.children.iter().map(|c| c.id).collect::<Vec<_>>(), [paint, clip], "the clipped layer is above its base");
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+    s.execute("layer.hideLayers", json!({"layer": paint.0})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), None, "a hidden base hides what is clipped to it");
+}
+
+/// A layer clipped to an adjustment layer, which has no ink of its own measured, counts as its own:
+/// it shows its pixels over what the adjustment changes. Base square at x 4..14, an Invert above
+/// it and a layer clipped to the Invert at x 30..40 (y 6..16) show x 4..40.
+#[test]
+fn a_group_masks_shown_part_counts_a_layer_clipped_to_an_adjustment() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let invert = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let clip = LayerId(s.execute("layer.new.layer", json!({"name": "clip"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    for id in [paint.0, invert] {
+        s.execute("layer.select", json!({"layer": id, "mode": "add"})).unwrap();
+    }
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerMask.revealAll", json!({"layer": group.0})).unwrap();
+    s.edit("clip", |d, _| {
+        d.layer_mut(clip).expect("clip").clipped = true;
+        Ok(())
+    })
+    .unwrap();
+    let LayerContent::Group(g) = &doc(&s, 0).layer(group).unwrap().content else { panic!("a group") };
+    assert_eq!(g.children.iter().map(|c| c.id).collect::<Vec<_>>(), [paint, LayerId(invert), clip]);
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), Some(Rect::new(4, 6, 40, 16)));
+}
+
 /// #10422 review: separate feathered openings show only as far as each one's blur reaches, not
 /// over the rectangle spanning both. Openings at x 0..20, y 0..20 and x 75..95, y 75..95 (3 px
 /// feather) show the square (x 4..14, y 6..16) and a patch at x 78..85, y 78..85; a patch at
