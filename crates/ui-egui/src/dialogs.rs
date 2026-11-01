@@ -294,6 +294,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::delete_layer_prompt::owns(fields) => crate::delete_layer_prompt::body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
+        _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
@@ -486,6 +487,17 @@ fn button_row(
                 fields.insert("choice".into(), json!("smartObject"));
             } else if hit == Some(ButtonRole::Default) {
                 fields.insert("choice".into(), json!("rasterize"));
+            }
+            hit
+        } else if crate::preset_group_prompt::owns(fields) {
+            // Import as New Group / Cancel / Replace (#10640): Enter keeps the group.
+            let new = DialogButton::new(ButtonRole::Default, tl!("Import as New Group"), 150.0);
+            let replace = DialogButton::new(ButtonRole::Alternate, tl!("Replace"), 84.0);
+            let hit = dialog_buttons(ui, &[new, cancel, replace]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert("choice".into(), json!("replace"));
+            } else if hit == Some(ButtonRole::Default) {
+                fields.insert("choice".into(), json!("new"));
             }
             hit
         } else {
@@ -849,6 +861,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::prefs_ui::owns,
     crate::open_prompt::owns,
     crate::replace_prompt::owns,
+    crate::preset_group_prompt::owns,
     crate::layer_style::color_picker::owns,
     |f| f.contains_key("__export"),
     |f| f.contains_key("__smartFilter"),
@@ -988,6 +1001,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
+        _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
@@ -1052,6 +1066,10 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     // Cancel on the question whether to replace a file writes nothing.
     if crate::replace_prompt::owns(&closed.fields) {
         crate::replace_prompt::cancel(app)?;
+    }
+    // Cancel on the group-name question imports nothing.
+    if crate::preset_group_prompt::owns(&closed.fields) {
+        crate::preset_group_prompt::cancel(app);
     }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
@@ -1139,6 +1157,7 @@ pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
 pub(crate) mod pattern_fill_ui;
+pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
