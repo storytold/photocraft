@@ -1,5 +1,5 @@
 use super::dialogs::open_preferences;
-use super::fields::{choice_label, color_of, preference_matches};
+use super::fields::{RowEmitter, choice_label, color_of, preference_matches};
 use super::{AppearanceMode, Color32, DarkTheme, LightTheme, Map, PhotocraftApp, RichText, SavedTheme, Sense, ThemeKind, Tokens, Value, json, prefs, vec2};
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -279,7 +279,7 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
 /// reading start in both directions.
 fn theme_row(
     ctx: &egui::Context,
-    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+    row: &mut RowEmitter<'_>,
     title: &str,
     active: bool,
     selected: &mut String,
@@ -343,7 +343,7 @@ pub(super) fn appearance_rows(
     obj: &mut Map<String, Value>,
     system: Option<egui::Theme>,
     rows: AppearanceRows,
-    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+    row: &mut RowEmitter<'_>,
 ) {
     let t = Tokens::get(ctx);
     let mut mode = obj.get("appearanceMode").and_then(Value::as_str).unwrap_or("auto").to_string();
