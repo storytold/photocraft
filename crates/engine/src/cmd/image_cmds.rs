@@ -555,6 +555,9 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
 /// Image → Canvas Size.
 fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    if photocraft_compose::deep::any_deep(&d.doc.layers) {
+        return Err(EngineError::Other("deep layers cannot be re-canvased yet; their samples keep their extent".into()));
+    }
     let (ow, oh) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
     let w = p.get("width").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { ow });
