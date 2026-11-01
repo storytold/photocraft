@@ -120,6 +120,7 @@ pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
 pub use cmd::paint_cmds;
+use cmd::path_clip_cmds;
 use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
@@ -202,6 +203,10 @@ pub struct Session {
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
+    /// Path components copied with Edit › Copy / Cut while the Path Selection tool has a
+    /// component selected (`path.copy` / `path.cut`): like one real clipboard, a path clip
+    /// replaces the pixel clipboard and is replaced by it (`path_clip_cmds`).
+    pub path_clipboard: Option<photocraft_doc::Path>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
     pub style_clipboard: Option<CopiedStyle>,

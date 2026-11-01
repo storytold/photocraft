@@ -47,7 +47,7 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
 }
 
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
-fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
+pub(crate) fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
     // A malformed target is an error, never a silent edit of the Work Path or the active layer.
     let name = match p.get("name") {
         Some(v) => v.as_str().ok_or_else(|| bad(cmd, "`name` must be a path name, \"work\" or \"layer\""))?,

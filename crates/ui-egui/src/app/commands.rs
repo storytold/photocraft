@@ -34,6 +34,8 @@ impl PhotocraftApp {
         result
     }
 
+    /// Run a command through the app shell (prompts, intercepts, status reporting), counting
+    /// the nesting depth so a nested run doesn't prompt or catch panics twice.
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
@@ -41,6 +43,9 @@ impl PhotocraftApp {
         r
     }
 
+    /// [`run_command`]'s body at the current depth: stale-gesture cancellation, automation
+    /// authorization, the UI intercepts (prompts, tool routing, the path clipboard), the
+    /// engine dispatch and the post-command state fixes.
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
@@ -80,6 +85,11 @@ impl PhotocraftApp {
             return r;
         }
         if let Some(r) = crate::crop_ui::intercept(self, id) {
+            return r;
+        }
+        // Path Selection's component clipboard: Edit › Copy/Cut take the selected components,
+        // Edit › Paste lays the path clipboard down (before the OS-clipboard import below).
+        if let Some(r) = vector_ui::path_clip_intercept(self, id, &params) {
             return r;
         }
         let t0 = gpu_canvas::now_ms();
