@@ -1,7 +1,7 @@
 use super::adjustments::{HUE_RANGES, adjustment_by_class, adjustment_by_suffix, adjustment_steps};
 use super::descriptors::{
-    PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, get_text, jbool, jnum,
-    jstr, layer_ref, layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
+    PCT, PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, get_text, jbool,
+    jnum, jstr, layer_ref, layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
 };
 use super::fields::{Mapped, none, step, steps};
 use super::steps_layer::quick_mask_ref;
@@ -194,14 +194,27 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         }
         Some("AdjL") => match type_desc.and_then(|t| adjustment_by_class(&trimmed(&t.class_id))) {
             Some(a) => {
-                let mut mapped = adjustment_steps(a, "layer.newAdjustmentLayer.", type_desc);
+                let Mapped::Steps(mut mapped) = adjustment_steps(a, "layer.newAdjustmentLayer.", type_desc) else {
+                    return Mapped::Unsupported { harmless: false };
+                };
+                if let Some(u) = using
+                    && u.get("Opct").is_some()
+                {
+                    if matches!(u.get("Opct"), Some(D::UnitFloat { unit, .. }) if *unit != PCT) {
+                        return Mapped::Unsupported { harmless: false };
+                    }
+                    let Some(opacity) = get_num(u, "Opct").filter(|o| (0.0..=100.0).contains(o)) else {
+                        return Mapped::Unsupported { harmless: false };
+                    };
+                    let Some((_, Value::Object(params))) = mapped.first_mut() else { return Mapped::Unsupported { harmless: false } };
+                    // Recorded layer opacity uses 0..255 even in a 16-bit document.
+                    params.insert("opacity".into(), ((opacity * 255.0 / 100.0).round() / 255.0).into());
+                }
                 if let Some(c) = using.and_then(|u| get_enum(u, "Clr ")) {
                     let Some(color) = lookup(LABEL_COLORS, &c) else { return Mapped::Unsupported { harmless: false } };
-                    if let Mapped::Steps(steps) = &mut mapped {
-                        steps.push(("layer.setLabelColor".into(), json!({"color": color})));
-                    }
+                    mapped.push(("layer.setLabelColor".into(), json!({"color": color})));
                 }
-                mapped
+                Mapped::Steps(mapped)
             }
             None => Mapped::Unsupported { harmless: false },
         },
@@ -390,12 +403,25 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
         _ => {
             let suffix = id.strip_prefix("layer.newAdjustmentLayer.")?;
             let a = adjustment_by_suffix(suffix)?;
-            let t = if p.as_object().is_some_and(|o| o.is_empty()) {
+            let opacity = match p.get("opacity") {
+                None => None,
+                Some(value) => Some(value.as_f64().filter(|o| o.is_finite() && (0.0..=1.0).contains(o))?),
+            };
+            let mut params = p.clone();
+            if let Some(params) = params.as_object_mut() {
+                params.remove("opacity");
+            }
+            // Layer opacity must not turn default adjustment settings into a custom preset.
+            let t = if params.as_object().is_some_and(|o| o.is_empty()) {
                 desc(a.class).with("presetKind", enm("presetKindType", "presetKindDefault"))
             } else {
-                (a.to)(p)?
+                (a.to)(&params)?
             };
-            desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(desc("AdjL").with("Type", D::Descriptor(t))))
+            let mut using = desc("AdjL").with("Type", D::Descriptor(t));
+            if let Some(opacity) = opacity {
+                using = using.with("Opct", pct(opacity * 100.0));
+            }
+            desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(using))
         }
     })
 }

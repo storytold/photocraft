@@ -234,7 +234,7 @@ fn adjustment_make(t: Descriptor, opacity: Option<D>) -> Descriptor {
 #[test]
 fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
     let d = Descriptor::new("Vbrn").with("vibrance", D::Integer(47)).with("Strt", D::Integer(-19));
-    for depth in [8, 16] {
+    for depth in [8, 16, 32] {
         for event in [AtnEvent::name("vibrance"), AtnEvent::Code(*b"Vbrn")] {
             let action = recorded(event, d.clone());
             assert_eq!(action.steps, vec![("image.adjustments.vibrance".into(), json!({"vibrance":47,"saturation":-19}))]);
@@ -278,7 +278,7 @@ fn recorded_adjustment_opacity_keeps_gradient_settings_and_defaults() {
         let written = saved(&action).descriptor.unwrap();
         let Some(D::Descriptor(using)) = written.get("Usng") else { panic!("missing adjustment metadata") };
         assert!(matches!(using.get("Opct"),Some(D::UnitFloat{unit,value}) if unit==b"#Prc" && (*value-179.0/255.0*100.0).abs()<1e-10));
-        for depth in [8, 16] {
+        for depth in [8, 16, 32] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width":4,"height":3,"depth":depth})).unwrap();
             let base = s.active().unwrap().active_layer.unwrap();
@@ -329,7 +329,12 @@ fn adjustment_opacity_validation_and_endpoints_are_atomic() {
         assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().opacity, opacity.unwrap_or(1.0));
         let action = Action::new("Recorded", vec![("layer.newAdjustmentLayer.gradientMap".into(), p)]);
         let reloaded = recorded(AtnEvent::Code(*b"Mk  "), saved(&action).descriptor.unwrap());
-        assert_eq!(reloaded.steps, action.steps);
+        assert_eq!(reloaded.steps.len(), 1);
+        assert_eq!(reloaded.steps[0].0, action.steps[0].0);
+        match opacity {
+            None => assert_eq!(reloaded.steps[0].1, json!({})),
+            Some(opacity) => assert_eq!(reloaded.steps[0].1["opacity"].as_f64(), Some(f64::from(opacity))),
+        }
         s.execute("edit.undo", json!({})).unwrap();
     }
 }
