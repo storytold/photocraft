@@ -1,0 +1,48 @@
+# AUR package: repackages the prebuilt Linux tarball from the GitHub release.
+# Maintainer: PhotoCraft maintainers <photocraft@storyteller.ai>
+pkgname=photocraft-bin
+pkgver=0.2.0
+# Upstream version as tagged (pkgver drops the "-" of pre-releases; see ../update.sh).
+_version=0.2.0
+pkgrel=1
+pkgdesc="Open-source, native image editor that works the way Photoshop users expect (prebuilt)"
+arch=(x86_64 aarch64)
+url="https://github.com/storytold/photocraft"
+license=('MIT OR Apache-2.0')
+# The binaries link only glibc and libgcc_s directly; windowing and the GPU are dlopen()ed at
+# runtime (see packaging/linux/nfpm.yaml), so list them by hand. pacman has no "A or B" depends,
+# so take both Vulkan and EGL: they are small and nearly always installed.
+depends=(
+  glibc
+  gcc-libs
+  libxkbcommon
+  libxkbcommon-x11
+  wayland
+  libx11
+  libxcb
+  libxcursor
+  libxi
+  vulkan-icd-loader
+  libglvnd
+  hicolor-icon-theme
+)
+optdepends=(
+  'vulkan-driver: GPU compositing through Vulkan'
+  'xdg-desktop-portal: native file dialogs'
+)
+provides=(photocraft)
+conflicts=(photocraft)
+options=(!strip !debug)
+source_x86_64=("$url/releases/download/v$_version/photocraft-$_version-linux-x86_64.tar.gz")
+source_aarch64=("$url/releases/download/v$_version/photocraft-$_version-linux-aarch64.tar.gz")
+sha256sums_x86_64=('2d55aed968418447f514ac87e6a3f1eb3df885f0e3b46bc04e54122f52c77430')
+sha256sums_aarch64=('027e19ddd3581d1ec2e2057d66df51b2a14f6a7354d4ef8d03e48735af60c70e')
+
+package() {
+  cd "photocraft-$_version-linux-$CARCH"
+  install -Dm755 bin/photocraft bin/photocraft-cli -t "$pkgdir/usr/bin/"
+  mkdir -p "$pkgdir/usr/share"
+  cp -R --no-preserve=ownership share/. "$pkgdir/usr/share/"
+  install -Dm644 share/doc/photocraft/LICENSE-MIT share/doc/photocraft/LICENSE-APACHE \
+    -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
