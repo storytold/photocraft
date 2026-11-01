@@ -147,6 +147,33 @@ fn malformed_alternate_spot_colors_never_panic() {
     }
 }
 
+/// Duplicate identifiers select the first matching ink, and opaque resource bytes survive
+/// both PSD serialization and a document import/export, including unknown colour spaces.
+#[test]
+fn alternate_resource_duplicates_and_unknown_spaces_round_trip() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut file = without_layer_records(&flat_doc(ColorMode::Rgb, depth));
+        unknown_spot_space(&mut file);
+        let ids = &file.resource(1053).unwrap().data;
+        let id = &ids[..4];
+        let mut data = vec![0, 1, 0, 3];
+        for color in [[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0], [0x23, 0x31, 1, 2, 3, 4, 5, 6, 7, 8]] {
+            data.extend_from_slice(id);
+            data.extend_from_slice(&color);
+        }
+        file.resources.push(ImageResource::new(1067, data.clone()));
+        let bytes = file.to_bytes().unwrap();
+        let parsed = PsdFile::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.resource(1067).unwrap().data, data);
+        let opened = import("duplicate.psd", &bytes).unwrap().document;
+        assert_eq!(opened.channels.len(), 2);
+        assert_eq!(opened.channels[0].spot.unwrap().0.to_rgb(), [1.0, 0.0, 0.0]);
+        let saved = export(&opened, "roundtrip.psd", &ExportOptions::default()).unwrap();
+        let reparsed = PsdFile::from_bytes(&saved.bytes).unwrap();
+        assert_eq!(reparsed.resource(1067).unwrap().data, data);
+    }
+}
+
 #[cfg(feature = "corpus")]
 fn psd_tools(name: &str) -> Vec<u8> {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd-tools").join(name);
