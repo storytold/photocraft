@@ -96,6 +96,12 @@ const BAND_BYTES: usize = 32 << 20;
 fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
     let tile = TILE_SIZE as usize;
     let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
+    row_bands(top, h, rows)
+}
+
+// `rows` is a positive multiple of TILE_SIZE. Mask decoding uses one tile row at a
+// time so a narrow but tall mask never needs a whole-plane conversion buffer.
+fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
     // The first band ends at the first tile boundary at least `rows` rows in.
     let into_tile = usize::try_from(top.rem_euclid(TILE_SIZE)).unwrap_or(0);
     let mut out = Vec::new();
@@ -252,21 +258,6 @@ impl Ctx<'_> {
         Placement { id, transform, perspective, warp }
     }
 
-    /// Decodes a PSD layer channel, marking the document damaged if its data is unreadable.
-    fn channel_plane(&mut self, rec: &LayerRecord, id: i16, name: &str) -> Option<Vec<u8>> {
-        rec.channel(id)?;
-        if self.fatal_error.is_some() {
-            return None;
-        }
-        match rec.decode_channel(id, self.file.header.depth, self.file.header.version) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                self.channel_failed(name, id, &e);
-                None
-            }
-        }
-    }
-
     /// Builds a raster surface from the layer channels, leaving the surface empty if
     /// any present channel fails to decode rather than inventing replacement pixels.
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
@@ -357,23 +348,42 @@ impl Ctx<'_> {
         };
         let mut surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
         if !rect.is_empty()
+            && self.fatal_error.is_none()
             && let Ok((w, h)) = rect.size()
-            && let Some(plane) = self.channel_plane(rec, id, name)
         {
-            let s = self.mask_fmt.sample;
-            let bytes = match try_interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]) {
-                Ok(bytes) => bytes,
+            let decoder = rec.channel(id)?.row_decoder(w, h, self.file.header.depth, self.file.header.version);
+            match decoder {
                 Err(error) => {
-                    self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
-                    return None;
+                    self.channel_failed(name, id, &error);
                 }
-            };
-            if let Err(error) = surface.try_write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes) {
-                self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
-                return None;
+                Ok(decoder) => {
+                    for (b0, b1) in row_bands(rect.top, h, TILE_SIZE as usize) {
+                        let mut bytes = match decoder.rows(b0, b1) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                self.channel_failed(name, id, &error);
+                                // Discard bands already written: damaged mask data must not
+                                // leave a plausible but incomplete mask on the layer.
+                                surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
+                                break;
+                            }
+                        };
+                        // A mask is one channel: convert its big-endian samples in place.
+                        // Preserve float bits, including NaN payloads, without a float round trip.
+                        #[cfg(target_endian = "little")]
+                        for sample in bytes.chunks_exact_mut(self.mask_fmt.sample.bytes()) {
+                            sample.reverse();
+                        }
+                        let band = Rect::new(rect.left, rect.top + b0 as i32, rect.right, rect.top + b1 as i32);
+                        if let Err(error) = surface.try_write_interleaved(band, &bytes) {
+                            self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
+                            return None;
+                        }
+                    }
+                    surface.prune();
+                    surface.share_uniform_tiles(&mut self.uniform);
+                }
             }
-            surface.prune();
-            surface.share_uniform_tiles(&mut self.uniform);
         }
         let params = m.parameters;
         Some(LayerMask {
