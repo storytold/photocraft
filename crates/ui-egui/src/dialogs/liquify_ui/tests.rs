@@ -1070,3 +1070,57 @@ fn preview_off_shows_the_original_and_p_toggles_it() {
     assert_eq!(d.out, render(d, &d.field), "Preview on: the warp of both strokes");
     assert_eq!(d.view_dirty, d.view_bounds, "the zoomed preview is redrawn too");
 }
+
+/// A forward-warp stroke across the test layer, at row `y`.
+fn warp_stroke(app: &mut PhotocraftApp, y: f64) {
+    for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
+        pointer(app, ev, egui::Modifiers::NONE);
+    }
+}
+
+/// The active layer's pixels over the whole document.
+fn layer_pixels(app: &PhotocraftApp) -> Vec<f32> {
+    let st = app.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 120, 80))
+}
+
+/// With Preview off, a stroke changes the displacement field but the display stays the original
+/// image (#7905).
+#[test]
+fn a_stroke_with_preview_off_changes_the_field_but_not_the_display() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": false})).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    let (field_before, shown_before) = (d.field.clone(), d.out.clone());
+    assert_eq!(d.field.max_displacement(), 0.0);
+    warp_stroke(&mut app, 40.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_ne!(d.field, field_before, "the stroke changes the field");
+    assert!(d.field.max_displacement() > 3.0);
+    assert_eq!(d.out, shown_before, "the display does not change");
+}
+
+/// OK with Preview off applies the warp: the layer ends up exactly as it does when the same stroke
+/// is committed with Preview on.
+#[test]
+fn ok_with_preview_off_applies_the_warp() {
+    let ctx = egui::Context::default();
+    let commit_with = |preview: bool| {
+        let mut app = app_with_layer();
+        let before = layer_pixels(&app);
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": preview})).unwrap();
+        warp_stroke(&mut app, 40.0);
+        let past = app.session.active().unwrap().history.past_len();
+        control(&mut app, &json!({"commit": true})).unwrap();
+        assert!(app.distort.liquify.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one Liquify step");
+        (before, layer_pixels(&app))
+    };
+    let (before, unpreviewed) = commit_with(false);
+    assert_ne!(unpreviewed, before, "OK with Preview off warps the layer");
+    assert_eq!(unpreviewed, commit_with(true).1, "the same warp as with Preview on");
+}
+
