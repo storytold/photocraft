@@ -3302,14 +3302,13 @@ fn gallery_effect_steps_the_commands_cannot_play_are_kept() {
 }
 
 /// What the event cannot hold refuses the step: a fraction in an integer key, the colours a
-/// Sketch effect pinned, a value with no Photoshop code, Neon Glow without its colour (#10592).
+/// Sketch effect pinned, a value with no Photoshop code, a mask target (#10592).
 #[test]
 fn gallery_effect_steps_that_cannot_be_written_are_refused() {
     for (id, params) in [
         ("filter.gallery.accentedEdges", json!({"edgeWidth": 2.5})),
         ("filter.gallery.charcoal", json!({"foreground": "#000000"})),
         ("filter.gallery.glass", json!({"texture": "blocks"})),
-        ("filter.gallery.neonGlow", json!({"glowSize": 5})),
         ("filter.gallery.cutout", json!({"target": "mask"})),
     ] {
         assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
@@ -3337,6 +3336,20 @@ fn gallery_effect_integers_outside_the_settings_range_are_refused() {
         ("filter.gallery.glass", json!({"scaling": 200})),
     ] {
         assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}
+
+/// Neon Glow without a colour plays with the effect's default glow colour, so it saves with that
+/// colour, component for component (#10592).
+#[test]
+fn gallery_neon_glow_without_a_colour_saves_the_colour_it_plays_with() {
+    let item = export_item("filter.gallery.neonGlow", &json!({"glowSize": 5}), "S").expect("refused");
+    let d = item.descriptor.unwrap();
+    let c = get_obj(&d, "Clr ").expect("no colour");
+    assert_eq!(trimmed(&c.class_id), "RGBC");
+    let neon = photocraft_algo::GalleryEffect::new(photocraft_algo::GalleryFilter::NeonGlow).color;
+    for (key, v) in [("Rd  ", neon[0]), ("Grn ", neon[1]), ("Bl  ", neon[2])] {
+        assert_eq!(get_num(c, key), Some(f64::from(v) * 255.0), "{key}");
     }
 }
 

@@ -8,6 +8,7 @@ use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
 use super::{D, Descriptor, Map, Value};
+use photocraft_algo::{GalleryEffect, GalleryFilter};
 
 /// One key of an effect, in recorded order.
 enum G {
@@ -17,7 +18,7 @@ enum G {
     /// value keeps the step.
     Enum(&'static str, &'static str, &'static [(&'static str, &'static str)], &'static str),
     Bool(&'static str, &'static str, bool),
-    /// A colour object ↔ `#rrggbb`.
+    /// A colour object ↔ `#rrggbb`; left out, it is the effect's own default colour.
     Color(&'static str, &'static str),
 }
 
@@ -551,6 +552,15 @@ fn effect_step(d: &Descriptor) -> Option<Mapped> {
     Some(step(id, Value::Object(p)))
 }
 
+/// The colour `id`'s effect plays with when the step names none (Neon Glow's glow colour), as
+/// Photoshop's 0–255 components, unrounded, so the step saves the colour it plays with.
+fn default_color(id: &str) -> Option<Descriptor> {
+    let filter = id.strip_prefix("filter.gallery.").and_then(GalleryFilter::from_key)?;
+    let [r, g, b, _] = GalleryEffect::new(filter).color;
+    let c = |v: f32| D::Double(f64::from(v) * 255.0);
+    Some(desc("RGBC").with("Rd  ", c(r)).with("Grn ", c(g)).with("Bl  ", c(b)))
+}
+
 /// Every key in recorded order, Photoshop's default (which is the command's) for what the step
 /// leaves out. A setting the event has no key for (the Sketch effects' pinned colours, a mask
 /// target), a fraction in an integer key, an integer outside its setting's range or a value
@@ -576,9 +586,10 @@ pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
             }
             G::Enum(key, _, table, default) => enm(enum_type(key), v.map_or(Some(*default), |v| v.as_str().and_then(|s| lookup_back(table, s)))?),
             G::Bool(_, _, default) => D::Boolean(v.map_or(Some(*default), Value::as_bool)?),
-            // The colour the effect replays with when the step names none is the session's, which
-            // the event cannot record.
-            G::Color(..) => D::Descriptor(color_desc(v?.as_str()?)?),
+            G::Color(..) => D::Descriptor(match v {
+                Some(v) => color_desc(v.as_str()?)?,
+                None => default_color(id)?,
+            }),
         };
         d = d.with(k.key(), out);
     }
