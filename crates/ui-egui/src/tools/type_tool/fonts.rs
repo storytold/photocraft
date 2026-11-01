@@ -509,8 +509,11 @@ pub(crate) fn family_picker_in(
         let previewed: String = ui.data(|d| d.get_temp(preview_id)).unwrap_or_else(|| current.clone());
         let previewed_label = label(&previewed);
         // Everything above the lists is as wide as the class and font lists below, measured last
-        // frame: never wider, so the menu has no empty strip beside the list.
-        let body_id = field.with("body");
+        // frame: never wider, so the menu has no empty strip beside the list. Measured per class
+        // list state: the width capped by the lists measured with the classes hidden would only
+        // let the menu grow back a little each frame once they are shown again (#10427).
+        let body_key = |hidden: bool| field.with("body").with(hidden);
+        let body_id = body_key(filters.hide_classes);
         let class_w = crate::font_filters::CLASS_COLUMN_WIDTH;
         let estimate = FONT_LIST_WIDTH + 16.0 + if filters.hide_classes { 0.0 } else { class_w + 14.0 };
         let body: Option<egui::Rect> = ui.data(|d| d.get_temp(body_id));
@@ -520,10 +523,18 @@ pub(crate) fn family_picker_in(
             ui.set_max_width(menu_width);
         }
         crate::font_filters::preview_banner(ui, &previewed, &previewed_label, library.preview_text.as_deref(), menu_width);
+        let classes_were_hidden = filters.hide_classes;
         ui.horizontal(|ui| {
             crate::font_filters::filter_buttons(ui, &mut filters);
             crate::font_filters::clear_all(ui, &mut filters);
         });
+        // The class list was just shown or hidden: this frame's lists are laid out under the other
+        // state's width, so they are no measure of this one. Keep the last measure and lay out
+        // again at once.
+        let toggled = filters.hide_classes != classes_were_hidden;
+        if toggled {
+            ui.ctx().request_repaint();
+        }
         let lookup = crate::font_filters::lookup_in(library.traits.clone());
         // No recent group while a filter is on: the filters narrow the alphabetical list alone.
         let (mut rows, n_recent) = font_menu_rows(families, labels, &edit.query, if filters.any() { &[] } else { &edit.recents });
@@ -759,10 +770,15 @@ pub(crate) fn family_picker_in(
         // itself stretches with the popup, so it can't tell when the popup is too wide.
         let list_right = list_right + FONT_SCROLL_BAR_WIDTH;
         let body = egui::Rect::from_min_max(body.response.rect.min, egui::pos2(list_right.min(body.response.rect.right()), body.response.rect.bottom()));
+        // Stored under the state the lists were just laid out in (the toggle above may have
+        // changed it this frame).
+        let measured_id = body_key(filters.hide_classes);
         ui.data_mut(|d| {
             d.insert_temp(filters_id, filters);
             d.insert_temp(expanded_id, expanded);
-            d.insert_temp(body_id, body.translate(egui::vec2(-origin, 0.0)));
+            if !toggled {
+                d.insert_temp(measured_id, body.translate(egui::vec2(-origin, 0.0)));
+            }
             if let Some(f) = &hovered {
                 d.insert_temp(preview_id, f.clone());
             }

@@ -265,10 +265,14 @@ pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
 /// active type layer's Type Path (#9114), then the work path. The Pen's Auto Add/Delete edits these
 /// (`anchor_tools::pen_auto`).
 pub(crate) fn active_paths(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
-    let layer = crate::vector_ui::targeted_vector_mask(app)
-        .or_else(|| crate::vector_ui::active_shape_path(app))
-        .map(|(id, p)| (PathRef::Layer(id), p))
-        .or_else(|| crate::vector_ui::active_type_path(app).map(|(id, p)| (PathRef::TypePath(id), p)));
+    let type_path = || crate::vector_ui::active_type_path(app).map(|(id, p)| (PathRef::TypePath(id), p));
+    // The Type Path selected in the Paths panel is edited even when the layer's vector mask is
+    // targeted too: the panel and the tool agree (#10099).
+    let type_selected = app.ui.selected_path.as_deref() == Some(photocraft_engine::vector_cmds::TYPE_PATH);
+    let layer = type_path()
+        .filter(|_| type_selected)
+        .or_else(|| crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app)).map(|(id, p)| (PathRef::Layer(id), p)))
+        .or_else(type_path);
     let saved = crate::vector_ui::selected_saved_path_index(app).map(|(i, p)| (PathRef::Saved(i), p));
     let work = app.session.active().and_then(|st| st.doc.work_path.clone()).filter(|_| crate::vector_ui::work_path_shown(app)).map(|p| (PathRef::Work, p));
     let mut out: Vec<_> = saved.into_iter().chain(layer).chain(work).collect();
@@ -304,11 +308,17 @@ pub(crate) fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
                 out.push((PathRef::Layer(l.id.0), sh.path.clone()));
             }
         }
-        if !out.iter().any(|(r, _)| *r == PathRef::Work) {
+        if !out.iter().any(|(r, _)| *r == PathRef::Work) && !behind_type_path(app) {
             out.extend(st.doc.work_path.clone().map(|p| (PathRef::Work, p)));
         }
     }
     out
+}
+
+/// Is the work path behind the active type layer's Type Path, so neither drawn nor edited
+/// (#10099)? Then it is not even a fallback target.
+pub(crate) fn behind_type_path(app: &PhotocraftApp) -> bool {
+    crate::vector_ui::active_type_path(app).is_some() && !crate::vector_ui::work_path_shown(app)
 }
 
 /// Can `target` be edited: a layer's path only while the layer is not locked.

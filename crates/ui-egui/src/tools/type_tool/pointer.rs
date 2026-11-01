@@ -228,7 +228,8 @@ pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathCli
         return None;
     }
     let shape_path = crate::vector_ui::active_shape_path(app);
-    let work = app.session.active().and_then(|s| s.doc.work_path.clone());
+    // The Work Path hidden behind the active Type Path is not drawn, so not a click target (#10099).
+    let work = app.session.active().and_then(|s| s.doc.work_path.clone()).filter(|_| !crate::direct_select::behind_type_path(app));
     let work_shown = app.ui.selected_path.as_deref() == Some("work");
     // The canvas hover runs this every frame and `hit` samples every segment, so a path with more
     // anchors than this is not a click target (the click and the pointer agree: plain point
@@ -331,7 +332,13 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         let follow_up = match &target {
             Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
             Some(PathClick::OnPath { shape, subpath, start }) => {
-                app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
+                let r = app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}));
+                // The type has its own path now, the Paths panel's "<Layer> Type Path": it is the
+                // target path, and the path it was made on is left alone, as in Photoshop (#10099).
+                if r.is_ok() {
+                    app.ui.selected_path = Some(photocraft_engine::vector_cmds::TYPE_PATH.to_string());
+                }
+                r
             }
             None => Ok(serde_json::Value::Null),
         };

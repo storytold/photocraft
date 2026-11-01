@@ -13,9 +13,12 @@ pub(crate) fn is_work(name: Option<&str>) -> bool {
     name.is_none_or(|n| n.is_empty() || n.eq_ignore_ascii_case("work") || n == "Work Path")
 }
 
+/// The name that targets the active type layer's Type Path (type on a path) in path commands.
+pub const TYPE_PATH: &str = "typePath";
+
 /// The path a command targets: `"work"`/absent → the work path (falling back to the active
 /// layer's shape path or vector mask when there is none), `"layer"` → the active layer's,
-/// otherwise a saved path by name.
+/// `"typePath"` → the active type layer's Type Path, otherwise a saved path by name.
 pub(super) fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let layer_path = || -> Option<Path> {
@@ -27,6 +30,15 @@ pub(super) fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
     };
     if name == Some("layer") {
         return layer_path().ok_or_else(|| EngineError::Other("active layer has no shape path or vector mask".into()));
+    }
+    // Type on a path's own path, the Paths panel's "<Layer> Type Path" row (#10099).
+    if name == Some(TYPE_PATH) {
+        let l = d.active_layer.and_then(|id| d.doc.layer(id));
+        let path = l.and_then(|l| match &l.content {
+            LayerContent::Text(t) => crate::type_extra_cmds::type_path(t),
+            _ => None,
+        });
+        return path.ok_or_else(|| EngineError::Other("active layer is not type on a path".into()));
     }
     if is_work(name) {
         return d.doc.work_path.clone().or_else(layer_path).ok_or_else(|| EngineError::Other("no work path".into()));
@@ -78,6 +90,10 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
+    // `typePath` names the active type layer's Type Path, so no saved path may take it.
+    if name.as_deref() == Some(TYPE_PATH) {
+        return Err(bad(CMD, "`typePath` is the Type Path's name, not a saved path's"));
+    }
     s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
@@ -309,6 +325,9 @@ pub(super) fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let to = p.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or_else(|| bad(CMD, "missing `to`"))?.to_string();
     if is_work(Some(&to)) {
         return Err(bad(CMD, "`to` cannot name the work path"));
+    }
+    if to == TYPE_PATH {
+        return Err(bad(CMD, "`to` cannot be `typePath`, the name of the Type Path"));
     }
     s.edit(if is_work(name.as_deref()) { "Save Path" } else { "Rename Path" }, |doc, _| {
         if doc.paths.iter().any(|q| q.name == to) {

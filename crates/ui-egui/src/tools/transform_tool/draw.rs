@@ -297,13 +297,19 @@ pub(crate) fn selection_ants(
 
 /// What the styled preview of the moving layer is drawn from (transform_fx.rs), at `zoom` screen
 /// pixels per document pixel. `None` for a layer without a style (also once it is switched off
-/// while the box is open) or a hidden one: the bare pixels are drawn instead. The style, opacity
+/// while the box is open) that no masked group holds, or a hidden one: the bare pixels are drawn
+/// instead. The style, opacity
 /// and fill are the layer's as they are now, so edits made while the box is open show.
 pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Option<(&crate::transform_fx::StyledPreview, crate::transform_fx::Frame<'_>)> {
     let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
     let styled = pv.styled.as_ref().filter(|_| t.warp.is_none())?;
     let st = app.session.active().filter(|st| st.doc.id == pv.doc.id)?;
-    let layer = st.doc.layer(LayerId(t.layer)).filter(|l| l.visible && photocraft_compose::effects::has_effects(l))?;
+    let layer = st.doc.layer(LayerId(t.layer)).filter(|l| l.visible)?;
+    let style = styled.style() && photocraft_compose::effects::has_effects(layer);
+    // Without a style, composited only to cut it by the masks of the groups holding it (#9941).
+    if !style && !crate::transform_fx::holders(&st.doc.layers, layer.id).into_iter().any(crate::transform_fx::masked) {
+        return None;
+    }
     let frame = crate::transform_fx::Frame {
         doc: &st.doc,
         layer,
@@ -314,6 +320,7 @@ pub(crate) fn styled_frame(app: &PhotocraftApp, zoom: f32, dragging: bool) -> Op
         nearest: t.interpolation == "nearest",
         zoom,
         dragging,
+        style,
     };
     Some((styled, frame))
 }
