@@ -198,7 +198,7 @@ trajectory; UV mode retains the complete native stroke route. Opacity is a cutou
 not sorted translucent-glass blending. The current Material renderer remains lit Color + Normal.
 
 
-### Environment and PBR
+## Environment and PBR
 
 The right-hand Environment / PBR panel offers an original procedural studio, a native HDR/EXR file picker, a panorama preview, light brightness/rotation, independent background brightness and emissive strength. PBR is enabled by default and can be disabled to restore legacy lighting. Authored model normals are always enabled in the workspace; normal-map strength and DirectX Y remain editable. Scalar metallic and roughness fallbacks apply only without a bound map.
 
@@ -207,14 +207,14 @@ Environment preparation is bounded (256 MiB input, 32 MP decoded, 16K dimension,
 PBR math follows the public [Khronos metallic/roughness specification](https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/Specification.adoc); the shaders, environment generator and convolution are original implementations. No third-party environment assets are bundled.
 
 
-### Painting latency and complete scene resaves
+## Painting latency and complete scene resaves
 
 PBR source caches now propagate native compositor damage through linear CMS and retained half-float GPU subregion updates/mips. Small strokes retain full-sized image/encoded-map allocations and leave untouched texels alone; skipped/stale hints fall back to a full refresh. Commit and undo damage are respected. 2D autoscroll requires the 2D canvas to own tool input; a live mapped 3D stroke is excluded, including both split-view orders.
 
 Scene input/save is capped separately at 2 GiB; mesh import remains 256 MiB. The previous shared cap prevented a real 372 MiB character scene with twelve 4K maps from being saved again. Atomic overwrite is retained. Optional, bounded view metadata (64 KiB, depth 16) preserves camera/PBR/Normal settings, channel and layout, per-bound-document 2D transforms and an HDR/EXR reference (new container saves also embed the panorama bytes). Original texture source paths survive project load and resave; texture pixels and layers remain embedded. Old version-1 projects without these fields still open. Save errors are retained in the UV workspace. The external character diagnostic reads source assets in place and saves/deletes only its D-drive temporary copy.
 
 
-### Texture writeback, separate 2D map and shell rectangles (2026-10-22)
+## Texture writeback, separate 2D map and shell rectangles (2026-10-22)
 
 File > 3D Import > Export Textures (formerly Save All Textures) finishes an active paint gesture and atomically writes only dirty, bound texture documents to their existing file paths, using the normal native exporter (original format, depth, encoding and profile). Shared bindings save a document once. Flat map writeback is explicit; editable layers remain in the .pcuv project. There are no file pickers or confirmation dialogs. Maps without paths are skipped and counted in the status line; errors remain in the UV panel and failed maps stay dirty. Conflicting documents targeting one path are refused. New .pcuv saves preserve which embedded maps still need writeback after reopening; legacy files without that metadata mark linked embedded maps as needing one explicit writeback (saving the scene did not save their source images).
 
@@ -234,7 +234,7 @@ Controlled two-island 4K U16 seam benchmark (four surface samples per frame, CPU
 The 24 MP RGB selection microbenchmark compares the original parallel processing of all tiles with skipping zero-coverage tiles: 275.62 ms versus 9.36 ms in the optimized test profile, for Invert through a 32×32 selection, with pixel equality checked. The standalone release example `uv_selected_adjustment_bench` runs actual Levels commands plus history on a 6000×4000 document: warm p50 9.34 ms (8-bit), 11.97 ms (16-bit), 10.03 ms (32f), excluding canvas refresh. No user assets are opened by these benchmarks; build/temp/perf output uses the D-drive build tree.
 
 
-### Project containers and isolated 3D documents (2026-10-22)
+## Project containers and isolated 3D documents (2026-10-22)
 
 `.pcuv` is the project save destination. The archive embeds model geometry, editable native texture documents with layers/masks/depth/profiles, material bindings, original export paths, visibility, UV selection/margins, camera/PBR and 2D-view settings. New saves also embed the original HDR/EXR panorama and image-library sources. Source images and the panorama are not needed to reopen a saved container; the original FBX/OBJ is needed only for a later ReImport. Old version-1 archives still load.
 
@@ -242,7 +242,7 @@ In the 3D workspace, Ctrl+S saves the container in place, choosing its path only
 
 The Images tab beside 3D / UV accepts multiple OS file drops or a native file picker after importing a model. It caches a small original-image preview once. Drag a preview into Layers (or double-click it / choose Add to layers) to create a native editable raster layer, centred and fitted using PhotoCraft's placement preferences; Undo removes the placement. Removing a shelf source does not remove layers already placed from it. The library is embedded in the container, capped at 256 images / 512 MiB, with a 256 MiB per-source input limit. No extracted project images or thumbnails are written to a temporary directory.
 
-### Historical Windows package for PhotoCraft 0.14.0 (2026-10-23)
+## Historical Windows package for PhotoCraft 0.14.0 (2026-10-23)
 
 The following notes describe a legacy package built for upstream `v0.14.0` (`ff4738810134d7f7e68b49f2e4f231b686282ff3`). They are historical and do not describe a Windows package supplied by this PR. The current source baseline is PhotoCraft `v0.18.0`; build the optional workspace from source with `cargo build -p photocraft --features uv-workbench`.
 
@@ -250,7 +250,7 @@ The old Windows x64 package replaced the main executable with a tested build for
 
 An official launcher update could replace the main executable. Reapplying the old package was supported only for the identical official release. Updating to another release required porting and testing a new package; it was not an arbitrary-version binary plug-in. The upstream WASM plug-in ABI supports image filters, not a native 3D viewport or shell integration.
 
-### English package and workspace language (2026-10-23)
+## English package and workspace language (2026-10-23)
 
 The 3D/UV workspace follows PhotoCraft's interface language. English and Russian cover its controls, tooltips, navigation, environment settings, image shelf, project prompts and status messages. Other languages retain their existing native PhotoCraft translations and use explicit English fallbacks for extension strings that have no translation. English can be selected in Edit > Preferences > Interface > Language. Switching languages does not alter scene or texture data.
 
@@ -260,13 +260,13 @@ Leaving the 3D workspace parks its documents and restores the ordinary workspace
 
 The native Channels/layer-mask display is projected onto affected 3D materials, including grayscale mask solo, rubylith overlays, live brush previews and undo. The GPU uses a per-material unlit mask display and bypasses opacity cutouts for it; other materials retain their normal lighting. This view does not overwrite source texture maps. Layer-mask display revisions are tracked as view changes, so changing mask visibility alone does not mark a map for export.
 
-### Imported asset paths and external writeback
+## Imported asset paths and external writeback
 
 Model-provided texture and MTL references resolve only to regular files inside the model directory (including its subdirectories). Absolute exporter paths can relink to a matching local filename; paths and symlinks escaping the directory are not opened automatically. Missing maps can still be assigned explicitly through the texture picker.
 
 A loaded container preserves external texture paths and all embedded edits, but Export Textures refuses writeback outside the container directory until that document is explicitly rebound using the material controls. This trust is not inherited from container metadata. Explicitly opened textures remain supported.
 
-### Editable mask effects and local preview
+## Editable mask effects and local preview
 
 Mask Paint, image/constant Fill and Levels effects are preserved in native `.pcraft`
 documents embedded in `.pcuv`, including order, opacity, source pixels, Fill bounds,
@@ -295,10 +295,10 @@ side. The manipulator reads the latest pointer transform every UI frame independ
 the image's sampling rate. The opaque mask preview skips the full image composite it covers;
 other material views retain their previous image until the gesture ends. This changes display
 quality only; the gesture commits the original-resolution mask and source image without
-downsampling them. Rotated resize keeps the opposite handle anchored and the gesture can
+down-sampling them. Rotated resize keeps the opposite handle anchored and the gesture can
 finish outside the canvas or after a missing pointer-release event.
 
-### Wireframe, polygon selection and mask Levels
+## Wireframe, polygon selection and mask Levels
 
 The viewport can overlay the imported polygon wireframe with adjustable color and
 opacity. The shell tool can target UV shells or individual polygons. Polygon
