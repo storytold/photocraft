@@ -10,8 +10,13 @@ use super::{PhotocraftApp, Stroke, Tokens, icons, pos2};
 /// The panels and the canvas in the space left by the menus, bars and toolbar: craft-ui's
 /// docking layout, with the icon rail at the window's end edge in the Studio themes.
 pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if let Err(error) = crate::panel_docking::compat::initialize(app) {
+        app.ui.panel_presentation.migrated = true;
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
     let t = Tokens::get(ui.ctx());
-    if app.ui.panels.rail && !t.pro {
+    if app.ui.panels.rail && !app.ui.panel_presentation.migrated && !t.pro {
         rail(app, ui, &t);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui));
@@ -24,7 +29,7 @@ pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub(crate) fn canvas_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let backdrop = if app.ui.view.hides_chrome() { egui::Color32::BLACK } else { crate::prefs_ui::pasteboard_color(app).unwrap_or(t.canvas) };
-    if app.ui.panels.rail && t.pro {
+    if app.ui.panels.rail && !app.ui.panel_presentation.migrated && t.pro {
         rail(app, ui, &t);
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| crate::canvas::document_area(app, ui));

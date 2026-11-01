@@ -10,6 +10,7 @@ next to them.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `vendor/craft-ui/` | Shared UI source snapshot and local docking API patch | craft-libs contributors; local repair @KotovGGG | [craft-libs c5a1cbf](https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/crates/ui) | MIT OR Apache-2.0; licenses in the snapshot |
 | `crates/codecs/src/codecs/xpm/x11_colors.rs` | X11 `rgb.txt` color-name lookup table (normalized X.Org RGB values) | X.Org Foundation and X11 contributors | <https://cgit.freedesktop.org/xorg/app/rgb/tree/rgb.txt> | MIT (X.Org app/rgb) |
 | `crates/ui-egui/src/i18n/el.tsv` | Greek UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
 | `crates/ui-egui/src/i18n/de.tsv` | German UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
@@ -93,6 +94,7 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `docs/images/panel-repair/*.png`, `docs/images/panel-repair/*.gif` | Panel docking regression screenshots and gesture recordings | @KotovGGG | Contributor captures and local offscreen regression replay; synthetic blank documents only, no personal artwork or photos | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
@@ -118,9 +120,15 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
-## Test data (not committed, not shipped)
+## Committed test fixtures (not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/ui-egui/tests/fixtures/panel-repair-workspace.json` | Panel-only workspace regression fixture | @KotovGGG | Sanitized panel audit snapshot, 2026-10-29 | MIT OR Apache-2.0; adjacent `panel-repair-workspace.LICENSE` |
+
+## Test data (not shipped)
+
+`corpus/` is gitignored. Committed test fixtures are listed in the table above.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

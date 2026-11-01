@@ -15,8 +15,14 @@
 use std::fmt::Write as _;
 
 use serde_json::Value;
+#[path = "build/panel_contract.rs"]
+mod panel_contract;
 
 fn main() {
+    if let Err(error) = panel_contract::check(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")) {
+        println!("cargo::error={error}");
+        return;
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| serde_json::from_str::<Value>(t).map_err(|e| e.to_string()))
         .unwrap_or(Value::Null);
