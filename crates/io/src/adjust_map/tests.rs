@@ -733,6 +733,31 @@ fn malformed_vibrance_sliders_parse_as_unsupported() {
     let ok = photoshop_vib(&[("vibrance", Value::Double(250.0)), ("Strt", Value::UnitFloat { unit: *b"#Prc", value: -12.0 })]);
     assert_eq!(parse(b"vibA", &ok, None, Channels::Rgb), Adjustment::Vibrance { vibrance: 100.0, saturation: -12.0 });
     assert_eq!(parse(b"vibA", &photoshop_vib(&[]), None, Channels::Rgb), Adjustment::Vibrance { vibrance: 0.0, saturation: 0.0 });
+    // A finite double too large for f32 is clamped like any other out-of-range number, not
+    // narrowed to infinity and refused.
+    let huge = photoshop_vib(&[("vibrance", Value::Double(1e39)), ("Strt", Value::Double(-1e300))]);
+    assert_eq!(parse(b"vibA", &huge, None, Channels::Rgb), Adjustment::Vibrance { vibrance: 100.0, saturation: -100.0 });
+}
+
+/// A slider stored twice (no writer does) reads as its first copy, and an edit leaves exactly one
+/// copy holding the new value, so the second can't come back on reopening.
+#[test]
+fn duplicate_vibrance_sliders_keep_one_copy_after_an_edit() {
+    let twice = photoshop_vib(&[
+        ("useLegacy", Value::Boolean(false)),
+        ("vibrance", Value::Integer(28)),
+        ("Strt", Value::Integer(-7)),
+        ("vibrance", Value::Integer(50)),
+    ]);
+    assert_eq!(parse(b"vibA", &twice, None, Channels::Rgb), Adjustment::Vibrance { vibrance: 28.0, saturation: -7.0 });
+    for v in [0.0, 33.0] {
+        let target = Adjustment::Vibrance { vibrance: v, saturation: -7.0 };
+        let mut data = twice.clone();
+        assert!(retarget_vibrance(&mut data, &target));
+        assert_eq!(parse(b"vibA", &data, None, Channels::Rgb), target, "vibrance {v}");
+        let copies = vib_keys(&data).iter().filter(|(k, _)| k == "vibrance").count();
+        assert_eq!(copies, usize::from(v != 0.0), "vibrance {v}: one copy, none when 0");
+    }
 }
 
 /// The `vibA` reader takes file bytes: lengths and counts that claim more than the block holds
@@ -766,11 +791,13 @@ fn newer_vibrance_method_is_an_explicit_use_legacy_false() {
     assert!(!is_newer_vibrance(&with(None)));
     assert!(!is_newer_vibrance(&with(Some(Value::Integer(0)))), "a non-boolean switch is not read as one");
     assert!(!is_newer_vibrance(&write(&Adjustment::Vibrance { vibrance: 10.0, saturation: 5.0 })[0].1), "PhotoCraft writes the legacy method");
+    // Every prefix short of the whole descriptor is unreadable, so not the newer method; the
+    // whole descriptor is, with or without the padding after it.
     let newer = with(Some(Value::Boolean(false)));
-    for n in 0..newer.len() {
-        let _ = is_newer_vibrance(&newer[..n]);
+    let (_, full) = VersionedDescriptor::parse_prefix(&newer).unwrap();
+    for n in 0..=newer.len() {
+        assert_eq!(is_newer_vibrance(&newer[..n]), n >= full, "{n} of {} bytes", newer.len());
     }
-    assert!(!is_newer_vibrance(&[]));
     assert!(newer_vibrance_warning("Vibrance 1").starts_with("layer \"Vibrance 1\": its Vibrance uses Photoshop's newer method"));
 }
 

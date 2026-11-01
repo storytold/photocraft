@@ -88,10 +88,16 @@ fn parse_curves(d: &[u8]) -> Option<Adjustment> {
 }
 
 fn desc_num(d: &Descriptor, key: &str) -> Option<f32> {
+    desc_f64(d, key).map(|v| v as f32)
+}
+
+/// [`desc_num`] before narrowing, for callers that clamp first (a finite double past `f32::MAX`
+/// would narrow to infinity).
+fn desc_f64(d: &Descriptor, key: &str) -> Option<f64> {
     match d.get(key)? {
-        Value::Integer(v) => Some(*v as f32),
-        Value::Double(v) => Some(*v as f32),
-        Value::UnitFloat { value, .. } => Some(*value as f32),
+        Value::Integer(v) => Some(f64::from(*v)),
+        Value::Double(v) => Some(*v),
+        Value::UnitFloat { value, .. } => Some(*value),
         _ => None,
     }
 }
@@ -363,6 +369,9 @@ pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool
     let sliders = [("vibrance", *vibrance), ("Strt", *saturation)];
     for (i, (key, value)) in sliders.iter().enumerate() {
         let value = i32::from(clamp_i16(value.clamp(-100.0, 100.0)));
+        // A slider stored twice (no writer does) keeps only its first copy, the one read back.
+        let mut seen = false;
+        desc.items.retain(|(k, _)| !k.is(key) || !std::mem::replace(&mut seen, true));
         let at = desc.items.iter().position(|(k, _)| k.is(key));
         match (at, value) {
             (Some(at), 0) => {
@@ -588,7 +597,7 @@ fn parse_vibrance(d: &[u8]) -> Option<Adjustment> {
     let desc = versioned(d)?;
     let get = |k: &str| match desc.get(k) {
         None => Some(0.0),
-        Some(_) => desc_num(&desc, k).filter(|v| v.is_finite()).map(|v| v.clamp(-100.0, 100.0)),
+        Some(_) => desc_f64(&desc, k).filter(|v| v.is_finite()).map(|v| v.clamp(-100.0, 100.0) as f32),
     };
     Some(Adjustment::Vibrance { vibrance: get("vibrance")?, saturation: get("Strt")? })
 }

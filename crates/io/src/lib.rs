@@ -181,7 +181,7 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
             }
         }
         if matches!(l.content, LayerContent::Adjustment(Adjustment::Vibrance { .. }))
-            && l.psd_blocks.iter().any(|(k, d)| k == b"vibA" && adjust_map::is_newer_vibrance(d))
+            && l.psd_blocks.iter().find(|(k, _)| k == b"vibA").is_some_and(|(_, d)| adjust_map::is_newer_vibrance(d))
         {
             out.push(adjust_map::newer_vibrance_warning(&l.name));
         }

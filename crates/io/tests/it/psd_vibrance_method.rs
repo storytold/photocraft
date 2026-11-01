@@ -157,3 +157,52 @@ fn malformed_vibrance_sliders_stay_unsupported() {
         }
     }
 }
+
+/// Levels data (version 2, four identity records), as a stale block another adjustment left.
+fn levels_block() -> Vec<u8> {
+    let mut b = vec![0, 2];
+    for _ in 0..4 {
+        for v in [0u16, 255, 0, 255, 100] {
+            b.extend_from_slice(&v.to_be_bytes());
+        }
+    }
+    b
+}
+
+/// A layer whose file blocks hold a stale adjustment of another kind beside its `vibA` (the
+/// importer reads the first adjustment key in its order, `levl` before `vibA`): an edited Vibrance
+/// is written as the layer's only adjustment, so it reopens as the Vibrance edit, not as Levels.
+#[test]
+fn edited_vibrance_drops_stale_adjustment_blocks() {
+    let modern = photoshop_vib(&[("useLegacy", Value::Boolean(false)), ("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7))]);
+    let mut doc = Document::new("v", Size::new(6, 4), ColorMode::Rgb, SampleType::U8);
+    let fmt = doc.pixel_format();
+    doc.layers.push(raster("Background", fmt, doc.bounds(), 3, false));
+    let mut layer = Layer::new("Vibrance 1", LayerContent::Adjustment(Adjustment::Vibrance { vibrance: 29.0, saturation: -7.0 }));
+    layer.psd_blocks = vec![(*b"levl", std::sync::Arc::new(levels_block())), (*b"vibA", std::sync::Arc::new(modern))];
+    doc.layers.push(layer);
+    let saved = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let f = PsdFile::from_bytes(&saved).unwrap();
+    let blocks: Vec<String> = f.layers()[1].blocks.iter().map(|b| String::from_utf8_lossy(&b.key).into_owned()).collect();
+    assert!(!blocks.iter().any(|k| k == "levl"), "stale Levels block written beside the edited Vibrance: {blocks:?}");
+    let d = saved_vib(&saved);
+    assert_eq!(d.get("useLegacy"), Some(&Value::Boolean(false)));
+    let reopened = import("x.psd", &saved).unwrap().document;
+    assert_eq!(reopened.layers[1].content, LayerContent::Adjustment(Adjustment::Vibrance { vibrance: 29.0, saturation: -7.0 }));
+}
+
+/// The open note follows the `vibA` block the layer is read from, the first one, not any later
+/// copy a malformed file might carry.
+#[test]
+fn open_note_follows_the_first_vibrance_block() {
+    let newer = photoshop_vib(&[("useLegacy", Value::Boolean(false)), ("vibrance", Value::Integer(28))]);
+    let legacy = photoshop_vib(&[("vibrance", Value::Integer(28))]);
+    for (first, second, notes) in [(legacy.clone(), newer.clone(), 0), (newer, legacy, 1)] {
+        let mut doc = Document::new("v", Size::new(6, 4), ColorMode::Rgb, SampleType::U8);
+        let mut layer = Layer::new("Vibrance 1", LayerContent::Adjustment(Adjustment::Vibrance { vibrance: 28.0, saturation: 0.0 }));
+        layer.psd_blocks = vec![(*b"vibA", std::sync::Arc::new(first)), (*b"vibA", std::sync::Arc::new(second))];
+        doc.layers.push(layer);
+        let warnings = open_warnings(&doc);
+        assert_eq!(warnings.iter().filter(|w| w.contains("newer method")).count(), notes, "{warnings:?}");
+    }
+}

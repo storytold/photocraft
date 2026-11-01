@@ -175,6 +175,21 @@ fn q255(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// Points a layer's own `vibA` block at an edited Vibrance `a` ([`adjust_map::retarget_vibrance`])
+/// and makes it the layer's only adjustment block: the importer reads the first adjustment key it
+/// knows, so a stale block of another kind (or a second `vibA`) would come back instead of the
+/// edit. `false`, with `raw` untouched, when no `vibA` block can be edited.
+fn retarget_vibrance_block(raw: &mut Vec<([u8; 4], Vec<u8>)>, a: &photocraft_doc::Adjustment) -> bool {
+    let Some(at) = raw.iter_mut().position(|(k, d)| k == b"vibA" && adjust_map::retarget_vibrance(d, a)) else { return false };
+    let mut i = 0;
+    raw.retain(|(k, _)| {
+        let kept = i == at || (!adjust_map::ADJUSTMENT_KEYS.contains(&k) && k != b"CgEd");
+        i += 1;
+        kept
+    });
+    true
+}
+
 impl Ex {
     fn compression(&self) -> Compression {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
@@ -469,9 +484,7 @@ impl Ex {
                 // An edited Vibrance keeps the file's own descriptor with its sliders updated, so
                 // Photoshop's method switch (`useLegacy`), temperature and tint survive instead of
                 // the layer reopening with the legacy method (#8838).
-                let keep = keep
-                    || (matches!(a, photocraft_doc::Adjustment::Vibrance { .. })
-                        && raw.iter_mut().any(|(k, d)| k == b"vibA" && adjust_map::retarget_vibrance(d, a)));
+                let keep = keep || (matches!(a, photocraft_doc::Adjustment::Vibrance { .. }) && retarget_vibrance_block(&mut raw, a));
                 // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
                 // never written a second time beside a stale copy.
                 let own = match a {
