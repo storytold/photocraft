@@ -954,6 +954,13 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
         ("filter.noise.dustAndScratches", json!({"radius": 4.0, "threshold": 0.0})),
         ("filter.noise.reduceNoise", json!({})),
         ("filter.other.custom", json!({"kernel": edge})),
+        // #10474: Minimum and Maximum work on whole-pixel radii (`round()` / `floor()`), so at
+        // k = 4 a typed 1.5 px radius previews as 0.375 px = 0 px: the proxy shows the untouched
+        // document while OK writes a real 1.5 / 1 px effect. Same failure mode as Dust & Scratches.
+        ("filter.other.minimum", json!({"radius": 1.5, "preserve": "squareness"})),
+        ("filter.other.minimum", json!({"radius": 1.5, "preserve": "roundness"})),
+        ("filter.other.maximum", json!({"radius": 1.5, "preserve": "squareness"})),
+        ("filter.other.maximum", json!({"radius": 1.5, "preserve": "roundness"})),
         ("filter.video.deInterlace", json!({})),
         ("filter.stylize.traceContour", json!({})),
         ("filter.stylize.wind", json!({"method": "blast"})),
