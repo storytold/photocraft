@@ -41,7 +41,14 @@ pub fn content_bounds(s: &Surface) -> Rect {
     }
     let fmt = s.format();
     let mut dp = vec![0u8; fmt.bytes_per_pixel()];
-    photocraft_raster::encode_pixel(&fmt, &s.default_pixel(), &mut dp);
+    let default = s.default_pixel();
+    photocraft_raster::encode_pixel(&fmt, &default, &mut dp);
+    // As in `Surface::content_bounds`: a clear pixel's colour is not content, so a surface that
+    // has an alpha channel and defaults to transparent measures by its alpha.
+    let sample = fmt.sample;
+    let alpha_at = fmt.mode.color_channels() * sample.bytes();
+    let by_alpha = fmt.alpha && default.get(fmt.mode.color_channels()).is_some_and(|&alpha| alpha == 0.0);
+    let bpp = fmt.bytes_per_pixel();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if c.entries.len() > c.sweep_at {
         c.entries.retain(|_, e| e.tile.strong_count() > 0);
@@ -54,7 +61,7 @@ pub fn content_bounds(s: &Surface) -> Rect {
         let b = match hit {
             Some(b) => b,
             None => {
-                let b = t.content_bounds(&dp);
+                let b = if by_alpha { t.alpha_bounds(alpha_at, bpp, sample) } else { t.content_bounds(&dp) };
                 c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
                 b
             }
@@ -87,5 +94,16 @@ mod tests {
         s.fill_rect(Rect::new(-300, 10, 1300, 900), &[0.2, 0.4, 0.6, 1.0]);
         assert_eq!(content_bounds(&s), Rect::new(-300, 10, 1300, 900));
         assert_eq!(content_bounds(&s), s.content_bounds(), "cached");
+    }
+
+    #[test]
+    fn a_clear_pixels_colour_is_not_content_here_either() {
+        // The cached path measures by alpha like `Surface::content_bounds`, so the transform box
+        // and the layer listing agree on a file whose clear pixels hold white.
+        let mut s = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 300, 300), &[1.0, 1.0, 1.0, 0.0]);
+        s.fill_rect(Rect::new(70, 41, 270, 241), &[0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(content_bounds(&s), Rect::new(70, 41, 270, 241));
+        assert_eq!(content_bounds(&s), s.content_bounds(), "cached and surface agree");
     }
 }
