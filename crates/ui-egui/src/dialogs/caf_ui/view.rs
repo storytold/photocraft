@@ -175,7 +175,7 @@ fn caf_props_panel(
     egui::CollapsingHeader::new(tl!("Sampling Area Overlay")).id_salt("caf-overlay").default_open(false).show(ui, |ui| {
         widgets::checkbox(ui, &mut w.opts.show_overlay, tl!("Show Sampling Area"));
         widgets::slider_row(ui, tl!("Opacity"), &mut w.opts.opacity, 0.0..=100.0, "%", None);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("Color"));
             widgets::color_edit_button_srgb(ui, &mut w.opts.color, &crate::color_picker_ui::title_for(tl!("Sampling Area Overlay")));
             ui.add_space(8.0);
@@ -191,7 +191,7 @@ fn caf_props_panel(
         });
     });
     widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         widgets::section_label(ui, tl!("Sampling Area Options"));
         ui.with_layout(crate::text::direction::trailing(), |ui| {
             if crate::icons::button(ui, "undo-2", 22.0, false, tl!("Reset")).clicked() {
@@ -263,7 +263,11 @@ fn caf_preview_panel(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, w: 
     painter.line_segment([sep_top, sep_bottom], Stroke::new(1.0, t.separator));
     let (title_pos, title_align) =
         if rtl { (pv_rect.right_top() + vec2(-12.0, 10.0), Align2::RIGHT_TOP) } else { (pv_rect.left_top() + vec2(12.0, 10.0), Align2::LEFT_TOP) };
-    painter.text(title_pos, title_align, tl!("Preview"), FontId::proportional(12.0), t.text);
+    let mut title_job = egui::text::LayoutJob::simple_singleline(tl!("Preview").to_string(), FontId::proportional(12.0), t.text);
+    title_job.direction = crate::text::direction::text_direction();
+    let galley = painter.layout_job(title_job);
+    let trect = title_align.anchor_size(title_pos, galley.size());
+    painter.galley(trect.min, galley, t.text);
     let pv_area = preview_area(pv_rect);
     painter.rect_filled(pv_area, 0.0, t.canvas);
     if w.preview.zoom <= 0.0 {
@@ -344,13 +348,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.rect_filled(p.title, 0.0, t.dock);
         painter.line_segment([p.title.left_bottom(), p.title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if w.zoom > 0.0 { w.zoom * 100.0 } else { 100.0 };
-        painter.text(
-            p.title.center(),
-            Align2::CENTER_CENTER,
+        let mut job = egui::text::LayoutJob::simple_singleline(
             format!("{} ({}, {:.0}%)", tl!("Content-Aware Fill…").trim_end_matches('…'), w.layer_name, pct),
             FontId::proportional(13.0),
             t.text,
         );
+        job.direction = crate::text::direction::text_direction();
+        let galley = painter.layout_job(job);
+        let trect = Align2::CENTER_CENTER.anchor_size(p.title.center(), galley.size());
+        painter.galley(trect.min, galley, t.text);
         // Options bar.
         painter.rect_filled(p.bar, 0.0, t.dock);
         painter.line_segment([p.bar.left_bottom(), p.bar.right_bottom()], Stroke::new(1.0, t.separator));
@@ -528,6 +534,29 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
+
+    /// The sampling row reads in reading order: the Color label hugs the reading-start edge of
+    /// the row, so it sits on the left in LTR and on the right in RTL.
+    #[test]
+    fn sampling_row_mirrors_item_order_in_rtl() {
+        use crate::direction::{Dir, direction_scope};
+        fn label_x(dir: Dir) -> f32 {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    let r = ui.label("Color");
+                    ui.label("Indicates");
+                    r.rect.left()
+                })
+                .inner
+            })
+            .inner
+        }
+        let ltr = label_x(Dir::Ltr);
+        let rtl = label_x(Dir::Rtl);
+        assert!(ltr < rtl, "LTR label at left edge ({ltr}), RTL label mirrored right ({rtl})");
+    }
 
     /// A layer with a selection, so the workspace opens.
     fn app_with_selection() -> PhotocraftApp {
