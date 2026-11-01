@@ -136,7 +136,11 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) -> u64 {
     let section = if SECTIONS.iter().any(|(id, _)| *id == section) { section } else { "general" };
     let working = preference_values(app.session.prefs());
     let order = field_order(app.session.prefs(), &working);
-    open_kind(app, "prefs", "Preferences", json!({"section": section, "values": working, "__order": order}))
+    let id = open_kind(app, "prefs", "Preferences", json!({"section": section, "values": working, "__order": order}));
+    if let Some(dialog) = app.ui.dialog_mut(id) {
+        dialog.fields.insert("__prefsDialogId".into(), json!(id));
+    }
+    id
 }
 
 /// Each section's keys in declaration order (JSON objects sort their keys; the serialised text
