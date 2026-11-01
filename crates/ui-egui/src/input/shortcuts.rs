@@ -863,8 +863,14 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Tools › Use Shift Key for Tool Switch, only ⇧+key cycles and the plain key keeps the
     // group's current tool. From another group, the key picks the group's last-used tool.
     // A held tool letter is a spring-loaded tool (#2672), not a burst of presses: its key
-    // repeats are dropped rather than cycling the group.
-    let assigned: Vec<Key> = Tool::ALL.iter().filter_map(|t| crate::tool_shortcuts::plain_key(app, *t)).collect();
+    // repeats are dropped rather than cycling the group. A key a focused widget keeps (a tool given
+    // an arrow key) keeps its repeats too.
+    let focus = crate::shortcut_dispatch::Focus::of(ctx);
+    let assigned: Vec<Key> = Tool::ALL
+        .iter()
+        .filter_map(|t| crate::tool_shortcuts::plain_key(app, *t))
+        .filter(|k| focus.allows(&KeyboardShortcut::new(Modifiers::NONE, *k)))
+        .collect();
     ctx.input_mut(|i| {
         i.events.retain(
             |e| !matches!(e, egui::Event::Key { key, pressed: true, repeat: true, .. } if crate::spring_tools::is_tool_key(*key) || assigned.contains(key)),

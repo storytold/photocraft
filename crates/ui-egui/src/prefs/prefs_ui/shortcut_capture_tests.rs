@@ -577,3 +577,95 @@ fn a_tools_plain_alternate_is_no_shared_key() {
     assert_eq!(crate::shortcuts::effective_alternates(app, "tools.select.move"), ["B"]);
     assert_eq!(crate::tool_shortcuts::shortcut(app, crate::state::Tool::Brush), None, "the Brush lost B to the alternate");
 }
+
+/// Two tools given one key take turns: the first press picks the first of them, each press after
+/// it the next, and round again. With Use Shift Key for Tool Switch the plain key keeps the tool
+/// (Shift cycling: `tools_sharing_a_changed_key_cycle_with_shift`).
+#[test]
+fn two_tools_sharing_a_key_take_turns() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "F6", "tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::Zoom;
+    let mut seen = vec![];
+    for _ in 0..3 {
+        tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+        seen.push(app.ui.tool);
+    }
+    assert_eq!(seen, [Tool::Move, Tool::Hand, Tool::Move]);
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Move, "with the Shift preference the plain key keeps the tool");
+}
+
+/// A tool given a command's key (Q, Edit in Quick Mask Mode) is warned about like any clash, and
+/// OK takes the key from the command: commands don't share keys, only tools do.
+#[test]
+fn a_tool_given_a_commands_key_warns_and_takes_it() {
+    let (mut h, id) = dialog(1.0, "tools.select.move", "Move Tool");
+    capture_key(&mut h, id, Key::Q, Modifiers::NONE);
+    assert_eq!(field(&h, id, "messageWarning"), json!(true), "{}", field(&h, id, "message"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert_eq!(crate::shortcuts::effective_shortcut(app, "select.editInQuickMaskMode", Some("Q")).as_deref(), None, "Quick Mask lost Q");
+    app.ui.tool = crate::state::Tool::Zoom;
+    tap(app, &egui::Context::default(), Key::Q, Modifiers::NONE);
+    assert_eq!(app.ui.tool, crate::state::Tool::Move);
+}
+
+/// Typing in a text field switches no tool, even a key that tools share: the letters are the
+/// text's.
+#[test]
+fn typing_in_a_text_field_switches_no_tool() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "B"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let mut text = String::new();
+    let mut field = |ctx: &egui::Context| egui::Area::new(egui::Id::unique("type-test")).show(ctx, |ui| ui.text_edit_singleline(&mut text)).inner;
+    ctx.begin_pass(egui::RawInput::default());
+    field(&ctx).request_focus();
+    ctx.end_pass().textures_delta.clear();
+    for (key, shift) in [(Key::B, false), (Key::B, true), (Key::V, false)] {
+        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        let k = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        let typed = if shift { key.name().to_string() } else { key.name().to_lowercase() };
+        ctx.begin_pass(egui::RawInput { events: vec![Event::ModifiersChanged(modifiers), k(true), Event::Text(typed), k(false)], ..Default::default() });
+        field(&ctx);
+        assert_eq!(crate::shortcut_dispatch::Focus::of(&ctx), crate::shortcut_dispatch::Focus::Text);
+        crate::shortcuts::handle(&mut app, &ctx);
+        ctx.end_pass().textures_delta.clear();
+    }
+    assert_eq!(app.ui.tool, Tool::Zoom, "no tool switched");
+    assert_eq!(text, "bBv");
+}
+
+/// A key a focused widget keeps keeps its repeats too: with a tool given ←, holding ← in a focused
+/// widget still repeats there (the tool keys drop only their own repeats).
+#[test]
+fn a_focused_widget_keeps_the_repeats_of_a_key_a_tool_was_given() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Left"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let button = |ctx: &egui::Context| egui::Area::new(egui::Id::unique("repeat-test")).show(ctx, |ui| ui.button("Focused")).inner;
+    ctx.begin_pass(egui::RawInput::default());
+    button(&ctx).request_focus();
+    ctx.end_pass().textures_delta.clear();
+    // ← pressed, then held: egui counts a repeat only for a key already down.
+    for repeat in [false, true] {
+        let left = Event::Key { key: Key::ArrowLeft, physical_key: None, pressed: true, repeat, modifiers: Modifiers::NONE };
+        ctx.begin_pass(egui::RawInput { events: vec![left.clone()], ..Default::default() });
+        button(&ctx);
+        assert_eq!(crate::shortcut_dispatch::Focus::of(&ctx), crate::shortcut_dispatch::Focus::Widget);
+        crate::shortcuts::handle(&mut app, &ctx);
+        assert!(ctx.input(|i| i.events.contains(&left)), "the widget's ← is still there (repeat: {repeat})");
+        ctx.end_pass().textures_delta.clear();
+    }
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}
