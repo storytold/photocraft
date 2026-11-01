@@ -252,6 +252,25 @@ fn add_recent(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"recent":s.presets.recent_documents}))
 }
 
+/// Take one entry (by its position in `document.recent.list`, newest first) off the Recent list.
+fn remove_recent(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.recent.remove";
+    let index = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "index must be a whole number"))?;
+    let index = usize::try_from(index).ok().filter(|i| *i < s.presets.recent_documents.len()).ok_or_else(|| bad(CMD, "No such recent document"))?;
+    s.presets.recent_documents.remove(index);
+    s.presets_changed();
+    Ok(json!({"recent":s.presets.recent_documents}))
+}
+
+/// Empty the Recent list. Saved presets are not touched.
+fn clear_recent(s: &mut Session, _: &Value) -> Result<Value> {
+    if !s.presets.recent_documents.is_empty() {
+        s.presets.recent_documents.clear();
+        s.presets_changed();
+    }
+    Ok(json!({"recent":[]}))
+}
+
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.presets.save";
     let name = checked_name(req_str(p, "name", CMD)?).map_err(|e| bad(CMD, e))?;
@@ -346,6 +365,26 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: always,
             run: add_recent,
             // Bookkeeping for File › New, not an editing step an action should replay.
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.recent.remove",
+            label: "Remove Recent Document Settings",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"index":int (position in document.recent.list, newest first)} -> {recent}"#,
+            enabled: always,
+            run: remove_recent,
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.recent.clear",
+            label: "Clear Recent Document Settings",
+            menu: &[],
+            shortcut: None,
+            params: "{} -> {recent:[]} (saved presets are kept)",
+            enabled: always,
+            run: clear_recent,
             journal: false,
         },
     ]
@@ -571,6 +610,36 @@ mod tests {
         next.load_prefs_json(&value.to_string()).unwrap();
         assert_eq!(next.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 24]);
         assert!(next.documents().is_empty(), "recording never creates a document");
+    }
+
+    #[test]
+    fn recent_entries_can_be_removed_one_at_a_time_or_cleared_and_stay_gone_after_reload() {
+        let mut s = Session::new();
+        for w in [11, 12, 13] {
+            s.execute("document.recent.add", json!({"settings":{"width":w,"height":10}})).unwrap();
+        }
+        s.execute("document.presets.save", json!({"name":"Kept","settings":settings()})).unwrap();
+        let widths = |s: &Session| s.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>();
+        // Newest first: index 1 is the 12 px document.
+        let r = s.execute("document.recent.remove", json!({"index":1})).unwrap();
+        assert_eq!(r["recent"].as_array().map(Vec::len), Some(2));
+        let mut s = reload(&s);
+        assert_eq!(widths(&s), [13, 11]);
+        // Bad indices change nothing.
+        let rev = s.prefs.rev();
+        for bad in [json!({}), json!({"index":2}), json!({"index":-1}), json!({"index":"0"}), json!({"index":u64::MAX}), Value::Null] {
+            assert!(s.execute("document.recent.remove", bad).is_err());
+        }
+        assert_eq!((widths(&s), s.prefs.rev()), (vec![13, 11], rev));
+        s.execute("document.recent.clear", json!({})).unwrap();
+        let mut s = reload(&s);
+        assert!(s.presets.recent_documents.is_empty());
+        assert_eq!(s.presets.documents.len(), 1, "saved presets are not part of Recent");
+        // Clearing an empty list is a no-op, not an error.
+        let rev = s.prefs.rev();
+        s.execute("document.recent.clear", json!({})).unwrap();
+        assert_eq!(s.prefs.rev(), rev);
+        assert!(s.documents().is_empty());
     }
 
     #[test]

@@ -902,4 +902,43 @@ mod dialog {
             );
         }
     }
+
+    fn recent_widths(h: &Harness<'static, PhotocraftApp>) -> Vec<u32> {
+        h.state().session.presets.recent_documents.iter().map(|r| r.width).collect()
+    }
+
+    /// Right-click on a card, as a user does.
+    fn right_click_at(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) {
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+    }
+
+    #[test]
+    fn recent_cards_can_be_deleted_or_cleared_from_their_context_menu() {
+        let mut h = harness();
+        for (w, hh) in [(590, 894), (928, 1232), (300, 200)] {
+            h.state_mut().run("document.recent.add", serde_json::json!({"settings": {"width": w, "height": hh}})).unwrap();
+        }
+        h.run_steps(2);
+        assert_eq!(recent_widths(&h), [300, 928, 590]);
+
+        let at = preset_title_at(&h, "928 x 1232 px @ 72 ppi");
+        right_click_at(&mut h, at);
+        h.get_by_label("Delete").click();
+        h.run_steps(3);
+        assert_eq!(recent_widths(&h), [300, 590]);
+
+        let at = preset_title_at(&h, "590 x 894 px @ 72 ppi");
+        right_click_at(&mut h, at);
+        h.get_by_label("Clear All").click();
+        h.run_steps(3);
+        assert!(recent_widths(&h).is_empty());
+        assert!(h.state().session.documents().is_empty(), "the menu never creates a document");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "the dialog stays open");
+    }
 }
