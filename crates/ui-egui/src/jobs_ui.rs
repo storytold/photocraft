@@ -256,10 +256,11 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
             }
         }
         JobOutcome::Failed(err) => app.place_failed(&place.name, &err),
-        JobOutcome::Cancelled => {
+        JobOutcome::Cancelled if app.session.documents().iter().any(|st| st.doc.id == place.doc) => {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled placing {name}"), &[("name", &place.name)]);
             app.ui.status_error = false;
         }
+        JobOutcome::Cancelled => {}
     }
     app.place_next_dropped(ctx);
 }
@@ -816,7 +817,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let Some(j) = app.session.active_job() else { return };
             // A save shows its progress in the tab and the status bar; so does a place, which
             // leaves the view free to zoom and pan while the file is decoded.
-            let place = app.jobs.place.as_ref().is_some_and(|p| p.job == j.id);
+            let place = place_uses_status_bar(&j.command, !app.ui.view.hides_chrome() && app.ui.panels.status_bar);
             if j.elapsed_ms < DIALOG_DELAY_MS || place || app.jobs.saves.iter().any(|s| s.job == j.id) {
                 return;
             }
@@ -968,3 +969,20 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 
 #[cfg(test)]
 mod tests;
+
+/// Placements keep the canvas accessible when progress and Cancel are visible in the status bar.
+fn place_uses_status_bar(command: &str, status_bar_visible: bool) -> bool {
+    status_bar_visible && matches!(command, "file.placeEmbedded" | "file.placeLinked")
+}
+
+#[cfg(test)]
+mod place_progress_tests {
+    #[test]
+    fn placement_modal_depends_on_command_and_visible_progress() {
+        for command in ["file.placeEmbedded", "file.placeLinked"] {
+            assert!(super::place_uses_status_bar(command, true));
+            assert!(!super::place_uses_status_bar(command, false));
+        }
+        assert!(!super::place_uses_status_bar("filter.blur", true));
+    }
+}
