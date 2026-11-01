@@ -97,7 +97,7 @@ impl Default for QuickMaskOptions {
 pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
-    let quick = st.doc.quick_mask.is_some();
+    let previous_target = st.channel_view.target;
     {
         let v = &mut st.channel_view;
         v.alpha_visible.truncate(n);
@@ -122,15 +122,12 @@ pub(crate) fn fix_view(st: &mut DocState) {
         }
     }
     crate::mask_view_cmds::fix(st);
-    // An alpha/spot eye, Quick Mask, or the active layer's mask can be the only thing on the
-    // canvas (so R, G and B can all be off). Otherwise the colour channels come back.
-    let active = st.active_layer;
-    let shown = {
-        let doc = &st.doc;
-        let v = &st.channel_view;
-        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
-    };
-    if st.channel_view.visible_colors(colors) == 0 && !shown {
+    // Undo/deletion can remove the only channel the user was viewing. A forced return to
+    // Composite must not leave an empty canvas; an intentional all-hidden view with a still-
+    // valid target, or another visible mask/channel, keeps its existing eyes.
+    let v = &st.channel_view;
+    let other_shown = (0..n).any(|i| v.alpha_shown(i)) || (st.doc.quick_mask.is_some() && !v.quick_mask_hidden) || v.shown_layer_mask(&st.doc).is_some();
+    if previous_target != v.target && v.visible_colors(colors) == 0 && !other_shown {
         st.channel_view.color_hidden.clear();
     }
 }

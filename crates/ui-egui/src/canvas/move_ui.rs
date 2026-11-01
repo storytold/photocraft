@@ -10,11 +10,12 @@
 use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, LayerId};
+use photocraft_engine::channel_cmds::ChannelTarget;
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::state::Tool;
+use crate::state::{Tool, TransformSession};
 
 /// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
 /// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
@@ -150,6 +151,132 @@ pub(crate) struct MovePreview {
     too_big: bool,
 }
 
+/// An immutable, reduced source for a Move drag on one colour channel. The per-frame offset
+/// changes only the affine shader's uniforms; the full-resolution edit still goes through
+/// `layer.translate` on release. `gpu: None` caches an unsupported source for this snapshot.
+pub(crate) struct MoveGpuPreview {
+    doc: DocId,
+    /// Eye changes bump the session revision without changing native pixels. Match the
+    /// document snapshot so those changes only rerun the shader, never upload the source.
+    snapshot: std::sync::Weak<Document>,
+    layer: LayerId,
+    channel: usize,
+    background: [f32; 4],
+    factor: u32,
+    bounds: Rect,
+    gpu: Option<crate::channel_transform_gpu::Preview>,
+    shown: bool,
+}
+
+/// Use the existing native-component shader for a Move drag when the captured RGB stack has
+/// a faithful GPU representation. Unsupported stacks, profiles and selections use the CPU.
+pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Option<u32>) -> Option<egui::TextureId> {
+    if app.session.active_index() != Some(idx) {
+        return None;
+    }
+    if crate::canvas::multiple_color_target(app) {
+        app.move_gpu_preview = None;
+        return None;
+    }
+    let Some(offset) = drag_offset(app) else {
+        app.move_gpu_preview = None;
+        return None;
+    };
+    // A single GPU texture is shared by document windows. A window on another output can
+    // require a different display encoding; let its CPU preview own that conversion.
+    if output != app.session.color.main_display {
+        return None;
+    }
+    if let Some(p) = app.move_gpu_preview.as_mut() {
+        p.shown = false;
+    }
+    if offset == (0, 0) || app.ui.transform.is_some() || app.session.prefs().interface.show_bounding_box_when_dragging_layer || app.layer_mask_targeted() {
+        return None;
+    }
+    let st = app.session.documents().get(idx)?;
+    let ChannelTarget::Color(channel) = st.channel_view.target else { return None };
+    let layer = st.active_layer?;
+    if st.doc.selection.is_some() || photocraft_engine::float_cmds::floating(st).is_some() {
+        return None;
+    }
+    let (doc, view) = (st.doc.clone(), st.channel_view.clone());
+    let background = app.session.tools.background;
+    let factor = if photocraft_compose::proxy::proxy_faithful(&doc) { crate::proxy::preview_factor(&doc, crate::proxy::reduced_previews(app)) } else { 1 };
+    let (display, _) = crate::canvas::canvas_display(app, &doc, output);
+    let fast_view = display.as_ref().is_none_or(|d| d.transform.is_none())
+        && view.shown_layer_mask(&doc).is_none()
+        && (0..doc.channels.len()).all(|i| !view.alpha_shown(i))
+        && (doc.quick_mask.is_none() || view.quick_mask_hidden);
+    if !fast_view {
+        return None;
+    }
+    let gpu = app.gpu.as_ref().filter(|g| g.health().is_ok())?;
+    let fresh = app.move_gpu_preview.as_ref().is_some_and(|p| {
+        p.doc == doc.id
+            && p.snapshot.ptr_eq(&Arc::downgrade(&doc))
+            && p.layer == layer
+            && p.channel == channel
+            && p.background == background
+            && p.factor == factor
+    });
+    if !fresh {
+        let native_bounds = doc.layer(layer)?.surface()?.content_bounds();
+        // The shader uploads the document only. An off-canvas source can move pixels in from
+        // beyond that upload, so retain the CPU oracle for it.
+        let (bounds, preview) = if native_bounds.is_empty() || !doc.bounds().contains_rect(&native_bounds) {
+            (Rect::EMPTY, None)
+        } else {
+            let proxy = crate::proxy::proxy_document(&doc, factor);
+            let bounds = proxy.layer(layer).and_then(|l| l.surface()).map_or(Rect::EMPTY, photocraft_raster::Surface::content_bounds);
+            let preview = crate::channel_transform_gpu::Preview::new(gpu, &proxy, Some(layer), background);
+            (bounds, preview)
+        };
+        app.move_gpu_preview =
+            Some(MoveGpuPreview { doc: doc.id, snapshot: Arc::downgrade(&doc), layer, channel, background, factor, bounds, gpu: preview, shown: false });
+    }
+    let p = app.move_gpu_preview.as_mut()?;
+    let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(|v| f64::from(v) * f64::from(factor));
+    let quad =
+        [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| [x + f64::from(offset.0), y + f64::from(offset.1)]);
+    let t = TransformSession {
+        session: 0,
+        layer: layer.0,
+        rect,
+        quad,
+        pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
+        interpolation: if offset.0.rem_euclid(factor as i32) == 0 && offset.1.rem_euclid(factor as i32) == 0 { "nearest" } else { "bilinear" }.into(),
+        warp: None,
+        selection: false,
+        target: Some(json!({"color": channel})),
+        path: None,
+        made: None,
+        mode: Default::default(),
+        content_aware: None,
+        skew_v: 0.0,
+        layers: Vec::new(),
+    };
+    let texture = p.gpu.as_mut().and_then(|g| {
+        g.texture_move(&t, &view, app.session.prefs().interface.show_channels_in_color, display.as_ref().is_some_and(|d| d.encode_srgb), factor, p.bounds)
+    });
+    p.shown = texture.is_some();
+    if texture.is_some() {
+        // A prior CPU frame (e.g. the Navigator's first frame) must not be composited too.
+        app.move_preview = None;
+    }
+    texture
+}
+
+pub(crate) fn gpu_showing(app: &PhotocraftApp, idx: usize) -> bool {
+    app.session.active_index() == Some(idx) && drag_offset(app).is_some() && app.move_gpu_preview.as_ref().is_some_and(|p| p.shown)
+}
+
+/// Closing/switching the document or cancelling a drag can bypass the normal pointer release.
+pub(crate) fn cancel_stale_gpu(app: &mut PhotocraftApp) {
+    if app.move_gpu_preview.as_ref().is_some_and(|p| drag_offset(app).is_none() || app.session.active().is_none_or(|st| st.doc.id != p.doc)) {
+        app.move_gpu_preview = None;
+    }
+}
+
 impl MovePreview {
     fn key(&self) -> u64 {
         BASE + self.offsets.len() as u64
@@ -195,6 +322,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     {
         return floating_doc(app, idx);
     }
+    if crate::canvas::multiple_color_target(app) {
+        app.move_preview = None;
+        return None;
+    }
     // Preferences › Interface › Show bounding box when dragging layer: outline and arrow only.
     if app.session.active_index() != Some(idx) || app.session.prefs().interface.show_bounding_box_when_dragging_layer {
         return None;
@@ -204,18 +335,29 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         return None;
     };
     let mask_target = app.layer_mask_targeted();
+    let background = app.session.tools.background;
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
+    // One colour channel targeted (#6068): the drag moves that channel of the active layer, as
+    // `layer.translate` will on release, and the layer itself stays.
+    let channel = match st.channel_view.target {
+        photocraft_engine::channel_cmds::ChannelTarget::Color(k) if !mask_target => st.active_layer.map(|id| (id, k)),
+        _ => None,
+    };
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
-        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
+        let ids = match channel {
+            Some((id, _)) => vec![id],
+            None => photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers()),
+        };
         if ids.is_empty() {
             return None;
         }
         let all = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
         let bounds = ids.iter().try_fold(Rect::EMPTY, |acc, id| Some(acc.union(&photocraft_compose::change_bounds(doc.layer(*id)?, all)?)));
         let canvas = doc.bounds();
-        let moving = with_descendants(&doc, &ids);
+        // A channel move leaves the layer (and its Layer Edges outline) where it is.
+        let moving = if channel.is_some() { Vec::new() } else { with_descendants(&doc, &ids) };
         let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
         app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big });
@@ -229,7 +371,14 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
-        match photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target) {
+        let moved = match channel {
+            Some((id, k)) => {
+                let mut d = (*doc).clone();
+                photocraft_engine::channel_cmds::move_color_channel(&mut d, id, k, offset.0, offset.1, background).map(|()| d)
+            }
+            None => photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target),
+        };
+        match moved {
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
@@ -345,7 +494,7 @@ pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, 
 
 /// Whether the canvas shows a Move drag's layers at the pointer.
 pub(crate) fn showing(app: &PhotocraftApp) -> bool {
-    app.move_preview.as_ref().is_some_and(|p| p.shown.is_some())
+    app.move_preview.as_ref().is_some_and(|p| p.shown.is_some()) || app.session.active_index().is_some_and(|idx| gpu_showing(app, idx))
 }
 
 /// Whether `key` is a Move drag preview key.
@@ -366,6 +515,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // Within the range the preview and the ΔX/ΔY readout show (`drag_offset`), so the release
     // commits the offset they showed even at the lowest zoom of a huge document.
     let (dx, dy) = (dx.clamp(-1e7, 1e7), dy.clamp(-1e7, 1e7));
+    app.move_gpu_preview = None;
     // Only when the canvas shows this very offset (else it recomposites everything once).
     let at = (dx as i32, dy as i32);
     let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));

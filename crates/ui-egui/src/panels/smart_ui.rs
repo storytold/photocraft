@@ -861,4 +861,26 @@ mod tests {
             assert_eq!(app.with_mask_target(cmd, json!({}))["target"], "filterMask", "{cmd}");
         }
     }
+
+    #[test]
+    fn a_gray_filter_mask_view_does_not_transform_the_layer_mask() {
+        let mut app = PhotocraftApp::new(Session::new(), Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#336699"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.session.execute("paint.stroke", json!({"points": [[4, 4], [8, 8]], "size": 4, "color": "#000000", "target": "filterMask"})).unwrap();
+        app.run("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
+        app.sync_mask_targets();
+        assert!(app.filter_mask_targeted());
+        assert!(!app.layer_mask_targeted());
+        assert!(app.with_mask_target("edit.transform.rotate180", json!({})).get("target").is_none());
+        crate::transform_tool::begin(&mut app, &egui::Context::default()).unwrap();
+        assert!(app.ui.transform.as_ref().unwrap().target.is_none(), "the whole smart object is transformed");
+        assert!(app.session.active().unwrap().channel_transform.is_none());
+        crate::transform_tool::cancel(&mut app);
+    }
 }

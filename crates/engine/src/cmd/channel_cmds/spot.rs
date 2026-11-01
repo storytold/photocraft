@@ -50,8 +50,8 @@ pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     if let Some(st) = s.active_mut() {
         st.channel_view = ChannelView::default();
-        fix_view_now(st);
     }
+    fix_view_now(s);
     Ok(Value::Null)
 }
 

@@ -552,6 +552,16 @@ struct PanelSet {
 
 impl PanelSet {
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
+        let mask_target = bool_field(p, "maskTarget")?;
+        let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
+        let filter_mask_target = bool_field(p, "filterMaskTarget")?;
+        if photocraft_engine::channel_transform::locked(&app.session)
+            && (mask_target.is_some_and(|v| v != app.ui.mask_target)
+                || vector_mask_target.is_some_and(|v| v != app.ui.vector_mask_target)
+                || filter_mask_target.is_some_and(|v| v != app.ui.filter_mask_target.is_some()))
+        {
+            return Err(photocraft_engine::channel_transform::LOCKED.into());
+        }
         Ok(Self {
             // The Histogram panel: its options, the dragged tonal range ([from, to] levels or
             // null) and Uncached Refresh.
@@ -559,9 +569,9 @@ impl PanelSet {
             histogram_range: histogram_range_param(p)?,
             histogram_refresh: bool_field(p, "histogramRefresh")?,
             panels: merged_object(&app.ui.panels, p.get("panels"), "panels")?,
-            mask_target: bool_field(p, "maskTarget")?,
+            mask_target,
             updates_open: bool_field(p, "updatesOpen")?,
-            vector_mask_target: bool_field(p, "vectorMaskTarget")?,
+            vector_mask_target,
             filter_mask_target: filter_mask_target_param(app, p)?,
             selection_mode: uint_field(p, "selectionMode")?,
             dock_tabs: merged_object(&app.ui.dock_tabs, p.get("dockTabs"), "dockTabs")?,
@@ -923,7 +933,10 @@ fn open_named_dialog(app: &mut PhotocraftApp, p: &Value, kind: &str) -> Outcome 
         None => err(missing),
     };
     match kind {
-        "layerStyle" | "LayerStyle" => opened(crate::layer_style::open(app, str_param(p, "effect")), "no active layer"),
+        "layerStyle" | "LayerStyle" => {
+            let why = if photocraft_engine::channel_transform::locked(&app.session) { photocraft_engine::channel_transform::LOCKED } else { "no active layer" };
+            opened(crate::layer_style::open(app, str_param(p, "effect")), why)
+        }
         // The Crop tool's New / Delete Crop Preset… (#1919).
         "newCropPreset" => opened(crate::crop_presets::open_new(app), "nothing to save: set W and H (W x H x Resolution) or a ratio first"),
         "deleteCropPreset" => opened(crate::crop_presets::open_delete(app), "no crop presets are saved"),

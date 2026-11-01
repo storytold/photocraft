@@ -2,6 +2,7 @@ use super::{
     DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
     smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
+use crate::move_ui;
 
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
@@ -259,6 +260,7 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        move_ui::cancel_stale_gpu(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.

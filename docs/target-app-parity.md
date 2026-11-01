@@ -12,6 +12,8 @@ the measured checklists are [`scorecard.md`](scorecard.md) (`cargo xtask scoreca
 
 ## Headline (2026-10-10, PhotoCraft 0.6.0, `main` at 3e000bc1)
 
+> **Channel transform update · 2026-10-14 · minor:** isolated channel transforms, live visibility and scoped cached RGB GPU previews are covered by native-depth and selection regressions. Aggregate percentages and estimates are unchanged.
+
 | Number | Value | Kind |
 |---|---|---|
 | **Feature breadth** (does each Photoshop feature exist?) | **~76%** | partly measured (menus, tools, panels, formats), weights below |
@@ -170,7 +172,7 @@ parity for the area and are already contained in the dimension rows above.
 | Selections, Select and Mask, channels | 55% | 120–200 | [Selected colour sets](multi-channel-editing.md) edit raster drawing, tone and supported filters; partial-set geometry remains open. All selection tools, single row/column marquee included (#2837). Select and Mask is Photoshop's workspace with its own tools (Quick Selection, Refine Edge Brush, Brush, Object Selection, Lasso, Polygonal Lasso), view modes and six outputs (TOOL-214-1, #7069, #8148), no Refine Hair (#2671), Object Aware or Presets; Select Subject/Sky classical, 559 ms p50 on 24 MP vs a 100 ms budget |
 | Painting and brush engine | 55% | 150–250 | Every Brush Settings section exists; feel is the gap: lag on big brushes, pressure jumps, smoothing and edge quality reports ([brush-parity.md](brush-parity.md)) |
 | Retouching (healing, clone, patch, remove, content-aware) | 50% | 100–180 | Remove tool non-generative; Content-Aware Fill has no workspace (TOOL-214-15); no live stroke preview for the Mixer Brush yet (TOOL-213-7) |
-| Transform, warp, puppet, perspective, liquify | 55% | 100–180 | Free Transform modifiers right, with a right-click transform menu (TOOL-214-5) and H/V skew fields; Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) |
+| Transform, warp, puppet, perspective, liquify | 55% | 100–180 | 2026-10-12: isolated colour/alpha/spot/Quick Mask/raster-mask transforms with live eyes and locked targets; native-depth selection and Warp regressions. 2026-10-13: cached GPU previews for one visible RGB raster layer, with CPU fallback for unsupported stacks, profiles and filtering; `channel_transform_gpu_bench` and native-depth readback regressions, including sparse samples, curved Warp, fractional source frames and footprint-filter fallback. Aggregate estimate unchanged. Free Transform modifiers right, with a right-click transform menu (TOOL-214-5); H/V skew fields; Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) |
 | Adjustments and filters | 70% | 120–200 | All present; smart-filter re-render matches Photoshop on 5 of 30 files; Filter Gallery looks approximate; no Neural Filters |
 | Type | 40% | 120–200 | Engine works; manual/optical kerning, a live Warp Text preview and variable-font axis sliders (2026-10-11); type on a path only places glyphs rigidly (TYPE-218-1 partial); no RTL paragraphs, OpenType panel UI; Type tool freeze on macOS (#2518) |
 | Vector shapes and paths | 55% | 80–140 | Pen, Direct/Path Selection, shapes, shape strokes. Freeform and Curvature Pen (#1054). Add/Delete Anchor Point and Convert Point tools exist (`Tool` enum); on-canvas corner radius widgets on live rectangles (TOOL-214-12, 2026-10-13); shape Density and Feather, the path as the fill's soft vector mask, matching Photoshop's 10 px feather ramp within 1 level (#5846, 2026-10-15); missing path-point nudge; shape parity tracking issue #2496 |
@@ -602,6 +604,8 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 | 2026-10-15 | minor | Print: Functions › Bleed (`file.print` / `file.printOneCopy` `bleed`, corner crop marks on the trim line, PDF and Windows paths); the Print dialog field is still missing; percentages unchanged |
 | 2026-10-13 | minor | Vector shapes: on-canvas corner radius widgets on live rectangles (TOOL-214-12); estimates unchanged |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the Pen flyout) are live toolbar tools and Frame landed, so Art History Brush is the only tool still missing; percentages unchanged |
+| 2026-10-12 | minor | Added isolated channel transform and live visibility evidence; aggregate percentages unchanged |
+| 2026-10-13 | minor | Cached GPU previews for isolated RGB transforms; scoped CPU fallback and reproducible 24 MP hardware benchmark; reviewed scalar coverage, curved Warp/footprint filtering and linked-mask frame regressions; aggregate percentages unchanged |
 | 2026-10-13 | minor | Added measured Content-Aware Scale gains (P28 under its budget on a 4-core VM, not yet in the baseline); percentages and budgets unchanged |
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
 | 2026-10-12 | minor | `.atn` import: 112 events mapped (TrueGrit Texture Supply sets play end to end); percentages unchanged |

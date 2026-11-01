@@ -3,7 +3,9 @@ use super::{
     Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
     smart_cmds,
 };
+use crate::channel_transform;
 use crate::color_channels;
+use crate::warp_cmds;
 
 impl Session {
     /// Run a command by id with JSON params. Returns a JSON result.
@@ -95,11 +97,15 @@ impl Session {
     /// document, a hidden target. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        if let Some(reason) = channel_transform::refusal(self, id, params, spec.journal) {
+            return Err(EngineError::Disabled(id.into(), reason.into()));
+        }
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        let run_params = if channel_transform::geometric(id) { channel_transform::params(self, &run_params)? } else { run_params };
         if let Some(why) = color_channels::refusal(self, id, &run_params) {
             return Err(EngineError::Disabled(id.into(), why));
         }
-        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+        if let Err(why) = self.explicit_layer_enabled(spec, &run_params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         if let Some(why) = self.job_conflict(id, spec.journal) {
@@ -132,11 +138,29 @@ impl Session {
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
         let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
-        self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
+        let params = channel_cmds::inject_target(self, id, params.clone());
+        let params = if channel_transform::geometric(id) {
+            match channel_transform::params(self, &params) {
+                Ok(p) => p,
+                Err(e) => return Some(e.to_string()),
+            }
+        } else {
+            params
+        };
+        self.precondition(s, &params).err().or_else(|| self.job_conflict(id, s.journal))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if let Some(reason) = channel_transform::refusal(self, spec.id, params, spec.journal) {
+            return Err(reason.into());
+        }
+        if warp_cmds::inline_edit(spec.id, params) {
+            return Ok(());
+        }
+        if channel_transform::geometric(spec.id) && channel_cmds::is_channel_target(params) {
+            return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
+        }
         if let Some(why) = color_channels::refusal(self, spec.id, params) {
             return Err(why);
         }
@@ -203,6 +227,9 @@ impl Session {
     /// [`Self::edit`], recording a history state only when `record` is set. An unrecorded change
     /// still marks the document modified and leaves the redo states alone.
     pub(crate) fn edit_with<R>(&mut self, label: &str, record: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        if channel_transform::locked(self) {
+            return Err(EngineError::Other(channel_transform::LOCKED.into()));
+        }
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);

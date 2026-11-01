@@ -82,6 +82,10 @@ pub fn target(s: &Session, p: &Value) -> Result<Option<ColorChannels>> {
 
 /// Protect unsupported operations before either the UI or automation can edit a whole layer.
 pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
+    // An explicitly named layer without a target is a whole-layer Move, as for Free Transform.
+    if id == "layer.translate" && p.get("target").is_none() && p.get("layer").is_some_and(|v| !v.is_null()) {
+        return None;
+    }
     let colors = match target(s, p) {
         Ok(Some(c)) => c,
         Ok(None) => return None,
@@ -228,6 +232,7 @@ fn restrict_coords(before: &Surface, after: &mut Surface, colors: ColorChannels,
         return Err(EngineError::Other("invalid pixel format".into()));
     }
     for c in coords {
+        crate::allocation::checkpoint("preserving untargeted paint channels")?;
         let old = before.tile(c);
         let tile = after.try_tile_mut(c).map_err(|e| EngineError::Other(e.to_string()))?;
         for (i, pixel) in tile.bytes_mut().chunks_exact_mut(stride).enumerate() {

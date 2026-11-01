@@ -1,4 +1,5 @@
 use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
+use crate::channel_transform;
 
 /// Per-document editing state.
 #[derive(Clone, Debug)]
@@ -30,6 +31,8 @@ pub struct DocState {
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
+    /// Interactive single-channel transform; never saved or included in pixel history.
+    pub channel_transform: Option<channel_transform::Guard>,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
     /// Painting symmetry preset or sampled path (tool state, not document pixels).
@@ -97,6 +100,7 @@ impl DocState {
             last_damage: None,
             coalesce: None,
             channel_view: Default::default(),
+            channel_transform: None,
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),

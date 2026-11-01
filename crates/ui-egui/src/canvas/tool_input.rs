@@ -572,6 +572,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // the release point would otherwise nudge the layer onto a nearby edge.
             if d.tool == Tool::Move && d.points.len() < 2 && matches!(raw, ToolEvent::Up { x, y } if [x, y] == d.start) {
                 app.move_preview = None;
+                app.move_gpu_preview = None;
                 crate::move_mods::finish(app);
                 if d.sel_move.is_some() {
                     finish_selection_drag(app, true, d.start, d.start);

@@ -35,6 +35,12 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
+    /// Release an interactive channel target, including after its document was switched/closed.
+    pub fn clear_channel_transforms(&mut self) {
+        for st in &mut self.docs {
+            st.channel_transform = None;
+        }
+    }
 
     /// Monotonic active-document generation. It changes when a different document becomes
     /// active, including a switch away and back between two observations; equal values therefore

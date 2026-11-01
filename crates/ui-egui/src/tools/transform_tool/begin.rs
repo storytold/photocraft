@@ -7,24 +7,45 @@ use super::{
     TransformPreview, TransformSession, Warp, WarpStyle, corners, default_interpolation, json,
 };
 
-/// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
-/// layer mask, alpha channel or Quick Mask.
+/// Start Free Transform on the active layer or its selected pixels, or on the captured
+/// colour component, raster mask, alpha/spot channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
+    begin_with_params(app, ctx, json!({}))
+}
+
+fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::Value) -> Result<(), String> {
+    if app.session.active().is_some_and(|st| st.channel_transform.is_some()) {
+        return Err(photocraft_engine::channel_transform::LOCKED.into());
+    }
+    if app.session.active_job().is_some() {
+        return Err("Wait for the document operation to finish before starting a transform".into());
+    }
+    if params.get("layer").is_none()
+        && let Some((params, path)) = crate::vector_ui::free_transform_path(app)
+    {
         return begin_path(app, ctx, params, path);
     }
-    if crate::canvas::multiple_color_target(app) {
+    if params.get("layer").is_none() && crate::canvas::multiple_color_target(app) {
         return Err("Move and transforms on several colour channels are not implemented yet".into());
     }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }
-    let target = crate::canvas::paint_target(app);
+    let mut params = photocraft_engine::channel_transform::params(&app.session, &params).map_err(|e| e.to_string())?;
+    if params.get("layer").is_none() && params["target"] == "pixels" && crate::canvas::paint_target(app) == "mask" {
+        // Layers thumbnail targeting is a fallback; a visible mask overlay never overrides
+        // a colour component explicitly selected in Channels.
+        params["target"] = json!("mask");
+    }
+    let target = params["target"].clone();
     let st = app.session.active().ok_or("no document")?;
     let (doc, revision) = (st.doc.clone(), st.revision);
-    let lone = photocraft_engine::transform_cmds::lone_target(&doc, st.active_layer, &json!({ "target": target })).map_err(|e| e.to_string())?.cloned();
-    if let Some(surf) = lone {
-        return begin_lone(app, ctx, doc, surf, target);
+    let lone = photocraft_engine::channel_transform::source_bounds(&doc, st.active_layer, &params).map_err(|e| e.to_string())?;
+    if let Some(bounds) = lone {
+        if !photocraft_engine::channel_transform::visible(&app.session, &params).map_err(|e| e.to_string())? {
+            return Err(photocraft_engine::channel_transform::HIDDEN.into());
+        }
+        return begin_lone(app, ctx, doc, bounds, target);
     }
     let id = st.active_layer.ok_or("no active layer")?;
     // Several layers selected: one box moves them all, as in Photoshop (#6501).
@@ -74,6 +95,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
@@ -181,6 +203,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
     let texture = several.render();
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(under),
         texture,
         opacity: 1.0,
@@ -269,7 +292,9 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
 /// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    begin(app, ctx)?;
+    let layer = app.session.active().and_then(|st| st.active_layer).ok_or("no active layer")?;
+    // Placement explicitly transforms the new layer, regardless of the previous channel target.
+    begin_with_params(app, ctx, json!({"layer":layer.0}))?;
     if let Some(t) = app.ui.transform.as_mut() {
         t.made = Some(MadeLayer::Place);
     }
@@ -310,6 +335,7 @@ pub(crate) fn begin_content_aware(
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
@@ -398,49 +424,26 @@ pub(super) fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId
     }
 }
 
-/// Free Transform of a targeted unlinked layer mask, alpha channel or Quick Mask by itself: the
-/// box frames its content (or the selection) and previews the moving values in grey over the
-/// document with them vacated.
-fn begin_lone(
-    app: &mut PhotocraftApp,
-    ctx: &egui::Context,
-    doc: Arc<Document>,
-    surf: photocraft_raster::Surface,
-    target: serde_json::Value,
-) -> Result<(), String> {
-    use photocraft_engine::transform_cmds as tc;
-    let b = tc::target_frame(&doc, &surf);
+/// Capture a scalar channel and its target without changing any channel eyes.
+fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, b: photocraft_geom::Rect, target: serde_json::Value) -> Result<(), String> {
     if b.is_empty() {
         return Err("Could not transform: nothing is selected".into());
     }
-    let whole;
-    let sel = match &doc.selection {
-        Some(s) => s,
-        None => {
-            let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
-            s.fill_rect(b, &[1.0]);
-            whole = s;
-            &whole
-        }
-    };
-    let (lifted, rest) = tc::split_gray_selected(&surf, sel).map_err(|e| e.to_string())?.ok_or("this channel can't be transformed")?;
     crate::type_tool::commit(app);
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
-    let mut pd = (*doc).clone();
-    let tp = json!({ "target": target });
-    if let Ok(Some(s)) = tc::lone_target_mut(&mut pd, Some(LayerId(layer)), &tp) {
-        *s = rest;
-    }
+    let active = app.session.active().and_then(|st| st.active_layer);
+    let channel = crate::channel_transform_preview::Preview::new(&doc, active, app.session.tools.background, crate::proxy::reduced_previews(app));
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
-    let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let (image, uv) = crate::transform_tex::read_surface(&lifted, None, b, max_side);
-    let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+    // Scalar previews are composited as a document; the raw moving-quad texture is unused.
+    let texture =
+        crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0; 2]);
     app.transform_preview = Some(TransformPreview {
         session,
-        doc: Arc::new(pd),
+        channel: Some(channel),
+        doc: doc.clone(),
         texture,
-        opacity: 0.6,
+        opacity: 0.0,
         above: None,
         styled: None,
         follow: None,
@@ -466,7 +469,7 @@ fn begin_lone(
         interpolation: default_interpolation(app).into(),
         warp: None,
         selection: false,
-        target: Some(target),
+        target: Some(target.clone()),
         path: None,
         made: None,
         mode: Default::default(),
@@ -474,6 +477,9 @@ fn begin_lone(
         skew_v: 0.0,
         layers: Vec::new(),
     });
+    if let Some(st) = app.session.active_mut() {
+        st.channel_transform = Some(photocraft_engine::channel_transform::Guard { layer: active, target });
+    }
     start_steps(app);
     Ok(())
 }
@@ -493,6 +499,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc,
         texture,
         opacity: 1.0,
@@ -580,6 +587,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
     pd.selection = None;
     app.transform_preview = Some(TransformPreview {
         session,
+        channel: None,
         doc: Arc::new(pd),
         texture,
         opacity: 1.0,
@@ -655,12 +663,15 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
         return enter_type_warp(app, ctx);
     }
-    let existing =
-        app.session.active().and_then(|d| d.doc.layer(LayerId(app.ui.transform.as_ref()?.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
+    let existing = app
+        .ui
+        .transform
+        .as_ref()
+        .filter(|t| t.target.is_none())
+        .and_then(|t| app.session.active()?.doc.layer(LayerId(t.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
     let Some(t) = app.ui.transform.as_mut() else { return };
-    // Warp moves layers and paths (#3027): a lone mask or channel keeps the box, and so do
-    // several layers (#6501).
-    if t.warp.is_some() || t.target.is_some() || !t.layers.is_empty() {
+    // Warp retains the captured target and box.
+    if t.warp.is_some() {
         return;
     }
     if t.quad == corners(t.rect)

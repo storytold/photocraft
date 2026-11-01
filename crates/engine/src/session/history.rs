@@ -1,10 +1,11 @@
 use super::documents::fix_active;
 use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds, layer_multi_cmds};
+use crate::channel_transform;
 
 impl Session {
     pub fn undo(&mut self) -> bool {
         // A background job is computing from the current state: it must not move under it.
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();
@@ -48,7 +49,7 @@ impl Session {
     }
 
     pub fn redo(&mut self) -> bool {
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();
@@ -84,7 +85,7 @@ impl Session {
     /// last of them). Falls back to Undo plus forgetting the redo states when the history
     /// changed since that step. Returns whether a step was taken back.
     pub fn rollback(&mut self) -> bool {
-        if self.active_job().is_some() {
+        if self.active_job().is_some() || channel_transform::locked(self) {
             return false;
         }
         let keep_visibility = !self.visibility_undoable();

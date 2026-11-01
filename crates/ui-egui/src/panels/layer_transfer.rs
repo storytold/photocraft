@@ -89,6 +89,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
         // The Move drag ends without moving anything; an ⌥-drag's copy is taken back.
         app.drag = None;
         app.move_preview = None;
+        app.move_gpu_preview = None;
         crate::move_mods::abandon(app);
         let active = app.session.active().and_then(|st| st.active_layer).unwrap_or(active);
         if !begin(app, ctx, active, Some(grab)) {
