@@ -15,6 +15,7 @@ mod channel_clip;
 mod clip_group;
 pub mod color_channels;
 mod crop_fill;
+pub mod cryptomatte_cmds;
 pub mod display_color;
 pub mod doc_path;
 pub mod filters;
