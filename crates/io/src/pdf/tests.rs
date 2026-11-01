@@ -244,6 +244,10 @@ fn text_with_compositing_or_a_profile_stays_in_the_raster_backdrop() {
                 ..Default::default()
             }),
         );
+        // The compositor consumes the text cache maintained by the engine/UI.
+        if let LayerContent::Text(text) = &mut layer.content {
+            photocraft_text::TextEngine::new().render_layer(text, d.resolution_dpi, d.pixel_format());
+        }
         match case {
             0 => layer.opacity = 0.5,
             1 => layer.fill_opacity = 0.5,
