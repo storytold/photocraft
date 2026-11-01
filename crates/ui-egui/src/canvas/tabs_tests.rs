@@ -256,13 +256,19 @@ fn crowded_tabs_keep_their_whole_names_and_the_menu_lists_every_document() {
                 (0..14).map(|i| if pro { pro_tab_title(h.state(), i) } else { h.state().session.documents()[i].doc.name.clone() }).collect();
             h.get_by_label("More documents").click();
             h.run_steps(2);
+            // A shown tab carries the same title as its menu row, so the rows are queried inside
+            // the open menu only.
+            let menu = h
+                .query_all_by_role(egui::accesskit::Role::Menu)
+                .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+                .unwrap_or_else(|| panic!("{theme:?}: the document menu is open"));
             for (i, label) in labels.iter().enumerate() {
                 // The checked row's name leads with the check mark; an unchecked row's name is the
                 // bare title (its gutter is a layout advance, not text).
                 let (on, off) = (format!("✔ {label}"), label.clone());
                 let (want, other) = if i == active { (&on, &off) } else { (&off, &on) };
-                assert_eq!(h.query_all_by_label(want).count(), 1, "{theme:?}, active {active}: document {i} is in the menu as {want:?}");
-                assert_eq!(h.query_all_by_label(other).count(), 0, "{theme:?}, active {active}: document {i} is not {other:?}");
+                assert_eq!(menu.query_all_by_label(want).count(), 1, "{theme:?}, active {active}: document {i} is in the menu as {want:?}");
+                assert_eq!(menu.query_all_by_label(other).count(), 0, "{theme:?}, active {active}: document {i} is not {other:?}");
             }
             h.key_press(egui::Key::Escape);
             h.run_steps(2);
