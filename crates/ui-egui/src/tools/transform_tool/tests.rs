@@ -21,6 +21,69 @@ fn session() -> TransformSession {
 }
 
 #[test]
+fn colour_set_mask_view_is_preserved_by_transform_copy_and_cancel() {
+    for selected in [false, true] {
+        for linked in [false, true] {
+            for mode in ["gray", "overlay"] {
+                for landed in [false, true] {
+                    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                    app.run("layer.layerMask.hideAll", json!({})).unwrap();
+                    app.run("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+                    let source = app.session.active().unwrap().active_layer.unwrap();
+                    app.session
+                        .edit("mask patch", |doc, _| {
+                            doc.layer_mut(source).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(8, 8, 24, 24), &[1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                    if selected {
+                        app.run("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 16, "feather": 1})).unwrap();
+                    }
+                    app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+                    app.run("view.layerMask", json!({"mode": mode})).unwrap();
+                    let before = app.session.active().unwrap().doc.clone();
+                    let view = app.session.active().unwrap().channel_view.clone();
+                    let history = app.session.active().unwrap().history.past_len();
+                    begin_copy(&mut app, &egui::Context::default()).unwrap();
+                    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")), "{selected}/{linked}/{mode}: capture the original mask target");
+                    let copy = app.session.active().unwrap().active_layer.unwrap();
+                    assert_ne!(copy, source);
+                    assert_eq!(
+                        app.session.active().unwrap().doc.layer(copy).unwrap().surface(),
+                        before.layer(source).unwrap().surface(),
+                        "copying a mask must not crop its host pixels"
+                    );
+                    let mut expected_view = view.clone();
+                    expected_view.layer_mask.as_mut().unwrap().layer = copy;
+                    assert_eq!(app.session.active().unwrap().channel_view, expected_view, "start preserves channel eyes and the viewed mask");
+                    app.run("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+                    expected_view = app.session.active().unwrap().channel_view.clone();
+                    crate::transform_tool::nudge(&mut app, 4.0, 0.0);
+                    if landed {
+                        commit(&mut app);
+                        let st = app.session.active().unwrap();
+                        assert!(st.doc.layer(source) == before.layer(source));
+                        assert_eq!(st.doc.layer(copy).unwrap().surface(), before.layer(source).unwrap().surface());
+                        assert_ne!(st.doc.layer(copy).unwrap().mask.as_ref().unwrap().surface, before.layer(source).unwrap().mask.as_ref().unwrap().surface);
+                        assert_eq!(st.history.past_len(), history + 1);
+                        assert_eq!(st.channel_view, expected_view);
+                        assert!(app.session.undo());
+                        assert!(app.session.active().unwrap().doc.layers == before.layers);
+                    } else {
+                        cancel(&mut app);
+                        expected_view.layer_mask.as_mut().unwrap().layer = source;
+                        let st = app.session.active().unwrap();
+                        assert!(Arc::ptr_eq(&st.doc, &before));
+                        assert_eq!(st.history.past_len(), history);
+                        assert_eq!(st.channel_view, expected_view, "cancel restores the source mask while retaining current eyes");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_plain_click_far_outside_accepts_transform_but_a_rotation_drag_does_not() {
     let context = egui::Context::default();
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));

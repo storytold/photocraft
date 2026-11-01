@@ -224,7 +224,8 @@ fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_chan
     let background = s.tools.background;
     s.edit("Move", |doc, _| {
         let locks = doc.effective_locks(id);
-        if locks.position || locks.all {
+        let selected_background = colors.len() > 1 && doc.selection.is_some() && doc.is_background(id);
+        if (locks.position && !selected_background) || locks.all {
             let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
             return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
         }

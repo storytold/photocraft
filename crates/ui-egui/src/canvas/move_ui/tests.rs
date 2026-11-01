@@ -1078,19 +1078,80 @@ fn colour_set_copy_guard_rechecks_after_auto_select_ends_mask_view() {
 
 #[test]
 fn colour_set_exposed_before_alt_drag_duplication_cancels_without_moving_the_original() {
-    let (mut app, _) = selected_pixels(16);
-    app.run("select.deselect", json!({})).unwrap();
-    app.ui.tool_options.move_auto_select = false;
-    let before = app.session.active().unwrap().doc.clone();
-    let history = app.session.active().unwrap().history.past_len();
-    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
-    app.session.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
-    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 26.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
-    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 26.0, y: 16.0 }, egui::Modifiers::ALT);
-    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
-    assert_eq!(app.session.active().unwrap().history.past_len(), history);
-    assert!(app.ui.status_error);
-    assert!(app.drag.is_none());
+    for selected in [false, true] {
+        let (mut app, _) = selected_pixels(16);
+        if selected {
+            let original = app.session.active().unwrap().active_layer.unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("layer.select", json!({"layer": original.0, "mode": "add"})).unwrap();
+        } else {
+            app.run("select.deselect", json!({})).unwrap();
+        }
+        app.ui.tool_options.move_auto_select = false;
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        app.session.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 26.0, y: 16.0, pressure: 1.0 }, egui::Modifiers::ALT);
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 26.0, y: 16.0 }, egui::Modifiers::ALT);
+        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        assert!(app.ui.status_error);
+        assert!(app.drag.is_none());
+    }
+}
+
+#[test]
+fn selected_background_channel_drags_match_keyboard_and_native_oracles() {
+    fn background(depth: u32, colors: &[usize]) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64, "depth": depth})).unwrap();
+        app.session
+            .edit("background patch", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(8, 8, 24, 24), &[0.9, 0.3, 0.2, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+        app.run("channel.target", json!({"colors": colors})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app
+    }
+    for depth in [8, 16, 32] {
+        for colors in [vec![0], vec![0, 2]] {
+            let mut app = background(depth, &colors);
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            let expected = if colors.len() == 1 {
+                // Preserve the upstream single-channel floating-selection workflow.
+                let mut keyboard = background(depth, &colors);
+                crate::move_mods::nudge(&mut keyboard, 10.0, 5.0, false);
+                keyboard.run("select.drop", json!({})).unwrap();
+                let st = keyboard.session.active().unwrap();
+                st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
+            } else {
+                let mut oracle = photocraft_engine::Session::new();
+                oracle.tools.background = app.session.tools.background;
+                oracle.add_document((*before).clone(), None);
+                oracle.execute("edit.transform", json!({"target": {"colors": colors}, "dx": 10, "dy": 5, "interpolation": "nearest"})).unwrap();
+                oracle.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone()
+            };
+            drag(&mut app, [16.0, 16.0], [26.0, 21.0], egui::Modifiers::NONE);
+            if colors.len() == 1 {
+                assert_eq!(offset(&app), Some((10, 5)));
+                app.run("select.drop", json!({})).unwrap();
+            }
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(id).unwrap().surface().unwrap(), &expected, "{depth}, {colors:?}");
+            assert!(st.doc.is_background(id));
+            assert!(app.session.undo());
+            assert!(app.session.active().unwrap().doc.layers == before.layers);
+        }
+    }
 }
 
 #[test]

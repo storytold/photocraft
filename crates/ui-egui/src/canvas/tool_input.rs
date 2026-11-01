@@ -393,7 +393,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     return;
                 }
                 if mods.alt
-                    && let Err(e) = crate::move_ui::duplicate_for_drag(app)
+                    && let Err(e) = crate::move_ui::duplicate_for_geometry(app)
                 {
                     app.ui.status = e;
                     app.ui.status_error = true;

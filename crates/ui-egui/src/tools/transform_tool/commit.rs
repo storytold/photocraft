@@ -115,7 +115,7 @@ fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made
     if landed {
         fold_made(app, document, layer, made);
     } else {
-        take_back_made(app, document, layer);
+        take_back_made(app, document, layer, made == MadeLayer::Copy);
     }
 }
 
@@ -265,7 +265,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
     if let (Some(t), Some(pv)) = (transform, preview)
         && t.made.is_some()
     {
-        take_back_made(app, pv.doc.id, LayerId(t.layer));
+        take_back_made(app, pv.doc.id, LayerId(t.layer), t.made == Some(MadeLayer::Copy));
     }
 }
 

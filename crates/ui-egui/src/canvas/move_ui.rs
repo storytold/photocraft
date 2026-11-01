@@ -37,9 +37,9 @@ pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::col
     photocraft_engine::color_channels::selected(&app.session)
 }
 
-/// Copying for a Move drag keeps a shown mask on the copy. Otherwise changing the active layer
+/// Copying for a geometric edit keeps a shown mask on the copy. Otherwise changing the active layer
 /// ends the mask view and can expose retained colour rows as a different movement target.
-pub(crate) fn duplicate_for_drag(app: &mut PhotocraftApp) -> Result<serde_json::Value, String> {
+pub(crate) fn duplicate_for_geometry(app: &mut PhotocraftApp) -> Result<serde_json::Value, String> {
     if color_target(app).is_some_and(|colors| colors.len() > 1) {
         return Err(COPY_SET_DRAG_UNSUPPORTED.into());
     }

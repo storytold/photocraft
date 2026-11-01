@@ -94,7 +94,7 @@ pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
-    match crate::move_ui::duplicate_for_drag(app) {
+    match crate::move_ui::duplicate_for_geometry(app) {
         // The state just before the copy's: in non-linear history the copy's step also moved
         // the later states in front of it (`History::record`), and those must stay.
         Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
@@ -147,6 +147,17 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let Some(start) = app.move_mods.start.filter(|_| moving(app)) else { return p };
+    if app.move_mods.alt && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1) {
+        // Check pending copy intent before selected-pixel classification can skip duplication.
+        // No copy has been made while `alt` is still armed, so cancellation needs no history edit.
+        app.move_mods = MoveDrag::default();
+        app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
+        app.ui.status_error = true;
+        app.drag = None;
+        app.move_preview = None;
+        app.move_gpu_preview = None;
+        return p;
+    }
     // Selected native colour sets do not float, but use the same 45° constraints. Their copy
     // gesture is refused at the press; ordinary selected pixels were copied there already.
     let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some() || crate::move_ui::moves_selected_pixels_with(app, d.tool));

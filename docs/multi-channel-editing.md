@@ -51,7 +51,12 @@ Move commands honour viewed raster masks just as the UI does; explicit targets o
 layer retain their precedence.
 The engine and live Move preview share viewed-mask priority; Alpha and Quick Mask keep
 their existing precedence. Copy refusal is checked after Auto-Select and before duplication,
-and a refused copy cancels the gesture without moving the original.
+and a refused pending copy cancels the gesture without moving the original or rolling back history.
+Free Transform a Copy of a viewed raster mask retains that target and duplicates its full host,
+even with a pixel selection. Cancelling restores the original mask view and keeps current eyes.
+A pixel selection permits native-set movement within Background samples while preserving
+Background identity; pixel/all locks and whole-Background position locking still apply.
+Single-channel pointer drags retain the existing floating-selection and keyboard behaviour.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge

@@ -130,6 +130,58 @@ fn implicit_move_preserves_alpha_and_quick_mask_precedence_over_a_layer_mask_vie
         }
     }
 }
+
+#[test]
+fn selected_background_colour_sets_move_without_bypassing_user_locks() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 32, "height": 24, "mode": mode, "depth": depth})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            s.edit("background patch", |doc, _| {
+                let b = doc.bounds();
+                let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+                let mut base = vec![0.2; surf.channels()];
+                let mut patch = vec![0.8; surf.channels()];
+                if let Some(alpha) = base.get_mut(surf.format().mode.color_channels()) {
+                    *alpha = 1.0;
+                }
+                if let Some(alpha) = patch.get_mut(surf.format().mode.color_channels()) {
+                    *alpha = 1.0;
+                }
+                surf.fill_rect(b, &base);
+                surf.fill_rect(Rect::new(4, 6, 8, 10), &patch);
+                Ok(())
+            })
+            .unwrap();
+            s.execute("select.rect", json!({"x": 4, "y": 6, "width": 4, "height": 4})).unwrap();
+            subset(&mut s);
+            let before = s.active().unwrap().doc.clone();
+            let mut oracle = Session::new();
+            oracle.tools.background = s.tools.background;
+            oracle.add_document((*before).clone(), None);
+            oracle.execute("edit.transform", json!({"target": {"colors": [0, 2]}, "dx": 2, "dy": 1, "interpolation": "nearest"})).unwrap();
+            s.execute("layer.translate", json!({"dx": 2, "dy": 1})).unwrap();
+            assert_eq!(surface(&s), surface(&oracle), "{mode}/{depth}");
+            unchanged(before.layer(id).unwrap().surface().unwrap(), &surface(&s));
+            assert!(s.active().unwrap().doc.is_background(id));
+            assert!(s.undo());
+            assert!(s.active().unwrap().doc.layers == before.layers);
+            s.execute("select.deselect", json!({})).unwrap();
+            let no_selection = s.active().unwrap().doc.clone();
+            assert!(s.execute("layer.translate", json!({"dx": 2})).is_err(), "whole-Background movement remains locked");
+            assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &no_selection));
+            s.execute("select.rect", json!({"x": 4, "y": 6, "width": 4, "height": 4})).unwrap();
+            for field in ["pixels", "all"] {
+                s.execute("layer.lockLayers", json!({(field): true})).unwrap();
+                let locked = s.active().unwrap().doc.clone();
+                assert!(s.execute("layer.translate", json!({"dx": 2})).is_err());
+                assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &locked));
+                s.execute("layer.lockLayers", json!({(field): false})).unwrap();
+            }
+        }
+    }
+}
 fn subset(s: &mut Session) {
     s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
 }

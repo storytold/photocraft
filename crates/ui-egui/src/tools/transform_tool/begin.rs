@@ -13,6 +13,15 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     begin_with_params(app, ctx, json!({}))
 }
 
+fn resolved_params(app: &PhotocraftApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let mut params = photocraft_engine::channel_transform::params(&app.session, params).map_err(|e| e.to_string())?;
+    if params.get("layer").is_none() && params["target"] == "pixels" && crate::canvas::paint_target(app) == "mask" {
+        // Thumbnail targeting is a fallback; explicit colour targets retain precedence.
+        params["target"] = json!("mask");
+    }
+    Ok(params)
+}
+
 fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::Value) -> Result<(), String> {
     if app.session.active().is_some_and(|st| st.channel_transform.is_some()) {
         return Err(photocraft_engine::channel_transform::LOCKED.into());
@@ -28,12 +37,7 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }
-    let mut params = photocraft_engine::channel_transform::params(&app.session, &params).map_err(|e| e.to_string())?;
-    if params.get("layer").is_none() && params["target"] == "pixels" && crate::canvas::paint_target(app) == "mask" {
-        // Layers thumbnail targeting is a fallback; a visible mask overlay never overrides
-        // a colour component explicitly selected in Channels.
-        params["target"] = json!("mask");
-    }
+    let params = resolved_params(app, &params)?;
     let target = params["target"].clone();
     let st = app.session.active().ok_or("no document")?;
     let (doc, revision) = (st.doc.clone(), st.revision);
@@ -273,13 +277,20 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
     if crate::canvas::multiple_color_target(app) && crate::vector_ui::free_transform_path(app).is_none() {
         return Err("Free Transform a Copy requires the composite or one colour channel".into());
     }
-    let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
-    let params = if selection { json!({}) } else { json!({"inPlace": true}) };
-    app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, params)?;
+    let params = resolved_params(app, &json!({}))?;
+    let viewed = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
+    let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some()) && params["target"] != "mask" && viewed.is_none();
+    if viewed.is_some() || params["target"] == "mask" {
+        // A selected mask copies its host unchanged, then transforms only the copied mask.
+        // Pixel Layer via Copy would crop/rasterize the host and lose the captured target.
+        crate::move_ui::duplicate_for_geometry(app)?;
+    } else {
+        app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, if selection { json!({}) } else { json!({"inPlace": true}) })?;
+    }
     let made = app.session.active().and_then(|st| st.active_layer.map(|layer| (st.doc.id, layer)));
-    if let Err(e) = begin(app, ctx) {
+    if let Err(e) = begin_with_params(app, ctx, params) {
         if let Some((document, layer)) = made {
-            take_back_made(app, document, layer);
+            take_back_made(app, document, layer, true);
         }
         return Err(e);
     }
@@ -378,7 +389,7 @@ pub(crate) fn begin_content_aware(
 
 /// Undoes the layer a cancelled or failed session made (⌥⌘T's copy, a placed file), leaving
 /// nothing to redo.
-pub(super) fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId) {
+pub(super) fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId, restore_mask_view: bool) {
     // Tabs can move or close while transforming. Only undo the creation in its own document,
     // and only while it is still the latest step (it may already have been undone).
     let Some(index) = app.session.documents().iter().position(|st| {
@@ -393,9 +404,27 @@ pub(super) fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: La
         return;
     };
     let active = app.session.active_index();
+    let viewed = restore_mask_view
+        .then(|| app.session.documents().get(index).and_then(photocraft_engine::mask_view_cmds::current))
+        .flatten()
+        .filter(|v| v.layer == layer);
     app.session.set_active(index);
     // Exactly, also in non-linear history (where an undo would land on a later state).
     app.session.rollback();
+    if let Some(viewed) = viewed
+        && app.session.active().is_some_and(|st| {
+            st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| photocraft_engine::mask_view_cmds::viewed_mask(l, viewed.filter).is_some())
+        })
+    {
+        let mode = match viewed.mode {
+            photocraft_engine::mask_view_cmds::MaskViewMode::Gray => "gray",
+            photocraft_engine::mask_view_cmds::MaskViewMode::Overlay => "overlay",
+        };
+        if let Err(e) = app.session.execute("view.layerMask", json!({"mask": if viewed.filter { "filter" } else { "layer" }, "mode": mode})) {
+            app.ui.status = e.to_string();
+            app.ui.status_error = true;
+        }
+    }
     if let Some(active) = active {
         app.session.set_active(active);
     }
