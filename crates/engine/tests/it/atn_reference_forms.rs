@@ -426,6 +426,26 @@ fn unrepresentable_comp_indexes_are_rejected_before_recording() {
     assert!(s.actions.list.last().unwrap().steps.is_empty());
 }
 
+/// Valid extreme indexes survive recording and export as ATN Index references.
+#[test]
+fn accepted_comp_boundary_indexes_record_and_export() {
+    let (mut s, _, _) = comp_scene();
+    s.execute("actions.record", json!({"name":"Boundary indexes"})).unwrap();
+    for valid in [json!(i32::MIN), json!(u32::MAX)] {
+        s.execute("layerComp.apply", json!({"comp":{"index":valid}})).unwrap();
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    let action = s.actions.list.last().unwrap();
+    assert_eq!(action.steps.len(), 2);
+    let (saved, skipped) = atn_cmds::export("References", &[action], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let parsed = atn::parse(&saved).unwrap();
+    assert_eq!(parsed.actions[0].items.len(), 2);
+    for (item, expected) in parsed.actions[0].items.iter().zip([i32::MIN as u32, u32::MAX]) {
+        assert_eq!(item.descriptor.as_ref().unwrap().get("null"), Some(&D::Reference(vec![index("compsClass", expected)])));
+    }
+}
+
 /// A recorded invalid index is a no-op even with zero comps; ordinary Apply stays disabled.
 #[test]
 fn empty_comp_list_index_is_noop() {
