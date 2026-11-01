@@ -3374,3 +3374,21 @@ fn distort_filter_steps_with_a_repeated_key_are_kept() {
         assert!(kept(distort(code, desc("null").with(key, a.clone()).with(key, b.clone()))), "{code} with {key} twice was mapped");
     }
 }
+
+/// An enumeration of another type isn't the setting Photoshop records, so the step stays a
+/// Photoshop step instead of loading its value and saving back the expected type (#10605).
+#[test]
+fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Plr ", "Cnvr", enm("Ordn", "RctP")),
+        ("Sphr", "SphM", enm("Cnvr", "Nrml")),
+        ("ZgZg", "ZZTy", enm("Ordn", "PndR")),
+        ("Wave", "Wvtp", enm("WvSn", "WvSn")),
+        ("Wave", "UndA", enm("Ordn", "WrpA")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+    assert!(!kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "PlrR")))));
+    assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
+}

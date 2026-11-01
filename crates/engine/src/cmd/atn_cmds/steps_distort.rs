@@ -1,7 +1,7 @@
 //! Photoshop's Distort filter steps (#10605): Pinch, Polar Coordinates, Spherize, Twirl, Wave and
 //! ZigZag, each key in recorded order with the limits and defaults Photoshop measures.
 
-use super::descriptors::{desc, enm, enumerated, num, trimmed};
+use super::descriptors::{desc, enm, num, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
@@ -30,13 +30,22 @@ fn sets_only(p: &Value, allowed: &[&str]) -> bool {
     p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
 }
 
+/// An enumeration's value when its type is `ty`, the type Photoshop records it with and the
+/// step saves back: one of another type isn't that setting.
+fn enum_of(ty: &str) -> impl Fn(&D) -> Option<String> + '_ {
+    move |v| match v {
+        D::Enumerated { type_id, value } if trimmed(type_id) == ty.trim_end() => Some(trimmed(value)),
+        _ => None,
+    }
+}
+
 /// One key of a Distort filter's step, in recorded order.
 pub(super) enum Key {
     /// An integer clamped to `min..=max` on import, as Photoshop clamps it; `default` when the
     /// step leaves it out.
     Int { key: &'static str, param: &'static str, min: i32, max: i32, default: i32 },
     /// An enumeration (`ty`, Photoshop ↔ PhotoCraft values); `default` is Photoshop's value when
-    /// the step leaves it out. An unknown value keeps the step.
+    /// the step leaves it out. An unknown value, or one of another type, keeps the step.
     Enum { key: &'static str, param: &'static str, ty: &'static str, table: &'static [(&'static str, &'static str)], default: &'static str },
 }
 
@@ -71,7 +80,7 @@ fn keys_map(d: &Descriptor, keys: &[Key], extra: &[&'static str]) -> Option<Map<
             Key::Int { key, min, max, default, .. } => {
                 Value::from(setting(d, key, |v| num(v).map(|n| n.round().clamp(f64::from(*min), f64::from(*max)) as i32), *default)?)
             }
-            Key::Enum { key, table, default, .. } => Value::from(lookup(table, &setting(d, key, enumerated, (*default).to_string())?)?),
+            Key::Enum { key, ty, table, default, .. } => Value::from(lookup(table, &setting(d, key, enum_of(ty), (*default).to_string())?)?),
         };
         m.insert(k.param().into(), v);
     }
@@ -152,7 +161,7 @@ pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.round().clamp(1.0, 100.0) != 100.0)) {
         return unsupported;
     }
-    let Some(undefined) = setting(d, "UndA", enumerated, "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
+    let Some(undefined) = setting(d, "UndA", enum_of("UndA"), "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
     m.insert("undefinedAreas".into(), undefined.into());
     match setting(d, "RndS", |v| seed_bits(v).map(Some), None) {
         Some(Some(seed)) => {
