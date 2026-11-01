@@ -16,7 +16,7 @@ so playback skips them.
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
 
-## Supported events (129)
+## Supported events (128)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -86,7 +86,6 @@ does not map yet, with everything needed to implement them without the reference
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
 | `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
-| (string ID only) | animationFramesFromLayers | Make Frames from Layers | Kept step (disabled) |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
 | `Mrg2` | mergeLayersNew | Merge Layers | `layer.mergeLayers` |
@@ -159,10 +158,11 @@ with cell size 2, and Trace Contour imports with its upper edge. Saving a native
 that omits these parameters preserves its native behavior: Mosaic cell size 10 and
 Trace Contour lower edge. Explicit imported values stay explicit, including changed
 Trace Contour levels and edges that the reference application applies but does not echo.
-Trace Contour maps levels within PhotoCraft's native `0..255` range unchanged.
-Other recorded levels remain kept steps with their descriptors and flags intact;
-native commands outside that range refuse export. This is a native support limit,
-not a measurement of the reference application's dialog range, which remains pending.
+Trace Contour keeps the full recorded integer level, including values below 0
+or above 255. The measured reference reports the boundary image for these values,
+so playback uses the existing `0..255` clamp while saving retains the original
+integer. That rendering limit is not a limit on the serialized descriptor; the
+reference application's dialog range remains unmeasured.
 
 Mosaic accepts a unitless pixel value on import and writes a `#Pxl` unit double.
 Other fields keep their documented integer, boolean and enum types. Unknown keys,
@@ -285,6 +285,16 @@ No parameters: the step carries an empty descriptor.
 | Key | String ID | Type | Unit | Default | Allowed |
 |---|---|---|---|---|---|
 | `ClSz` | cellSize | integer |  | 5 | 3 .. 300 (out-of-range values are clamped) |
+
+## Recognized steps kept disabled
+
+These events are recognized but have no playable command. They load as kept steps
+switched off, and Save Actions preserves their descriptors. They are excluded from
+the supported-event count and the unmapped measured reference below.
+
+| String ID | Label |
+|---|---|
+| animationFramesFromLayers | Make Frames from Layers |
 
 ## Event reference: events not mapped yet
 

@@ -208,35 +208,33 @@ fn numeric_imports_clamp_measured_ranges() {
     }
 }
 
-/// Map native-supported Trace levels exactly; keep other recorded values without changing them.
+/// Trace levels retain their recorded integers; only playback uses the measured boundary image.
 #[test]
-fn trace_levels_outside_native_range_keep_their_bytes_and_flags() {
-    for level in [0, 128, 255] {
-        let mut s = load_items(vec![code_item("TrcC", desc("null").with("Lvl ", D::Integer(level)))]);
-        let params = &s.actions.list[0].steps[0].1;
-        assert_eq!(s.actions.list[0].steps[0].0, "filter.stylize.traceContour");
-        assert_eq!(params["level"], level);
-        assert_eq!(
-            crate::filters_ext::params_for("filter.stylize.traceContour", params),
-            crate::filters_ext::params_for("filter.stylize.traceContour", &json!({"level":level,"edge":"upper"}))
-        );
-        assert_eq!(saved_items(&mut s)[0].descriptor.as_ref().unwrap().get("Lvl "), Some(&D::Integer(level)));
-        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_some());
+fn trace_levels_round_trip_and_play_at_the_boundary() {
+    for level in [i32::MIN, -1, 0, 128, 255, 256, 300, i32::MAX] {
+        for (edge, name) in [("Lwr ", "lower"), ("Upr ", "upper")] {
+            let descriptor = desc("null").with("Lvl ", D::Integer(level)).with("Edg ", enm("CntE", edge));
+            let mut item = code_item("TrcC", descriptor.clone());
+            item.with_dialog = true;
+            let mut imported = load_items(vec![item]);
+            assert_eq!(imported.actions.list[0].steps[0].0, "filter.stylize.traceContour", "{level}/{name}");
+            assert_eq!(imported.actions.list[0].steps[0].1["level"], level);
+            let saved = saved_items(&mut imported);
+            assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
+            assert!(saved[0].with_dialog);
+            assert!(export_item("filter.stylize.traceContour", &json!({"level":level,"edge":name}), "Group D").is_some());
+            for depth in [8, 16, 32] {
+                let mut direct = Session::new();
+                prepare_pattern(&mut imported, depth, "rgb");
+                prepare_pattern(&mut direct, depth, "rgb");
+                let played = imported.execute("actions.play", json!({"action":"A"})).unwrap();
+                assert!(played.get("failed").is_none(), "{level}/{name}/{depth}: {played}");
+                direct.execute("filter.stylize.traceContour", json!({"level":level.clamp(0,255),"edge":name})).unwrap();
+                assert_eq!(pixels(&imported), pixels(&direct), "{level}/{name}/{depth}");
+            }
+        }
     }
-    for level in [i32::MIN, -1, 256, 300, i32::MAX] {
-        let descriptor = desc("null").with("Lvl ", D::Integer(level)).with("Edg ", enm("CntE", "Lwr "));
-        let mut item = code_item("TrcC", descriptor.clone());
-        item.dictionary = b"Trace Contour".to_vec();
-        item.enabled = false;
-        item.with_dialog = true;
-        item.dialog_options = 2;
-        let mut s = load_items(vec![item.clone()]);
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "Trace Contour/{level}");
-        assert!(s.actions.list[0].disabled.contains(&0));
-        assert!(s.actions.list[0].dialogs.contains(&0));
-        let saved = saved_items(&mut s);
-        assert_eq!(saved, vec![item]);
-        assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
+    for level in [255.5, 2147483648.0] {
         assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_none());
     }
 }

@@ -23,8 +23,8 @@ const EXTRUDE: &[Field] = &[
     Field("ExtR", "depthMode", Kind::Enum("ExtR", &[("Rndm", "random"), ("LvlB", "levelBased")], "random")),
 ];
 const TRACE: &[Field] = &[
-    // PhotoCraft's native range; the reference application's dialog range is not measured.
-    Field("Lvl ", "level", Kind::Long(128, 0, 255)),
+    // Recorded levels stay intact; playback alone clamps to the measured boundary image.
+    Field("Lvl ", "level", Kind::Long(128, i32::MIN, i32::MAX)),
     Field("Edg ", "edge", Kind::Enum("CntE", &[("Lwr ", "lower"), ("Upr ", "upper")], "upper")),
 ];
 const WIND: &[Field] = &[
@@ -145,8 +145,6 @@ fn params_from(id: &str, d: &Descriptor) -> Option<Map<String, Value>> {
             return None;
         }
         let value = match d.get(key) {
-            // Keep unmeasured Trace levels instead of changing them to the native limit.
-            Some(D::Integer(n)) if id == "filter.stylize.traceContour" && !(0..=255).contains(n) => return None,
             Some(value) => kind.read(value)?,
             None => kind.default(),
         };
