@@ -1491,7 +1491,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert_eq!(more_steps[4].1, json!({"foreground": "#000000"}));
     assert!(more.unsupported.is_empty());
     assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
-    assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic"}));
+    assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic", "scaleStyles": true}));
     assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false}));
     assert_eq!(rest_steps[4].1, json!({"path": "/Users/me/logo.png", "scale": 50}));
     assert_eq!(rest_steps[5].1, json!({"path": "/Users/me/in.psd"}));
