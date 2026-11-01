@@ -662,18 +662,33 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
 /// the modifier with the event.
 pub(crate) fn event_tool(app: &PhotocraftApp, mods: egui::Modifiers) -> Tool {
     match app.active_tool() {
-        t if app.tool_override.is_none() && mods.command && crate::hold_keys::cmd_moves(t) && app.ui.transform.is_none() && app.ui.text_edit.is_none() => {
+        t if app.tool_override.is_none()
+            && mods.command
+            && (crate::hold_keys::cmd_moves(t) || native_set_move_shortcut(app, t, mods))
+            && app.ui.transform.is_none()
+            && app.ui.text_edit.is_none() =>
+        {
             Tool::Move
         }
         t => t,
     }
 }
 
+fn is_selection_move_tool(tool: Tool) -> bool {
+    matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand)
+}
+
+/// A native colour set cannot float, so selection-tool shortcuts use the same native Move
+/// gesture from inside or outside the selection, before snapping or modifiers classify it.
+fn native_set_move_shortcut(app: &PhotocraftApp, tool: Tool, mods: egui::Modifiers) -> bool {
+    is_selection_move_tool(tool) && !mods.shift && app.ui.polygon.is_empty() && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1)
+}
+
 /// Does a ⌘ (⌘⌥) press with selection tool `tool` at `p` move the whole layer (a duplicate with
 /// ⌥), as the Move tool would? Outside the selection or without one; inside it, ⌘ drags the
 /// selected pixels instead (`selection_drag_kind`).
 pub(crate) fn command_moves_layer(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> bool {
-    let selection_tool = matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagicWand);
+    let selection_tool = is_selection_move_tool(tool);
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     selection_tool && mods.command && !mods.shift && !floating && app.ui.polygon.is_empty() && !inside_selection(app, p)
 }

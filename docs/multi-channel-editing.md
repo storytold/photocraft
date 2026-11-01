@@ -42,6 +42,9 @@ snapping back to its starting outline, and Shift constrains movement to axes or 
 A shown Smart Filter mask keeps Move aimed at the whole object, even with colour rows
 retained behind it. Copying that object keeps its mask view on the copy. Set-copy refusal
 also applies to Cmd/Ctrl+Alt drags started with selection tools.
+Cmd/Ctrl-dragging with a selection tool uses the same native Move path inside or
+outside the selection. Native-set canvas drags cannot become whole-layer copies
+by crossing another document's tab; Layers-panel transfers retain their explicit layer scope.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge

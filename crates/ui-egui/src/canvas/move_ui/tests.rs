@@ -974,3 +974,58 @@ fn colour_set_filter_mask_view_keeps_its_target_when_alt_drag_duplicates() {
         assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
     }
 }
+
+#[test]
+fn colour_set_command_drags_from_selection_tools_use_native_selected_move() {
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagicWand] {
+        for start in [[16.0, 16.0], [30.0, 30.0]] {
+            let (mut app, id) = selected_pixels(16);
+            app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+            app.ui.tool = tool;
+            app.ui.extras.snap = true;
+            app.ui.view.snap_to.layers = false;
+            app.ui.view.snap_to.document_bounds = false;
+            let before = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let mut oracle = photocraft_engine::Session::new();
+            oracle.tools.background = app.session.tools.background;
+            oracle.add_document((*before).clone(), None);
+            oracle.execute("edit.transform", json!({"target": {"colors": [0, 2]}, "dx": 2, "dy": 1, "interpolation": "nearest"})).unwrap();
+            let m = egui::Modifiers { command: true, mac_cmd: true, ..Default::default() };
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: start[0] + 2.0, y: start[1] + 1.0, pressure: 1.0 }, m);
+            assert!(!app.ui.status_error, "{tool:?}, {start:?}: {}", app.ui.status);
+            assert_eq!(super::drag_offset(&app), Some((2, 1)), "{tool:?}, {start:?}: native movement, without self-snapping");
+            assert_eq!(crate::canvas::selection_shown_offset(&app), Some((2, 1)));
+            let shown = super::display_doc(&mut app, 0).unwrap().0;
+            assert_eq!(shown.layer(id), oracle.active().unwrap().doc.layer(id));
+            assert_eq!(shown.selection, oracle.active().unwrap().doc.selection);
+            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: start[0] + 2.0, y: start[1] + 1.0 }, m);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer(id), shown.layer(id));
+            assert_eq!(st.doc.selection, shown.selection);
+            assert_eq!(st.history.past_len(), history + 1);
+            assert_eq!(app.ui.tool, tool, "the shortcut does not permanently change tools");
+        }
+    }
+}
+
+#[test]
+fn colour_set_temporary_move_keeps_shift_constraints_after_releasing_command() {
+    for tool in [Tool::RectMarquee, Tool::Brush] {
+        for start in [[16.0, 16.0], [30.0, 30.0]] {
+            let (mut app, _) = selected_pixels(16);
+            app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+            app.ui.tool = tool;
+            let m = egui::Modifiers { command: true, mac_cmd: true, ..Default::default() };
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: start[0] + 14.0, y: start[1] + 12.0, pressure: 1.0 }, m | egui::Modifiers::SHIFT);
+            assert_eq!(super::drag_offset(&app), Some((13, 13)), "{tool:?}: diagonal preview");
+            let shown = super::display_doc(&mut app, 0).unwrap().0;
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: start[0] + 14.0, y: start[1] + 12.0 }, egui::Modifiers::SHIFT);
+            assert_eq!(app.session.active().unwrap().doc.selection, shown.selection, "{tool:?}: release preserves the constrained offset");
+            assert_eq!(app.ui.tool, tool);
+        }
+    }
+}

@@ -120,6 +120,30 @@ fn a_move_tool_drag_onto_a_tab_copies_the_layer_under_the_pointer_and_leaves_the
 }
 
 #[test]
+fn colour_set_move_drag_does_not_arm_a_whole_layer_transfer() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64, "background": "transparent"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.session.set_active(0);
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+    let dest = app.session.documents()[1].doc.clone();
+    let ctx = egui::Context::default();
+    crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
+    crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Move { x: 26.0, y: 16.0, pressure: 1.0 }, Modifiers::NONE);
+    assert_eq!(super::move_drag(&app), None, "the selected set cannot be copied as whole layers");
+    super::over_tab(&mut app, &ctx, 1);
+    assert_eq!(app.session.active_index(), Some(0));
+    assert!(super::get(&ctx).is_none());
+    assert!(app.drag.is_some(), "tab hover must not discard the native Move gesture");
+    assert!(std::sync::Arc::ptr_eq(&app.session.documents()[1].doc, &dest));
+}
+
+#[test]
 fn dropping_back_on_the_source_copies_nothing() {
     let (mut h, _) = harness();
     let row = h.get_by_role_and_label(Role::Button, "paint").rect().center();

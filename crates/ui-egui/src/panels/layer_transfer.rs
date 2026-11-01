@@ -10,7 +10,8 @@
 //! document's tile drops there.
 //!
 //! A Move-tool drag starting inside a selection or moving a floating piece stays a move: Photoshop
-//! would copy just the selected pixels, which is not supported yet.
+//! would copy just the selected pixels, which is not supported yet. Native colour-set drags
+//! also stay in their source document: a layer transfer would copy untargeted samples too.
 
 use photocraft_doc::{DocId, LayerId};
 use serde_json::json;
@@ -63,7 +64,11 @@ pub fn begin_from_panel(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId
 fn move_drag(app: &PhotocraftApp) -> Option<[f64; 2]> {
     let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move && d.sel_move.is_none())?;
     let st = app.session.active()?;
-    let plain = app.ui.transform.is_none() && app.guide_drag.is_none() && st.doc.selection.is_none() && st.floating.is_none();
+    let plain = app.ui.transform.is_none()
+        && app.guide_drag.is_none()
+        && st.doc.selection.is_none()
+        && st.floating.is_none()
+        && crate::move_ui::color_target(app).is_none_or(|colors| colors.len() <= 1);
     plain.then_some(d.start)
 }
 
