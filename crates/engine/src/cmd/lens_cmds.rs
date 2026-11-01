@@ -312,8 +312,9 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value,
         let selection = doc.selection.clone();
         // A targeted layer mask, alpha channel or Quick Mask is filtered instead of the layer, as
         // Photoshop's Camera Raw Filter does (#10457; Lens Correction and Adaptive Wide Angle are
-        // disabled then).
-        if crate::channel_cmds::target_of(&stored) != crate::channel_cmds::Target::Pixels {
+        // disabled then). A smart object's filter mask isn't filtered: Camera Raw adds a smart
+        // filter there, as from the menu (`follows_filter_mask`).
+        if !matches!(crate::channel_cmds::target_of(&stored), crate::channel_cmds::Target::Pixels | crate::channel_cmds::Target::FilterMask) {
             let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), &stored)? else { return Ok(()) };
             let out = f(surf, canvas);
             *surf = match &selection {
