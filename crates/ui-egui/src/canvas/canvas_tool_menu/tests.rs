@@ -1006,6 +1006,27 @@ fn stroke_path_falls_back_to_off_for_a_corrupt_saved_simulate_pressure() {
 }
 
 #[test]
+fn stroke_path_failed_confirmation_does_not_remember_simulate_pressure() {
+    let mut app = stroke_app();
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, true);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the applied choice is remembered");
+    // Untick it, point the dialog at a path that does not exist and press OK: the stroke fails, so
+    // nothing was applied and nothing may be remembered.
+    let id = open_stroke(&mut app);
+    set_pressure(&mut app, id, false);
+    app.ui.dialog_mut(id).unwrap().fields.insert("name".into(), json!("no such path"));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err(), "stroking a missing path fails");
+    assert_eq!(app.session.journal.iter().filter(|(id, _)| id == "path.stroke").count(), 1, "the failed OK ran no stroke");
+    while let Some(d) = app.ui.dialogs.last().map(|d| d.id) {
+        app.ui.close_dialog(d);
+    }
+    assert_eq!(app.session.prefs().dialogs.get("path.stroke"), Some(&json!({"simulatePressure": true})), "a failed OK leaves the memory alone");
+    assert_eq!(pressure_on_open(&mut app), Some(true), "the next opening still shows the last applied choice");
+}
+
+#[test]
 fn stroke_path_does_not_remember_its_tool_choice() {
     // Only Simulate Pressure sticks (#10527). Nobody asked for the tool to be remembered, so the
     // dialog keeps opening on the spec's default and the engine keeps defaulting to the brush.
