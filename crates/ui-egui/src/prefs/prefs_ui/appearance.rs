@@ -289,29 +289,21 @@ fn theme_row(
     let t = Tokens::get(ctx);
     let caption: egui::WidgetText = RichText::new(tl!(title)).color(t.text_dim).into();
     row(caption, &mut |ui: &mut egui::Ui, _cap| {
-        // The strip stays physical left-to-right in both directions; only the emission
-        // order below mirrors, so the first option ends up at the reading start.
-        crate::direction::ltr(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Room for the favourite star badges on the swatch corners.
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let rtl = crate::direction::is_rtl();
-                // Under RTL the strip is emitted in reverse: the Active marker goes first
-                // (the reading end) and the first option ends up the rightmost one.
-                // The swatch paint itself never mirrors.
-                if rtl && active {
-                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-                    ui.add_space(6.0);
-                }
-                for i in 0..options.len() {
-                    let (id, kind) = options[if rtl { options.len() - 1 - i } else { i }];
-                    theme_swatch(ui, kind, id, selected, favorites);
-                }
-                if !rtl && active {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-                }
-            });
+        // The strip runs in reading order: it starts right after the label at the reading
+        // start, the first option is the reading-start-most one, and the Active marker reads
+        // last, at the reading end. (An `ltr` scope would anchor the strip at the remaining
+        // space's far edge, which in a right-to-left row is the reading end.) The swatch paint
+        // itself never mirrors.
+        crate::direction::horizontal_centered(ui, |ui| {
+            // Room for the favourite star badges on the swatch corners.
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for &(id, kind) in options {
+                theme_swatch(ui, kind, id, selected, favorites);
+            }
+            if active {
+                ui.add_space(6.0);
+                ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+            }
         });
     });
 }
