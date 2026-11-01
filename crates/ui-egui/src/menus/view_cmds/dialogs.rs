@@ -224,14 +224,26 @@ fn form_editor(ui: &mut egui::Ui, f: &mut Map<String, Value>, k: &str, choices: 
                     crate::widgets::dropdown(ui, &format!("form-{k}"), &label(k), &mut s, &refs, 200.0);
                 }
                 None => {
-                    ui.with_layout(crate::direction::row(), |ui| {
-                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
-                        ui.add(crate::widgets::rtl_singleline(&mut s, &mut layouter).desired_width(260.0)).accessible_name(label(k));
-                        // A folder field gets the system folder picker (#7942, #9357).
-                        if crate::dialogs::is_folder_field(k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
-                            *browse = Some(k.to_string());
-                        }
-                    });
+                    // File Info's description, keywords and copyright notice are multiline
+                    // editors; Enter edits the field instead of confirming the dialog.
+                    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
+                    if file_info && matches!(k, "description" | "keywords" | "copyright") {
+                        egui::ScrollArea::vertical().id_salt(("form-text", &k)).max_height(80.0).show(ui, |ui| {
+                            let response = crate::widgets::rtl_multiline_edit(ui, &mut s, 3, 260.0).accessible_name(label(k));
+                            if response.has_focus() {
+                                ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                            }
+                        });
+                    } else {
+                        ui.with_layout(crate::direction::row(), |ui| {
+                            let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                            ui.add(crate::widgets::rtl_singleline(&mut s, &mut layouter).desired_width(260.0)).accessible_name(label(k));
+                            // A folder field gets the system folder picker (#7942, #9357).
+                            if crate::dialogs::is_folder_field(k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                                *browse = Some(k.to_string());
+                            }
+                        });
+                    }
                 }
             }
             json!(s)
