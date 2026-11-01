@@ -1157,7 +1157,8 @@ fn apply_sketch(e: &GalleryEffect, win: &mut Win, ctx: &Ctx) -> bool {
             let mut l = win.lum();
             blur1(&mut l, w, h, 0.3 + g("smoothness") * 0.3);
             for i in 0..win.c.len() {
-                win.c[i] = mix(bg, fg, smoothstep(bal + 0.02, bal - 0.02, l[i]));
+                // Smooth the shapes without introducing colors between the ink and paper.
+                win.c[i] = if l[i] < bal { fg } else { bg };
             }
         }
         F::TornEdges => {
