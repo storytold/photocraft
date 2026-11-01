@@ -248,6 +248,8 @@ pub(crate) fn apply_ratio(app: &mut PhotocraftApp) {
     if app.ui.tool != Tool::Crop || app.crop.drag.is_some() {
         return;
     }
+    // A ratio or size chosen after a commit fits a frame, not nothing.
+    show_frame(app);
     frame(app);
     fit_frame(app);
     crate::crop_mode::sync_frame(app);
@@ -449,6 +451,14 @@ pub fn cancel(app: &mut PhotocraftApp) {
 pub fn hide_frame(app: &mut PhotocraftApp) {
     if app.ui.tool == Tool::Crop {
         app.crop.dismissed = dismiss_key(app);
+    }
+}
+
+/// Ends [`hide_frame`] and makes the default frame now, so what follows acts on it as on any
+/// default frame: a press records it as the box's Undo step, a ratio fits it.
+pub(crate) fn show_frame(app: &mut PhotocraftApp) {
+    if app.crop.dismissed.take().is_some() {
+        frame(app);
     }
 }
 
@@ -823,7 +833,7 @@ fn straighten(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers, p: [f64; 
     // A press it takes brings the hidden frame back like any other press, even when the line is
     // too short to turn the frame.
     if matches!(ev, ToolEvent::Down { .. }) {
-        app.crop.dismissed = None;
+        show_frame(app);
     }
     claim(app);
     // Default mode: the image turns so the line ends up level.
@@ -844,7 +854,7 @@ fn straighten(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers, p: [f64; 
 
 /// Starts the drag a press at `p` selects: resize, move, turn or draw.
 fn begin_drag(app: &mut PhotocraftApp, p: [f64; 2]) {
-    app.crop.dismissed = None;
+    show_frame(app);
     claim(app);
     app.crop.editing = true;
     app.crop.press_step = Some(step_of(app));

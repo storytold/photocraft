@@ -138,6 +138,41 @@ fn enter_on_the_selection_frame_crops_to_it_at_8_and_16_bit() {
     }
 }
 
+/// A commit hides the frame; picking the Crop tool again, a ratio, or a press brings back the
+/// default frame, and the press's crop keeps its box Undo and Redo.
+#[test]
+fn a_hidden_frame_comes_back_on_re_picking_a_ratio_or_a_press_with_redo_intact() {
+    let committed = || {
+        let mut app = app(SampleType::U8);
+        app.ui.crop_rect = Some([20.0, 10.0, 120.0, 60.0]);
+        crate::canvas::commit_crop(&mut app);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None, "hidden after the commit");
+        app
+    };
+    let whole = Some([0.0, 0.0, 100.0, 50.0]);
+    // Picking the Crop tool while it is still picked.
+    let mut app = committed();
+    crate::tool_memory::select(&mut app, Tool::Crop);
+    assert_eq!(app.ui.crop_rect, whole);
+    assert!(app.crop.default_frame);
+    // A ratio fits the frame it brings back.
+    let mut app = committed();
+    app.ui.tool_options.crop_ratio = "1:1".into();
+    apply_ratio(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([25.0, 0.0, 75.0, 50.0]));
+    // A drawn crop undoes to the default frame, and redoes.
+    let mut app = committed();
+    drag(&mut app, &[[10.0, 10.0], [40.0, 30.0]], NONE);
+    let drawn = app.ui.crop_rect;
+    assert_eq!(drawn, Some([10.0, 10.0, 40.0, 30.0]));
+    assert!(intercept(&mut app, "edit.undo").is_some());
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, whole, "undo goes back to the default frame");
+    assert!(intercept(&mut app, "edit.redo").is_some());
+    assert_eq!(app.ui.crop_rect, drawn, "and redo still has the drawn frame");
+}
+
 #[test]
 fn the_frame_is_edited_from_a_press_until_commit_cancel_or_another_tool() {
     let mut app = app(SampleType::U8);

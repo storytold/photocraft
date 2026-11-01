@@ -1014,7 +1014,7 @@ fn the_crop_row_crops_and_no_frame_shows_until_the_next_press() {
     assert!(h.state().ui.canvas_tool_menu.is_none());
     assert_eq!(h.state().ui.tool, Tool::Crop);
     assert_eq!(h.state().ui.crop_rect, None, "no frame around the cropped image");
-    // A click on the canvas brings back the tool's default frame.
+    // A click on the canvas brings back a frame around the whole cropped image.
     let center = h.state().last_canvas_rect.center();
     h.event(egui::Event::PointerMoved(center));
     h.run_steps(1);
@@ -1022,7 +1022,7 @@ fn the_crop_row_crops_and_no_frame_shows_until_the_next_press() {
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert!(h.state().ui.crop_rect.is_some() && h.state().crop.default_frame, "the press brings a frame back");
+    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, f64::from(size.width), f64::from(size.height)]), "the click brings a frame back");
 }
 
 #[test]
