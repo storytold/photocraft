@@ -505,7 +505,7 @@ fn draw_warp_content(
     pv: &TransformPreview,
     display: Option<&photocraft_engine::display_color::CanvasDisplay>,
 ) {
-    let r = t.rect;
+    let r = pv.several.as_ref().map_or(t.rect, |sv| [sv.rect.x0, sv.rect.y0, sv.rect.x1, sv.rect.y1].map(f64::from));
     let m = w.to_mesh(1, 1);
     let (us, vs) = crate::warp_preview::samples(&m, xf.zoom as f64);
     let (tex, uv) = pv.texture.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, t.interpolation == "nearest", display);
