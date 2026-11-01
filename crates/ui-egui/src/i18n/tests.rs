@@ -229,6 +229,16 @@ fn lookups_fall_back_to_english() {
     assert_eq!(trn(JA(), 3, "{n} no such message", "{n} no such messages"), "3 no such messages");
 }
 
+/// Romanian: 1 is one; 0 and counts ending in 01–19 are few ("2 straturi", "119 straturi");
+/// the rest take "de" ("20 de straturi", "121 de straturi").
+#[test]
+fn romanian_plural_rule() {
+    let ro = Lang::from_code("ro").expect("ro registered");
+    let counts = [0, 1, 2, 19, 20, 21, 100, 101, 119, 120, 121, 1001];
+    let forms: Vec<usize> = counts.into_iter().map(ro.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 2, 2, 2, 1, 1, 2, 2, 1]);
+}
+
 #[test]
 fn russian_plural_rule() {
     let ru = Lang::from_code("ru").expect("ru registered");
