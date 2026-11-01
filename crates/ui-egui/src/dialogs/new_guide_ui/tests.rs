@@ -5,8 +5,12 @@ use crate::menus::invoke as menu;
 
 /// One 4 × 2 inch document at 100 ppi, with the rulers in `unit`.
 fn app(unit: &str) -> (PhotocraftApp, egui::Context) {
+    app_at_resolution(unit, 100)
+}
+
+fn app_at_resolution(unit: &str, dpi: u32) -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+    app.run("file.new", json!({"width": 400, "height": 200, "resolution": dpi})).unwrap();
     app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": unit})).unwrap();
     app.sync_views();
     (app, egui::Context::default())
@@ -141,4 +145,110 @@ fn the_last_position_reopens_in_whatever_the_ruler_unit_is_now() {
         assert_eq!(app.ui.dialog_mut(d).unwrap().fields["position"], shown, "{unit}");
         crate::dialogs::cancel(&mut app, d).unwrap();
     }
+}
+
+#[test]
+fn bare_positions_use_the_selected_unit_at_the_document_resolution() {
+    for (unit, position, expected) in [("px", "12,5", 12.5), ("mm", "25,4", 300.0), ("in", "1,5", 450.0)] {
+        let (mut app, ctx) = app_at_resolution("pixels", 300);
+        let d = open(&mut app, &ctx);
+        set(&mut app, d, "vertical", position);
+        app.ui.dialog_mut(d).unwrap().fields.insert(UNIT.into(), json!(unit));
+        crate::dialogs::confirm(&mut app, d).unwrap();
+        assert_eq!(guides(&app), (vec![], vec![expected]), "{position} {unit}");
+    }
+}
+
+#[test]
+fn unit_conversion_preserves_fractional_negative_positions_and_percent_extents() {
+    let (app, _) = app_at_resolution("pixels", 300);
+    let mut position = "-123.456789 px".to_string();
+    let mut from = Unit::Pixels;
+    for to in [Unit::Millimeters, Unit::Inches, Unit::Pixels] {
+        position = convert_position(&app, &position, from, to, true).unwrap();
+        from = to;
+    }
+    assert!((Unit::parse_length(&position).unwrap().0 + 123.456789).abs() < 1e-8, "{position}");
+    assert_eq!(convert_position(&app, "50%", Unit::Pixels, Unit::Pixels, true).unwrap(), "200 px");
+    assert_eq!(convert_position(&app, "50%", Unit::Pixels, Unit::Pixels, false).unwrap(), "100 px");
+    for invalid in ["", "-", "12 furlongs", "NaN", "inf"] {
+        assert!(convert_position(&app, invalid, Unit::Pixels, Unit::Inches, true).is_none());
+    }
+}
+
+#[test]
+fn switching_units_and_confirming_preserves_high_precision_positions() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for original in [-1e-10_f64, 1e-10, -1e-100, 1e-100, -123.45678901234567, 0.0, 100.0, 123.45678901234567] {
+        let (app, ctx) = app_at_resolution("pixels", 300);
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        let d = open(h.state_mut(), &ctx);
+        set(h.state_mut(), d, "vertical", &format!("{original} px"));
+        h.run_steps(3);
+        for label in ["Inches", "Millimeters", "Pixels"] {
+            h.get_by_label("Units").click();
+            h.run_steps(3);
+            h.get_by_label(label).click();
+            h.run_steps(3);
+        }
+        crate::dialogs::confirm(h.state_mut(), d).unwrap();
+        let (horizontal, vertical) = guides(h.state());
+        assert!(horizontal.is_empty());
+        assert_eq!(vertical.len(), 1);
+        let actual = vertical[0];
+        // Allow floating-point conversion error, but no loss from decimal-place rounding.
+        let tolerance = original.abs() * f64::EPSILON * 8.0;
+        assert!((actual - original).abs() <= tolerance, "{original} px became {actual} px");
+    }
+}
+
+#[test]
+fn editing_an_existing_guide_accepts_the_selected_unit_and_undo_restores_it() {
+    let (mut app, _) = app("pixels");
+    app.run(COMMAND, json!({"orientation": "horizontal", "position": 10})).unwrap();
+    crate::guide_select::select(&mut app, false, 0);
+    let d = open_edit(&mut app).unwrap();
+    set(&mut app, d, "vertical", "25,4");
+    app.ui.dialog_mut(d).unwrap().fields.insert(UNIT.into(), json!("mm"));
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(guides(&app), (vec![], vec![100.0]));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(guides(&app), (vec![10.0], vec![]));
+}
+
+#[test]
+fn unit_dropdown_converts_the_draft_and_bare_typing_uses_its_selection() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (app, ctx) = app_at_resolution("pixels", 300);
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    let d = open(h.state_mut(), &ctx);
+    set(h.state_mut(), d, "vertical", "300 px");
+    h.run_steps(3);
+    for (label, position, suffix) in [("Millimeters", "25.4 mm", "mm"), ("Inches", "1 in", "in"), ("Pixels", "300 px", "px")] {
+        h.get_by_label("Units").click();
+        h.run_steps(3);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        let fields = &h.state().ui.dialogs.iter().find(|dialog| dialog.id == d).unwrap().fields;
+        assert_eq!(fields["position"], position);
+        assert_eq!(fields[UNIT], suffix);
+        assert_eq!(guides(h.state()), (vec![], vec![]), "changing units only edits the draft");
+    }
+    // An explicit typed suffix also updates the dropdown; Tab returns to the position field.
+    set(h.state_mut(), d, "vertical", "25.4 mm");
+    h.run_steps(3);
+    assert_eq!(h.get_by_label("Units").value().as_deref(), Some("Millimeters"));
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(h.get_by_label("Position").is_focused());
+    h.event(egui::Event::Text("12,7".into()));
+    h.run_steps(3);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(guides(h.state()), (vec![], vec![150.0]));
+    assert!(h.state().ui.dialogs.is_empty());
 }

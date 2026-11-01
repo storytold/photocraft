@@ -330,7 +330,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
-        _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(app, ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);

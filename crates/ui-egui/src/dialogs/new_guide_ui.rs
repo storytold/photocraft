@@ -2,9 +2,10 @@
 //! Photoshop.
 //!
 //! The position opens in the ruler unit ("0 cm") and takes any unit Photoshop's field takes:
-//! "50%", "2.5 cm", "1in", "12 pt", "3 pc", "100 px". A bare number is in the ruler unit, as in
-//! Photoshop. OK runs `view.newGuide` with the text, so the engine converts it with the document's
-//! resolution. A position the engine refuses reopens the dialog with what was typed and the
+//! "50%", "2.5 cm", "1in", "12 pt", "3 pc", "100 px". The unit dropdown converts the current
+//! position without moving the guide; a bare number uses the selected unit. An explicit suffix
+//! overrides that selection. OK runs `view.newGuide` with the text, so the engine converts it with
+//! the document's resolution. A position the engine refuses reopens the dialog with what was typed and the
 //! engine's message, as Photoshop keeps New Guide open on a bad position. The
 //! dialog is an ordinary one in the UI state, so `ui.inspect`, `ui.dialog.confirm` and
 //! `ui.dialog.cancel` drive it. The last successful guide's orientation and colour open next
@@ -36,6 +37,17 @@ const INITIAL_COLOR: &str = "__initialColor";
 const CUSTOM: &str = "custom";
 /// New Guide's colour when nothing was remembered, as in Photoshop.
 const DEFAULT_COLOR: &str = "cyan";
+const UNIT: &str = "__unit";
+
+const UNITS: [(Unit, &str); 7] = [
+    (Unit::Pixels, "Pixels"),
+    (Unit::Millimeters, "Millimeters"),
+    (Unit::Inches, "Inches"),
+    (Unit::Centimeters, "Centimeters"),
+    (Unit::Points, "Points"),
+    (Unit::Picas, "Picas"),
+    (Unit::Percent, "Percent"),
+];
 
 /// A colour's label in the list (the catalogue holds each one).
 pub(crate) fn color_label(name: &str) -> &'static str {
@@ -73,6 +85,27 @@ fn ruler_unit(app: &PhotocraftApp) -> Unit {
     app.session.prefs().units_and_rulers.rulers
 }
 
+fn selected_unit(app: &PhotocraftApp, f: &Map<String, Value>) -> Unit {
+    f.get(UNIT).and_then(Value::as_str).and_then(Unit::from_suffix).unwrap_or_else(|| ruler_unit(app))
+}
+
+/// Keep subpixel positions when switching units: ruler readout rounding would move the guide.
+/// Invalid drafts stay untouched for the engine to reject on OK.
+fn convert_position(app: &PhotocraftApp, position: &str, from: Unit, to: Unit, vertical: bool) -> Option<String> {
+    let (value, suffix) = Unit::parse_length(position)?;
+    let doc = &app.session.active()?.doc;
+    let dpi = f64::from(doc.resolution_dpi);
+    let extent = f64::from(if vertical { doc.size.width } else { doc.size.height });
+    let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
+    let px = suffix.unwrap_or(from).to_px(value, dpi, extent, ppi);
+    let converted = to.from_px(px, dpi, extent, ppi);
+    if !px.is_finite() || !converted.is_finite() {
+        return None;
+    }
+    // Display preserves the f64 value without exponent notation, which parse_length rejects.
+    Some(with_unit(&converted.to_string(), to))
+}
+
 /// "0 cm", "0 px", "0 %": a value in `unit` as the field shows it, with a space before the unit
 /// as in Photoshop.
 fn with_unit(value: &str, unit: Unit) -> String {
@@ -105,6 +138,7 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     f.insert("__label".into(), json!("New Guide…"));
     f.insert("orientation".into(), json!(orientation));
     f.insert("position".into(), json!(position));
+    f.insert(UNIT.into(), json!(ruler_unit(app).suffix()));
     f.insert("color".into(), json!(color));
     f.insert("customColor".into(), json!(custom));
     app.ui.open_dialog(DialogKind::Command, f)
@@ -142,15 +176,17 @@ pub fn open_edit(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert(EDIT.into(), json!({"orientation": orientation, "index": index}));
     f.insert("orientation".into(), json!(orientation));
     f.insert("position".into(), json!(in_ruler_unit(app, px, vertical)));
+    f.insert(UNIT.into(), json!(ruler_unit(app).suffix()));
     f.insert(INITIAL_COLOR.into(), json!(if color == CUSTOM { custom.clone() } else { color.clone() }));
     f.insert("color".into(), json!(color));
     f.insert("customColor".into(), json!(custom));
     Ok(app.ui.open_dialog(DialogKind::Command, f))
 }
 
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal").to_string();
     let mut position = f.get("position").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut unit = selected_unit(app, f);
     let mut color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR).to_string();
     if let Some(error) = f.get("__error").and_then(Value::as_str) {
         ui.colored_label(ui.visuals().error_fg_color, error);
@@ -164,7 +200,24 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         });
         ui.end_row();
         let position_label = ui.label(tl!("Position"));
-        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
+        ui.horizontal(|ui| {
+            let response = ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
+            if ui.is_enabled() {
+                crate::field_tab::register(ui.ctx(), response.id);
+            }
+            if response.gained_focus() {
+                crate::field_tab::select_all(ui.ctx(), response.id, &position);
+            }
+            if let Some((_, Some(typed_unit))) = Unit::parse_length(&position) {
+                unit = typed_unit;
+            }
+            let previous = unit;
+            if crate::widgets::dropdown(ui, "new-guide-unit", tl!("Units"), &mut unit, &UNITS, 110.0)
+                && let Some(converted) = convert_position(app, &position, previous, unit, orientation == "vertical")
+            {
+                position = converted;
+            }
+        });
         ui.end_row();
         ui.label(tl!("Color"));
         ui.horizontal(|ui| {
@@ -186,16 +239,17 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     f.insert("orientation".into(), json!(orientation));
     f.insert("position".into(), json!(position));
+    f.insert(UNIT.into(), json!(unit.suffix()));
     f.insert("color".into(), json!(color));
 }
 
-/// The command's parameters: a bare number gets the ruler unit; anything else goes as typed, for
+/// The command's parameters: a bare number gets the selected unit; anything else goes as typed, for
 /// the engine to read (or refuse, keeping the dialog open). Custom… sends its "#rrggbb".
 pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
     let orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal");
     let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim();
     let position = match Unit::parse_length(typed) {
-        Some((_, None)) => with_unit(typed, ruler_unit(app)),
+        Some((_, None)) => with_unit(typed, selected_unit(app, f)),
         _ => typed.to_string(),
     };
     let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
