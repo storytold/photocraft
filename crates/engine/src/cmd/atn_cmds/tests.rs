@@ -476,6 +476,10 @@ fn settings_at_the_value_the_event_plays_still_export() {
 #[test]
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
+        ("filter.stylize.findEdges", json!({})),
+        ("filter.stylize.solarize", json!({})),
+        ("filter.pixelate.facet", json!({})),
+        ("filter.pixelate.fragment", json!({})),
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),
         ("filter.sharpen.unsharpMask", json!({"amount": 120, "radius": 1.5, "threshold": 3})),
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
