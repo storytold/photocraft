@@ -232,7 +232,8 @@ fn views_keep_the_channel_and_the_menu_toggles_options() {
     h.get_by_label("Show Channels in Color").click();
     h.run_steps(2);
     assert!(h.state().ui.histogram_panel.show_channels_in_color);
-    h.get_by_label("Show Statistics").click();
+    // Checked rows carry the gutter checkmark ("✔ …") in their label; match by containment.
+    h.get_by_label_contains("Show Statistics").click();
     h.run_steps(2);
     assert!(!h.state().ui.histogram_panel.show_statistics);
     // Kept with the preferences.
