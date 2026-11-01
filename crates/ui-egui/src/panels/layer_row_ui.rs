@@ -297,7 +297,7 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     // Submenu rows go through the shared `submenu_row`: the row's label and arrow mirror
     // under a right-to-left direction (a stock `menu_button` title stays left-anchored) and
     // its body is scoped through `popup_body` like every other menu popup.
-    let submenu_title = |ui: &Ui, label: &str| {
+    let submenu_title = |ui: &egui::Ui, label: &str| {
         if ui.style().right_to_left {
             crate::menu_keys::menu_row_text(ui, false, label, None, false, crate::menu_keys::GutterSide::ReadingStart)
         } else {
