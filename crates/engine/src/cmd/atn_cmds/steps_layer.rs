@@ -360,6 +360,7 @@ pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", D::Reference(items)))
 }
 
+/// Import Fill or Paint Bucket, keeping Content-Aware choices the engine cannot replay.
 pub(super) fn fill_from(d: &Descriptor) -> Mapped {
     if let Some(from) = get_obj(d, "From") {
         // The Paint Bucket tool's click: its point is in pixels, or in percent of the canvas
@@ -435,6 +436,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
     step("edit.fill", p)
 }
 
+/// Export Fill settings, including the native Content-Aware no-rotation behavior.
 pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "paint.bucket" {
         let mut d = desc("null").with("From", D::Descriptor(desc("Pnt ").with("Hrzn", px(jnum(p, "x")?)).with("Vrtc", px(jnum(p, "y")?))));

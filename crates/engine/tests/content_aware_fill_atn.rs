@@ -70,6 +70,7 @@ fn pixels(s: &Session, id: LayerId) -> Vec<f32> {
     doc.layer(id).unwrap().surface().unwrap().read_region(doc.bounds())
 }
 
+/// Imported flags retain their values and native pixel results through saved actions.
 #[test]
 fn typed_flags_survive_saved_descriptors_and_public_playback() {
     for event in [AtnEvent::Code(*b"Fl  "), AtnEvent::name("fill")] {
@@ -112,6 +113,7 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
     }
 }
 
+/// Omission and null retain native defaults; saved native fills explicitly disable rotation.
 #[test]
 fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
     let mut s = Session::new();
@@ -147,6 +149,7 @@ fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
     }
 }
 
+/// Unreplayable flags remain intact as unsupported Photoshop steps.
 #[test]
 fn malformed_flags_and_requested_rotation_remain_kept_steps() {
     for event in [AtnEvent::Code(*b"Fl  "), AtnEvent::name("fill")] {
