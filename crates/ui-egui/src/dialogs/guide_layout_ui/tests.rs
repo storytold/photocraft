@@ -348,6 +348,8 @@ fn the_body_rows_mirror_in_a_right_to_left_ui() {
     assert!(l_ok.left() > l_rows.right(), "LTR: the rail follows the fields: {l_ok:?} / {l_rows:?}");
 
     let (r_columns, r_rows, r_ok, r_axis) = mirrored_rows(crate::text::direction::Dir::Rtl);
+    eprintln!("LTR cols {l_columns:?} rows {l_rows:?} ok {l_ok:?} axis {l_axis}");
+    eprintln!("RTL cols {r_columns:?} rows {r_rows:?} ok {r_ok:?} axis {r_axis}");
     assert!((l_axis - r_axis).abs() < 1.0, "the dialog sits at the same place in both directions: {l_axis} / {r_axis}");
     assert!(r_columns.left() > r_rows.right(), "RTL: the Columns group still leads, from the right: {r_columns:?} / {r_rows:?}");
     assert!(r_ok.right() < r_rows.left(), "RTL: the rail leads at the reading end: {r_ok:?} / {r_rows:?}");
