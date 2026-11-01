@@ -1753,6 +1753,26 @@ fn frame_stroke_bounds_hold_its_mitered_corners() {
     }
 }
 
+/// A group whose layer mask reveals everything and holds no pixels lays its effects out over the
+/// document, as Photoshop does; without a mask (or with a hide-all or disabled one) its effects
+/// keep its children's bounds, and a pixel layer keeps its own bounds whatever its mask.
+#[test]
+fn a_reveal_all_group_mask_lays_effects_out_over_the_document() {
+    let canvas = Rect::new(0, 0, 40, 40);
+    let child = solid_layer("sq", Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let mut grp = Layer::group("g", vec![child.clone()]);
+    assert_eq!(effects_frame(&grp, canvas), Rect::new(10, 10, 30, 30));
+    grp.mask = Some(LayerMask::reveal_all());
+    assert_eq!(effects_frame(&grp, canvas), canvas);
+    grp.mask = Some(LayerMask { enabled: false, ..LayerMask::reveal_all() });
+    assert_eq!(effects_frame(&grp, canvas), Rect::new(10, 10, 30, 30));
+    grp.mask = Some(LayerMask::hide_all());
+    assert_eq!(effects_frame(&grp, canvas), Rect::new(10, 10, 30, 30));
+    let mut pixels = child;
+    pixels.mask = Some(LayerMask::reveal_all());
+    assert_eq!(effects_frame(&pixels, canvas), Rect::new(10, 10, 30, 30));
+}
+
 #[test]
 fn an_empty_frames_effects_follow_its_stroke() {
     // No children: the frame's drop shadow is shaped by its stroke alone.
