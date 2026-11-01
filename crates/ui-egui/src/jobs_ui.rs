@@ -920,7 +920,7 @@ mod dialog_content_rtl_tests {
                     ui.label("job-title");
                     crate::direction::dialog_row(ui, |ui| {
                         ui.label("job-row-label");
-                        ui.button("job-row-button");
+                        let _ = ui.button("job-row-button");
                     });
                 });
             },
