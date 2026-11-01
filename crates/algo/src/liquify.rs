@@ -189,6 +189,22 @@ struct StrokeCursor {
     end: [f64; 2],
     last_dab: [f64; 2],
     carry: f64,
+    /// The pointer pressure at `end`.
+    pressure: f64,
+}
+
+/// A stroke's pending travel shown ahead of its next dab ([`LiquifyField::show_pending`]): the
+/// nodes the dab wrote, as they were, so [`LiquifyField::hide_pending`] can put them back.
+#[derive(Clone, Debug)]
+pub struct PendingDab {
+    i0: usize,
+    j0: usize,
+    i1: usize,
+    j1: usize,
+    d: Vec<[f32; 2]>,
+    freeze: Vec<f32>,
+    /// The document rectangle the dab changed.
+    pub dirty: Rect,
 }
 
 /// Dabs over this many field nodes compute their rows in parallel (an 800 px brush has about
@@ -208,7 +224,13 @@ fn dab_spacing(r: f64) -> f64 {
 /// Thaw) while it moves: scaled to the spacing so its effect per distance travelled stays what it
 /// was with dabs a fifth of the radius apart.
 fn moving_weight(r: f64) -> f64 {
-    dab_spacing(r) / (r * 0.2).max(0.5)
+    moving_weight_for(r, dab_spacing(r))
+}
+
+/// [`moving_weight`] for a dab that stands for `dist` of travel (a pending dab, or the last one
+/// of a stroke, which stand for less than a spacing).
+fn moving_weight_for(r: f64, dist: f64) -> f64 {
+    dist / (r * 0.2).max(0.5)
 }
 
 /// The default field resolution for `bounds`: 2 px per node up to 4 MP, 4 px beyond.
@@ -299,7 +321,7 @@ impl LiquifyField {
         for w in pts.windows(2) {
             dirty = dirty.union(&self.stroke_segment(s, w[0], w[1]));
         }
-        dirty
+        dirty.union(&self.stroke_end(s))
     }
 
     /// Lasso: sets the freeze mask to `amount` (1.0 when none; 0.0 thaws) at every field node
@@ -360,7 +382,7 @@ impl LiquifyField {
     /// callers use this plus [`Self::stroke_segment`] per new point, which is exactly what
     /// [`Self::apply_stroke`] does with the whole point list.
     pub fn stroke_begin(&mut self, s: &LiquifyStroke, p: [f64; 3]) -> Rect {
-        self.cursor = Some(StrokeCursor { end: [p[0], p[1]], last_dab: [p[0], p[1]], carry: 0.0 });
+        self.cursor = Some(StrokeCursor { end: [p[0], p[1]], last_dab: [p[0], p[1]], carry: 0.0, pressure: p[2].clamp(0.0, 1.0) });
         if s.tool.is_stationary() && !s.tool.is_global() { self.dab(s, [p[0], p[1]], [0.0, 0.0], p[2].clamp(0.0, 1.0), 1.0) } else { Rect::EMPTY }
     }
 
@@ -381,7 +403,7 @@ impl LiquifyField {
         let stationary = s.tool.is_stationary();
         let cur = match self.cursor {
             Some(c) if c.end == [a[0], a[1]] => c,
-            _ => StrokeCursor { end: [a[0], a[1]], last_dab: [a[0], a[1]], carry: 0.0 },
+            _ => StrokeCursor { end: [a[0], a[1]], last_dab: [a[0], a[1]], carry: 0.0, pressure: pa },
         };
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
         let len = dx.hypot(dy);
@@ -403,7 +425,7 @@ impl LiquifyField {
         // segment's end still falls on it, so cutting one segment in two never adds or drops a dab.
         let slack = spacing * 1e-6;
         if first > len + slack {
-            self.cursor = Some(StrokeCursor { end: [b[0], b[1]], last_dab: cur.last_dab, carry: cur.carry + len });
+            self.cursor = Some(StrokeCursor { end: [b[0], b[1]], last_dab: cur.last_dab, carry: cur.carry + len, pressure: pb });
             return dirty;
         }
         let last_k = ((len - first + slack) / spacing).floor().max(0.0);
@@ -432,8 +454,89 @@ impl LiquifyField {
             }
         }
         let last = (first + last_k * spacing).min(len);
-        self.cursor = Some(StrokeCursor { end: [b[0], b[1]], last_dab: at(last), carry: (len - last).clamp(0.0, spacing) });
+        self.cursor = Some(StrokeCursor { end: [b[0], b[1]], last_dab: at(last), carry: (len - last).clamp(0.0, spacing), pressure: pb });
         dirty
+    }
+
+    /// The dab that stands for the stroke's pending travel: the way the pointer has gone since
+    /// the last dab, short of a spacing. `(centre, delta, pressure, weight)`, or `None` when
+    /// nothing is pending or the tool doesn't dab.
+    fn pending_dab(&self, s: &LiquifyStroke) -> Option<([f64; 2], [f64; 2], f64, f64)> {
+        let cur = self.cursor?;
+        if s.tool == LiquifyTool::LassoMask || s.tool.is_global() || cur.carry <= 0.0 || !cur.carry.is_finite() {
+            return None;
+        }
+        let delta = [cur.end[0] - cur.last_dab[0], cur.end[1] - cur.last_dab[1]];
+        if !delta[0].is_finite() || !delta[1].is_finite() || (delta[0] == 0.0 && delta[1] == 0.0) {
+            return None;
+        }
+        let r = (s.size / 2.0).max(0.5);
+        // A stationary tool dabs where the brush is, as much as its travel is worth; Forward
+        // Warp (and Push Left) dab where the brush was, dragging what was under it.
+        Some(if s.tool.is_stationary() { (cur.end, delta, cur.pressure, moving_weight_for(r, cur.carry)) } else { (cur.last_dab, delta, cur.pressure, 1.0) })
+    }
+
+    /// Shows the stroke's pending travel as a dab of its own, so the picture follows the pointer
+    /// at every event instead of once per spacing (on a wide brush moved slowly, that was a
+    /// second between updates). The dab is provisional: [`Self::hide_pending`] takes it back
+    /// before the stroke goes on, so its real dabs stay where the spacing puts them and the
+    /// result still doesn't depend on how finely the pointer was sampled (#2606);
+    /// [`Self::stroke_end`] makes the travel final. `None` when nothing is pending.
+    pub fn show_pending(&mut self, s: &LiquifyStroke) -> Option<PendingDab> {
+        let (c, delta, pressure, weight) = self.pending_dab(s)?;
+        let r = (s.size / 2.0).max(0.5);
+        let (i0, j0, i1, j1) = self.dab_nodes(c, r)?;
+        let (w, rows) = (i1 - i0 + 1, j1 - j0 + 1);
+        let (mut d, mut freeze) = (Vec::with_capacity(w * rows), Vec::with_capacity(w * rows));
+        for j in j0..=j1 {
+            d.extend_from_slice(&self.d[j * self.w + i0..=j * self.w + i1]);
+            freeze.extend_from_slice(&self.freeze[j * self.w + i0..=j * self.w + i1]);
+        }
+        let dirty = self.dab(s, c, delta, pressure, weight);
+        Some(PendingDab { i0, j0, i1, j1, d, freeze, dirty })
+    }
+
+    /// Takes back a [`Self::show_pending`] dab: the nodes it wrote are as they were.
+    pub fn hide_pending(&mut self, p: PendingDab) {
+        let w = p.i1 - p.i0 + 1;
+        for (k, j) in (p.j0..=p.j1).enumerate() {
+            let (Some(d), Some(f)) = (p.d.get(k * w..(k + 1) * w), p.freeze.get(k * w..(k + 1) * w)) else { continue };
+            let Some(row) = self.d.get_mut(j * self.w + p.i0..=j * self.w + p.i1) else { continue };
+            row.copy_from_slice(d);
+            if let Some(row) = self.freeze.get_mut(j * self.w + p.i0..=j * self.w + p.i1) {
+                row.copy_from_slice(f);
+            }
+        }
+    }
+
+    /// Ends the stroke: its pending travel becomes a dab, so the stroke leaves what the preview
+    /// showed. [`Self::apply_stroke`] ends every stroke the same way, so a replay agrees.
+    /// Returns the document rect it changed.
+    pub fn stroke_end(&mut self, s: &LiquifyStroke) -> Rect {
+        let dirty = match self.pending_dab(s) {
+            Some((c, delta, pressure, weight)) => self.dab(s, c, delta, pressure, weight),
+            None => Rect::EMPTY,
+        };
+        self.cursor = None;
+        dirty
+    }
+
+    /// The field nodes a dab of radius `r` at `c` writes, as an inclusive node rectangle, or
+    /// `None` when it reaches no node.
+    fn dab_nodes(&self, c: [f64; 2], r: f64) -> Option<(usize, usize, usize, usize)> {
+        let (gx0, gy0) = self.to_grid(c[0] - r, c[1] - r);
+        let (gx1, gy1) = self.to_grid(c[0] + r, c[1] + r);
+        if !(gx0.is_finite() && gy0.is_finite() && gx1.is_finite() && gy1.is_finite()) {
+            return None;
+        }
+        let i0 = gx0.floor().max(0.0) as usize;
+        let j0 = gy0.floor().max(0.0) as usize;
+        let i1 = (gx1.ceil().max(-1.0) as isize).min(self.w as isize - 1);
+        let j1 = (gy1.ceil().max(-1.0) as isize).min(self.h as isize - 1);
+        if i1 < i0 as isize || j1 < j0 as isize {
+            return None;
+        }
+        Some((i0, j0, i1 as usize, j1 as usize))
     }
 
     /// The distances along a segment from `a` (direction `dir`, length `len`) whose points lie
@@ -479,16 +582,7 @@ impl LiquifyField {
         if strength <= 0.0 {
             return Rect::EMPTY;
         }
-        let (gx0, gy0) = self.to_grid(c[0] - r, c[1] - r);
-        let (gx1, gy1) = self.to_grid(c[0] + r, c[1] + r);
-        let i0 = gx0.floor().max(0.0) as usize;
-        let j0 = gy0.floor().max(0.0) as usize;
-        let i1 = (gx1.ceil().max(-1.0) as isize).min(self.w as isize - 1);
-        let j1 = (gy1.ceil().max(-1.0) as isize).min(self.h as isize - 1);
-        if i1 < i0 as isize || j1 < j0 as isize {
-            return Rect::EMPTY;
-        }
-        let (i1, j1) = (i1 as usize, j1 as usize);
+        let Some((i0, j0, i1, j1)) = self.dab_nodes(c, r) else { return Rect::EMPTY };
         // Snapshot of the affected nodes plus a margin (sampling reads around them).
         let m = ((delta[0].abs().max(delta[1].abs()) + r * 0.2) / self.cell).ceil() as usize + 2;
         let (si0, sj0) = (i0.saturating_sub(m), j0.saturating_sub(m));
@@ -801,17 +895,18 @@ pub fn apply_liquify(src: &Surface, field: &LiquifyField) -> Surface {
     out
 }
 
-/// A downsampled, premultiplied RGBA copy of a layer for the interactive preview.
+/// A premultiplied RGBA8 copy of a layer for the interactive preview, at document resolution or
+/// box-downsampled by a whole number when the layer is larger than the preview may be.
 #[derive(Clone, Debug)]
 pub struct ProxyImage {
     /// Document region the proxy covers (the field bounds).
     pub bounds: Rect,
-    /// Document pixels per proxy pixel.
+    /// Document pixels per proxy pixel (a whole number).
     pub scale: f64,
     pub w: usize,
     pub h: usize,
-    /// Premultiplied RGBA, row-major.
-    pub px: Vec<[f32; 4]>,
+    /// Premultiplied RGBA8, row-major.
+    pub px: Vec<[u8; 4]>,
 }
 
 const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
@@ -819,14 +914,25 @@ const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
 impl ProxyImage {
     /// Box-downsamples `src` over `bounds` so the longer side is at most `max_side`.
     pub fn new(src: &Surface, bounds: Rect, max_side: usize) -> Self {
+        Self::new_within(src, bounds, max_side, usize::MAX)
+    }
+
+    /// [`Self::new`], also keeping the proxy within `max_pixels`: the smallest whole scale that
+    /// fits both, so a layer the preview can hold is copied at document resolution and shown
+    /// sharp at any zoom, and a larger one is downsampled as little as the budget allows.
+    pub fn new_within(src: &Surface, bounds: Rect, max_side: usize, max_pixels: usize) -> Self {
         let side = bounds.width().max(bounds.height()).max(1) as f64;
-        let scale = (side / max_side.max(1) as f64).max(1.0).ceil();
-        let w = ((f64::from(bounds.width()) / scale).ceil() as usize).max(1);
-        let h = ((f64::from(bounds.height()) / scale).ceil() as usize).max(1);
+        let mut scale = (side / max_side.max(1) as f64).max(1.0).ceil();
+        let dims = |scale: f64| (((f64::from(bounds.width()) / scale).ceil() as usize).max(1), ((f64::from(bounds.height()) / scale).ceil() as usize).max(1));
+        let (mut w, mut h) = dims(scale);
+        while w.saturating_mul(h) > max_pixels.max(1) && scale < side {
+            scale += 1.0;
+            (w, h) = dims(scale);
+        }
         let k = scale as i32;
-        let mut px = vec![[0.0f32; 4]; w * h];
+        let mut px = vec![[0u8; 4]; w * h];
         let fmt = src.format();
-        let fill_rows = |y: usize, row: &mut [[f32; 4]]| {
+        let fill_rows = |y: usize, row: &mut [[u8; 4]]| {
             let r = Rect::new(bounds.x0, bounds.y0 + y as i32 * k, bounds.x0 + w as i32 * k, (bounds.y0 + (y as i32 + 1) * k).min(bounds.y1));
             let mut buf = vec![[0.0f32; 4]; r.width() as usize * r.height() as usize];
             src.read_rgba_into(r, &mut buf);
@@ -846,7 +952,7 @@ impl ProxyImage {
                     }
                 }
                 if cnt > 0.0 {
-                    *o = acc.map(|v| v / cnt);
+                    *o = acc.map(|v| ((v / cnt).clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
                 }
             }
         };
@@ -877,7 +983,9 @@ impl ProxyImage {
                 let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
                 let (iu, iv) = (u.floor(), v.floor());
                 let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
-                let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
+                let at = |x: f64, y: f64| {
+                    self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize].map(|c| f32::from(c) / 255.0)
+                };
                 let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
                 *slot = std::array::from_fn(|k| {
                     let v = (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv;
