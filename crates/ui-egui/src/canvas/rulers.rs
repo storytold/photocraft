@@ -49,7 +49,7 @@ fn nice_step(min: f64, whole: bool) -> f64 {
 }
 
 /// English display name for a length unit, as shown in Preferences › Units & Rulers.
-fn unit_label(u: Unit) -> &'static str {
+pub(crate) fn unit_label(u: Unit) -> &'static str {
     match u {
         Unit::Pixels => "Pixels",
         Unit::Inches => "Inches",
