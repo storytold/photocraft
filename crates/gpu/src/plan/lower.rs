@@ -259,7 +259,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                     row
                 })
                 .collect();
-            p[0] = [n as f32, if *tetrahedral { 1.0 } else { 0.0 }, if *dither { 1.0 } else { 0.0 }, 0.0];
+            p[0] = [n as f32, if *tetrahedral { 1.0 } else { 0.0 }, if *dither && depth == photocraft_color::SampleType::U8 { 1.0 } else { 0.0 }, 0.0];
             (16, p, Some(rows))
         }
         // Identity on the CPU too (not evaluated there).
