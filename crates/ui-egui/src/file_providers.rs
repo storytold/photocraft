@@ -47,6 +47,9 @@ struct Save {
     warnings: Vec<String>,
     copy: bool,
     destination: String,
+    /// This capture predates an overwrite of its document's former provider checkpoint.
+    /// Keep the operation busy until it settles, but it cannot restore that stale binding.
+    invalidated_resource: Option<String>,
 }
 
 #[derive(Clone)]
@@ -431,7 +434,7 @@ impl Host {
         s.resolved_requests.remove(&doc);
         let resource = s.bindings.get(&doc).cloned();
         s.event(json!({"type":"save","requestId":request,"documentId":doc.0.to_string(),"revision":revision.to_string(),"intent":intent,"destination":destination,"resourceId":resource,"filename":path,"copy":copy}), Some(bytes));
-        s.pending.insert(request, Save { doc, revision, path: path.into(), warnings, copy, destination });
+        s.pending.insert(request, Save { doc, revision, path: path.into(), warnings, copy, destination, invalidated_resource: None });
         Ok(())
     }
 
@@ -571,6 +574,18 @@ fn apply_result(app: &mut PhotocraftApp, ctx: &egui::Context, host: &Host, reque
         return;
     }
     let Some(save) = host.state().pending.remove(request) else { return };
+    if save.invalidated_resource.as_ref().is_some_and(|old| (status == "saved" && old == &resource) || status == "download") {
+        // A newer write already retired this capture's checkpoint authority. A completed
+        // provider write may still have replaced the resource, so invalidate its current
+        // aliases too, while never cleaning/rebinding this stale sender. A device download
+        // has no provider side effect; a Save As to another resource remains independent.
+        if status == "saved" && save.destination == "provider" {
+            invalidate_resource_aliases(app, host, &resource, None);
+        }
+        app.ui.status = crate::i18n::t("The provider resource changed while this save was pending; save the document again to keep its changes.").into();
+        app.ui.status_error = true;
+        return;
+    }
     if status == "saved" && save.destination == "provider" {
         // A stable resource can be open in several tabs. Replacing it invalidates the other
         // tabs' old checkpoints, even when this write was only a copy of the current tab.
@@ -604,6 +619,9 @@ fn invalidate_resource_aliases(app: &mut PhotocraftApp, host: &Host, resource: &
     let aliases: Vec<_> = {
         let mut s = host.state();
         let aliases: Vec<_> = s.bindings.iter().filter(|(doc, bound)| Some(**doc) != saver && bound.as_str() == resource).map(|(doc, _)| *doc).collect();
+        for save in s.pending.values_mut().filter(|save| aliases.contains(&save.doc)) {
+            save.invalidated_resource = Some(resource.to_string());
+        }
         for doc in &aliases {
             s.bindings.remove(doc);
             s.provider_names.remove(doc);

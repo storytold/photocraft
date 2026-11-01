@@ -111,7 +111,12 @@ revision to make a later edit appear saved. A successful acknowledgement marks o
 captured revision. Work edited since capture stays dirty. It does not switch tabs or alter
 other documents with the same filename. If a write replaces a resource also open in another tab,
 that other tab loses its stale provider binding and must be saved explicitly; a local file
-with a matching name remains independent. External bindings never become local filesystem paths.
+with a matching name remains independent. Pending captures of an invalidated alias keep the
+operation busy until it settles, but an older acknowledgement cannot restore that resource's
+checkpoint, rebind the tab or release its close prompt. A completed write to the same resource
+still invalidates its other aliases: the backend may have committed uploads in either order.
+An independent Save As to another resource remains valid. A separately saved local file keeps its durable checkpoint.
+External bindings never become local filesystem paths.
 
 `copy: true` never makes the editable document clean or binds it to the copy. `failed` retains
 the native pending save for an explicit provider retry. `cancel` retires it without cleaning

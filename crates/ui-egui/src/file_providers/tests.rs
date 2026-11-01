@@ -220,6 +220,91 @@ fn a_deferred_close_cannot_use_the_download_exception_after_its_resource_is_over
 }
 
 #[test]
+fn an_overwritten_alias_cannot_be_cleaned_or_closed_by_its_older_acknowledgement() {
+    for (destination, status, resource, stale) in
+        [("provider", "saved", "resource-one", true), ("device", "download", "", true), ("provider", "saved", "new-resource", false)]
+    {
+        let (mut app, host, first) = app();
+        app.services.write_unconfirmed = true;
+        let new_doc = |app: &mut PhotocraftApp, name: &str, revision: u64, saved: u64, path: Option<&str>| {
+            app.run("file.new", json!({"width":2,"height":2,"name":name})).unwrap();
+            let state = app.session.active_mut().unwrap();
+            state.revision = revision;
+            state.saved_revision = saved;
+            state.path = path.map(str::to_string);
+            state.doc.id
+        };
+        let writer = new_doc(&mut app, "Newer writer", 8, 7, None);
+        let physical = new_doc(&mut app, "Physical copy", 11, 11, Some("/device/drawing.psd"));
+        let other_alias = new_doc(&mut app, "Other resource", 9, 9, None);
+        let homonym = new_doc(&mut app, "Local homonym", 13, 13, Some("/elsewhere/drawing.psd"));
+        {
+            let mut state = host.state();
+            for (doc, checkpoint) in [(first, 2), (writer, 7), (physical, 9), (other_alias, 9)] {
+                state.bindings.insert(doc, if doc == other_alias { "new-resource" } else { "resource-one" }.into());
+                state.provider_names.insert(doc, "drawing.psd".into());
+                state.provider_revisions.insert(doc, checkpoint);
+            }
+            state.destinations.insert(first, destination.into());
+        }
+        if !stale {
+            host.intent(first, "saveAs");
+        }
+        let begin_at = |doc, revision| {
+            host.begin(doc, revision, "drawing.psd", vec![1, 2, 3], Vec::new(), false).unwrap();
+            host.take_events().into_iter().find(|event| event.metadata["type"] == "save").unwrap().metadata["requestId"].as_str().unwrap().to_string()
+        };
+        let older = begin_at(first, 7);
+        let newer = begin_at(writer, 8);
+        let local_upload = begin_at(physical, 11);
+        if stale {
+            assert!(crate::discard_ui::intercept(&mut app, "file.close", &json!({"document":0})));
+        }
+        host.result(newer, "saved".into(), "resource-one".into()).unwrap();
+        tick_once(&mut app);
+        assert!(host.pending_for(first), "retiring checkpoint authority must not abandon the upload");
+        assert!(host.pending_for(physical));
+        assert!(host.disconnect().is_err());
+        host.result(older, status.into(), resource.into()).unwrap();
+        tick_once(&mut app);
+        let writer_after_first = app.session.documents().iter().find(|state| state.doc.id == writer).unwrap();
+        assert_eq!(writer_after_first.is_dirty(), stale && status == "saved", "only a write to this same resource invalidates its checkpoint");
+        assert_eq!(host.bound(writer), !(stale && status == "saved"));
+        host.result(local_upload, "saved".into(), "resource-one".into()).unwrap();
+        tick_once(&mut app);
+
+        let documents = app.session.documents();
+        let first_state = documents.iter().find(|state| state.doc.id == first).unwrap();
+        assert_eq!(first_state.is_dirty(), stale);
+        assert_eq!(host.bound(first), !stale);
+        if !stale {
+            assert_eq!(host.state().bindings.get(&first).map(String::as_str), Some("new-resource"));
+        }
+        assert_eq!(crate::discard_ui::inspect(&app).is_some(), stale, "an older reply cannot release the close prompt");
+        let writer_state = documents.iter().find(|state| state.doc.id == writer).unwrap();
+        assert!(writer_state.is_dirty(), "the later physical-copy upload can have replaced the same resource too");
+        assert_eq!(writer_state.revision, 8);
+        assert!(!host.bound(writer));
+        let physical_state = documents.iter().find(|state| state.doc.id == physical).unwrap();
+        assert_eq!(physical_state.path.as_deref(), Some("/device/drawing.psd"));
+        assert_eq!(physical_state.saved_revision, 11);
+        assert_eq!(physical_state.revision, 11);
+        assert!(!physical_state.is_dirty(), "the independently saved physical copy remains durable");
+        assert!(!host.bound(physical), "the retired upload cannot detach the physical file and rebind it");
+        let other_state = documents.iter().find(|state| state.doc.id == other_alias).unwrap();
+        assert_eq!(other_state.is_dirty(), !stale, "only a successful Save As to this resource invalidates its alias");
+        assert_eq!(host.bound(other_alias), stale);
+        let local = documents.iter().find(|state| state.doc.id == homonym).unwrap();
+        assert_eq!(local.path.as_deref(), Some("/elsewhere/drawing.psd"));
+        assert_eq!(local.saved_revision, 13);
+        assert!(!local.is_dirty());
+        assert_eq!(app.session.active().unwrap().doc.id, homonym);
+        assert!(!host.pending_for(first));
+        assert!(!host.pending_for(physical));
+    }
+}
+
+#[test]
 fn delayed_reply_does_not_change_the_selected_tab_or_a_homonymous_local_file() {
     let (mut app, host, doc) = app();
     let request = begin(&host, doc, false);
