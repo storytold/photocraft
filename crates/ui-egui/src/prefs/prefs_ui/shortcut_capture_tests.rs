@@ -566,3 +566,34 @@ fn only_a_real_capture_flag_owns_the_keyboard() {
         assert_eq!(crate::prefs_ui::capturing_shortcut(&app), want, "{value}");
     }
 }
+
+/// #8965: closing the dialog while a field waits for keys gives the keyboard back. The menu rows
+/// return to their normal state, ⌘Z undoes the document again and the view keys zoom again.
+#[test]
+fn closing_a_capturing_dialog_restores_the_normal_keys() {
+    let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (mut h, id) = dialog_over_document("edit.search", "search…");
+    h.state_mut().services.native_menu = Some(crate::native_menu::NativeMenu::new(Box::new(Menu { synced: synced.clone(), events })));
+    let enabled = |id: &str| synced.borrow().last().and_then(|bar| bar.find(id).map(|it| it.enabled));
+    h.get_by_label(&crate::shortcuts::pretty("Cmd+F")).click();
+    h.run_steps(2);
+    assert!(crate::prefs_ui::capturing_shortcut(h.state()));
+    assert_eq!(enabled("image.imageRotation.90cw"), Some(false));
+    assert_eq!(enabled("edit.undo"), Some(true));
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().ui.dialogs.iter().any(|d| d.id == id), "the dialog is closed");
+    assert!(!crate::prefs_ui::capturing_shortcut(h.state()));
+    assert_eq!(enabled("image.imageRotation.90cw"), Some(true), "rows without a key are enabled again");
+    assert_eq!(enabled("edit.undo"), Some(true), "Undo is enabled: there is a step to undo");
+    let (revision, zoom) = document_state(&h);
+    key(&mut h, Key::Z, true, Modifiers::COMMAND);
+    key(&mut h, Key::Z, false, Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_ne!(document_state(&h).0, revision, "⌘Z undoes the selection again");
+    key(&mut h, Key::Equals, true, Modifiers::COMMAND);
+    key(&mut h, Key::Equals, false, Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_ne!(document_state(&h).1, zoom, "⌘= zooms again");
+}
