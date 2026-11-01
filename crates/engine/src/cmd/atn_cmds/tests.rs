@@ -638,7 +638,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.createClippingMask", json!({})),
         ("layer.ungroupLayers", json!({})),
         ("layer.layerStyle.copyLayerStyle", json!({})),
-        ("layer.layerStyle.pasteLayerStyle", json!({})),
+        ("layer.layerStyle.pasteLayerStyle", json!({"allowGroups": true})),
         ("layer.setExpanded", json!({"all": true, "expanded": false})),
         ("layerComp.apply", json!({"comp": "Original"})),
         ("actions.play", json!({"action": "Other", "set": "S"})),

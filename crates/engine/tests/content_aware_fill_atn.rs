@@ -8,8 +8,12 @@ use photocraft_psd::{
 };
 use serde_json::{Value, json};
 
-const FLAGS: [(&str, &str); 3] =
-    [("contentAwareColorAdaptationFill", "colorAdaptation"), ("contentAwareScaleFill", "scaleAdaptation"), ("contentAwareMirrorFill", "mirror")];
+const FLAGS: [(&str, &str); 4] = [
+    ("contentAwareColorAdaptationFill", "colorAdaptation"),
+    ("contentAwareScaleFill", "scaleAdaptation"),
+    ("contentAwareMirrorFill", "mirror"),
+    ("contentAwareRotateFill", "rotationAdaptation"),
+];
 const ROTATION: &str = "contentAwareRotateFill";
 
 fn descriptor() -> Descriptor {
@@ -74,8 +78,8 @@ fn pixels(s: &Session, id: LayerId) -> Vec<f32> {
 #[test]
 fn typed_flags_survive_saved_descriptors_and_public_playback() {
     for event in [AtnEvent::Code(*b"Fl  "), AtnEvent::name("fill")] {
-        for values in [[false, true, true], [true, false, false]] {
-            let mut d = descriptor().with(ROTATION, D::Boolean(false));
+        for values in [[false, true, true, true], [true, false, false, false], [true, false, false, true]] {
+            let mut d = descriptor();
             let mut params = json!({"contents": "contentAware"});
             for ((key, param), value) in FLAGS.into_iter().zip(values) {
                 d = d.with(key, D::Boolean(value));
@@ -89,6 +93,13 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
                 default.execute("edit.fill", json!({"contents": "contentAware"})).unwrap();
                 assert_ne!(expected, pixels(&default, default_id), "combined options must change the fixture");
             }
+            if values[3] {
+                let (mut unrotated, unrotated_id) = fixture();
+                let mut off = params.clone();
+                off["rotationAdaptation"] = json!(false);
+                unrotated.execute("edit.fill", off).unwrap();
+                assert!(expected != pixels(&unrotated, unrotated_id), "the action fixture must distinguish rotated candidates");
+            }
             let (mut replay, replay_id) = fixture();
             assert_eq!(load(&mut replay, &recorded(event.clone(), d))["unsupported"], json!([]));
             assert_eq!(replay.actions.list[0].steps, vec![("edit.fill".into(), params)], "CAF flags must import without loss");
@@ -98,7 +109,7 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
             for ((key, _), value) in FLAGS.into_iter().zip(values) {
                 assert_eq!(saved_d.get(key), Some(&D::Boolean(value)));
             }
-            assert_eq!(saved_d.get(ROTATION), Some(&D::Boolean(false)));
+            assert_eq!(saved_d.get(ROTATION), Some(&D::Boolean(values[3])));
             let imported = atn_cmds::import(&saved).unwrap();
             assert!(imported.unsupported.is_empty());
             assert_eq!(imported.actions[0].steps, replay.actions.list[0].steps);
@@ -118,7 +129,7 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
 fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
     let mut s = Session::new();
     assert_eq!(load(&mut s, &recorded(AtnEvent::Code(*b"Fl  "), descriptor()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list[0].steps[0].1, json!({"contents": "contentAware"}));
+    assert_eq!(s.actions.list[0].steps[0].1, json!({"contents": "contentAware", "rotationAdaptation": false}));
     let saved = save(&mut s);
     let imported = atn_cmds::import(&saved).unwrap();
     assert_eq!(imported.actions[0].steps, s.actions.list[0].steps);
@@ -135,9 +146,11 @@ fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
         let file = atn::parse(&bytes).unwrap();
         let d = file.actions[0].items[0].descriptor.as_ref().unwrap();
         for (key, _) in FLAGS {
-            assert!(d.get(key).is_none());
+            if key != ROTATION {
+                assert!(d.get(key).is_none());
+            }
         }
-        assert_eq!(d.get(ROTATION), Some(&D::Boolean(false)), "native CAF performs no rotated-source search");
+        assert_eq!(d.get(ROTATION), Some(&D::Boolean(false)), "the default performs no rotated-source search");
     }
     for (_, param) in FLAGS {
         for value in [json!(1), json!("false")] {
@@ -149,9 +162,9 @@ fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
     }
 }
 
-/// Unreplayable flags remain intact as unsupported Photoshop steps.
+/// Malformed flags remain intact as unsupported Photoshop steps.
 #[test]
-fn malformed_flags_and_requested_rotation_remain_kept_steps() {
+fn malformed_flags_remain_kept_steps() {
     for event in [AtnEvent::Code(*b"Fl  "), AtnEvent::name("fill")] {
         let mut bad = Vec::new();
         for (key, _) in FLAGS {
@@ -159,7 +172,6 @@ fn malformed_flags_and_requested_rotation_remain_kept_steps() {
                 bad.push(descriptor().with(key, value));
             }
         }
-        bad.push(descriptor().with(ROTATION, D::Boolean(true)));
         bad.push(descriptor().with(ROTATION, D::Integer(0)));
         for d in bad {
             let source = recorded(event.clone(), d);

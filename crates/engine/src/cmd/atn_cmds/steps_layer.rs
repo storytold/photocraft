@@ -400,11 +400,12 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
     let Some(contents) = get_enum(d, "Usng").and_then(|u| lookup(FILL_CONTENTS, &u)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"contents": contents});
     if contents == "contentAware" {
-        // Keep a requested rotation until the command can reproduce it, rather than run unrotated.
-        match d.get("contentAwareRotateFill") {
-            None | Some(D::Boolean(false)) => {}
+        let rotate = match d.get("contentAwareRotateFill") {
+            None => false,
+            Some(D::Boolean(value)) => *value,
             Some(_) => return Mapped::Unsupported { harmless: false },
-        }
+        };
+        p["rotationAdaptation"] = json!(rotate);
         for (key, param) in
             [("contentAwareColorAdaptationFill", "colorAdaptation"), ("contentAwareScaleFill", "scaleAdaptation"), ("contentAwareMirrorFill", "mirror")]
         {
@@ -436,7 +437,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
     step("edit.fill", p)
 }
 
-/// Export Fill settings, including the native Content-Aware no-rotation behavior.
+/// Export Fill settings, including the effective native Content-Aware rotation option.
 pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "paint.bucket" {
         let mut d = desc("null").with("From", D::Descriptor(desc("Pnt ").with("Hrzn", px(jnum(p, "x")?)).with("Vrtc", px(jnum(p, "y")?))));
@@ -485,8 +486,12 @@ pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
         d = d.with("PrsT", D::Boolean(t));
     }
     if contents.eq_ignore_ascii_case("contentAware") {
-        // Native CAF searches unrotated sources; express that even when other flags are omitted.
-        d = d.with("contentAwareRotateFill", D::Boolean(false));
+        let rotate = match p.get("rotationAdaptation") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(value)) => *value,
+            Some(_) => return None,
+        };
+        d = d.with("contentAwareRotateFill", D::Boolean(rotate));
         for (key, param) in
             [("contentAwareColorAdaptationFill", "colorAdaptation"), ("contentAwareScaleFill", "scaleAdaptation"), ("contentAwareMirrorFill", "mirror")]
         {
@@ -498,6 +503,32 @@ pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
         }
     }
     Some(d)
+}
+
+/// Preserve the group eligibility flag without approximating an explicit recorded target.
+pub(super) fn paste_effects_from(d: &Descriptor) -> Mapped {
+    if d.get("null").is_some() {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let allow = match d.get("allowPasteFXOnLayerSet") {
+        None => true,
+        Some(D::Boolean(value)) => *value,
+        Some(_) => return Mapped::Unsupported { harmless: false },
+    };
+    step("layer.layerStyle.pasteLayerStyle", json!({"allowGroups": allow}))
+}
+
+/// Emit the effective default; unrepresented target parameters must not silently disappear.
+pub(super) fn paste_effects_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !pixel_target(p) || p.get("layer").is_some() || p.get("layers").is_some() {
+        return None;
+    }
+    let allow = match p.get("allowGroups") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return None,
+    };
+    Some(desc("null").with("allowPasteFXOnLayerSet", D::Boolean(allow)))
 }
 
 /// The Paint Bucket's `color` as `paint.bucket` reads it (`[r, g, b(, a)]` in 0..=1 or

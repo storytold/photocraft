@@ -135,10 +135,13 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let adapt = flag(p, "colorAdaptation", true)?;
             let scale = flag(p, "scaleAdaptation", false)?;
             let mirror = flag(p, "mirror", false)?;
+            let rotate = flag(p, "rotationAdaptation", false)?;
             let lid = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             let surf = st.doc.layer(lid).and_then(|l| l.surface()).ok_or_else(|| EngineError::Other("Content-Aware fill needs a pixel layer".into()))?;
             let seed = p.get("seed").and_then(Value::as_u64).unwrap_or(1);
-            let options = FillOptions { scale, mirror, ..content_aware_options(adapt, seed) };
+            // The native Boolean enables quarter-turn candidates, within the existing mosaic cap.
+            let rotations = if rotate { photocraft_algo::content_aware::rotation_level("full") } else { Vec::new() };
+            let options = FillOptions { rotations, scale, mirror, ..content_aware_options(adapt, seed) };
             content_aware(surf, sel, doc_bounds, &options)?
         }
         _ => return Err(bad(format!("unknown contents `{contents}`"))),
