@@ -456,6 +456,41 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     }
 }
 
+/// #8064: `maximizeCompatibility` decides one save's PSD/PSB merged image over the preference
+/// (Photoshop's Maximize Compatibility checkbox); unset, the preference decides. Anything but a
+/// boolean is refused before anything is written.
+#[test]
+fn maximize_compatibility_param_overrides_the_preference_for_one_save() {
+    use crate::prefs::Ask;
+    let dir = tmp("maximize-param");
+    let mut s = session(300, 200, 16);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
+    for (ask, param, expect) in [
+        (Ask::Always, json!(false), false),
+        (Ask::Never, json!(true), true),
+        (Ask::Ask, json!(false), false),
+        (Ask::Never, json!(null), false),
+        (Ask::Always, json!(null), true),
+    ] {
+        s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
+        for ext in ["psd", "psb"] {
+            let out = join(&dir, &format!("{ask:?}-{param}.{ext}"));
+            s.execute("file.saveACopy", json!({"path": out, "maximizeCompatibility": param})).unwrap();
+            assert_eq!(real_merged(&out), Some(expect), "{ask:?} {param} {ext}");
+        }
+    }
+    let state = |s: &Session| s.active().map(|st| (st.revision, st.path.clone(), st.is_dirty()));
+    let before = state(&s);
+    for bad in [json!("no"), json!(0), json!(1), json!([true])] {
+        let out = join(&dir, "bad.psd");
+        let r = s.execute("file.saveACopy", json!({"path": out, "maximizeCompatibility": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+        assert_eq!(state(&s), before, "{bad}: the document is as it was");
+    }
+}
+
 #[test]
 fn open_as_forces_the_decoder() {
     let dir = tmp("openas");
