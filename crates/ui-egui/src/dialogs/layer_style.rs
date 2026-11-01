@@ -989,6 +989,18 @@ fn channel_names_of(f: &Map<String, Value>) -> Vec<String> {
         .unwrap_or_else(|| ["R", "G", "B"].iter().map(|s| (*s).to_string()).collect())
 }
 
+/// `widgets::row_label` with the text pinned to the label column's edge facing the row's
+/// controls (right edge left-to-right, left edge right-to-left), so the label→control gap is
+/// the same in both directions.
+fn row_label_control_side(ui: &mut egui::Ui, label: &str, width: f32) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    ui.allocate_ui_with_layout(vec2(width, widgets::VALUE_FIELD_H), crate::direction::trailing(), |ui| {
+        ui.set_min_width(width);
+        ui.add(egui::Label::new(RichText::new(tl!(label)).color(t.text_dim)).truncate())
+    })
+    .inner
+}
+
 /// The Blending Options page: General Blending, Advanced Blending and Blend If, as in Photoshop.
 fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     let t = Tokens::get(ui.ctx());
@@ -1016,7 +1028,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     }
     // Channels: one check box per colour channel (checked = blends).
     crate::direction::dialog_row(ui, |ui| {
-        widgets::row_label(ui, "Channels:", LABEL_W);
+        row_label_control_side(ui, "Channels:", LABEL_W);
         let mut ch: Vec<bool> =
             p.get("channels").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect()).unwrap_or_default();
         ch.resize(names.len(), true);

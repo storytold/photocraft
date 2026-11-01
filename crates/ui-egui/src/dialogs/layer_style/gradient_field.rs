@@ -470,7 +470,7 @@ mod tests {
             let _scope = direction_scope(dir);
             let (app, parent) = dialog_app();
             let h = harness(app, parent);
-            let color = h.get_by_label("Color").rect();
+            let color = h.get_by_role_and_label(egui::accesskit::Role::ColorWell, "Color").rect();
             let loc = h.get_by_label("Location").rect();
             if rtl {
                 assert!(loc.right() < color.left(), "{dir:?}: RTL Location trails Color: {color:?} {loc:?}");
