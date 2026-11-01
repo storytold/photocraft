@@ -4,7 +4,8 @@ use super::kit::{Kit, SHADER, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
 use super::{
-    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
+    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, LayerOperator, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, operator,
+    plan, prefix, timing,
 };
 
 impl Compositor {
@@ -165,6 +166,13 @@ impl Compositor {
             cmyk: 0,
             health: None,
             timer: None,
+            operators: HashMap::new(),
+            op_kit: None,
+            op_made: HashMap::new(),
+            op_pins: HashMap::new(),
+            frame_ops: Vec::new(),
+            op_scratch: None,
+            frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device_max)
     }
@@ -191,6 +199,9 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.temps.clear();
+        self.op_scratch = None;
+        self.op_made.clear();
+        self.op_pins.clear();
         self.prefix.clear();
     }
 
@@ -400,6 +411,29 @@ impl Compositor {
         Ok(())
     }
 
+    /// Layer operators for `doc` (`operator.rs`): from the next render on, each listed layer's
+    /// content is its operator's output. Replaces any set before; an empty list clears them.
+    /// Renders of `doc` return [`Unsupported`] (so the caller draws the CPU preview, never the
+    /// layer unfiltered) when the device can't run them or their pages don't fit.
+    pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
+        if operators.is_empty() {
+            self.operators.remove(&doc);
+        } else {
+            self.operators.insert(doc, operators);
+        }
+    }
+
+    /// [`Self::set_operators`] with none: the layers show their own pixels again.
+    pub fn clear_operators(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
+    }
+
+    /// Whether `device` can run layer operators (compute passes into float storage textures).
+    /// Builds their pipelines the first time, so a dialog can warm them as it opens.
+    pub fn operators_supported(&mut self, device: &wgpu::Device) -> bool {
+        self.op_kit.get_or_insert_with(|| operator::OpKit::new(device)).is_some()
+    }
+
     /// A pattern's texture must fit the device and the per-pattern cap; a larger one renders on
     /// the CPU compositor.
     fn check_pattern(&self, pat: &photocraft_doc::Pattern) -> Result<(), Unsupported> {
@@ -414,7 +448,11 @@ impl Compositor {
 
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
         self.residents.retain(|_, r| r.doc != doc);
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -430,6 +468,7 @@ impl Compositor {
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
             .chain(self.prefix.doc())
+            .chain(self.operators.keys().copied())
             .filter(|d| !keep(*d))
             .collect();
         gone.sort_by_key(|d| d.0);
