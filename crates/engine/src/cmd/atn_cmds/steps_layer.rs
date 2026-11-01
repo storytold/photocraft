@@ -398,6 +398,22 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
     }
     let Some(contents) = get_enum(d, "Usng").and_then(|u| lookup(FILL_CONTENTS, &u)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"contents": contents});
+    if contents == "contentAware" {
+        // Keep a requested rotation until the command can reproduce it, rather than run unrotated.
+        match d.get("contentAwareRotateFill") {
+            None | Some(D::Boolean(false)) => {}
+            Some(_) => return Mapped::Unsupported { harmless: false },
+        }
+        for (key, param) in
+            [("contentAwareColorAdaptationFill", "colorAdaptation"), ("contentAwareScaleFill", "scaleAdaptation"), ("contentAwareMirrorFill", "mirror")]
+        {
+            match d.get(key) {
+                None => {}
+                Some(D::Boolean(value)) => p[param] = json!(value),
+                Some(_) => return Mapped::Unsupported { harmless: false },
+            }
+        }
+    }
     if contents == "color" {
         match get_obj(d, "Clr ").and_then(color_hex) {
             Some(c) => p["color"] = json!(c),
@@ -465,6 +481,19 @@ pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
     }
     if let Some(t) = jbool(p, "preserveTransparency") {
         d = d.with("PrsT", D::Boolean(t));
+    }
+    if contents.eq_ignore_ascii_case("contentAware") {
+        // Native CAF searches unrotated sources; express that even when other flags are omitted.
+        d = d.with("contentAwareRotateFill", D::Boolean(false));
+        for (key, param) in
+            [("contentAwareColorAdaptationFill", "colorAdaptation"), ("contentAwareScaleFill", "scaleAdaptation"), ("contentAwareMirrorFill", "mirror")]
+        {
+            match p.get(param) {
+                None | Some(Value::Null) => {}
+                Some(Value::Bool(value)) => d = d.with(key, D::Boolean(*value)),
+                Some(_) => return None,
+            }
+        }
     }
     Some(d)
 }
