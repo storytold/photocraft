@@ -454,6 +454,33 @@ fn alt_right_click_with_the_move_tool_reads_alt_from_a_same_frame_press() {
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(color), "⌥ on the press event picks the layer");
 }
 
+/// #10447 review (mirror case): ⌥ that goes down after the right button, in the press's own frame,
+/// is not ⌥ + right-click even though the frame's modifiers end with ⌥: the plain right-click
+/// opens the layer menu and the selection is unchanged. Released in that frame or a later one.
+#[test]
+fn alt_after_the_right_press_in_the_same_frame_is_a_plain_right_click() {
+    let mut h = harness(Tool::Move, false, 1.0);
+    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+    let at = fractional_point(&h, 1.0);
+    for release_later in [false, true] {
+        h.state_mut().ui.layer_menu = None;
+        h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.event(Event::PointerMoved(at));
+        h.run_steps(2);
+        press(&mut h, at, PointerButton::Secondary, true, Modifiers::NONE);
+        h.input_mut().events.push(Event::ModifiersChanged(Modifiers::ALT));
+        if release_later {
+            h.run_steps(1);
+            assert!(h.ctx.input(|i| i.modifiers.alt), "the press frame's modifiers end with ⌥");
+        }
+        press(&mut h, at, PointerButton::Secondary, false, Modifiers::ALT);
+        h.run_steps(3);
+        assert!(is_open(&h, Popup::Layers), "no ⌥ on the press event: the layer menu (release later: {release_later})");
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(bg), "selection unchanged (release later: {release_later})");
+    }
+}
+
 /// #8484: with the Move tool, ⌥ + right-click on the pasteboard opens its colour menu, also where a
 /// fill layer (which covers every point) would be hit; nothing is selected. A plain right-click
 /// there still lists the layers.
