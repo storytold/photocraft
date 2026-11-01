@@ -103,6 +103,26 @@ fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
     assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
 }
 
+/// Duplicate labels must not change which row Apply or OK sends to the engine.
+#[test]
+fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
+    for button in ["Apply", "OK"] {
+        let (_dir, mut h) = pixel_replacement_harness();
+        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+        let selected = fields["__variables"]["dataSets"][0].clone();
+        fields["__variables"]["dataSets"] = json!([{"name": "Blue", "values": []}, selected]);
+        fields.insert("__cur".into(), json!(1));
+        if button == "OK" {
+            fields.insert("__apply".into(), json!(1));
+        }
+        h.run_steps(2);
+        h.get_by_label(button).click();
+        h.run_steps(3);
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]), "{button}");
+        assert_eq!(h.state().session.active().unwrap().doc.variables.active, Some(1), "{button}");
+    }
+}
+
 /// A failed request reports once; correcting it can be applied and kept when Cancel closes.
 #[test]
 fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {

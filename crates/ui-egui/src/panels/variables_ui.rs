@@ -350,7 +350,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
         }
         ui.add_space(6.0);
         if crate::widgets::secondary_button(ui, tl!("Apply"), 84.0).clicked() {
-            fields.insert("__apply".into(), json!(sname));
+            fields.insert("__apply".into(), json!(cur));
             apply = true;
         }
     }
@@ -366,6 +366,10 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     // Only define when there is at least one named variable (empty define clears).
     app.run("image.variables.define", json!({"defs": defs}))?;
     app.run("image.variables.dataSets", json!({"dataSets": sets}))?;
+    if let Some(index) = fields.get("__apply").and_then(Value::as_u64) {
+        return app.run("image.applyDataSet", json!({"index": index}));
+    }
+    // Keep name-based requests from existing automation callers working.
     if let Some(name) = fields.get("__apply").and_then(Value::as_str) {
         return app.run("image.applyDataSet", json!({"name": name}));
     }
