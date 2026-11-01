@@ -443,3 +443,16 @@ fn the_pen_adds_a_smooth_anchor_to_a_curve_being_drawn_and_drags_it() {
     assert_close(&pen_path(&app), &want, "the drag moved the new anchor");
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(3), "and placed no anchor of its own");
 }
+
+/// A press a couple of pixels off an existing anchor hits the anchor (anchors win the hit test), so
+/// Add Anchor Point adds nothing there, and a drag from it moves nothing and leaves no selection.
+#[test]
+fn a_drag_near_an_existing_anchor_adds_and_moves_nothing() {
+    let mut app = app(Tool::AddAnchorPoint);
+    with_path(&mut app);
+    let (before, n) = (work(&app), steps(&app));
+    assert!(matches!(photocraft_vector::edit::hit(&before, Point::new(42.0, 41.0), 6.0, &[]), Some(photocraft_vector::edit::Hit::Anchor([0, 0]))));
+    drag(&mut app, [42.0, 41.0], [60.0, 70.0]);
+    assert_eq!((work(&app), steps(&app)), (before, n));
+    assert!(app.ui.direct_selection.anchors.is_empty() && app.ui.direct_selection.drag.is_none());
+}
