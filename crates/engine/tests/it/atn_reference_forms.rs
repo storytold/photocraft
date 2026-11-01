@@ -214,6 +214,15 @@ fn indexed_moves_follow_the_measured_boundary_table() {
     let action = moved(index("Lyr ", 3), index("Lyr ", 0));
     replay(&mut s, &action);
     assert_eq!(s.active().unwrap().doc.layers[0].name, "L2");
+    let mut s = scene(true);
+    for invalid in [7, u32::MAX] {
+        let action = moved(index("Lyr ", 2), index("Lyr ", invalid));
+        let doc = s.active().unwrap().doc.clone();
+        let state = selection(&s);
+        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert_eq!(s.active().unwrap().doc, doc);
+        assert_eq!(selection(&s), state);
+    }
 }
 
 /// A target-layer move keeps the complete selected source set and remains one undoable edit.
@@ -390,6 +399,31 @@ fn invalid_comp_indexes_and_unsupported_references_preserve_state() {
             .with("T   ", D::Reference(vec![ReferenceItem::Offset { class: class("Lyr "), offset }]));
         assert_eq!(atn_cmds::import(&bytes(AtnEvent::Code(*b"move"), d)).unwrap().unsupported.len(), 1);
     }
+}
+
+/// Reject integers outside the ATN reference format before they can enter a recording.
+#[test]
+fn unrepresentable_comp_indexes_are_rejected_before_recording() {
+    let (mut s, _, _) = comp_scene();
+    for valid in [json!(i32::MIN), json!(u32::MAX)] {
+        s.execute("layerComp.apply", json!({"comp":{"index":valid}})).unwrap();
+    }
+    let before = s.active().unwrap().doc.clone();
+    let state = selection(&s);
+    let history = s.active().unwrap().history.past_len();
+    s.execute("actions.record", json!({"name":"Index bounds"})).unwrap();
+    let mut accepted = Vec::new();
+    for invalid in [json!(u64::from(u32::MAX) + 1), json!(u64::MAX), json!(i64::from(i32::MIN) - 1), json!(i64::MIN)] {
+        if s.execute("layerComp.apply", json!({"comp":{"index":invalid}})).is_ok() {
+            accepted.push(invalid);
+        }
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(selection(&s), state);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    assert!(accepted.is_empty(), "unrepresentable indexes were accepted: {accepted:?}");
+    assert!(s.actions.list.last().unwrap().steps.is_empty());
 }
 
 /// A recorded invalid index is a no-op even with zero comps; ordinary Apply stays disabled.
