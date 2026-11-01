@@ -3392,3 +3392,14 @@ fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
     assert!(!kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "PlrR")))));
     assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
 }
+
+/// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
+/// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
+#[test]
+fn wave_with_a_fractional_scale_is_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("SclH", 99.6), ("SclV", 99.5), ("SclH", 100.4)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
+    }
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
+}

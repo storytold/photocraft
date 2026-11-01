@@ -153,12 +153,12 @@ const WAVE: &[Key] = &[
 const WAVE_UNDEFINED: &[(&str, &str)] = &[("RptE", "repeat"), ("WrpA", "wrap")];
 
 /// Wave (`Wave`). The command has no horizontal or vertical scale, so a step that scales the
-/// waves below 100 % keeps the Photoshop step. Missing undefined areas are Photoshop's Repeat
+/// waves below 100 %, or by a fraction (saved back as 100), keeps the Photoshop step. Missing undefined areas are Photoshop's Repeat
 /// Edge Pixels (the command's own default is wrap); `RndS` keeps its 32 bits as the seed.
 pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(mut m) = keys_map(d, WAVE, &["SclH", "SclV", "UndA", "RndS"]) else { return unsupported };
-    if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.round().clamp(1.0, 100.0) != 100.0)) {
+    if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.fract() != 0.0 || n.clamp(1.0, 100.0) != 100.0)) {
         return unsupported;
     }
     let Some(undefined) = setting(d, "UndA", enum_of("UndA"), "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
