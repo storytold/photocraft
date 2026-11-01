@@ -380,13 +380,6 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     if p.is_empty() {
         return Mapped::Unsupported { harmless: false };
     }
-    // An omitted Photoshop flag preserves style sizes; the native command defaults to scaling.
-    let scale_styles = match d.get("scaleStyles") {
-        None => false,
-        Some(D::Boolean(value)) => *value,
-        Some(_) => return Mapped::Unsupported { harmless: false },
-    };
-    p.insert("scaleStyles".into(), scale_styles.into());
     step("image.imageSize", Value::Object(p))
 }
 
@@ -425,8 +418,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(i) = jstr(p, "resample").filter(|r| *r != "none") {
         d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, i)?));
     }
-    // Write the effective native default explicitly: omission in an ATN means false.
-    Some(d.with("scaleStyles", D::Boolean(jbool(p, "scaleStyles").unwrap_or(true))))
+    Some(d)
 }
 
 pub(super) fn crop_from(d: &Descriptor) -> Mapped {
