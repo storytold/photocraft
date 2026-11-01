@@ -537,7 +537,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
                 app.jobs.close_after_saves = false;
             }
             app.sync_views();
-            notices::error(app, format!("{label}: {err}"));
+            if !crate::ai_errors_ui::report(app, &e.command, &err) {
+                notices::error(app, format!("{label}: {err}"));
+            }
         }
         JobOutcome::Cancelled => {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &label)]);

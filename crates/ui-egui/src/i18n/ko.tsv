@@ -3786,3 +3786,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	결과는 캔버스에 맞춰 새 레이어로 추가됩니다. 기존 레이어는 유지됩니다.
 	AI Edit via API	API를 통한 AI 편집
 	AI Provider Settings	AI 제공업체 설정
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI 편집이 서비스의 콘텐츠 심사를 통과하지 못했습니다
+	The image service's content review is unavailable	이미지 서비스의 콘텐츠 심사를 사용할 수 없습니다
+	Your editing instruction did not pass the service's content review.	편집 지침이 서비스의 콘텐츠 심사를 통과하지 못했습니다.
+	Your reference image did not pass the service's content review.	참조 이미지가 서비스의 콘텐츠 심사를 통과하지 못했습니다.
+	The generated image did not pass the service's content review.	생성된 이미지가 서비스의 콘텐츠 심사를 통과하지 못했습니다.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	지침이 서비스의 콘텐츠 규칙에 해당합니다. 저작권 관련 제한 등이 포함될 수 있습니다.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	참조 이미지가 서비스의 콘텐츠 규칙에 해당합니다. 저작권 관련 제한 등이 포함될 수 있습니다.
+	Your reference image did not pass the service's privacy review.	참조 이미지가 서비스의 개인정보 보호 심사를 통과하지 못했습니다.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	생성된 이미지가 서비스의 콘텐츠 규칙에 해당합니다. 저작권 관련 제한 등이 포함될 수 있습니다.
+	The generated image triggered the service's impersonation restrictions.	생성된 이미지가 서비스의 사칭 관련 제한에 해당합니다.
+	The service rejected this edit without identifying the content-review stage.	서비스가 이번 편집을 거부했지만 어떤 콘텐츠 심사 단계인지는 밝히지 않았습니다.
+	The service's content review failed, so this edit could not be completed.	서비스의 콘텐츠 심사에 오류가 발생하여 편집을 완료할 수 없습니다.
+	Revise the instruction and try again manually.	지침을 수정한 후 직접 다시 시도하세요.
+	Choose a reference image that meets the service's requirements.	서비스 요구 사항을 충족하는 참조 이미지를 선택하세요.
+	Adjust the editing request or contact the service provider for details.	편집 내용을 조정하거나 서비스 제공업체에 자세한 내용을 문의하세요.
+	Check that your editing request meets the service's content requirements.	편집 요청이 서비스의 콘텐츠 요구 사항을 충족하는지 확인하세요.
+	Check your editing content or ask the service provider for details.	편집 내용을 확인하거나 서비스 제공업체에 자세한 내용을 문의하세요.
+	Try again manually later. Contact the service provider if the problem continues.	나중에 직접 다시 시도하세요. 문제가 계속되면 서비스 제공업체에 문의하세요.
+	This edit did not change existing layers or add a new layer.	이번 편집으로 기존 레이어를 변경하거나 새 레이어를 추가하지 않았습니다.
+	Error code: {code}	오류 코드: {code}
+	API settings	API 설정

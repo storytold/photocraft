@@ -4323,3 +4323,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Het resultaat wordt aan het canvas aangepast en als nieuwe laag toegevoegd. Bestaande lagen blijven behouden.
 	AI Edit via API	AI-bewerking via API
 	AI Provider Settings	Instellingen van AI-aanbieder
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	De AI-bewerking is afgewezen door de inhoudscontrole van de dienst
+	The image service's content review is unavailable	De inhoudscontrole van de afbeeldingsdienst is niet beschikbaar
+	Your editing instruction did not pass the service's content review.	Je bewerkingsinstructie kwam niet door de inhoudscontrole van de dienst.
+	Your reference image did not pass the service's content review.	Je referentieafbeelding kwam niet door de inhoudscontrole van de dienst.
+	The generated image did not pass the service's content review.	De gegenereerde afbeelding kwam niet door de inhoudscontrole van de dienst.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Je instructie activeerde de inhoudsregels van de dienst, die ook auteursrechtelijke beperkingen kunnen omvatten.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Je referentieafbeelding activeerde de inhoudsregels van de dienst, die ook auteursrechtelijke beperkingen kunnen omvatten.
+	Your reference image did not pass the service's privacy review.	Je referentieafbeelding kwam niet door de privacycontrole van de dienst.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	De gegenereerde afbeelding activeerde de inhoudsregels van de dienst, die ook auteursrechtelijke beperkingen kunnen omvatten.
+	The generated image triggered the service's impersonation restrictions.	De gegenereerde afbeelding activeerde de beperkingen van de dienst tegen identiteitsnabootsing.
+	The service rejected this edit without identifying the content-review stage.	De dienst wees deze bewerking af zonder de betreffende fase van de inhoudscontrole te noemen.
+	The service's content review failed, so this edit could not be completed.	De inhoudscontrole van de dienst is mislukt, waardoor deze bewerking niet kon worden voltooid.
+	Revise the instruction and try again manually.	Pas de instructie aan en probeer het handmatig opnieuw.
+	Choose a reference image that meets the service's requirements.	Kies een referentieafbeelding die aan de eisen van de dienst voldoet.
+	Adjust the editing request or contact the service provider for details.	Pas je bewerkingsverzoek aan of vraag de dienstaanbieder om meer informatie.
+	Check that your editing request meets the service's content requirements.	Controleer of je bewerkingsverzoek aan de inhoudseisen van de dienst voldoet.
+	Check your editing content or ask the service provider for details.	Controleer de te bewerken inhoud of vraag de dienstaanbieder om meer informatie.
+	Try again manually later. Contact the service provider if the problem continues.	Probeer het later handmatig opnieuw. Neem contact op met de dienstaanbieder als het probleem aanhoudt.
+	This edit did not change existing layers or add a new layer.	Deze bewerking heeft geen bestaande lagen gewijzigd en geen nieuwe laag toegevoegd.
+	Error code: {code}	Foutcode: {code}
+	API settings	API-instellingen

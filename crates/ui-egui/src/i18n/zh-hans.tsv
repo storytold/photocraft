@@ -3251,3 +3251,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	结果将适配画布尺寸并添加为新图层，保留已有图层。
 	AI Edit via API	通过 API 进行 AI 编辑
 	AI Provider Settings	AI 服务配置
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI 编辑未通过服务商审核
+	The image service's content review is unavailable	图片服务的内容审核暂不可用
+	Your editing instruction did not pass the service's content review.	编辑指令未通过服务商的内容审核。
+	Your reference image did not pass the service's content review.	参考图片未通过服务商的内容审核。
+	The generated image did not pass the service's content review.	生成结果未通过服务商的内容审核。
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	编辑指令触发了服务商的内容规则，可能包含版权等限制。
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	参考图片触发了服务商的内容规则，可能包含版权等限制。
+	Your reference image did not pass the service's privacy review.	参考图片未通过服务商的隐私审核。
+	The generated image triggered the service's content rules, which may include copyright restrictions.	生成结果触发了服务商的内容规则，可能包含版权等限制。
+	The generated image triggered the service's impersonation restrictions.	生成结果触发了服务商的仿冒内容限制。
+	The service rejected this edit without identifying the content-review stage.	服务商拒绝了本次编辑，但未说明具体的审核环节。
+	The service's content review failed, so this edit could not be completed.	服务商的审核服务发生错误，本次编辑暂时无法完成。
+	Revise the instruction and try again manually.	请调整编辑指令后手动重试。
+	Choose a reference image that meets the service's requirements.	请更换符合服务商要求的参考图片。
+	Adjust the editing request or contact the service provider for details.	请调整编辑内容，或向服务商确认具体限制。
+	Check that your editing request meets the service's content requirements.	请确认编辑内容符合服务商的内容要求。
+	Check your editing content or ask the service provider for details.	请检查编辑内容，或向服务商查询详细原因。
+	Try again manually later. Contact the service provider if the problem continues.	请稍后手动重试；若持续发生，请联系服务商。
+	This edit did not change existing layers or add a new layer.	本次未改动已有图层，也未添加新图层。
+	Error code: {code}	错误码：{code}
+	API settings	API 配置

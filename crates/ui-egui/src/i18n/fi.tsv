@@ -4822,3 +4822,25 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Tulos sovitetaan kankaaseen ja lisätään uutena tasona. Nykyiset tasot säilyvät.
 	AI Edit via API	Tekoälymuokkaus API:n kautta
 	AI Provider Settings	Tekoälypalveluntarjoajan asetukset
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Tekoälymuokkaus ei läpäissyt palvelun sisältötarkistusta
+	The image service's content review is unavailable	Kuvapalvelun sisältötarkistus ei ole käytettävissä
+	Your editing instruction did not pass the service's content review.	Muokkausohjeesi ei läpäissyt palvelun sisältötarkistusta.
+	Your reference image did not pass the service's content review.	Viitekuvasi ei läpäissyt palvelun sisältötarkistusta.
+	The generated image did not pass the service's content review.	Luotu kuva ei läpäissyt palvelun sisältötarkistusta.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ohjeesi käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Viitekuvasi käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	Your reference image did not pass the service's privacy review.	Viitekuvasi ei läpäissyt palvelun yksityisyystarkistusta.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Luotu kuva käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	The generated image triggered the service's impersonation restrictions.	Luotu kuva käynnisti palvelun toisen henkilönä esiintymistä koskevat rajoitukset.
+	The service rejected this edit without identifying the content-review stage.	Palvelu hylkäsi muokkauksen ilmoittamatta sisältötarkistuksen vaihetta.
+	The service's content review failed, so this edit could not be completed.	Palvelun sisältötarkistus epäonnistui, joten muokkausta ei voitu suorittaa loppuun.
+	Revise the instruction and try again manually.	Muokkaa ohjetta ja yritä uudelleen manuaalisesti.
+	Choose a reference image that meets the service's requirements.	Valitse viitekuva, joka täyttää palvelun vaatimukset.
+	Adjust the editing request or contact the service provider for details.	Muuta muokkauspyyntöä tai kysy lisätietoja palveluntarjoajalta.
+	Check that your editing request meets the service's content requirements.	Tarkista, että muokkauspyyntö täyttää palvelun sisältövaatimukset.
+	Check your editing content or ask the service provider for details.	Tarkista muokattava sisältö tai pyydä lisätietoja palveluntarjoajalta.
+	Try again manually later. Contact the service provider if the problem continues.	Yritä myöhemmin uudelleen manuaalisesti. Jos ongelma jatkuu, ota yhteyttä palveluntarjoajaan.
+	This edit did not change existing layers or add a new layer.	Tämä muokkaus ei muuttanut nykyisiä tasoja eikä lisännyt uutta tasoa.
+	Error code: {code}	Virhekoodi: {code}
+	API settings	API-asetukset

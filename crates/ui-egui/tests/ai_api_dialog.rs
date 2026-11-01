@@ -155,11 +155,13 @@ fn all_languages_update_ai_controls_and_saved_feedback_without_losing_the_prompt
     h.state_mut().session.execute("ai.provider.settings", json!({"action":"save","provider":"seedream","profile":photocraft_engine::cmd::ai_provider_cmds::preset("seedream"),"apiKey":"local-translation-key","rememberKey":false})).unwrap();
     h.state_mut().ui.dialogs[0].fields.insert("provider".into(), json!("seedream"));
     h.state_mut().ui.dialogs[0].fields.insert("prompt".into(), json!("Keep this instruction unchanged"));
+    h.state_mut().ui.dialogs[0].fields.insert("__aiApiSettingsOpen:seedream".into(), json!(true));
     h.state_mut().session.execute("prefs.set", json!({"path":"interface.language","value":"zh-hans"})).unwrap();
     h.run_steps(4);
+    h.run();
     h.get_by_label("保存 API 配置").click();
-    h.run_steps(3);
-    assert!(h.query_by_label("API 配置已保存").is_some());
+    h.run();
+    assert!(h.query_by_label("API 配置已保存").is_some(), "save state: {:?}; rect: {:?}", h.state().ui.ai_api, h.get_by_label("保存 API 配置").rect());
     for lang in Lang::all() {
         h.state_mut().session.execute("prefs.set", json!({"path":"interface.language","value":lang.code()})).unwrap();
         h.run_steps(3);
@@ -193,4 +195,63 @@ fn expanded_api_settings_keep_confirmation_buttons_on_a_small_screen() {
         assert!(rect.top() >= 0.0 && rect.bottom() <= 600.0, "{label} outside the window: {rect:?}");
     }
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
+}
+
+#[test]
+fn configured_api_controls_fold_without_losing_configuration_or_prompt() {
+    for provider in ["gemini", "seedream", "flux"] {
+        let mut h = harness();
+        h.state_mut().session.execute("ai.provider.settings", json!({"action":"save","provider":provider,"profile":photocraft_engine::cmd::ai_provider_cmds::preset(provider),"apiKey":"local-fold-test-key","rememberKey":false})).unwrap();
+        h.state_mut().ui.dialogs[0].fields.insert("provider".into(), json!(provider));
+        h.state_mut().ui.dialogs[0].fields.insert("prompt".into(), json!("Keep this prompt"));
+        h.run_steps(4);
+        assert!(h.query_by_label("Save API settings").is_none());
+        assert!(h.query_by_role(egui::accesskit::Role::PasswordInput).is_none());
+        assert!(h.query_by_label("Model ID").is_some());
+        assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+        h.get_by_label("API settings").click();
+        h.run_steps(24);
+        assert!(h.query_by_label("Save API settings").is_some());
+        assert!(h.query_by_label("API address and protocol").is_some());
+        h.get_by_label("API settings").click();
+        h.run_steps(24);
+        assert!(h.query_by_label("Save API settings").is_none());
+        assert_eq!(h.state().ui.dialogs[0].fields["prompt"], "Keep this prompt");
+        assert!(h.state().session.ai_api.has_key(provider).unwrap());
+        assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+        assert!(!serde_json::to_string(&h.state().ui).unwrap().contains("local-fold-test-key"));
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
+    }
+}
+
+#[test]
+fn folding_unsaved_key_keeps_the_draft_and_requires_an_explicit_save() {
+    let mut h = harness();
+    h.state_mut().ui.dialogs[0].fields.insert("provider".into(), json!("seedream"));
+    h.state_mut().ui.dialogs[0].fields.insert("prompt".into(), json!("Keep this prompt"));
+    h.run_steps(4);
+    h.run();
+    h.get_by_role(egui::accesskit::Role::PasswordInput).click();
+    h.run();
+    assert!(h.get_by_role(egui::accesskit::Role::PasswordInput).is_focused());
+    h.get_by_role(egui::accesskit::Role::PasswordInput).type_text("unsaved-fold-test-key");
+    h.run();
+    h.get_by_label("API settings").click();
+    h.run_steps(24);
+    assert!(h.query_by_label("Save API settings").is_none());
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled());
+    assert!(!h.state().session.ai_api.has_key("seedream").unwrap());
+    h.get_by_label("API settings").click();
+    h.run_steps(24);
+    h.run();
+    h.get_by_label("Save API settings").click();
+    h.run_steps(4);
+    assert!(
+        h.state().session.ai_api.has_key("seedream").unwrap(),
+        "folding retained the unsaved draft: {:?}; rect: {:?}",
+        h.state().ui.ai_api,
+        h.get_by_label("Save API settings").rect()
+    );
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+    assert!(!serde_json::to_string(&h.state().ui).unwrap().contains("unsaved-fold-test-key"));
 }

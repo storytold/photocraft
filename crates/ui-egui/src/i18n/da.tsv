@@ -4821,3 +4821,25 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Resultatet tilpasses lærredet og tilføjes som et nyt lag. Eksisterende lag bevares.
 	AI Edit via API	AI-redigering via API
 	AI Provider Settings	Indstillinger for AI-udbyder
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI-redigeringen bestod ikke tjenestens indholdskontrol
+	The image service's content review is unavailable	Billedtjenestens indholdskontrol er ikke tilgængelig
+	Your editing instruction did not pass the service's content review.	Din redigeringsinstruktion bestod ikke tjenestens indholdskontrol.
+	Your reference image did not pass the service's content review.	Dit referencebillede bestod ikke tjenestens indholdskontrol.
+	The generated image did not pass the service's content review.	Det genererede billede bestod ikke tjenestens indholdskontrol.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Din instruktion udløste tjenestens indholdsregler, som kan omfatte ophavsretlige begrænsninger.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Dit referencebillede udløste tjenestens indholdsregler, som kan omfatte ophavsretlige begrænsninger.
+	Your reference image did not pass the service's privacy review.	Dit referencebillede bestod ikke tjenestens privatlivskontrol.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Det genererede billede udløste tjenestens indholdsregler, som kan omfatte ophavsretlige begrænsninger.
+	The generated image triggered the service's impersonation restrictions.	Det genererede billede udløste tjenestens begrænsninger mod identitetsefterligning.
+	The service rejected this edit without identifying the content-review stage.	Tjenesten afviste redigeringen uden at oplyse trinnet i indholdskontrollen.
+	The service's content review failed, so this edit could not be completed.	Tjenestens indholdskontrol mislykkedes, så redigeringen kunne ikke gennemføres.
+	Revise the instruction and try again manually.	Ret instruktionen, og prøv igen manuelt.
+	Choose a reference image that meets the service's requirements.	Vælg et referencebillede, der opfylder tjenestens krav.
+	Adjust the editing request or contact the service provider for details.	Tilpas redigeringsanmodningen, eller kontakt tjenesteudbyderen for flere oplysninger.
+	Check that your editing request meets the service's content requirements.	Kontroller, at redigeringsanmodningen opfylder tjenestens indholdskrav.
+	Check your editing content or ask the service provider for details.	Kontroller redigeringens indhold, eller bed tjenesteudbyderen om flere oplysninger.
+	Try again manually later. Contact the service provider if the problem continues.	Prøv igen manuelt senere. Kontakt tjenesteudbyderen, hvis problemet fortsætter.
+	This edit did not change existing layers or add a new layer.	Denne redigering ændrede ingen eksisterende lag og tilføjede ikke et nyt lag.
+	Error code: {code}	Fejlkode: {code}
+	API settings	API-indstillinger

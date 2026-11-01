@@ -4763,3 +4763,25 @@ shape	Appearance	Оформление
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Результат будет подогнан под холст и добавлен новым слоем. Существующие слои сохранятся.
 	AI Edit via API	Редактирование с ИИ через API
 	AI Provider Settings	Настройки поставщика ИИ
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Правка с ИИ не прошла проверку содержимого сервиса
+	The image service's content review is unavailable	Проверка содержимого сервиса изображений недоступна
+	Your editing instruction did not pass the service's content review.	Ваша инструкция не прошла проверку содержимого сервиса.
+	Your reference image did not pass the service's content review.	Ваше исходное изображение не прошло проверку содержимого сервиса.
+	The generated image did not pass the service's content review.	Созданное изображение не прошло проверку содержимого сервиса.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ваша инструкция затронула правила сервиса, которые могут включать ограничения авторского права.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Ваше исходное изображение затронуло правила сервиса, которые могут включать ограничения авторского права.
+	Your reference image did not pass the service's privacy review.	Ваше исходное изображение не прошло проверку конфиденциальности сервиса.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Созданное изображение затронуло правила сервиса, которые могут включать ограничения авторского права.
+	The generated image triggered the service's impersonation restrictions.	Созданное изображение затронуло ограничения сервиса на выдачу себя за другое лицо.
+	The service rejected this edit without identifying the content-review stage.	Сервис отклонил правку, не указав этап проверки содержимого.
+	The service's content review failed, so this edit could not be completed.	При проверке содержимого на стороне сервиса произошла ошибка, поэтому правка не завершена.
+	Revise the instruction and try again manually.	Измените инструкцию и повторите попытку вручную.
+	Choose a reference image that meets the service's requirements.	Выберите исходное изображение, соответствующее требованиям сервиса.
+	Adjust the editing request or contact the service provider for details.	Измените запрос на редактирование или уточните подробности у поставщика сервиса.
+	Check that your editing request meets the service's content requirements.	Проверьте, соответствует ли запрос требованиям сервиса к содержимому.
+	Check your editing content or ask the service provider for details.	Проверьте редактируемое содержимое или уточните подробности у поставщика сервиса.
+	Try again manually later. Contact the service provider if the problem continues.	Повторите попытку вручную позже. Если проблема сохраняется, обратитесь к поставщику сервиса.
+	This edit did not change existing layers or add a new layer.	Эта правка не изменила существующие слои и не добавила новый слой.
+	Error code: {code}	Код ошибки: {code}
+	API settings	Настройки API

@@ -125,47 +125,56 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         let label = ui.label(tl!("Model ID"));
         ui.add(egui::TextEdit::singleline(&mut profile.model).id_salt(("ai-api-model", &provider)).desired_width(300.0).char_limit(200)).labelled_by(label.id);
     });
-    ui.collapsing(tl!("API address and protocol"), |ui| {
-        let label = ui.label(tl!("API address"));
-        ui.add(egui::TextEdit::singleline(&mut profile.endpoint).id_salt(("ai-api-endpoint", &provider)).desired_width(400.0).char_limit(2048))
-            .labelled_by(label.id);
-        ui.horizontal(|ui| {
-            let label = ui.label(tl!("API protocol"));
-            let before = profile.protocol;
-            craft_ui::ComboBox::from_id_salt("ai-api-protocol")
-                .selected_text(protocol_label(profile.protocol))
-                .show_ui(ui, |ui| {
-                    for protocol in [Protocol::GeminiInteractions, Protocol::GeminiGenerateContent, Protocol::Seedream, Protocol::Flux] {
-                        ui.selectable_value(&mut profile.protocol, protocol, protocol_label(protocol));
-                    }
-                })
-                .response
-                .labelled_by(label.id);
-            if before != profile.protocol {
-                profile.endpoint = match profile.protocol {
-                    Protocol::GeminiInteractions => "https://generativelanguage.googleapis.com/v1beta/interactions",
-                    Protocol::GeminiGenerateContent => "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                    Protocol::Seedream => "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-                    Protocol::Flux => "https://api.bfl.ai/v1/{model}",
-                }
-                .into();
-            }
-        });
-        ui.weak(tl!("Custom services must support the selected image-editing protocol. Changing the address requires a key for that address."));
-    });
-    let label = ui.label(if draft.has_key { tl!("API key configured — leave empty to keep it") } else { tl!("API key") });
-    ui.add(egui::TextEdit::singleline(&mut draft.key).id_salt(("ai-api-key", &provider)).password(true).desired_width(400.0).char_limit(4096))
-        .labelled_by(label.id);
-    ui.add_enabled(draft.persistent, egui::Checkbox::new(&mut draft.remember, tl!("Remember API key in system credential store")));
-    if !draft.remember {
-        ui.weak(tl!("The API key is available for this session only."));
-    }
+    let open_field = format!("__aiApiSettingsOpen:{provider}");
+    let open = fields.entry(open_field.clone()).or_insert_with(|| json!(!draft.has_key)).as_bool().unwrap_or(!draft.has_key);
     let mut save = false;
     let mut remove = false;
-    ui.horizontal_wrapped(|ui| {
-        save = ui.button(tl!("Save API settings")).clicked();
-        remove = ui.add_enabled(draft.has_key, egui::Button::new(tl!("Remove API key"))).clicked();
-    });
+    let disclosure =
+        egui::CollapsingHeader::new(tl!("API settings")).id_salt(("ai-api-settings", &provider)).default_open(open).open(Some(open)).show(ui, |ui| {
+            ui.collapsing(tl!("API address and protocol"), |ui| {
+                let label = ui.label(tl!("API address"));
+                ui.add(egui::TextEdit::singleline(&mut profile.endpoint).id_salt(("ai-api-endpoint", &provider)).desired_width(400.0).char_limit(2048))
+                    .labelled_by(label.id);
+                ui.horizontal(|ui| {
+                    let label = ui.label(tl!("API protocol"));
+                    let before = profile.protocol;
+                    craft_ui::ComboBox::from_id_salt("ai-api-protocol")
+                        .selected_text(protocol_label(profile.protocol))
+                        .show_ui(ui, |ui| {
+                            for protocol in [Protocol::GeminiInteractions, Protocol::GeminiGenerateContent, Protocol::Seedream, Protocol::Flux] {
+                                ui.selectable_value(&mut profile.protocol, protocol, protocol_label(protocol));
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id);
+                    if before != profile.protocol {
+                        profile.endpoint = match profile.protocol {
+                            Protocol::GeminiInteractions => "https://generativelanguage.googleapis.com/v1beta/interactions",
+                            Protocol::GeminiGenerateContent => "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                            Protocol::Seedream => "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+                            Protocol::Flux => "https://api.bfl.ai/v1/{model}",
+                        }
+                        .into();
+                    }
+                });
+                ui.weak(tl!("Custom services must support the selected image-editing protocol. Changing the address requires a key for that address."));
+            });
+            let label = ui.label(if draft.has_key { tl!("API key configured — leave empty to keep it") } else { tl!("API key") });
+            ui.add(egui::TextEdit::singleline(&mut draft.key).id_salt(("ai-api-key", &provider)).password(true).desired_width(400.0).char_limit(4096))
+                .labelled_by(label.id);
+            ui.add_enabled(draft.persistent, egui::Checkbox::new(&mut draft.remember, tl!("Remember API key in system credential store")));
+            if !draft.remember {
+                ui.weak(tl!("The API key is available for this session only."));
+            }
+            ui.horizontal_wrapped(|ui| {
+                save = ui.button(tl!("Save API settings")).clicked();
+                remove = ui.add_enabled(draft.has_key, egui::Button::new(tl!("Remove API key"))).clicked();
+            });
+        });
+    if disclosure.header_response.clicked() {
+        fields.insert(open_field, json!(!open));
+        ui.ctx().request_repaint();
+    }
     if let Some(message) = &draft.message {
         if draft.message_error {
             ui.colored_label(ui.visuals().error_fg_color, tl!(message.as_str()));

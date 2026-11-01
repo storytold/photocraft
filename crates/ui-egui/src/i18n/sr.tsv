@@ -4645,3 +4645,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Rezultat se prilagođava platnu i dodaje kao novi sloj. Postojeći slojevi se čuvaju.
 	AI Edit via API	AI uređivanje putem API-ja
 	AI Provider Settings	Podešavanja AI pružaoca
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI izmena nije prošla proveru sadržaja usluge
+	The image service's content review is unavailable	Provera sadržaja usluge za slike nije dostupna
+	Your editing instruction did not pass the service's content review.	Vaše uputstvo nije prošlo proveru sadržaja usluge.
+	Your reference image did not pass the service's content review.	Vaša referentna slika nije prošla proveru sadržaja usluge.
+	The generated image did not pass the service's content review.	Generisana slika nije prošla proveru sadržaja usluge.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Vaše uputstvo aktiviralo je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Vaša referentna slika aktivirala je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	Your reference image did not pass the service's privacy review.	Vaša referentna slika nije prošla proveru privatnosti usluge.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Generisana slika aktivirala je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	The generated image triggered the service's impersonation restrictions.	Generisana slika aktivirala je ograničenja usluge protiv lažnog predstavljanja.
+	The service rejected this edit without identifying the content-review stage.	Usluga je odbila ovu izmenu bez navođenja faze provere sadržaja.
+	The service's content review failed, so this edit could not be completed.	Provera sadržaja usluge nije uspela, pa ova izmena nije mogla biti završena.
+	Revise the instruction and try again manually.	Izmenite uputstvo i pokušajte ponovo ručno.
+	Choose a reference image that meets the service's requirements.	Izaberite referentnu sliku koja ispunjava zahteve usluge.
+	Adjust the editing request or contact the service provider for details.	Prilagodite zahtev za uređivanje ili pitajte pružaoca usluge za detalje.
+	Check that your editing request meets the service's content requirements.	Proverite da li vaš zahtev ispunjava pravila usluge o sadržaju.
+	Check your editing content or ask the service provider for details.	Proverite sadržaj izmene ili pitajte pružaoca usluge za detalje.
+	Try again manually later. Contact the service provider if the problem continues.	Pokušajte ponovo ručno kasnije. Ako problem potraje, obratite se pružaocu usluge.
+	This edit did not change existing layers or add a new layer.	Ova izmena nije promenila postojeće slojeve niti dodala novi sloj.
+	Error code: {code}	Kôd greške: {code}
+	API settings	API podešavanja

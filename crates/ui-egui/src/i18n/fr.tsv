@@ -4602,3 +4602,25 @@ shape	Appearance	Apparence
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Le résultat sera ajusté au canevas et ajouté sur un nouveau calque. Les calques existants seront conservés.
 	AI Edit via API	Retouche IA via API
 	AI Provider Settings	Paramètres du fournisseur IA
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	La retouche IA n’a pas passé la modération du service
+	The image service's content review is unavailable	La modération du service d’images est indisponible
+	Your editing instruction did not pass the service's content review.	Vos instructions n’ont pas passé la modération du service.
+	Your reference image did not pass the service's content review.	Votre image de référence n’a pas passé la modération du service.
+	The generated image did not pass the service's content review.	L’image générée n’a pas passé la modération du service.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Vos instructions ont déclenché les règles de contenu du service, qui peuvent inclure des restrictions de droit d’auteur.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Votre image de référence a déclenché les règles de contenu du service, qui peuvent inclure des restrictions de droit d’auteur.
+	Your reference image did not pass the service's privacy review.	Votre image de référence n’a pas passé le contrôle de confidentialité du service.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	L’image générée a déclenché les règles de contenu du service, qui peuvent inclure des restrictions de droit d’auteur.
+	The generated image triggered the service's impersonation restrictions.	L’image générée a déclenché les restrictions du service concernant l’usurpation d’identité.
+	The service rejected this edit without identifying the content-review stage.	Le service a refusé cette retouche sans préciser l’étape de modération concernée.
+	The service's content review failed, so this edit could not be completed.	La modération du service a échoué ; cette retouche n’a donc pas pu aboutir.
+	Revise the instruction and try again manually.	Modifiez les instructions, puis réessayez manuellement.
+	Choose a reference image that meets the service's requirements.	Choisissez une image de référence conforme aux exigences du service.
+	Adjust the editing request or contact the service provider for details.	Adaptez votre demande ou contactez le fournisseur du service pour en savoir plus.
+	Check that your editing request meets the service's content requirements.	Vérifiez que votre demande respecte les exigences de contenu du service.
+	Check your editing content or ask the service provider for details.	Vérifiez le contenu à retoucher ou demandez des précisions au fournisseur du service.
+	Try again manually later. Contact the service provider if the problem continues.	Réessayez manuellement plus tard. Si le problème persiste, contactez le fournisseur du service.
+	This edit did not change existing layers or add a new layer.	Cette retouche n’a modifié aucun calque existant ni ajouté de nouveau calque.
+	Error code: {code}	Code d’erreur : {code}
+	API settings	Paramètres API

@@ -4243,3 +4243,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	結果はキャンバスに合わせ、新しいレイヤーとして追加されます。既存のレイヤーは保持されます。
 	AI Edit via API	API 経由の AI 編集
 	AI Provider Settings	AI プロバイダー設定
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI 編集はサービスのコンテンツ審査に通りませんでした
+	The image service's content review is unavailable	画像サービスのコンテンツ審査を利用できません
+	Your editing instruction did not pass the service's content review.	編集指示がサービスのコンテンツ審査に通りませんでした。
+	Your reference image did not pass the service's content review.	参照画像がサービスのコンテンツ審査に通りませんでした。
+	The generated image did not pass the service's content review.	生成画像がサービスのコンテンツ審査に通りませんでした。
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	指示がサービスのコンテンツ規則に抵触しました。著作権に関する制限などが含まれる場合があります。
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	参照画像がサービスのコンテンツ規則に抵触しました。著作権に関する制限などが含まれる場合があります。
+	Your reference image did not pass the service's privacy review.	参照画像がサービスのプライバシー審査に通りませんでした。
+	The generated image triggered the service's content rules, which may include copyright restrictions.	生成画像がサービスのコンテンツ規則に抵触しました。著作権に関する制限などが含まれる場合があります。
+	The generated image triggered the service's impersonation restrictions.	生成画像がサービスのなりすましに関する制限に抵触しました。
+	The service rejected this edit without identifying the content-review stage.	サービスはこの編集を拒否しましたが、どの審査段階かは示していません。
+	The service's content review failed, so this edit could not be completed.	サービスのコンテンツ審査でエラーが発生し、編集を完了できませんでした。
+	Revise the instruction and try again manually.	指示を修正してから、手動で再試行してください。
+	Choose a reference image that meets the service's requirements.	サービスの要件を満たす参照画像を選んでください。
+	Adjust the editing request or contact the service provider for details.	編集内容を調整するか、サービス提供元に詳細を確認してください。
+	Check that your editing request meets the service's content requirements.	編集内容がサービスのコンテンツ要件を満たしているか確認してください。
+	Check your editing content or ask the service provider for details.	編集内容を確認するか、サービス提供元に詳細をお問い合わせください。
+	Try again manually later. Contact the service provider if the problem continues.	後で手動で再試行してください。問題が続く場合は、サービス提供元にお問い合わせください。
+	This edit did not change existing layers or add a new layer.	今回の編集で既存のレイヤーは変更されず、新しいレイヤーも追加されていません。
+	Error code: {code}	エラーコード: {code}
+	API settings	API 設定

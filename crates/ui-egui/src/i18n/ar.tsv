@@ -3597,3 +3597,25 @@ curves	Smooth	تنعيم
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	ستُضبط النتيجة لتناسب مساحة الرسم وتُضاف كطبقة جديدة. ستُحفظ الطبقات الحالية.
 	AI Edit via API	تحرير بالذكاء الاصطناعي عبر API
 	AI Provider Settings	إعدادات مزوّد الذكاء الاصطناعي
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	لم يجتز تعديل الذكاء الاصطناعي مراجعة المحتوى لدى الخدمة
+	The image service's content review is unavailable	مراجعة المحتوى لدى خدمة الصور غير متاحة
+	Your editing instruction did not pass the service's content review.	لم تجتز تعليمات التحرير مراجعة المحتوى لدى الخدمة.
+	Your reference image did not pass the service's content review.	لم تجتز الصورة المرجعية مراجعة المحتوى لدى الخدمة.
+	The generated image did not pass the service's content review.	لم تجتز الصورة المولّدة مراجعة المحتوى لدى الخدمة.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	فعّلت تعليماتك قواعد المحتوى لدى الخدمة، التي قد تتضمن قيود حقوق النشر.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	فعّلت الصورة المرجعية قواعد المحتوى لدى الخدمة، التي قد تتضمن قيود حقوق النشر.
+	Your reference image did not pass the service's privacy review.	لم تجتز الصورة المرجعية مراجعة الخصوصية لدى الخدمة.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	فعّلت الصورة المولّدة قواعد المحتوى لدى الخدمة، التي قد تتضمن قيود حقوق النشر.
+	The generated image triggered the service's impersonation restrictions.	فعّلت الصورة المولّدة قيود الخدمة المتعلقة بانتحال الهوية.
+	The service rejected this edit without identifying the content-review stage.	رفضت الخدمة هذا التعديل دون تحديد مرحلة مراجعة المحتوى.
+	The service's content review failed, so this edit could not be completed.	فشلت مراجعة المحتوى لدى الخدمة، لذا تعذّر إكمال هذا التعديل.
+	Revise the instruction and try again manually.	عدّل التعليمات وحاول مجددًا يدويًا.
+	Choose a reference image that meets the service's requirements.	اختر صورة مرجعية تستوفي متطلبات الخدمة.
+	Adjust the editing request or contact the service provider for details.	عدّل طلب التحرير أو اسأل مزوّد الخدمة عن التفاصيل.
+	Check that your editing request meets the service's content requirements.	تحقق من توافق طلب التحرير مع متطلبات المحتوى لدى الخدمة.
+	Check your editing content or ask the service provider for details.	راجع محتوى التعديل أو اسأل مزوّد الخدمة عن التفاصيل.
+	Try again manually later. Contact the service provider if the problem continues.	حاول مجددًا يدويًا لاحقًا. تواصل مع مزوّد الخدمة إذا استمرت المشكلة.
+	This edit did not change existing layers or add a new layer.	لم يغيّر هذا التعديل الطبقات الحالية ولم يضف طبقة جديدة.
+	Error code: {code}	رمز الخطأ: {code}
+	API settings	إعدادات API

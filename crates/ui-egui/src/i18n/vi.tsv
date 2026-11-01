@@ -4073,3 +4073,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Kết quả được khớp với khung vẽ và thêm thành lớp mới. Các lớp hiện có được giữ nguyên.
 	AI Edit via API	Chỉnh sửa bằng AI qua API
 	AI Provider Settings	Cấu hình nhà cung cấp AI
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Chỉnh sửa bằng AI không vượt qua kiểm duyệt nội dung của dịch vụ
+	The image service's content review is unavailable	Kiểm duyệt nội dung của dịch vụ hình ảnh hiện không khả dụng
+	Your editing instruction did not pass the service's content review.	Chỉ dẫn chỉnh sửa của bạn không vượt qua kiểm duyệt nội dung của dịch vụ.
+	Your reference image did not pass the service's content review.	Ảnh tham chiếu của bạn không vượt qua kiểm duyệt nội dung của dịch vụ.
+	The generated image did not pass the service's content review.	Ảnh được tạo không vượt qua kiểm duyệt nội dung của dịch vụ.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Chỉ dẫn của bạn đã kích hoạt quy tắc nội dung của dịch vụ, có thể bao gồm hạn chế về bản quyền.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Ảnh tham chiếu của bạn đã kích hoạt quy tắc nội dung của dịch vụ, có thể bao gồm hạn chế về bản quyền.
+	Your reference image did not pass the service's privacy review.	Ảnh tham chiếu của bạn không vượt qua kiểm tra quyền riêng tư của dịch vụ.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Ảnh được tạo đã kích hoạt quy tắc nội dung của dịch vụ, có thể bao gồm hạn chế về bản quyền.
+	The generated image triggered the service's impersonation restrictions.	Ảnh được tạo đã kích hoạt hạn chế của dịch vụ về mạo danh.
+	The service rejected this edit without identifying the content-review stage.	Dịch vụ từ chối chỉnh sửa này nhưng không nêu rõ giai đoạn kiểm duyệt nội dung.
+	The service's content review failed, so this edit could not be completed.	Kiểm duyệt nội dung của dịch vụ gặp lỗi nên không thể hoàn tất chỉnh sửa.
+	Revise the instruction and try again manually.	Sửa chỉ dẫn rồi thử lại theo cách thủ công.
+	Choose a reference image that meets the service's requirements.	Chọn ảnh tham chiếu đáp ứng yêu cầu của dịch vụ.
+	Adjust the editing request or contact the service provider for details.	Điều chỉnh yêu cầu chỉnh sửa hoặc hỏi nhà cung cấp dịch vụ để biết chi tiết.
+	Check that your editing request meets the service's content requirements.	Kiểm tra xem yêu cầu chỉnh sửa có đáp ứng yêu cầu nội dung của dịch vụ hay không.
+	Check your editing content or ask the service provider for details.	Kiểm tra nội dung chỉnh sửa hoặc hỏi nhà cung cấp dịch vụ để biết chi tiết.
+	Try again manually later. Contact the service provider if the problem continues.	Hãy thử lại thủ công sau. Nếu sự cố tiếp diễn, hãy liên hệ nhà cung cấp dịch vụ.
+	This edit did not change existing layers or add a new layer.	Lần chỉnh sửa này không thay đổi các lớp hiện có hay thêm lớp mới.
+	Error code: {code}	Mã lỗi: {code}
+	API settings	Cấu hình API

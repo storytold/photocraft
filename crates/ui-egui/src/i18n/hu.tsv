@@ -4486,3 +4486,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Az eredményt a vászonhoz igazítjuk, és új rétegként adjuk hozzá. A meglévő rétegek megmaradnak.
 	AI Edit via API	AI-szerkesztés API-n keresztül
 	AI Provider Settings	AI-szolgáltató beállításai
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Az AI-szerkesztés nem ment át a szolgáltatás tartalomellenőrzésén
+	The image service's content review is unavailable	A képszolgáltatás tartalomellenőrzése nem érhető el
+	Your editing instruction did not pass the service's content review.	A szerkesztési utasítás nem ment át a szolgáltatás tartalomellenőrzésén.
+	Your reference image did not pass the service's content review.	A referenciakép nem ment át a szolgáltatás tartalomellenőrzésén.
+	The generated image did not pass the service's content review.	A létrehozott kép nem ment át a szolgáltatás tartalomellenőrzésén.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Az utasítás a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	A referenciakép a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	Your reference image did not pass the service's privacy review.	A referenciakép nem ment át a szolgáltatás adatvédelmi ellenőrzésén.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	A létrehozott kép a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	The generated image triggered the service's impersonation restrictions.	A létrehozott kép a szolgáltatás mások megszemélyesítésére vonatkozó korlátozásaiba ütközött.
+	The service rejected this edit without identifying the content-review stage.	A szolgáltatás elutasította a szerkesztést, de nem nevezte meg a tartalomellenőrzés szakaszát.
+	The service's content review failed, so this edit could not be completed.	A szolgáltatás tartalomellenőrzése sikertelen volt, ezért a szerkesztés nem fejezhető be.
+	Revise the instruction and try again manually.	Módosítsa az utasítást, majd próbálja újra kézzel.
+	Choose a reference image that meets the service's requirements.	Válasszon a szolgáltatás követelményeinek megfelelő referenciaképet.
+	Adjust the editing request or contact the service provider for details.	Módosítsa a szerkesztési kérést, vagy kérjen részleteket a szolgáltatótól.
+	Check that your editing request meets the service's content requirements.	Ellenőrizze, hogy a kérés megfelel-e a szolgáltatás tartalmi követelményeinek.
+	Check your editing content or ask the service provider for details.	Ellenőrizze a szerkesztendő tartalmat, vagy kérjen részleteket a szolgáltatótól.
+	Try again manually later. Contact the service provider if the problem continues.	Próbálja újra később kézzel. Ha a hiba továbbra is fennáll, forduljon a szolgáltatóhoz.
+	This edit did not change existing layers or add a new layer.	Ez a szerkesztés nem módosította a meglévő rétegeket, és nem adott hozzá új réteget.
+	Error code: {code}	Hibakód: {code}
+	API settings	API-beállítások

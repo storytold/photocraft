@@ -4266,3 +4266,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Το αποτέλεσμα προσαρμόζεται στον καμβά και προστίθεται ως νέο επίπεδο. Τα υπάρχοντα επίπεδα διατηρούνται.
 	AI Edit via API	Επεξεργασία με ΤΝ μέσω API
 	AI Provider Settings	Ρυθμίσεις παρόχου ΤΝ
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Η επεξεργασία με ΤΝ δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας
+	The image service's content review is unavailable	Ο έλεγχος περιεχομένου της υπηρεσίας εικόνων δεν είναι διαθέσιμος
+	Your editing instruction did not pass the service's content review.	Η οδηγία επεξεργασίας δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	Your reference image did not pass the service's content review.	Η εικόνα αναφοράς δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	The generated image did not pass the service's content review.	Η παραγόμενη εικόνα δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Η οδηγία ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Η εικόνα αναφοράς ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	Your reference image did not pass the service's privacy review.	Η εικόνα αναφοράς δεν πέρασε τον έλεγχο απορρήτου της υπηρεσίας.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Η παραγόμενη εικόνα ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	The generated image triggered the service's impersonation restrictions.	Η παραγόμενη εικόνα ενεργοποίησε τους περιορισμούς της υπηρεσίας για πλαστοπροσωπία.
+	The service rejected this edit without identifying the content-review stage.	Η υπηρεσία απέρριψε την επεξεργασία χωρίς να αναφέρει το στάδιο ελέγχου περιεχομένου.
+	The service's content review failed, so this edit could not be completed.	Ο έλεγχος περιεχομένου της υπηρεσίας απέτυχε και η επεξεργασία δεν ολοκληρώθηκε.
+	Revise the instruction and try again manually.	Αναθεωρήστε την οδηγία και δοκιμάστε ξανά χειροκίνητα.
+	Choose a reference image that meets the service's requirements.	Επιλέξτε εικόνα αναφοράς που πληροί τις απαιτήσεις της υπηρεσίας.
+	Adjust the editing request or contact the service provider for details.	Προσαρμόστε το αίτημα επεξεργασίας ή ζητήστε λεπτομέρειες από τον πάροχο.
+	Check that your editing request meets the service's content requirements.	Ελέγξτε αν το αίτημά σας πληροί τις απαιτήσεις περιεχομένου της υπηρεσίας.
+	Check your editing content or ask the service provider for details.	Ελέγξτε το περιεχόμενο της επεξεργασίας ή ζητήστε λεπτομέρειες από τον πάροχο.
+	Try again manually later. Contact the service provider if the problem continues.	Δοκιμάστε ξανά χειροκίνητα αργότερα. Αν το πρόβλημα συνεχιστεί, επικοινωνήστε με τον πάροχο.
+	This edit did not change existing layers or add a new layer.	Αυτή η επεξεργασία δεν άλλαξε τα υπάρχοντα επίπεδα ούτε πρόσθεσε νέο επίπεδο.
+	Error code: {code}	Κωδικός σφάλματος: {code}
+	API settings	Ρυθμίσεις API

@@ -4478,3 +4478,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	El resultado se ajustará al lienzo y se añadirá como una capa nueva. Las capas existentes se conservarán.
 	AI Edit via API	Edición con IA mediante API
 	AI Provider Settings	Configuración del proveedor de IA
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	La edición con IA no superó la revisión de contenido del servicio
+	The image service's content review is unavailable	La revisión de contenido del servicio de imágenes no está disponible
+	Your editing instruction did not pass the service's content review.	Tus instrucciones de edición no superaron la revisión de contenido del servicio.
+	Your reference image did not pass the service's content review.	Tu imagen de referencia no superó la revisión de contenido del servicio.
+	The generated image did not pass the service's content review.	La imagen generada no superó la revisión de contenido del servicio.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Tus instrucciones activaron las normas de contenido del servicio, que pueden incluir restricciones de derechos de autor.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Tu imagen de referencia activó las normas de contenido del servicio, que pueden incluir restricciones de derechos de autor.
+	Your reference image did not pass the service's privacy review.	Tu imagen de referencia no superó la revisión de privacidad del servicio.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	La imagen generada activó las normas de contenido del servicio, que pueden incluir restricciones de derechos de autor.
+	The generated image triggered the service's impersonation restrictions.	La imagen generada activó las restricciones del servicio sobre suplantación de identidad.
+	The service rejected this edit without identifying the content-review stage.	El servicio rechazó esta edición sin indicar la etapa de revisión de contenido.
+	The service's content review failed, so this edit could not be completed.	La revisión de contenido del servicio falló y no se pudo completar esta edición.
+	Revise the instruction and try again manually.	Modifica las instrucciones y vuelve a intentarlo manualmente.
+	Choose a reference image that meets the service's requirements.	Elige una imagen de referencia que cumpla los requisitos del servicio.
+	Adjust the editing request or contact the service provider for details.	Adapta la solicitud de edición o consulta los detalles al proveedor del servicio.
+	Check that your editing request meets the service's content requirements.	Comprueba que tu solicitud cumpla los requisitos de contenido del servicio.
+	Check your editing content or ask the service provider for details.	Comprueba el contenido de la edición o consulta los detalles al proveedor del servicio.
+	Try again manually later. Contact the service provider if the problem continues.	Vuelve a intentarlo manualmente más tarde. Si el problema persiste, contacta con el proveedor del servicio.
+	This edit did not change existing layers or add a new layer.	Esta edición no modificó las capas existentes ni añadió ninguna capa nueva.
+	Error code: {code}	Código de error: {code}
+	API settings	Configuración de API

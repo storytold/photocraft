@@ -3,7 +3,7 @@ Turkish, Hungarian, Serbian, Russian, Swedish, Finnish, Danish and Norwegian Bok
 catalogs are licensed under MIT OR Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
 
-The AI image-editing, account and API entries in all registered catalogs are original
+The AI image-editing, account, API, review and disclosure entries in all registered catalogs are original
 translations of PhotoCraft's English labels by PhotoCraft AI contributors, with OpenAI
 Codex as an AI contributor, licensed under MIT OR Apache-2.0. These additions have not
 had native-speaker review; earlier catalog reviews do not cover the new entries.

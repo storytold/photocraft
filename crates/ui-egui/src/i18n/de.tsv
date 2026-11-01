@@ -3597,3 +3597,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Das Ergebnis wird an die Leinwand angepasst und als neue Ebene hinzugefügt. Vorhandene Ebenen bleiben erhalten.
 	AI Edit via API	KI-Bearbeitung über API
 	AI Provider Settings	KI-Anbietereinstellungen
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Die KI-Bearbeitung wurde von der Inhaltsprüfung des Dienstes abgelehnt
+	The image service's content review is unavailable	Die Inhaltsprüfung des Bilddienstes ist nicht verfügbar
+	Your editing instruction did not pass the service's content review.	Ihre Bearbeitungsanweisung hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	Your reference image did not pass the service's content review.	Ihr Referenzbild hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	The generated image did not pass the service's content review.	Das erzeugte Bild hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ihre Anweisung hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Ihr Referenzbild hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	Your reference image did not pass the service's privacy review.	Ihr Referenzbild hat die Datenschutzprüfung des Dienstes nicht bestanden.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Das erzeugte Bild hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	The generated image triggered the service's impersonation restrictions.	Das erzeugte Bild hat die Regeln des Dienstes gegen Identitätsvortäuschung ausgelöst.
+	The service rejected this edit without identifying the content-review stage.	Der Dienst hat diese Bearbeitung abgelehnt, ohne die betroffene Prüfungsphase zu nennen.
+	The service's content review failed, so this edit could not be completed.	Die Inhaltsprüfung des Dienstes ist fehlgeschlagen. Diese Bearbeitung konnte daher nicht abgeschlossen werden.
+	Revise the instruction and try again manually.	Ändern Sie die Anweisung und versuchen Sie es erneut manuell.
+	Choose a reference image that meets the service's requirements.	Wählen Sie ein Referenzbild, das den Anforderungen des Dienstes entspricht.
+	Adjust the editing request or contact the service provider for details.	Passen Sie die Bearbeitungsanfrage an oder fragen Sie den Dienstanbieter nach Einzelheiten.
+	Check that your editing request meets the service's content requirements.	Prüfen Sie, ob Ihre Bearbeitungsanfrage den Inhaltsanforderungen des Dienstes entspricht.
+	Check your editing content or ask the service provider for details.	Prüfen Sie den Bearbeitungsinhalt oder fragen Sie den Dienstanbieter nach Einzelheiten.
+	Try again manually later. Contact the service provider if the problem continues.	Versuchen Sie es später erneut manuell. Wenden Sie sich bei anhaltenden Problemen an den Dienstanbieter.
+	This edit did not change existing layers or add a new layer.	Diese Bearbeitung hat vorhandene Ebenen nicht verändert und keine neue Ebene hinzugefügt.
+	Error code: {code}	Fehlercode: {code}
+	API settings	API-Einstellungen

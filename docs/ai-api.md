@@ -62,7 +62,8 @@ The wasm build retains the platform-neutral types but disables native editing/se
 Seedream error bodies are bounded to 64 KiB/two seconds. Only known codes, fields and safe
 classifications are retained; arbitrary messages, prompts, keys, URLs and unknown suffixes
 are not echoed. This transport vocabulary includes content-review categories. Localized
-review notices and folding the configuration controls are a separate UI follow-up.
+review notices and folding the configuration controls are documented in the
+[UI follow-up](ai-ux.md).
 
 ## Commands and tests
 

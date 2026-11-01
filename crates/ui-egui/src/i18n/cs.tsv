@@ -4312,3 +4312,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Výsledek se přizpůsobí plátnu a přidá jako nová vrstva. Stávající vrstvy zůstanou zachovány.
 	AI Edit via API	Úprava pomocí AI přes API
 	AI Provider Settings	Nastavení poskytovatele AI
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Úprava pomocí AI neprošla kontrolou obsahu služby
+	The image service's content review is unavailable	Kontrola obsahu obrazové služby není dostupná
+	Your editing instruction did not pass the service's content review.	Váš pokyn k úpravě neprošel kontrolou obsahu služby.
+	Your reference image did not pass the service's content review.	Váš referenční obrázek neprošel kontrolou obsahu služby.
+	The generated image did not pass the service's content review.	Vygenerovaný obrázek neprošel kontrolou obsahu služby.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Váš pokyn aktivoval pravidla obsahu služby, která mohou zahrnovat omezení autorských práv.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Váš referenční obrázek aktivoval pravidla obsahu služby, která mohou zahrnovat omezení autorských práv.
+	Your reference image did not pass the service's privacy review.	Váš referenční obrázek neprošel kontrolou soukromí služby.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Vygenerovaný obrázek aktivoval pravidla obsahu služby, která mohou zahrnovat omezení autorských práv.
+	The generated image triggered the service's impersonation restrictions.	Vygenerovaný obrázek aktivoval omezení služby týkající se vydávání se za jinou osobu.
+	The service rejected this edit without identifying the content-review stage.	Služba odmítla tuto úpravu bez určení fáze kontroly obsahu.
+	The service's content review failed, so this edit could not be completed.	Kontrola obsahu služby selhala, proto nebylo možné úpravu dokončit.
+	Revise the instruction and try again manually.	Upravte pokyn a zkuste to znovu ručně.
+	Choose a reference image that meets the service's requirements.	Vyberte referenční obrázek splňující požadavky služby.
+	Adjust the editing request or contact the service provider for details.	Upravte požadavek nebo požádejte poskytovatele služby o podrobnosti.
+	Check that your editing request meets the service's content requirements.	Ověřte, zda požadavek splňuje obsahové požadavky služby.
+	Check your editing content or ask the service provider for details.	Zkontrolujte upravovaný obsah nebo požádejte poskytovatele služby o podrobnosti.
+	Try again manually later. Contact the service provider if the problem continues.	Zkuste to ručně později. Pokud problém přetrvává, kontaktujte poskytovatele služby.
+	This edit did not change existing layers or add a new layer.	Tato úprava nezměnila stávající vrstvy ani nepřidala novou vrstvu.
+	Error code: {code}	Kód chyby: {code}
+	API settings	Nastavení API

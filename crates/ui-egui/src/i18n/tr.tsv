@@ -4300,3 +4300,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Sonuç tuvale sığdırılır ve yeni katman olarak eklenir. Var olan katmanlar korunur.
 	AI Edit via API	API üzerinden yapay zekâ ile düzenleme
 	AI Provider Settings	Yapay zekâ sağlayıcı ayarları
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Yapay zekâ düzenlemesi hizmetin içerik denetiminden geçemedi
+	The image service's content review is unavailable	Görsel hizmetinin içerik denetimi kullanılamıyor
+	Your editing instruction did not pass the service's content review.	Düzenleme talimatınız hizmetin içerik denetiminden geçemedi.
+	Your reference image did not pass the service's content review.	Referans görseliniz hizmetin içerik denetiminden geçemedi.
+	The generated image did not pass the service's content review.	Oluşturulan görsel hizmetin içerik denetiminden geçemedi.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Talimatınız, telif hakkı kısıtlamalarını da içerebilen hizmet içerik kurallarını tetikledi.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Referans görseliniz, telif hakkı kısıtlamalarını da içerebilen hizmet içerik kurallarını tetikledi.
+	Your reference image did not pass the service's privacy review.	Referans görseliniz hizmetin gizlilik denetiminden geçemedi.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Oluşturulan görsel, telif hakkı kısıtlamalarını da içerebilen hizmet içerik kurallarını tetikledi.
+	The generated image triggered the service's impersonation restrictions.	Oluşturulan görsel hizmetin kimliğe bürünme kısıtlamalarını tetikledi.
+	The service rejected this edit without identifying the content-review stage.	Hizmet bu düzenlemeyi reddetti, ancak içerik denetiminin hangi aşamasında olduğunu belirtmedi.
+	The service's content review failed, so this edit could not be completed.	Hizmetin içerik denetimi başarısız olduğundan bu düzenleme tamamlanamadı.
+	Revise the instruction and try again manually.	Talimatı değiştirip elle yeniden deneyin.
+	Choose a reference image that meets the service's requirements.	Hizmetin gereksinimlerini karşılayan bir referans görsel seçin.
+	Adjust the editing request or contact the service provider for details.	Düzenleme isteğini değiştirin veya ayrıntılar için hizmet sağlayıcısına başvurun.
+	Check that your editing request meets the service's content requirements.	Düzenleme isteğinizin hizmetin içerik gereksinimlerine uyduğunu denetleyin.
+	Check your editing content or ask the service provider for details.	Düzenleme içeriğini denetleyin veya ayrıntılar için hizmet sağlayıcısına başvurun.
+	Try again manually later. Contact the service provider if the problem continues.	Daha sonra elle yeniden deneyin. Sorun sürerse hizmet sağlayıcısına başvurun.
+	This edit did not change existing layers or add a new layer.	Bu düzenleme var olan katmanları değiştirmedi ve yeni katman eklemedi.
+	Error code: {code}	Hata kodu: {code}
+	API settings	API ayarları

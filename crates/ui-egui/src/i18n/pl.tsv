@@ -4185,3 +4185,25 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Wynik zostanie dopasowany do płótna i dodany jako nowa warstwa. Istniejące warstwy zostaną zachowane.
 	AI Edit via API	Edycja z AI przez API
 	AI Provider Settings	Ustawienia dostawcy AI
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Edycja z AI nie przeszła kontroli treści usługi
+	The image service's content review is unavailable	Kontrola treści usługi obrazów jest niedostępna
+	Your editing instruction did not pass the service's content review.	Twoja instrukcja edycji nie przeszła kontroli treści usługi.
+	Your reference image did not pass the service's content review.	Twój obraz odniesienia nie przeszedł kontroli treści usługi.
+	The generated image did not pass the service's content review.	Wygenerowany obraz nie przeszedł kontroli treści usługi.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Twoja instrukcja uruchomiła reguły treści usługi, które mogą obejmować ograniczenia praw autorskich.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Twój obraz odniesienia uruchomił reguły treści usługi, które mogą obejmować ograniczenia praw autorskich.
+	Your reference image did not pass the service's privacy review.	Twój obraz odniesienia nie przeszedł kontroli prywatności usługi.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Wygenerowany obraz uruchomił reguły treści usługi, które mogą obejmować ograniczenia praw autorskich.
+	The generated image triggered the service's impersonation restrictions.	Wygenerowany obraz uruchomił ograniczenia usługi dotyczące podszywania się pod inne osoby.
+	The service rejected this edit without identifying the content-review stage.	Usługa odrzuciła tę edycję bez wskazania etapu kontroli treści.
+	The service's content review failed, so this edit could not be completed.	Kontrola treści usługi nie powiodła się, dlatego nie można było ukończyć edycji.
+	Revise the instruction and try again manually.	Zmień instrukcję i spróbuj ponownie ręcznie.
+	Choose a reference image that meets the service's requirements.	Wybierz obraz odniesienia spełniający wymagania usługi.
+	Adjust the editing request or contact the service provider for details.	Zmień prośbę o edycję lub zapytaj dostawcę usługi o szczegóły.
+	Check that your editing request meets the service's content requirements.	Sprawdź, czy prośba o edycję spełnia wymagania usługi dotyczące treści.
+	Check your editing content or ask the service provider for details.	Sprawdź edytowaną treść lub zapytaj dostawcę usługi o szczegóły.
+	Try again manually later. Contact the service provider if the problem continues.	Spróbuj ponownie ręcznie później. Jeśli problem się powtarza, skontaktuj się z dostawcą usługi.
+	This edit did not change existing layers or add a new layer.	Ta edycja nie zmieniła istniejących warstw ani nie dodała nowej warstwy.
+	Error code: {code}	Kod błędu: {code}
+	API settings	Ustawienia API

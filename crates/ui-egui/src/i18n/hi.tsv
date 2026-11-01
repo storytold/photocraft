@@ -641,3 +641,25 @@ cameraRaw	Yellow	पीला
 	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	परिणाम कैनवस के आकार में ढालकर नई परत के रूप में जोड़ा जाएगा। मौजूदा परतें सुरक्षित रहेंगी।
 	AI Edit via API	API से AI संपादन
 	AI Provider Settings	AI प्रदाता सेटिंग
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI संपादन सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ
+	The image service's content review is unavailable	चित्र सेवा की सामग्री समीक्षा उपलब्ध नहीं है
+	Your editing instruction did not pass the service's content review.	आपका संपादन निर्देश सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	Your reference image did not pass the service's content review.	आपका संदर्भ चित्र सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	The generated image did not pass the service's content review.	बनाया गया चित्र सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	आपके निर्देश ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	आपके संदर्भ चित्र ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	Your reference image did not pass the service's privacy review.	आपका संदर्भ चित्र सेवा की गोपनीयता समीक्षा में स्वीकार नहीं हुआ।
+	The generated image triggered the service's content rules, which may include copyright restrictions.	बनाए गए चित्र ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	The generated image triggered the service's impersonation restrictions.	बनाए गए चित्र ने किसी अन्य व्यक्ति का रूप धारण करने संबंधी सेवा के प्रतिबंध सक्रिय किए।
+	The service rejected this edit without identifying the content-review stage.	सेवा ने यह संपादन अस्वीकार कर दिया, लेकिन सामग्री समीक्षा का चरण नहीं बताया।
+	The service's content review failed, so this edit could not be completed.	सेवा की सामग्री समीक्षा विफल होने के कारण यह संपादन पूरा नहीं हो सका।
+	Revise the instruction and try again manually.	निर्देश बदलें और स्वयं फिर से कोशिश करें।
+	Choose a reference image that meets the service's requirements.	सेवा की आवश्यकताओं के अनुरूप संदर्भ चित्र चुनें।
+	Adjust the editing request or contact the service provider for details.	संपादन अनुरोध बदलें या विवरण के लिए सेवा प्रदाता से संपर्क करें।
+	Check that your editing request meets the service's content requirements.	जाँचें कि संपादन अनुरोध सेवा की सामग्री आवश्यकताओं के अनुरूप है।
+	Check your editing content or ask the service provider for details.	संपादन की सामग्री जाँचें या सेवा प्रदाता से विवरण पूछें।
+	Try again manually later. Contact the service provider if the problem continues.	बाद में स्वयं फिर से कोशिश करें। समस्या बनी रहे तो सेवा प्रदाता से संपर्क करें।
+	This edit did not change existing layers or add a new layer.	इस संपादन ने मौजूदा परतें नहीं बदलीं और कोई नई परत नहीं जोड़ी।
+	Error code: {code}	त्रुटि कोड: {code}
+	API settings	API सेटिंग
