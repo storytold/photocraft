@@ -225,6 +225,11 @@ pub struct Session {
     pub prefs: prefs::PrefsStore,
     /// Release checks use an injected platform transport; no network I/O in the engine.
     pub updates: updates_cmds::Updates,
+    /// Transient Codex connection state, with credentials owned by the installed runtime.
+    pub ai_account: cmd::ai_account_cmds::Account,
+    /// Keys stay transient or in the OS credential store, never in documents or preferences.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub ai_api: photocraft_gen::api_settings::Settings,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).

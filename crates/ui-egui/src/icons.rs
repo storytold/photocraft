@@ -191,6 +191,11 @@ pub fn button_with_icon_size(ui: &mut egui::Ui, name: &str, box_size: f32, icon_
 /// [`button_with_icon_size`] whose tooltip shows only when `show_tip`; the tooltip text still
 /// names the button (for screen readers and tests) when it is hidden.
 pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, icon_size: f32, selected: bool, tooltip: &str, show_tip: bool) -> Response {
+    button_with_size_tip(ui, name, Vec2::splat(box_size), icon_size, selected, tooltip, show_tip)
+}
+
+/// A compact command button can use a rectangular hit area while sharing toolbar styling.
+pub fn button_with_size_tip(ui: &mut egui::Ui, name: &str, size: Vec2, icon_size: f32, selected: bool, tooltip: &str, show_tip: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let style = IconButtonStyle {
         normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
@@ -201,7 +206,7 @@ pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, i
         focus_stroke: egui::Stroke::new(1.0, t.accent),
     };
     let label = if tooltip.is_empty() { name } else { tl!(tooltip) };
-    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
+    let resp = IconButton::new(label, size, &style).selected(selected).show(ui, |ui, rect, tint| {
         paint(ui, rect, name, icon_size, tint);
     });
     if tooltip.is_empty() || !show_tip { resp } else { resp.on_hover_text(label) }

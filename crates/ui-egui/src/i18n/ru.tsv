@@ -4711,3 +4711,55 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Редактирование с ИИ…
+@id	edit.ai.codex	Редактирование с ИИ…
+	Describe your edit	Опишите правку
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Видимый холст и инструкция будут отправлены в Codex с использованием входа через ChatGPT. Результат будет подогнан под холст и добавлен новым слоем.
+	Codex account has not been checked	Учётная запись Codex ещё не проверена
+	Checking Codex connection…	Проверка подключения к Codex…
+	Complete ChatGPT sign-in in your browser	Завершите вход в ChatGPT в браузере
+	Connected to ChatGPT	Подключено к ChatGPT
+	ChatGPT plan	Тариф ChatGPT
+	ChatGPT sign-in is required	Необходимо войти в ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex использует другой способ входа. Войдите через ChatGPT, чтобы использовать подписку.
+	Cancelling sign-in…	Отмена входа…
+	Sign-in cancelled	Вход отменён
+	Could not verify the account. Check your connection or sign in again.	Не удалось проверить учётную запись. Проверьте соединение или войдите снова.
+	Connection details	Сведения о подключении
+	Sign in with ChatGPT	Войти через ChatGPT
+	Open sign-in page	Открыть страницу входа
+	Check connection	Проверить подключение
+	Cancel sign-in	Отменить вход
+	Copy sign-in link	Скопировать ссылку для входа
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Не удалось открыть браузер. Повторите попытку или вставьте ссылку для входа в браузер.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Входом управляет установленная среда Codex; сеанс используется совместно с Codex. PhotoCraft не хранит токены.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex не найден. Установите и откройте настольное приложение Codex, затем снова проверьте подключение.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Используйте полную установку Codex: при копировании только codex.exe могут отсутствовать компоненты редактирования изображений.
+	AI Edit	Редактирование с ИИ
+	Codex Account	Учётная запись Codex
+# Image API and related UI (original translations).
+	Image service	Сервис изображений
+	Codex (ChatGPT subscription)	Codex (подписка ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Видимый холст и инструкция отправляются настроенному сервису. Поставщик сервиса может взимать плату за использование.
+	Model ID	ID модели
+	API address and protocol	Адрес и протокол API
+	API address	Адрес API
+	API protocol	Протокол API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Пользовательский сервис должен поддерживать выбранный протокол редактирования изображений. При смене адреса нужен ключ для нового адреса.
+	API key	Ключ API
+	API key configured — leave empty to keep it	Ключ API настроен — оставьте поле пустым, чтобы сохранить его
+	Remember API key in system credential store	Сохранить ключ API в системном хранилище учётных данных
+	The API key is available for this session only.	Ключ API доступен только в текущем сеансе.
+	Save API settings	Сохранить настройки API
+	Remove API key	Удалить ключ API
+	API configured. Saving settings does not generate an image.	API настроен. Сохранение настроек не создаёт изображение.
+	Save your API settings before editing.	Перед редактированием сохраните настройки API.
+	API settings saved	Настройки API сохранены
+	Enter a valid API key without whitespace	Введите действительный ключ API без пробельных символов
+	API key removed	Ключ API удалён
+	Could not load API settings	Не удалось загрузить настройки API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Результат будет подогнан под холст и добавлен новым слоем. Существующие слои сохранятся.
+	AI Edit via API	Редактирование с ИИ через API
+	AI Provider Settings	Настройки поставщика ИИ

@@ -4191,3 +4191,55 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI 編集…
+@id	edit.ai.codex	AI 編集…
+	Describe your edit	編集内容を入力
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	表示中のキャンバスと指示は、ChatGPT のログインを使用して Codex に送信されます。結果はキャンバスに合わせ、新しいレイヤーとして追加されます。
+	Codex account has not been checked	Codex アカウントは未確認です
+	Checking Codex connection…	Codex への接続を確認中…
+	Complete ChatGPT sign-in in your browser	ブラウザーで ChatGPT へのログインを完了してください
+	Connected to ChatGPT	ChatGPT に接続済み
+	ChatGPT plan	ChatGPT プラン
+	ChatGPT sign-in is required	ChatGPT へのログインが必要です
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex は別の方法でログインしています。サブスクリプションを使用するには ChatGPT にログインしてください。
+	Cancelling sign-in…	ログインをキャンセル中…
+	Sign-in cancelled	ログインをキャンセルしました
+	Could not verify the account. Check your connection or sign in again.	アカウントを確認できませんでした。接続を確認するか、再度ログインしてください。
+	Connection details	接続の詳細
+	Sign in with ChatGPT	ChatGPT にログイン
+	Open sign-in page	ログインページを開く
+	Check connection	接続を確認
+	Cancel sign-in	ログインをキャンセル
+	Copy sign-in link	ログインリンクをコピー
+	Could not open your browser. Try again or copy the sign-in link into your browser.	ブラウザーを開けませんでした。再試行するか、ログインリンクをブラウザーに貼り付けてください。
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	ログインはインストール済みの Codex が管理し、Codex と共有されます。PhotoCraft はトークンを保存しません。
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex が見つかりません。Codex デスクトップアプリをインストールして起動し、再度接続を確認してください。
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex のインストール全体を使用してください。codex.exe のみをコピーすると、画像編集コンポーネントが不足する場合があります。
+	AI Edit	AI 編集
+	Codex Account	Codex アカウント
+# Image API and related UI (original translations).
+	Image service	画像サービス
+	Codex (ChatGPT subscription)	Codex（ChatGPT サブスクリプション）
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	表示中のキャンバスと指示を設定したサービスに送信します。使用料金はサービス提供元から請求される場合があります。
+	Model ID	モデル ID
+	API address and protocol	API アドレスとプロトコル
+	API address	API アドレス
+	API protocol	API プロトコル
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	カスタムサービスは選択した画像編集プロトコルに対応している必要があります。アドレスを変更すると、そのアドレス用のキーが必要です。
+	API key	API キー
+	API key configured — leave empty to keep it	API キー設定済み — 空欄で既存のキーを維持
+	Remember API key in system credential store	システムの資格情報ストアに API キーを保存
+	The API key is available for this session only.	API キーは今回のセッションでのみ使用できます。
+	Save API settings	API 設定を保存
+	Remove API key	API キーを削除
+	API configured. Saving settings does not generate an image.	API は設定済みです。設定の保存では画像は生成されません。
+	Save your API settings before editing.	編集する前に API 設定を保存してください。
+	API settings saved	API 設定を保存しました
+	Enter a valid API key without whitespace	空白を含まない有効な API キーを入力してください
+	API key removed	API キーを削除しました
+	Could not load API settings	API 設定を読み込めませんでした
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	結果はキャンバスに合わせ、新しいレイヤーとして追加されます。既存のレイヤーは保持されます。
+	AI Edit via API	API 経由の AI 編集
+	AI Provider Settings	AI プロバイダー設定

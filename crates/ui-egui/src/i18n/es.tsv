@@ -4426,3 +4426,55 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Edición con IA…
+@id	edit.ai.codex	Edición con IA…
+	Describe your edit	Describe la edición
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	El lienzo visible y las instrucciones se enviarán a Codex mediante tu sesión de ChatGPT. El resultado se ajustará al lienzo y se añadirá como una capa nueva.
+	Codex account has not been checked	La cuenta de Codex aún no se ha comprobado
+	Checking Codex connection…	Comprobando la conexión con Codex…
+	Complete ChatGPT sign-in in your browser	Completa el inicio de sesión de ChatGPT en el navegador
+	Connected to ChatGPT	Conectado a ChatGPT
+	ChatGPT plan	Plan de ChatGPT
+	ChatGPT sign-in is required	Debes iniciar sesión en ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex utiliza otro método de inicio de sesión. Inicia sesión con ChatGPT para usar tu suscripción.
+	Cancelling sign-in…	Cancelando el inicio de sesión…
+	Sign-in cancelled	Inicio de sesión cancelado
+	Could not verify the account. Check your connection or sign in again.	No se pudo verificar la cuenta. Comprueba la conexión o vuelve a iniciar sesión.
+	Connection details	Detalles de conexión
+	Sign in with ChatGPT	Iniciar sesión con ChatGPT
+	Open sign-in page	Abrir página de inicio de sesión
+	Check connection	Comprobar conexión
+	Cancel sign-in	Cancelar inicio de sesión
+	Copy sign-in link	Copiar enlace de inicio de sesión
+	Could not open your browser. Try again or copy the sign-in link into your browser.	No se pudo abrir el navegador. Vuelve a intentarlo o pega el enlace de inicio de sesión en el navegador.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	La instalación de Codex gestiona el inicio de sesión y lo comparte con Codex. PhotoCraft no almacena tokens.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	No se encontró Codex. Instala y abre la aplicación de escritorio Codex y vuelve a comprobar la conexión.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Utiliza la instalación completa de Codex; copiar solo codex.exe puede omitir componentes de edición de imágenes.
+	AI Edit	Edición con IA
+	Codex Account	Cuenta de Codex
+# Image API and related UI (original translations).
+	Image service	Servicio de imágenes
+	Codex (ChatGPT subscription)	Codex (suscripción de ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Se envían el lienzo visible y las instrucciones al servicio configurado. El proveedor puede cobrar por su uso.
+	Model ID	ID del modelo
+	API address and protocol	Dirección y protocolo de API
+	API address	Dirección de API
+	API protocol	Protocolo de API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Los servicios personalizados deben admitir el protocolo de edición seleccionado. Al cambiar la dirección, se necesita una clave para esa dirección.
+	API key	Clave de API
+	API key configured — leave empty to keep it	Clave de API configurada — deja el campo vacío para conservarla
+	Remember API key in system credential store	Guardar la clave de API en el almacén de credenciales del sistema
+	The API key is available for this session only.	La clave de API solo estará disponible durante esta sesión.
+	Save API settings	Guardar configuración de API
+	Remove API key	Eliminar clave de API
+	API configured. Saving settings does not generate an image.	API configurada. Guardar la configuración no genera ninguna imagen.
+	Save your API settings before editing.	Guarda la configuración de API antes de editar.
+	API settings saved	Configuración de API guardada
+	Enter a valid API key without whitespace	Introduce una clave de API válida sin espacios
+	API key removed	Clave de API eliminada
+	Could not load API settings	No se pudo cargar la configuración de API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	El resultado se ajustará al lienzo y se añadirá como una capa nueva. Las capas existentes se conservarán.
+	AI Edit via API	Edición con IA mediante API
+	AI Provider Settings	Configuración del proveedor de IA

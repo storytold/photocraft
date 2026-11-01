@@ -4021,3 +4021,55 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Chỉnh sửa bằng AI…
+@id	edit.ai.codex	Chỉnh sửa bằng AI…
+	Describe your edit	Mô tả chỉnh sửa
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Khung vẽ đang hiển thị và chỉ dẫn sẽ được gửi tới Codex qua phiên đăng nhập ChatGPT của bạn. Kết quả được khớp với khung vẽ và thêm thành lớp mới.
+	Codex account has not been checked	Chưa kiểm tra tài khoản Codex
+	Checking Codex connection…	Đang kiểm tra kết nối Codex…
+	Complete ChatGPT sign-in in your browser	Hoàn tất đăng nhập ChatGPT trong trình duyệt
+	Connected to ChatGPT	Đã kết nối với ChatGPT
+	ChatGPT plan	Gói ChatGPT
+	ChatGPT sign-in is required	Cần đăng nhập ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex đang dùng cách đăng nhập khác. Hãy đăng nhập bằng ChatGPT để sử dụng gói đăng ký của bạn.
+	Cancelling sign-in…	Đang hủy đăng nhập…
+	Sign-in cancelled	Đã hủy đăng nhập
+	Could not verify the account. Check your connection or sign in again.	Không thể xác minh tài khoản. Hãy kiểm tra kết nối hoặc đăng nhập lại.
+	Connection details	Chi tiết kết nối
+	Sign in with ChatGPT	Đăng nhập bằng ChatGPT
+	Open sign-in page	Mở trang đăng nhập
+	Check connection	Kiểm tra kết nối
+	Cancel sign-in	Hủy đăng nhập
+	Copy sign-in link	Sao chép liên kết đăng nhập
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Không thể mở trình duyệt. Hãy thử lại hoặc dán liên kết đăng nhập vào trình duyệt.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Phiên đăng nhập do bản cài đặt Codex quản lý và được chia sẻ với Codex. PhotoCraft không lưu mã thông báo.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Không tìm thấy Codex. Hãy cài đặt và mở ứng dụng Codex cho máy tính, rồi kiểm tra kết nối lại.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Hãy dùng bản cài đặt Codex đầy đủ; chỉ sao chép codex.exe có thể thiếu thành phần chỉnh sửa hình ảnh.
+	AI Edit	Chỉnh sửa bằng AI
+	Codex Account	Tài khoản Codex
+# Image API and related UI (original translations).
+	Image service	Dịch vụ hình ảnh
+	Codex (ChatGPT subscription)	Codex (gói đăng ký ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Khung vẽ đang hiển thị và chỉ dẫn được gửi tới dịch vụ đã cấu hình. Nhà cung cấp có thể tính phí sử dụng.
+	Model ID	ID mô hình
+	API address and protocol	Địa chỉ và giao thức API
+	API address	Địa chỉ API
+	API protocol	Giao thức API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Dịch vụ tùy chỉnh phải hỗ trợ giao thức chỉnh sửa hình ảnh đã chọn. Đổi địa chỉ yêu cầu khóa cho địa chỉ đó.
+	API key	Khóa API
+	API key configured — leave empty to keep it	Đã cấu hình khóa API — để trống để giữ nguyên
+	Remember API key in system credential store	Lưu khóa API trong kho thông tin xác thực của hệ thống
+	The API key is available for this session only.	Khóa API chỉ khả dụng trong phiên này.
+	Save API settings	Lưu cấu hình API
+	Remove API key	Xóa khóa API
+	API configured. Saving settings does not generate an image.	Đã cấu hình API. Lưu cấu hình không tạo hình ảnh.
+	Save your API settings before editing.	Hãy lưu cấu hình API trước khi chỉnh sửa.
+	API settings saved	Đã lưu cấu hình API
+	Enter a valid API key without whitespace	Nhập khóa API hợp lệ không có khoảng trắng
+	API key removed	Đã xóa khóa API
+	Could not load API settings	Không thể tải cấu hình API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Kết quả được khớp với khung vẽ và thêm thành lớp mới. Các lớp hiện có được giữ nguyên.
+	AI Edit via API	Chỉnh sửa bằng AI qua API
+	AI Provider Settings	Cấu hình nhà cung cấp AI
