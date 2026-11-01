@@ -48,6 +48,29 @@ pub struct Action {
     /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// Written by automation: loaded, recorded, or had its steps edited while
+    /// [`Session::authorize`] was installed (a control, MCP or synthetic-input request).
+    /// Playback keeps automation's gate ([`Session::automation_gate`]) for it even when the user
+    /// starts it (a key, the Actions panel), so a client confined to its automation roots
+    /// can't plant steps that later run with the user's file access. Batch and droplets copy
+    /// steps instead of the action, so they do not keep the gate yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
+}
+
+/// Mark action `idx` as written by automation when an automation gate is installed.
+pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
+    if s.authorize.is_some()
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// The gate to install while `action` plays: automation's, for an action automation wrote that
+/// plays with none installed. `None` when the session's own gate (or none) applies.
+pub fn kept_gate(s: &Session, action: &Action) -> Option<fn(&str, &Value) -> Result<()>> {
+    if action.automation && s.authorize.is_none() { s.automation_gate } else { None }
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
@@ -55,7 +78,7 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new(), automation: false }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -371,6 +394,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.list.len() - 1
     };
     s.actions.recording = Some((s.journal.len(), idx));
+    note_automation_edit(s, idx);
     s.actions.take = s.actions.take.wrapping_add(1);
     let name = s.actions.list.get(idx).map(|a| a.name.clone()).unwrap_or_default();
     Ok(json!({"action": name, "index": idx}))
@@ -509,7 +533,15 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
+    // Nested calls and commands the steps run on their own behalf see the kept gate too.
+    let kept = kept_gate(s, &action);
+    if kept.is_some() {
+        s.authorize = kept;
+    }
     let (ran, failed) = run_recorded(s, &action, from);
+    if kept.is_some() {
+        s.authorize = None;
+    }
     finish_playback(s, recording, &action, from);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
@@ -546,6 +578,7 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         action.steps.insert(to, moved);
         action.remap_steps(|i| Some(moved_index(i, step, to)));
         let result = json!({"action": action.name, "step": to});
+        note_automation_edit(s, idx);
         s.actions.touch();
         Ok(result)
     } else {
@@ -602,6 +635,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
+        note_automation_edit(s, idx);
         s.actions.touch();
         return Ok(result);
     }
@@ -655,6 +689,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         None => action.disabled = (0..action.steps.len()).collect(),
     }
     let result = json!({"action": action.name, "disabled": action.disabled});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }

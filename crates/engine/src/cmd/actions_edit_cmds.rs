@@ -8,7 +8,7 @@
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
+use crate::actions_cmds::{flush_recording, not_playing, note_automation_edit, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -69,6 +69,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     action.steps.insert(at, (id.clone(), params));
     action.remap_steps(|i| Some(if i >= at { i + 1 } else { i }));
     let result = json!({"action": action.name, "step": at, "id": id, "steps": action.steps.len()});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }

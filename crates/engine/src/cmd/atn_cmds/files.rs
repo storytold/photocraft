@@ -58,6 +58,11 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Actions an automation client loads keep its gate when the user plays them.
+    let automation = s.authorize.is_some();
+    for a in &mut added {
+        a.automation = automation;
+    }
     s.actions.list.extend(added);
     let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
     if !keys.is_empty() {

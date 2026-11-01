@@ -1084,6 +1084,25 @@ fn a_paused_playback_keeps_its_automation_gate_when_the_dialog_is_confirmed() {
     assert!(app.ui.status.contains("select.all denied"), "{}", app.ui.status);
 }
 
+/// An action automation wrote, bound to a key, plays under the desktop's automation policy
+/// when the user presses the key: its file step is refused, not run with the user's access.
+#[test]
+fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
+    fn deny_file(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        if id.starts_with("file.") { Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let services = crate::Services { automation_authorize: Some(deny_file), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let mut planted = Action::new("Backup", vec![("file.openAs".into(), json!({"path": "/outside/secret.png"}))]);
+    planted.automation = true;
+    app.session.actions.list.push(planted);
+    assign_shortcut(&mut app, "Backup", "F9").unwrap();
+    crate::shortcut_dispatch::dispatch(&mut app, &egui::Context::default(), &shortcut_id("Backup"));
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.status.contains("disabled"), "the refusal is reported: {}", app.ui.status);
+    assert!(app.session.authorize.is_none(), "the kept gate is removed after playback");
+}
+
 /// The dialog names only its pause: changing its fields can't resume another action.
 #[test]
 fn a_step_dialog_resumes_only_the_playback_that_paused_it() {
