@@ -289,3 +289,45 @@ fn a_custom_warp_in_placed_units_stays_warped_at_the_frame() {
     let out = photocraft_algo::warp::place_source(&src, Rect::new(0, 0, 16, 16), &transform, Some(&warp), Some((8.0, 8.0))).unwrap();
     about(out.content_bounds(), 10, 10, 18, 14);
 }
+
+/// `Sz` in another resolution's units — a placed box of 8 pt at 72 ppi against a 300 ppi
+/// source (the 300/72 ≈ 4.17 ratio, not the integer 2 of the other tests).
+#[test]
+fn a_sold_sz_in_points_scales_the_source_at_300_ppi() {
+    let corners = [10.0, 10.0, 18.0, 10.0, 18.0, 18.0, 10.0, 18.0];
+    let data = sold((8.0, 8.0), corners, warp_none([0.0, 0.0, 8.0, 8.0]));
+    let (_, transform) = parse_smart(b"SoLd", &data);
+    // 8 pt ≙ 33.3 px at 300 ppi: the source scales down to the placed box.
+    let src = red(33);
+    let out = photocraft_algo::warp::place_source(&src, Rect::new(0, 0, 33, 33), &transform, None, Some((8.0, 8.0))).unwrap();
+    about(out.content_bounds(), 10, 10, 18, 18);
+}
+
+/// A zero, negative, NaN or missing `Sz` is no size at all: `parse_placed_size` rejects it
+/// (and `parse_smart` falls back to identity), the renderer's own guard rejects it too, and
+/// nothing divides by it — the source's rect is the placed box.
+#[test]
+fn a_bad_or_missing_sz_is_rejected_not_divided_by() {
+    let corners = [10.0, 10.0, 18.0, 10.0, 18.0, 18.0, 10.0, 18.0];
+    for sz in [(0.0, 0.0), (-8.0, 8.0), (f64::NAN, 8.0)] {
+        let data = sold(sz, corners, warp_none([0.0, 0.0, 8.0, 8.0]));
+        assert_eq!(parse_placed_size(b"SoLd", &data), None, "{sz:?}");
+        assert_eq!(parse_smart(b"SoLd", &data).1, photocraft_geom::Affine::IDENTITY, "{sz:?}");
+    }
+    let d = Descriptor::new("soLD")
+        .with("Trnf", Value::List(corners.iter().map(|v| Value::Double(*v)).collect()))
+        .with("warp", Value::Descriptor(warp_none([0.0, 0.0, 8.0, 8.0])));
+    let mut no_sz = b"soLD".to_vec();
+    no_sz.extend_from_slice(&4u32.to_be_bytes());
+    no_sz.extend_from_slice(&VersionedDescriptor::new(d).to_bytes());
+    assert_eq!(parse_placed_size(b"SoLd", &no_sz), None);
+
+    let src = red(16);
+    let r = Rect::new(0, 0, 16, 16);
+    let t = photocraft_geom::Affine::translate(10.0, 10.0);
+    let expect = photocraft_algo::warp::place_source(&src, r, &t, None, None).unwrap().content_bounds();
+    for sz in [(0.0, 0.0), (-8.0, 8.0), (f64::NAN, 8.0)] {
+        let out = photocraft_algo::warp::place_source(&src, r, &t, None, Some(sz)).unwrap();
+        assert_eq!(out.content_bounds(), expect, "{sz:?}");
+    }
+}
