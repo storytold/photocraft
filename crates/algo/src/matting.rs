@@ -928,6 +928,25 @@ mod tests {
     }
 
     #[test]
+    fn sparse_brushed_refine_matches_dense_for_add_and_restore() {
+        let canvas = Rect::new(-10, -5, 530, 270);
+        let source = Surface::with_default(PixelFormat::RGBA8, &[0.2, 0.4, 0.7, 1.0]);
+        let sampler = crate::segment::SurfaceSampler(&source);
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(Rect::new(12, 17, 300, 230), &[1.0]);
+        mask.fill_rect(Rect::new(80, 70, 140, 110), &[0.0]);
+        let strokes = [
+            EdgeStroke { points: vec![(295.0, 40.0), (320.0, 200.0)], size: 20.0, add: true },
+            EdgeStroke { points: vec![(310.0, 100.0), (300.0, 160.0)], size: 12.0, add: false },
+        ];
+        let brush = EdgeBrush::new(&strokes, canvas).unwrap();
+        let params = RefineParams { radius: 4.0, smart_radius: true, feather: 2.0, smooth: 5.0, ..Default::default() };
+        let dense = refine_mask_brushed(&sampler, &surface_reader(&mask), mask.content_bounds(), canvas, &params, Some(&brush)).unwrap();
+        let sparse = refine_surface(&sampler, &mask, canvas, &params, Some(&brush)).unwrap().unwrap();
+        assert_eq!(sparse.to_interleaved(canvas), region_surface(&dense).to_interleaved(canvas));
+    }
+
+    #[test]
     fn sparse_refine_handles_reveal_all_without_input_tiles() {
         let canvas = Rect::new(0, 0, 100_000, 100_000);
         let source = Surface::new(PixelFormat::RGBA8);
