@@ -715,6 +715,101 @@ mod tests {
         (app, ctx)
     }
 
+    /// Start the Styles test panel once its theme fonts are installed.
+    fn styles_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(250.0, 340.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    styles_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(1);
+        h
+    }
+
+    fn style_textures(ctx: &egui::Context) -> usize {
+        ctx.tex_manager().read().allocated().filter(|(_, m)| m.name.starts_with("preset-")).count()
+    }
+
+    /// Closed folders defer thumbnails; first use preserves pixels and later frames reuse them.
+    #[test]
+    fn styles_prepare_only_expanded_folders_and_reuse_their_pixels() {
+        let frame = |app: &mut PhotocraftApp, ctx: &egui::Context| {
+            let mut output = ctx
+                .run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(250.0, 340.0))), ..Default::default() }, |ui| {
+                    styles_panel(app, ui)
+                });
+            let images: Vec<_> = output.textures_delta.set.values().flatten().filter(|d| d.image.size() == [64, 64]).map(|d| d.image.clone()).collect();
+            output.textures_delta.clear();
+            images
+        };
+        for closed in [false, true] {
+            let (mut app, ctx) = app();
+            PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+            let style = &app.session.presets.styles[0].items[1];
+            let expected = ColorImage::from_rgba_unmultiplied([64, 64], &photocraft_engine::presets::styles::thumbnail(&app.session, style, 64));
+            if closed {
+                app.ui.presets_ui.toggled.insert("styles/Basics".into());
+            }
+            let mut images = frame(&mut app, &ctx);
+            assert_eq!(style_textures(&ctx), if closed { 0 } else { 8 }, "closed folders must not prepare thumbnails");
+            if closed {
+                app.ui.presets_ui.toggled.clear();
+                images = frame(&mut app, &ctx);
+            }
+            assert_eq!(style_textures(&ctx), 8, "only Basics starts open");
+            assert!(
+                images.iter().any(|image| {
+                    let egui::ImageData::Color(image) = image;
+                    image.as_ref() == &expected
+                }),
+                "the first visible swatch keeps the thumbnail producer's pixels"
+            );
+            assert!(frame(&mut app, &ctx).is_empty(), "visible thumbnails stay cached");
+        }
+    }
+
+    /// Clipped grid and list cells keep their scroll range and apply their style when revealed.
+    #[test]
+    fn styles_scroll_clipped_grid_and_list_cells_into_view_and_apply_them() {
+        use egui_kittest::kittest::Queryable;
+        for size in [40.0, MIN_THUMB] {
+            let (mut app, _) = app();
+            app.run("layer.new.layer", json!({"name": "Styled"})).unwrap();
+            let sample = app.session.presets.styles[0].items[1].clone();
+            let items = (0..64)
+                .map(|i| {
+                    let mut style = sample.clone();
+                    style.name = format!("Imported {i:02}");
+                    style
+                })
+                .collect();
+            app.session.presets.styles = vec![photocraft_engine::presets::Group::new("Imported", items)];
+            app.ui.presets_ui.sizes.insert("styles".into(), size);
+            let mut h = styles_harness(app);
+            let first_count = style_textures(&h.ctx);
+            assert!(first_count > 0 && first_count < 64, "only visible cells prepare: {first_count}, size {size}");
+            let last = h.get_by_role_and_label(egui::accesskit::Role::Button, "Imported 63");
+            assert!(last.rect().top() > 340.0, "clipping retains the full scroll extent");
+            last.scroll_to_me();
+            h.run_steps(3);
+            let last = h.get_by_role_and_label(egui::accesskit::Role::Button, "Imported 63");
+            assert!(h.ctx.content_rect().contains(last.rect().center()), "last cell scrolls into view");
+            assert!(style_textures(&h.ctx) > first_count, "newly visible cells prepare on demand");
+            last.click();
+            h.run_steps(3);
+            assert_eq!(h.state().ui.presets_ui.selected.get("styles").map(String::as_str), Some("Imported 63"));
+            let active = h.state().session.active().unwrap();
+            assert_eq!(active.doc.layer(active.active_layer.unwrap()).unwrap().effects.items, sample.effects);
+            let count = style_textures(&h.ctx);
+            h.run_steps(1);
+            assert_eq!(style_textures(&h.ctx), count);
+        }
+    }
+
     #[test]
     fn window_menu_toggles_panels_and_color_tabs() {
         let (mut app, ctx) = app();
