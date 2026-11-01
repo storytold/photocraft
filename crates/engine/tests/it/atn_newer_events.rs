@@ -170,7 +170,7 @@ fn atn_link_events_keep_descriptors_and_replay_the_requested_operation() {
 fn unsupported_link_descriptors_are_kept_and_ambiguous_exports_are_refused() {
     for event in ["linkSelectedLayers", "unlinkSelectedLayers"] {
         for descriptor in [
-            Descriptor::new("null"),
+            Descriptor::new("null").with("null", D::Reference(vec![])),
             Descriptor::new("null").with("null", D::Integer(1)),
             Descriptor::new("null").with("null", target_class("Dcmn")),
             Descriptor::new("null").with("null", target()).with("extra", D::Boolean(true)),
@@ -188,6 +188,274 @@ fn unsupported_link_descriptors_are_kept_and_ambiguous_exports_are_refused() {
     for params in [json!({}), json!({"linked": null}), json!({"linked": true, "layer": "Layer 0"}), json!({"linked": false, "layers": [1, 2]})] {
         let action = Action::new("A", vec![("layer.linkLayers".into(), params)]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
+    }
+}
+
+const TARGET_EVENTS: &[(&str, &str)] = &[
+    ("reverse", "layer.arrange.reverse"),
+    ("selectLinkedLayers", "layer.selectLinkedLayers"),
+    ("disableLayerStyle", "layer.layerStyle.clear"),
+    ("placedLayerMakeCopy", "layer.smartObjects.newSmartObjectViaCopy"),
+    ("placedLayerConvertToLayers", "layer.smartObjects.convertToLayers"),
+    ("placedLayerConvertToEmbedded", "layer.smartObjects.convertToEmbedded"),
+    ("placedLayerUpdateAllModified", "layer.smartObjects.updateAllModifiedContent"),
+    ("rasterizeAll", "layer.rasterize.allLayers"),
+    ("addBlankVideoLayer", "layer.videoLayers.newBlankVideoLayer"),
+    ("isolateLayers", "select.isolateLayers"),
+    ("textLoadDefaultTypeStyles", "type.loadDefaultTypeStyles"),
+    ("textSaveDefaultTypeStyles", "type.saveDefaultTypeStyles"),
+    ("recordMeasurements", "image.analysis.recordMeasurements"),
+];
+
+fn targeted(event: &str, explicit: bool) -> Descriptor {
+    let d = Descriptor::new(event);
+    if explicit { d.with("null", target()) } else { d }
+}
+
+fn load_targeted(s: &mut Session, event: &str, id: &str, explicit: bool) {
+    assert_eq!(load(s, &file(event, targeted(event, explicit)))["unsupported"], json!([]), "{event}");
+    let p = if explicit { json!({}) } else { json!({"_atnNoTarget": true}) };
+    assert_eq!(s.actions.list[0].steps, [(id.into(), p)]);
+}
+
+#[test]
+fn target_events_keep_empty_and_explicit_target_descriptors_distinct() {
+    for &(event, id) in TARGET_EVENTS {
+        for explicit in [false, true] {
+            let mut s = Session::new();
+            load_targeted(&mut s, event, id, explicit);
+            let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+            let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+            let item = &atn::parse(&bytes).unwrap().actions[0].items[0];
+            assert_eq!(item.event, AtnEvent::name(event));
+            assert_eq!(item.descriptor, Some(targeted("null", explicit)), "{event}");
+            assert_eq!(load(&mut s, &bytes)["unsupported"], json!([]));
+        }
+    }
+    // Reference lines197–199 permits writing an empty descriptor for an absent one.
+    let mut f = atn::parse(&file("reverse", Descriptor::new("null"))).unwrap();
+    f.actions[0].items[0].descriptor = None;
+    let mut s = Session::new();
+    assert_eq!(load(&mut s, &atn::write(&f).unwrap())["unsupported"], json!([]));
+    let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+    let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(Descriptor::new("null")));
+}
+
+#[test]
+fn bare_link_events_keep_their_operation_and_empty_keys() {
+    for (event, linked) in [("linkSelectedLayers", true), ("unlinkSelectedLayers", false)] {
+        let initial = if linked { None } else { Some(77) };
+        let mut s = fixture(&[initial, initial], &[0, 1]);
+        assert_eq!(load(&mut s, &file(event, Descriptor::new(event)))["unsupported"], json!([]));
+        assert_eq!(s.actions.list[0].steps[0].1, json!({"linked": linked, "_atnNoTarget": true}));
+        let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+        let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(Descriptor::new("null")));
+        let before = s.active().unwrap().doc.clone();
+        play(&mut s);
+        assert_ne!(s.active().unwrap().doc, before);
+        let after = s.active().unwrap().doc.clone();
+        assert!(groups(&s).iter().all(|group| group.is_some() == linked));
+        assert_eq!(groups(&s)[0], groups(&s)[1]);
+        play(&mut s);
+        assert_eq!(s.active().unwrap().doc, after);
+    }
+}
+
+#[test]
+fn target_events_keep_unknown_targets_and_refuse_native_options() {
+    for &(event, id) in TARGET_EVENTS {
+        for descriptor in [
+            Descriptor::new(event).with("null", D::Integer(1)),
+            Descriptor::new(event).with("null", target_class("Dcmn")),
+            targeted(event, true).with("null", target()),
+            targeted(event, true).with("extra", D::Boolean(true)),
+        ] {
+            let mut s = Session::new();
+            assert_eq!(load(&mut s, &file(event, descriptor.clone()))["unsupported"].as_array().unwrap().len(), 1);
+            let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
+            let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+            assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(descriptor));
+        }
+        for p in [json!({"layer": 1}), json!({"on": true}), json!({"_atnNoTarget": false}), json!({"_atnNoTarget": "true"})] {
+            let action = Action::new("A", vec![(id.into(), p)]);
+            assert!(atn_cmds::export("Links", &[&action], &[], false).is_err(), "{event}");
+        }
+    }
+    for linked in [false, true] {
+        let action = Action::new("A", vec![("layer.linkLayers".into(), json!({"linked": linked, "_atnNoTarget": false}))]);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
+    }
+}
+
+#[test]
+fn reverse_linked_selection_and_clear_style_events_do_their_edits() {
+    for explicit in [false, true] {
+        let mut s = fixture(&[None, None, None], &[0, 1, 2]);
+        let before = s.active().unwrap().doc.clone();
+        let ids: Vec<_> = before.layers.iter().map(|layer| layer.id).rev().collect();
+        load_targeted(&mut s, "reverse", "layer.arrange.reverse", explicit);
+        play(&mut s);
+        assert_eq!(s.active().unwrap().doc.layers.iter().map(|layer| layer.id).collect::<Vec<_>>(), ids);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+
+        let mut s = fixture(&[Some(77), Some(77), None], &[0]);
+        let ids: Vec<_> = s.active().unwrap().doc.layers[..2].iter().map(|layer| layer.id).collect();
+        load_targeted(&mut s, "selectLinkedLayers", "layer.selectLinkedLayers", explicit);
+        play(&mut s);
+        assert_eq!(s.active().unwrap().selected_layers(), ids);
+
+        let mut s = fixture(&[None], &[0]);
+        s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        assert_eq!(before.layers[0].effects.items.len(), 1);
+        load_targeted(&mut s, "disableLayerStyle", "layer.layerStyle.clear", explicit);
+        play(&mut s);
+        assert!(s.active().unwrap().doc.layers[0].effects.items.is_empty());
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+fn smart_target_scene(event: &str, bytes: &[u8], replacement: &[u8], path: &str) -> Session {
+    let mut s = smart_fixture(bytes);
+    if matches!(event, "placedLayerConvertToEmbedded" | "placedLayerUpdateAllModified") {
+        s.execute("layer.smartObjects.convertToLinked", json!({"path": path})).unwrap();
+    }
+    if event == "placedLayerUpdateAllModified" {
+        std::fs::write(path, replacement).unwrap();
+    }
+    s
+}
+
+fn assert_smart_target_edit(event: &str, s: &Session, original_id: photocraft_doc::SmartContentsId, pixels: &[[f32; 4]], bytes: &[u8]) {
+    match event {
+        "placedLayerMakeCopy" => {
+            assert_ne!(active_smart(s).contents_id, original_id);
+            assert_eq!(s.active().unwrap().doc.walk().iter().filter(|(_, _, layer)| matches!(layer.content, LayerContent::Smart(_))).count(), 2);
+        }
+        "placedLayerConvertToLayers" => assert!(s.active().unwrap().doc.walk().iter().all(|(_, _, layer)| !matches!(layer.content, LayerContent::Smart(_)))),
+        "placedLayerConvertToEmbedded" => assert!(matches!(&active_smart(s).source, SmartSource::Embedded { bytes: actual, .. } if actual.as_slice() == bytes)),
+        "placedLayerUpdateAllModified" => assert!(photocraft_compose::flatten(&s.active().unwrap().doc).px.iter().all(|px| *px == [1.0, 0.0, 0.0, 1.0])),
+        _ => unreachable!(),
+    }
+    if event != "placedLayerUpdateAllModified" {
+        assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px, pixels);
+    }
+}
+
+#[test]
+fn smart_target_events_copy_unpack_embed_and_refresh_real_contents() {
+    let original = png("#0000ff");
+    let replacement = png("#ff0000");
+    for &(event, id) in &TARGET_EVENTS[3..7] {
+        for explicit in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("linked.png");
+            let mut s = smart_target_scene(event, &original, &replacement, path.to_str().unwrap());
+            let before = s.active().unwrap().doc.clone();
+            let pixels = photocraft_compose::flatten(&before).px;
+            let contents_id = active_smart(&s).contents_id;
+            load_targeted(&mut s, event, id, explicit);
+            play(&mut s);
+            assert_smart_target_edit(event, &s, contents_id, &pixels, &original);
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
+#[test]
+fn rasterize_all_event_visits_nested_and_top_level_smart_layers() {
+    for explicit in [false, true] {
+        let mut s = smart_fixture(&png("#0000ff"));
+        let first = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.smartObjects.newSmartObjectViaCopy", json!({})).unwrap();
+        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let nested = doc.remove(first).unwrap();
+        doc.layers.push(Layer::group("Nested", vec![nested]));
+        let before = s.active().unwrap().doc.clone();
+        let pixels = photocraft_compose::flatten(&before).px;
+        load_targeted(&mut s, "rasterizeAll", "layer.rasterize.allLayers", explicit);
+        play(&mut s);
+        assert!(s.active().unwrap().doc.walk().iter().all(|(_, _, layer)| !matches!(layer.content, LayerContent::Smart(_))));
+        assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px, pixels);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn video_and_isolate_events_use_current_document_state() {
+    for explicit in [false, true] {
+        let mut s = fixture(&[None], &[0]);
+        let before = s.active().unwrap().doc.clone();
+        load_targeted(&mut s, "addBlankVideoLayer", "layer.videoLayers.newBlankVideoLayer", explicit);
+        play(&mut s);
+        let st = s.active().unwrap();
+        let video = st.doc.layer(st.active_layer.unwrap()).unwrap().video.as_ref().unwrap();
+        assert_eq!(video.frames.len(), 1);
+        assert_eq!(video.fps, 30.0);
+        assert!(video.frames[0].content_bounds().is_empty());
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+
+        let mut s = fixture(&[None, None, None], &[0, 2]);
+        let before = s.active().unwrap().doc.clone();
+        let ids = s.active().unwrap().selected_layers();
+        let history = s.active().unwrap().history.past_len();
+        load_targeted(&mut s, "isolateLayers", "select.isolateLayers", explicit);
+        play(&mut s);
+        assert_eq!(s.active().unwrap().isolated_layers, ids);
+        play(&mut s);
+        assert!(s.active().unwrap().isolated_layers.is_empty());
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+fn active_text(s: &Session) -> &photocraft_doc::TextLayer {
+    let st = s.active().unwrap();
+    let LayerContent::Text(text) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("expected Type") };
+    text
+}
+
+#[test]
+fn type_default_events_save_then_restore_changed_styles() {
+    for explicit in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+        s.execute("type.create", json!({"text": "Hi", "size": 14})).unwrap();
+        assert!(s.type_defaults.is_none());
+        load_targeted(&mut s, "textSaveDefaultTypeStyles", "type.saveDefaultTypeStyles", explicit);
+        play(&mut s);
+        assert_eq!(s.type_defaults.as_ref().unwrap().0.size_pt, 14.0);
+        s.execute("type.setStyle", json!({"size": 28})).unwrap();
+        assert_eq!(active_text(&s).char_runs()[0].style.size_pt, 28.0);
+        let before = s.active().unwrap().doc.clone();
+        load_targeted(&mut s, "textLoadDefaultTypeStyles", "type.loadDefaultTypeStyles", explicit);
+        play(&mut s);
+        assert_eq!(active_text(&s).char_runs()[0].style.size_pt, 14.0);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn measurement_event_records_actual_selected_area() {
+    for explicit in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        load_targeted(&mut s, "recordMeasurements", "image.analysis.recordMeasurements", explicit);
+        play(&mut s);
+        assert_eq!(s.analysis.log.len(), 1);
+        assert_eq!(s.analysis.log[0].values["source"], "Selection");
+        assert_eq!(s.analysis.log[0].values["area"].as_f64(), Some(4.0));
+        assert_eq!(s.active().unwrap().doc, before);
     }
 }
 

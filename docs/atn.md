@@ -16,6 +16,34 @@ saved as either Photoshop event. Explicit layer lists and extra parameters also
 cannot be saved as these events. Unsupported targets or extra descriptor keys
 are kept as Photoshop steps for lossless saving, rather than partially replayed.
 
+## Other events without settings
+
+| Photoshop event | PhotoCraft command |
+| --- | --- |
+| `reverse` | `layer.arrange.reverse` |
+| `selectLinkedLayers` | `layer.selectLinkedLayers` |
+| `disableLayerStyle` | `layer.layerStyle.clear` |
+| `placedLayerMakeCopy` | `layer.smartObjects.newSmartObjectViaCopy` |
+| `placedLayerConvertToLayers` | `layer.smartObjects.convertToLayers` |
+| `placedLayerConvertToEmbedded` | `layer.smartObjects.convertToEmbedded` |
+| `placedLayerUpdateAllModified` | `layer.smartObjects.updateAllModifiedContent` |
+| `rasterizeAll` | `layer.rasterize.allLayers` |
+| `addBlankVideoLayer` | `layer.videoLayers.newBlankVideoLayer` |
+| `isolateLayers` | `select.isolateLayers` |
+| `textLoadDefaultTypeStyles` | `type.loadDefaultTypeStyles` |
+| `textSaveDefaultTypeStyles` | `type.saveDefaultTypeStyles` |
+| `recordMeasurements` | `image.analysis.recordMeasurements` |
+
+These events and Link/Unlink accept either an empty descriptor or an explicit
+current-layer target. Save retains which form was imported. Other targets or
+extra settings stay complete Photoshop steps; native options with no recorded
+representation are refused on export.
+
+Playback uses each native command's normal preconditions and current state.
+Isolate Layers toggles the panel view. Type defaults are saved in the current
+session. Record Measurements uses the current selection/ruler/count and data
+point configuration.
+
 ## Smart Object file operations
 
 | Photoshop event | Meaningful descriptor keys | PhotoCraft command |

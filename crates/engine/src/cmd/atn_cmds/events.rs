@@ -17,7 +17,7 @@ use super::steps_layer::{
 };
 use super::steps_make::{locking_from, locking_to, make_from, make_to, set_from, set_to};
 use super::tables::{NOISE, OFFSET_FILL, SMART_BLUR_MODE, SMART_BLUR_QUALITY, TRIM};
-use super::{AtnEvent, D, Descriptor, STOP_MESSAGE, Value, json};
+use super::{AtnEvent, D, Descriptor, Map, STOP_MESSAGE, Value, json};
 
 /// An event: code (empty when Photoshop only has a string name), string name, the panel
 /// label, the command ids it exports (the first is the one simple events import to), and the
@@ -175,20 +175,57 @@ fn clipping_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", layer_ref(p)?))
 }
 
-// Target matching follows #10628's Link Layers adapter. Recorded Link and Unlink
-// need explicit state: replaying the UI toggle can perform the opposite operation.
-fn link_from(d: &Descriptor, linked: bool) -> Mapped {
-    // The reference permits normalizing the top-level descriptor class to null.
-    if d.items == desc("null").with("null", target_ref("Lyr ")).items {
-        step("layer.linkLayers", json!({"linked": linked}))
-    } else {
-        Mapped::Unsupported { harmless: false }
+// Adapter-only transport bit: the reference permits either no target key or the
+// current-layer target. Save must retain that distinction; native behavior is identical.
+const NO_TARGET: &str = "_atnNoTarget";
+
+fn target_params(d: &Descriptor) -> Option<Map<String, Value>> {
+    let mut p = Map::new();
+    if d.items.is_empty() {
+        p.insert(NO_TARGET.into(), Value::Bool(true));
+    } else if d.items != desc("null").with("null", target_ref("Lyr ")).items {
+        return None;
+    }
+    Some(p)
+}
+
+fn target_descriptor(p: &Value) -> Option<Descriptor> {
+    match p.get(NO_TARGET) {
+        None => Some(desc("null").with("null", target_ref("Lyr "))),
+        Some(Value::Bool(true)) => Some(desc("null")),
+        Some(_) => None,
     }
 }
 
+// Native-parameter allowlist adapted from #10628; refuse unrepresented options on export.
+fn params(p: &Value, allowed: &[&str]) -> bool {
+    p.as_object().is_some_and(|p| p.keys().all(|key| allowed.contains(&key.as_str())))
+}
+
+fn target_only_from(d: &Descriptor, id: &str) -> Mapped {
+    target_params(d).map_or(Mapped::Unsupported { harmless: false }, |p| step(id, Value::Object(p)))
+}
+
+fn target_only_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !params(p, &[NO_TARGET]) {
+        return None;
+    }
+    target_descriptor(p)
+}
+
+// Recorded Link and Unlink need explicit state: replaying the UI toggle can
+// perform the opposite operation. Target matching follows #10628's adapter.
+fn link_from(d: &Descriptor, linked: bool) -> Mapped {
+    let Some(mut p) = target_params(d) else { return Mapped::Unsupported { harmless: false } };
+    p.insert("linked".into(), Value::Bool(linked));
+    step("layer.linkLayers", Value::Object(p))
+}
+
 fn link_to(p: &Value, linked: bool) -> Option<Descriptor> {
-    let p = p.as_object()?;
-    (p.len() == 1 && p.get("linked") == Some(&Value::Bool(linked))).then(|| desc("null").with("null", target_ref("Lyr ")))
+    if !params(p, &["linked", NO_TARGET]) || p.get("linked") != Some(&Value::Bool(linked)) {
+        return None;
+    }
+    target_descriptor(p)
 }
 
 fn smart_path_from(d: &Descriptor, id: &str) -> Mapped {
@@ -227,6 +264,12 @@ fn smart_path_to(id: &str, p: &Value) -> Option<Descriptor> {
 macro_rules! clipping_event {
     ($code:literal, $name:literal, $label:literal, $id:literal) => {
         Event { code: $code, name: $name, label: $label, ids: &[$id], from: |d| clipping_from(d, $id), to: clipping_to }
+    };
+}
+
+macro_rules! target_event {
+    ($name:literal, $label:literal, $id:literal) => {
+        Event { code: "", name: $name, label: $label, ids: &[$id], from: |d| target_only_from(d, $id), to: target_only_to }
     };
 }
 
@@ -401,6 +444,15 @@ pub(super) const EVENTS: &[Event] = &[
     },
     Event { code: "Dplc", name: "duplicate", label: "Duplicate", ids: &["layer.duplicate", "image.duplicate"], from: duplicate_from, to: duplicate_to },
     // Layers.
+    target_event!("reverse", "Reverse", "layer.arrange.reverse"),
+    target_event!("selectLinkedLayers", "Select Linked Layers", "layer.selectLinkedLayers"),
+    target_event!("disableLayerStyle", "Clear Layer Style", "layer.layerStyle.clear"),
+    target_event!("rasterizeAll", "Rasterize All Layers", "layer.rasterize.allLayers"),
+    target_event!("addBlankVideoLayer", "New Blank Video Layer", "layer.videoLayers.newBlankVideoLayer"),
+    target_event!("isolateLayers", "Isolate Layers", "select.isolateLayers"),
+    target_event!("textLoadDefaultTypeStyles", "Load Default Type Styles", "type.loadDefaultTypeStyles"),
+    target_event!("textSaveDefaultTypeStyles", "Save Default Type Styles", "type.saveDefaultTypeStyles"),
+    target_event!("recordMeasurements", "Record Measurements", "image.analysis.recordMeasurements"),
     Event { code: "", name: "linkSelectedLayers", label: "Link Layers", ids: &["layer.linkLayers"], from: |d| link_from(d, true), to: |_, p| link_to(p, true) },
     Event {
         code: "",
@@ -529,6 +581,10 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "newPlacedLayer", "Convert to Smart Object", "layer.smartObjects.convertToSmartObject", &[]),
     ev!("", "placedLayerEditContents", "Edit Contents", "layer.smartObjects.editContents", &[]),
     ev!("", "updatePlacedLayer", "Update Smart Objects", "layer.smartObjects.updateModifiedContent", &[]),
+    target_event!("placedLayerMakeCopy", "New Smart Object via Copy", "layer.smartObjects.newSmartObjectViaCopy"),
+    target_event!("placedLayerConvertToLayers", "Convert to Layers", "layer.smartObjects.convertToLayers"),
+    target_event!("placedLayerConvertToEmbedded", "Convert to Embedded", "layer.smartObjects.convertToEmbedded"),
+    target_event!("placedLayerUpdateAllModified", "Update All Modified Content", "layer.smartObjects.updateAllModifiedContent"),
     Event {
         code: "",
         name: "placedLayerExportContents",
