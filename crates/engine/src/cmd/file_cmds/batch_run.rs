@@ -129,6 +129,19 @@ pub(crate) fn process_tree(
     suffix: &str,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
+    process_tree_with_results(s, inputs, output, format, save, suffix, &|scratch, out| f(scratch, out).map_err(FileFailure::from))
+}
+
+/// Process default output paths without discarding a failed child's returned file outcomes.
+fn process_tree_with_results(
+    s: &Session,
+    inputs: &[BatchInput],
+    output: &str,
+    format: &str,
+    save: SaveOpts,
+    suffix: &str,
+    f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
+) -> Value {
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
@@ -176,11 +189,24 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+/// A per-input error, optionally carrying the original result of failed nested work.
+struct FileFailure {
+    error: EngineError,
+    result: Option<Value>,
+}
+
+impl From<EngineError> for FileFailure {
+    fn from(error: EngineError) -> Self {
+        Self { error, result: None }
+    }
+}
+
+/// Save successful inputs and retain structured nested results alongside their error summaries.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
-    f: &dyn Fn(&mut Session, &str) -> Result<bool>,
+    f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
     let raw_ppi = s.prefs().raw_defaults.resolution;
@@ -188,7 +214,7 @@ fn process_outputs<'a>(
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     for (path, out) in outputs {
-        let r = (|| -> Result<()> {
+        let r = (|| -> std::result::Result<(), FileFailure> {
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
@@ -205,7 +231,13 @@ fn process_outputs<'a>(
                 written.record(&out, path);
                 files.push(out);
             }
-            Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
+            Err(FileFailure { error, result }) => {
+                let mut failure = json!({"file": path, "error": error.to_string()});
+                if let Some(result) = result {
+                    failure["result"] = result;
+                }
+                errors.push(failure);
+            }
         }
     }
     json!({"files": files, "errors": errors})
@@ -244,10 +276,16 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Run explicit steps or a saved action on each input using the requested output settings.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps =
-        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    let (mut steps, action) = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
+        Some(steps) => (parse_steps(steps)?, None),
+        None => {
+            let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": p.get("action")}))?;
+            (action.enabled_steps().map(|(_, step)| step.clone()).collect(), Some(action.name))
+        }
+    };
     // Each result goes to the destination folder, which overrides the action's recorded Save /
     // Save As steps: they only mark the result.
     steps.retain(|(id, _)| batch_keeps_step(id) && id != "file.export.quickExport");
@@ -273,23 +311,32 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // A batch inside a played action charges its inputs × steps (at least one each: an input is read,
     // decoded and saved even with no steps) to the playback tree it is in and
-    // hands the count on, so a batch of batches can't multiply past the limit. A top-level batch
-    // is not limited by it.
+    // hands the count on, so a batch of batches can't multiply past the limit. A named action
+    // starts a playback tree too; top-level explicit steps retain their existing behavior.
     let mut playback_steps = 0;
-    if s.actions.playing > 0 {
-        playback_steps = s.actions.playback_steps.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
+    if s.actions.playing > 0 || action.is_some() {
+        let spent = if s.actions.playing > 0 { s.actions.playback_steps } else { 0 };
+        playback_steps = spent.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the playback step limit of the action that runs it".into() });
+            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the action playback step limit".into() });
         }
-        s.actions.playback_steps = playback_steps;
+        if s.actions.playing > 0 {
+            s.actions.playback_steps = playback_steps;
+        }
     }
-    let actions = crate::actions_cmds::ActionState {
+    let mut actions = crate::actions_cmds::ActionState {
         list,
         playing: s.actions.playing,
         playback_stack: s.actions.playback_stack.clone(),
         playback_steps,
         ..Default::default()
     };
+    // Keep the selected identity in scratch sessions, so nested Batch and Play calls use
+    // the same cycle/depth guards without changing how the caller records this Batch command.
+    if let Some(name) = action {
+        actions.playing = actions.playing.saturating_add(1);
+        actions.playback_stack.push(name);
+    }
     let names = batch_naming::plan(&inputs, &output, &format, p)?;
     let save = SaveOpts::from_params(s, p, cmd)?;
     let authorize = s.authorize;
@@ -301,7 +348,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         scratch.authorize = authorize;
         scratch.actions = actions.clone();
         scratch.actions.playback_steps = carried.get();
-        let result = (|| {
+        let result = (|| -> std::result::Result<bool, FileFailure> {
             // The document as the last recorded save found it, written once the action has run so a
             // failing step still writes nothing.
             let mut saved: Option<Arc<Document>> = None;
@@ -313,7 +360,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 let r = scratch.execute(id, params.clone())?;
                 // A failed step inside a called action makes this file an error, not a saved result.
                 if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
-                    return Err(EngineError::Other(error));
+                    return Err(FileFailure { error: EngineError::Other(error), result: Some(r) });
                 }
             }
             // While the saved document is still open the steps after the save reach the result too
@@ -332,7 +379,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = match names {
         Some(names) => process_outputs(s, inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run),
-        None => process_tree(s, &inputs, &output, &format, save, "", &run),
+        None => process_tree_with_results(s, &inputs, &output, &format, save, "", &run),
     };
     if s.actions.playing > 0 {
         s.actions.playback_steps = carried.get();
