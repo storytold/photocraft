@@ -138,14 +138,15 @@ fn add_from_selection(app: &mut PhotocraftApp) {
     }
 }
 
-/// Topmost visible, non-background layer whose content bounds contain `pt`, if any.
+/// Topmost visible, non-background pixel layer whose content bounds contain `pt`, if any. Groups
+/// (folders) are skipped so binding tracks the actual layer under the frame, not the folder.
 fn layer_at_point(app: &PhotocraftApp, pt: [f64; 2]) -> Option<u64> {
     let st = app.session.active()?;
     let doc = &st.doc;
     let canvas = doc.bounds();
     let (x, y) = (pt[0].round() as i32, pt[1].round() as i32);
     for (_, _, layer) in doc.walk().into_iter().rev() {
-        if doc.is_background(layer.id) || !layer.visible {
+        if doc.is_background(layer.id) || !layer.visible || layer.is_group() {
             continue;
         }
         let b = layer_bounds(layer, canvas);

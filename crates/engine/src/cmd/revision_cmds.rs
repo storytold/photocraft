@@ -268,12 +268,14 @@ fn snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list_json(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
 
-/// Topmost visible, non-background layer whose content bounds contain `pt`, if any.
+/// Topmost visible, non-background pixel layer whose content bounds contain `pt`, if any. Groups
+/// (folders) are skipped: a group's bounds cover its children, and binding must track the actual
+/// layer under the frame, not the folder.
 fn layer_at_point(doc: &Document, pt: [f64; 2]) -> Option<LayerId> {
     let canvas = doc.bounds();
     let (x, y) = (pt[0].round() as i32, pt[1].round() as i32);
     for (_, _, layer) in doc.walk().into_iter().rev() {
-        if doc.is_background(layer.id) || !layer.visible {
+        if doc.is_background(layer.id) || !layer.visible || layer.is_group() {
             continue;
         }
         let b = photocraft_compose::layer_bounds(layer, canvas);
@@ -473,6 +475,25 @@ mod tests {
         s.execute("revision.snapshot", json!({})).unwrap();
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["done"], json!(false));
+    }
+
+    #[test]
+    fn layer_at_point_skips_groups() {
+        // A folder's bounds cover its children; the point hit must resolve to the child layer,
+        // not the folder, so markers bind to the layer actually under the frame.
+        let mut s = session();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let layers = s.execute("layer.list", json!({})).unwrap();
+        let child = layers["layers"].as_array().unwrap()[0]["id"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 60, "height": 40})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.0, 0.0, 1.0]})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        // Wrap the layer in a group: the group now covers the same bounds, above the child.
+        s.execute("layer.new.groupFromLayers", json!({"layer": child})).unwrap();
+        let d = s.active().unwrap().doc.clone();
+        let hit = layer_at_point(&d, [40.0, 30.0]);
+        assert_eq!(hit, Some(LayerId(child)), "hit resolves to the child layer, not the folder");
+        assert!(hit.is_some_and(|id| !d.layer(id).unwrap().is_group()));
     }
 
     #[test]

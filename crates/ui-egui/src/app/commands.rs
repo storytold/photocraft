@@ -419,9 +419,9 @@ const ADDS_LAYER_MASK: [&str; 5] = [
 /// panel, file, channel and other non-pixel commands are skipped; anything that can change what a
 /// marker frames (paint, edit, layer, image, history, path, type commits...) is checked.
 fn should_auto_detect(id: &str) -> bool {
-    const SKIP: [&str; 18] = [
+    const SKIP: [&str; 17] = [
         "actions.", "channel.", "document.", "dock.", "file.", "grid.", "guides.", "help.",
-        "navigator.", "panel.", "preferences.", "revision.", "select.", "tool.", "type.",
+        "navigator.", "panel.", "preferences.", "revision.", "select.", "tool.",
         "view.", "window.", "workspace.",
     ];
     !SKIP.iter().any(|prefix| id.starts_with(prefix))
