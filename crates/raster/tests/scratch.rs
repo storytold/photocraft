@@ -89,9 +89,12 @@ fn too_big_a_buffer_is_not_reused() {
 fn try_take_exact_reuses_and_allocates() {
     let _g = serial();
     release();
-    give(vec![0u8; 200_000]);
+    let buf = vec![0u8; 200_000];
+    let ptr = buf.as_ptr();
+    give(buf);
     let v = try_take_exact(200_000, 9u8);
     assert!(v.as_ref().is_some_and(|v| v.len() == 200_000 && v.iter().all(|&b| b == 9)));
+    assert_eq!(v.as_ref().map(|v| v.as_ptr()), Some(ptr));
     assert_eq!(retained_bytes(), 0);
     assert!(try_take_exact(300_000, 0u8).is_some());
     release();
