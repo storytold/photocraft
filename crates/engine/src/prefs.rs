@@ -1263,6 +1263,10 @@ impl Preferences {
                 self.menus.colors.remove(id);
                 return Ok(());
             }
+            Some(("collapsedActionSets", id)) => {
+                self.collapsed_action_sets.remove(id);
+                return Ok(());
+            }
             _ => {}
         }
         let def = Preferences::default().get(path).ok_or_else(|| format!("unknown preference `{path}`"))?;
@@ -1458,12 +1462,7 @@ impl Session {
                     color_changed |= self.set_pref("colorSettings", v.clone(), validate_color)?;
                     continue;
                 }
-                if v.is_object()
-                    && !p.starts_with("shortcuts")
-                    && !p.starts_with("alternateShortcuts")
-                    && !p.ends_with(".colors")
-                    && next.get(&p).is_some_and(|c| c.is_object())
-                {
+                if v.is_object() && keyed(&format!("{p}.")).is_none() && next.get(&p).is_some_and(|c| c.is_object()) {
                     for (k2, v2) in v.as_object().into_iter().flatten() {
                         next.set(&format!("{p}.{k2}"), v2.clone())?;
                     }

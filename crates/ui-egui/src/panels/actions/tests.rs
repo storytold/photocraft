@@ -637,6 +637,9 @@ fn set_folders_group_actions_and_collapse() {
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.session.prefs.edit(|p| {
+        p.collapsed_action_sets.insert("Portrait".into(), false);
+    });
     let mut sharpen = Action::new("Sharpen", vec![("filter.sharpen.sharpen".into(), json!({}))]);
     sharpen.set = Some("Retouch".into());
     let mut soften = Action::new("Soften", vec![("filter.blur.blur".into(), json!({}))]);
@@ -658,6 +661,7 @@ fn set_folders_group_actions_and_collapse() {
     h.get_by_label("Retouch").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
     assert!(h.query_by_label("Sharpen").is_none());
     assert!(h.query_by_label("Loose").is_some());
     crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
@@ -675,6 +679,8 @@ fn set_folders_group_actions_and_collapse() {
     h.get_by_label("Retouch").click();
     h.run_steps(3);
     assert!(h.state().ui.actions.collapsed_sets.is_empty());
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Retouch"), Some(&false));
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
     assert!(h.query_by_label("Sharpen").is_some());
     crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
     let expanded = PhotocraftApp::new(

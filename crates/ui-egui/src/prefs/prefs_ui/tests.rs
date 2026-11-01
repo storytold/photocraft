@@ -614,12 +614,12 @@ fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
 
 #[test]
 fn action_folder_choices_merge_between_instances() {
-    let store = Arc::new(Mutex::new(None));
+    let store = Arc::new(Mutex::new(Some(json!({"collapsedActionSets": {"Portrait": false}}).to_string())));
     let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
     let ctx = egui::Context::default();
-    a.run("prefs.set", json!({"values": {"collapsedActionSets": {"Retouch": true}}})).unwrap();
+    a.run("prefs.set", json!({"path": "collapsedActionSets.Portrait", "value": true})).unwrap();
     tick(&mut a, &ctx);
-    b.run("prefs.set", json!({"values": {"collapsedActionSets": {"Portrait": true}}})).unwrap();
+    b.run("prefs.set", json!({"path": "collapsedActionSets.Retouch", "value": true})).unwrap();
     tick(&mut b, &ctx);
     assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch": true, "Portrait": true}));
     let restored = app_on(&store, Arc::default());
@@ -628,8 +628,8 @@ fn action_folder_choices_merge_between_instances() {
     // Reopening a folder here must keep the other instance's independent collapse.
     a.run("prefs.reset", json!({"path": "collapsedActionSets"})).unwrap();
     tick(&mut a, &ctx);
-    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Portrait": true}));
-    assert_eq!(app_on(&store, Arc::default()).ui.actions.collapsed_sets, ["Portrait"]);
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch": true}));
+    assert_eq!(app_on(&store, Arc::default()).ui.actions.collapsed_sets, ["Retouch"]);
 }
 
 #[test]

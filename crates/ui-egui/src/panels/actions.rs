@@ -1091,14 +1091,15 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let _ = app.run("actions.dialog", json!({"action": action, "step": step}));
     }
     if let Some(set) = set_toggled {
-        match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
-            Some(i) => {
-                app.ui.actions.collapsed_sets.remove(i);
-            }
-            None => app.ui.actions.collapsed_sets.push(set),
+        let collapsed = !app.ui.actions.collapsed_sets.contains(&set);
+        if collapsed {
+            app.ui.actions.collapsed_sets.push(set.clone());
+        } else {
+            app.ui.actions.collapsed_sets.retain(|name| name != &set);
         }
-        let collapsed = app.ui.actions.collapsed_sets.iter().cloned().map(|name| (name, true)).collect();
-        app.session.prefs.edit(|p| p.collapsed_action_sets = collapsed);
+        app.session.prefs.edit(|p| {
+            p.collapsed_action_sets.insert(set, collapsed);
+        });
     }
     if let Some(set) = save_set
         && let Err(e) = save_dialog(app, Some(set))

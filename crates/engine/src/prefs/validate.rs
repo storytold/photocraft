@@ -137,7 +137,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
 
 /// Is this preference a `#rrggbb` colour?
 pub fn is_color(path: &str) -> bool {
-    if choices(path).is_some() || path.starts_with("shortcuts.") || path.starts_with("alternateShortcuts.") || path.starts_with("menus.") {
+    if choices(path).is_some() || keyed(path).is_some() || path.starts_with("menus.") {
         return false;
     }
     if path == "layerMaskOverlay.color" {
@@ -169,10 +169,9 @@ pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
 
 // ------------------------------------------------------------------ JSON paths
 
-/// Map keys that are command ids (which contain dots): `shortcuts.<id>`,
-/// `alternateShortcuts.<id>`, `menus.colors.<id>`.
+/// Free-form map keys, including command ids and folder names that contain dots.
 pub(super) fn keyed(path: &str) -> Option<(&str, &str)> {
-    for prefix in ["shortcuts.", "alternateShortcuts.", "menus.colors."] {
+    for prefix in ["shortcuts.", "alternateShortcuts.", "menus.colors.", "collapsedActionSets."] {
         if let Some(id) = path.strip_prefix(prefix) {
             return Some((&prefix[..prefix.len() - 1], id));
         }
