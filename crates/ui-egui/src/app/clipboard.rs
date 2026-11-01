@@ -120,6 +120,9 @@ impl PhotocraftApp {
         };
         let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
         let Some((w, h, bytes)) = image else {
+            if self.clip_unmirrored && !self.clip_external && self.session.clipboard.is_some() {
+                return Ok(false);
+            }
             self.os_clip_svg = None;
             if (self.os_clip_sig.take().is_some() || self.clip_external) && !self.clip_unmirrored {
                 self.session.clipboard = None;
