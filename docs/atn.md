@@ -13,8 +13,9 @@ it back unchanged. Playback stops at an enabled kept step with its name, so an a
 work. Kept steps with no effect on the document (tool selections and the like) are imported switched off,
 so playback skips them.
 
-This page has three parts: the events PhotoCraft maps today, the settings some of them still lose, and a
-measured reference for the events it does not map yet, with everything needed to implement them without
+This page covers the events PhotoCraft maps today, the settings some of them still lose, how steps name
+layers and documents, newer and older events and files, and a measured reference for the events it does not
+map yet, with everything needed to implement them without
 the reference application.
 
 ## Supported events (117)
@@ -144,8 +145,12 @@ the reference application.
 A mapped event can still lose a setting. Every mapped event was checked on 2026-11-01: the 5 296 steps of
 the `.atn` corpus (sets the reference application recorded) and factory descriptors measured in the
 reference application went through `actions.load` and `actions.save`, and each saved descriptor was compared
-with the original; the forms PhotoCraft writes were then played in the reference application. The steps
-below change what a step does. Each line says what is lost and what the fix is.
+with the original. Then every step PhotoCraft saves for the cases in
+`every_mapped_command_exports_and_imports_back` was played in the reference application: 128 of 151 ran.
+Three failed on a wrong code (Vibrance, Gradient Map, Stroke Outside); the others needed a document the test
+did not have (a mask, a group, a named pattern or channel). Checking every code the mapping writes found
+three more (Pass Through, canvas extension colour, Absolute Colorimetric). The steps below change what a
+step does; each line says what is lost and the fix.
 
 ### Import or export loses a setting (fix in `atn_cmds` only)
 
@@ -162,6 +167,13 @@ below change what a step does. Each line says what is lost and what the fix is.
 | Background layer by property (`Lyr .Bckg`) | Becomes the layer name "Background" on load and is saved as a name reference. A localised reference application has no layer of that name ("Hintergrund" in German), and the step fails there. | Keep the property form: load as the Background layer, save as `Lyr .Bckg`. |
 | Close (`Cls `) without `Svng` | Without `Svng` the reference application asks whether to save (without a dialog it refuses to close a changed document). Save writes `Svng N` (do not save), so playback there silently discards changes. 244 corpus steps. | Write no `Svng` for a Close that asks. |
 | Photo Filter (`photoFilter`) with a `LbCl` colour | The reference application's default filter colour is Lab (`Lmnc`, `A   `, `B   `); only RGB, HSB and gray colours are read, so a recorded Photo Filter usually stays a kept step. | Convert Lab colours (through `photocraft-cms`) on load. |
+| Vibrance (direct) | Saved as event `Vbrn`, which the reference application does not know: the step fails there ("command not available"). | Save as `vibrance`. |
+| Gradient Map (direct) | Saved as event `GdMp`, which is the Gradient Map *class*, not an event: the step fails there. | Save as `gradientMapEvent`. |
+| Stroke, Location Outside | Written as `StrL.OtsF`; the application's value is `Otsd` and it rejects `OtsF` ("parameters not valid"). A recorded `Otsd` does not load. | Use `Otsd` both ways. |
+| Set layer blend mode Pass Through (groups) | Written as `BlnM.PsTh`; the application rejects it. Its value is `passThrough`. | Save `passThrough`. |
+| Canvas Size, extension colour Foreground / Other | Written as `canvasExtensionColorType` `Frgd` / `Othr`; the application does not know them and opens the Canvas Size dialog instead. Its values are `FrgC` and `Clr `. | Use `FrgC` and `Clr ` both ways. |
+| Convert to Profile, intent Absolute Colorimetric | Written as `Inte.AbsC`; the application reads it as Relative Colorimetric (it echoes `Clrm`). Its value is `AClr`; a recorded `AClr` does not load. | Use `AClr` both ways. |
+| Select a document by offset (`Dcmn` `rele`) | The reference application wraps around at the ends of the opening order (from the second of three documents, -2 is the third, +2 the first); `document.activate` refuses an offset past the ends (#7103), so the step fails in PhotoCraft. See Reference forms. | Wrap like the reference application. |
 
 ### The command has no such setting (needs a new command option first)
 
@@ -186,6 +198,141 @@ below change what a step does. Each line says what is lost and what the fix is.
 - An adjustment layer's values equal to the defaults are not written back (other values are).
 - Colours are kept as 8-bit values (51.0031 becomes 51); gradient names become "Custom".
 - Levels and Curves write the composite as `Chnl.Cmps` (the application skips `Ordn.Trgt`, #8543).
+
+## Reference forms
+
+How the reference application resolves a layer or document a step names, measured on 2026-11-01 by
+playing `select` and `move` steps with each form (documents with and without a Background, a group,
+layers above and below it). A recorded step can use any of these; PhotoCraft reads names and the target
+today.
+
+### Layers
+
+The stack is counted from the bottom and includes a hidden "group end" entry below each group's
+children. Example stack, bottom to top: Background, L1, L2, *group end*, Gchild, G (the group), L3.
+
+| Form | Meaning | Measured |
+|---|---|---|
+| By name (`name`) | The layer with that name (the first match). | (supported) |
+| Target (`Ordn.Trgt`) | The active layer. | (supported) |
+| By index (`indx`) | Position in the stack above. With a Background, the Background is 0 and L1 is 1. Without one, the bottom layer is 1, and 0 fails. The group end is a position but cannot be selected: the step leaves the selection unchanged. A number past the top fails. | with Background: 0 Background, 1 L1, 2 L2, 3 (group end: no change), 4 Gchild, 5 G, 6 L3, 7 fails |
+| By id (`Idnt`) | The layer id of the document the step was recorded in (`LyrI`, never reused in that document). In another document it names an unrelated layer or none. | id 3 = L2 with a Background, L1 without |
+| By offset (`rele`) | Not supported for layers: every offset fails. | -3..3 all fail |
+| `Ordn.Frwr` / `Ordn.Bckw` | The next layer up / down in the stack, entering groups (group ends are skipped). | from L2: Frwr Gchild, Bckw L1 |
+| `Ordn.Frnt` / `Ordn.Back` | The top layer / the bottom layer (the Background when there is one). | L3 / Background |
+
+**Move to an index** (`move`, `T` = layer by index `m`): counted as above on the stack before the move.
+Moving down, the layer lands at index `m`; moving up, at `m - 1` (directly below the layer that had index
+`m`). With a Background, `m` = 0 fails; without one, `m` = 0 sends the layer to the bottom. Moving to an
+index inside a group puts the layer into that group.
+
+| m (with Background, moving L2 at index 2) | 0 | 1 | 2, 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Stack after | fails | Bg, L2, L1, ... | unchanged | Bg, L1, *end*, L2, Gchild, G, L3 (L2 inside G, bottom) | ... *end*, Gchild, L2, G (inside G, top) | ... G, L2, L3 |
+
+### Documents
+
+| Form | Meaning | Measured (D1, D2, D3 opened in that order, D2 active) |
+|---|---|---|
+| By offset (`rele`) | That many documents after (positive) or before (negative) the active one, in opening order, **wrapping around** at the ends. 0 fails. | -1 D1, +1 D3, -2 D3, +2 D1 |
+| By index (`indx`) | 1-based, in opening order; 0 fails. | 1 D1, 2 D2, 3 D3 |
+
+PhotoCraft's `document.activate {"offset"}` refuses to wrap (#7103); the reference application wraps.
+
+## Newer events (string ID only)
+
+The events the reference application records for the menu items PhotoCraft has that are neither mapped
+nor in the reference below: 63 candidates from PhotoCraft's menu catalogue, each run in the reference
+application without a dialog on a document prepared for it (layers, a selection, a smart object, a type
+layer, a layer style or a group) on 2026-11-01. 27 more menu items record no event of their own (puppet
+warp and warp splits, combine shapes, scripts such as Load Files into Stack and Statistics, artboard and
+video export, missing-font commands): they cannot be recorded or play as a script step.
+
+**Measured: no settings beyond the target.** A step with these events carries at most `null` (the target
+layer reference, `Ordn.Trgt`); mapping them needs only the event name.
+
+| Event | Menu item |
+|---|---|
+| `reverse` | Layer > Arrange > Reverse (several layers selected) |
+| `linkSelectedLayers` / `unlinkSelectedLayers` | Layer > Link Layers / Unlink Layers |
+| `selectLinkedLayers` | Layer > Select Linked Layers |
+| `disableLayerStyle` | Layer > Layer Style > Clear Layer Style |
+| `placedLayerMakeCopy` | Layer > Smart Objects > New Smart Object via Copy |
+| `placedLayerConvertToLayers` | Layer > Smart Objects > Convert to Layers |
+| `placedLayerConvertToEmbedded` | Layer > Smart Objects > Embed Linked |
+| `placedLayerUpdateAllModified` | Layer > Smart Objects > Update All Modified Content (the returned `documentID` and `layerIDs` are session ids, not settings) |
+| `rasterizeAll` | Layer > Rasterize > All Layers |
+| `addBlankVideoLayer` | Layer > Video Layers > New Blank Video Layer |
+| `isolateLayers` | Select > Isolate Layers |
+| `textLoadDefaultTypeStyles` / `textSaveDefaultTypeStyles` | Type > Load / Save Default Type Styles |
+| `recordMeasurements` | Image > Analysis > Record Measurements |
+| `CropPhotosAuto0001` | File > Automate > Crop and Straighten Photos |
+
+**Measured: settings.**
+
+| Event | Menu item | Keys |
+|---|---|---|
+| `placedLayerExportContents` | Layer > Smart Objects > Export Contents | `null`: path of the file written |
+| `placedLayerConvertToLinked` | Layer > Smart Objects > Convert to Linked | `null`: target layer; `Usng`: path of the file written |
+| `placedLayerRelinkToFile` | Layer > Smart Objects > Relink to File | `null`: path; `LyrI`: session layer id |
+| `placedLayerReplaceContents` | Layer > Smart Objects > Replace Contents | `null`: path; `LyrI`: session layer id |
+| `artboardFromLayerGroupEvent` | Layer > New > Artboard from Group | `null` target; `artboard` (object: `guideIDs` list, `artboardPresetName` text, `Clr ` RGB background colour, `artboardBackgroundType` long, 1 = white); `changeBackground` long |
+| `shapeBlur` | Filter > Blur > Shape Blur | `Rds ` radius in pixels (factory 10); the shape itself comes from the dialog |
+| Make `contentLayer` with `Usng` = reference to `textLayer` `Ordn.Trgt` | Type > Convert to Shape (recorded as Make, not as `convertToShape`) | `null`: class `contentLayer`; `Usng`: the type layer |
+
+**Needs a step recorded through its dialog or a matching document.** Without them the event either did
+nothing, returned no settings, or was not available: Export As and Quick Export (document and layers),
+Content-Aware Fill workspace (`cafWorkspace`), Perspective Warp, Color Lookup, Scale Effects
+(`scaleEffectsEvent`), Liquify (`LqFy`), Camera Raw Filter, Vanishing Point, Blur Gallery
+(`blurbTransform`), Calculations, Photomerge, Package, data sets and variables, Close All / Close Others,
+artboards (new, from layers), Frame from Layers, Create Layers from a layer style, Stack Modes
+(`applyImageStackPluginRenderer`), video frames and footage, Create Work Path, Check Spelling, Find and
+Replace Text, Import Notes, Measurement Scale, Convert Stroke to Fill (needs a selected path component),
+Sky Replacement.
+
+## Older files: version 12
+
+Action sets saved by the reference application's version 5 era use file version 12. PhotoCraft rejects
+them today; this is what reading them needs. Checked on 2026-11-01 on 325 real version 12 sets (all parse
+to the end with this layout) and against AtnKit (MIT), which reads version 12 but gets two details wrong
+(noted below).
+
+**Only the descriptor differs.** The file header, the action record and the step record are the same as
+in version 16 (set and action names are UTF-16 strings with a counted NUL; events are almost always
+4-character codes, so the existing event table applies). Trailing bytes after the last action occur in
+22 of 325 files (stale data from an overwritten file): keep them a warning.
+
+The version 12 descriptor:
+
+- The step's descriptor has no name and no class: it starts with the item count.
+- Every identifier is a bare 4-byte code, with no length prefix: keys, classes, enum types and values,
+  units, reference classes. No Unicode class names anywhere.
+- Strings (`TEXT`, reference names) are the same UTF-16 strings as in version 16.
+
+```text
+step descriptor := count u32, count × (key [4], type [4], value)
+object          := class [4], count u32, count × (key [4], type [4], value)
+
+bool u8 | long i32 | comp i64 | doub f64 | UntF unit [4] + f64
+UnFl unit [4] + n u32 + n × f64
+TEXT UTF-16 string | enum type [4] + value [4]
+Objc / GlbO object | type / GlbC class [4]
+VlLs n u32 + n × (type [4] + value)
+ObAr class [4] + object count u32 + count u32 + count × (key [4], type [4], value)
+obj  n u32 + n × reference item
+tdta / alis / Pth  u32 length + bytes
+
+reference item := form [4] + class [4] + (prop: key [4] | Clss: nothing | Enmr: type [4] + value [4]
+                  | rele: i32 | indx: u32 | Idnt: u32 | name: UTF-16 string)
+```
+
+AtnKit reads `indx` without its class code and has no case for `UnFl`, `ObAr` and `Pth `; with those
+fixed, all 325 files parse. `Idnt` was not seen in a version 12 file; its layout follows `indx`.
+
+**Into PhotoCraft's model:** every id becomes a 4-character code; the step descriptor gets the empty name
+and class `null` that version 16 files use for code events; nested classes get the empty name. Save Actions
+keeps writing version 16. Version 7 files (a different layout with 8-bit strings) and sets wrapped in
+MacBinary stay rejected.
 
 ## Event reference: events not mapped yet
 
@@ -1449,7 +1596,7 @@ their tables will be added once a recorded step was read.
 | Trace Contour | The step's level and edge are applied, but the returned descriptor always shows the defaults (level 128, upper). Lower (`Lwr `) is valid; levels at or below 0 and at or above 255 give the same image. |
 | Gradient tool | The drag needs a full gradient object (see Gradient Map in group E for its form). |
 | Batch, Create Droplet, Print | File and printer settings come from their dialogs; Batch's file naming is still unknown (a step written with PhotoCraft's current naming rules is refused). |
-| Sky Replacement, Smart Object commands (embed, link, relink, replace, export contents), Convert Stroke to Fill, Rasterize All Layers | Known to the application but need a matching document (a sky, a smart object, a shape with a stroke). |
+| Sky Replacement, Convert Stroke to Fill | Need a sky photo and a selected path component. (The smart object commands, Rasterize All and Convert Type to Shape are measured: see Newer events.) |
 | Generative Fill (`syntheticFill`) | AI feature: in PhotoCraft this goes through the shared AI layer; until then such steps stay kept steps. |
 
 ### Recorded under another event
