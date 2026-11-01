@@ -450,7 +450,13 @@ fn selection_from(d: &Descriptor) -> Mapped {
                     if t.len() != 2 || ref_class(&t[1..]).as_deref() != Some("Lyr") {
                         return unsupported;
                     }
-                    let Some(layer) = layer_target(&t[1..]) else { return unsupported };
+                    let Some(mut layer) = layer_target(&t[1..]) else { return unsupported };
+                    if let Some(Value::String(name)) = layer.get("layer")
+                        && (name.is_empty() || name == "merged")
+                    {
+                        let selector = json!({"name": name});
+                        layer.insert("layer".into(), selector);
+                    }
                     p.extend(layer);
                 }
                 step("select.loadSelection", Value::Object(p))
@@ -752,7 +758,15 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             "transparency" => {
                 let mut r = vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") }];
                 if p.get("layer").is_some_and(|v| !v.is_null()) {
-                    let D::Reference(layer) = layer_ref(p)? else { return None };
+                    let reference = match p.get("layer") {
+                        // These native source defaults mean the active layer for transparency.
+                        Some(Value::String(name)) if name.is_empty() || name == "merged" => target_ref("Lyr "),
+                        Some(Value::Object(selector)) if selector.len() == 1 && selector.contains_key("name") => {
+                            name_ref("Lyr ", selector.get("name")?.as_str()?)
+                        }
+                        _ => layer_ref(p)?,
+                    };
+                    let D::Reference(layer) = reference else { return None };
                     r.extend(layer);
                 }
                 sel(D::Reference(r))

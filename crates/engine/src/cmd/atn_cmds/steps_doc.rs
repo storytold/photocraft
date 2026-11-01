@@ -210,9 +210,6 @@ pub(super) fn convert_mode_from(d: &Descriptor) -> Mapped {
         }
     }
     if let Some(depth) = get_num(d, "Dpth") {
-        if layer_options {
-            return Mapped::Unsupported { harmless: false };
-        }
         return match depth as i64 {
             8 => none("image.mode.bits8"),
             16 => none("image.mode.bits16"),

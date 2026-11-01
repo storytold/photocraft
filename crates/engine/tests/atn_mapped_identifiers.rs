@@ -362,6 +362,20 @@ fn review_10702_transparency_names_resolve_at_playback() {
         assert_eq!(saved(&action).descriptor, Some(d));
         replay_saved(&mut s, &action);
         assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![0.0, 1.0]);
+        for layer in [json!({"name":"Missing"}), json!({"name":1}), json!({"name":name,"extra":true})] {
+            assert!(s.execute("select.loadSelection", json!({"channel":"transparency","layer":layer})).is_err());
+            assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![0.0, 1.0]);
+        }
+        if name == "merged" {
+            for sentinel in ["merged", ""] {
+                let native = Action::new("Recorded", vec![("select.loadSelection".into(), json!({"channel":"transparency","layer":sentinel}))]);
+                let reloaded = recorded(AtnEvent::Code(*b"setd"), saved(&native).descriptor.unwrap());
+                let (id, params) = &reloaded.steps[0];
+                s.execute(id, params.clone()).unwrap();
+                let doc = &s.active().unwrap().doc;
+                assert_eq!(doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]), vec![1.0, 1.0]);
+            }
+        }
     }
 }
 
