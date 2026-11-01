@@ -45,6 +45,10 @@ also applies to Cmd/Ctrl+Alt drags started with selection tools.
 Cmd/Ctrl-dragging with a selection tool uses the same native Move path inside or
 outside the selection. Native-set canvas drags cannot become whole-layer copies
 by crossing another document's tab; Layers-panel transfers retain their explicit layer scope.
+Show Transform Controls uses the same native channel frame as Free Transform, including
+on Background samples, and other selected layers do not enlarge that frame. Implicit engine
+Move commands honour viewed raster masks just as the UI does; explicit targets or an explicit
+layer retain their precedence.
 
 Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
 a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge
@@ -381,7 +385,9 @@ GPU source outlines, other colour modes and selected-set Move drags retain the C
 oracle. All untargeted samples and transparency remain protected.
 
 The final command review added a repeat-copy availability guard after measurement;
-the native Move, resampling and GPU sampler sources measured above are unchanged.
+the native sample-copy, resampling and GPU sampling loops measured above are unchanged.
 The guard is covered separately by native command and adversarial tests.
-The subsequent Move gesture review corrected outline offsets, selection snapping and
-Shift constraints without changing those measured native processing or shader sources.
+Subsequent reviews corrected outline offsets, selection snapping, temporary-Move shortcuts,
+mask dispatch, copy guards and transform-control frames without changing those pixel kernels.
+The table retains the recorded build's provenance; the later dispatch and frame fixes are
+validated separately, rather than presented as another 24 MP measurement of the current head.

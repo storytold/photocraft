@@ -143,9 +143,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // An explicit target wins. An explicit layer without one retains whole-layer movement,
     // matching the other geometric commands; an implicit Move-tool command follows Channels.
+    let viewed_mask = s.active().and_then(crate::mask_view_cmds::current).filter(|_| p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null));
     let color = if p.get("target").is_some() {
         crate::color_channels::target(s, p)?
-    } else if p.get("layer").is_none_or(Value::is_null) && crate::mask_view_cmds::current(s.active().ok_or(EngineError::NoDocument)?).is_none() {
+    } else if p.get("layer").is_none_or(Value::is_null) && viewed_mask.is_none() {
         if matches!(s.active().ok_or(EngineError::NoDocument)?.channel_view.target, crate::channel_cmds::ChannelTarget::Color(_)) {
             Some(crate::color_channels::selected(s).ok_or_else(|| bad("layer.translate", "the selected colour set is invalid"))?)
         } else {
@@ -164,7 +165,9 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     if roots.is_empty() {
         return Err(EngineError::Other("no active layer".into()));
     }
-    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
+    // Headless callers need the same viewed-mask routing as the shell's explicit injection.
+    // A viewed Smart Filter mask still moves its whole object, not the filter mask alone.
+    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask") || viewed_mask.is_some_and(|view| !view.filter);
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));

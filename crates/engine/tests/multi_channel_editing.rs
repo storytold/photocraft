@@ -33,6 +33,64 @@ fn surface(s: &Session) -> Surface {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
 }
+
+#[test]
+fn implicit_move_of_viewed_mask_keeps_explicit_target_precedence_at_native_depths() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            for linked in [false, true] {
+                for view in ["gray", "overlay"] {
+                    for target in ["implicit", "pixels", "layer", "colors"] {
+                        let mut s = setup(mode, depth);
+                        s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+                        s.execute("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+                        let id = s.active().unwrap().active_layer.unwrap();
+                        s.edit("mask patch", |doc, _| {
+                            let sample = doc.pixel_format().sample;
+                            let mask = doc.layer_mut(id).unwrap().mask.as_mut().unwrap();
+                            mask.surface = Surface::new(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, false));
+                            mask.surface.fill_rect(Rect::new(4, 6, 8, 10), &[1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                        subset(&mut s);
+                        s.execute("view.layerMask", json!({"mode": view})).unwrap();
+                        let before = s.active().unwrap().doc.clone();
+                        let history = s.active().unwrap().history.past_len();
+                        let mut params = json!({"dx": 2, "dy": 1});
+                        let mut expected = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 2, 1, target == "implicit").unwrap();
+                        match target {
+                            "pixels" => params["target"] = json!("pixels"),
+                            "layer" => params["layer"] = json!(id.0),
+                            "colors" => {
+                                params["target"] = json!({"colors": [0, 2]});
+                                expected = (*before).clone();
+                                photocraft_engine::channel_cmds::move_color_channels(
+                                    &mut expected,
+                                    id,
+                                    color_channels::ColorChannels::from_indices([0, 2], before.pixel_format().mode.color_channels()).unwrap(),
+                                    2,
+                                    1,
+                                    s.tools.background,
+                                )
+                                .unwrap();
+                            }
+                            _ => {}
+                        }
+                        s.execute("layer.translate", params).unwrap();
+                        let after = s.active().unwrap().doc.clone();
+                        assert!(after.layers == expected.layers, "{mode}/{depth}, linked {linked}, {view}, {target}");
+                        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                        assert!(s.undo());
+                        assert_eq!(s.active().unwrap().doc.layers, before.layers);
+                        assert!(s.redo());
+                        assert_eq!(s.active().unwrap().doc.layers, after.layers);
+                    }
+                }
+            }
+        }
+    }
+}
 fn subset(s: &mut Session) {
     s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
 }

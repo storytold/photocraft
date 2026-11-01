@@ -22,7 +22,8 @@ pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photoc
     Some(b.translate(dx, dy))
 }
 
-/// The layers Move › Show Transform Controls frames: every selected layer but the Background.
+/// The layers Move › Show Transform Controls frames: selected layers except the Background,
+/// or only the active layer for native colours (whose Background samples can transform too).
 /// A corner radius drag hides the box, as in Photoshop. So does View › Extras (⌘H, #6699): the
 /// controls are an Extra, hidden and inert until Extras comes back, while Show Transform Controls
 /// keeps its setting.
@@ -37,15 +38,27 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
+    let native = crate::move_ui::color_target(app).is_some();
+    let ids = if native { st.active_layer.into_iter().collect() } else { st.selected_layers() };
+    ids.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| native || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
-/// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
-/// layers, joined into one.
+/// Move tool › Show Transform Controls: the native colour frame, or the boxes Free Transform
+/// would open on the selected layers joined into one.
 pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
     let st = app.session.active()?;
     let layers = transform_controls_layers(app);
-    let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;
+    if layers.is_empty() {
+        return None;
+    }
+    let b = if let Some(colors) = crate::move_ui::color_target(app) {
+        let LayerContent::Raster(plane) = &st.doc.layer(st.active_layer?)?.content else { return None };
+        // The same scalar frame `source_bounds` opens, without extracting planes or running
+        // allocation preflights each frame. Native samples include default-valued areas too.
+        photocraft_engine::channel_transform::bounds(&st.doc, plane, &serde_json::json!({"target": colors.params()})).ok()?
+    } else {
+        layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?
+    };
     // Floating selected pixels are framed by their outline, as their ants are (#7538), not by the
     // selection they were cut with; a frame round other selected layers too keeps them all.
     let alone = matches!(layers.as_slice(), [l] if photocraft_engine::float_cmds::floating(st).is_some_and(|f| f.layer == l.id));
