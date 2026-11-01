@@ -186,7 +186,7 @@ fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str,
     let k = unit_pt(units);
     let mut v = (*pt / k) as f32;
     let mut changed = false;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(label).color(t.text_dim));
         let before = v;
         crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
@@ -214,7 +214,7 @@ fn print_paper_size(value: Option<&Value>) -> (f64, f64) {
 fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let previous = f.get("paper").cloned();
     let mut selected = if previous.as_ref().is_some_and(Value::is_array) { "custom".to_string() } else { s(f, "paper", "letter") };
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), p.0)).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
         if crate::widgets::dropdown(ui, "print-paper", tl!("Paper"), &mut selected, &papers, 110.0) {
@@ -492,7 +492,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     ui.label(egui::RichText::new(e).color(t.warning).size(11.0));
                 }
             } else {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     ui.label(egui::RichText::new(tl!("Printer")).color(t.text_dim));
                     let mut pr = s(f, "printer", "");
                     let opts = printer_options(f.get("__systemPrinters"), &pr);
@@ -540,7 +540,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                     profiles.push((cur.as_str(), stem.as_str()));
                 }
                 dropdown_str(ui, "print-profile", tl!("Profile"), f, "printerProfile", &profiles, 240.0);
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     dropdown_str(
                         ui,
                         "print-intent",
@@ -572,7 +572,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             // Revealing this row during a drag resizes the centered modal and moves the paper.
             // Keep it present, showing the resolved position while Center owns the offsets.
             ui.add_enabled_ui(!centered, |ui| {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     // Kept in inches (Photoshop's Position fields), shown in the chosen units.
                     for (key, label) in [("top", tl!("Top")), ("left", tl!("Left"))] {
                         let mut pt =
@@ -593,14 +593,14 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 let fit = b(f, "scaleToFit", false);
                 if !fit {
                     // Two decimals: Height and Width set fractional scales.
-                    ui.horizontal(|ui| {
+                    crate::direction::dialog_row(ui, |ui| {
                         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
                         let mut v = n(f, "scale", 100.0) as f32;
                         crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale"));
                         f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
                     });
                 }
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     let hc = length_field(ui, tl!("Height"), &mut h2, &units);
                     let wc = length_field(ui, tl!("Width"), &mut w2, &units);
                     let k = if wc && w > 0.0 {
@@ -621,11 +621,11 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 }
             }
             head(ui, tl!("Printing Marks"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 check(ui, f, "cornerCropMarks", tl!("Corner Crop Marks"), false);
                 check(ui, f, "centerCropMarks", tl!("Center Crop Marks"), false);
             });
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 check(ui, f, "registrationMarks", tl!("Registration Marks"), false);
                 check(ui, f, "description", tl!("Description"), false);
                 check(ui, f, "labels", tl!("Labels"), false);
@@ -636,7 +636,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 ui.label(egui::RichText::new(tl!("Don't also tick Mirror Image in Print Settings…: the two flips cancel out.")).color(t.text_dim).size(11.0));
             }
             head(ui, tl!("Save as PDF"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 let mut out = s(f, "output", "");
                 if crate::widgets::rtl_singleline_add(ui, &mut out, |e| e.hint_text(tl!("(print to the printer)")).desired_width(240.0)).changed() {
                     f.insert("output".into(), json!(out));
