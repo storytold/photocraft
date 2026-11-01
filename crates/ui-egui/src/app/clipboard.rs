@@ -44,11 +44,14 @@ impl PhotocraftApp {
     /// Paste), never in the background.
     pub(crate) fn calibrate_os_clipboard(&mut self) {
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return };
+        // The RGBA length from the OS-provided dimensions is computed with checked arithmetic:
+        // malformed metadata must be rejected, never overflow.
         match get() {
-            Ok(Some((w, h, bytes))) if w > 0 && h > 0 && bytes.len() == w as usize * h as usize * 4 => {
-                self.os_clip_sig = Some(clip_signature(w, h, &bytes));
+            Ok(Some((w, h, bytes))) => {
+                let rgba = u64::from(w).checked_mul(u64::from(h)).and_then(|n| n.checked_mul(4));
+                self.os_clip_sig = Some(if rgba == Some(bytes.len() as u64) { clip_signature(w, h, &bytes) } else { OS_EMPTY });
             }
-            Ok(_) => self.os_clip_sig = Some(OS_EMPTY),
+            Ok(None) => self.os_clip_sig = Some(OS_EMPTY),
             Err(_) => {}
         }
     }
@@ -81,7 +84,12 @@ impl PhotocraftApp {
                 return Err(error);
             }
         };
-        let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        // Malformed dimensions are rejected with checked arithmetic, never an overflowing
+        // multiply on input-derived numbers.
+        let image = image.filter(|(w, h, bytes)| {
+            let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
+            *w > 0 && *h > 0 && rgba == Some(bytes.len() as u64)
+        });
         let Some((w, h, bytes)) = image else {
             if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
                 self.session.clipboard = None;

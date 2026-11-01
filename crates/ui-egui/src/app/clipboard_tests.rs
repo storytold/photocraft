@@ -472,6 +472,8 @@ fn os_clipboard_import_replaces_the_path_clipboard() {
         .unwrap();
     app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
     assert!(app.session.path_clipboard.is_some());
+    // Another app copies a new image: the import replaces the path clip.
+    *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
     assert!(app.import_os_clipboard().unwrap());
     assert!(app.session.clipboard.is_some(), "the OS image is the pixel clipboard");
     assert!(app.session.path_clipboard.is_none(), "one clipboard: the import replaced the path clip");
@@ -520,4 +522,17 @@ fn clip_signature_covers_every_byte() {
     b[7] = 0;
     b[23] = 1;
     assert_ne!(clipboard::clip_signature(3, 2, &a), clipboard::clip_signature(3, 2, &b), "even the last byte counts");
+}
+
+/// Malformed OS clipboard metadata (huge dimensions, short buffer) must be rejected by the
+/// checked-arithmetic validation, never panic on an overflowing byte-length multiply —
+/// in calibration and in the import alike.
+#[test]
+fn clipboard_rejects_overflowing_dimensions_without_panicking() {
+    let services = Services { clipboard_get_image: Some(Box::new(|| Ok(Some((u32::MAX, u32::MAX, vec![0u8; 4]))))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.calibrate_os_clipboard();
+    assert!(!app.import_os_clipboard().unwrap(), "the malformed image is rejected");
+    assert!(app.session.clipboard.is_none());
 }
