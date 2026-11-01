@@ -160,14 +160,14 @@ fn print_size_uses_the_screen_resolution_preference() {
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);
-    assert!(cells("tabs", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).is_none());
+    assert!(cells("tabs", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).is_none());
     menu(&mut app, &ctx, "window.arrange.threeUpStacked", json!({})).unwrap();
     assert_eq!(checked(&app, "window.arrange.threeUpStacked"), Some(true));
-    let c = cells(&app.ui.view.arrange, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).unwrap();
+    let c = cells(&app.ui.view.arrange, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
     assert_eq!(c.len(), 3);
     assert_eq!(c[0].height(), 600.0);
     assert_eq!(c[1].height(), 300.0);
-    let six = cells("sixUp", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3).unwrap();
+    let six = cells("sixUp", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
     assert_eq!((six.len(), six[1].min.x), (6, 300.0));
     menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
     assert_eq!(app.ui.windows.len(), 3);
@@ -209,13 +209,91 @@ fn match_zoom_clamps_to_each_documents_zoom_range() {
 fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
     let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
     let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
-    assert_eq!(cells("twoUpVertical", rect, 2).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
-    assert_eq!(cells("twoUpHorizontal", rect, 2).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
+    assert_eq!(cells("twoUpVertical", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
+    assert_eq!(cells("twoUpHorizontal", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
     assert_eq!(
-        cells("threeUpStacked", rect, 3).unwrap(),
+        cells("threeUpStacked", rect, 3, &[]).unwrap(),
         vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 375.0), region(490.0, 375.0, 940.0, 675.0)]
     );
-    assert!(cells("twoUpVertical", rect, 1).is_none());
+    assert!(cells("twoUpVertical", rect, 1, &[]).is_none());
+}
+
+#[test]
+fn dragged_arrange_borders_resize_the_cells_beside_them() {
+    // #10101: in 2-up and the other arrangements the border between documents drags, as in
+    // Photoshop, and the documents on either side take the new sizes.
+    use super::arrange::{Border, MIN_CELL};
+    let near = |a: &[egui::Rect], b: &[egui::Rect]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01)
+    };
+    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
+    let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
+    let mut splits = Vec::new();
+    let b = borders("twoUpVertical", rect, 2, &splits);
+    assert_eq!(b, vec![Border { split: 0, vertical: true, line: region(450.0, 0.0, 450.0, 600.0) }]);
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(300.0, 250.0));
+    assert!(near(&cells("twoUpVertical", rect, 2, &splits).unwrap(), &[region(0.0, 0.0, 300.0, 600.0), region(300.0, 0.0, 900.0, 600.0)]));
+    assert!((borders("twoUpVertical", rect, 2, &splits)[0].line.min.x - 300.0).abs() < 0.01);
+    // No cell is dragged narrower than MIN_CELL, nor past the area.
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(-500.0, 0.0));
+    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
+    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(899.0, 0.0));
+    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[1].width() - MIN_CELL).abs() < 0.01);
+
+    // 4-up: a column border and a row border, each across the whole area.
+    let mut splits = Vec::new();
+    let b = borders("fourUp", rect, 4, &splits);
+    assert_eq!(b.iter().map(|b| (b.split, b.vertical)).collect::<Vec<_>>(), vec![(0, true), (1, false)]);
+    drag_border("fourUp", rect, 4, &mut splits, 1, egui::pos2(10.0, 450.0));
+    let c = cells("fourUp", rect, 4, &splits).unwrap();
+    assert!(near(&[c[0], c[3]], &[region(0.0, 0.0, 450.0, 450.0), region(450.0, 450.0, 900.0, 600.0)]));
+
+    // 3-up Stacked: the row border is only across the right column, and follows the column.
+    let mut splits = Vec::new();
+    drag_border("threeUpStacked", rect, 3, &mut splits, 0, egui::pos2(600.0, 0.0));
+    drag_border("threeUpStacked", rect, 3, &mut splits, 1, egui::pos2(700.0, 200.0));
+    assert!(near(
+        &cells("threeUpStacked", rect, 3, &splits).unwrap(),
+        &[region(0.0, 0.0, 600.0, 600.0), region(600.0, 0.0, 900.0, 200.0), region(600.0, 200.0, 900.0, 600.0)]
+    ));
+    assert!(near(&[borders("threeUpStacked", rect, 3, &splits)[1].line], &[region(600.0, 200.0, 900.0, 200.0)]));
+
+    // Tiled: a border stops short of its neighbours, so the cells keep their order.
+    let mut splits = Vec::new();
+    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(800.0, 0.0));
+    let c = cells("threeUpVertical", rect, 3, &splits).unwrap();
+    assert!((c[0].max.x - (600.0 - MIN_CELL)).abs() < 0.01 && (c[1].width() - MIN_CELL).abs() < 0.01);
+}
+
+#[test]
+fn damaged_or_stale_arrange_splits_lay_out_even_cells() {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
+    let even = cells("threeUpVertical", rect, 3, &[]).unwrap();
+    // From a settings file or another layout: wrong count, out of order, outside 0–1, NaN.
+    for bad in [vec![0.5], vec![0.6, 0.3], vec![0.0, 0.5], vec![0.3, 1.5], vec![f32::NAN, 0.7], vec![0.2, 0.4, 0.6]] {
+        assert_eq!(cells("threeUpVertical", rect, 3, &bad).unwrap(), even, "{bad:?}");
+        assert_eq!(borders("threeUpVertical", rect, 3, &bad).len(), 2);
+        // A drag starts again from even cells.
+        let mut splits = bad.clone();
+        drag_border("threeUpVertical", rect, 3, &mut splits, 1, egui::pos2(700.0, 0.0));
+        assert_eq!(cells("threeUpVertical", rect, 3, &splits).unwrap()[0], even[0], "{bad:?}");
+    }
+    // A split that isn't the layout's, or a pointer off the numbers, changes nothing.
+    let mut splits = vec![0.25, 0.5];
+    drag_border("threeUpVertical", rect, 3, &mut splits, 2, egui::pos2(700.0, 0.0));
+    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(f32::NAN, 0.0));
+    drag_border("threeUpVertical", egui::Rect::NOTHING, 3, &mut splits, 0, egui::pos2(10.0, 0.0));
+    assert_eq!(splits, vec![0.25, 0.5]);
+    assert!(borders("tabs", rect, 3, &[]).is_empty());
+}
+
+#[test]
+fn choosing_an_arrangement_starts_from_even_cells() {
+    let (mut app, ctx) = app_with(2);
+    menu(&mut app, &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
+    app.ui.view.arrange_splits = vec![0.3];
+    menu(&mut app, &ctx, "window.arrange.twoUpHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.arrange_splits.is_empty());
 }
 
 #[test]
@@ -747,6 +825,50 @@ fn arranged_documents_keep_their_tiles() {
     assert_eq!(docs(&mut app, 1), vec![1, 2], "a click into the visible document 1 leaves the tiles as they are");
     assert_eq!(docs(&mut app, 0), vec![0, 1], "a hidden document slides in from the left");
     assert_eq!(docs(&mut app, 1), vec![0, 1]);
+}
+
+/// #10101: dragging the border between two arranged documents moves it. Grabbed inside the
+/// other document's edge, it doesn't make that document the active one.
+#[test]
+fn dragging_the_border_between_arranged_documents_resizes_them() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "twoUpVertical".into();
+    app.ui.tool = crate::state::Tool::Brush;
+    // The right-hand document is active; the grab below is inside the left one's edge.
+    app.session.set_active(1);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let area = h.state().last_canvas_rect;
+    let n = h.state().session.documents().len();
+    let border = borders("twoUpVertical", area, n, &[])[0].line;
+    // On the grip, 2 pt inside the left document (its cell ends 1 pt short of the border).
+    let from = border.center() - egui::vec2(2.0, 0.0);
+    let to = from - egui::vec2(200.0, 0.0);
+    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    ev(&mut h, egui::Event::PointerMoved(from));
+    h.run();
+    ev(&mut h, button(from, true));
+    h.run();
+    for step in 1..=10 {
+        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
+        h.run();
+    }
+    ev(&mut h, button(to, false));
+    h.run_steps(2);
+    let cells = cells("twoUpVertical", area, n, &h.state().ui.view.arrange_splits).unwrap();
+    assert!((cells[0].max.x - to.x).abs() < 1.0, "the border follows the pointer: {cells:?}, pointer at {}", to.x);
+    assert_eq!(h.state().session.active_index(), Some(1), "grabbing the border activates no document");
 }
 
 /// #6017: rulers showed in the active tile only; the other tile had none and no room for them.

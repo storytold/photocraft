@@ -21,7 +21,7 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
     if n == 0 {
         return None;
     }
-    let cells = crate::view_cmds::cells(&app.ui.view.arrange, rect, n)?;
+    let cells = crate::view_cmds::cells(&app.ui.view.arrange, rect, n, &app.ui.view.arrange_splits)?;
     // Keep stable tiles, expressing the remembered document index in the filtered docked list.
     let start = documents.partition_point(|&d| d < app.arrange_start).min(n.saturating_sub(cells.len()));
     let idx = app.session.active_index().and_then(|d| documents.iter().position(|&p| p == d));
@@ -85,19 +85,26 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(shown) = arranged_cells(app, rect) {
         app.arrange_start = shown.first().map_or(0, |(d, _)| *d);
         let t = crate::theme::Tokens::get(ui.ctx());
+        // A press on a border grip drags the border (`drag_borders`); it activates no document.
+        let grips: Vec<Rect> = border_grips(app, rect).into_iter().map(|(_, grip)| grip).collect();
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
-                if main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
+                if main_focused
+                    && ui.input(|i| {
+                        i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p) && !grips.iter().any(|g| g.contains(p)))
+                    })
+                {
                     app.session.set_active(d);
                 }
             }
             let stroke = if d == active_doc { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
             ui.painter().rect_stroke(cell, 0, stroke, egui::StrokeKind::Inside);
         }
+        drag_borders(app, ui, rect);
         return;
     }
     if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
@@ -105,6 +112,33 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
+}
+
+/// Window › Arrange: the borders between the documents are dragged to give one more room, as in
+/// Photoshop (#10101). Laid out after the canvases, so a grip over a cell's edge takes the press.
+fn drag_borders(app: &mut PhotocraftApp, ui: &egui::Ui, rect: Rect) {
+    let n = docked_document_indices(app).len();
+    let layout = app.ui.view.arrange.clone();
+    for (border, grip) in border_grips(app, rect) {
+        let response = ui.interact(grip, ui.scope_id().with(("arrange-border", border.split)), Sense::drag());
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(if border.vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
+        }
+        if response.dragged()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            crate::view_cmds::drag_border(&layout, rect, n, &mut app.ui.view.arrange_splits, border.split, p);
+        }
+    }
+}
+
+/// The arrangement's borders, each with the strip either side of it that grabs it.
+fn border_grips(app: &PhotocraftApp, rect: Rect) -> Vec<(crate::view_cmds::Border, Rect)> {
+    let n = docked_document_indices(app).len();
+    crate::view_cmds::borders(&app.ui.view.arrange, rect, n, &app.ui.view.arrange_splits)
+        .into_iter()
+        .map(|b| (b, b.line.expand2(if b.vertical { egui::vec2(3.0, 0.0) } else { egui::vec2(0.0, 3.0) })))
+        .collect()
 }
 
 /// The tab strip; returns where its document tabs are.
