@@ -1,8 +1,7 @@
 # PhotoCraft 3D / UV workspace
 
 An optional 3D viewport paired with PhotoCraft's editable 2D texture workspace.
-The overview screenshot is contributed by `veteraros-ai`; feature captures use
-the CC0 ORBIT-07 sample robot.
+The overview and feature captures use the CC0 ORBIT-07 sample robot.
 
 ## 1. Overview
 

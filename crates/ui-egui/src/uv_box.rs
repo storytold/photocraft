@@ -226,7 +226,7 @@ mod tests {
         state.shell_enclosed = true;
         select(&mut app, &mut state, rect, egui::Modifiers::NONE, material, false, project, |_, _, _| true);
         assert_eq!(app.session.uv.selected, std::collections::BTreeSet::from([1]));
-        select(&mut app, &mut state, rect, egui::Modifiers { ctrl: true, ..Default::default() }, material, false, project, |_, _, _| true);
+        select(&mut app, &mut state, rect, egui::Modifiers { command: true, ..Default::default() }, material, false, project, |_, _, _| true);
         assert!(app.session.uv.selected.is_empty());
     }
 

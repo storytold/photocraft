@@ -111,6 +111,18 @@ fn validate_mask_paint_bounds(kind: &photocraft_doc::mask_paint::EffectKind, bou
     }
 }
 
+fn validate_mask_fill_map(kind: &photocraft_doc::mask_paint::EffectKind, has_map: bool, size: [u32; 2]) -> Result<()> {
+    match (kind, has_map, size) {
+        (_, false, [0, 0]) => Ok(()),
+        (photocraft_doc::mask_paint::EffectKind::Fill { .. }, true, [w, h])
+            if (1..=photocraft_doc::pattern::MAX_EDGE).contains(&w) && (1..=photocraft_doc::pattern::MAX_EDGE).contains(&h) =>
+        {
+            Ok(())
+        }
+        _ => Err(FormatError::corrupt("invalid mask Paint Fill map metadata")),
+    }
+}
+
 fn valid_mask_paint_blend(mode: photocraft_color::BlendMode) -> bool {
     // Older local mask-stack files stored these scalar modes. Keep loading them even though new
     // commands expose the smaller, more predictable MASK_BLEND_MODES set.
@@ -484,6 +496,7 @@ impl Loader<'_> {
                 return Err(FormatError::corrupt("mask blend mode does not apply to Levels effects"));
             }
             validate_mask_paint_bounds(&kind, p.fill_bounds)?;
+            validate_mask_fill_map(&kind, p.fill_map.is_some(), p.fill_map_size)?;
             let fill_map = self.opt_surface(&p.fill_map)?;
             layers.push(photocraft_doc::mask_paint::Paint {
                 name: p.name.clone(),
@@ -855,6 +868,19 @@ mod mask_paint_bounds_tests {
         assert!(validate_mask_paint_bounds(&fill, Some([0, 0, 0, 2])).is_err());
         assert!(validate_mask_paint_bounds(&photocraft_doc::mask_paint::EffectKind::Paint, Some([0, 0, 1, 1])).is_err());
         assert!(validate_mask_paint_bounds(&fill, Some([i32::MIN, i32::MIN, i32::MAX, i32::MAX])).is_ok());
+    }
+
+    #[test]
+    fn loader_validates_fill_map_presence_kind_and_declared_dimensions() {
+        let fill =
+            photocraft_doc::mask_paint::EffectKind::Fill { value: 0.5, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false };
+        let paint = photocraft_doc::mask_paint::EffectKind::Paint;
+        assert!(validate_mask_fill_map(&fill, false, [0, 0]).is_ok());
+        assert!(validate_mask_fill_map(&fill, true, [1, photocraft_doc::pattern::MAX_EDGE]).is_ok());
+        assert!(validate_mask_fill_map(&fill, false, [1, 0]).is_err());
+        assert!(validate_mask_fill_map(&paint, true, [1, 1]).is_err());
+        assert!(validate_mask_fill_map(&fill, true, [0, 1]).is_err());
+        assert!(validate_mask_fill_map(&fill, true, [photocraft_doc::pattern::MAX_EDGE + 1, 1]).is_err());
     }
 
     #[test]

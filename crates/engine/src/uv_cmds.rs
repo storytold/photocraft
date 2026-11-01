@@ -15,6 +15,13 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 type PaddingCacheKey = (usize, u32, u32, i32, i32, usize, u64);
 
+fn require_active_uv_bank(session: &Session) -> Result<()> {
+    if session.uv_workspace.initialized && !session.uv_workspace.active {
+        return Err(err("Activate the 3D document workspace before changing its documents"));
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct UvState {
     /// Restored external destinations require explicit rebinding before texture writeback.
@@ -425,6 +432,7 @@ pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<c
     Ok((scene, stamp))
 }
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
+    require_active_uv_bank(s)?;
     let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
     let source = path(p)?.to_owned();
     let uv_set = uint(p, "uvSet", 0)?;
@@ -613,6 +621,7 @@ fn activate(s: &mut Session, material: usize) -> Result<()> {
 }
 
 fn texture_open(s: &mut Session, p: &Value) -> Result<Value> {
+    require_active_uv_bank(s)?;
     let material = material(s, p)?;
     let normal = channel(p, s.uv.current_channel())?;
     let texture_path = path(p)?.to_owned();
@@ -634,6 +643,7 @@ fn texture_open(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"document":id.0,"warnings":imported.warnings}))
 }
 fn texture_create(s: &mut Session, p: &Value) -> Result<Value> {
+    require_active_uv_bank(s)?;
     let material = material(s, p)?;
     let normal = channel(p, s.uv.current_channel())?;
     let width = uint(p, "width", 1024)?;
@@ -1191,6 +1201,7 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"saved":path}))
 }
 fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
+    require_active_uv_bank(s)?;
     let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
     let project_path = path(p)?;
     let project_export_root = model_directory(project_path).canonicalize().ok();
@@ -1508,5 +1519,28 @@ mod asset_path_tests {
         assert_eq!(session.documents().len(), 1);
         assert_eq!(session.documents()[0].doc.id, document_id);
         assert!(session.documents()[0].is_dirty());
+    }
+
+    #[test]
+    fn document_import_and_creation_are_rejected_while_uv_bank_is_parked() {
+        let mut session = crate::Session::new();
+        session.add_document(super::Document::new("Parked UV", super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
+        let original_id = session.active().unwrap().doc.id;
+        session.uv_workspace.parked = std::mem::take(&mut session.docs);
+        session.active = None;
+        session.uv_workspace.initialized = true;
+        session.uv_workspace.active = false;
+
+        for (command, params) in [
+            ("uv.texture.create", json!({"width":8,"height":8})),
+            ("uv.texture.open", json!({"path":"missing.png"})),
+            ("uv.model.import", json!({"path":"missing.obj"})),
+            ("uv.project.load", json!({"path":"missing.pcuv"})),
+        ] {
+            assert!(session.execute(command, params).is_err(), "{command} rejects a parked UV bank");
+            assert!(session.documents().is_empty());
+            assert_eq!(session.uv_documents().len(), 1);
+            assert_eq!(session.uv_documents()[0].doc.id, original_id);
+        }
     }
 }

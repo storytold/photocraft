@@ -476,12 +476,7 @@ pub(crate) fn effect_reach(layers: &[photocraft_doc::Layer]) -> i32 {
 /// Returns false if there is no GPU canvas.
 pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, visible: DRect) -> bool {
     let Some(gpu) = app.gpu.clone() else { return false };
-    let Some((revision, last_damage, id)) = app
-        .session
-        .documents()
-        .get(idx)
-        .map(|st| (st.revision, st.last_damage.map(|r| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) }), st.doc.id))
-    else {
+    let Some((revision, last_damage, id)) = app.session.documents().get(idx).map(|st| (st.revision, st.last_damage, st.doc.id)) else {
         return false;
     };
     // Spatial Fill's GPU planner consumes effect params directly. Give it the live immutable

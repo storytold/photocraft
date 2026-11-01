@@ -106,6 +106,8 @@ pub(crate) use strokes::break_native_uv_mask_segment;
 pub(crate) use strokes::clone_preview_texture;
 #[cfg(feature = "uv-workbench")]
 pub(crate) use strokes::feed_live_stroke;
+#[cfg(not(feature = "uv-workbench"))]
+use strokes::feed_live_stroke;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 #[cfg(feature = "uv-workbench")]

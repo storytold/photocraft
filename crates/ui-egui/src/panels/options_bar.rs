@@ -49,7 +49,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     crate::uv_ui::shell_settings(app, ui);
                 });
                 ui.separator();
-                ui.weak(tl!("Click to select · Shift to add · Ctrl to subtract"));
+                let hint = if cfg!(target_os = "macos") {
+                    tl!("Click to select · Shift to add · ⌘ to subtract")
+                } else {
+                    tl!("Click to select · Shift to add · Ctrl to subtract")
+                };
+                ui.weak(hint);
             });
         });
         return;

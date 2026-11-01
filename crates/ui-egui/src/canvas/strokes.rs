@@ -302,6 +302,7 @@ pub(crate) fn fail_native_mask_gpu_brush(app: &PhotocraftApp) {
 }
 
 /// Mark the live route for CPU replay before a renderer teardown makes GPU readback impossible.
+#[cfg(feature = "uv-workbench")]
 pub(crate) fn remove_native_mask_gpu_renderer(app: &PhotocraftApp, remove: impl FnOnce()) {
     fail_native_mask_gpu_brush(app);
     remove();

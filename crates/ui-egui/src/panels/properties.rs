@@ -6,10 +6,6 @@ use super::{CornerRadius, Layer, LayerContent, LayerId, PhotocraftApp, Rect, Ric
 /// tabs: Properties (`properties_body`: document, layer, adjustment and mask properties) and
 /// Adjustments (`adjustments_grid`).
 pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    #[cfg(feature = "uv-workbench")]
-    if app.ui.workspace == "3D" && matches!(app.ui.dock_tabs.properties, 2 | 3) {
-        return;
-    }
     if app.ui.docking.is_some() {
         return;
     }
@@ -74,6 +70,11 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             match indices.get(sel) {
                 Some(0) | None => properties_body(app, ui),
+                Some(1) => adjustments_grid(app, ui),
+                #[cfg(feature = "uv-workbench")]
+                Some(2) if app.ui.workspace == "3D" => crate::uv_ui::panel(app, ui),
+                #[cfg(feature = "uv-workbench")]
+                Some(3) if app.ui.workspace == "3D" => crate::uv_library::panel(app, ui),
                 Some(_) => adjustments_grid(app, ui),
             }
         });
