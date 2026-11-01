@@ -405,6 +405,51 @@ fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
     }
 }
 
+/// Layer › New Adjustment Layer › Channel Mixer in a CMYK document makes a mixer with cyan,
+/// magenta, yellow and black outputs (#8047); its identity leaves the inks alone, the destructive
+/// command mixes the stored inks, and a mix changes only the ink it targets.
+#[test]
+fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "background": "white"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.channelMixer", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let adj = doc
+        .layers
+        .iter()
+        .find_map(|l| match &l.content {
+            photocraft_doc::LayerContent::Adjustment(a) => Some(a.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        matches!(adj, Adjustment::ChannelMixer { cmyk: Some(rows), monochrome: false, .. } if rows == photocraft_doc::adjust::CMYK_MIXER_IDENTITY),
+        "{adj:?}"
+    );
+    let params = crate::adjust_params::to_params(&adj);
+    assert!(params.get("cyan").is_some() && params.get("red").is_none(), "{params}");
+
+    let cmyk = PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true);
+    let ink = [0.2, 0.4, 0.6, 0.1, 1.0];
+    let same = adjusted_pixel(cmyk, &ink, &adj, None);
+    assert!(same.iter().zip(&ink).all(|(g, w)| (g - w).abs() < 1e-4), "identity: {same:?}");
+    // Magenta's stored value (1 - ink) less 20 %: 20 % more magenta ink, the rest untouched.
+    let more_magenta = crate::adjust_params::from_params("channelMixer", &json!({"magenta": [0, 100, 0, 0, -20]}), None, ColorMode::Cmyk).unwrap();
+    let got = adjusted_pixel(cmyk, &ink, &more_magenta, None);
+    let want = [0.2, 0.6, 0.6, 0.1, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "magenta: {got:?}");
+    // Black from cyan: black's stored value is cyan's (0.8), so 20 % black ink.
+    let black_from_cyan = crate::adjust_params::from_params("channelMixer", &json!({"black": [100, 0, 0, 0, 0]}), None, ColorMode::Cmyk).unwrap();
+    let got = adjusted_pixel(cmyk, &ink, &black_from_cyan, None);
+    let want = [0.2, 0.4, 0.6, 0.2, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "black: {got:?}");
+    // Monochrome: the mix goes to the black ink alone.
+    let mono = crate::adjust_params::from_params("channelMixer", &json!({"monochrome": true, "gray": [0, 0, 0, 100, 0]}), None, ColorMode::Cmyk).unwrap();
+    let got = adjusted_pixel(cmyk, &ink, &mono, None);
+    let want = [0.0, 0.0, 0.0, 0.1, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "monochrome: {got:?}");
+}
+
 /// Two small blocks two billion pixels apart: the content bounds are a grid of 6·10¹³ tiles
 /// that holds nothing, which no adjustment may materialize.
 fn distant_blocks(fmt: PixelFormat, default: f32) -> Surface {

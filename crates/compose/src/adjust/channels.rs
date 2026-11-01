@@ -71,12 +71,37 @@ pub fn lab_channel_adjustment(adj: &Adjustment) -> bool {
 /// Whether a CMYK document evaluates `adj` on its inks rather than on the screen colour: Invert
 /// and Posterize (each ink, black included, so paper inverts to 400% ink), Threshold (paper or
 /// 100% black ink alone) and Brightness/Contrast (each ink's stored value, 1 - ink, through the
-/// tone curve; see [`ink_through`]). Photoshop corpus cmyk8 and cmyk16 invert, posterize-4,
+/// tone curve; see [`ink_through`]), and a Channel Mixer with CMYK outputs ([`mix_inks`]).
+/// Photoshop corpus cmyk8 and cmyk16 invert, posterize-4,
 /// threshold-128 and brightness-contrast(-legacy) follow these rules on the files' own inks on
 /// every pixel; here the inks are the screen colour separated through the document's CMYK
 /// profile, so neutrals carry the black that profile generates rather than the file's.
 pub fn cmyk_channel_adjustment(adj: &Adjustment) -> bool {
-    stored_channel_adjustment(adj) || cmy_adjustment(adj) || matches!(adj, Adjustment::BrightnessContrast { .. })
+    stored_channel_adjustment(adj) || cmy_adjustment(adj) || cmyk_mixer(adj) || matches!(adj, Adjustment::BrightnessContrast { .. })
+}
+
+/// Whether `adj` is a Channel Mixer with CMYK outputs ([`mix_inks`]).
+pub fn cmyk_mixer(adj: &Adjustment) -> bool {
+    matches!(adj, Adjustment::ChannelMixer { cmyk: Some(_), .. })
+}
+
+/// A CMYK Channel Mixer on one pixel's inks (C, M, Y, K; 0 none): each output's stored value
+/// (1 - ink) is its row's mix of the four stored values plus the constant, clipped to 0..1, so
+/// a positive constant takes ink away as Photoshop's Constant adds white. With `monochrome` the
+/// first row's mix goes to the black ink alone and cyan, magenta and yellow are cleared.
+pub fn mix_inks(rows: &[[f32; 5]; 4], monochrome: bool, ink: &mut [f32]) {
+    let stored: [f32; 4] = std::array::from_fn(|i| {
+        let v = ink.get(i).copied().unwrap_or(0.0);
+        if v.is_finite() { 1.0 - v.clamp(0.0, 1.0) } else { 1.0 }
+    });
+    let mix = |r: &[f32; 5]| {
+        let v = r[0] * stored[0] + r[1] * stored[1] + r[2] * stored[2] + r[3] * stored[3] + r[4];
+        if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+    };
+    let out: [f32; 4] = if monochrome { [0.0, 0.0, 0.0, 1.0 - mix(&rows[0])] } else { std::array::from_fn(|j| 1.0 - mix(&rows[j])) };
+    for (v, o) in ink.iter_mut().zip(out) {
+        *v = o;
+    }
 }
 
 /// Whether a CMYK document evaluates `adj` on C, M and Y as the complement of an RGB colour,
@@ -125,7 +150,7 @@ pub fn stored_channel_adjustment(adj: &Adjustment) -> bool {
     matches!(adj, Adjustment::Invert | Adjustment::Posterize { .. } | Adjustment::Threshold { .. })
 }
 
-/// Invert, Posterize or Threshold on one pixel's own channels in a Lab or CMYK document of
+/// Invert, Posterize or Threshold (or, in CMYK, a CMYK Channel Mixer: [`mix_inks`]) on one pixel's own channels in a Lab or CMYK document of
 /// `depth` (`None`: unknown, treated as 8-bit): `ch` holds L, a, b normalised as [`lab_norm`]
 /// gives them, or the C, M, Y, K inks (0: none). Lab Invert turns 8-bit bytes `v` into `255 - v`
 /// (a becomes -1 - a) and mirrors a and b around neutral at 16 bits (photoshop corpus lab16
@@ -156,6 +181,7 @@ pub fn stored_channels(adj: &Adjustment, mode: ColorMode, depth: Option<SampleTy
             };
             ch.iter_mut().zip(out).for_each(|(v, o)| *v = o);
         }
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } if mode == ColorMode::Cmyk => mix_inks(rows, *monochrome, ch),
         _ => {}
     }
 }

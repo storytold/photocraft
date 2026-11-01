@@ -7,7 +7,7 @@
 //! Every [`Adjustment`] kind is written (`vibA`, `blnc`, `blwh`, `phfl` and `mixr` included);
 //! a Color Lookup without a table is written as an identity cube and a Gradient Map with fewer
 //! than two stops as the equivalent two-stop gradient, so nothing is dropped on save. Blocks
-//! that cannot be read (noise gradients, profile lookups, CMYK channel mixers, unknown versions)
+//! that cannot be read (noise gradients, profile lookups, ink channel mixers outside CMYK documents, unknown versions)
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
 use photocraft_doc::Adjustment;
@@ -167,9 +167,13 @@ pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
 /// (modern brightness/contrast parameters). Levels/Curves store the
 /// composite record first, then one per document channel (see [`Channels`]).
 pub fn parse(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>, channels: Channels) -> Adjustment {
-    // A CMYK Channel Mixer (any record using the fourth, black, source) has no RGB meaning:
-    // keep it raw. Mixers written by `write` leave that source at 0 and map in every mode.
-    if key == b"mixr" && matches!(channels, Channels::Cmyk | Channels::Other) && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
+    // A CMYK document's mixer has Photoshop's four ink outputs.
+    if key == b"mixr" && channels == Channels::Cmyk {
+        return parse_cmyk_mixer(data).unwrap_or_else(|| unsupported(key, data));
+    }
+    // In other modes a mixer using the fourth (black) source has no RGB meaning: keep it raw.
+    // Mixers written by `write` from RGB outputs leave that source at 0.
+    if key == b"mixr" && channels != Channels::Cmyk && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
         return unsupported(key, data);
     }
     let mut a = parse_any(key, data, cged);
@@ -645,7 +649,33 @@ fn parse_channel_mixer(d: &[u8]) -> Option<Adjustment> {
     let first = rec(0)?;
     // A monochrome block may carry only the gray record.
     let (g, b) = if monochrome { (rec(1).unwrap_or([0.0; 4]), rec(2).unwrap_or([0.0; 4])) } else { (rec(1)?, rec(2)?) };
-    Some(Adjustment::ChannelMixer { matrix: [first, g, b], monochrome })
+    Some(Adjustment::ChannelMixer { matrix: [first, g, b], monochrome, cmyk: None })
+}
+
+/// `mixr` in a CMYK document: the same layout with four output records (cyan, magenta,
+/// yellow, black), each using all four sources (cyan, magenta, yellow, black) and the constant.
+/// A monochrome block may carry only its first record (the mix the black ink gets).
+fn parse_cmyk_mixer(d: &[u8]) -> Option<Adjustment> {
+    if be16(d, 0)? != 1 {
+        return None;
+    }
+    let monochrome = be16(d, 2)? != 0;
+    let rec = |r: usize| -> Option<[f32; 5]> {
+        let at = 4 + r * 10;
+        let v = |k: usize| bei16(d, at + k * 2).map(|x| f32::from(x).clamp(-200.0, 200.0) / 100.0);
+        Some([v(0)?, v(1)?, v(2)?, v(3)?, v(4)?])
+    };
+    let identity = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+    let mut rows = identity;
+    for (r, row) in rows.iter_mut().enumerate() {
+        *row = match rec(r) {
+            Some(v) => v,
+            None if monochrome && r > 0 => identity[r],
+            None => return None,
+        };
+    }
+    let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    Some(Adjustment::ChannelMixer { matrix, monochrome, cmyk: Some(rows) })
 }
 
 fn put16(v: &mut Vec<u8>, x: u16) {
@@ -699,7 +729,8 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::PhotoFilter { color, density, preserve_luminosity } => {
             return block(b"phfl", encode::photo_filter(*color, *density, *preserve_luminosity));
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => {
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => return block(b"mixr", encode::channel_mixer_cmyk(rows, *monochrome)),
+        Adjustment::ChannelMixer { matrix, monochrome, cmyk: None } => {
             return block(b"mixr", encode::channel_mixer(matrix, *monochrome));
         }
         Adjustment::Unsupported { psd_key, raw } => {

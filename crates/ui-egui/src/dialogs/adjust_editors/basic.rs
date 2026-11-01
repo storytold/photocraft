@@ -243,9 +243,19 @@ pub(super) fn photo_filter(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
 pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mono = flag(v, "monochrome", false);
+    // A CMYK document's mixer: four ink outputs, each from the four inks (#8047).
+    let cmyk = adjust_params::MIXER_INKS.iter().any(|k| v.get(*k).is_some());
     let out_id = cx.mem.with("cm-out");
     let mut out: usize = ui.data(|d| d.get_temp(out_id)).unwrap_or(0);
-    let outs: &[(usize, &str)] = if mono { &[(0, tl!("Gray"))] } else { &[(0, tl!("Red")), (1, tl!("Green")), (2, tl!("Blue"))] };
+    let outs: &[(usize, &str)] = if mono && cmyk {
+        &[(0, tl!("Black"))]
+    } else if mono {
+        &[(0, tl!("Gray"))]
+    } else if cmyk {
+        &[(0, tl!("Cyan")), (1, tl!("Magenta")), (2, tl!("Yellow")), (3, tl!("Black"))]
+    } else {
+        &[(0, tl!("Red")), (1, tl!("Green")), (2, tl!("Blue"))]
+    };
     if out >= outs.len() {
         out = 0;
     }
@@ -254,37 +264,59 @@ pub(super) fn channel_mixer(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
         widgets::dropdown(ui, &format!("{out_id:?}"), tl!("Output Channel:"), &mut out, outs, 110.0);
     });
     ui.data_mut(|d| d.insert_temp(out_id, out));
-    let key = if mono { "gray" } else { ["red", "green", "blue"][out] };
-    let identity: [f32; 4] = if mono { [40.0, 40.0, 20.0, 0.0] } else { std::array::from_fn(|i| if i == out { 100.0 } else { 0.0 }) };
-    let mut row = nums(v, key, if mono { nums(v, "red", identity) } else { identity });
+    // Source sliders: label and the colour at the track's far end.
+    let sources: &[(&str, [u8; 3])] = if cmyk {
+        &[(tl!("Cyan"), [0, 174, 239]), (tl!("Magenta"), [236, 0, 140]), (tl!("Yellow"), [255, 222, 0]), (tl!("Black"), [35, 31, 32])]
+    } else {
+        &[(tl!("Red"), [225, 50, 50]), (tl!("Green"), [50, 190, 70]), (tl!("Blue"), [60, 100, 235])]
+    };
+    let track_start = if cmyk { Color32::WHITE } else { Color32::BLACK };
+    let keys: &[&str] = if cmyk { &adjust_params::MIXER_INKS } else { &["red", "green", "blue"] };
+    let n = sources.len();
+    let key = if mono { "gray" } else { keys.get(out).copied().unwrap_or("red") };
+    // The sources, then the constant.
+    let identity: Vec<f32> = (0..=n).map(|i| if i == out && i < n { 100.0 } else { 0.0 }).collect();
+    let fallback = if mono { row_of(v, keys.first().copied().unwrap_or("red"), &identity) } else { identity };
+    let mut row = row_of(v, key, &fallback);
     let mut e = Edit::default();
     let mut changed = false;
-    for (i, (text, c)) in [(tl!("Red"), [225, 50, 50]), (tl!("Green"), [50, 190, 70]), (tl!("Blue"), [60, 100, 235])].iter().enumerate() {
-        let r = gradient_slider(ui, text, &mut row[i], -200.0..=200.0, "%", [Color32::BLACK, Color32::from_rgb(c[0], c[1], c[2])], cx.dynamic_color_sliders);
+    for (value, (text, c)) in row.iter_mut().zip(sources) {
+        let r = gradient_slider(ui, text, value, -200.0..=200.0, "%", [track_start, Color32::from_rgb(c[0], c[1], c[2])], cx.dynamic_color_sliders);
         changed |= r.changed;
         e.add(r);
     }
-    let total = row[0] + row[1] + row[2];
+    let total: f32 = row.iter().take(n).sum();
     ui.horizontal(|ui| {
         label(ui, tl!("Total:"));
         let warn = total > 100.0;
         ui.label(RichText::new(format!("{total:+.0}%")).font(crate::theme::mono(12.0)).color(if warn { t.warning } else { t.text }));
     });
-    let r = widgets::slider_row(ui, tl!("Constant"), &mut row[3], -200.0..=200.0, "%", None);
-    changed |= r.changed();
-    e.add(Edit::of(&r));
+    if let Some(constant) = row.get_mut(n) {
+        let r = widgets::slider_row(ui, tl!("Constant"), constant, -200.0..=200.0, "%", None);
+        changed |= r.changed();
+        e.add(Edit::of(&r));
+    }
     if changed {
-        v[key] = json!(row.map(f32::round));
+        v[key] = json!(row.iter().map(|x| x.round()).collect::<Vec<_>>());
     }
     let mut m = mono;
     if widgets::checkbox(ui, &mut m, tl!("Monochrome")).changed() {
         v["monochrome"] = json!(m);
         if m {
-            v["gray"] = json!([40.0, 40.0, 20.0, 0.0]);
+            // RGB starts from Photoshop's grey mix, CMYK from the Black output's.
+            let start = if cmyk { row_of(v, "black", &[0.0, 0.0, 0.0, 100.0, 0.0]) } else { vec![40.0, 40.0, 20.0, 0.0] };
+            v["gray"] = json!(start);
         } else if let Some(o) = v.as_object_mut() {
             o.remove("gray");
         }
         e.add(Edit::discrete(true));
     }
     e
+}
+
+/// A Channel Mixer row from `v[key]` (sources, then the constant), as many values as `default`
+/// holds, missing ones from `default`.
+fn row_of(v: &Value, key: &str, default: &[f32]) -> Vec<f32> {
+    let a = v.get(key).and_then(Value::as_array);
+    default.iter().enumerate().map(|(i, d)| a.and_then(|a| a.get(i)).and_then(Value::as_f64).map_or(*d, |x| x as f32)).collect()
 }
