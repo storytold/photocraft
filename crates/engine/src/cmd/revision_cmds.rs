@@ -431,4 +431,25 @@ mod tests {
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["done"], json!(false));
     }
+
+    #[test]
+    fn undo_restores_done() {
+        // Undoing a reset (re-snapshot) restores the previous snapshot and the green state.
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 60, "height": 40})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.0, 1.0, 0.0]})).unwrap();
+        s.execute("revision.detect", json!({})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(true), "changed → green");
+        // Reset to red (new baseline).
+        s.execute("revision.snapshot", json!({})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(false), "reset → red");
+        // Undo the reset: the marker is green again.
+        s.execute("history.undo", json!({})).unwrap();
+        let v = s.execute("revision.list", json!({})).unwrap();
+        assert_eq!(v["markers"][0]["done"], json!(true), "undo restores green");
+    }
 }

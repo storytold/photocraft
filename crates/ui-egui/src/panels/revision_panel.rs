@@ -25,7 +25,10 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if ui.add_enabled(can, egui::Button::new(tl!("Check All"))).clicked() {
             let _ = app.run("revision.detect", json!({}));
         }
-        if ui.add_enabled(can, egui::Button::new(tl!("Re-snapshot All"))).clicked() {
+        // Reset = re-snapshot every marker: the current content becomes the new baseline and the
+        // box turns red again (use after duplicating a finished file, to re-arm the checklist).
+        // Undo (Ctrl+Z) restores the previous snapshots and green state.
+        if ui.add_enabled(can, egui::Button::new(tl!("Reset All to Red"))).clicked() {
             let _ = app.run("revision.snapshot", json!({}));
         }
     });
@@ -82,6 +85,10 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
                     app.ui.status_error = true;
                 }
             }
+        }
+        if ui.small_button(tl!("Reset")).clicked() {
+            // Re-snapshot just this marker: its box turns red again (undo with Ctrl+Z).
+            let _ = app.run("revision.snapshot", json!({"index": i}));
         }
         if ui.small_button("✕").clicked() {
             let _ = app.run("revision.remove", json!({"index": i}));

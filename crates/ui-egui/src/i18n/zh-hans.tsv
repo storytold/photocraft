@@ -3325,6 +3325,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Add from Selection	从选区添加
 	Check All	全部检测
 	Re-snapshot All	全部重新快照
+	Reset All to Red	全部重置为红色
+	Reset	重置
 	Unbind	解除绑定
 	Bind Layer	绑定图层
 	Marker	标记
