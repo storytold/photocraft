@@ -636,8 +636,8 @@ Recorded direct Gradient Map (`GrMp`) and Replace Color (`RplC`) forms are descr
 [the ATN reference](atn.md#supported-direct-adjustment-settings), based on davidmann4's
 measurements in #10603. Gradient Map keeps its event, fractional RGB stops and recorded name;
 unsupported interpolation, midpoint and transparency settings remain preserved steps.
-Replace Color accepts `labMinimum` / `labMaximum` (three D50 Lab numbers each), exclusively
-of RGB samples and localized settings. The new option matches native surface samples through
+Replace Color accepts `labMinimum` / `labMaximum` (three D50 Lab numbers each), mutually
+exclusive with RGB samples and localized settings. The new option matches native surface samples through
 the document profile, retains alpha and untouched native pixels, and uses one undoable edit.
 A zero tone shift validates its inputs without changing pixels. The existing RGB option keeps
 its previous behavior. Explicit Lab bounds require a composite pixel-layer target.

@@ -9,6 +9,7 @@ use crate::{EngineError, Result, Session};
 
 const CMD: &str = "image.adjustments.replaceColor";
 
+/// Validate original precision before checking order and converting to native f32.
 fn bound(p: &Value, key: &str) -> Result<[f64; 3]> {
     let values = p.get(key).and_then(Value::as_array).filter(|a| a.len() == 3).ok_or_else(|| bad(CMD, format!("`{key}` must be three finite Lab numbers")))?;
     let mut result = [0.0; 3];

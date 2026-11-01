@@ -9,10 +9,12 @@ use super::{D, Descriptor, Value, json};
 /// Execution uses ordinary numeric RGB stops, never a stored descriptor.
 pub(super) const GRADIENT_ORIGIN: &str = "__atnGrMp";
 
+/// Refuse extra native settings instead of exporting an incomplete edit.
 fn only_params(p: &Value, allowed: &[&str]) -> bool {
     p.as_object().is_some_and(|p| p.keys().all(|k| allowed.contains(&k.as_str())))
 }
 
+/// Read exactly three channels; callers enforce their colour-space limits.
 fn triple(p: &Value) -> Option<[f64; 3]> {
     let a = p.as_array().filter(|a| a.len() == 3)?;
     Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
@@ -102,15 +104,18 @@ pub(super) fn gradient_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Retain source precision while requiring coordinates to stay finite in native f32.
 fn lab_bound(p: &Value) -> Option<[f64; 3]> {
     let values = triple(p)?;
     values.iter().all(|v| v.is_finite() && (*v as f32).is_finite()).then_some(values)
 }
 
+/// Reject extra, duplicate or reordered keys that the strict writer cannot retain.
 fn ordered(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.len() == keys.len() && d.items.iter().zip(keys).all(|((key, _), expected)| key.is(expected))
 }
 
+/// Read the measured Lab encoding directly, without RGB clipping or type coercion.
 fn lab_from(v: &D) -> Option<[f64; 3]> {
     let D::Descriptor(d) = v else { return None };
     if !d.class_id.is("LbCl") || !d.name.0.is_empty() || !ordered(d, &["Lmnc", "A   ", "B   "]) {
