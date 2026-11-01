@@ -224,12 +224,117 @@ fn empty_layer_cannot_be_converted() {
 }
 
 #[test]
-fn convert_to_smart_object_is_disabled_for_a_layer_that_is_already_smart() {
+fn converting_a_smart_object_wraps_it_in_another_smart_object() {
     let mut s = session(8);
     paint(&mut s);
-    assert!(s.is_enabled("layer.smartObjects.convertToSmartObject"));
     convert(&mut s);
-    assert!(!s.is_enabled("layer.smartObjects.convertToSmartObject"));
+    let inner_id = s.active().unwrap().active_layer.unwrap();
+    // A non-identity transform and a smart filter on the wrapped object: both must survive
+    // inside the nested contents, and the inner contents id keeps its own identity — the new
+    // object gets a fresh one, so a nest can't alias the document it lives in.
+    s.edit("edit", |doc, active| {
+        let sm = smart_mut(doc, active.unwrap())?;
+        sm.transform = Affine { m: [1.5, 0.0, 0.0, 0.75, 3.0, -2.0] };
+        sm.smart_filters.push(photocraft_doc::SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": 2.0}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        refresh_or_fail(doc, active.unwrap())
+    })
+    .unwrap();
+    let inner_contents = active_smart(&s).contents_id;
+    let before = flat(&s);
+
+    // Photoshop keeps Convert to Smart Object enabled on a smart object and nests it (#10378).
+    assert!(s.is_enabled("layer.smartObjects.convertToSmartObject"));
+    let outer_id = LayerId(convert(&mut s));
+    assert_ne!(outer_id, inner_id);
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    let inner_sm = inner
+        .layers
+        .iter()
+        .find_map(|l| match &l.content {
+            LayerContent::Smart(s) => Some(s),
+            _ => None,
+        })
+        .expect("the wrapped contents keep the smart object");
+    // The transform survives (its offsets re-frame with the contents' crop; the render is
+    // asserted identical below).
+    assert_ne!(inner_sm.transform, Affine::IDENTITY, "the nested transform survives");
+    assert_eq!([inner_sm.transform.m[0], inner_sm.transform.m[3]], [1.5, 0.75], "the nested scale survives");
+    assert_eq!(inner_sm.smart_filters.len(), 1, "the nested smart filters survive");
+    assert_eq!(inner_sm.contents_id, inner_contents, "the inner contents keeps its own id");
+    assert_ne!(inner_sm.contents_id, sm.contents_id, "the outer contents is a fresh identity — the nest can't alias itself");
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "wrapping does not change the render");
+    s.undo();
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
+}
+
+#[test]
+fn converting_a_smart_object_with_open_contents_editor_is_refused() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    let smart_id = s.active().unwrap().active_layer.unwrap();
+    let child = s.execute("layer.smartObjects.editContents", json!({})).unwrap()["document"].as_u64().unwrap() as usize;
+
+    // Back in the parent, wrapping would move the layer into the new object's contents and strand
+    // the open editor's commit path, so the command refuses rather than losing its edits.
+    s.set_active(0);
+    let err = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err().to_string();
+    assert!(err.contains("Edit Contents"), "{err}");
+    assert!(matches!(s.active().unwrap().doc.layer(smart_id).unwrap().content, LayerContent::Smart(_)), "the refused convert keeps the layer");
+    assert_eq!(s.smart_links.len(), 1, "the editor link is still live");
+
+    s.set_active(child);
+    s.execute("file.close", json!({})).unwrap();
+    s.set_active(0);
+    convert(&mut s);
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert!(inner.layers.iter().any(|l| matches!(l.content, LayerContent::Smart(_))), "closing the editor lets the wrap proceed");
+}
+
+/// Photoshop 2026 keeps a converted layer's whole Blend If and its channel exclusions
+/// (`brst`) on the layer inside the contents — the smart layer carries defaults — and lets
+/// the composite change where those settings blended with the old backdrop (verified by
+/// parsing a PSD Photoshop itself saved after Convert to Smart Object).
+#[test]
+fn convert_to_smart_object_keeps_backdrop_dependent_blending_inside() {
+    let mut s = session(8);
+    paint(&mut s);
+    s.edit("blend-if", |doc, active| {
+        let l = doc.layer_mut(active.unwrap()).unwrap();
+        let mut bi = photocraft_doc::BlendIf::default();
+        let mut under = photocraft_doc::BlendRange::FULL;
+        under.black = [100, 140];
+        bi.set(0, [photocraft_doc::BlendRange::FULL, under]);
+        l.blend_if = bi;
+        l.excluded_channels = 0b100;
+        Ok(())
+    })
+    .unwrap();
+
+    convert(&mut s);
+    {
+        let d = s.active().unwrap();
+        let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+        assert!(l.blend_if.is_default(), "the smart layer keeps default Blend If");
+        assert_eq!(l.excluded_channels, 0, "the smart layer excludes no channels");
+    }
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert_eq!(inner.layers.len(), 1);
+    let inner_l = &inner.layers[0];
+    assert_eq!(inner_l.blend_if.get(0)[1].black, [100, 140], "the underlying range stays on the inner layer");
+    assert_eq!(inner_l.excluded_channels, 0b100, "the channel exclusion stays on the inner layer");
 }
 
 #[test]

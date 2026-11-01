@@ -1,3 +1,4 @@
+use super::contents::contents_editor_open;
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
@@ -201,6 +202,21 @@ pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
         Some(id) => vec![LayerId(id)],
         None => crate::layer_multi_cmds::selected(s),
     };
+    {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let roots = crate::layer_multi_cmds::top_level(&d.doc, &ids);
+        let mut stack: Vec<&Layer> = roots.iter().filter_map(|id| d.doc.layer(*id)).collect();
+        while let Some(l) = stack.pop() {
+            if let LayerContent::Smart(sm) = &l.content
+                && contents_editor_open(s, d.doc.id, sm.contents_id)
+            {
+                return Err(other(format!("\"{}\"'s contents are open in an Edit Contents document; save any changes and close it before converting", l.name)));
+            }
+            if let Some(ch) = l.children() {
+                stack.extend(ch);
+            }
+        }
+    }
     let new_id = s.edit("Convert to Smart Object", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &ids);
         let top = *ids.last().ok_or_else(|| other("no layer selected"))?;
