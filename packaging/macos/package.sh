@@ -122,8 +122,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
 cp "$WORK/bin/photocraft-cli" "$APP/Contents/MacOS/photocraft-cli"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
-# Notices for the bundled font fallback, included before the bundle is signed.
-cp "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
+# The licences, and the notices for the bundled font fallback, included before the bundle is signed.
+cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md" \
+  "$APP/Contents/Resources/"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [[ -n "${CRAFT_FONTS_DIR:-}" ]]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
