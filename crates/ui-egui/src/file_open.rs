@@ -249,16 +249,22 @@ impl PhotocraftApp {
         }
     }
 
+    /// The pointer position, from the OS cursor service when available, falling back to egui's
+    /// last-known pointer position (e.g. on Wayland).
+    pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
+        self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
+    }
+
     /// Which of the files called `names`, dropped onto the window just now, are placed on the
     /// active document's canvas rather than opened, for a shell that reads dropped files itself
     /// (the browser reads them asynchronously, so the web shell can't hand them to
     /// [`open_dropped`](Self::open_dropped)). It delivers those through
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
-    /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
+    /// [`cursor_pos`](Self::cursor_pos). As with a desktop canvas drop, a Free
     /// Transform still open is applied first (#4833).
     pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
-        let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
+        let at = self.cursor_pos(ctx);
         let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
         let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
         if places.contains(&true) && self.ui.transform.is_some() {

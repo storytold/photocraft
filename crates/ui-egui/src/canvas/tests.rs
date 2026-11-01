@@ -1366,14 +1366,11 @@ fn clone_overlay_is_clipped_to_a_shaped_tip() {
 }
 
 #[test]
-fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
+fn wayland_start_screen_hint_offers_file_drop() {
     let x11 = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let wayland = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { is_wayland: true, ..Default::default() });
     assert!(start_screen_drop_hint(&x11).starts_with("Drop"));
-    // Pasting a copied image file works on Wayland (#338): the hint says how.
-    let hint = start_screen_drop_hint(&wayland);
-    assert!(!hint.contains("Drop"), "{hint}");
-    assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
+    assert!(start_screen_drop_hint(&wayland).starts_with("Drop"));
 }
 
 /// A tiling window manager can hand PhotoCraft a canvas narrower than the Home card (460
