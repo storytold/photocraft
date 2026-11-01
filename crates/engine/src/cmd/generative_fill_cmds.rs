@@ -39,14 +39,17 @@ const MAX_RESPONSE_BYTES: usize = 256 << 20;
 /// How long to wait for the model before giving up.
 const TIMEOUT_SECS: u64 = 30 * 60;
 
+/// A bad-parameter error for this command.
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.generativeFill".into(), msg: msg.into() }
 }
 
+/// A general engine error carrying `msg`.
 fn other(msg: impl Into<String>) -> EngineError {
     EngineError::Other(msg.into())
 }
 
+/// A number parameter within `lo..=hi`, or `default` when it is absent or null.
 fn num(p: &Value, key: &str, default: f64, lo: f64, hi: f64) -> Result<f64> {
     match p.get(key).filter(|v| !v.is_null()) {
         None => Ok(default),
@@ -57,6 +60,7 @@ fn num(p: &Value, key: &str, default: f64, lo: f64, hi: f64) -> Result<f64> {
     }
 }
 
+/// A text parameter of at most `max` characters; empty when it is absent or null.
 fn text(p: &Value, key: &str, max: usize) -> Result<String> {
     match p.get(key).filter(|v| !v.is_null()) {
         None => Ok(String::new()),
@@ -70,11 +74,14 @@ fn text(p: &Value, key: &str, max: usize) -> Result<String> {
 /// Which kind of server answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
+    /// AUTOMATIC1111, Forge or SD.Next.
     A1111,
+    /// ComfyUI.
     Comfy,
 }
 
 impl Backend {
+    /// The backend a `backend` parameter names (case-insensitive, common aliases accepted).
     fn parse(s: &str) -> Result<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "comfyui" | "comfy" => Ok(Backend::Comfy),
@@ -83,6 +90,7 @@ impl Backend {
         }
     }
 
+    /// The port the server listens on unless the host says otherwise.
     fn default_port(self) -> u16 {
         match self {
             Backend::A1111 => 7860,
@@ -102,6 +110,7 @@ impl Backend {
 /// A validated server address.
 #[derive(Debug, Clone, PartialEq)]
 struct Endpoint {
+    /// The resolved socket address that is connected to.
     addr: std::net::SocketAddr,
     /// The `Host` header value.
     host: String,
@@ -109,6 +118,7 @@ struct Endpoint {
     base: String,
     /// Seconds to wait for the connection and for the whole exchange.
     connect_secs: u64,
+    /// Seconds allowed for the whole exchange once connected.
     total_secs: u64,
 }
 
@@ -129,6 +139,10 @@ fn is_local(ip: std::net::IpAddr) -> bool {
 
 /// Parse `[http://]host[:port][/prefix]` and resolve it, refusing anything outside the local
 /// network. The port defaults to the backend's.
+///
+/// The connection is plain HTTP, so the image, mask and prompt cross the network unencrypted.
+/// That is acceptable to this machine (loopback); to another machine only a network you trust
+/// (or a tunnel you set up yourself) should carry it. `https://` is refused on purpose.
 fn parse_endpoint(url: &str, backend: Backend) -> Result<Endpoint> {
     use std::net::ToSocketAddrs;
     let url = url.trim();
@@ -245,17 +259,20 @@ fn request(ep: &Endpoint, method: &str, path: &str, content_type: Option<&str>, 
     parse_response(&raw)
 }
 
+/// The browser build has no sockets: always an "unavailable" error.
 #[cfg(target_arch = "wasm32")]
 fn request(_: &Endpoint, _: &str, _: &str, _: Option<&str>, _: &[u8], _: &dyn Fn() -> bool) -> Result<Vec<u8>> {
     Err(other("Generative Fill needs a model server and isn't available in the browser build"))
 }
 
+/// POST `body` as JSON to `path` and parse the JSON reply.
 fn post_json(ep: &Endpoint, path: &str, body: &Value, cancelled: &dyn Fn() -> bool) -> Result<Value> {
     let body = serde_json::to_vec(body).map_err(|e| other(e.to_string()))?;
     let reply = request(ep, "POST", path, Some("application/json"), &body, cancelled)?;
     serde_json::from_slice(&reply).map_err(|e| other(format!("the model server sent unreadable JSON: {e}")))
 }
 
+/// GET `path` and parse the JSON reply.
 fn get_json(ep: &Endpoint, path: &str, cancelled: &dyn Fn() -> bool) -> Result<Value> {
     let reply = request(ep, "GET", path, None, &[], cancelled)?;
     serde_json::from_slice(&reply).map_err(|e| other(format!("the model server sent unreadable JSON: {e}")))
@@ -285,6 +302,7 @@ fn parse_response(raw: &[u8]) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// Decode a `Transfer-Encoding: chunked` body.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn dechunk(mut data: &[u8]) -> Result<Vec<u8>> {
     let malformed = || other("the model server sent a malformed chunked response");
@@ -317,6 +335,7 @@ fn url_encode(s: &str) -> String {
 
 // ------------------------------------------------------------------ images
 
+/// Encode `w`×`h` 8-bit pixels in `layout` as a PNG.
 fn png(w: u32, h: u32, layout: photocraft_codecs::ChannelLayout, data: Vec<u8>) -> Result<Vec<u8>> {
     let img = photocraft_codecs::Image::from_u8(w, h, layout, data).map_err(|e| other(e.to_string()))?;
     photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default()).map_err(|e| other(e.to_string()))
@@ -495,6 +514,7 @@ fn is_flux_fill(name: &str) -> bool {
     n.contains("flux") && n.contains("fill")
 }
 
+/// The model kind a model file name stands for.
 fn comfy_model_named(name: &str) -> ComfyModel {
     if is_flux_fill(name) {
         ComfyModel::FluxFill { unet: name.to_string(), gguf: name.to_ascii_lowercase().ends_with(".gguf") }
@@ -544,8 +564,11 @@ fn comfy_pick_model(ep: &Endpoint, wanted: &str, cancelled: &dyn Fn() -> bool) -
 /// The files FLUX.1 Fill needs besides its UNet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FluxParts {
+    /// The CLIP-L text encoder file.
     clip_l: String,
+    /// The T5 text encoder file.
     t5: String,
+    /// The VAE file.
     vae: String,
 }
 
@@ -802,6 +825,7 @@ fn match_colors(rgba: &mut [u8], original_rgb: &[u8], cover: &[f32], grown: &[bo
     }
 }
 
+/// Why a fill can't run on this session, or `Ok` when it can (menu `enabled` check).
 fn can_generate(s: &Session) -> std::result::Result<(), String> {
     crate::edit_menu_cmds::can_caf(s).map_err(|_| "make a selection on a pixel layer to generate into".to_string())
 }
@@ -818,6 +842,7 @@ fn settings(s: &Session, p: &Value) -> Result<(Backend, String)> {
     Ok((backend, host))
 }
 
+/// The backend and validated server address a fill with these parameters talks to.
 fn server(s: &Session, p: &Value) -> Result<(Backend, Endpoint)> {
     let (backend, host) = settings(s, p)?;
     Ok((backend, parse_endpoint(&host, backend)?))
@@ -889,6 +914,7 @@ fn list_models(s: &mut Session, p: &Value) -> Result<Value> {
     lookup_models(backend.name(), &host)
 }
 
+/// Edit › Generative Fill: fill the selection with what the prompt describes.
 fn generative_fill(s: &mut Session, p: &Value) -> Result<Value> {
     fill_as(s, p, "Generative Fill")
 }
@@ -908,6 +934,7 @@ fn generative_remove(s: &mut Session, p: &Value) -> Result<Value> {
     fill_as(s, &q, "Generative Remove")
 }
 
+/// The shared fill pipeline behind Generative Fill and Generative Remove; `label` names the undo step.
 fn fill_as(s: &mut Session, p: &Value, label: &'static str) -> Result<Value> {
     use crate::retouch_cmds::{SampleLayers, composite_region};
     let id = crate::edit_menu_cmds::pixel_layer(s).map_err(EngineError::Other)?;
@@ -1090,6 +1117,7 @@ fn apply(s: &mut Session, label: &str, id: LayerId, output: &str, fmt: PixelForm
 /// preferring an inpainting one.
 const FILL_PARAMS: &str = r##"{"prompt":text,"negativePrompt":text,"backend":"comfyui|a1111","host":text,"model":text,"steps":1..150=25,"guidance":0..30=0,"strength":0.1..1=1,"resolution":256..2048=768,"seed":-1..4294967295=-1,"feather":0..32=6,"colorMatch":0..100=60,"output":"new|current"}"##;
 
+/// The Generative Fill commands: fill, remove and list-models.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

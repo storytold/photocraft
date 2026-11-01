@@ -1019,7 +1019,8 @@ pub struct Integrations {
     pub generative_fill_backend: GenerativeBackend,
     /// Generative Fill: where that server listens, e.g. `192.168.1.20:8188` (this machine or a
     /// private network only). Empty = not set up: the selection menu lists the fill greyed; a command
-    /// without a `host` then uses this machine on the backend's usual port.
+    /// without a `host` then uses this machine on the backend's usual port. The connection is plain
+    /// HTTP (unencrypted): use another machine only on a network you trust.
     pub generative_fill_host: String,
     /// Generative Fill: checkpoint to use. Empty = the server's first, preferring an inpainting one.
     pub generative_fill_model: String,

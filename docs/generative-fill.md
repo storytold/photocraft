@@ -1,13 +1,13 @@
 # Generative Fill and Generative Remove
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (new feature)
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-11-01 · **Change:** minor (plaintext-HTTP note)
 
 Right-click a selection with a selection tool: **Generative Fill…** opens a dialog with a prompt and
 a model;
 **Generative Remove** takes the selection out in one click and lets the model continue the
 surroundings. Both are engine commands (`edit.generativeFill`, `edit.generativeRemove`;
 `edit.generativeFill.models` lists the server's models), so agents, the CLI and the control
-channel can drive them. Code: `crates/engine/src/generative_fill_cmds.rs`.
+channel can drive them. Code: `crates/engine/src/cmd/generative_fill_cmds.rs`.
 
 ## The model runs on your own server
 
@@ -24,6 +24,12 @@ undo step. Two backends:
 network (loopback, RFC 1918, link-local, unique-local IPv6, Tailscale's 100.64.0.0/10); public
 addresses and `https://` are refused. The ComfyUI server must be reachable from the machine
 running PhotoCraft (start it with `--listen`).
+
+**The connection is not encrypted.** Plain HTTP carries the selection's pixels, the mask and your
+prompt in the clear. That is fine to a server on this computer; to another machine, use it only on a
+network you trust (not shared or guest Wi-Fi), or reach the server through a tunnel you set up
+yourself (an SSH port forward to `127.0.0.1`, or Tailscale, which encrypts its own traffic).
+`https://` is refused on purpose: a home server has no certificate to check.
 
 For FLUX.1 Fill, ComfyUI needs the `ComfyUI-GGUF` node (for GGUF files), `clip_l`, `t5xxl` and the
 Flux VAE. A missing file is named in the error. The FLUX.1 \[dev] weights are under Black Forest
