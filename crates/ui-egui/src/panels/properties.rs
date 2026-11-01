@@ -538,13 +538,14 @@ mod properties_rtl_tests {
                 ..Default::default()
             };
             let mut out = Vec::new();
-            ctx.run_ui(input, |ui| {
+            let mut full = ctx.run_ui(input, |ui| {
                 crate::direction::ltr_grid(ui, "twin-adjustments-grid", 3, vec2(2.0, 2.0), |ui| {
                     for _ in 0..3 {
                         out.push(ui.allocate_exact_size(vec2(30.0, 30.0), egui::Sense::hover()).0);
                     }
                 });
             });
+            full.textures_delta.clear();
             out
         };
         for dir in [Dir::Ltr, Dir::Rtl] {
