@@ -859,6 +859,36 @@ fn replace_color_subtracting_inside_the_added_range_takes_a_colour_out() {
     assert_eq!(covered, [true, true, false, false]);
 }
 
+/// CodeRabbit review on #10443: the click order (`"order"`) reaches the matcher, as in Select ›
+/// Color Range. Added dark grey, subtracted mid grey, added light grey (`+ - +`): the subtraction
+/// comes while the box is the dark grey alone, far from the mid grey, so it changes nothing and the
+/// light grey is replaced; all additions first (`+ + -`) would leave it out.
+#[test]
+fn replace_color_follows_the_click_order_as_color_range_does() {
+    let grey = |v: f32| [v, v, v, 1.0];
+    // Dark grey (x < 12), mid grey (subtracted), light grey, black (never sampled).
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| match x {
+        ..12 => grey(0.25),
+        12..24 => grey(0.65),
+        24..36 => grey(0.75),
+        _ => grey(0.0),
+    });
+    let at = [(4, 16), (16, 16), (28, 16), (40, 16)];
+    let before: Vec<_> = at.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let clicks = json!({"fuzziness": 20, "points": [[4, 16], [28, 16]], "subtractPoints": [[16, 16]], "order": ["+", "-", "+"]});
+    let mut p = clicks.clone();
+    p["lightness"] = json!(-50);
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    let replaced: Vec<bool> = at.iter().enumerate().map(|(i, &(x, y))| changed(rgba(&s, x, y), before[i]) > 0.1).collect();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("select.colorRange", clicks).unwrap();
+    let sel = doc(&s).selection.clone().unwrap();
+    let covered: Vec<bool> = at.iter().map(|&(x, y)| sel.read_region(Rect::from_xywh(x, y, 1, 1))[0] > 0.5).collect();
+    assert_eq!(covered, [true, true, true, false], "Color Range: the light grey is added back after the subtraction");
+    assert_eq!(replaced, covered, "Replace Color matches what Color Range covers for the same clicks");
+}
+
 /// FredApps review on #10443: Localized Color Clusters with several samples. A matching colour
 /// is replaced only near one of the samples, as in Select › Color Range.
 #[test]
