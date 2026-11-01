@@ -511,4 +511,50 @@ mod tests {
         assert!(ltr.is_finite() && rtl.is_finite(), "the item label is drawn both ways: ltr {ltr} rtl {rtl}");
         assert!(rtl > ltr + 10.0, "rtl: the label hugs the row's right edge: ltr right {ltr}, rtl right {rtl}");
     }
+
+    /// Twin: a press-menu popup's rows keep their width and inter-item gap in both directions and
+    /// hug the reading-start edge only under RTL (the strip's right edge in RTL, its left in LTR).
+    #[test]
+    fn press_menu_popup_rows_mirror_only_under_rtl() {
+        let run = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let strip = egui::Rect::from_min_size(pos2(20.0, 20.0), vec2(200.0, 48.0));
+            let mut rects = Vec::new();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let menu = PressMenu { popup: egui::Id::unique("twin") };
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::menus::popup_body(&mut strip_ui, |ui| {
+                    for text in ["Levels", "Curves"] {
+                        let (r, _) = menu.item_response(ui, text);
+                        rects.push(r.rect);
+                    }
+                });
+            });
+            out.textures_delta.clear();
+            // The rows are justified to the strip's full width in both directions, so the mirror
+            // shows in the label: at the row's left under LTR, its right under RTL.
+            let label = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .find(|(t, _)| t.contains("Levels"))
+                .map(|(_, r)| r)
+                .unwrap_or(egui::Rect::NOTHING);
+            (strip, rects, label)
+        };
+        let (ltr_strip, ltr, ltr_label) = run(crate::direction::Dir::Ltr);
+        let (rtl_strip, rtl, rtl_label) = run(crate::direction::Dir::Rtl);
+        assert_eq!((ltr.len(), rtl.len()), (2, 2), "both items are drawn both ways");
+        let gap = |v: &[Rect]| v[1].top() - v[0].bottom();
+        assert!((gap(&ltr) - gap(&rtl)).abs() < 0.01, "the inter-item gap is equal both ways: ltr {} rtl {}", gap(&ltr), gap(&rtl));
+        assert!((ltr[0].width() - rtl[0].width()).abs() < 0.01, "the rows keep their width both ways");
+        let slack = 24.0;
+        assert!(ltr[0].left() - ltr_strip.left() < slack && rtl_strip.right() - rtl[0].right() < slack, "ltr rows hug the strip's left, rtl rows its right");
+        assert!(rtl_label.right() > ltr_label.right() + 10.0, "the rtl label sits at the reading-start (right) edge: ltr {ltr_label:?} rtl {rtl_label:?}");
+    }
 }
