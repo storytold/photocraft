@@ -50,7 +50,9 @@ fn cases(app: &mut PhotocraftApp) -> Vec<(String, Map<String, Value>, Body)> {
     cases
 }
 
-/// In every language, no text a dialog body draws starts left of the dialog's edge.
+/// In every language (Arabic included: dialogs keep their left-to-right layout), at 100% and 200%
+/// UI scale, no text a dialog body draws starts left of the dialog's edge, and the longest
+/// translation doesn't push the fields out past its right edge.
 #[test]
 fn translated_labels_stay_inside_the_dialog() {
     let mut app = app();
@@ -59,28 +61,37 @@ fn translated_labels_stay_inside_the_dialog() {
     crate::theme::install_fonts(&ctx);
     crate::theme::apply(&ctx, crate::theme::ThemeKind::ALL[0]);
     let mut failures = Vec::new();
-    for lang in crate::i18n::Lang::all() {
-        let _language = crate::i18n::language_scope(lang);
-        for (name, fields, body) in &cases {
-            let mut f = fields.clone();
-            let mut room = egui::Rect::NOTHING;
-            let mut out = ctx.run_ui(Default::default(), |ui| {
-                ui.set_max_width(ROOM_W);
-                room = ui.max_rect();
-                body(&app, ui, &mut f);
-            });
-            out.textures_delta.clear();
-            let texts: Vec<(String, egui::Rect)> = out
-                .shapes
-                .iter()
-                .filter_map(|s| match &s.shape {
-                    egui::Shape::Text(t) => Some((t.galley.text().to_string(), s.shape.visual_bounding_rect())),
-                    _ => None,
-                })
-                .collect();
-            assert!(!texts.is_empty(), "{name} {}: draws its labels", lang.code());
-            for (text, r) in texts.iter().filter(|(_, r)| r.left() < room.left() - 0.5) {
-                failures.push(format!("{name} {}: {text:?} at {r:?} starts left of the dialog's {room:?}", lang.code()));
+    for ppp in [1.0, 2.0] {
+        ctx.set_pixels_per_point(ppp);
+        for lang in crate::i18n::Lang::all() {
+            let _language = crate::i18n::language_scope(lang);
+            for (name, fields, body) in &cases {
+                let mut f = fields.clone();
+                let mut room = egui::Rect::NOTHING;
+                let mut used = egui::Rect::NOTHING;
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    assert_eq!(ui.ctx().pixels_per_point(), ppp);
+                    ui.set_max_width(ROOM_W);
+                    room = ui.max_rect();
+                    body(&app, ui, &mut f);
+                    used = ui.min_rect();
+                });
+                out.textures_delta.clear();
+                let texts: Vec<(String, egui::Rect)> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(t) => Some((t.galley.text().to_string(), s.shape.visual_bounding_rect())),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!texts.is_empty(), "{name} {} @{ppp}x: draws its labels", lang.code());
+                for (text, r) in texts.iter().filter(|(_, r)| r.left() < room.left() - 0.5) {
+                    failures.push(format!("{name} {} @{ppp}x: {text:?} at {r:?} starts left of the dialog's {room:?}", lang.code()));
+                }
+                if used.right() > room.left() + ROOM_W + 0.5 {
+                    failures.push(format!("{name} {} @{ppp}x: the fields reach {used:?}, past the dialog's {ROOM_W} pt", lang.code()));
+                }
             }
         }
     }
