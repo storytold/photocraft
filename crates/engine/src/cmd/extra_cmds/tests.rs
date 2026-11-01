@@ -766,6 +766,22 @@ fn rasterize_fill_and_all_in_one_step() {
 }
 
 #[test]
+fn rasterize_pattern_fill_retains_pixels() {
+    let mut s = session(8);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard"})).unwrap();
+    assert!(matches!(active(&s).content, LayerContent::Fill(_)));
+    s.execute("layer.rasterize.fillContent", json!({})).unwrap();
+    assert!(matches!(active(&s).content, LayerContent::Raster(_)));
+    let surface = active(&s).surface();
+    assert!(surface.is_some_and(|s| !s.content_bounds().is_empty()), "rasterized pattern fill layer must not be empty");
+    for (x, gray) in [(1, 0.8), (9, 1.0)] {
+        let p = pixel(&s, x, 1);
+        assert!(p[..3].iter().all(|c| (*c - gray).abs() < 0.01));
+        assert!((p[3] - 1.0).abs() < 0.01);
+    }
+}
+
+#[test]
 fn rasterize_smart_object_layer() {
     let mut s = session(8);
     s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
