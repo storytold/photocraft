@@ -349,7 +349,9 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         if mixed {
             assert_eq!(result["ran"], 0, "{result}");
             let batch = &result["failed"]["result"];
-            assert_eq!(batch["files"], json!([output.join("valid.png")]));
+            let files = batch["files"].as_array().unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(std::path::Path::new(files[0].as_str().unwrap()), output.join("valid.png").as_path());
             assert_eq!(batch["errors"].as_array().unwrap().len(), 1);
             assert_eq!(batch["errors"][0]["file"], json!(corrupt));
             report_play(&mut app, &result);
