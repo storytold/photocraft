@@ -1588,6 +1588,66 @@ fn eyedropper_drag_updates_the_sampled_colour() {
     assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
 }
 
+/// #10074: painting a group looked as if it worked (the stroke's trail followed the pointer) and
+/// vanished on release with only a status-bar note. Photoshop refuses at the press with a
+/// message; so does PhotoCraft, and nothing is painted or drawn.
+#[test]
+fn painting_a_group_is_refused_at_the_press_with_a_message() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.groupLayers", json!({})).unwrap();
+    let group = app.session.active().unwrap().active_layer.unwrap();
+    assert!(app.session.active().unwrap().doc.layer(group).unwrap().is_group());
+    let errors = |app: &PhotocraftApp| -> Vec<String> {
+        app.ui
+            .dialogs
+            .iter()
+            .filter(|d| d.kind == crate::state::DialogKind::Error)
+            .map(|d| d.fields.get("message").and_then(|m| m.as_str()).unwrap_or_default().to_string())
+            .collect()
+    };
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::CloneStamp, Tool::PaintBucket] {
+        app.ui.dialogs.clear();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        let want = format!("Could not use the {} because the target layer is a group.", tool.label());
+        assert_eq!(errors(&app), [want], "{tool:?}");
+        assert!(app.drag.is_none() && app.live_stroke.is_none(), "{tool:?} starts no stroke");
+        tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+        assert!(app.trail.is_none(), "{tool:?} draws no trail");
+    }
+    // Tools that don't paint the group's pixels are unaffected.
+    app.ui.dialogs.clear();
+    app.ui.tool = Tool::RectMarquee;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty());
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 15.0 }, egui::Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some(), "a marquee still selects with a group active");
+    app.run("select.deselect", json!({})).unwrap();
+    // A group's mask can be painted: targeting it paints, without the message.
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(paint_target(&app), json!("mask"));
+    let mask_at = |app: &PhotocraftApp, x: i32| {
+        let st = app.session.active().unwrap();
+        st.doc.layer(group).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, 10, 0)
+    };
+    let before = mask_at(&app, 15);
+    // Black on a reveal-all mask hides: a stroke that paints shows.
+    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
+    app.ui.tool = Tool::Brush;
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert!(errors(&app).is_empty(), "the mask is paintable");
+    assert!(app.drag.is_some(), "the stroke starts on the mask");
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+    assert_ne!(mask_at(&app, 15), before, "the stroke painted the group's mask");
+}
+
 /// #4298: an adjustment layer has no pixels, so after its icon thumbnail is clicked (the
 /// Layers panel no longer targets the mask) Fill, the fill keys and the Paint Bucket still
 /// edit its mask, as in Photoshop, instead of failing with "not a pixel layer".
