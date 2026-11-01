@@ -179,7 +179,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     let t = Tokens::get(ui.ctx());
     let rtl = crate::direction::is_rtl();
     let mut tab = f.get("tab").and_then(Value::as_u64).unwrap_or(0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         for (i, name) in [tl!("Keyboard Shortcuts"), tl!("Menus"), tl!("Toolbar")].iter().enumerate() {
             if crate::widgets::pill_tab(ui, name, tab == i as u64).clicked() {
                 tab = i as u64;
@@ -219,7 +219,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
         ui.add_space(4.0);
     }
     let mut filter = f.get("filter").and_then(Value::as_str).unwrap_or("").to_string();
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(RichText::new(tl!("Search")).color(t.text_dim));
         crate::widgets::rtl_singleline_edit(ui, &mut filter, 260.0, tl!("command or shortcut"));
     });
@@ -328,11 +328,11 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     let needle = filter.to_ascii_lowercase();
     egui::ScrollArea::vertical().max_height(420.0).id_salt("shortcuts-scroll").show(ui, |ui| {
         let mut last_top = String::new();
-        // The fork's grid cannot place its first row under a right-to-left cursor (x = -inf),
-        // so the table runs in an explicit left-to-right scope; the cells below are emitted in
-        // reading order, and the block itself stays at the scroll area's left edge.
-        let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(egui::Layout::top_down(egui::Align::Min)));
-        egui::Grid::new("shortcut-grid").num_columns(3).spacing([12.0, 3.0]).striped(true).show(&mut grid_ui, |ui| {
+        // `scroll_grid` runs the table in an LTR child seeded from the cursor — never the
+        // parent's full `max_rect`, which under RTL re-anchors rows past the window edge — and
+        // advances the parent cursor from the grid's actual min_rect. The cells below are
+        // emitted in reading order.
+        crate::direction::scroll_grid(ui, "shortcut-grid", 3, egui::vec2(12.0, 3.0), |ui| {
             for (id, label, path, def) in &items {
                 if tab == 1 && crate::tool_shortcuts::tool(id).is_some() {
                     continue;
@@ -482,11 +482,10 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 ui.end_row();
             }
         });
-        ui.advance_cursor_after_rect(grid_ui.min_rect());
     });
     ui.add_space(6.0);
     if tab == 0 {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let has_sel = !selected.is_empty();
             if ui.add_enabled(has_sel, egui::Button::new(tl!("Add Shortcut"))).clicked() {
                 capture = true;
@@ -538,7 +537,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     {
         let (key, with, command) =
             (c["shortcut"].as_str().unwrap_or_default(), c["with"].as_str().unwrap_or_default(), c["command"].as_str().unwrap_or_default());
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             if ui.button(tl!("Accept and Go to Conflict")).on_hover_text(tl!("Take the shortcut from the other command and select it")).clicked() {
                 let holders: Vec<String> = serde_json::from_value(c["holders"].clone()).unwrap_or_else(|_| vec![with.to_string()]);
                 for holder in &holders {
@@ -650,7 +649,7 @@ fn set_row(
     let set_label = if active.is_empty() { defaults.clone() } else { active.clone() };
     let mut export = false;
     let mut summarize = false;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(tl!("Set:"));
         let mut chosen = active.clone();
         let pairs: Vec<(String, &str)> = names.iter().map(|(n, l)| (n.clone(), l.as_str())).collect();
@@ -680,7 +679,7 @@ fn set_row(
     if let Some(name) = new_name.as_mut() {
         let mut create = false;
         let mut cancel = false;
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("Name:"));
             let r = crate::widgets::rtl_singleline_edit(ui, name, 220.0, tl!("set name"));
             create = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -755,4 +754,122 @@ fn save_text(app: &mut PhotocraftApp, suggested: &str, text: String) -> Result<V
         write(&path, text.as_bytes())?;
         Ok(json!({"path": path}))
     })
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::text::direction::Dir;
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Render one migrated row (a `direction::dialog_row` holding a label then a button) under
+    /// `dir` with the real direction flag; return the label's and the button's rects.
+    fn row_probe(dir: Dir) -> (egui::Rect, egui::Rect) {
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(480.0, 200.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                ctx.all_styles_mut(|s| s.right_to_left = rtl);
+            })
+            .build_ui_state(
+                |ui, _f: &mut Map<String, Value>| {
+                    crate::direction::dialog_row(ui, |ui| {
+                        ui.label("row-label");
+                        ui.button("row-button");
+                    });
+                },
+                Map::new(),
+            );
+        h.run_steps(4);
+        let label = h.query_all_by_role_and_label(Role::Label, "row-label").next().expect("the label").rect();
+        let button = h.query_all_by_role_and_label(Role::Button, "row-button").next().expect("the button").rect();
+        (label, button)
+    }
+
+    /// RTL: the row mirrors — the label hugs the right (reading-start) edge and the button
+    /// follows to its left.
+    #[test]
+    fn rtl_dialog_row_anchors_to_the_right() {
+        let (label, button) = row_probe(Dir::Rtl);
+        assert!(label.left() > button.right(), "RTL: the label leads from the right: {label:?} vs {button:?}");
+    }
+
+    /// LTR twin: the label leads from the left, the same order a raw `ui.horizontal` draws.
+    #[test]
+    fn ltr_dialog_row_keeps_order() {
+        let (label, button) = row_probe(Dir::Ltr);
+        assert!(button.left() > label.right(), "LTR: the label leads from the left: {label:?} vs {button:?}");
+    }
+
+    /// The label↔button gap equals the LTR row's gap in RTL too.
+    #[test]
+    fn row_gap_matches_between_ltr_and_rtl() {
+        let (ltr_label, ltr_button) = row_probe(Dir::Ltr);
+        let (rtl_label, rtl_button) = row_probe(Dir::Rtl);
+        let ltr_gap = ltr_button.left() - ltr_label.right();
+        let rtl_gap = rtl_label.left() - rtl_button.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
+    }
+}
+
+#[cfg(test)]
+mod scroll_grid_rtl_tests {
+    use crate::text::direction::Dir;
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The migrated shortcut-table seed: a `scroll_grid` inside a vertical ScrollArea whose
+    /// cells are emitted in reading order via `grid_cells`. Returns the (label, key) cell rects.
+    fn grid_probe(dir: Dir) -> (egui::Rect, egui::Rect) {
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(480.0, 200.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                crate::theme::set_direction(ctx, rtl);
+            })
+            .build_ui(|ui| {
+                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                    crate::direction::scroll_grid(ui, "probe-grid", 2, egui::vec2(12.0, 3.0), |ui| {
+                        crate::direction::grid_cells(ui, |ui| { ui.label("probe-label"); }, |ui| { ui.button("probe-key"); });
+                        ui.end_row();
+                    });
+                });
+            });
+        h.run_steps(4);
+        let label = h.query_all_by_role_and_label(Role::Label, "probe-label").next().expect("the label").rect();
+        let key = h.query_all_by_role_and_label(Role::Button, "probe-key").next().expect("the key cell").rect();
+        (label, key)
+    }
+
+    /// RTL: the label cell leads from the right, the key cell follows to its left.
+    #[test]
+    fn rtl_scroll_grid_mirrors_cell_order() {
+        let (label, key) = grid_probe(Dir::Rtl);
+        assert!(label.left() > key.right(), "RTL: the label leads from the right: {label:?} vs {key:?}");
+    }
+
+    /// LTR twin: the key cell follows the label on the left-to-right row.
+    #[test]
+    fn ltr_scroll_grid_keeps_cell_order() {
+        let (label, key) = grid_probe(Dir::Ltr);
+        assert!(key.left() > label.right(), "LTR: the label leads from the left: {label:?} vs {key:?}");
+    }
+
+    /// The cell gap equals the LTR grid's 12 px column spacing in RTL too.
+    #[test]
+    fn scroll_grid_cell_gap_matches_between_ltr_and_rtl() {
+        let (ltr_label, ltr_key) = grid_probe(Dir::Ltr);
+        let (rtl_label, rtl_key) = grid_probe(Dir::Rtl);
+        let ltr_gap = ltr_key.left() - ltr_label.right();
+        let rtl_gap = rtl_label.left() - rtl_key.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
+        assert!((ltr_gap - 12.0).abs() < 1.5, "the gap is the grid's 12 px spacing: {ltr_gap}");
+    }
 }
