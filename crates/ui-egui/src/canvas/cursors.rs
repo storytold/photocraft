@@ -1,6 +1,6 @@
 use super::tool_input::ToolEvent;
 use super::view_xform::ViewXform;
-use super::{Color32, PhotocraftApp, Pos2, Rect, Stroke, Tool, json, pos2, vec2};
+use super::{Color32, PhotocraftApp, Pos2, Stroke, Tool, json, vec2};
 
 /// Windows' crosshair cursor inverts the pixels under it, so over mid-grey (the pasteboard, many
 /// photos) it vanishes (#737), and the Linux themes' and macOS's differ. Use the same black-and-white
@@ -11,27 +11,6 @@ pub(super) fn visible_crosshair(icon: egui::CursorIcon, painter: &egui::Painter,
         return icon;
     }
     crate::tool_cursor::crosshair(painter, p, 8.0, 2.0)
-}
-
-/// The Pencil's cursor at `doc` (document pixels): the whole-pixel square its dab fills
-/// (`paint::grid_square`), in screen points with its edges on physical pixels (`ppp` = pixels
-/// per point), so it lines up with the pixel grid at any zoom.
-pub(crate) fn pencil_cursor_rect(xf: &ViewXform, doc: [f64; 2], size: f32, ppp: f32) -> Rect {
-    let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(doc[0], doc[1], size);
-    let r = Rect::from_two_pos(xf.to_screen(x0 as f32, y0 as f32), xf.to_screen(x1 as f32, y1 as f32));
-    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    Rect::from_min_max(pos2(snap(r.min.x), snap(r.min.y)), pos2(snap(r.max.x), snap(r.max.y)))
-}
-
-/// Whether an aliased (Pencil) dab of `size` pixels is round rather than its whole
-/// [`pencil_cursor_rect`] square. The dab fills the pixels whose centres lie within its radius of
-/// the grid centre (`paint::grid_center`), so up to 3 px the corner pixels are in and the dab is
-/// a square; from 4 px on they fall outside and it is a disc (#2662).
-pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
-    let n = if size.is_finite() { size.round().clamp(1.0, 100_000.0) } else { 1.0 };
-    let h = n / 2.0;
-    (h - 0.5) * std::f32::consts::SQRT_2 > h
 }
 
 /// Whether a brush-tip circle draws its centre mark.

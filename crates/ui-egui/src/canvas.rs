@@ -61,7 +61,7 @@ pub mod zoom_window_fit;
 
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
-pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
+pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
@@ -1489,29 +1489,11 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
                     _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
                     // The Pencil (and the Eraser in Pencil mode): the outline of the
-                    // whole pixels its dab fills, on the pixel grid. A round tip is a
-                    // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                    // its square, 16 screen pixels at any zoom (#2770).
+                    // whole pixels its dab fills, on the pixel grid (#5262). The
+                    // Block-mode Eraser: its square, 16 screen pixels at any zoom (#2770).
                     _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                        let block = crate::eraser_ui::block_mode(app, tool);
-                        let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
-                        let ppp = painter.ctx().pixels_per_point();
-                        let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
-                        let px = 1.0 / ppp;
-                        let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                        if !block && pencil_tip_is_round(size) {
-                            let r = sq.width() / 2.0;
-                            painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                            painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                        } else {
-                            painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                        }
-                        // Too small to see where it is: the hotspot as well.
-                        if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                            crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
-                        }
-                        egui::CursorIcon::None
+                        let block = crate::eraser_ui::block_mode(app, tool).then(|| crate::eraser_ui::block_size(app));
+                        crate::pencil_cursor::cursor(painter, xf, p, brush, block, cur.show_crosshair_in_brush_tip)
                     }
                     // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                     // traces its outline, turned and flipped with the view; a plain round
