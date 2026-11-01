@@ -149,6 +149,7 @@ pub use dialogs::export_dialog;
 pub use dialogs::file_ui;
 pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
+pub use dialogs::filter_gpu_preview;
 use dialogs::filter_preview_ui;
 pub use dialogs::gallery_ui;
 pub use dialogs::guide_layout_ui;
@@ -165,6 +166,7 @@ pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
 pub(crate) use dialogs::pattern_fill_ui;
+pub use dialogs::preview_session;
 pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
@@ -347,6 +349,9 @@ pub struct PhotocraftApp {
     /// The main canvas's last GPU view of each document while it shows the plain document on
     /// the GPU canvas: the Navigator draws the same texture at its own size (#4518).
     navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
+    /// The main canvas's last GPU view of each document (any preview key): the filter dialog's
+    /// preview window draws from the same texture (`filter_gpu_preview`).
+    pub(crate) canvas_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
@@ -513,6 +518,8 @@ pub struct PhotocraftApp {
     pub(crate) color_range: Option<color_range_ui::Preview>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
     pub(crate) adjust_preview: Option<adjust_preview::AdjustPreview>,
+    /// The filter dialog's GPU preview session (`filter_gpu_preview`).
+    pub(crate) filter_gpu_preview: Option<filter_gpu_preview::FilterGpuPreview>,
     /// The Properties panel's live adjustment-layer drag: its damage region and coverage
     /// (`adjust_preview::live_key`).
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,

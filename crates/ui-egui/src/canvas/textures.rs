@@ -491,6 +491,12 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     {
         damage = Some(crate::adjust_preview::live_switch_damage(app, raw_key, r, visible));
     }
+    // And a filter dialog's GPU preview (with its preview window's part of the document).
+    if damage.is_some()
+        && let Some(r) = seen.filter(|s| s.0 == revision).and_then(|s| crate::filter_gpu_preview::switch_region(app, id, revision, s.1 ^ display_key, raw_key))
+    {
+        damage = Some(crate::filter_gpu_preview::switch_damage(app, raw_key, r, visible));
+    }
     let preview_key = raw_key ^ display_key;
     // The Navigator may draw this texture while it holds the plain document or a drag preview
     // that updates the full texture (not an adjustment preview composited only where the view is).
@@ -540,6 +546,14 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
             let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
             app.perf.record_refresh(&r);
         }
+        if let Some(r) = crate::filter_gpu_preview::uncovered(app, id, raw_key, visible) {
+            let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
+            app.perf.record_refresh(&r);
+            if r.kind == crate::gpu_canvas::REFRESH_OPERATOR_FAILED {
+                crate::filter_gpu_preview::failed(app, id, Some(raw_key));
+                ctx.request_repaint();
+            }
+        }
         // Blend previews keep offscreen pixels untouched until the view reaches them.
         // Use the normal refresh path so CPU fallback and pending redraws stay synchronized.
         damage = crate::blend_preview::uncovered(app, id, revision, raw_key, blend_visible);
@@ -563,9 +577,18 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     let budget_start = crate::gpu_canvas::now_ms();
     gpu_budget(app, &gpu, idx, partial, visible);
     app.perf.stage.damage_ms += crate::gpu_canvas::now_ms() - budget_start;
-    let defer = crate::background_redraw::enabled(app);
+    // A layer operator's refresh is never left to the CPU redraw (it can't draw operators).
+    let defer = crate::background_redraw::enabled(app) && !gpu.has_operators(id);
     let r = gpu.refresh_with(id.0, &doc, if partial { damage } else { None }, display.as_deref(), defer);
     app.perf.gpu_layer_fit = gpu.layer_fit();
+    if r.kind == crate::gpu_canvas::REFRESH_OPERATOR_FAILED {
+        // The GPU couldn't draw the filter preview: the CPU preview takes over next frame. The
+        // texture keeps what it showed (never the layer unfiltered under the preview's key).
+        crate::filter_gpu_preview::failed(app, id, seen.map(|s| s.1 ^ display_key));
+        app.perf.record_refresh(&r);
+        ctx.request_repaint();
+        return true;
+    }
     if r.kind == "lost" || r.kind == crate::gpu_canvas::REFRESH_OVER_BUDGET {
         // The device is gone (`gpu_status` then drops the GPU canvas) or the canvas is over the
         // texture budget: draw this frame on the CPU path.
@@ -674,11 +697,13 @@ pub(super) fn texture_buffer<'a>(
 pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
     // Remove a closed adjustment owner's proxy before collecting its live GPU keys.
     crate::adjust_preview::retain_documents(app);
+    crate::filter_gpu_preview::retain_documents(app);
     if let Some(gpu) = &app.gpu {
         // Keep each document's texture plus its preview textures (filter preview, adjustment proxy);
         // retaining only document ids freed the previews every frame (blank canvas while previewing).
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
+        live.extend(crate::filter_gpu_preview::gpu_keys(app));
         gpu.retain(&live);
     }
     crate::background_redraw::retain(app);
