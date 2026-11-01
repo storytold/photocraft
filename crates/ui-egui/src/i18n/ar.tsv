@@ -3545,3 +3545,30 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+# File › Automate › PDF Presentation (#6637)
+	PDF Presentation…	عرض PDF تقديمي…
+	Multi-Page Document	مستند متعدد الصفحات
+	Output Options	خيارات الإخراج
+	Duplicate	تكرار
+	Save As	حفظ باسم
+	Presentation Options	خيارات العرض التقديمي
+	Advance Every	التقدم كل
+	Seconds	ثانية
+	Loop after Last Page	التكرار بعد الصفحة الأخيرة
+	Acrobat and Adobe Reader only	Acrobat وAdobe Reader فقط
+	Blinds Horizontal	ستائر أفقية
+	Blinds Vertical	ستائر رأسية
+	Box In	مربع إلى الداخل
+	Box Out	مربع إلى الخارج
+	Glitter Down	لمعان إلى الأسفل
+	Glitter Right	لمعان إلى اليمين
+	Glitter Right-Down	لمعان إلى اليمين والأسفل
+	Split Horizontal In	تقسيم أفقي إلى الداخل
+	Split Horizontal Out	تقسيم أفقي إلى الخارج
+	Split Vertical In	تقسيم رأسي إلى الداخل
+	Split Vertical Out	تقسيم رأسي إلى الخارج
+	Wipe Down	مسح إلى الأسفل
+	Wipe Left	مسح إلى اليسار
+	Wipe Right	مسح إلى اليمين
+	Wipe Up	مسح إلى الأعلى
+	Uses the saved file: save {name} first to include its latest changes	يُستخدم الملف المحفوظ: احفظ {name} أولًا لتضمين أحدث تغييراته

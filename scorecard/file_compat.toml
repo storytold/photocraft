@@ -73,7 +73,7 @@ id = "FILE-215-10"
 target = "Multi-page PDF save, PDF presentation, layer comps to PDF, vector/text output, PDF import"
 status = "partial"
 issue = 215
-note = "io pdf.rs: Save As / Save a Copy / CLI write one flattened RGB/Gray/CMYK page with ICC (#3401); print PDFs in print_cmds. Multi-page save, presentation, comps, vector/text output and PDF import (#2541) remain"
+note = "io pdf.rs: PdfWriter writes any number of flattened RGB/Gray/CMYK pages with their ICC, ZIP or JPEG; Save As / Save a Copy / CLI write one (#3401), Artboards to PDF one per board, File › Automate › PDF Presentation one per file as a Multi-Page Document or a full-screen Presentation with timing, loop and transitions (#6637); print PDFs in print_cmds. PDF Presentation captions, comps, vector/text output and PDF import (#2541) remain"
 
 [[item]]
 id = "FILE-215-11"

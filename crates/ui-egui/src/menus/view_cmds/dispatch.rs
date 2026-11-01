@@ -222,6 +222,7 @@ fn wraps(id: &str) -> bool {
             | "file.automate.batch"
             | "file.scripts.imageProcessor"
             | "file.scripts.loadFilesIntoStack"
+            | "file.automate.pdfPresentation"
             | "file.automate.photomerge"
             | "file.automate.mergeToHdrPro"
             | "file.automate.lensCorrection"

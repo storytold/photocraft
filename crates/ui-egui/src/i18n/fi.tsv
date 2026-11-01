@@ -4770,3 +4770,27 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Monisivuinen asiakirja
+	Output Options	Tulostusasetukset
+	Presentation Options	Esityksen asetukset
+	Advance Every	Siirry eteenpäin
+	Seconds	sekunnin välein
+	Loop after Last Page	Toista viimeisen sivun jälkeen
+	Acrobat and Adobe Reader only	Vain Acrobat ja Adobe Reader
+	Blinds Horizontal	Kaihtimet vaakasuunnassa
+	Blinds Vertical	Kaihtimet pystysuunnassa
+	Box In	Laatikko sisään
+	Box Out	Laatikko ulos
+	Glitter Down	Kimallus alas
+	Glitter Right	Kimallus oikealle
+	Glitter Right-Down	Kimallus oikealle alas
+	Split Horizontal In	Jako vaakasuunnassa sisään
+	Split Horizontal Out	Jako vaakasuunnassa ulos
+	Split Vertical In	Jako pystysuunnassa sisään
+	Split Vertical Out	Jako pystysuunnassa ulos
+	Wipe Down	Pyyhkäisy alas
+	Wipe Left	Pyyhkäisy vasemmalle
+	Wipe Right	Pyyhkäisy oikealle
+	Wipe Up	Pyyhkäisy ylös
+	Uses the saved file: save {name} first to include its latest changes	Käyttää tallennettua tiedostoa: tallenna ensin {name}, jotta viimeisimmät muutokset tulevat mukaan
