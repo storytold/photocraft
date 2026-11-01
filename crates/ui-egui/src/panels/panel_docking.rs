@@ -1176,6 +1176,7 @@ struct PanelContent<'a> {
     commands: &'a mut Vec<(&'static str, Value)>,
 }
 
+/// Route docked and floating panels through their shared options menus before adding common dock actions.
 fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
     match panel {
         "layers" => {
@@ -1204,6 +1205,10 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
         }
         "histogram" => {
             crate::histogram_panel::panel_menu(app, ui);
+            ui.separator();
+        }
+        "info" => {
+            crate::info_panel_options::panel_menu(app, ui);
             ui.separator();
         }
         _ => {}

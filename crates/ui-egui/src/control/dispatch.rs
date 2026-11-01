@@ -547,10 +547,12 @@ struct PanelSet {
     dock_tabs: Option<crate::state::DockTabs>,
     dock: Option<crate::dock::DockLayout>,
     color_panel: Option<crate::state::ColorPanelState>,
+    info_panel: Option<crate::info_panel_options::InfoPanelState>,
     dock_width: Option<f64>,
 }
 
 impl PanelSet {
+    /// Validate all panel patches against current state before any part of ui.set is applied.
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
         Ok(Self {
             // The Histogram panel: its options, the dragged tonal range ([from, to] levels or
@@ -568,6 +570,8 @@ impl PanelSet {
             dock: whole_object(&app.ui.dock, p.get("dock"), "dock")?,
             // Which chip the Color panel edits.
             color_panel: merged_object(&app.ui.color_panel, p.get("colorPanel"), "colorPanel")?,
+            // The Info panel's readouts, kept with the preferences.
+            info_panel: merged_object(&app.ui.info_panel, p.get("infoPanel"), "infoPanel")?,
             dock_width: f32_field(p, "dockWidth")?,
         })
     }
@@ -636,9 +640,13 @@ impl PanelSet {
         }
     }
 
+    /// Apply validated color/Info options and request the bounded dock width after preflight succeeds.
     fn apply_color_and_width(&mut self, app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(v) = self.color_panel.take() {
             app.ui.color_panel = v;
+        }
+        if let Some(v) = self.info_panel.take() {
+            crate::info_panel_options::set_options(app, v);
         }
         // Right dock width in points (clamped to the dock's 250..=520 range), applied next frame.
         if let Some(w) = self.dock_width {
@@ -849,12 +857,12 @@ fn picker_param(p: &Value) -> std::result::Result<Option<Option<[f32; 2]>>, Stri
 }
 
 /// brushSize rides the journaled `tools.setBrush` command (#744). Numeric values
-/// are validated here so the command cannot fail after other fields were
+/// must fit its finite f32 storage so the command cannot fail after other fields were
 /// applied; non-numeric values keep the API's historical silent no-op.
 fn brush_size_param(p: &Value) -> std::result::Result<Option<f64>, String> {
     let Some(size) = p.get("brushSize").and_then(Value::as_f64) else { return Ok(None) };
-    if !size.is_finite() || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
-        return Err(format!("brushSize must be finite and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
+    if !f32_range(&size) || size > f64::from(photocraft_paint::MAX_BRUSH_SIZE) {
+        return Err(format!("brushSize must be finite as f32 and at most {} px", photocraft_paint::MAX_BRUSH_SIZE));
     }
     Ok(Some(size))
 }

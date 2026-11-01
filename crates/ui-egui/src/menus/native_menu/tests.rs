@@ -485,3 +485,40 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     app.distort.gallery = None;
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
 }
+
+/// State-only modal transitions update native enabled rows; raced native clicks stay blocked.
+#[test]
+fn info_panel_options_blocks_native_edits_and_refreshes_on_state_changes() {
+    let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut app = app(true);
+    let ctx = egui::Context::default();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced: synced.clone(), events: vec![Event::Click("image.imageRotation.90cw".into())] })));
+    frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+    assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    app.ui.info_panel_dialog = Some(app.ui.info_panel.clone());
+    // No pointer/key event: the dialog-presence hash must refresh the native menu.
+    frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+    assert!(!synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    assert!(!synced.borrow().last().unwrap().find("edit.undo").unwrap().enabled);
+    let mut raw = egui::RawInput::default();
+    app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+    frame(&ctx, raw, |ui| {
+        run(&mut app, ui.ctx());
+        sync(&mut app, ui.ctx());
+    });
+    assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.journal.len(), journal);
+    app.ui.info_panel_dialog = None;
+    frame(&ctx, egui::RawInput::default(), |ui| sync(&mut app, ui.ctx()));
+    assert!(synced.borrow().last().unwrap().find("image.imageRotation.90cw").unwrap().enabled);
+    app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced, events: vec![Event::Click("image.imageRotation.90cw".into())] })));
+    let mut raw = egui::RawInput::default();
+    app.services.native_menu.as_mut().unwrap().raw_input(&mut raw);
+    frame(&ctx, raw, |ui| run(&mut app, ui.ctx()));
+    assert_eq!(app.session.active().unwrap().doc.size, photocraft_doc::Size::new(48, 64));
+}

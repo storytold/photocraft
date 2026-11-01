@@ -479,6 +479,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Reconcile temporary tools and modal ownership before allowing application shortcuts to reach the document.
 fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);
@@ -493,6 +494,11 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
     // below it covers the canvas, so canvas zoom keys are blocked too.
     if app.camera_raw.is_some() {
+        return false;
+    }
+    // Info Panel Options owns its keyboard, including Escape; document shortcuts must not
+    // change the canvas or consume the dialog's cancellation key underneath the modal.
+    if app.ui.info_panel_dialog.is_some() {
         return false;
     }
     // A foreground save (Save in Background off, #6207) blocks the app until the file is written;
