@@ -280,6 +280,11 @@ mod tests {
         paste(&mut app);
         assert!(app.session.clipboard.is_none(), "the unchanged image did not install a pixel clip");
         assert!(app.session.path_clipboard.is_some(), "and the fresh path clip survived");
+        // The paste inserted: paste at another centre and the replaced "Pasted Path" follows.
+        app.ui.selected_path = None;
+        app.run("edit.paste", json!({"center": [30.0, 30.0]})).unwrap();
+        let anchors: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
+        assert_eq!(anchors[0], photocraft_geom::Point::new(25.0, 25.0), "the paste re-centred the component on (30, 30)");
         drop(a);
     }
 

@@ -71,10 +71,10 @@ impl PhotocraftApp {
             }
         };
         // Malformed dimensions are rejected with checked arithmetic, never an overflowing
-        // multiply on input-derived numbers.
+        // multiply on input-derived numbers; beyond-i32 sizes would wrap the cast to Rect.
         let image = image.filter(|(w, h, bytes)| {
             let rgba = u64::from(*w).checked_mul(u64::from(*h)).and_then(|n| n.checked_mul(4));
-            *w > 0 && *h > 0 && rgba == Some(bytes.len() as u64)
+            *w > 0 && *h > 0 && *w <= i32::MAX as u32 && *h <= i32::MAX as u32 && rgba == Some(bytes.len() as u64)
         });
         let Some((w, h, bytes)) = image else {
             if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
