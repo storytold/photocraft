@@ -761,7 +761,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// Pointer input for the Crop tool. Returns true when the event was its.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
     if app.ui.tool != Tool::Crop {
-        app.crop.drag = None;
+        end_drag(app);
         return false;
     }
     let p = match ev {
@@ -863,7 +863,9 @@ fn release(app: &mut PhotocraftApp, drag: CropDrag) {
     let ok = app.ui.crop_rect.is_some_and(size_ok);
     // A click outside the untouched default frame (no turn) leaves it the default.
     let changed = !matches!(drag, CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. } if from == angle(app))
-        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect));
+        && !matches!(drag, CropDrag::MoveImage { rect, .. } if app.ui.crop_rect == Some(rect))
+        // A press that never moved draws nothing: the frame shown is still the previous one.
+        && !matches!(drag, CropDrag::Draw { anchor, cur, .. } if anchor == cur);
     if ok && changed {
         app.crop.default_frame = false;
     }
@@ -873,6 +875,25 @@ fn release(app: &mut PhotocraftApp, drag: CropDrag) {
         restore_frame(app, drag);
     }
     push_press_step(app);
+}
+
+/// Another tool was picked while a drag on the frame is held (a tool key, #9223): the gesture ends
+/// where the pointer last moved it, as a release there would, so a box drawn over the untouched
+/// default frame counts as drawn and leaving the tool commits it.
+pub fn end_drag(app: &mut PhotocraftApp) {
+    let Some(drag) = app.crop.drag.take() else { return };
+    let tool = std::mem::replace(&mut app.ui.tool, Tool::Crop);
+    release(app, drag);
+    crate::crop_mode::sync_frame(app);
+    app.ui.tool = tool;
+}
+
+/// [`end_drag`] once another tool is current, except while the pen's eraser end stands in for the
+/// Crop tool (`stylus`): the gesture goes on when the tip comes back.
+pub fn end_drag_on_leave(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Crop && app.stylus.tool_before_eraser != Some(Tool::Crop) {
+        end_drag(app);
+    }
 }
 
 /// On release: the frame state at the press becomes a box Undo step when the gesture changed it.

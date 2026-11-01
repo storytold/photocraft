@@ -1910,6 +1910,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
     // A tab switched this frame drops the other document's pending crop (#1918).
     crate::crop_ui::cancel_stale(app);
+    // A tool picked mid-drag ends the crop gesture before the frame sees the switch, which would
+    // otherwise drop the untouched default frame under the box being drawn (#9223). The Hand and
+    // Zoom never reach `tool_event`, so this is the one place that sees every tool.
+    crate::crop_ui::end_drag_on_leave(app);
     crate::crop_ui::ensure_frame(app);
     let mut drawing = crate::crop_ui::active(app);
     if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
