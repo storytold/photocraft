@@ -1701,3 +1701,59 @@ fn a_shifted_merged_clip_is_placed_inside_the_destination_board() {
     assert_eq!(out["offset"], json!([20, 0]));
     assert_eq!(board_of_active(&s), Some(d), "inside board D");
 }
+
+/// A pasted layer centred just left of a board stays off it (#10538 review): the placement
+/// middle rounds down, so content spanning -4..3 (middle -0.5) is left of a board starting at
+/// x = 0. Truncating toward zero put it at 0, and the board took it in and clipped it.
+#[test]
+fn content_centred_just_left_of_a_board_is_not_placed_in_it() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+    let b = s.execute("layer.new.artboard", json!({"rect": [0, 0, 20, 20], "name": "B"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let place = |s: &mut Session, r: Rect| {
+        s.edit("place", |doc, active| {
+            let fmt = doc.pixel_format();
+            let mut l = Layer::raster("L", fmt);
+            l.surface_mut().unwrap().fill_rect(r, &[1.0, 0.0, 0.0, 1.0]);
+            let id = crate::layer_place::insert_new(doc, Some(b), l, crate::layer_place::Place::Auto);
+            *active = Some(id);
+            Ok(doc.artboard_of(id))
+        })
+        .unwrap()
+    };
+    assert_eq!(place(&mut s, Rect::new(-4, 5, 3, 10)), None, "middle -0.5: left of B");
+    assert_eq!(place(&mut s, Rect::new(-3, 5, 4, 10)), Some(b), "middle 0.5: on B");
+    assert_eq!(crate::layer_place::centre(Rect::new(-4, -4, 3, 3)), (-1, -1));
+    assert_eq!(crate::layer_place::centre(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)), (-1, -1));
+}
+
+/// In a document without artboards nothing changes (#10538 review): Paste in the same document
+/// keeps the canvas position, and the clip has no source board.
+#[test]
+fn paste_in_a_document_without_artboards_keeps_the_canvas_position() {
+    let mut s = session();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert_eq!(s.clipboard.as_ref().unwrap().board, None);
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["offset"], json!([0, 0]));
+    assert_eq!(active_bounds(&s), Rect::new(10, 10, 50, 30));
+}
+
+/// Pasting onto a smaller board keeps the same offset from the board's origin; what falls past
+/// the smaller board's edge is clipped by it, as anything on a board is (#10538 review).
+#[test]
+fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest() {
+    let (mut s, red, _a, _b) = two_boards();
+    // Board S at (300, 20), 10×10: smaller than the 20×20 red square.
+    let small = s.execute("layer.new.artboard", json!({"rect": [300, 20, 10, 10], "name": "S"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": small.0})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["offset"], json!([290, 10]), "S's origin minus A's");
+    assert_eq!(board_of_active(&s), Some(small));
+    assert_eq!(active_bounds(&s), Rect::new(300, 20, 320, 40), "the layer keeps all its pixels");
+    let px = |x: i32, y: i32| photocraft_compose::render(&s.active().unwrap().doc, Rect::new(x, y, x + 1, y + 1)).px[0];
+    assert!(px(305, 25)[0] > 0.99 && px(305, 25)[1] < 0.01, "shown inside S");
+    assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
+}

@@ -321,9 +321,8 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
 /// was copied (a pasted board is placed as a board, not on another one).
 fn source_board(d: &crate::DocState, merged: bool, bounds: Rect) -> Option<(LayerId, Rect)> {
     let board = if merged {
-        // The true middle, edges added before halving: halving each first rounds 9..11 to 9.
-        let mid = |a: i32, b: i32| i32::try_from((i64::from(a) + i64::from(b)) / 2).ok();
-        let (cx, cy) = (mid(bounds.x0, bounds.x1)?, mid(bounds.y0, bounds.y1)?);
+        // The same middle a pasted layer is placed by, so a clip leaves and joins boards alike.
+        let (cx, cy) = crate::layer_place::centre(bounds);
         d.doc.artboards().into_iter().rev().find(|(_, _, b)| b.rect.contains(cx, cy)).map(|(id, _, _)| id)?
     } else {
         let several = multi_copy_ids(d);
@@ -344,8 +343,9 @@ fn source_board(d: &crate::DocState, merged: bool, bounds: Rect) -> Option<(Laye
 /// board's layer selected puts it at the same spot there, instead of where it was on the first
 /// board (outside the second, which hid it) or in the middle of the view. Only within one
 /// document, and not for Paste Into / Outside (`"clampToCanvas": false`), which centre on the
-/// selection. `active` is the layer the paste lands beside; the board is its board.
-pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, p: &Value) -> Option<(i32, i32)> {
+/// selection. `active` is the layer the paste lands beside; the board is its board. Returns the
+/// shift and that board, which the pasted layer then joins ([`join_board`]).
+pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, p: &Value) -> Option<(i32, i32, LayerId)> {
     if p.get("clampToCanvas").and_then(Value::as_bool) == Some(false) || clip.source != Some(doc.id) {
         return None;
     }
@@ -360,12 +360,34 @@ pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, 
     // place instead of one on a board it isn't on. A layer inside a locked board is placed by its
     // own rules and still lands on the board.
     let board = doc.layer(to)?;
-    let k = board.locks;
-    if active == to && (k.all || k.pixels || k.transparency || k.position) {
+    if active == to && !takes_pastes(board) {
         return None;
     }
-    let dst = doc.layer(to)?.artboard()?.rect;
-    Some((dst.x0.checked_sub(src.x0)?, dst.y0.checked_sub(src.y0)?))
+    let dst = board.artboard()?.rect;
+    Some((dst.x0.checked_sub(src.x0)?, dst.y0.checked_sub(src.y0)?, to))
+}
+
+/// Does `board` take a pasted layer into it? Not with a lock that refuses editing it
+/// (`layer_place`'s rule for layers edited right after they are made).
+fn takes_pastes(board: &Layer) -> bool {
+    let k = board.locks;
+    !(k.all || k.pixels || k.transparency || k.position)
+}
+
+/// Puts pasted layer `id` on `board`, on top of its stack, when placement left it outside. A paste
+/// moved onto a board belongs to it even when its middle falls past a smaller board's edge; the
+/// board clips what lies beyond, as it clips anything on it (#10538 review).
+fn join_board(doc: &mut Document, id: LayerId, board: LayerId) {
+    if doc.artboard_of(id) == Some(board) || !doc.layer(board).is_some_and(takes_pastes) {
+        return;
+    }
+    let Some(mut layer) = doc.remove(id) else { return };
+    // On top of the board's stack nothing is above it to clip to.
+    layer.clipped = false;
+    match doc.layer_mut(board).and_then(Layer::children_mut) {
+        Some(children) => children.push(layer),
+        None => doc.layers.push(layer),
+    }
 }
 
 /// Copy the targeted layer mask (`"target":"mask"`, #2928) or smart-filter mask
@@ -466,9 +488,11 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
-    let (dx, dy) = board_shift(&clip, &d.doc, d.active_layer, p).unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
+    let shift = board_shift(&clip, &d.doc, d.active_layer, p);
+    let board = shift.map(|(_, _, b)| b);
+    let (dx, dy) = shift.map(|(dx, dy, _)| (dx, dy)).unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
     if let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode)) {
-        return paste_layers(s, layers, dx, dy);
+        return paste_layers(s, layers, dx, dy, board);
     }
     let moved = shifted(&clip.surface, dx, dy);
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
@@ -477,6 +501,9 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
         let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
         *crate::pixels_mut(&mut l)? = surf;
         let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
+        if let Some(b) = board {
+            join_board(doc, id, b);
+        }
         *active = Some(id);
         doc.selection = None;
         Ok(id)
@@ -487,8 +514,9 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 
 /// Paste of a whole copied layer ([`whole_layer`]): fresh copies (a group's children too),
 /// converted to the document's colour, moved as the pixels would be, above the active layer. A pasted smart object gets its
-/// own contents, independent of the copied one (as across documents).
-fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<Value> {
+/// own contents, independent of the copied one (as across documents). Moved onto `board` (see
+/// [`board_shift`]), they join it.
+fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32, board: Option<LayerId>) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut copies = layers.clone();
     for l in &mut copies.layers {
@@ -520,9 +548,18 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
         doc.metadata.psd_global_blocks.extend(linked);
         // The first pasted layer goes where a new layer would; the rest stack above it.
         let mut place = crate::layer_place::Place::AutoEditable;
+        let mut pasted = Vec::with_capacity(copies.layers.len());
         for l in copies.layers {
-            *active = Some(crate::layer_place::insert_new(doc, *active, l, place));
+            let id = crate::layer_place::insert_new(doc, *active, l, place);
+            pasted.push(id);
+            *active = Some(id);
             place = crate::layer_place::Place::Above;
+        }
+        // Bottom to top, so they keep their order on the board.
+        if let Some(b) = board {
+            for id in pasted {
+                join_board(doc, id, b);
+            }
         }
         crate::cmd::layer_multi_cmds::check_group_depth(doc, "Paste")?;
         doc.selection = None;

@@ -74,6 +74,16 @@ pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer,
     id
 }
 
+/// The pixel holding the middle of `bounds`, which decides the board content is on: a new or
+/// pasted layer, or one the Move tool drops (auto-nesting). The edges are added before halving
+/// (halving each first put 9..11 at 9) and the sum is floored, not truncated toward zero (which
+/// put -4..3, whose middle is -0.5, at 0, inside a board starting there); in i64, so it can't
+/// overflow. The middle of two i32 edges is itself an i32.
+pub(crate) fn centre(bounds: photocraft_geom::Rect) -> (i32, i32) {
+    let mid = |a: i32, b: i32| i32::try_from((i64::from(a) + i64::from(b)).div_euclid(2)).unwrap_or(a);
+    (mid(bounds.x0, bounds.x1), mid(bounds.y0, bounds.y1))
+}
+
 /// Does the group `target` at depth `depth` (its path length) take a new `layer` as its top
 /// child? An open group or an artboard does, locked or not (Photoshop puts a new layer inside a
 /// group locked with Lock All), unless nesting would pass [`MAX_GROUP_DEPTH`]. An artboard
@@ -83,10 +93,8 @@ fn takes_new_layers(target: &Layer, depth: usize, layer: &Layer) -> bool {
     let LayerContent::Group(g) = &target.content else { return false };
     let on_board = |rect: photocraft_geom::Rect| {
         crate::layer_multi_cmds::layer_bounds(layer).is_none_or(|b| {
-            // The true middle, edges added before halving: halving each first rounds 19..21 to
-            // 19, and a paste moved onto a board starting at 20 was turned away from it (#10538).
-            let mid = |a: i32, b: i32| i32::try_from((i64::from(a) + i64::from(b)) / 2).unwrap_or(a);
-            rect.contains(mid(b.x0, b.x1), mid(b.y0, b.y1))
+            let (cx, cy) = centre(b);
+            rect.contains(cx, cy)
         })
     };
     let open = match &g.artboard {
