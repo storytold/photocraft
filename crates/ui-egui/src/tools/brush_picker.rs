@@ -419,13 +419,18 @@ fn gear_menu_body(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPres
     ui.separator();
     // What a preset's card shows: a checkbox per part. At least one stays on — clicking the
     // last checked box does nothing, since an empty card would show no brush at all.
-    let on = [st.show_name, st.show_stroke, st.show_tip].into_iter().filter(|b| *b).count();
-    for (flag, label) in [(&mut st.show_name, tl!("Brush Name")), (&mut st.show_stroke, tl!("Brush Stroke")), (&mut st.show_tip, tl!("Brush Tip"))] {
-        let was = *flag;
-        if ui.checkbox(flag, label).changed() && was && on == 1 {
-            *flag = true;
+    let mut parts = [st.show_name, st.show_stroke, st.show_tip];
+    let labels = [tl!("Brush Name"), tl!("Brush Stroke"), tl!("Brush Tip")];
+    for (i, label) in labels.iter().enumerate() {
+        if crate::menu_keys::menu_row(ui, label, None, parts[i], true).clicked() {
+            parts[i] = !parts[i];
+            let on = parts.iter().filter(|b| **b).count();
+            if on == 0 {
+                parts[i] = true;
+            }
         }
     }
+    (st.show_name, st.show_stroke, st.show_tip) = (parts[0], parts[1], parts[2]);
     ui.separator();
     if crate::menu_keys::menu_row(ui, tl!("Import Brushes…"), None, false, true).clicked() {
         picks.push(Pick::Import);
