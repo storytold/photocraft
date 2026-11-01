@@ -3393,6 +3393,40 @@ fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
     assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
 }
 
+/// Photoshop clamps Wave's wavelengths and amplitudes to 1..999, but `filter.distort.wave`
+/// takes a minimum wavelength of 1..998, a maximum of 2..999 and a minimum amplitude of 1..998.
+/// A value the command rejects keeps the Photoshop step on import and refuses it on export,
+/// rather than mapping a step that fails when it plays; a minimum above its maximum, which the
+/// command takes, maps and plays (#10605).
+#[test]
+fn wave_values_the_command_rejects_are_kept_or_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("WLMn", 999), ("WLMn", 5000), ("WLMx", 1), ("WLMx", 0), ("AmMn", 999), ("AmMn", 1200)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Integer(n)))), "{key} {n} was mapped");
+    }
+    for (param, n) in [("wavelengthMin", 999), ("wavelengthMax", 1), ("amplitudeMin", 999)] {
+        assert!(export_item("filter.distort.wave", &json!({ param: n }), "S").is_none(), "{param} {n} exported");
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    let plays = [
+        desc("null").with("WLMn", D::Integer(998)),
+        desc("null").with("WLMx", D::Integer(2)),
+        desc("null").with("AmMn", D::Integer(998)),
+        desc("null").with("WLMn", D::Integer(200)).with("WLMx", D::Integer(100)),
+        desc("null").with("AmMn", D::Integer(40)).with("AmMx", D::Integer(20)),
+    ];
+    for (k, d) in plays.into_iter().enumerate() {
+        let (id, p) = one_step(distort("Wave", d));
+        assert!(export_item(&id, &p, "S").is_some(), "{p} refused");
+        let name = format!("W{k}");
+        s.actions.list.push(Action::new(&name, vec![(id, p.clone())]));
+        let played = s.execute("actions.play", json!({"action": name})).unwrap();
+        assert_eq!(played["ran"], 1, "{p}: {played}");
+    }
+}
+
 /// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
 /// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
 #[test]

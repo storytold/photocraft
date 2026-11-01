@@ -152,12 +152,22 @@ const WAVE: &[Key] = &[
 
 const WAVE_UNDEFINED: &[(&str, &str)] = &[("RptE", "repeat"), ("WrpA", "wrap")];
 
+/// `filter.distort.wave`'s own limits where they are narrower than Photoshop's 1..999. A value
+/// Photoshop plays but the command rejects keeps the step on import and refuses it on export,
+/// rather than mapping a step that fails when it plays.
+const WAVE_COMMAND_LIMITS: &[(&str, f64, f64)] = &[("wavelengthMin", 1.0, 998.0), ("wavelengthMax", 2.0, 999.0), ("amplitudeMin", 1.0, 998.0)];
+
+/// Whether every value `p` sets for a key of [`WAVE_COMMAND_LIMITS`] is within the command's limits.
+fn wave_command_takes(p: &Map<String, Value>) -> bool {
+    WAVE_COMMAND_LIMITS.iter().all(|(param, min, max)| p.get(*param).and_then(Value::as_f64).is_none_or(|n| (*min..=*max).contains(&n)))
+}
+
 /// Wave (`Wave`). The command has no horizontal or vertical scale, so a step that scales the
 /// waves below 100 %, or by a fraction (saved back as 100), keeps the Photoshop step. Missing undefined areas are Photoshop's Repeat
 /// Edge Pixels (the command's own default is wrap); `RndS` keeps its 32 bits as the seed.
 pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
-    let Some(mut m) = keys_map(d, WAVE, &["SclH", "SclV", "UndA", "RndS"]) else { return unsupported };
+    let Some(mut m) = keys_map(d, WAVE, &["SclH", "SclV", "UndA", "RndS"]).filter(wave_command_takes) else { return unsupported };
     if ["SclH", "SclV"].iter().any(|k| setting(d, k, num, 100.0).is_none_or(|n| n.fract() != 0.0 || n.clamp(1.0, 100.0) != 100.0)) {
         return unsupported;
     }
@@ -189,6 +199,9 @@ pub(super) fn wave_to(_: &str, p: &Value) -> Option<Descriptor> {
         ("amplitudeMin", json!(5)),
         ("amplitudeMax", json!(35)),
     ];
+    if !p.as_object().is_none_or(wave_command_takes) {
+        return None;
+    }
     let d = keys_to(p, WAVE, &ours, &["undefinedAreas", "seed"])?;
     let undefined = match p.get("undefinedAreas") {
         None | Some(Value::Null) => "WrpA",
