@@ -14,6 +14,10 @@ use photocraft_doc::Document;
 
 use crate::{ExportResult, IoError};
 
+mod selection;
+mod shapes;
+mod text;
+
 /// The image placed on a page: 8-bit interleaved samples, 1 (gray), 3 (RGB) or 4 (CMYK,
 /// 1 = full ink), with the profile it was authored in if any.
 pub struct PrintImage {
@@ -42,7 +46,7 @@ pub struct PrintPage {
     pub label: Option<String>,
 }
 
-fn pdf_string(s: &str) -> String {
+pub(super) fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
         match c {
@@ -105,6 +109,10 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
+    print_pdf_with_vectors(page, "", &selection::SelectionFont::default())
+}
+
+fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &selection::SelectionFont) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -116,18 +124,20 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     let img = &page.image;
     let (pw, ph) = page.paper;
     let (x, y, w, h) = page.rect;
+    let selection_base = if img.icc.is_some() { 8 } else { 7 };
     // 1 catalog, 2 pages, 3 page, 4 contents, 5 image, 6 font, 7 ICC (optional).
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
     obj(
         &mut out,
         format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /FSelect {selection_base} 0 R >> >> /Contents 4 0 R >>"
         )
         .as_bytes(),
     );
     // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
     let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n");
+    content.push_str(vectors);
     content.push_str(&marks_ops(page.marks, page.rect));
     let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
     let pad = if any_marks { 30.0 } else { 6.0 };
@@ -167,6 +177,9 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
         body.extend_from_slice(b"\nendstream");
         obj(&mut out, &body);
     }
+    for body in selection_font.objects(selection_base) {
+        obj(&mut out, &body);
+    }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
     for o in &offsets {
@@ -193,7 +206,45 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     let fmt = doc.pixel_format();
     let n = fmt.channels().max(1);
     let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
-    let surface = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
+    // compositing. Stop at the first unsupported visible layer, since it may depend on the
+    // backdrop (adjustments, blend modes, masks, effects, or clipping).
+    let selection_font = selection::SelectionFont::new(doc.layers.iter().filter_map(|layer| match &layer.content {
+        photocraft_doc::LayerContent::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    }));
+    let mut backdrop = doc.clone();
+    let mut vector_ops = Vec::new();
+    if doc.icc_profile.is_none() {
+        for layer in backdrop.layers.iter_mut().rev() {
+            if !layer.visible {
+                continue;
+            }
+            if layer.blend != photocraft_color::BlendMode::Normal
+                || layer.opacity != 1.0
+                || layer.fill_opacity != 1.0
+                || layer.clipped
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || (layer.effects.enabled && !layer.effects.items.is_empty())
+                || layer.excluded_channels != 0
+                || layer.blend_if != Default::default()
+                || layer.advanced != Default::default()
+                || layer.video.is_some()
+            {
+                break;
+            }
+            let ops = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => shapes::shape_path(shape, doc.mode),
+                photocraft_doc::LayerContent::Text(text_layer) => text::text_ops_with_font(text_layer, doc.mode, doc.resolution_dpi, &selection_font),
+                _ => break,
+            };
+            let Some(ops) = ops else { break };
+            layer.visible = false;
+            vector_ops.push(ops);
+        }
+    }
+    let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
     let values = surface.read_region(canvas);
     let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
@@ -214,7 +265,13 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf(&page), warnings })
+    let scale = 72.0 / dpi;
+    let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
+    for ops in vector_ops.iter().rev() {
+        vectors.push_str(ops);
+    }
+    vectors.push_str("Q\n");
+    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors, &selection_font), warnings })
 }
 
 #[cfg(test)]
