@@ -106,7 +106,7 @@ pub(crate) fn save_to(app: &mut PhotocraftApp, path: String) -> Result<Value, St
 pub(crate) struct Ui {
     prompt: Option<(String, Value)>,
     skip_once: bool,
-    approved_replace: bool,
+    pub(crate) approved_replace: bool,
     exit_approved: bool,
     cancel_workspace: Option<String>,
     pub(crate) parked_view: Option<Value>,
