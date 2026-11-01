@@ -14,6 +14,7 @@ use photocraft_doc::Document;
 
 use crate::{ExportResult, IoError};
 
+mod selection;
 mod shapes;
 mod text;
 
@@ -108,10 +109,10 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
 
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
-    print_pdf_with_vectors(page, "")
+    print_pdf_with_vectors(page, "", &selection::SelectionFont::default())
 }
 
-fn print_pdf_with_vectors(page: &PrintPage, vectors: &str) -> Vec<u8> {
+fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &selection::SelectionFont) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -123,13 +124,14 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str) -> Vec<u8> {
     let img = &page.image;
     let (pw, ph) = page.paper;
     let (x, y, w, h) = page.rect;
+    let selection_base = if img.icc.is_some() { 8 } else { 7 };
     // 1 catalog, 2 pages, 3 page, 4 contents, 5 image, 6 font, 7 ICC (optional).
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
     obj(
         &mut out,
         format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /FSelect {selection_base} 0 R >> >> /Contents 4 0 R >>"
         )
         .as_bytes(),
     );
@@ -175,6 +177,9 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str) -> Vec<u8> {
         body.extend_from_slice(b"\nendstream");
         obj(&mut out, &body);
     }
+    for body in selection_font.objects(selection_base) {
+        obj(&mut out, &body);
+    }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
     for o in &offsets {
@@ -204,6 +209,10 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
     // compositing. Stop at the first unsupported visible layer, since it may depend on the
     // backdrop (adjustments, blend modes, masks, effects, or clipping).
+    let selection_font = selection::SelectionFont::new(doc.layers.iter().filter_map(|layer| match &layer.content {
+        photocraft_doc::LayerContent::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    }));
     let mut backdrop = doc.clone();
     let mut vector_ops = Vec::new();
     if doc.icc_profile.is_none() {
@@ -227,7 +236,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
             }
             let ops = match &layer.content {
                 photocraft_doc::LayerContent::Shape(shape) => shapes::shape_path(shape, doc.mode),
-                photocraft_doc::LayerContent::Text(text_layer) => text::text_ops(text_layer, doc.mode, doc.resolution_dpi),
+                photocraft_doc::LayerContent::Text(text_layer) => text::text_ops_with_font(text_layer, doc.mode, doc.resolution_dpi, &selection_font),
                 _ => break,
             };
             let Some(ops) = ops else { break };
@@ -262,7 +271,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
         vectors.push_str(ops);
     }
     vectors.push_str("Q\n");
-    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors), warnings })
+    Ok(ExportResult { bytes: print_pdf_with_vectors(&page, &vectors, &selection_font), warnings })
 }
 
 #[cfg(test)]

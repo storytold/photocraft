@@ -132,8 +132,10 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
     assert!(content.contains("0 0 1 rg"));
     assert!(content.contains("BT"));
     assert!(content.contains("3 Tr"));
-    assert!(content.contains("/F1"));
-    assert!(content.contains("(Vector PDF) Tj"));
+    assert!(content.contains("/FSelect"));
+    assert!(has(&out.bytes, "/ToUnicode"));
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Vector PDF");
     assert!(content.contains("ET"));
     assert!(content.contains("EMC"));
     assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
@@ -157,8 +159,8 @@ fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
     let content = String::from_utf8(content).unwrap();
     assert!(content.contains("1 0 0 rg\n"));
     assert!(content.contains("0 1 0 rg\n"));
-    assert!(content.contains("/Span << /ActualText <FEFF00480069> >> BDC"));
-    assert!(content.contains("(Hi) Tj"));
+    assert!(content.contains("/Span << /ActualText <FEFF0048> >> BDC"));
+    assert!(content.contains("> Tj"));
     assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
 }
 
@@ -198,4 +200,67 @@ fn other_modes_are_refused_with_an_actionable_error() {
     let e = export(&d).unwrap_err().to_string();
     assert!(e.contains("RGB") && e.contains("Mode"), "{e}");
     assert!(crate::export(&d, "x.pdf", &crate::ExportOptions::default()).is_err());
+}
+
+#[test]
+fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
+    let mut d = doc(ColorMode::Rgb);
+    d.size = Size { width: 128, height: 48 };
+    let fmt = d.pixel_format();
+    // Synthetic photo-like backdrop; no personal image or third-party asset.
+    d.layers = vec![Layer::new("Photo", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[0.2, 0.4, 0.6, 1.0])))];
+    let text = "café Ω 😀";
+    d.layers.push(Layer::new(
+        "Text",
+        LayerContent::Text(photocraft_doc::TextLayer {
+            text: text.into(),
+            size_pt: 12.0,
+            transform: photocraft_geom::Affine::translate(2.0, 20.0),
+            ..Default::default()
+        }),
+    ));
+    let pdf = export(&d).unwrap().bytes;
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), text);
+    assert!(has(&pdf, "/Subtype /Image"));
+    assert!(has(&pdf, "/Subtype /Type3"));
+    assert!(has(&pdf, "/ToUnicode"));
+    assert_eq!(&stream_after(&pdf, "/Subtype /Image")[..3], &[51, 102, 153]);
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    assert!(!content.contains("/ActualText <FEFF00630061006600E9"), "selection spans are clusters, not the entire layer");
+}
+
+#[test]
+fn text_with_compositing_or_a_profile_stays_in_the_raster_backdrop() {
+    for case in 0..5 {
+        let mut d = doc(ColorMode::Rgb);
+        d.size = Size { width: 32, height: 32 };
+        let mut layer = Layer::new(
+            "Text",
+            LayerContent::Text(photocraft_doc::TextLayer {
+                text: "A".into(),
+                size_pt: 16.0,
+                transform: photocraft_geom::Affine::translate(2.0, 20.0),
+                ..Default::default()
+            }),
+        );
+        match case {
+            0 => layer.opacity = 0.5,
+            1 => layer.fill_opacity = 0.5,
+            2 => layer.blend = photocraft_color::BlendMode::Multiply,
+            3 => {
+                layer.effects.enabled = true;
+                layer.effects.items.push(photocraft_doc::effects::Effect::default_drop_shadow());
+            }
+            _ => d.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3, 4])),
+        }
+        d.layers.push(layer);
+        let pdf = export(&d).unwrap().bytes;
+        let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+        assert!(!content.contains("/ActualText"), "case {case} must retain the raster composite");
+        assert!(stream_after(&pdf, "/Subtype /Image").iter().any(|v| *v != 255), "case {case} must retain visible text");
+        if case == 4 {
+            assert!(has(&pdf, "[/ICCBased 7 0 R]"));
+        }
+    }
 }

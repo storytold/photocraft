@@ -56,7 +56,20 @@ fn straight_horizontal(layer: &TextLayer, dpi: f32) -> bool {
 
 /// Return PDF vector and invisible text operators for a directly representable text layer.
 /// Coordinates are in document pixels with y increasing down; the caller applies the CTM.
-pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<String> {
+#[cfg(test)]
+fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<String> {
+    text_ops_with_font(layer, mode, dpi, &super::selection::SelectionFont::new(std::iter::once(layer.text.as_str())))
+}
+
+fn outlines_permitted(bytes: &[u8], index: u32) -> bool {
+    let Ok(face) = ttf_parser::Face::parse(bytes, index) else { return false };
+    matches!(face.permissions(), Some(ttf_parser::Permissions::Installable | ttf_parser::Permissions::PreviewAndPrint | ttf_parser::Permissions::Editable))
+        && face.is_outline_embedding_allowed()
+        && face.is_subsetting_allowed()
+}
+
+pub(super) fn text_ops_with_font(layer: &TextLayer, mode: ColorMode, dpi: f32, selection_font: &super::selection::SelectionFont) -> Option<String> {
+    selection_font.encode(&layer.text)?;
     if !straight_horizontal(layer, dpi) {
         return None;
     }
@@ -72,7 +85,17 @@ pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<S
 
     let mut engine = photocraft_text::TextEngine::new();
     let layout = engine.layout(layer, dpi);
-    if synthetic_bold(&layout) {
+    layout_ops(layer, mode, channels, &layout, selection_font)
+}
+
+fn layout_ops(
+    layer: &TextLayer,
+    mode: ColorMode,
+    channels: usize,
+    layout: &photocraft_text::TextLayout,
+    selection_font: &super::selection::SelectionFont,
+) -> Option<String> {
+    if synthetic_bold(layout) || layout.faces.iter().any(|face| !outlines_permitted(face.font.data.as_ref(), face.font.index)) {
         return None;
     }
 
@@ -83,11 +106,9 @@ pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<S
         }
     }
 
-    let outlines = photocraft_text::render::glyph_outlines(&layout, &layer.transform, None);
+    let outlines = photocraft_text::render::glyph_outlines(layout, &layer.transform, None);
 
     let mut out = String::new();
-    let hex = actual_text_hex(&layer.text);
-    writeln!(out, "/Span << /ActualText <{hex}> >> BDC").ok()?;
 
     let mut current_color: Option<photocraft_color::Color> = None;
 
@@ -171,30 +192,44 @@ pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<S
         writeln!(out, "f").ok()?;
     }
 
-    let [a, b, c, d, _e, _f] = layer.transform.m;
-    let has_text_lines = layout.lines.iter().any(|l| layer.text.get(l.range.clone()).is_some_and(|s| !s.is_empty()));
-    if has_text_lines {
-        writeln!(out, "BT").ok()?;
-        writeln!(out, "3 Tr").ok()?;
-        for line in &layout.lines {
-            let Some(line_text) = layer.text.get(line.range.clone()) else { continue };
-            if line_text.is_empty() {
-                continue;
-            }
-            let font_size = (line.ascent + line.descent).max(1.0);
-            let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(line.x0), f64::from(line.baseline)));
-            if !origin.x.is_finite() || !origin.y.is_finite() {
-                return None;
-            }
-            let (m0, m1, m2, m3) = (a, b, -c, -d);
-            writeln!(out, "/F1 {font_size} Tf").ok()?;
-            writeln!(out, "{m0} {m1} {m2} {m3} {} {} Tm", origin.x, origin.y).ok()?;
-            writeln!(out, "{} Tj", super::pdf_string(line_text)).ok()?;
+    let [a, b, c, d, _, _] = layer.transform.m;
+    let mut current_line = None;
+    let mut clusters: Vec<_> = layout.clusters.iter().collect();
+    clusters.sort_by_key(|cluster| cluster.range.start);
+    for cluster in clusters {
+        let text = layer.text.get(cluster.range.clone())?;
+        if text.is_empty() {
+            continue;
         }
-        writeln!(out, "ET").ok()?;
+        let line = layout.lines.get(cluster.line)?;
+        if current_line != Some(cluster.line) {
+            if current_line.is_some() {
+                writeln!(out, "ET").ok()?;
+            }
+            writeln!(out, "BT\n3 Tr\n/FSelect 1 Tf").ok()?;
+            current_line = Some(cluster.line);
+        }
+        let height = (line.ascent + line.descent).max(1.0);
+        let width = cluster.advance.abs() / text.chars().count().max(1) as f32;
+        if !height.is_finite() || !width.is_finite() {
+            return None;
+        }
+        let x = cluster.x;
+        let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(x), f64::from(line.baseline)));
+        if !origin.x.is_finite() || !origin.y.is_finite() {
+            return None;
+        }
+        let hex = actual_text_hex(text);
+        let encoded = selection_font.encode(text)?;
+        writeln!(out, "/Span << /ActualText <{hex}> >> BDC").ok()?;
+        writeln!(out, "{} {} {} {} {} {} Tm", a * f64::from(width), b * f64::from(width), -c * f64::from(height), -d * f64::from(height), origin.x, origin.y)
+            .ok()?;
+        writeln!(out, "<{encoded}> Tj\nEMC").ok()?;
     }
 
-    writeln!(out, "EMC").ok()?;
+    if current_line.is_some() {
+        writeln!(out, "ET").ok()?;
+    }
     Some(out)
 }
 
@@ -202,6 +237,29 @@ pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<S
 mod tests {
     use super::*;
     use photocraft_geom::Affine;
+
+    #[test]
+    fn embedding_restrictions_refuse_outlines() {
+        let original = photocraft_text::fonts::INTER_REGULAR.as_slice();
+        assert!(outlines_permitted(original, 0));
+        let count = u16::from_be_bytes(original[4..6].try_into().unwrap()) as usize;
+        let record = (0..count).map(|i| 12 + 16 * i).find(|at| &original[*at..*at + 4] == b"OS/2").unwrap();
+        let offset = u32::from_be_bytes(original[record + 8..record + 12].try_into().unwrap()) as usize;
+        for flags in [0x0002u16, 0x0100, 0x0200] {
+            let mut restricted = original.to_vec();
+            restricted[offset + 8..offset + 10].copy_from_slice(&flags.to_be_bytes());
+            assert!(!outlines_permitted(&restricted, 0), "fsType {flags:#x}");
+            let layer = TextLayer { text: "Restricted".into(), ..Default::default() };
+            let mut layout = photocraft_text::TextEngine::new().layout(&layer, 72.0);
+            for face in &mut layout.faces {
+                face.font.data = restricted.clone().into();
+                face.font.index = 0;
+            }
+            let font = super::super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+            assert!(layout_ops(&layer, ColorMode::Rgb, 3, &layout, &font).is_none(), "restricted text must remain raster");
+        }
+        assert!(!outlines_permitted(&[], 0));
+    }
 
     #[test]
     fn text_layer_emits_actualtext_outlines_and_invisible_text() {
@@ -213,15 +271,15 @@ mod tests {
             ..Default::default()
         };
         let ops = text_ops(&layer, ColorMode::Rgb, 72.0).unwrap();
-        assert!(ops.contains("/Span << /ActualText <FEFF00480065006C006C006F> >> BDC"));
+        assert!(ops.contains("/Span << /ActualText <FEFF0048> >> BDC"));
         assert!(ops.contains("0 0.5 1 rg"));
         assert!(ops.contains(" m\n"));
         assert!(ops.contains(" c\n"));
         assert!(ops.contains("h\nf*\n"));
         assert!(ops.contains("BT\n3 Tr\n"));
-        assert!(ops.contains("/F1"));
-        assert!(ops.contains("(Hello) Tj\nET\n"));
-        assert!(ops.ends_with("EMC\n"));
+        assert!(ops.contains("/FSelect"));
+        assert!(ops.contains("> Tj\nEMC\n"));
+        assert!(ops.ends_with("ET\n"));
     }
 
     #[test]
