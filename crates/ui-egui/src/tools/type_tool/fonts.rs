@@ -665,13 +665,18 @@ pub(crate) fn family_picker_in(
                         // Highlighted by its fill alone, as Photoshop's font menu is: a hovered or selected
                         // row's stroke grew it and pushed the rows below down (#7406).
                         let slot = preview.map_or(0.0, |(size, _)| crate::font_preview::slot_width(ui.ctx(), f, size));
-                        // One row lit, though a recent family is listed twice.
-                        let mut button = egui::Button::selectable(selected == Some(i), shown).truncate().stroke(egui::Stroke::NONE);
+                        // One row lit, though a recent family is listed twice. The row's atoms
+                        // go through the shared mirror helper: under a right-to-left direction
+                        // the name hugs the row's reading start and the sample sits at its
+                        // reading end (left-to-right pixels are unchanged).
                         let [_, h] = preview.map_or([0.0, 16.0], |(_, b)| b);
-                        button =
-                            button.right_text(egui::Atom::custom(egui::IdSalt::new(("font-sample", f, recent_row)), egui::vec2(slot + FONT_BADGE_WIDTH, h)));
+                        let sample = egui::Atom::custom(egui::IdSalt::new(("font-sample", f, recent_row)), egui::vec2(slot + FONT_BADGE_WIDTH, h));
+                        let button = crate::menu_keys::menu_row_button_atom(egui::RichText::new(shown).into(), Some(sample), ui.style().right_to_left)
+                            .selected(selected == Some(i))
+                            .truncate()
+                            .stroke(egui::Stroke::NONE);
                         let response = ui
-                            .allocate_ui_with_layout(egui::vec2(FONT_LIST_WIDTH, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            .allocate_ui_with_layout(egui::vec2(FONT_LIST_WIDTH, row_h), crate::direction::row(), |ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 // The star adds the font to (or removes it from) the favourites; it never picks it.
                                 let tip = if favorite { tl!("Remove from Favorites") } else { tl!("Add to Favorites") };
@@ -691,7 +696,7 @@ pub(crate) fn family_picker_in(
                                 } else {
                                     ui.add_space(16.0);
                                 }
-                                ui.add_sized([ui.available_width(), row_h], button)
+                                ui.add_sized([crate::direction::row_width(ui), row_h], button)
                             })
                             .inner;
                         if stepped == Some(i) {
@@ -718,9 +723,10 @@ pub(crate) fn family_picker_in(
                         {
                             crate::font_preview::paint(ui, f, response.rect, size);
                         }
-                        // The format badge (O, TT, VAR) just left of the sample.
+                        // The format badge (O, TT, VAR) just left of the sample, at the row's
+                        // reading end whichever way the row runs.
                         if let Some(format) = format {
-                            let center = egui::pos2(response.rect.right() - 8.0 - slot - FONT_BADGE_WIDTH / 2.0, response.rect.center().y);
+                            let center = egui::pos2(crate::direction::end_x(response.rect, 8.0 + slot + FONT_BADGE_WIDTH / 2.0), response.rect.center().y);
                             let t = crate::theme::Tokens::get(ui.ctx());
                             ui.painter().text(center, egui::Align2::CENTER_CENTER, format.badge(), egui::FontId::proportional(10.0), t.text_dim);
                             let tip = egui::Rect::from_center_size(center, egui::vec2(FONT_BADGE_WIDTH, 14.0));
@@ -744,15 +750,14 @@ pub(crate) fn family_picker_in(
                         }
                         // The family's styles, each picking the family in that style.
                         for style in &styles {
-                            let style_row = ui
-                                .horizontal(|ui| {
-                                    ui.add_space(46.0);
-                                    ui.add_sized(
-                                        [ui.available_width(), 22.0],
-                                        egui::Button::selectable(false, style_label(style)).truncate().stroke(egui::Stroke::NONE),
-                                    )
-                                })
-                                .inner;
+                            let style_row = row(ui, |ui| {
+                                ui.add_space(46.0);
+                                ui.add_sized(
+                                    [crate::direction::row_width(ui), 22.0],
+                                    egui::Button::selectable(false, style_label(style)).truncate().stroke(egui::Stroke::NONE),
+                                )
+                            })
+                            .inner;
                             if style_row.clicked() {
                                 changed = true;
                                 current.clone_from(f);
