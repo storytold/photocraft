@@ -461,3 +461,81 @@ fn wheel_during_handle_drag_is_not_applied_or_consumed_by_preview() {
     assert_eq!(after.0, 1);
     pointer(&mut h, at + vec2(10.0, 10.0), Some(false));
 }
+
+/// Exercise the real accessible numeric control, leaving it as the owner's Tab commit does.
+fn edit_print_number(h: &mut Harness<'_, (PhotocraftApp, Map<String, Value>)>, label: &str, text: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role_and_label(egui::Role::SpinButton, label).click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+}
+
+#[test]
+fn numeric_dimension_resizing_obeys_manual_scale_limits_instead_of_falling_back_to_full_size() {
+    let mut h = harness();
+    h.state_mut().0.run("file.new", json!({"width":6000,"height":400,"resolution":72})).unwrap();
+    h.run_steps(3);
+    let doc = h.state().0.session.active().unwrap().doc.clone();
+    let revision = h.state().0.session.active().unwrap().revision;
+    // 0.01cm on a6000pt canvas would otherwise round0.0047244% to0%, which the
+    // engine treats as absent (100%). Height uses exactly the same numeric resize path.
+    for (field, value, percent) in [("Width", "0.01", 1.0), ("Height", "0.001", 1.0), ("Width", "10000", 1000.0), ("Width", "100.00", 47.24)] {
+        edit_print_number(&mut h, field, value);
+        assert_eq!(h.state().1["scale"], json!(percent), "numeric resizing must respect the manual Scale limits");
+        assert_eq!(h.state().1["scaleToFit"], json!(false));
+        let l = resolved(&h.state().0, &h.state().1);
+        near(l.scale, percent / 100.0);
+        near(l.rect.2, 6000.0 * percent / 100.0);
+        near(l.rect.3, 400.0 * percent / 100.0);
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("bounded-scale.pdf");
+        let mut p = params(&h.state().1);
+        p["output"] = json!(output.to_string_lossy());
+        let result = h.state_mut().0.session.execute("file.print", p).unwrap();
+        assert_eq!(result["sent"], false);
+        near(result["imageRect"][2].as_f64().unwrap(), l.rect.2);
+        near(result["imageRect"][3].as_f64().unwrap(), l.rect.3);
+        assert!(std::fs::read(output).unwrap().starts_with(b"%PDF"));
+    }
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().0.session.active().unwrap().doc));
+    assert_eq!(h.state().0.session.active().unwrap().revision, revision);
+}
+
+#[test]
+fn rendered_scale_row_shows_fitted_value_disabled_and_manual_value_editable() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness();
+    // Low DPI gives a fitted percentage below1%; even that legitimate fitted scale must
+    // be displayed as resolved, never clamped to the manual-edit minimum or written back.
+    h.state_mut().0.run("file.new", json!({"width":6000,"height":400,"resolution":1})).unwrap();
+    h.state_mut().1.insert("scale".into(), json!(37.123456));
+    for orientation in ["portrait", "landscape"] {
+        h.state_mut().1.insert("orientation".into(), json!(orientation));
+        h.state_mut().1.insert("scaleToFit".into(), json!(true));
+        h.run_steps(3);
+        let l = resolved(&h.state().0, &h.state().1);
+        assert!(l.scale * 100.0 < 1.0);
+        let field = h.get_by_role_and_label(egui::Role::SpinButton, "Scale");
+        assert!(field.accesskit_node().is_disabled());
+        near(field.accesskit_node().numeric_value().unwrap(), f64::from((l.scale * 100.0) as f32));
+        let shown = crate::widgets::fmt_num_prec(f64::from((l.scale * 100.0) as f32), 2);
+        assert!(
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(t) if field.rect().contains(t.pos) && t.galley.text() == shown)),
+            "actual fitted Scale text must be painted"
+        );
+        assert_eq!(h.state().1["scale"], json!(37.123456));
+        assert_eq!(resolved(&h.state().0, &h.state().1), l);
+    }
+    h.state_mut().1.insert("scaleToFit".into(), json!(false));
+    h.run_steps(3);
+    let field = h.get_by_role_and_label(egui::Role::SpinButton, "Scale");
+    assert!(!field.accesskit_node().is_disabled());
+    near(field.accesskit_node().numeric_value().unwrap(), 37.123456);
+    edit_print_number(&mut h, "Scale", "25.5");
+    near(h.state().1["scale"].as_f64().unwrap(), 25.5);
+    near(resolved(&h.state().0, &h.state().1).scale, 0.255);
+}

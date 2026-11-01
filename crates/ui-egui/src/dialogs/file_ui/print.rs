@@ -641,7 +641,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         None
                     };
                     if let Some(k) = k.filter(|k| k.is_finite() && *k > 0.0) {
-                        f.insert("scale".into(), json!(((l.scale * k * 100.0) * 100.0).round() / 100.0));
+                        f.insert("scale".into(), json!((((l.scale * k * 100.0) * 100.0).round() / 100.0).clamp(1.0, 1000.0)));
                         f.insert("scaleToFit".into(), json!(false));
                     }
                 });
