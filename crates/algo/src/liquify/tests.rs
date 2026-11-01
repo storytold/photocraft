@@ -698,16 +698,18 @@ fn strokes_without_times_replay_as_before() {
     }
 }
 
-/// A live segment at zero pressure changes nothing, so it leaves no provisional dab to take back;
-/// at full pressure it does.
+/// A live segment with no strength changes nothing, so it leaves no provisional dab to take back;
+/// with strength it does. No strength is a zero pressure at the point or a zero stroke pressure.
 #[test]
 fn a_live_segment_without_strength_leaves_nothing_to_take_back() {
-    let s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 200.0);
-    for (pressure, shown) in [(0.0, false), (1.0, true)] {
+    for (point_pressure, stroke_pressure, shown) in [(0.0, 100.0, false), (1.0, 0.0, false), (1.0, 100.0, true)] {
+        let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 200.0);
+        s.pressure = stroke_pressure;
         let mut f = LiquifyField::new(Rect::new(0, 0, 300, 200), 2.0);
-        f.stroke_begin(&s, [100.0, 100.0, pressure]);
-        f.stroke_segment_live(&s, [100.0, 100.0, pressure], [100.5, 100.0, pressure], 16.0);
-        assert_eq!(f.tail.is_some(), shown, "pressure {pressure}");
-        assert_eq!(f.is_identity(), !shown, "pressure {pressure}");
+        f.stroke_begin(&s, [100.0, 100.0, point_pressure]);
+        f.stroke_segment_live(&s, [100.0, 100.0, point_pressure], [100.5, 100.0, point_pressure], 16.0);
+        let case = format!("point pressure {point_pressure}, stroke pressure {stroke_pressure}");
+        assert_eq!(f.tail.is_some(), shown, "{case}");
+        assert_eq!(f.is_identity(), !shown, "{case}");
     }
 }
