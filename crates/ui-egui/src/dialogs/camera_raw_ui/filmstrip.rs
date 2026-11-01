@@ -131,11 +131,16 @@ fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Option<Came
 }
 
 /// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
-/// its own settings. One reply for one raw, `{"opened": [...]}` for several.
+/// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
+/// filmstrip only once it has opened: one that fails stays there with its settings, so the
+/// dialog comes back for it (or Cancel still closes it).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let others: Vec<HeldRaw> = std::mem::take(&mut app.raw_shelf).into_iter().filter(|h| h.raw.document != raw.document).collect();
+    let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
     let first = commit_open_raw(app, params, raw, Some(original));
+    if first.is_ok() {
+        app.raw_shelf.retain(|h| h.raw.document != raw.document);
+    }
     if others.is_empty() {
         return first;
     }
@@ -145,14 +150,19 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
         Ok(v) => opened.push(v),
         Err(e) => failed.push(format!("{}: {e}", raw.name)),
     }
-    for held in others {
-        let (p, loaded) = match held.kept {
+    for id in others {
+        let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == id) else { continue };
+        let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
+        let (p, loaded) = match kept {
             Some((p, original)) => (p, Some(original)),
-            None => first_settings(app, &held.raw),
+            None => first_settings(app, &held_raw),
         };
-        match commit_open_raw(app, &p, &held.raw, loaded.as_ref()) {
-            Ok(v) => opened.push(v),
-            Err(e) => failed.push(format!("{}: {e}", held.raw.name)),
+        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+            Ok(v) => {
+                opened.push(v);
+                app.raw_shelf.retain(|h| h.raw.document != id);
+            }
+            Err(e) => failed.push(format!("{}: {e}", held_raw.name)),
         }
     }
     if !failed.is_empty() {
