@@ -88,6 +88,309 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
     assert_eq!(doc(&s, 1).layers.len(), 4);
 }
 
+/// #9681: like Photoshop's Paste, a centred copy centres what the layer mask shows, not the hidden
+/// pixels under it. The 10×10 square at x 4..14 keeps x ≥ 9 (or x < 7) visible.
+#[test]
+fn a_centred_copy_centres_the_part_its_mask_shows() {
+    let shown = |keep: Value, mask: Option<Value>| {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        s.execute("select.rect", keep).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+        if let Some(m) = mask {
+            s.execute("layer.layerMask.enabled", m).unwrap();
+        }
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+        bounds(&s, 1, copied(&r))
+    };
+    let right = json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false});
+    // Visible x 9..14 (5 px) centred on the 60-wide canvas: 27.5..32.5, rounded to 28..33.
+    assert_eq!(shown(right.clone(), None), Rect::new(23, 20, 33, 30), "the unmasked square sits 5 px left of its visible part");
+    let left = json!({"x": 0, "y": 0, "width": 7, "height": 30, "antiAlias": false});
+    // Visible x 4..7 (3 px) centred: 28.5..31.5, rounded to 29..32.
+    assert_eq!(shown(left, None), Rect::new(29, 20, 39, 30));
+    // A disabled mask hides nothing, so the whole square is centred.
+    assert_eq!(shown(right, Some(json!({"enabled": false}))), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: a copy dropped on a point centres what the mask shows there too. The mask keeps
+/// x ≥ 9 of the square (x 4..14, y 6..16), so the shown part's centre (11.5, 11) lands on
+/// (30.5, 25): dx 19, dy 14. Centred on the whole square (9, 11), it would land at dx 22.
+#[test]
+fn a_copy_dropped_on_a_point_centres_the_part_its_mask_shows() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "at": [30.5, 25.0]})).unwrap();
+    assert_eq!(r["offset"], json!([19, 14]));
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(23, 20, 33, 30));
+}
+
+/// #10422 review: the centre is that of the pixels the mask shows, not of the mask's opening.
+/// A second square at x 30..34 sits outside the mask; the opening (x 0..20) also covers empty
+/// pixels right of the first square, which mustn't pull the centre right.
+#[test]
+fn a_centred_copy_ignores_empty_pixels_the_mask_reveals() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The shown square (x 4..14, y 6..16) lands centred on the 60×50 canvas: dx 21, dy 14.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 55, 30));
+}
+
+/// #10422 review: a feathered mask shows pixels as far out as the compositor carries its blur, so
+/// a 3 px feather on an opening at x 9 still shows x 4..9.
+#[test]
+fn a_feathered_masks_shown_part_reaches_as_far_as_its_blur() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The whole square (x 4..14) is within the blur's reach, so it is centred as a whole.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: a feathered opening that starts past the ink still shows it through its blur,
+/// so the shown part is measured on the blurred mask, not on the mask's own pixels.
+#[test]
+fn a_feathered_opening_beside_the_ink_still_shows_it() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 15, "y": 0, "width": 25, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The blur reaches back to x 6 (the compositor's mask is 0 at x 4 and 5), so the shown x 6..14
+    // is centred (dx 20), rather than the source canvas's centre standing in for an empty measure.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(24, 20, 34, 30));
+}
+
+/// #10422 review: a mask below 100 % density hides nothing completely, so it crops nothing: the
+/// whole square is centred, as with no mask.
+#[test]
+fn a_centred_copy_under_a_half_density_mask_centres_the_whole_layer() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.execute("layer.layerMask.edit", json!({"layer": paint.0, "density": 50})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: a group's enabled mask crops what its children show. The group's mask keeps
+/// x ≥ 9 of the child's square (x 4..14), so the visible x 9..14 is centred, as for a layer.
+#[test]
+fn a_centred_group_copy_centres_what_the_groups_mask_shows_of_its_children() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let group = s.execute("layer.groupLayers", json!({"layer": paint.0})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": group})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group], "center": true})).unwrap();
+    let LayerContent::Group(g) = &doc(&s, 1).layer(copied(&r)).unwrap().content else { panic!("a group was copied") };
+    let child = crate::layer_multi_cmds::layer_bounds(&g.children[0]).unwrap();
+    // Visible x 9..14 centred on the 60-wide canvas, as in `a_centred_copy_centres_the_part_its_mask_shows`.
+    assert_eq!(child, Rect::new(23, 20, 33, 30));
+}
+
+/// #10422 review: a mask that hides everything leaves nothing to measure, so the copy is centred
+/// as the source canvas is (40×30 on 60×50: dx 10, dy 10), without a panic.
+#[test]
+fn a_centred_copy_whose_mask_hides_everything_centres_the_source_canvas() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.layerMask.hideAll", json!({"layer": paint.0})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), None);
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    assert_eq!(r["offset"], json!([10, 10]));
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(14, 16, 24, 26));
+}
+
+/// #10422 review: an enabled vector mask crops like a pixel mask. Its path keeps x ≥ 9 of the
+/// square (x 4..14), so the visible x 9..14 is centred; below 100 % density or feathered it hides
+/// nothing completely and crops nothing, as for a pixel mask. An opening that also covers a
+/// second square's empty surroundings still centres on the ink it shows.
+#[test]
+fn a_centred_copy_centres_the_part_its_vector_mask_shows() {
+    let centred = |path: Value, extra: Option<(u32, u32, u32, u32)>, edit: fn(&mut photocraft_doc::VectorMask)| {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        if let Some((x, y, w, h)) = extra {
+            s.execute("select.rect", json!({"x": x, "y": y, "width": w, "height": h})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+        }
+        s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": path})).unwrap();
+        s.edit("vector mask", |d, _| {
+            edit(d.layer_mut(paint).and_then(|l| l.vector_mask.as_mut()).expect("vector mask"));
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+        bounds(&s, 1, copied(&r))
+    };
+    let right = json!({"subpaths": [{"knots": [[9, 0], [40, 0], [40, 30], [9, 30]]}]});
+    // Visible x 9..14 (5 px) centred on the 60-wide canvas: 27.5..32.5, rounded to 28..33.
+    assert_eq!(centred(right.clone(), None, |_| {}), Rect::new(23, 20, 33, 30), "the unmasked square sits 5 px left of its visible part");
+    assert_eq!(centred(right.clone(), None, |m| m.density = 0.5), Rect::new(25, 20, 35, 30), "50 % density crops nothing");
+    assert_eq!(centred(right.clone(), None, |m| m.feather = 3.0), Rect::new(25, 20, 35, 30), "a feather crops nothing");
+    assert_eq!(centred(right, None, |m| m.enabled = false), Rect::new(25, 20, 35, 30), "a disabled vector mask crops nothing");
+    // A second square at x 30..34 outside an opening at x 0..20: the shown square (x 4..14, y 6..16)
+    // is centred (dx 21, dy 14), not the opening's empty pixels right of it.
+    let left = json!({"subpaths": [{"knots": [[0, 0], [20, 0], [20, 30], [0, 30]]}]});
+    assert_eq!(centred(left, Some((30, 6, 4, 10)), |_| {}), Rect::new(25, 20, 55, 30));
+}
+
+/// #10422 review: a vector mask shows what its path covers, not its path's control rectangle. A
+/// triangle with corners (0, 0), (40, 0), (0, 30) covers the square (x 4..14, y 6..16) and hides a
+/// second patch at x 30..34, y 20..24 inside the same rectangle.
+#[test]
+fn a_vector_masks_shown_part_is_what_its_path_covers() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 30, "y": 20, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": {"subpaths": [{"knots": [[0, 0], [40, 0], [0, 30]]}]}})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
+/// #10422 review: a group's mask shows only where its children show ink. Children at x 4..14 and
+/// x 30..34 (y 6..16) under a group mask opening x 0..25: the empty gap x 14..25 the opening also
+/// covers shows nothing, so only the first child's square is shown.
+#[test]
+fn a_group_masks_shown_part_is_where_its_children_show_ink() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.new.layer", json!({"name": "other"})).unwrap();
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 25, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": group})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
+/// #10422 review: a hidden child shows nothing through its group's mask, as the compositor skips
+/// it. Children at x 4..14 and, hidden, x 30..34 (y 6..16) under a group mask that reveals all:
+/// only the visible child's square is shown.
+#[test]
+fn a_group_masks_shown_part_skips_hidden_children() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let other = LayerId(s.execute("layer.new.layer", json!({"name": "other"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": group})).unwrap();
+    s.execute("layer.hideLayers", json!({"layer": other.0})).unwrap();
+    assert!(!doc(&s, 0).layer(other).unwrap().visible);
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
+/// #10422 review: a clipped child shows only within its base's alpha, as the compositor clips it,
+/// and nothing over a hidden base. A base at x 4..14 and a layer clipped to it at x 30..40
+/// (y 6..16) under a group mask that reveals all show only the base's square; with the base
+/// hidden, the group shows nothing.
+#[test]
+fn a_group_masks_shown_part_clips_children_to_their_base() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let clip = LayerId(s.execute("layer.new.layer", json!({"name": "clip"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerMask.revealAll", json!({"layer": group.0})).unwrap();
+    s.edit("clip", |d, _| {
+        d.layer_mut(clip).expect("clip").clipped = true;
+        Ok(())
+    })
+    .unwrap();
+    let LayerContent::Group(g) = &doc(&s, 0).layer(group).unwrap().content else { panic!("a group") };
+    assert_eq!(g.children.iter().map(|c| c.id).collect::<Vec<_>>(), [paint, clip], "the clipped layer is above its base");
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+    s.execute("layer.hideLayers", json!({"layer": paint.0})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), None, "a hidden base hides what is clipped to it");
+}
+
+/// A layer clipped to an adjustment layer, which has no ink of its own measured, counts as its own:
+/// it shows its pixels over what the adjustment changes. Base square at x 4..14, an Invert above
+/// it and a layer clipped to the Invert at x 30..40 (y 6..16) show x 4..40.
+#[test]
+fn a_group_masks_shown_part_counts_a_layer_clipped_to_an_adjustment() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let invert = s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let clip = LayerId(s.execute("layer.new.layer", json!({"name": "clip"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    for id in [paint.0, invert] {
+        s.execute("layer.select", json!({"layer": id, "mode": "add"})).unwrap();
+    }
+    let group = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerMask.revealAll", json!({"layer": group.0})).unwrap();
+    s.edit("clip", |d, _| {
+        d.layer_mut(clip).expect("clip").clipped = true;
+        Ok(())
+    })
+    .unwrap();
+    let LayerContent::Group(g) = &doc(&s, 0).layer(group).unwrap().content else { panic!("a group") };
+    assert_eq!(g.children.iter().map(|c| c.id).collect::<Vec<_>>(), [paint, LayerId(invert), clip]);
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(group).unwrap()), Some(Rect::new(4, 6, 40, 16)));
+}
+
+/// #10422 review: separate feathered openings show only as far as each one's blur reaches, not
+/// over the rectangle spanning both. Openings at x 0..20, y 0..20 and x 75..95, y 75..95 (3 px
+/// feather) show the square (x 4..14, y 6..16) and a patch at x 78..85, y 78..85; a patch at
+/// x 88..96, y 0..10 lies between them, far past either blur, and stays hidden.
+#[test]
+fn separate_feathered_openings_show_only_what_their_blur_reaches() {
+    let (mut s, paint) = two_docs(100, 100, 8);
+    for (x, y, w, h) in [(78, 78, 7, 7), (88, 0, 8, 10)] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": w, "height": h})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    }
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20, "antiAlias": false})).unwrap();
+    s.execute("select.rect", json!({"x": 75, "y": 75, "width": 20, "height": 20, "antiAlias": false, "mode": "add"})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 85, 85)));
+}
+
+/// #10422 review: a disabled mask's feather reaches nothing. Under a disabled pixel mask with a
+/// 1000 px feather, an enabled vector mask's path (x, y -4000..5000) covers both squares, at
+/// x 4..14 and x 1000..1005; measured over the disabled feather's reach (the layer's bounds grown
+/// by 3002 px), the path's mask would exceed its working budget and fall back to the value far
+/// outside the path, hiding everything.
+#[test]
+fn a_disabled_masks_feather_does_not_widen_what_is_measured() {
+    let (mut s, paint) = two_docs(1010, 1010, 8);
+    s.execute("select.rect", json!({"x": 1000, "y": 1000, "width": 5, "height": 5})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": paint.0})).unwrap();
+    let path = json!({"subpaths": [{"knots": [[-4000, -4000], [5000, -4000], [5000, 5000], [-4000, 5000]]}]});
+    s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": path})).unwrap();
+    s.edit("disabled feather", |d, _| {
+        let m = d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask");
+        (m.enabled, m.feather) = (false, 1000.0);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 1005, 1005)));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);

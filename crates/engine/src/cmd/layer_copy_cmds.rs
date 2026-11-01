@@ -59,6 +59,133 @@ fn center(r: Rect) -> [f64; 2] {
     [(f64::from(r.x0) + f64::from(r.x1)) / 2.0, (f64::from(r.y0) + f64::from(r.y1)) / 2.0]
 }
 
+/// The part of `l`'s pixels its layer masks show: what Photoshop centres a pasted layer on (#9681).
+/// A layer with an enabled pixel or vector mask is cropped to the pixels where its effective mask
+/// (as the compositor applies it: density, feather, the path's own coverage) and its ink are both
+/// above zero; a group's ink is where its children show theirs. One below 100 % density hides
+/// nothing completely and crops nothing; without a mask the layer's (or children's) bounds stand.
+fn shown_bounds(l: &Layer) -> Option<Rect> {
+    let masked = l.mask.as_ref().is_some_and(|m| m.enabled) || l.vector_mask.as_ref().is_some_and(|v| v.enabled);
+    if !masked {
+        return match &l.content {
+            LayerContent::Group(g) => Some(g.children.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b))).filter(|r| !r.is_empty()),
+            _ => crate::layer_multi_cmds::layer_bounds(l),
+        };
+    }
+    let shown = Shown::new(l)?;
+    let b = shown.bounds;
+    // Rows one at a time, so a large sparse layer never needs its whole rectangle in memory.
+    let mut row = vec![false; b.width() as usize];
+    let mut r = Rect::EMPTY;
+    for y in b.y0..b.y1 {
+        shown.row(y, b.x0, &mut row);
+        if let (Some(a), Some(z)) = (row.iter().position(|h| *h), row.iter().rposition(|h| *h)) {
+            let (a, z) = (b.x0.saturating_add(a as i32), b.x0.saturating_add(z as i32));
+            r = r.union(&Rect::new(a, y, z.saturating_add(1), y.saturating_add(1)));
+        }
+    }
+    (!r.is_empty()).then_some(r)
+}
+
+/// Where a layer shows ink, sampled a row at a time for [`shown_bounds`].
+struct Shown<'a> {
+    /// Where it can show anything: its pixels' bounds, or its children's.
+    bounds: Rect,
+    ink: Ink<'a>,
+    mask: Option<ShownMask<'a>>,
+}
+
+enum Ink<'a> {
+    /// Everywhere in the bounds: no alpha, or effects that reach past it.
+    All,
+    Alpha(&'a photocraft_raster::Surface),
+    /// A group's: where its children show theirs.
+    Children(Vec<Shown<'a>>),
+}
+
+enum ShownMask<'a> {
+    /// An unfeathered pixel mask alone, read as it is (with its density).
+    Pixel(&'a photocraft_doc::LayerMask),
+    /// Pixel × vector mask, each feathered, as the compositor applies them.
+    Combined(photocraft_raster::Surface),
+}
+
+impl<'a> Shown<'a> {
+    fn new(l: &'a Layer) -> Option<Self> {
+        let fx = photocraft_compose::effects::has_effects(l);
+        let (bounds, ink) = match &l.content {
+            LayerContent::Group(g) if !fx => {
+                let kids: Vec<_> = shown_children(&g.children).filter_map(Shown::new).collect();
+                (kids.iter().fold(Rect::EMPTY, |a, k| a.union(&k.bounds)), Ink::Children(kids))
+            }
+            _ => (crate::layer_multi_cmds::layer_bounds(l)?, l.surface().filter(|s| s.format().alpha && !fx).map_or(Ink::All, Ink::Alpha)),
+        };
+        if bounds.is_empty() {
+            return None;
+        }
+        // Everything that can reach into the bounds through either enabled mask's feather.
+        let sigma = |f: f32| photocraft_compose::masks::feather_sigma(f);
+        let pixel = l.mask.iter().filter(|m| m.enabled).map(|m| sigma(m.feather));
+        let reach = pixel.chain(l.vector_mask.iter().filter(|v| v.enabled).map(|v| sigma(v.feather))).fold(0.0, f32::max);
+        let combined = photocraft_compose::masks::combined_mask(l, photocraft_vector::feather::grow(bounds, reach));
+        let mask = combined.map(ShownMask::Combined).or_else(|| l.mask.as_ref().filter(|m| m.enabled).map(ShownMask::Pixel));
+        Some(Self { bounds, ink, mask })
+    }
+
+    /// Whether each pixel of row `y` from x `x0` (as many as `out` holds) shows ink, into `out`.
+    fn row(&self, y: i32, x0: i32, out: &mut [bool]) {
+        out.fill(false);
+        let row = Rect::new(x0, y, x0.saturating_add(out.len() as i32), y.saturating_add(1)).intersect(&self.bounds);
+        if row.is_empty() {
+            return;
+        }
+        let Some(out) = out.get_mut((row.x0 - x0) as usize..(row.x1 - x0) as usize) else { return };
+        let mut buf = Vec::new();
+        match &self.ink {
+            Ink::All => out.fill(true),
+            Ink::Alpha(s) => {
+                s.read_region_into(row, &mut buf);
+                let n = s.channels();
+                for (o, px) in out.iter_mut().zip(buf.chunks_exact(n)) {
+                    *o = px[n - 1] > 0.0;
+                }
+            }
+            Ink::Children(kids) => {
+                let mut kid = vec![false; out.len()];
+                for k in kids {
+                    k.row(y, row.x0, &mut kid);
+                    out.iter_mut().zip(&kid).for_each(|(o, h)| *o |= *h);
+                }
+            }
+        }
+        match &self.mask {
+            Some(ShownMask::Pixel(m)) => m.values_into(row, &mut buf),
+            Some(ShownMask::Combined(c)) => c.read_region_into(row, &mut buf),
+            None => return,
+        }
+        out.iter_mut().zip(&buf).for_each(|(o, v)| *o &= *v > 0.0);
+    }
+}
+
+/// The children whose ink a group shows, stacked as the compositor stacks them (bottom to top, a
+/// clipped layer clipping to the nearest unclipped one below): the visible ones, less those clipped
+/// to a base. Hidden layers are skipped, and a clipped layer shows only within its base's alpha,
+/// which the base's own measure already covers, or nothing over a hidden base. Over a fill or an
+/// adjustment layer, which has no ink of its own measured here, a clipped layer counts as its own.
+fn shown_children(children: &[Layer]) -> impl Iterator<Item = &Layer> {
+    let mut base: Option<&Layer> = None;
+    children.iter().filter(move |c| {
+        let shows = match base.filter(|_| c.clipped) {
+            Some(b) => b.visible && c.visible && matches!(b.content, LayerContent::Fill(_) | LayerContent::Adjustment(_)),
+            None => c.visible,
+        };
+        if !c.clipped {
+            base = Some(c);
+        }
+        shows
+    })
+}
+
 /// Restore missing shape caches, or refresh every shape for a changed canvas, including groups.
 fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
     for layer in layers {
@@ -197,8 +324,13 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     // Measure in source space: destination refresh may clip a shape before it is moved.
     // Missing caches must participate too, including shapes nested inside groups.
     prepare_shapes(&mut copies.layers, &sdoc, false);
-    let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
-    let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
+    // What a centred or dropped copy is centred on; the default offset placement doesn't measure.
+    let content = if p.get("center").and_then(Value::as_bool).unwrap_or(false) || p.get("at").is_some() {
+        let bounds = copies.layers.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
+        if bounds.is_empty() { sdoc.bounds() } else { bounds }
+    } else {
+        Rect::EMPTY
+    };
     adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
