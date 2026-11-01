@@ -74,7 +74,7 @@ impl PhotocraftApp {
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
         self.session.clipboard =
-            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
+            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None, board: None });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
