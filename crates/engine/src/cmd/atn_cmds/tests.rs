@@ -3278,3 +3278,17 @@ fn newer_feature_steps_that_cannot_be_written_are_refused() {
     }
     assert!(export_item("select.sky", &json!({"mode": "replace", "threshold": 50, "softness": 50}), "S").is_some());
 }
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper must not play it with a default but keep the Photoshop step (#10610).
+fn kept_when_wrong_typed(name: &str, settings: &[(&str, D)]) {
+    for (key, v) in settings {
+        let m = newer(name, desc("null").with(key, v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{name} with {key:?} = {v:?} was mapped");
+    }
+}
+
+#[test]
+fn select_sky_with_a_wrong_typed_setting_is_kept() {
+    kept_when_wrong_typed("selectSky", &[("sampleAllLayers", D::Integer(1)), ("sampleAllLayers", text("true"))]);
+}

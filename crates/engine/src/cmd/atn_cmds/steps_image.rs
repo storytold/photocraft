@@ -1,5 +1,5 @@
 use super::descriptors::{
-    PX, Target, ang, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px,
+    PX, Target, ang, boolean, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px,
     ref_class, target, trimmed,
 };
 use super::events::pixel_target;
@@ -461,6 +461,16 @@ fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
 }
 
+/// The step's `key` read by `read` (its space padding ignored, as `only_keys` admits it),
+/// `default` when the step leaves it out, `None` when it holds a value `read` can't take: that
+/// is still the step's setting, so the step is kept rather than played with the default.
+fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default: T) -> Option<T> {
+    match d.items.iter().find(|(k, _)| trimmed(k) == key.trim_end()) {
+        Some((_, v)) => read(v),
+        None => Some(default),
+    }
+}
+
 /// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
 fn sets_only(p: &Value, allowed: &[&str]) -> bool {
     p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
@@ -480,10 +490,10 @@ pub(super) fn bare_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// Select Sky (`selectSky`): `sampleAllLayers` only, false when the step leaves it out
 /// (the command's own default is true).
 pub(super) fn select_sky_from(d: &Descriptor) -> Mapped {
-    if !only_keys(d, &["sampleAllLayers"]) {
-        return Mapped::Unsupported { harmless: false };
+    match setting(d, "sampleAllLayers", boolean, false) {
+        Some(all) if only_keys(d, &["sampleAllLayers"]) => step("select.sky", json!({"sampleAllLayers": all})),
+        _ => Mapped::Unsupported { harmless: false },
     }
-    step("select.sky", json!({"sampleAllLayers": get_bool(d, "sampleAllLayers").unwrap_or(false)}))
 }
 
 /// The event has no mode, threshold or softness: only their replay values survive.
