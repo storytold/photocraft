@@ -385,7 +385,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
 /// Photoshop-style radio button.
 fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let (r, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
         ui.painter().circle_stroke(r.center(), 5.5, Stroke::new(1.2, if on { t.accent } else { t.text_faint }));
@@ -529,7 +529,7 @@ fn body_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         ui.vertical(|ui| {
             ui.add_enabled_ui(c.sampling, |ui| {
                 let tool = s(f, "__tool", "sample").to_string();
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     for (id, badge, label) in
                         [("sample", "", tl!("Eyedropper")), ("add", "+", tl!("Add to Sample")), ("subtract", "−", tl!("Subtract from Sample"))]
                     {
@@ -564,7 +564,7 @@ fn body_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     });
     ui.add_space(4.0);
     let view = s(f, "__view", "selection").to_string();
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if radio(ui, view == "selection", "Selection").clicked() {
             f.insert("__view".into(), json!("selection"));
         }
@@ -574,7 +574,7 @@ fn body_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         }
     });
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Selection Preview:")).color(t.text_dim));
         let mode = s(f, "__selectionPreview", "none").to_string();
         let mut chosen = mode.as_str();
