@@ -15,20 +15,11 @@ use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
 use crate::zip::{ZipReader, ZipWriter};
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
 
-pub(crate) const MANIFEST: &str = "manifest.json";
-pub(crate) const THUMB: &str = "thumb.png";
-pub(crate) const COMPOSITE: &str = "composite/preview.png";
-/// The file a directory save holds an exclusive lock on for its whole transaction (#4957).
-pub(crate) const SAVE_LOCK: &str = "save.lock";
+// `SAVE_LOCK` is the file a directory save holds an exclusive lock on for its whole transaction (#4957).
+pub(crate) use craft_pcraft_format::{COMPOSITE, MANIFEST, SAVE_LOCK, THUMB};
+use craft_pcraft_format::{blob_path, tile_path};
 /// How long a directory save waits for another save of the same bundle to finish.
 const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
-
-fn tile_path(h: &str) -> String {
-    format!("tiles/{h}.zst")
-}
-fn blob_path(h: &str) -> String {
-    format!("blobs/{h}.zst")
-}
 
 fn compress(data: &[u8]) -> Vec<u8> {
     ruzstd::encoding::compress_to_vec(data, ruzstd::encoding::CompressionLevel::Fastest)
@@ -149,61 +140,22 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 // Loading
 // ---------------------------------------------------------------------------
 
-/// Deepest JSON nesting a manifest may have: each group level adds three (the layer object, its
-/// content object and the `children` array), with headroom for the document and leaf layer fields.
-/// The saver checks the same bound, so every bundle it writes loads again.
-const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
-
-/// Most JSON items (arrays and objects opened, plus elements and members after a comma) a
-/// manifest may hold. Parsing builds a `serde_json::Value` tree of tens of bytes per item, so
-/// `[0,0,…]` costs about 16× its size in memory; a typical manifest spends 20 bytes or more per
-/// item, so this still admits manifests of about 80 MiB.
-const MAX_MANIFEST_ITEMS: usize = 4 << 20;
-
-/// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] or holding more than
-/// [`MAX_MANIFEST_ITEMS`] items with a linear scan (no recursion), so parsing with serde_json's
-/// recursion limit disabled can't exhaust the stack, nor tiny values the memory, on hostile input.
-fn check_manifest_depth(json: &[u8]) -> Result<()> {
-    let (mut depth, mut items, mut in_str, mut escaped) = (0usize, 0usize, false, false);
-    for &b in json {
-        if in_str {
-            match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_MANIFEST_DEPTH {
-                    return Err(FormatError::LimitExceeded(format!("manifest JSON nested deeper than {MAX_MANIFEST_DEPTH} levels")));
-                }
-            }
-            b']' | b'}' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if matches!(b, b'[' | b'{' | b',') {
-            items += 1;
-            if items > MAX_MANIFEST_ITEMS {
-                return Err(FormatError::LimitExceeded(format!("manifest JSON holds more than {MAX_MANIFEST_ITEMS} values")));
-            }
-        }
-    }
-    Ok(())
+/// The limits a manifest is checked against: craft-pcraft-format's item limit, the JSON nesting
+/// of [`convert::MAX_GROUP_DEPTH`] nested groups ([`craft_pcraft_format::manifest_depth`]) and at
+/// most `max_manifest_bytes` bytes. The saver checks the same nesting and items, so every bundle
+/// it writes loads again.
+fn manifest_limits(max_manifest_bytes: usize) -> craft_pcraft_format::Limits {
+    let mut limits = craft_pcraft_format::Limits::default();
+    limits.max_manifest_bytes = max_manifest_bytes;
+    limits.max_depth = craft_pcraft_format::manifest_depth(convert::MAX_GROUP_DEPTH);
+    limits
 }
 
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
-    // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
-    check_manifest_depth(&raw)?;
-    let mut de = serde_json::Deserializer::from_slice(&raw);
-    de.disable_recursion_limit();
-    let mut v = <serde_json::Value as serde::Deserialize>::deserialize(&mut de)?;
-    de.end()?;
+    // serde_json stops at 128 levels (about 40 nested groups); `parse_manifest` checks the nesting
+    // and the items in one pass, then parses without that limit.
+    let mut v = craft_pcraft_format::parse_manifest(&raw, &manifest_limits(opts.max_manifest_bytes))?;
     crate::migrate::migrate(&mut v)?;
     let layers = take_array(&mut v, "/document/layers");
     let mut m: Manifest = serde_json::from_value(v)?;
@@ -263,11 +215,10 @@ impl LoadFetch<'_> {
 
 impl Fetch for LoadFetch<'_> {
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>> {
-        if !is_valid_hash(hash) {
+        let Some(path) = tile_path(hash) else {
             return Err(FormatError::corrupt(format!("invalid tile hash `{hash}`")));
-        }
+        };
         self.account(len)?;
-        let path = tile_path(hash);
         let z = self.src.get(&path, len + len / 8 + 4096)?;
         let data = decompress(&z, len, &path)?;
         if hash_bytes(&data) != hash {
@@ -288,10 +239,9 @@ impl Fetch for LoadFetch<'_> {
         if let Some(b) = self.blobs.get(hash) {
             return if b.len() <= limit { Ok(b.clone()) } else { Err(FormatError::LimitExceeded("optional preview blob exceeds its limit".into())) };
         }
-        if !is_valid_hash(hash) {
+        let Some(path) = blob_path(hash) else {
             return Err(FormatError::corrupt(format!("invalid blob hash `{hash}`")));
-        }
-        let path = blob_path(hash);
+        };
         // The stored zstd frame of incompressible data is a little larger than the data, so a
         // blob right at `limit` must still be read; `decompress_bounded` enforces `limit`.
         let z = self.src.get(&path, limit.saturating_add(limit / 8).saturating_add(4096))?;
@@ -933,14 +883,16 @@ impl PcraftWriter {
             crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
         })?;
         let manifest = serde_json::to_vec_pretty(&manifest)?;
-        check_manifest_depth(&manifest)?;
+        // The nesting and the items only: a save checks no manifest size.
+        craft_pcraft_format::check_manifest(&manifest, &manifest_limits(usize::MAX))?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
+        let invalid = |h: &str| FormatError::corrupt(format!("invalid object hash `{h}`"));
         let mut objects = BTreeMap::new();
         for (h, (t, s)) in c.tiles {
-            objects.insert(tile_path(&h), Object::Tile(t, s));
+            objects.insert(tile_path(&h).ok_or_else(|| invalid(&h))?, Object::Tile(t, s));
         }
         for (h, b) in c.blobs {
-            objects.insert(blob_path(&h), Object::Blob(b));
+            objects.insert(blob_path(&h).ok_or_else(|| invalid(&h))?, Object::Blob(b));
         }
         Ok(Prepared { manifest, objects, stats })
     }
@@ -1445,7 +1397,7 @@ fn an_incompressible_blob_at_its_limit_still_loads() {
     let z = compress(&data);
     assert!(z.len() > data.len(), "the fixture must not compress");
     let hash = hash_bytes(&data);
-    let src = One(blob_path(&hash), z);
+    let src = One(blob_path(&hash).unwrap(), z);
     let mut fetch = LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() };
     assert_eq!(fetch.blob_bounded(&hash, data.len()).unwrap().as_slice(), data.as_slice());
     assert!(LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() }.blob_bounded(&hash, data.len() - 1).is_err());
