@@ -174,23 +174,28 @@ fn metric_field(
             .icon(crate::widgets::chevron_icon)
             .close_behavior(close)
             .show_ui(ui, |ui| {
-                if let Some(on) = auto {
-                    let item = ui.selectable_label(on, tl!("Auto"));
-                    if press.chosen(ui, &item) {
-                        chosen = Some(MetricChoice::Auto);
-                    }
-                }
-                for (i, group) in presets.iter().enumerate() {
-                    if i > 0 {
-                        ui.separator();
-                    }
-                    for &p in *group {
-                        let item = ui.selectable_label(auto != Some(true) && near(p), preset_label(p * u, unit));
+                // The combo's popup body is pinned left-to-right by the fork; the shared body
+                // scope and menu rows mirror it under a right-to-left direction.
+                crate::direction::popup_body(ui, |ui| {
+                    if let Some(on) = auto {
+                        let item = crate::menu_keys::menu_row(ui, tl!("Auto"), None, on, true);
                         if press.chosen(ui, &item) {
-                            chosen = Some(MetricChoice::Preset(p));
+                            chosen = Some(MetricChoice::Auto);
                         }
                     }
-                }
+                    for (i, group) in presets.iter().enumerate() {
+                        if i > 0 {
+                            ui.separator();
+                        }
+                        for &p in *group {
+                            let label = preset_label(p * u, unit);
+                            let item = crate::menu_keys::menu_row(ui, &label, None, auto != Some(true) && near(p), true);
+                            if press.chosen(ui, &item) {
+                                chosen = Some(MetricChoice::Preset(p));
+                            }
+                        }
+                    }
+                })
             });
         press.after(&combo.response);
         combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!(menu)));
