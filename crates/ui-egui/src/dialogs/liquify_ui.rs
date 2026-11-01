@@ -1314,18 +1314,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // frame, each worth the time since the last, so the speed is the same at any
                 // frame rate and never stalls while the brush creeps.
                 let held = d.opts.tool.is_stationary();
-                if moved {
-                    // Every pointer position the platform reported this frame, not just the
-                    // last, so a quick curved stroke keeps its curve instead of being cut into
-                    // one straight chord per frame.
-                    let path: Vec<Pos2> =
-                        ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
-                    for p in path.iter().take(path.len().saturating_sub(1)) {
-                        let m = to_doc(d, area, *p);
-                        events.push(ToolEvent::Move { x: m[0], y: m[1], pressure: pr });
-                    }
+                // Every pointer position the platform reported this frame, not just the last, so
+                // a quick curved stroke keeps its curve instead of being cut into one straight
+                // chord per frame, and a detour that returns to where it began is not dropped.
+                let path: Vec<Pos2> =
+                    ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+                let detour = path.len() > 1;
+                for p in path.iter().take(path.len().saturating_sub(1)) {
+                    let m = to_doc(d, area, *p);
+                    events.push(ToolEvent::Move { x: m[0], y: m[1], pressure: pr });
                 }
-                if moved || held {
+                if moved || held || detour {
                     events.push(ToolEvent::Move { x: q[0], y: q[1], pressure: pr });
                 }
                 ctx.request_repaint();

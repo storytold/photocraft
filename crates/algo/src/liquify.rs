@@ -469,7 +469,9 @@ impl LiquifyField {
                 && cur.end == [b[0], b[1]]
             {
                 let delta = [b[0] - cur.last_dab[0], b[1] - cur.last_dab[1]];
-                if delta[0] != 0.0 || delta[1] != 0.0 {
+                let pressure = b[2].clamp(0.0, 1.0);
+                // A dab with no strength changes nothing, so there is nothing to take back.
+                if (delta[0] != 0.0 || delta[1] != 0.0) && pressure > 0.0 && s.pressure > 0.0 {
                     let r = (s.size / 2.0).max(0.5);
                     let span = self.node_span(cur.last_dab, r);
                     let saved = span.map(|(i0, j0, i1, j1)| {
@@ -479,7 +481,7 @@ impl LiquifyField {
                         }
                         v
                     });
-                    let tail = self.dab(s, cur.last_dab, delta, b[2].clamp(0.0, 1.0), 1.0);
+                    let tail = self.dab(s, cur.last_dab, delta, pressure, 1.0);
                     if let (Some((i0, j0, i1, _)), Some(saved)) = (span, saved) {
                         self.tail = Some(LiveTail { i0, j0, i1, saved, dirty: tail });
                     }

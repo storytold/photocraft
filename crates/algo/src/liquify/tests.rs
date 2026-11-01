@@ -697,3 +697,17 @@ fn strokes_without_times_replay_as_before() {
         assert_eq!(f, LiquifyField::from_strokes(bounds(), 2.0, &[s]), "{tool:?}");
     }
 }
+
+/// A live segment at zero pressure changes nothing, so it leaves no provisional dab to take back;
+/// at full pressure it does.
+#[test]
+fn a_live_segment_without_strength_leaves_nothing_to_take_back() {
+    let s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 200.0);
+    for (pressure, shown) in [(0.0, false), (1.0, true)] {
+        let mut f = LiquifyField::new(Rect::new(0, 0, 300, 200), 2.0);
+        f.stroke_begin(&s, [100.0, 100.0, pressure]);
+        f.stroke_segment_live(&s, [100.0, 100.0, pressure], [100.5, 100.0, pressure], 16.0);
+        assert_eq!(f.tail.is_some(), shown, "pressure {pressure}");
+        assert_eq!(f.is_identity(), !shown, "pressure {pressure}");
+    }
+}
