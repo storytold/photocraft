@@ -75,7 +75,7 @@ fn legacy_v12_commands_import_like_v16() {
     let modern = atn::write(&atn::parse(bytes).unwrap()).unwrap();
     let expected = vec![
         ("filter.blur.gaussianBlur".into(), json!({"radius": 2.5})),
-        ("image.adjustments.levels".into(), json!({"inBlack": 10.0, "inWhite": 240.0, "gamma": 1.2, "outBlack": 0.0, "outWhite": 250.0})),
+        ("image.adjustments.levels".into(), json!({"inBlack": 10, "inWhite": 240, "gamma": 1.2, "outBlack": 0, "outWhite": 250})),
         ("select.all".into(), json!({})),
         ("layer.new.layer".into(), json!({"name": "Legacy layer"})),
     ];

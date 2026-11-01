@@ -171,6 +171,7 @@ fn write_ascii(out: &mut Vec<u8>, s: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Read one step with the descriptor dialect selected by the file version.
 fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
     let expanded = r.u8()? != 0;
     let enabled = r.u8()? != 0;
@@ -190,6 +191,7 @@ fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
     Ok(AtnItem { expanded, enabled, with_dialog, dialog_options, event, dictionary, descriptor })
 }
 
+/// Read an action and its steps using the file's descriptor dialect.
 fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
     let function_key = r.u16()?;
     let shift = r.u8()? != 0;

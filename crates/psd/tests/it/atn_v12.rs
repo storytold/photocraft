@@ -98,6 +98,7 @@ fn with_descriptor(body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// Reject every truncated fixture while preserving trailing data as a warning.
 #[test]
 fn truncations_fail_and_trailing_bytes_only_warn() {
     for bytes in [STOP, VALUES, COMMANDS] {
@@ -113,6 +114,7 @@ fn truncations_fail_and_trailing_bytes_only_warn() {
     }
 }
 
+/// Reject excessive counts/depth and unsupported forms without dialect fallback.
 #[test]
 fn legacy_counts_depth_and_unknown_forms_fail_without_fallback() {
     assert!(atn::parse(&with_descriptor(&u32::MAX.to_be_bytes())).is_err());

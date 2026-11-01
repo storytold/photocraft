@@ -612,8 +612,8 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads and writes Photoshop Actions files (`atn`, version 16: Photoshop 6 and
-later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
+`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+(Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
