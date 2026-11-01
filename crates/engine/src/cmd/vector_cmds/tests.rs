@@ -2,6 +2,7 @@ use serde_json::json;
 
 use super::*;
 
+/// Rejected strokes roll back earlier geometry edits without adding history.
 #[test]
 fn stroke_validation_rejects_hostile_values_without_editing_history() {
     let mut s = session(100, 80, 8);
