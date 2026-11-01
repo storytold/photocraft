@@ -79,6 +79,23 @@ fn rtl_footer_buttons_hug_the_reading_end() {
     assert!(import.right() < count.left(), "the buttons end left of the count: {import:?}, {count:?}");
 }
 
+#[test]
+fn probe_footer_rtl() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut h = rtl_tab(brushes_tab_app());
+    h.run_steps(4);
+    let trash = h.get_by_role_and_label(Role::Button, "Delete brush").rect();
+    let n = h.state().session.tools.presets.len();
+    eprintln!("PROBE n={n} trash={trash:?}");
+    for i in 0..(n + 2) {
+        for txt in [format!("{i} presets"), format!("{i} preset")] {
+            for node in h.query_all_by_label(&txt) {
+                eprintln!("PROBE label {txt:?} -> {:?}", node.rect());
+            }
+        }
+    }
+}
+
 /// The grid's columns accumulate from the right: in the first row the first preset sits at the
 /// reading start (its right edge is the row's outermost), mirrored from the LTR tab.
 #[test]
