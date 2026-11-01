@@ -535,3 +535,28 @@ fn proof_setup_presets_and_checkmarks() {
     let params = crate::filter_dialog::parse_spec(spec.params);
     assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice { options, .. } if options[0] == "srgb" && !options.iter().any(|v| v.contains('/'))));
 }
+
+/// Layer › Copy CSS puts the layer's CSS on the clipboard, as Photoshop's does (#9372).
+#[test]
+fn copy_css_puts_the_layers_css_on_the_clipboard() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.session.execute("layer.new.layer", json!({"name": "Box"})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(100, 80, 300, 220), &[0.2, 0.4, 0.8, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    assert!(crate::menus::menu_items(&app).iter().any(|i| i.id == "layer.copyCSS" && i.path == ["Layer"]), "Layer › Copy CSS");
+    let ctx = egui::Context::default();
+    let mut result = None;
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        result = Some(invoke(&mut app, ui.ctx(), "layer.copyCSS", json!({})));
+    });
+    out.textures_delta.clear();
+    let css = result.unwrap().unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.starts_with(".Box {\n  background-image: url(\"Box.png\");\n"), "{css}");
+    assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText(css)]);
+}

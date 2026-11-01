@@ -65,6 +65,14 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
     }
+    // Layer › Copy CSS: the engine writes the CSS, the clipboard is the shell's (#9372).
+    if id == photocraft_engine::layer_css_cmds::ID {
+        return Some(app.run(id, params.clone()).inspect(|r| {
+            if let Some(css) = r.get("css").and_then(Value::as_str) {
+                ctx.copy_text(css.to_string());
+            }
+        }));
+    }
     if id == "ui.symmetryTransform" {
         return Some(crate::symmetry_ui::begin(app).map(|_| Value::Null));
     }
