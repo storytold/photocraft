@@ -123,9 +123,10 @@ impl<'a> Shown<'a> {
         if bounds.is_empty() {
             return None;
         }
-        // Everything that can reach into the bounds through either mask's feather.
+        // Everything that can reach into the bounds through either enabled mask's feather.
         let sigma = |f: f32| photocraft_compose::masks::feather_sigma(f);
-        let reach = l.mask.iter().map(|m| sigma(m.feather)).chain(l.vector_mask.iter().map(|v| sigma(v.feather))).fold(0.0, f32::max);
+        let pixel = l.mask.iter().filter(|m| m.enabled).map(|m| sigma(m.feather));
+        let reach = pixel.chain(l.vector_mask.iter().filter(|v| v.enabled).map(|v| sigma(v.feather))).fold(0.0, f32::max);
         let combined = photocraft_compose::masks::combined_mask(l, photocraft_vector::feather::grow(bounds, reach));
         let mask = combined.map(ShownMask::Combined).or_else(|| l.mask.as_ref().filter(|m| m.enabled).map(ShownMask::Pixel));
         Some(Self { bounds, ink, mask })

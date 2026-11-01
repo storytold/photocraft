@@ -286,6 +286,28 @@ fn separate_feathered_openings_show_only_what_their_blur_reaches() {
     assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 85, 85)));
 }
 
+/// #10422 review: a disabled mask's feather reaches nothing. Under a disabled pixel mask with a
+/// 1000 px feather, an enabled vector mask's path (x, y -4000..5000) covers both squares, at
+/// x 4..14 and x 1000..1005; measured over the disabled feather's reach (the layer's bounds grown
+/// by 3002 px), the path's mask would exceed its working budget and fall back to the value far
+/// outside the path, hiding everything.
+#[test]
+fn a_disabled_masks_feather_does_not_widen_what_is_measured() {
+    let (mut s, paint) = two_docs(1010, 1010, 8);
+    s.execute("select.rect", json!({"x": 1000, "y": 1000, "width": 5, "height": 5})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": paint.0})).unwrap();
+    let path = json!({"subpaths": [{"knots": [[-4000, -4000], [5000, -4000], [5000, 5000], [-4000, 5000]]}]});
+    s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": path})).unwrap();
+    s.edit("disabled feather", |d, _| {
+        let m = d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask");
+        (m.enabled, m.feather) = (false, 1000.0);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), Some(Rect::new(4, 6, 1005, 1005)));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
