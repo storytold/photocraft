@@ -405,6 +405,240 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9221: the Curves Preset menu loads a preset's curves into the dialog (one discrete edit
+/// the preview follows) and reads Custom once the curve is edited by hand.
+#[test]
+fn curves_preset_menu_loads_a_preset_and_reads_custom_after_an_edit() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(4);
+    let preset = |h: &Harness<'_, PhotocraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).next().and_then(|n| n.accesskit_node().value().map(|s| s.to_string()))
+    };
+    assert_eq!(preset(&h).as_deref(), Some("Default"), "a new Curves starts at Default");
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Strong Contrast").click();
+    h.run_steps(3);
+    let fields = &h.state().ui.dialogs[0].fields;
+    assert_eq!(fields["points"], json!([[0.0, 0.0], [64.0, 36.0], [192.0, 220.0], [255.0, 255.0]]));
+    assert_eq!(fields["red"], json!([[0.0, 0.0], [255.0, 255.0]]), "a tone preset leaves the channels straight");
+    assert_eq!(preset(&h).as_deref(), Some("Strong Contrast"), "the menu shows the preset");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [64, 30], [192, 220], [255, 255]]));
+    h.run_steps(3);
+    assert_eq!(preset(&h).as_deref(), Some("Custom"), "an edited curve is Custom");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+}
+
+/// CodeRabbit on #9234: a grayscale document's Curves shows the Preset menu even when its
+/// settings still hold another mode's channel keys (a CMYK `cyan`, a Lab `a`).
+#[test]
+fn grayscale_curves_shows_presets_with_stale_channel_keys() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    for key in ["cyan", "a"] {
+        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        fields.insert("points".into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        fields.insert(key.into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        h.run_steps(4);
+        let menus: Vec<String> =
+            h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect();
+        assert!(menus.iter().any(|v| v == "Default"), "with `{key}`: the Preset menu, at Default (menus: {menus:?})");
+        assert!(menus.iter().any(|v| v == "Gray"), "with `{key}`: the channel stays Gray (menus: {menus:?})");
+        // A drag on the graph edits the gray curve, `points`, and drops the stale key (which the
+        // engine would read instead).
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 0], [128, 128], [255, 255]]));
+        h.run_steps(3);
+        let graph = h.ctx.data(|d| d.get_temp::<egui::Rect>(dialog_mem("curves").with("curves-graph"))).unwrap();
+        let a = egui::pos2(graph.left() + 128.0 / 255.0 * graph.width(), graph.bottom() - 128.0 / 255.0 * graph.height());
+        h.hover_at(a);
+        h.run_steps(1);
+        h.drag_at(a);
+        h.run_steps(1);
+        h.hover_at(a + egui::vec2(40.0, -32.0));
+        h.run_steps(1);
+        h.drop_at(a + egui::vec2(40.0, -32.0));
+        h.run_steps(3);
+        let fields = &h.state().ui.dialogs[0].fields;
+        let points = fields.get("points").unwrap_or_else(|| panic!("with `{key}`: the edit keeps `points`"));
+        assert!(points[1][0].as_f64().unwrap() > 150.0, "with `{key}`: the drag edited `points`: {points}");
+        assert!(fields.get(key).is_none(), "with `{key}`: the stale key is dropped");
+        // CodeRabbit on #9234: a click on the image adds its point to the Gray curve too, and
+        // drops a stale key the same way.
+        let n = fields["points"].as_array().map_or(0, Vec::len);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+        let ctx = h.ctx.clone();
+        assert!(add_point_at(h.state_mut(), &ctx, 4.0, 4.0, false));
+        let fields = &h.state().ui.dialogs[0].fields;
+        assert_eq!(fields["points"].as_array().map_or(0, Vec::len), n + 1, "with `{key}`: the image click adds to `points`");
+        assert!(fields.get(key).is_none() && fields.get("lightness").is_none(), "with `{key}`: not to `lightness`, stale key dropped");
+    }
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+}
+
+/// CodeRabbit on #9234: a grayscale document's Curves recalled with Lab records (⌥⌘M after
+/// Curves in a Lab document) still renders the Gray curve it shows: a preset chosen there darkens
+/// the image once OK is clicked, though the engine would read the stale `lightness` record first.
+#[test]
+fn grayscale_curves_preset_over_stale_lab_records_changes_the_image() {
+    let mut app = app_in_mode("lab");
+    let id = open(&mut app, "image.adjustments.curves").unwrap();
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    remember(&mut app, &fields);
+    app.ui.dialogs.clear();
+    app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    let gray = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 8, "y": 8})).unwrap()[0].as_f64().unwrap();
+    let before = gray(&mut app);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+    let fields = &h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    assert!(fields.contains_key("lightness") && fields.contains_key("a"), "recalled with Lab records: {fields:?}");
+    h.run_steps(4);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Darker").click();
+    h.run_steps(3);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let after = gray(h.state_mut());
+    assert!(after < before - 0.05, "Darker darkened the midtones: {before} -> {after}");
+}
+
+/// CodeRabbit on #9234: a grayscale document's Curves recalled with an RGB document's Red curve
+/// (⌥⌘M after Curves there) renders only the Gray curve it shows: the Preset menu does not read
+/// Default over a Red curve that still changes the image, and Darker gives Darker's gray.
+#[test]
+fn grayscale_curves_preset_over_a_recalled_red_curve_renders_the_preset_alone() {
+    let darker = |app: &mut PhotocraftApp| {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    };
+    let gray = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 8, "y": 8})).unwrap()[0].as_f64().unwrap();
+    // Darker's gray, from a Curves with no channel curves.
+    let mut app = app_in_mode("grayscale");
+    darker(&mut app);
+    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 104.0], [255.0, 255.0]]})).unwrap();
+    let expected = gray(&mut app);
+    let mut app = app_in_mode("rgb");
+    let id = open(&mut app, "image.adjustments.curves").unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("red".into(), json!([[0.0, 0.0], [64.0, 230.0], [255.0, 255.0]]));
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    remember(&mut app, &fields);
+    app.ui.dialogs.clear();
+    darker(&mut app);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+    assert_eq!(h.state().ui.dialogs[0].fields["red"][1], json!([64.0, 230.0]), "recalled with the Red curve");
+    h.run_steps(4);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Darker").click();
+    h.run_steps(3);
+    let preset = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().and_then(|n| n.accesskit_node().value().map(|s| s.to_string()));
+    assert_eq!(preset.as_deref(), Some("Darker"), "the menu shows the preset");
+    assert_eq!(h.state().ui.dialogs[0].fields["red"], json!([[0.0, 0.0], [255.0, 255.0]]), "the preset straightens the Red curve");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let after = gray(h.state_mut());
+    assert!((after - expected).abs() < 1.0 / 255.0, "Darker alone renders {expected}, got {after}");
+}
+
+/// CodeRabbit on #9234: as above, with the RGB document's Red curve drawn with the pencil (a
+/// 256-level map, not points): Darker still renders Darker's gray alone.
+#[test]
+fn grayscale_curves_preset_over_a_recalled_pencil_red_map_renders_the_preset_alone() {
+    let darker = |app: &mut PhotocraftApp| {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    };
+    let gray = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 8, "y": 8})).unwrap()[0].as_f64().unwrap();
+    let mut app = app_in_mode("grayscale");
+    darker(&mut app);
+    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 104.0], [255.0, 255.0]]})).unwrap();
+    let expected = gray(&mut app);
+    let mut app = app_in_mode("rgb");
+    let id = open(&mut app, "image.adjustments.curves").unwrap();
+    let red: Vec<f64> = (0..256).map(|k| ((f64::from(k) / 255.0).sqrt() * 255.0).round()).collect();
+    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+    fields.insert("pencil".into(), json!(true));
+    fields.insert("red".into(), json!(red));
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    remember(&mut app, &fields);
+    app.ui.dialogs.clear();
+    darker(&mut app);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+    assert_eq!(h.state().ui.dialogs[0].fields["red"], json!(red), "recalled with the pencil-drawn Red map");
+    h.run_steps(4);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Darker").click();
+    h.run_steps(3);
+    let preset = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().and_then(|n| n.accesskit_node().value().map(|s| s.to_string()));
+    assert_eq!(preset.as_deref(), Some("Darker"), "the menu shows the preset");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let after = gray(h.state_mut());
+    assert!((after - expected).abs() < 1.0 / 255.0, "Darker alone renders {expected}, got {after}");
+}
+
+/// The Curves dialog's dropdowns as (label, value).
+fn combo_boxes(h: &Harness<'_, PhotocraftApp>) -> Vec<(String, String)> {
+    h.query_all_by_role(egui::accesskit::Role::ComboBox)
+        .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.accesskit_node().value().map(|v| v.to_string()).unwrap_or_default()))
+        .collect()
+}
+
+/// #9221: the presets are RGB curves, so a CMYK or Lab document's Curves has no Preset menu; an
+/// RGB one does (grayscale: `grayscale_curves_shows_presets_with_stale_channel_keys`).
+#[test]
+fn curves_preset_menu_is_absent_in_cmyk_and_lab_documents() {
+    for (mode, shown) in [("rgb", true), ("cmyk", false), ("lab", false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_in_mode(mode));
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        let menus = combo_boxes(&h);
+        assert!(menus.iter().any(|(l, _)| l == "Channel:"), "{mode}: the Curves editor is drawn (menus: {menus:?})");
+        assert_eq!(menus.iter().any(|(l, _)| l == "Preset"), shown, "{mode}: the Preset menu (menus: {menus:?})");
+        assert_eq!(h.query_by_label("Preset:").is_some(), shown, "{mode}: the Preset: label");
+        crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    }
+}
+
+/// #9221: a preset's curves go through the engine on OK and come back rounded to 0.01 when the
+/// dialog reopens at its last settings (⌥⌘M); the menu still names the preset, not Custom.
+#[test]
+fn curves_presets_keep_their_names_after_a_round_trip_through_the_engine() {
+    for mode in ["rgb", "grayscale"] {
+        let gray = mode == "grayscale";
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_in_mode(mode));
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        for preset in crate::curves_presets::available(gray) {
+            let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+            let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+            let mut values = crate::filter_dialog::params_of(fields);
+            crate::curves_presets::apply(&mut values, preset, gray);
+            if let Value::Object(v) = values {
+                fields.extend(v);
+            }
+            h.run_steps(3);
+            crate::dialogs::confirm(h.state_mut(), id).unwrap();
+            h.run_steps(2);
+            let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+            h.run_steps(4);
+            let menus = combo_boxes(&h);
+            let shown = menus.iter().find(|(l, _)| l == "Preset").map(|(_, v)| v.as_str());
+            assert_eq!(shown, Some(preset.label), "{mode}: {} after OK and ⌥⌘M (menus: {menus:?})", preset.id);
+            crate::dialogs::cancel(h.state_mut(), id).unwrap();
+        }
+    }
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {

@@ -123,6 +123,39 @@ pub struct EditorCx {
     pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
 }
 
+/// The tone space a Curves editor works in: a grayscale document's is always its one Gray curve
+/// (`points`), whatever channel keys of another mode its settings still hold.
+pub fn curves_space(v: &Value, gray: bool) -> ToneSpace {
+    if gray { ToneSpace::Rgb } else { space_of(v) }
+}
+
+/// Grayscale Curves settings put in the tone space [`curves_space`] edits: another mode's channel
+/// records (CMYK inks, Lab `lightness`, `a`, `b`) and bent `red`, `green` or `blue` curves (from
+/// an RGB document's Curves) give way to straight `red`, `green` and `blue`, as a grayscale
+/// document's own Curves have. The engine picks the space from those keys, reads a Lab
+/// `lightness` over `points`, and renders each RGB channel's curve on the gray image, so the Gray
+/// curve the editor shows is the only one that renders.
+pub fn gray_curves(v: &mut Value) {
+    const STALE: [&str; 7] = ["cyan", "magenta", "yellow", "black", "lightness", "a", "b"];
+    let rgb = adjust_params::channel_keys(ToneSpace::Rgb);
+    // A channel holds `[in, out]` points or a pencil-drawn 256-level map; the engine renders either.
+    let straight = |key: &str| {
+        let c = curves::read_curve(v, key);
+        c.first() == Some(&[0.0, 0.0])
+            && c.last() == Some(&[255.0, 255.0])
+            && c.iter().all(|p| (p[0] - p[1]).abs() < 0.01)
+            && curves::read_map(v, key).iter().enumerate().all(|(k, o)| (o - k as f32).abs() < 0.5)
+    };
+    let bent = rgb.iter().any(|key| !straight(key));
+    let Some(o) = v.as_object_mut().filter(|o| bent || STALE.iter().any(|k| o.contains_key(*k))) else { return };
+    for key in STALE {
+        o.remove(key);
+    }
+    for key in rgb {
+        o.insert((*key).into(), json!([[0.0, 0.0], [255.0, 255.0]]));
+    }
+}
+
 /// The Levels/Curves channel space the values address.
 pub fn space_of(v: &Value) -> ToneSpace {
     if v.get("cyan").is_some() || v.get("black").is_some() {

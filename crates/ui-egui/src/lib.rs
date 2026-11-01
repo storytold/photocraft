@@ -136,6 +136,7 @@ pub use dialogs::color_picker_ui;
 pub use dialogs::color_range_ui;
 pub use dialogs::color_table_ui;
 pub use dialogs::credits;
+pub(crate) use dialogs::curves_presets;
 pub use dialogs::dds_options_ui;
 pub use dialogs::delete_layer_prompt;
 pub use dialogs::dialog_alt_reset;
