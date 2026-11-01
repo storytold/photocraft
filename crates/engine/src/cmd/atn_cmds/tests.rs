@@ -3351,3 +3351,30 @@ fn oil_paint_setting_with_a_unit_or_another_number_type_is_kept() {
         ],
     );
 }
+
+/// Smart Sharpen records `Amnt` in `#Prc` and its radius in `#Pxl`, and saves them back so:
+/// another unit, or none, would load as that number and save back in the other unit, so the
+/// step stays a Photoshop step, whether the radius key is padded or not (#10610).
+#[test]
+fn smart_sharpen_amount_or_radius_in_another_unit_is_kept() {
+    kept_when_wrong_typed(
+        "smartSharpen",
+        &[
+            ("Amnt", px(150.0)),
+            ("Amnt", D::Double(150.0)),
+            ("Amnt", D::Integer(150)),
+            ("Rds ", pct(2.0)),
+            ("Rds ", D::Double(2.0)),
+            ("Rds", D::UnitFloat { unit: *b"#Mlm", value: 2.0 }),
+            ("Rds", D::Double(2.0)),
+        ],
+    );
+    for rds in ["Rds ", "Rds"] {
+        let d = desc("null").with("Amnt", pct(150.0)).with(rds, px(2.5));
+        assert_eq!(
+            mapped(newer("smartSharpen", d)),
+            ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})),
+            "{rds:?}"
+        );
+    }
+}

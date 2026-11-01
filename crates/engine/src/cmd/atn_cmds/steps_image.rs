@@ -1,6 +1,6 @@
 use super::descriptors::{
     PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target,
-    long, num, pct, px, ref_class, target, trimmed,
+    long, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -588,10 +588,19 @@ pub(super) fn oil_paint_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d.with("LghD", D::Integer(angle as i32)).with("specularity", D::Double(num("shine", 1.0)?)))
 }
 
+/// A unit double in `unit`: the step saves `Amnt` in `#Prc` and the radius in `#Pxl`, so a
+/// value in another unit, or without one, would save back as another value.
+fn in_unit(unit: [u8; 4]) -> impl Fn(&D) -> Option<f64> {
+    move |v| match v {
+        D::UnitFloat { unit: u, value } if *u == unit && value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
 /// Smart Sharpen (`smartSharpen`), as Photoshop records it without its dialog: the legacy
 /// filter, removing Lens Blur, with no noise reduction (so `reduceNoise` is 0). A step that
 /// asks for what the command does not do (another blur, More Accurate, the newer filter, a
-/// preset) keeps it as a Photoshop step.
+/// preset), or an amount or radius in another unit, keeps it as a Photoshop step.
 pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
     match smart_sharpen_params(d) {
         Some(p) => step("filter.sharpen.smartSharpen", Value::Object(p)),
@@ -610,8 +619,8 @@ fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
         return None;
     }
     let mut p = Map::new();
-    for (key, param, default) in [("Amnt", "amount", 200.0), ("Rds", "radius", 1.0)] {
-        p.insert(param.into(), setting(d, key, num, default)?.into());
+    for (key, param, unit, default) in [("Amnt", "amount", *b"#Prc", 200.0), ("Rds", "radius", PX, 1.0)] {
+        p.insert(param.into(), setting(d, key, in_unit(unit), default)?.into());
     }
     p.insert("reduceNoise".into(), 0.into());
     Some(p)
