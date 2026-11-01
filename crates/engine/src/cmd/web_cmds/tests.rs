@@ -1560,6 +1560,8 @@ fn a_whole_image_path_with_slice_numbers_is_refused() {
     assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "dir": "", "numbers": [left, right]}), "use `dir`");
     // `folder` alone is the whole image under the document's name (#5305): refused the same way.
     assert_refused(&mut s, &dir, json!({"format": "png24", "folder": dir, "numbers": [right]}), "use `dir`");
+    // An explicit null `slices` is the default mode, as if absent.
+    assert_refused(&mut s, &dir, json!({"format": "png24", "path": path, "slices": null, "numbers": [right]}), "use `dir`");
     // Valid calls still work: `path` alone is the whole image; with `slices`, the chosen slices
     // go next to it; `dir` with `numbers` writes those slices.
     let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path})).unwrap();
