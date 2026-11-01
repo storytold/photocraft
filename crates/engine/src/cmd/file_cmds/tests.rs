@@ -32,6 +32,60 @@ fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
 }
 
 #[test]
+fn sprite_sheet_grid_exports_padded_png() {
+    let dir = tmp("sprite-sheet");
+    let path = join(&dir, "sheet.png");
+    let mut s = session(8, 4, 8);
+    let result = s
+        .execute(
+            "file.export.spriteSheet",
+            json!({
+                "path": path,
+                "source": "grid",
+                "frameWidth": 4,
+                "frameHeight": 2,
+                "columns": 2,
+                "padding": 1,
+                "fps": 8,
+                "exportGif": true,
+                "selectedFrames": [{"frame": 1, "durationTicks": 2}, {"frame": 0, "durationTicks": 1}]
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["width"], 11);
+    assert_eq!(result["height"], 7);
+    let bytes = std::fs::read(&path).unwrap();
+    let image = photocraft_codecs::decode(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (11, 7));
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(join(&dir, "sheet.json")).unwrap()).unwrap();
+    assert_eq!(metadata["frames"]["frame_0"]["frame"], json!({"x": 6, "y": 1, "w": 4, "h": 2}));
+    assert_eq!(metadata["frames"]["frame_0"]["duration"], 250);
+    assert_eq!(metadata["frames"]["frame_1"]["duration"], 125);
+    let gif = std::fs::read(join(&dir, "sheet.gif")).unwrap();
+    let gif_frames = photocraft_codecs::decode_gif_frames(&gif, &photocraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(gif_frames.len(), 2);
+    assert_eq!(gif_frames[0].delay_ms, 250);
+    assert_eq!(gif_frames[1].delay_ms, 120);
+}
+
+#[test]
+fn sprite_sheet_normalizes_output_extension_and_rejects_oversized_grids() {
+    let dir = tmp("sprite-sheet-safety");
+    let mut s = session(65, 65, 8);
+    let requested = join(&dir, "animation.json");
+    let result =
+        s.execute("file.export.spriteSheet", json!({"path": requested, "source": "grid", "frameWidth": 1, "frameHeight": 1, "columns": 8})).unwrap_err();
+    assert!(result.to_string().contains("exceeding safety limit"));
+
+    let mut s = session(8, 4, 8);
+    let requested = join(&dir, "animation.json");
+    let result = s.execute("file.export.spriteSheet", json!({"path": requested, "source": "grid", "frameWidth": 4, "frameHeight": 2, "columns": 2})).unwrap();
+    assert_eq!(result["path"], join(&dir, "animation.png"));
+    assert!(std::fs::metadata(join(&dir, "animation.png")).is_ok());
+    assert!(std::fs::metadata(join(&dir, "animation.json")).is_ok());
+}
+
+#[test]
 fn close_all_and_close_others() {
     let mut s = session(8, 8, 8);
     s.execute("file.new", json!({"width": 9, "height": 9})).unwrap();

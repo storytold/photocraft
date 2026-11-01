@@ -184,6 +184,9 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
 
 fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Result<Option<Value>, String> {
     let result = match id {
+        "file.export.spriteSheet" if params.as_object().is_none_or(|object| object.is_empty()) => {
+            return crate::sprite_sheet::open(app).map(|dialog| Some(json!({"dialog": dialog})));
+        }
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
         // drawn) as a selection.
         "path.toSelection" if params.get("name").is_none() => crate::vector_ui::path_to_selection(app, params.clone()),
