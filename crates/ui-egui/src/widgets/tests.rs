@@ -1442,3 +1442,179 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
 }
+
+/// Click and drag-paint of checkboxes (#3333).
+mod checkbox_drag {
+    use egui::Modifiers;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// #3333: pressing a checkbox and dragging over its neighbours sets them all to the state the
+    /// first one switched to; the box past the sweep stays untouched.
+    #[test]
+    fn dragging_across_checkboxes_sets_them_all_like_the_first() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false, true, false, false],
+        );
+        h.run();
+        let boxes: Vec<egui::Pos2> = h.get_all_by_label("Box").map(|n| n.rect().left_center() + egui::vec2(7.0, 0.0)).collect();
+        assert_eq!(boxes.len(), 4);
+        h.event(egui::Event::PointerMoved(boxes[0]));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: boxes[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for b in &boxes[1..3] {
+            h.event(egui::Event::PointerMoved(*b));
+            h.run_steps(2);
+        }
+        h.event(egui::Event::PointerButton { pos: boxes[2], button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(*h.state(), [true, true, true, false]);
+    }
+
+    /// Left-centre of each "Box" checkbox, ordered left to right, then top to bottom.
+    fn box_points<S>(h: &Harness<'_, S>) -> Vec<egui::Pos2> {
+        let mut v: Vec<egui::Pos2> = h.get_all_by_label("Box").map(|n| n.rect().left_center() + egui::vec2(7.0, 0.0)).collect();
+        v.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        v
+    }
+
+    /// Press on `path[0]`, move through the rest one frame each, release on the last point.
+    fn sweep<S>(h: &mut Harness<'_, S>, path: &[egui::Pos2], settle: usize) {
+        h.event(egui::Event::PointerMoved(path[0]));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: path[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for p in &path[1..] {
+            h.event(egui::Event::PointerMoved(*p));
+            h.run_steps(settle);
+        }
+        let last = *path.last().unwrap();
+        h.event(egui::Event::PointerButton { pos: last, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+
+    /// #3333: a sweep skips a disabled box in the same group; the enabled box past it still follows.
+    #[test]
+    fn drag_sweep_does_not_toggle_a_disabled_checkbox() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                ui.vertical(|ui| {
+                    crate::widgets::checkbox(ui, &mut s[0], "Box");
+                    // Disabling the ui keeps the group, so only the enabled check can stop the sweep.
+                    ui.disable();
+                    crate::widgets::checkbox(ui, &mut s[1], "Box");
+                    crate::widgets::checkbox(ui, &mut s[2], "Box");
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &b, 2);
+        assert_eq!(*h.state(), [true, false, false], "disabled boxes keep their state");
+    }
+
+    /// #3333: a box outside the visible clip is not toggled although the pointer is over its rect.
+    #[test]
+    fn drag_sweep_does_not_toggle_a_clipped_checkbox() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                ui.vertical(|ui| {
+                    crate::widgets::checkbox(ui, &mut s[0], "Box");
+                    crate::widgets::checkbox(ui, &mut s[1], "Box");
+                    // Everything from here down is clipped away (scrolled out of view).
+                    let mut clip = ui.clip_rect();
+                    clip.max.y = ui.cursor().top();
+                    ui.set_clip_rect(clip);
+                    crate::widgets::checkbox(ui, &mut s[2], "Box");
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &b, 2);
+        assert_eq!(*h.state(), [true, true, false], "the clipped box keeps its state");
+    }
+
+    /// #3333: a box that another layer covers at the pointer is not toggled.
+    #[test]
+    fn drag_sweep_does_not_toggle_a_covered_checkbox() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+                // A floating panel over the third box.
+                let y = ui.min_rect().bottom() - 12.0;
+                egui::Area::new(egui::Id::unique("cover")).fixed_pos(egui::pos2(0.0, y)).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+                    ui.allocate_exact_size(egui::vec2(200.0, 40.0), egui::Sense::click());
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &b, 2);
+        assert_eq!(*h.state(), [true, true, false], "the covered box keeps its state");
+    }
+
+    /// #3333: a sweep that starts in one group never changes a box of another group.
+    #[test]
+    fn drag_sweep_stays_inside_the_group_it_started_in() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 4]| {
+                ui.horizontal(|ui| {
+                    // Two separate id scopes: two groups.
+                    ui.push_id("left", |ui| {
+                        ui.vertical(|ui| {
+                            crate::widgets::checkbox(ui, &mut s[0], "Box");
+                            crate::widgets::checkbox(ui, &mut s[1], "Box");
+                        });
+                    });
+                    ui.push_id("right", |ui| {
+                        ui.vertical(|ui| {
+                            crate::widgets::checkbox(ui, &mut s[2], "Box");
+                            crate::widgets::checkbox(ui, &mut s[3], "Box");
+                        });
+                    });
+                });
+            },
+            [false; 4],
+        );
+        h.run();
+        let b = box_points(&h);
+        assert_eq!(b.len(), 4);
+        // Left column top, across to the right column, then down the right column, back to the left.
+        sweep(&mut h, &[b[0], b[2], b[3], b[1]], 2);
+        assert_eq!(*h.state(), [true, true, false, false], "only the starting group follows");
+    }
+
+    /// #3333: sweeping upwards and releasing on the next frame still reaches the earlier box.
+    #[test]
+    fn drag_sweep_upwards_with_a_quick_release_reaches_the_earlier_box() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut [bool; 3]| {
+                ui.vertical(|ui| {
+                    for b in s.iter_mut() {
+                        crate::widgets::checkbox(ui, b, "Box");
+                    }
+                });
+            },
+            [false; 3],
+        );
+        h.run();
+        let b = box_points(&h);
+        sweep(&mut h, &[b[2], b[1]], 1);
+        assert_eq!(*h.state(), [false, true, true]);
+    }
+}
