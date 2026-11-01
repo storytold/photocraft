@@ -102,13 +102,13 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
 
     crate::widgets::section_label(ui, tl!("Resolution"));
     crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Input:"));
         let input = num(f, "__inputResolution", 72.0);
         let (v, unit) = if text(f, "__resUnit", "ppi") == "ppcm" { (input / CM, res_units[1].1) } else { (input, res_units[0].1) };
         ui.label(egui::RichText::new(format!("{} {unit}", crate::widgets::fmt_num_prec(f64::from(v), 3))).color(t.text));
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Output:"));
         let input = num(f, "__inputResolution", 72.0);
         per_unit_row(ui, f, "resolution", tl!("Resolution"), RESOLUTION, input, "__resUnit", res_units);
@@ -118,7 +118,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
     crate::widgets::section_label(ui, tl!("Method"));
     crate::widgets::hairline(ui);
     let mut method = text(f, "method", "diffusion");
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Use:"));
         let opts: Vec<(String, &str)> = METHODS.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
         if crate::widgets::dropdown(ui, "bitmap-method", tl!("Method"), &mut method, &opts, 190.0) {
@@ -126,7 +126,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         }
     });
     // Photoshop greys the pattern out unless the method is Custom Pattern.
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.add_enabled_ui(method == "customPattern", |ui| {
             label(ui, tl!("Custom Pattern:"));
             let pat = text(f, "pattern", "");
@@ -142,18 +142,18 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         ui.add_space(4.0);
         crate::widgets::section_label(ui, tl!("Halftone Screen"));
         crate::widgets::hairline(ui);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Frequency:"));
             per_unit_row(ui, f, "frequency", tl!("Frequency"), FREQUENCY, 53.0, "__freqUnit", [("lpi", tl!("Lines/Inch")), ("lpcm", tl!("Lines/Centimeter"))]);
         });
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Angle:"));
             let mut angle = num(f, "angle", 45.0);
             if crate::widgets::value_field(ui, &mut angle, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
                 f.insert("angle".into(), json!((angle.clamp(-180.0, 180.0) * 10.0).round() / 10.0));
             }
         });
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             label(ui, tl!("Shape:"));
             let mut shape = text(f, "shape", "round");
             let opts: Vec<(String, &str)> = SHAPES.iter().map(|(id, l)| (id.to_string(), tl!(l))).collect();
@@ -223,5 +223,45 @@ mod rtl_tests {
         let rtl_input = rtl.get_by_label("Input:").rect();
         let rtl_output = rtl.get_by_label("Output:").rect();
         assert!((rtl_input.right() - rtl_output.right()).abs() < 1.0, "RTL: the rows end at the right: {rtl_input:?} {rtl_output:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Bitmap body drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>)> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("__inputResolution".into(), json!(72.0));
+        fields.insert("__resUnit".into(), json!("ppi"));
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(440.0, 360.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, s: &mut (PhotocraftApp, Map<String, Value>)| body(&s.0, ui, &mut s.1), (app, fields));
+        h.run_steps(3);
+        h
+    }
+
+    /// The migrated Use/Method row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_use_method_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let cap = egui::accesskit::Role::Label;
+        let combo = egui::accesskit::Role::ComboBox;
+        let ltr_cap = ltr.get_by_role_and_label(cap, "Use:").rect();
+        let ltr_combo = ltr.get_by_role_and_label(combo, "Method").rect();
+        assert!(ltr_cap.right() <= ltr_combo.left(), "LTR reads Use: then the dropdown: {ltr_cap:?} {ltr_combo:?}");
+        let ltr_gap = ltr_combo.left() - ltr_cap.right();
+        let rtl_cap = rtl.get_by_role_and_label(cap, "Use:").rect();
+        let rtl_combo = rtl.get_by_role_and_label(combo, "Method").rect();
+        assert!(rtl_combo.right() <= rtl_cap.left(), "RTL mirrors the row: {rtl_cap:?} {rtl_combo:?}");
+        let rtl_gap = rtl_cap.left() - rtl_combo.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
