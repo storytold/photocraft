@@ -376,4 +376,13 @@ fn effect_layer_list_grows_with_the_dialog_height() {
     assert!(params >= 80.0);
     assert!(params + tall + 110.0 <= 980.0 + 1.0);
     assert_eq!(column_heights(f32::NAN).1, 190.0);
+    // Short, zero, negative and non-finite heights keep the settings at 80 px and the list at 190 px.
+    for h in [380.0, 300.0, 0.0, -50.0, f32::NAN, f32::NEG_INFINITY] {
+        assert_eq!(column_heights(h), (80.0, 190.0), "{h}");
+    }
+    // At every height the settings keep at least 80 px and the list at least 190 px.
+    for h in (0..=4000).step_by(10).map(|h| h as f32) {
+        let (params, list) = column_heights(h);
+        assert!(params >= 80.0 && list >= 190.0, "{h}: {params} {list}");
+    }
 }
