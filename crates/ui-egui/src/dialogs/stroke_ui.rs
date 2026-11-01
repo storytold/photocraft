@@ -95,14 +95,14 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     crate::widgets::section_label(ui, tl!("Stroke"));
     crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Width:"));
         let mut width = f.get("width").and_then(Value::as_f64).unwrap_or(1.0) as f32;
         if crate::widgets::value_field(ui, &mut width, 1.0..=250.0, "px", 84.0).accessible_name(tl!("Width:")).changed() {
             f.insert("width".into(), json!(width.round()));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Color:"));
         let current = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
         let rgb = [1usize, 3, 5].map(|i| current.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()).unwrap_or(0));
@@ -115,7 +115,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.add_space(4.0);
     crate::widgets::section_label(ui, tl!("Location"));
     crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Location:"));
         let mut location = f.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
         let opts: Vec<(String, &str)> = LOCATIONS.iter().map(|(key, label)| (key.to_string(), tl!(label))).collect();
