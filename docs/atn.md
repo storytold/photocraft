@@ -173,6 +173,10 @@ step does; each line says what is lost and the fix.
 | Set layer blend mode Pass Through (groups) | Written as `BlnM.PsTh`; the application rejects it. Its value is `passThrough`. | Save `passThrough`. |
 | Canvas Size, extension colour Foreground / Other | Written as `canvasExtensionColorType` `Frgd` / `Othr`; the application does not know them and opens the Canvas Size dialog instead. Its values are `FrgC` and `Clr `. | Use `FrgC` and `Clr ` both ways. |
 | Convert to Profile, intent Absolute Colorimetric | Written as `Inte.AbsC`; the application reads it as Relative Colorimetric (it echoes `Clrm`). Its value is `AClr`; a recorded `AClr` does not load. | Use `AClr` both ways. |
+| Convert Mode (`CnvM`) | Saved with `T   ` as an enum (`ClrS.Grys`); the application records and needs a class (`T   ` type `Grys`): with the enum every mode change fails there ("program error"). A recording on a layered document also carries `Fltt` and `Rstr` (false), which avoid the flatten question on playback. | Save `T   ` as a class; read and write `Fltt`/`Rstr`. |
+| Make adjustment layer with `Usng.Opct` | The layer's opacity (e.g. 70 % in the bundled Gradient Map action) is dropped. | Map to the new layer's opacity. |
+| Canvas Size in percent | A recorded size in `#Prc` (the bundled Frame Channel action records 200 %) stays a kept step. | Scale the current size by the percentage. |
+| Image Size in cm or inches | Recorded in `#Rlt` (points) with `scaleStyles`; stays a kept step. | Convert with the document's resolution at playback. |
 | Select a document by offset (`Dcmn` `rele`) | The reference application wraps around at the ends of the opening order (from the second of three documents, -2 is the third, +2 the first); `document.activate` refuses an offset past the ends (#7103), so the step fails in PhotoCraft. See Reference forms. | Wrap like the reference application. |
 
 ### The command has no such setting (needs a new command option first)
@@ -289,6 +293,75 @@ artboards (new, from layers), Frame from Layers, Create Layers from a layer styl
 (`applyImageStackPluginRenderer`), video frames and footage, Create Work Path, Check Spelling, Find and
 Replace Text, Import Notes, Measurement Scale, Convert Stroke to Fill (needs a selected path component),
 Sky Replacement.
+
+## Measured through dialogs and recordings
+
+Measured on 2026-11-01 in two ways: by running the event with its dialog and pressing OK (the reference
+application then returns the full descriptor), and by recording actions through the menus and reading
+the recorded steps back from the saved Actions panel. Ranges come from the dialog's own "a value between
+… is required" message.
+
+| Event | Keys (recorded order) | Notes |
+|---|---|---|
+| Custom (`Cstm`) | `Scl ` long 1..9999, `Ofst` long -9999..9999, `Mtrx` list of 25 longs -999..999 | Without the dialog the step needs all 25 cells, or the application fails. |
+| Fibers (`Fbrs`) | `Vrnc` long 1..64, `Strg` long 1..64, `RndS` long (seed) | |
+| Displace (`Dspl`) | `HrzS`, `VrtS` long -999..999; `DspM` (`StrF` stretch to fit, or tile); `UndA` (`RptE` repeat edge pixels, or wrap around); `DspF` alias: path of the displacement map (.psd) | The map file is chosen after OK. |
+| Color Lookup (`colorLookup`) | `lookupType` (`colorLookupType`: `3DLUT`, abstract, device link); `Nm  ` text: the file's path; `Dthr` bool; `profile` raw data (ICC); `LUTFormat` (`LUTFormatType`, e.g. `LUTFormatLOOK`); `LUT3DFileData` raw data: the LUT file itself; `LUT3DFileName` text | The LUT travels inside the step. |
+| Shape Blur (`shapeBlur`) | `Rds ` pixels 5..1000; `customShape` object (`Nm  ` text, `Idnt` text: the shape's id); `keyOriginType` long (9) | |
+| Lighting Effects (`lightFilterLightingEffects`) | `k3DLights` list of lights (`Nm  `, colour `Rd  `/`Grn `/`Bl  ` 0..1, `hots`, `FlOf`, `shdw`, attenuation keys, `Type`, `ison`, `key3DMatrix` raw + floats, `X   `/`Y   `/`Z   `, target `tarx`/`tary`/`tarz`, `key3DPosition`), `key3DCurrentCameraPosition`, `Glos`, `Mtrl`, `Exps`, `AmbB`, `AmbC` RGB, `BmpA`, `BmpC` (texture channel by name, localised: "Ohne" = none), `Wdth`, `Hght` | A dialog-less run returns nothing; only a recording shows the keys. |
+| Blur Gallery (`blurbTransform`) | `blurbType`, `VrsM`, `VrsN`, `referenceRect` (rectangle), `blurbOpenPanel`, `blurbGeneralBlurEffectApplied`, `blurbSaveMaskChannel`, `blurbHighQuality`, `blurbWidgetList` (per widget: `blurbWidgetType` (0 = field blur), `blurbWidgetLocationX`/`Y`, `blurbWidgetSelected`, `blurbWidgetEffectEnabled`, `blurbGeneralBlurAmount`) | One event for all five Blur Gallery filters. |
+| Liquify (`LqFy`) | `LqMe` raw data: the mesh | Opaque; keep the step as recorded. |
+| Camera Raw Filter | `CrVe` text (version), `PrVN` long, `PrVe` long | With settings at their defaults; changed settings add keys. |
+| Vanishing Point (`VnPt`) | none | The planes are not recorded. |
+| Calculations | recorded as Make: `Nw  ` class channel, `Usng` object (`T   ` reference: source 1 channel and layer, `Clcl` blend mode, `Src2` reference) | Not a `calculations` event. |
+| Image Size, size in cm or inches | `Wdth` in `#Rlt` (points), `scaleStyles`, `CnsP`, `Intr` | A physical size is recorded in points, not pixels: playback needs the document's resolution. |
+| Canvas Size | only the changed side; `canvasExtensionColorType` `FrgC` for the foreground colour | |
+| Convert Mode, several layers, "Don't Flatten" | `T   ` as a **class** (`Grys`), `Fltt` false, `Rstr` false | With `Fltt` and `Rstr` the step plays without the flatten question. |
+| New Group with a colour | `Usng` (`Clr ` label), `layerSectionStart`, `layerSectionEnd`, top-level `Nm  ` | |
+
+**Not recordable:** Edit > Purge (no step is recorded; this version's Purge menu has Clipboard,
+Histories, All and Video Cache, no Undo).
+
+### Batch
+
+Running Batch while recording records the steps the batch played, not a Batch step. The Batch
+descriptor itself (`Btch`, as the dialog returns it):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `null` | alias | source folder (absent for open files) |
+| `Fldr` | bool | include all subfolders |
+| `suppressWarnings` | bool | suppress colour profile warnings |
+| `Usng` | reference | the action: `Actn` by name in `ASet` by name |
+| `T   ` | alias | destination folder |
+| `fileNamingRules` | object | file naming (below) |
+| `Log ` | alias | folder of the error log ("log errors to file") |
+| `Nm  ` | text | error log file name |
+
+`fileNamingRules`: `fileNamingComponents` (list of up to six objects; each is `component` enum
+`fileNamingComponent`, or `Txt ` text for typed text), `Strt` long (starting serial number), `Mcnt`, `Win `,
+`unix` bool (compatibility).
+
+| Component | Menu entry |
+|---|---|
+| `Nm  ` / `lowerCase` / `upperCase` | Document Name / document name / DOCUMENT NAME |
+| `oneDigit` `twoDigit` `threeDigit` `fourDigit` | 1, 2, 3, 4 digit serial number |
+| `lowerCaseSerial` / `upperCaseSerial` | serial letter (a, b, c…) / (A, B, C…) |
+| `mmddyy` `yyyymmdd` `yymmdd` `yyddmm` `ddmmyy` | dates |
+| `lowerCaseExtension` / `upperCaseExtension` | extension / EXTENSION |
+
+The extension component has no dot: Document Name + extension + 3 digit serial + "_pc", starting at 5,
+named `other.png` → `otherpng005_pc` (the saved file then gets its own extension). The two remaining date
+entries (mmdd, ddmm) did not accept `mmdd`/`ddmm`; their values are still unknown.
+
+### Actions panel menu
+
+Button Mode; New Action, New Set, Duplicate, Delete, Play; Start Recording, Record Again, Insert Menu
+Item, Insert Stop, Insert Conditional, Insert Path; Action Options, Playback Options, Allow Tool
+Recording; Clear All Actions, Reset Actions, Load Actions, Replace Actions, Save Actions; the bundled sets
+(Commands, Frames, Image Effects, LAB Black & White Technique, Production, Star Trails, Text Effects,
+Textures, Video Actions); Close, Close Tab Group. Playback Options: Accelerated, Step by Step, Pause For
+1..60 seconds.
 
 ## Older files: version 12
 
@@ -1588,14 +1661,11 @@ their tables will be added once a recorded step was read.
 
 | Event | Why |
 |---|---|
-| Lighting Effects | The light list only appears after the dialog. |
-| Displace | Reads a displacement map file chosen in the dialog. |
-| Fibers (`Vrnc`, `Strg` ranges) | Values outside the dialog's range are returned unchanged, not clamped; the limits come from the dialog. |
-| Custom | Without the dialog, scale and offset are ignored, and a matrix that is not 5 x 5 makes the application fail. |
 | Shear | Probing the point list made the application fail; the limits come from the dialog. |
 | Trace Contour | The step's level and edge are applied, but the returned descriptor always shows the defaults (level 128, upper). Lower (`Lwr `) is valid; levels at or below 0 and at or above 255 give the same image. |
 | Gradient tool | The drag needs a full gradient object (see Gradient Map in group E for its form). |
-| Batch, Create Droplet, Print | File and printer settings come from their dialogs; Batch's file naming is still unknown (a step written with PhotoCraft's current naming rules is refused). |
+| Create Droplet, Print | File and printer settings come from their dialogs. (Batch is measured: see Measured through dialogs and recordings.) |
+| Perspective Warp, Content-Aware Fill workspace, Export As, Quick Export | Interactive workspaces; their recorded steps were not read yet. |
 | Sky Replacement, Convert Stroke to Fill | Need a sky photo and a selected path component. (The smart object commands, Rasterize All and Convert Type to Shape are measured: see Newer events.) |
 | Generative Fill (`syntheticFill`) | AI feature: in PhotoCraft this goes through the shared AI layer; until then such steps stay kept steps. |
 
