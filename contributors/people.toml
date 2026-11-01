@@ -295,3 +295,7 @@ sync_github_name = true
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
+
+[people.CGnomazoid]
+real_name = "Colin Ulmer"
+sync_github_name = false

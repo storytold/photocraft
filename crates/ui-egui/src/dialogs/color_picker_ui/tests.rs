@@ -230,6 +230,61 @@ fn hex_field_takes_every_paste_with_or_without_hash() {
     assert_eq!(color(&h), "#1234ab");
 }
 
+/// The copy button beside the hex field puts the colour's hex code on the clipboard, as the
+/// Color panel's Copy Color's Hex Code does.
+#[test]
+fn hex_copy_button_copies_the_hex_code() {
+    let mut h = picker("#12abef");
+    h.get_by_label("Copy hex code").click();
+    h.run_steps(1);
+    let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(s) if s == "12abef"));
+    assert!(copied, "{:?}", h.output().platform_output.commands);
+    assert_eq!(color(&h), "#12abef", "copying leaves the colour alone");
+}
+
+/// The paste button asks for the clipboard and gives the hex field its focus back, so the
+/// clipboard text that arrives next pass sets the colour as ⌘V in the field does. Text that
+/// isn't a colour changes nothing, the field included.
+#[test]
+fn hex_paste_button_pastes_into_the_hex_field() {
+    let mut h = picker("#336699");
+    h.get_by_label("Paste hex code").click();
+    h.step();
+    let asked = h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::RequestPaste));
+    assert!(asked, "the paste button asks the platform for the clipboard");
+    h.run_steps(1);
+    assert!(h.get_by_role(Role::TextInput).is_focused(), "the hex field has its focus back for the paste");
+    h.event(egui::Event::Paste("#ff8800".into()));
+    h.run_steps(2);
+    assert_eq!(color(&h), "#ff8800");
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("FF8800"));
+    h.get_by_label("Paste hex code").click();
+    h.run_steps(1);
+    h.event(egui::Event::Paste("hello".into()));
+    h.run_steps(2);
+    assert_eq!(color(&h), "#ff8800");
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("FF8800"), "non-colour text stays out of the field");
+}
+
+/// An empty clipboard answers the paste button with no Paste event; once the request lapses, a
+/// later ⌘V is the field's own again rather than being taken as the button's answer.
+#[test]
+fn an_unanswered_paste_button_request_lapses() {
+    let mut h = picker("#336699");
+    h.get_by_label("Paste hex code").click();
+    h.run_steps(1);
+    let asked = h.ctx.input(|i| i.time);
+    while h.ctx.input(|i| i.time) - asked <= PASTE_ANSWER_SECS {
+        h.step();
+    }
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.event(egui::Event::Paste("ff".into()));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("ff"), "⌘V's text goes into the field");
+    assert_eq!(color(&h), "#336699");
+}
+
 #[test]
 fn color_picker_opens_with_hex_focused_and_selected() {
     let mut h = picker("#336699");

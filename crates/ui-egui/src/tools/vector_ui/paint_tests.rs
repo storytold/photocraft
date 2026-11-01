@@ -266,6 +266,40 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
     }
 }
 
+/// The Color Picker opened from the popover copies the paint's hex code, and its paste button
+/// replaces half-typed digits with the clipboard colour while keeping the paint's alpha.
+#[test]
+fn shape_paint_hex_copy_and_paste_buttons() {
+    for label in ["Fill color", "Stroke color"] {
+        let mut app = app("rgb", 32);
+        let original = [0.2, 0.4, 0.6, 0.372819];
+        app.run("tools.setColors", json!({"foreground": original, "background": original})).unwrap();
+        let mut h = harness(app, false);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        h.get_by_label("Color Picker").click();
+        h.run_steps(3);
+        let id = h.state().ui.dialogs.last().expect("the Color Picker dialog").id;
+        h.get_by_label("Copy hex code").click();
+        h.run_steps(1);
+        let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(s) if s == "336699"));
+        assert!(copied, "{label}: {:?}", h.output().platform_output.commands);
+        focus_hex(&mut h);
+        h.event(Event::Text("12".into()));
+        h.run_steps(1);
+        h.get_by_label("Paste hex code").click();
+        h.run_steps(1);
+        h.event(Event::Paste("#12ABEF".into()));
+        h.run_steps(2);
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#12abef", "{label}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let want = [18.0 / 255.0, 171.0 / 255.0, 239.0 / 255.0, original[3]];
+        let tools = &h.state().session.tools;
+        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want, "{label}");
+        assert_eq!(if label == "Fill color" { tools.background } else { tools.foreground }, original, "{label}");
+    }
+}
+
 #[test]
 fn a_pasted_hex_colour_updates_the_selected_shape_and_undoes_once() {
     for label in ["Fill color", "Stroke color"] {
