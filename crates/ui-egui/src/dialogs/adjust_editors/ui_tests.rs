@@ -1088,3 +1088,42 @@ fn a_zone_drag_released_in_the_frame_it_moves_still_moves() {
     };
     assert!(last.iter().zip(&b).all(|(l, b)| (l - (b + 10.0)).abs() <= 1.0), "moved 10° to the release, not past it: {b:?} → {last:?}");
 }
+
+/// FredApps review on #9272: a zone drag across the 0/360 seam. Reds' fully-on span sits on both
+/// ends of the bar; a drag from its middle third at either end (nearer a handle grabs the handle)
+/// moves the whole range intact, and the handles that pass the seam come out at the other end.
+#[test]
+fn hue_saturation_range_zone_drags_across_the_seam() {
+    let mut h = app_harness("hueSaturation", "rgb", 8);
+    let (id, _) = layer(&h);
+    let mem = crate::adjust_editors::layer_mem(id);
+    h.ctx.data_mut(|d| d.insert_temp(mem.with("hs-range"), 1usize)); // Reds: 315/345…15\45
+    h.run_steps(3);
+    let bars: Rect = h.ctx.data(|d| d.get_temp(mem.with("hs-range-bars"))).expect("the range bars");
+    let x = |deg: f32| bars.left() + deg / 360.0 * bars.width();
+    let y = bars.center().y;
+    let reds = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::HueSaturation { ranges, .. } => ranges[0].bounds,
+        other => panic!("{other:?}"),
+    };
+    let on_circle = |b: [f32; 4]| b.map(|d| d.rem_euclid(360.0).round());
+    let widths = |b: [f32; 4]| [b[1] - b[0], b[2] - b[1], b[3] - b[2]];
+    let mut steps = h.state().session.active().unwrap().history.past_len();
+    // (press, release, where the four handles land on the circle)
+    for (from, to, want) in [
+        // The span's right end, dragged left: 15\45 cross the seam to the right end.
+        (358.0, 298.0, [255.0, 285.0, 315.0, 345.0]),
+        // Back right from its middle: 315\345 cross the seam to the left end.
+        (300.0, 360.0, [315.0, 345.0, 15.0, 45.0]),
+        // The span's left end, dragged right: 315/345 cross the seam to the left end.
+        (2.0, 62.0, [15.0, 45.0, 75.0, 105.0]),
+    ] {
+        let before = reds(&h);
+        drag(&mut h, Pos2::new(x(from), y), Pos2::new(x(to), y));
+        let b = reds(&h);
+        assert!(on_circle(b).iter().zip(&want).all(|(d, w)| (d - w).abs() <= 1.0), "{from}° → {to}°: {before:?} → {b:?}, want {want:?}");
+        assert_eq!(widths(b), widths(before), "{from}° → {to}°: the range moves intact");
+        steps += 1;
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{from}° → {to}°: one step");
+    }
+}
