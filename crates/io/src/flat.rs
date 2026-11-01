@@ -37,7 +37,11 @@ fn import_flat_impl(name: &str, bytes: &[u8], ctl: &Interrupt, stream_min: Optio
 }
 
 pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
-    import_flat_with_limit_and_interrupt(name, bytes, pixel_limit, &Interrupt::NONE)
+    if pixel_limit == crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES {
+        import_flat_with(name, bytes, &Interrupt::NONE)
+    } else {
+        import_flat_with_limit_and_interrupt(name, bytes, pixel_limit, &Interrupt::NONE)
+    }
 }
 
 pub(crate) fn import_flat_with_limit_and_interrupt(name: &str, bytes: &[u8], pixel_limit: u64, ctl: &Interrupt) -> Result<ImportResult, IoError> {
@@ -620,6 +624,7 @@ fn single_layer_document(
 /// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a
 /// band of rows at a time so no second full-size copy of the image is made.
 pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: CSample) -> Result<Surface, IoError> {
+    let csample = if csample == CSample::F16 { CSample::F32 } else { csample };
     let (w, h) = img.dimensions();
     let mut s = Surface::new(surface_format(target_layout, csample));
     let convert = RowConverter::new((img.layout(), img.sample_type()), (target_layout, csample));
