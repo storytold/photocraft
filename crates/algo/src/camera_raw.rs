@@ -1012,6 +1012,7 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     });
 }
 
+/// Apply luminance/chroma noise reduction and sharpening to RGB while preserving alpha.
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
