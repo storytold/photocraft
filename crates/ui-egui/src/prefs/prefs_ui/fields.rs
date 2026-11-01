@@ -4,6 +4,10 @@ use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, read_
 use super::shortcuts::shortcuts_body;
 use super::{Color32, Map, PhotocraftApp, RichText, SECTIONS, Sense, Tokens, Value, json, prefs, vec2};
 
+/// The settings-grid row emitter shared by the prefs editors: `row(label, editor)`, where the
+/// editor closure receives the label's Id for accessibility labeling.
+pub(super) type RowEmitter<'a> = dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)) + 'a;
+
 // ------------------------------------------------------------------ bodies
 
 /// Render one of our dialogs' bodies.
@@ -495,7 +499,7 @@ fn field_rows(
     obj: &mut Map<String, Value>,
     keys: Vec<String>,
     lang: crate::i18n::Lang,
-    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+    row: &mut RowEmitter<'_>,
 ) {
     let t = Tokens::get(ctx);
     for k in keys {
@@ -792,7 +796,7 @@ mod rtl_direction_tests {
         let (ltr_gap, ltr_label, ltr_editor) = probe_appearance_gap(Dir::Ltr, "Appearance Mode");
         let (rtl_gap, rtl_label, rtl_editor) = probe_appearance_gap(Dir::Rtl, "Appearance Mode");
         assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
-        assert!(rtl_gap >= 0.0 && rtl_gap < 100.0, "no overlap, gap stays the grid spacing: RTL {rtl_gap}");
+        assert!((0.0..100.0).contains(&rtl_gap), "no overlap, gap stays the grid spacing: RTL {rtl_gap}");
         assert!(rtl_label.left() > rtl_editor.right(), "RTL: the label reads first: {rtl_label:?} {rtl_editor:?}");
         assert!(ltr_editor.left() > ltr_label.right(), "LTR twin: {ltr_label:?} {ltr_editor:?}");
     }
