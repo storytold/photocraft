@@ -194,17 +194,20 @@ pub fn open_mismatch(app: &mut PhotocraftApp, message: &str, action: &str, missi
 pub(super) fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut hidden: Vec<String> = f.get("toolbarHidden").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     egui::ScrollArea::vertical().max_height(380.0).id_salt("toolbar-scroll").show(ui, |ui| {
-        // The fork's grid cannot place its cells under a right-to-left cursor, so the table
-        // runs in an explicit left-to-right scope; the cells are emitted in reading order below.
-        let mut grid_ui = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(egui::Layout::top_down(egui::Align::Min)));
-        egui::Grid::new("toolbar-grid").num_columns(2).spacing([16.0, 4.0]).show(&mut grid_ui, |ui| {
+        if crate::direction::is_rtl() {
+            // Hand rows: the fork's `Grid` gives its last column the remaining width, which
+            // detaches the key cell from its checkbox under RTL. Fix the checkbox column at
+            // the LTR grid's width so the cell gap matches left-to-right.
+            let box_w = toolbar_box_col_w(ui);
+            ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
             for tool in crate::state::Tool::ALL {
                 let name = format!("{tool:?}");
                 let mut on = !hidden.contains(&name);
                 let k = tool.key();
-                // Grid columns always advance left to right, so emit them in reading order.
-                crate::direction::grid_cells(
+                let text = if k == '\0' { String::new() } else { k.to_string() };
+                crate::direction::settings_row(
                     ui,
+                    box_w,
                     |ui| {
                         crate::widgets::checkbox(ui, &mut on, tl!(tool.label()));
                         if on {
@@ -214,17 +217,56 @@ pub(super) fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         }
                     },
                     |ui| {
-                        ui.label(if k == '\0' { String::new() } else { k.to_string() });
+                        ui.label(text);
                     },
                 );
-                ui.end_row();
             }
-        });
+        } else {
+            // `scroll_grid` runs the table in an LTR child seeded from the cursor (never the full
+            // `max_rect`, which under RTL re-anchors rows past the window edge) and advances the
+            // parent cursor from the grid's actual min_rect; the cells are emitted in reading order.
+            crate::direction::scroll_grid(ui, "toolbar-grid", 2, egui::vec2(16.0, 4.0), |ui| {
+                for tool in crate::state::Tool::ALL {
+                    let name = format!("{tool:?}");
+                    let mut on = !hidden.contains(&name);
+                    let k = tool.key();
+                    // Grid columns always advance left to right, so emit them in reading order.
+                    crate::direction::grid_cells(
+                        ui,
+                        |ui| {
+                            crate::widgets::checkbox(ui, &mut on, tl!(tool.label()));
+                            if on {
+                                hidden.retain(|h| *h != name);
+                            } else if !hidden.contains(&name) {
+                                hidden.push(name);
+                            }
+                        },
+                        |ui| {
+                            let text = if k == '\0' { String::new() } else { k.to_string() };
+                            ui.label(text);
+                        },
+                    );
+                    ui.end_row();
+                }
+            });
+        }
     });
     if ui.button(tl!("Restore Defaults")).clicked() {
         hidden.clear();
     }
     f.insert("toolbarHidden".into(), json!(hidden));
+}
+
+/// The checkbox column's width as the LTR `Grid` sizes it: the widest tool row's box + label.
+fn toolbar_box_col_w(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    crate::state::Tool::ALL
+        .iter()
+        .map(|tool| {
+            let g = ui.painter().layout_no_wrap(tl!(tool.label()).to_string(), font.clone(), egui::Color32::PLACEHOLDER);
+            14.0 + 6.0 + g.size().x
+        })
+        .fold(0.0, f32::max)
 }
 
 pub(super) fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -438,5 +480,65 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             crate::open_prompt::answer(app, Some(action))
         }
         _ => Err("unknown dialog".into()),
+    }
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::text::direction::Dir;
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Render `toolbar_tab` under `dir` with the real direction flag; return the "Move Tool"
+    /// checkbox's rect and the "V" key cell's rect on its row.
+    fn toolbar_probe(dir: Dir) -> (egui::Rect, egui::Rect) {
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut fields = Map::new();
+        fields.insert("toolbarHidden".into(), json!(Vec::<String>::new()));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(720.0, 700.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                ctx.all_styles_mut(|s| s.right_to_left = rtl);
+            })
+            .build_ui_state(|ui, f: &mut Map<String, Value>| super::toolbar_tab(ui, f), fields);
+        h.run_steps(4);
+        let tool = h.query_all_by_role_and_label(Role::CheckBox, "Move Tool").next().expect("the Move Tool checkbox").rect();
+        let cy = tool.center().y;
+        let key = h
+            .query_all_by_role_and_label(Role::Label, "V")
+            .map(|n| n.rect())
+            .min_by(|a, b| (a.center().y - cy).abs().total_cmp(&(b.center().y - cy).abs()))
+            .expect("the V key cell");
+        (tool, key)
+    }
+
+    /// RTL: the tool checkbox leads from the right, its key cell follows to the left.
+    #[test]
+    fn rtl_toolbar_grid_mirrors_cell_order() {
+        let (tool, key) = toolbar_probe(Dir::Rtl);
+        assert!(tool.left() > key.right(), "RTL: the checkbox leads from the right: {tool:?} vs key {key:?}");
+    }
+
+    /// LTR twin: the key cell follows the checkbox on the left-to-right row.
+    #[test]
+    fn ltr_toolbar_grid_keeps_cell_order() {
+        let (tool, key) = toolbar_probe(Dir::Ltr);
+        assert!(key.left() > tool.right(), "LTR: the key follows the checkbox: {tool:?} vs key {key:?}");
+    }
+
+    /// The cell gap matches the LTR grid's in RTL too, and never collapses below the grid's
+    /// 16 px column spacing (the node-to-node gap also carries the label column's slack).
+    #[test]
+    fn toolbar_cell_gap_matches_between_ltr_and_rtl() {
+        let (ltr_tool, ltr_key) = toolbar_probe(Dir::Ltr);
+        let (rtl_tool, rtl_key) = toolbar_probe(Dir::Rtl);
+        let ltr_gap = ltr_key.left() - ltr_tool.right();
+        let rtl_gap = rtl_tool.left() - rtl_key.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
+        assert!(ltr_gap >= 14.5 && rtl_gap >= 14.5, "the gap keeps the grid's 16 px column spacing: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
