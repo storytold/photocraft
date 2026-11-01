@@ -25,6 +25,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod clip_line_ui;
 mod color;
+pub mod color_hud;
 pub mod color_panel_ui;
 pub mod comps_ui;
 pub mod doc_props_ui;
@@ -87,7 +88,7 @@ pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};
 pub(crate) use layer_row::thumb_load_badge;
 #[cfg(test)]
 use layer_row::{layer_thumb_fit, paint_clipping_indicator};
-pub(crate) use layers::blend_options;
+pub(crate) use layers::{blend_options, fx_button};
 #[cfg(test)]
 use layers::{layers, opacity_row_layout, simple_lock_toggle};
 #[cfg(test)]

@@ -312,10 +312,15 @@ fn save_as_offers_only_writable_formats_including_ico() {
         let subtype = name.rsplit('.').next().unwrap_or_default();
         assert!(!filters.iter().any(|(_, exts)| exts.iter().any(|e| e == subtype)), "{name}: .{subtype} is offered");
     }
-    // File › Open lists every file Save As writes, also in that format's own type (PDF is written
-    // but not read yet).
+    // File Open lists readable Save As formats in their own type. Export-only formats must
+    // stay absent from both Open filters rather than advertising an unavailable decoder.
     for (name, exts) in SAVE_FILTERS {
         for ext in exts.iter().filter(|e| **e != "pdf") {
+            if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
+                assert!(!OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
+                assert!(!OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
+                continue;
+            }
             assert!(OPEN_EXTS.contains(ext), "{name}: Open's All Formats lacks .{ext}");
             assert!(OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: no Open type lists .{ext}");
         }

@@ -25,17 +25,21 @@ pub struct PatternLibrary {
     /// Bumped when a pattern's pixels are replaced under the same id (an imported `.pat` whose
     /// id is already in the library), which its id, name and size don't show.
     pub pixels_rev: u64,
+    /// Saved patterns held as a small preview until used, by id: their full size. The preset
+    /// store reads the pixels ([`full`]); everything that paints goes through [`resolve`].
+    pub stored: std::collections::HashMap<String, (u32, u32)>,
 }
 
 impl Default for PatternLibrary {
     fn default() -> Self {
-        PatternLibrary { items: builtin(), pixels_rev: 0 }
+        PatternLibrary { items: builtin(), pixels_rev: 0, stored: Default::default() }
     }
 }
 
 impl PatternLibrary {
     /// Add `pat`, or replace the pattern with its id (marking the pixels changed).
     pub fn upsert(&mut self, pat: Pattern) {
+        self.stored.remove(&pat.id);
         match self.items.iter_mut().find(|q| q.id == pat.id) {
             Some(q) => {
                 *q = pat;
@@ -132,25 +136,59 @@ fn has_pattern(s: &Session) -> std::result::Result<(), String> {
     if s.patterns.items.is_empty() && s.active().is_none_or(|d| d.doc.patterns.is_empty()) { Err("no patterns".into()) } else { Ok(()) }
 }
 
-/// Finds a pattern by id or name: the active document's first, then the library. An empty key
-/// picks the first library pattern (Photoshop's default).
-pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
-    if key.is_empty() {
-        // The Patterns panel's selection, else the first library pattern.
-        return crate::presets::patterns::current(s).or(s.patterns.items.first()).cloned();
+/// `p` with its full pixels: a saved pattern held as a preview is read from the preset store.
+pub fn full(s: &Session, p: &Pattern) -> std::result::Result<Pattern, String> {
+    if !s.patterns.stored.contains_key(&p.id) {
+        return Ok(p.clone());
     }
-    if let Some(d) = s.active()
+    let st = s.preset_store.as_ref().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
+    let mut f = st.load_pattern(&p.id).map_err(|e| format!("pattern \"{}\" could not be loaded: {e}", p.display_name()))?;
+    f.name = p.name.clone();
+    Ok(f)
+}
+
+/// The library pattern `key` names (the panel's selection or the first for an empty key).
+fn library_pattern<'a>(s: &'a Session, key: &str) -> Option<&'a Pattern> {
+    if key.is_empty() {
+        return crate::presets::patterns::current(s).or(s.patterns.items.first());
+    }
+    photocraft_doc::pattern::find(&s.patterns.items, key, key)
+}
+
+/// The id of the pattern [`resolve`] finds, without reading a saved pattern's pixels: for checks
+/// and lookups that don't paint.
+pub fn resolve_id(s: &Session, key: &str) -> Option<String> {
+    if !key.is_empty()
+        && let Some(d) = s.active()
+        && let Some(p) = photocraft_doc::pattern::find(&d.doc.patterns, key, key)
+    {
+        return Some(p.id.clone());
+    }
+    library_pattern(s, key).map(|p| p.id.clone())
+}
+
+/// Finds a pattern by id or name: the active document's first, then the library. An empty key
+/// picks the first library pattern (Photoshop's default). `None` also when a saved pattern's
+/// pixels can't be read (see [`resolve_param`] for the reason).
+pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
+    if !key.is_empty()
+        && let Some(d) = s.active()
         && let Some(p) = photocraft_doc::pattern::find(&d.doc.patterns, key, key)
     {
         return Some(p.clone());
     }
-    photocraft_doc::pattern::find(&s.patterns.items, key, key).cloned()
+    full(s, library_pattern(s, key)?).ok()
 }
 
 pub(crate) fn resolve_param(s: &Session, cmd: &str, p: &Value) -> Result<Pattern> {
     let key = p.get("pattern").and_then(Value::as_str).unwrap_or("");
-    let pat = resolve(s, key).ok_or_else(|| bad(cmd, format!("no pattern \"{key}\" (see pattern.list)")))?;
-    paintable(cmd, pat)
+    if let Some(pat) = resolve(s, key) {
+        return paintable(cmd, pat);
+    }
+    match library_pattern(s, key).map(|lp| full(s, lp)) {
+        Some(Err(e)) => Err(bad(cmd, e)),
+        _ => Err(bad(cmd, format!("no pattern \"{key}\" (see pattern.list)"))),
+    }
 }
 
 /// `pat`, or the reason it would paint nothing: a pattern too large for the compositor renders as
@@ -185,10 +223,10 @@ pub fn resolve_effect(s: &Session, fx: photocraft_doc::Effect) -> Result<(photoc
     }
 }
 
-fn info(p: &Pattern, in_doc: bool, in_library: bool) -> Value {
+fn info(p: &Pattern, size: (u32, u32), in_doc: bool, in_library: bool) -> Value {
     let f = p.surface.format();
     json!({
-        "id": p.id, "name": p.display_name(), "storedName": p.name, "width": p.width, "height": p.height,
+        "id": p.id, "name": p.display_name(), "storedName": p.name, "width": size.0, "height": size.1,
         "mode": format!("{:?}", f.mode), "depth": format!("{:?}", f.sample), "alpha": f.alpha,
         "inDocument": in_doc, "inLibrary": in_library,
         "paintable": p.is_paintable(), "paintProblem": p.paint_problem(),
@@ -197,8 +235,9 @@ fn info(p: &Pattern, in_doc: bool, in_library: bool) -> Value {
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let doc_pats: Vec<Pattern> = s.active().map(|d| d.doc.patterns.clone()).unwrap_or_default();
-    let mut out: Vec<Value> = s.patterns.items.iter().map(|p| info(p, doc_pats.iter().any(|d| d.id == p.id), true)).collect();
-    out.extend(doc_pats.iter().filter(|d| !s.patterns.items.iter().any(|p| p.id == d.id)).map(|p| info(p, true, false)));
+    let size = |p: &Pattern| s.patterns.stored.get(&p.id).copied().unwrap_or((p.width, p.height));
+    let mut out: Vec<Value> = s.patterns.items.iter().map(|p| info(p, size(p), doc_pats.iter().any(|d| d.id == p.id), true)).collect();
+    out.extend(doc_pats.iter().filter(|d| !s.patterns.items.iter().any(|p| p.id == d.id)).map(|p| info(p, (p.width, p.height), true, false)));
     Ok(Value::Array(out))
 }
 
@@ -299,7 +338,7 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let pat = Pattern::new(name, surf, r.width(), r.height());
     let id = pat.id.clone();
-    let out = info(&pat, false, true);
+    let out = info(&pat, (pat.width, pat.height), false, true);
     if !s.patterns.items.iter().any(|q| q.id == id) {
         s.patterns.items.push(pat);
     }
@@ -334,6 +373,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let i = library_index(s, "pattern.delete", p)?;
     let pat = s.patterns.items.remove(i);
+    s.patterns.stored.remove(&pat.id);
     Ok(json!({"deleted": pat.id}))
 }
 
@@ -349,6 +389,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ids = Vec::new();
     for pat in pats {
         ids.push(pat.id.clone());
+        s.patterns.stored.remove(&pat.id);
         s.patterns.upsert(pat);
     }
     Ok(json!({"imported": ids, "count": ids.len()}))
@@ -361,7 +402,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         Some(keys) => {
             keys.iter().filter_map(Value::as_str).map(|k| resolve(s, k).ok_or_else(|| bad(cmd, format!("no pattern \"{k}\"")))).collect::<Result<_>>()?
         }
-        None => s.patterns.items.clone(),
+        None => s.patterns.items.iter().map(|p| full(s, p).map_err(|e| bad(cmd, e))).collect::<Result<_>>()?,
     };
     let bytes = photocraft_io::pattern_map::write_pat(&pats).map_err(EngineError::Other)?;
     crate::file_cmds::write_file(path, &bytes)?;
@@ -397,9 +438,28 @@ pub(crate) fn insert_fill_layer(
     let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
     let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
     crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern", default_mask)?;
+    // Like Photoshop, an empty pixel layer selected becomes the fill layer instead of getting one
+    // above it; it keeps its place, opacity and blending, and a name the user gave it.
+    if let Some(id) = *active
+        && crate::stamp_cmds::is_empty_pixel_layer(doc, id)
+    {
+        let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        if is_default_layer_name(&target.name) {
+            target.name = l.name;
+        }
+        target.content = l.content;
+        target.mask = l.mask;
+        target.vector_mask = l.vector_mask;
+        return Ok(id);
+    }
     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
     *active = Some(id);
     Ok(id)
+}
+
+/// A name new layers get ("Layer 3"), so not one the user chose.
+fn is_default_layer_name(name: &str) -> bool {
+    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `layer.newFillLayer.pattern`: a Pattern Fill layer above the active one, masked as the Layers panel's Use Default Masks on Fill Layers option says.
