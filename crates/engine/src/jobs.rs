@@ -106,7 +106,8 @@ impl JobCtx {
     /// Progress never goes backwards: a lower value than already reported is ignored.
     pub fn progress(&self, fraction: f32, message: &str) {
         if fraction.is_finite() {
-            self.shared.progress.fetch_max(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            // `+ 0.0` turns -0.0 into +0.0: its bits would otherwise outrank every positive float.
+            self.shared.progress.fetch_max((fraction.clamp(0.0, 1.0) + 0.0).to_bits(), Ordering::Relaxed);
         }
         if !message.is_empty() {
             let mut m = self.shared.message.lock().unwrap_or_else(PoisonError::into_inner);
