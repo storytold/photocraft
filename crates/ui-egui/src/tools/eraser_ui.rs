@@ -65,6 +65,11 @@ pub fn erases_to_history(app: &PhotocraftApp, tool: Tool) -> bool {
     tool == Tool::Eraser && app.ui.tool_options.erase_to_history
 }
 
+/// The tool a drag with `tool` runs as: the History Brush for an Eraser that erases to history.
+pub fn drag_tool(app: &PhotocraftApp, tool: Tool) -> Tool {
+    if erases_to_history(app, tool) { Tool::HistoryBrush } else { tool }
+}
+
 /// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through
 /// `paint.pencil` (`"erase": true`) and shows the Pencil's pixel-grid cursor (#2662).
 pub fn pencil_mode(app: &PhotocraftApp, tool: Tool) -> bool {
