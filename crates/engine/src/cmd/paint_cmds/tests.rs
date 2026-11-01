@@ -410,9 +410,12 @@ fn bucket_timing_on_24_megapixels() {
     s.execute("layer.new.layer", json!({})).unwrap();
     for (all, contiguous, aa) in [(false, true, true), (true, true, false), (true, true, true), (true, false, false), (true, false, true)] {
         let t = std::time::Instant::now();
-        s.execute("paint.bucket", json!({"x": 5, "y": 5, "color": "#ff0000", "tolerance": 32, "antiAlias": aa, "contiguous": contiguous, "sampleAllLayers": all})).unwrap();
+        s.execute(
+            "paint.bucket",
+            json!({"x": 5, "y": 5, "color": "#ff0000", "tolerance": 32, "antiAlias": aa, "contiguous": contiguous, "sampleAllLayers": all}),
+        )
+        .unwrap();
         println!("paint.bucket sampleAllLayers={all} contiguous={contiguous} antiAlias={aa}: {:?}", t.elapsed());
         assert!(s.undo());
     }
 }
-
