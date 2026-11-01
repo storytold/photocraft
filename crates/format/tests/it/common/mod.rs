@@ -192,6 +192,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
         "Smart",
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
+            vector_preview: None,
             source: SmartSource::Embedded { file_name: "inner.png".into(), bytes: blob(11, 2000) },
             transform: Affine::scale(0.5),
             smart_filters: vec![SmartFilter {
@@ -221,6 +222,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
         "Linked",
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
+            vector_preview: None,
             source: SmartSource::Linked { path: "/tmp/linked.psd".into() },
             transform: Affine::IDENTITY,
             smart_filters: vec![],
