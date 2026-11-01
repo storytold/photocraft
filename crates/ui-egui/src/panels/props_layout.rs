@@ -152,7 +152,7 @@ pub fn quick_actions_ui(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerC
     for row in actions.chunks(cols) {
         // A short last row (or a lone action) still spans the panel.
         let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = COL_GAP;
             for (label, id) in row {
                 let resp = widgets::secondary_button(ui, label, w);
@@ -296,5 +296,44 @@ mod rtl_tests {
             let rtl_box = rtl.iter().find(|(t, _)| t == text).map(|(_, r)| *r).unwrap_or_else(|| panic!("the RTL `{text}`"));
             assert_eq!(ltr_box, rtl_box, "the `{text}` keeps its physical position");
         }
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use serde_json::json;
+
+    /// The Quick Actions row mirrors in a right-to-left UI: the buttons swap ends and keep the
+    /// same gap.
+    #[test]
+    fn the_quick_actions_row_mirrors_in_a_right_to_left_ui() {
+        let rects = |dir: Dir| {
+            let _d = direction_scope(dir);
+            let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(360.0, 300.0)).build_ui_state(
+                |ui, app: &mut crate::PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        let content = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().content.clone();
+                        quick_actions_ui(app, ui, &content);
+                    }
+                },
+                app,
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            (h.get_by_label("Remove Background").rect(), h.get_by_label("Select Subject").rect())
+        };
+        let (a_l, b_l) = rects(Dir::Ltr);
+        assert!(a_l.right() <= b_l.left(), "LTR: the first action starts the row: {a_l:?} {b_l:?}");
+        let (a_r, b_r) = rects(Dir::Rtl);
+        assert!(b_r.right() <= a_r.left(), "RTL: the first action ends the row: {a_r:?} {b_r:?}");
+        let gap_ltr = b_l.left() - a_l.right();
+        let gap_rtl = a_r.left() - b_r.right();
+        assert!((gap_ltr - gap_rtl).abs() < 1.0, "the gap is direction-independent: {gap_ltr} vs {gap_rtl}");
     }
 }
