@@ -229,7 +229,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let Some(st) = s.active() else { return params };
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => {
             if !follows_filter_mask(id) {
