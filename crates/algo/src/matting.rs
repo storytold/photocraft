@@ -391,14 +391,7 @@ fn shift_coverage(v: f32, k: f32) -> f32 {
     if shifted.is_finite() { shifted.clamp(0.0, 1.0) } else { v }
 }
 
-/// Most pixels one refine should cover. Its result is a dense [`Region`] over [`refine_area`]
-/// (about two bytes a pixel while it is assembled), so callers refuse a larger refine up front
-/// rather than allocate it: 2³⁰ pixels, a 32k × 32k selection.
-pub const MAX_REFINE_AREA: u64 = 1 << 30;
-
-/// The area [`refine_mask`] and [`refine_mask_brushed`] compute and allocate their result over:
-/// `content` grown by how far `p` can spread it, plus where `brush` adds, within `canvas`. Empty
-/// when `content` misses the canvas.
+/// Bounds reachable by refinement and brush additions, clipped to the canvas.
 pub fn refine_area(content: Rect, canvas: Rect, p: &RefineParams, brush: Option<&EdgeBrush>) -> Rect {
     let content = content.intersect(&canvas);
     if content.is_empty() {
@@ -410,6 +403,7 @@ pub fn refine_area(content: Rect, canvas: Rect, p: &RefineParams, brush: Option<
 /// Refines a selection mask. `mask(r)` returns coverage over `r` (row-major); `content` bounds
 /// its non-zero pixels; the result is clipped to `canvas`. `sampler` supplies the guide image
 /// (only read when `radius > 0`). Returns `None` when nothing remains selected.
+#[cfg(test)]
 pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Sync), content: Rect, canvas: Rect, p: &RefineParams) -> Option<Region> {
     refine_mask_with(sampler, mask, content, canvas, p, None)
 }
@@ -417,6 +411,7 @@ pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Syn
 /// [`refine_mask`] with the Refine Edge Brush: where `brush` adds, coverage comes from the image
 /// (the area can reach beyond the edge-detection band); where it restores, the original edge
 /// stays. The sampler is read wherever the brush adds, whatever the radius.
+#[cfg(test)]
 pub fn refine_mask_brushed(
     sampler: &dyn Sampler,
     mask: &(dyn Fn(Rect) -> Vec<f32> + Sync),
@@ -428,6 +423,7 @@ pub fn refine_mask_brushed(
     refine_mask_with(sampler, mask, content, canvas, p, brush)
 }
 
+#[cfg(test)]
 fn refine_mask_with(
     sampler: &dyn Sampler,
     mask: &(dyn Fn(Rect) -> Vec<f32> + Sync),
@@ -497,7 +493,152 @@ fn refine_mask_with(
     crate::segment::trim_region(Region { bbox, mask: out })
 }
 
+/// Refines sparse coverage without materializing its bounding rectangle.
+/// Missing input tiles use the mask's default; output is zero outside the canvas.
+pub fn refine_surface(
+    sampler: &dyn Sampler,
+    mask: &Surface,
+    canvas: Rect,
+    p: &RefineParams,
+    brush: Option<&EdgeBrush>,
+) -> Result<Option<Surface>, photocraft_raster::AllocationError> {
+    use std::collections::{BTreeSet, HashMap};
+    use std::sync::Arc;
+    let default = mask.default_pixel().first().copied().unwrap_or(0.0);
+    let content = if default > 0.0 { canvas } else { mask.content_bounds().intersect(&canvas) };
+    let bbox = refine_area(content, canvas, p, brush);
+    if bbox.is_empty() {
+        return Ok(None);
+    }
+    let halo = p.halo().saturating_add(brush.map_or(0, |b| (b.window() as i32).saturating_mul(4)));
+    // Preserve the dense implementation's block origin, including non-aligned selections.
+    let mut blocks = BTreeSet::new();
+    let mut include = |area: Rect| -> Result<(), photocraft_raster::AllocationError> {
+        let area = area.intersect(&bbox);
+        if area.is_empty() {
+            return Ok(());
+        }
+        let x0 = (i64::from(area.x0) - i64::from(bbox.x0)) / i64::from(TILE);
+        let y0 = (i64::from(area.y0) - i64::from(bbox.y0)) / i64::from(TILE);
+        let x1 = (i64::from(area.x1) - 1 - i64::from(bbox.x0)) / i64::from(TILE);
+        let y1 = (i64::from(area.y1) - 1 - i64::from(bbox.y0)) / i64::from(TILE);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                blocks.insert((y, x));
+                if blocks.len() > 1_048_576 {
+                    return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: blocks.len().saturating_mul(64) });
+                }
+            }
+        }
+        Ok(())
+    };
+    if default > 0.0 {
+        include(bbox)?;
+    } else {
+        for (tc, _) in mask.tiles() {
+            include(tc.rect().inflate(p.spread()))?;
+        }
+    }
+    if let Some(b) = brush {
+        for tc in b.tile_coords() {
+            include(tc.rect().inflate(p.spread()))?;
+        }
+    }
+    let mut uniform: HashMap<usize, Option<f32>> = HashMap::new();
+    let mut output = Surface::new(PixelFormat::GRAY8);
+    let solid = output.solid_tile(&[1.0]);
+    for (by, bx) in blocks {
+        let x = (i64::from(bbox.x0) + bx * i64::from(TILE)) as i32;
+        let y = (i64::from(bbox.y0) + by * i64::from(TILE)) as i32;
+        let t = Rect::new(x, y, x.saturating_add(TILE).min(bbox.x1), y.saturating_add(TILE).min(bbox.y1));
+        let r = t.inflate(halo).intersect(&canvas);
+        let scratch_pixels = (r.width() as usize).checked_mul(r.height() as usize).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let scratch_bytes = scratch_pixels.checked_mul(256).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+        let painted = brush
+            .filter(|b| b.tile_coords().any(|tc| !tc.rect().intersect(&r).is_empty()))
+            .map(|b| {
+                if scratch_bytes > 512 * 1024 * 1024 {
+                    return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: scratch_bytes });
+                }
+                Ok(b.read(r))
+            })
+            .transpose()?;
+        let adds = painted.as_ref().is_some_and(|v| v.iter().any(|v| *v > 0.0));
+        let mut constant = None;
+        let mut all_uniform = true;
+        for tc in r.tiles() {
+            let value = if let Some(tile) = mask.tile(tc) {
+                let key = Arc::as_ptr(tile) as usize;
+                *uniform.entry(key).or_insert_with(|| {
+                    let first = mask.sample_channel(tc.rect().x0, tc.rect().y0, 0);
+                    let fmt = mask.format();
+                    let bytes = fmt.bytes_per_pixel();
+                    let first_pixel = tile.bytes().get(..bytes)?;
+                    tile.bytes().chunks_exact(bytes).all(|p| p == first_pixel).then_some(first)
+                })
+            } else {
+                Some(default)
+            };
+            let Some(value) = value else {
+                all_uniform = false;
+                break;
+            };
+            if constant.is_some_and(|v| v != value) {
+                all_uniform = false;
+                break;
+            }
+            constant = Some(value);
+        }
+        if !adds && all_uniform && matches!(constant, Some(0.0)) {
+            continue;
+        }
+        if !adds && all_uniform && matches!(constant, Some(1.0)) {
+            let tc = photocraft_geom::TileCoord::containing(t.x0, t.y0);
+            if tc.rect() == t {
+                output.put_tiles([(tc, solid.clone())]);
+                continue;
+            }
+            output.fill_rect(t, &[1.0]);
+        } else {
+            // Guided filtering holds many working planes simultaneously. Bound one worker's
+            // scratch before any image or mask read, independent of bounding-box area.
+            let pixels = (r.width() as usize).checked_mul(r.height() as usize).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+            let bytes = pixels.checked_mul(256).ok_or(photocraft_raster::AllocationError::SizeOverflow)?;
+            if bytes > 512 * 1024 * 1024 {
+                return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes });
+            }
+            let m = crate::selection::mask_from_surface(Some(mask), r);
+            let (rw, rh) = (r.width() as usize, r.height() as usize);
+            let img = (p.uses_image() || adds).then(|| sampler.rgb(r));
+            let bb = match (&painted, brush) {
+                (Some(v), Some(b)) => Some(BrushBuf { v, window: b.window() }),
+                _ => None,
+            };
+            let refined = refine_buffer_with(img.as_ref(), &m, rw, rh, p, bb);
+            let mut data = Vec::with_capacity(t.width() as usize * t.height() as usize);
+            for yy in t.y0..t.y1 {
+                for xx in t.x0..t.x1 {
+                    let i = (yy - r.y0) as usize * rw + (xx - r.x0) as usize;
+                    data.push((refined.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8);
+                }
+            }
+            if data.iter().any(|v| *v != 0) {
+                output.try_write_interleaved(t, &data)?;
+            }
+        }
+        // Canonical tiles can straddle two legacy blocks. Share them as soon as complete,
+        // keeping solid interiors compact even when the processing origin is unaligned.
+        for tc in t.tiles() {
+            if output.tile(tc).is_some_and(|tile| tile.bytes().iter().all(|v| *v == 255)) {
+                output.put_tiles([(tc, solid.clone())]);
+            }
+        }
+    }
+    Ok((output.tile_count() > 0).then_some(output))
+}
+
 /// A mask reader over a [`Region`] (zero outside its box).
+#[cfg(test)]
 pub fn region_reader(reg: &Region) -> impl Fn(Rect) -> Vec<f32> + Sync + '_ {
     move |r: Rect| {
         let mut v = Vec::with_capacity(r.width() as usize * r.height() as usize);
@@ -511,6 +652,7 @@ pub fn region_reader(reg: &Region) -> impl Fn(Rect) -> Vec<f32> + Sync + '_ {
 }
 
 /// A mask reader over a selection surface (channel 0).
+#[cfg(test)]
 pub fn surface_reader(s: &Surface) -> impl Fn(Rect) -> Vec<f32> + Sync + '_ {
     move |r: Rect| crate::selection::mask_from_surface(Some(s), r)
 }
@@ -522,6 +664,7 @@ pub fn region_surface(reg: &Region) -> Surface {
     s
 }
 
+#[cfg(test)]
 fn tiles_of(area: Rect) -> Vec<Rect> {
     let mut tiles = Vec::new();
     let mut y = area.y0;
@@ -536,6 +679,7 @@ fn tiles_of(area: Rect) -> Vec<Rect> {
     tiles
 }
 
+#[cfg(test)]
 fn par_tiles<T: Send>(tiles: &[Rect], f: impl Fn(&Rect) -> Option<T> + Sync + Send) -> Vec<T> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -552,6 +696,7 @@ fn par_tiles<T: Send>(tiles: &[Rect], f: impl Fn(&Rect) -> Option<T> + Sync + Se
 /// average colour of nearby fully selected pixels (normalised convolution with a box of radius
 /// `max(radius, 3)`, widened ×4 where no such pixel is near), by `amount`% scaled by its
 /// transparency. Works in the surface's own colour channels (any model / depth).
+#[cfg(test)]
 pub fn decontaminate(src: &Surface, alpha: &Region, radius: f32, amount: f32) -> Surface {
     let fmt = src.format();
     let n = fmt.channels();
@@ -610,8 +755,76 @@ pub fn decontaminate(src: &Surface, alpha: &Region, radius: f32, amount: f32) ->
     out
 }
 
+/// Decontaminates sparse GRAY8 alpha, processing one fringe tile at a time.
+pub fn decontaminate_surface(src: &Surface, alpha: &Surface, radius: f32, amount: f32) -> Surface {
+    let fmt = src.format();
+    let n = fmt.channels();
+    let nc = n - fmt.alpha as usize;
+    let rad = radius.max(3.0).ceil() as usize;
+    let halo = (rad * 4) as i32;
+    let amount = amount.clamp(0.0, 100.0) / 100.0;
+    let soft = |a: f32| a > 0.02 && a < 0.98;
+    let run = |t: &Rect| {
+        if !(t.y0..t.y1).any(|y| (t.x0..t.x1).any(|x| soft(alpha.sample_channel(x, y, 0)))) {
+            return None;
+        }
+        let r = t.inflate(halo);
+        let (rw, rh) = (r.width() as usize, r.height() as usize);
+        let mut px = Vec::new();
+        src.read_region_into(r, &mut px);
+        let al: Vec<f32> = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| alpha.sample_channel(x, y, 0))).collect();
+        let wts: Vec<f32> = (0..rw * rh).map(|i| if al[i] >= 0.98 { if fmt.alpha { px[i * n + n - 1] } else { 1.0 } } else { 0.0 }).collect();
+        let den = box_mean(&wts, rw, rh, rad);
+        let den2 = box_mean(&wts, rw, rh, rad * 4);
+        let mut nums = Vec::with_capacity(nc);
+        for c in 0..nc {
+            let v: Vec<f32> = (0..rw * rh).map(|i| wts[i] * px[i * n + c]).collect();
+            nums.push((box_mean(&v, rw, rh, rad), box_mean(&v, rw, rh, rad * 4)));
+        }
+        let (cx, cy, cw, ch) = ((t.x0 - r.x0) as usize, (t.y0 - r.y0) as usize, t.width() as usize, t.height() as usize);
+        let mut out = Vec::with_capacity(cw * ch * n);
+        for yy in 0..ch {
+            for xx in 0..cw {
+                let i = (cy + yy) * rw + cx + xx;
+                let a = al[i];
+                let k = if soft(a) { amount * ((1.0 - a) * 4.0).clamp(0.0, 1.0) } else { 0.0 };
+                for c in 0..n {
+                    let v = px[i * n + c];
+                    if c >= nc || k == 0.0 {
+                        out.push(v);
+                        continue;
+                    }
+                    let f = if den[i] > 1e-4 {
+                        nums[c].0[i] / den[i]
+                    } else if den2[i] > 1e-4 {
+                        nums[c].1[i] / den2[i]
+                    } else {
+                        v
+                    };
+                    out.push(v + (f - v) * k);
+                }
+            }
+        }
+        Some((*t, out))
+    };
+    let mut out = src.clone();
+    let mut hard = std::collections::HashMap::new();
+    for (tc, tile) in alpha.tiles() {
+        let key = std::sync::Arc::as_ptr(tile) as usize;
+        let uniform_hard = *hard.entry(key).or_insert_with(|| tile.bytes().iter().all(|v| *v == 0 || *v == 255));
+        if uniform_hard {
+            continue;
+        }
+        if let Some((t, data)) = run(&tc.rect()) {
+            out.write_region(t, &data);
+        }
+    }
+    out
+}
+
 /// The pixels of `src` with their alpha multiplied by `alpha` (zero outside its box); the result
 /// has an alpha channel even if `src` does not.
+#[cfg(test)]
 pub fn masked_copy(src: &Surface, alpha: &Region) -> Surface {
     let fmt = src.format();
     let n = fmt.channels();
@@ -644,11 +857,90 @@ pub fn masked_copy(src: &Surface, alpha: &Region) -> Surface {
     out
 }
 
+/// Copies selected pixels without collecting buffers across the alpha bounds.
+/// `alpha` is a zero-default GRAY8 surface, as returned by [`refine_surface`].
+pub fn masked_copy_surface(src: &Surface, alpha: &Surface) -> Surface {
+    let fmt = src.format();
+    let n = fmt.channels();
+    let output_fmt = PixelFormat { alpha: true, ..fmt };
+    let mut out = Surface::new(output_fmt);
+    let mut default = src.default_pixel();
+    if !fmt.alpha {
+        default.push(1.0);
+    }
+    let default_tile = out.solid_tile(&default);
+    let mut full = std::collections::HashMap::new();
+    let bounds = alpha.content_bounds();
+    for (tc, tile) in alpha.tiles() {
+        let key = std::sync::Arc::as_ptr(tile) as usize;
+        let opaque = *full.entry(key).or_insert_with(|| tile.bytes().iter().all(|v| *v == 255));
+        if opaque && fmt.alpha {
+            if let Some(t) = src.tile(*tc) {
+                out.put_tiles([(*tc, t.clone())]);
+            } else if default.last().is_some_and(|a| *a > 0.0) {
+                out.put_tiles([(*tc, default_tile.clone())]);
+            }
+            continue;
+        }
+        if opaque && src.tile(*tc).is_none() {
+            out.put_tiles([(*tc, default_tile.clone())]);
+            continue;
+        }
+        let r = tc.rect().intersect(&bounds);
+        let px = src.read_region(r);
+        let al = alpha.read_region(r);
+        let mut data = Vec::with_capacity(al.len().saturating_mul(output_fmt.channels()));
+        let mut any = false;
+        for (p, a) in px.chunks_exact(n).zip(al) {
+            let colors = n - usize::from(fmt.alpha);
+            data.extend_from_slice(p.get(..colors).unwrap_or(&[]));
+            let sa = if fmt.alpha { p.last().copied().unwrap_or(0.0) } else { 1.0 };
+            data.push(sa * a);
+            any |= sa * a > 0.0;
+        }
+        if any {
+            out.write_region(r, &data);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::segment::ImageSampler;
     use photocraft_color::SampleType;
+
+    #[test]
+    fn sparse_refine_matches_dense_at_unaligned_origins() {
+        let canvas = Rect::new(-15, -9, 540, 280);
+        let source = Surface::new(PixelFormat::RGBA8);
+        let sampler = crate::segment::SurfaceSampler(&source);
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(Rect::new(-3, 4, 310, 210), &[1.0]);
+        mask.fill_rect(Rect::new(64, 50, 130, 90), &[0.25]);
+        for params in [RefineParams::default(), RefineParams { radius: 4.0, smart_radius: true, smooth: 10.0, feather: 2.0, contrast: 20.0, shift_edge: -15.0 }]
+        {
+            let dense = refine_mask(&sampler, &surface_reader(&mask), mask.content_bounds(), canvas, &params).expect("dense");
+            let sparse = refine_surface(&sampler, &mask, canvas, &params, None).expect("allocation").expect("sparse");
+            assert_eq!(sparse.to_interleaved(canvas), region_surface(&dense).to_interleaved(canvas));
+        }
+    }
+
+    #[test]
+    fn sparse_refine_handles_reveal_all_without_input_tiles() {
+        let canvas = Rect::new(0, 0, 100_000, 100_000);
+        let source = Surface::new(PixelFormat::RGBA8);
+        let sampler = crate::segment::SurfaceSampler(&source);
+        let mask = Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        let output = refine_surface(&sampler, &mask, canvas, &RefineParams::default(), None).expect("allocation").expect("selected");
+        assert_eq!(output.sample_channel(99_999, 99_999, 0), 1.0);
+        assert_eq!(output.sample_channel(100_000, 100_000, 0), 0.0);
+        assert!(std::sync::Arc::ptr_eq(
+            output.tile(photocraft_geom::TileCoord::new(10, 10)).unwrap(),
+            output.tile(photocraft_geom::TileCoord::new(20, 20)).unwrap()
+        ));
+    }
 
     /// Horizontal blend from `a` (left) to `b` (right) across a Gaussian-blurred edge at x = 40.
     fn blurred_edge(w: usize, h: usize, sigma: f32) -> (RgbImage, Vec<f32>) {
@@ -813,6 +1105,13 @@ mod tests {
                 .collect();
             let a = Region { bbox: Rect::new(0, 0, 20, 8), mask };
             let d = decontaminate(&s, &a, 3.0, 100.0);
+            let sparse_alpha = region_surface(&a);
+            let sparse_d = decontaminate_surface(&s, &sparse_alpha, 3.0, 100.0);
+            for (expected, actual) in d.read_region(a.bbox).iter().zip(sparse_d.read_region(a.bbox)) {
+                assert!((expected - actual).abs() < 1e-5, "{sample:?}: decontamination changed");
+            }
+            let sparse_c = masked_copy_surface(&d, &sparse_alpha);
+            assert_eq!(sparse_c.to_interleaved(a.bbox), masked_copy(&d, &a).to_interleaved(a.bbox));
             let p = d.pixel(10, 4);
             assert!(p[0] > 0.9 && p[2] < 0.1, "{sample:?}: {p:?}");
             assert_eq!(d.pixel(15, 4), s.pixel(15, 4));
