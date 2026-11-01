@@ -18,6 +18,19 @@ fn hindi_tags_resolve() {
     assert_eq!(Lang::from_pref("HI"), HI());
 }
 
+/// The layer Color menu, Layer › New › Layer and the Layers panel name each label color in
+/// Hindi, each with its own name.
+#[test]
+fn hindi_names_every_layer_color_label() {
+    let mut seen = std::collections::HashSet::new();
+    for color in photocraft_doc::LabelColor::ALL {
+        let name = tr_ctx(HI(), "layerLabel", color.label());
+        assert_ne!(name, color.label(), "{color:?} shows in English");
+        assert!(seen.insert(name), "{color:?}: {name} also names another color");
+    }
+    assert_ne!(tr(HI(), "No Color"), "No Color", "the shape fill and stroke pickers");
+}
+
 #[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {

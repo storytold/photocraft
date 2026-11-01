@@ -164,6 +164,16 @@
 	Merge Down	नीचे मर्ज करें
 	Merge Visible	दृश्यमान मर्ज करें
 	Flatten Image	इमेज फ़्लैट करें
+
+# Layer color labels
+layerLabel	No Color	कोई रंग नहीं
+	No Color	कोई रंग नहीं
+	Seafoam	सीफ़ोम
+	Indigo	जामुनी
+	Fuchsia	फ़्यूशिया
+	Violet	बैंगनी
+	Gray	ग्रे
+
 	All	सभी
 	Deselect	अचयनित करें
 	Reselect	पुनः चयन करें
