@@ -4434,3 +4434,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI-szerkesztés…
+@id	edit.ai.codex	AI-szerkesztés…
+	Describe your edit	Írja le a módosítást
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	A látható vásznat és az utasítást a ChatGPT-bejelentkezésével küldjük el a Codexnek. Az eredményt a vászonhoz igazítjuk, és új rétegként adjuk hozzá.
+	Codex account has not been checked	A Codex-fiók még nincs ellenőrizve
+	Checking Codex connection…	Codex-kapcsolat ellenőrzése…
+	Complete ChatGPT sign-in in your browser	Fejezze be a ChatGPT-bejelentkezést a böngészőben
+	Connected to ChatGPT	Csatlakoztatva a ChatGPT-hez
+	ChatGPT plan	ChatGPT-előfizetés
+	ChatGPT sign-in is required	ChatGPT-bejelentkezés szükséges
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	A Codex más bejelentkezési módot használ. Az előfizetés használatához jelentkezzen be a ChatGPT-vel.
+	Cancelling sign-in…	Bejelentkezés megszakítása…
+	Sign-in cancelled	Bejelentkezés megszakítva
+	Could not verify the account. Check your connection or sign in again.	A fiók nem ellenőrizhető. Ellenőrizze a kapcsolatot, vagy jelentkezzen be újra.
+	Connection details	Kapcsolat részletei
+	Sign in with ChatGPT	Bejelentkezés a ChatGPT-vel
+	Open sign-in page	Bejelentkezési oldal megnyitása
+	Check connection	Kapcsolat ellenőrzése
+	Cancel sign-in	Bejelentkezés megszakítása
+	Copy sign-in link	Bejelentkezési hivatkozás másolása
+	Could not open your browser. Try again or copy the sign-in link into your browser.	A böngésző nem nyitható meg. Próbálja újra, vagy illessze be a bejelentkezési hivatkozást a böngészőbe.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	A bejelentkezést a telepített Codex-környezet kezeli és megosztja a Codexszel. A PhotoCraft nem tárol tokeneket.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	A Codex nem található. Telepítse és nyissa meg a Codex asztali alkalmazást, majd ellenőrizze újra a kapcsolatot.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Használja a teljes Codex-telepítést; csak a codex.exe másolásakor hiányozhatnak a képszerkesztési összetevők.
+	AI Edit	AI-szerkesztés
+	Codex Account	Codex-fiók
+# Image API and related UI (original translations).
+	Image service	Képszolgáltatás
+	Codex (ChatGPT subscription)	Codex (ChatGPT-előfizetés)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	A látható vásznat és az utasítást a beállított szolgáltatásnak küldjük. A szolgáltató használati díjat számíthat fel.
+	Model ID	Modellazonosító
+	API address and protocol	API-cím és protokoll
+	API address	API-cím
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Az egyéni szolgáltatásnak támogatnia kell a kiválasztott képszerkesztési protokollt. A cím módosításához az adott címhez tartozó kulcs szükséges.
+	API key	API-kulcs
+	API key configured — leave empty to keep it	API-kulcs beállítva — megtartásához hagyja üresen
+	Remember API key in system credential store	API-kulcs mentése a rendszer hitelesítőadat-tárolójába
+	The API key is available for this session only.	Az API-kulcs csak ebben a munkamenetben érhető el.
+	Save API settings	API-beállítások mentése
+	Remove API key	API-kulcs eltávolítása
+	API configured. Saving settings does not generate an image.	Az API beállítva. A beállítások mentése nem hoz létre képet.
+	Save your API settings before editing.	Szerkesztés előtt mentse az API-beállításokat.
+	API settings saved	API-beállítások mentve
+	Enter a valid API key without whitespace	Adjon meg érvényes, szóköz nélküli API-kulcsot
+	API key removed	API-kulcs eltávolítva
+	Could not load API settings	Az API-beállítások nem tölthetők be
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Az eredményt a vászonhoz igazítjuk, és új rétegként adjuk hozzá. A meglévő rétegek megmaradnak.
+	AI Edit via API	AI-szerkesztés API-n keresztül
+	AI Provider Settings	AI-szolgáltató beállításai
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Az AI-szerkesztés nem ment át a szolgáltatás tartalomellenőrzésén
+	The image service's content review is unavailable	A képszolgáltatás tartalomellenőrzése nem érhető el
+	Your editing instruction did not pass the service's content review.	A szerkesztési utasítás nem ment át a szolgáltatás tartalomellenőrzésén.
+	Your reference image did not pass the service's content review.	A referenciakép nem ment át a szolgáltatás tartalomellenőrzésén.
+	The generated image did not pass the service's content review.	A létrehozott kép nem ment át a szolgáltatás tartalomellenőrzésén.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Az utasítás a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	A referenciakép a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	Your reference image did not pass the service's privacy review.	A referenciakép nem ment át a szolgáltatás adatvédelmi ellenőrzésén.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	A létrehozott kép a szolgáltatás tartalmi szabályaiba ütközött, amelyek szerzői jogi korlátozásokat is tartalmazhatnak.
+	The generated image triggered the service's impersonation restrictions.	A létrehozott kép a szolgáltatás mások megszemélyesítésére vonatkozó korlátozásaiba ütközött.
+	The service rejected this edit without identifying the content-review stage.	A szolgáltatás elutasította a szerkesztést, de nem nevezte meg a tartalomellenőrzés szakaszát.
+	The service's content review failed, so this edit could not be completed.	A szolgáltatás tartalomellenőrzése sikertelen volt, ezért a szerkesztés nem fejezhető be.
+	Revise the instruction and try again manually.	Módosítsa az utasítást, majd próbálja újra kézzel.
+	Choose a reference image that meets the service's requirements.	Válasszon a szolgáltatás követelményeinek megfelelő referenciaképet.
+	Adjust the editing request or contact the service provider for details.	Módosítsa a szerkesztési kérést, vagy kérjen részleteket a szolgáltatótól.
+	Check that your editing request meets the service's content requirements.	Ellenőrizze, hogy a kérés megfelel-e a szolgáltatás tartalmi követelményeinek.
+	Check your editing content or ask the service provider for details.	Ellenőrizze a szerkesztendő tartalmat, vagy kérjen részleteket a szolgáltatótól.
+	Try again manually later. Contact the service provider if the problem continues.	Próbálja újra később kézzel. Ha a hiba továbbra is fennáll, forduljon a szolgáltatóhoz.
+	This edit did not change existing layers or add a new layer.	Ez a szerkesztés nem módosította a meglévő rétegeket, és nem adott hozzá új réteget.
+	Error code: {code}	Hibakód: {code}
+	API settings	API-beállítások

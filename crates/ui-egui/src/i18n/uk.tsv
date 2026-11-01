@@ -4225,3 +4225,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Редагування з ШІ…
+@id	edit.ai.codex	Редагування з ШІ…
+	Describe your edit	Опишіть зміну
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Видиме полотно та інструкцію буде надіслано до Codex через ваш вхід у ChatGPT. Результат буде підігнано до полотна й додано як новий шар.
+	Codex account has not been checked	Обліковий запис Codex ще не перевірено
+	Checking Codex connection…	Перевірка з’єднання з Codex…
+	Complete ChatGPT sign-in in your browser	Завершіть вхід у ChatGPT у браузері
+	Connected to ChatGPT	Підключено до ChatGPT
+	ChatGPT plan	План ChatGPT
+	ChatGPT sign-in is required	Потрібно ввійти в ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex використовує інший спосіб входу. Увійдіть через ChatGPT, щоб скористатися підпискою.
+	Cancelling sign-in…	Скасування входу…
+	Sign-in cancelled	Вхід скасовано
+	Could not verify the account. Check your connection or sign in again.	Не вдалося перевірити обліковий запис. Перевірте з’єднання або ввійдіть знову.
+	Connection details	Відомості про з’єднання
+	Sign in with ChatGPT	Увійти через ChatGPT
+	Open sign-in page	Відкрити сторінку входу
+	Check connection	Перевірити з’єднання
+	Cancel sign-in	Скасувати вхід
+	Copy sign-in link	Копіювати посилання для входу
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Не вдалося відкрити браузер. Спробуйте ще раз або вставте посилання для входу в браузер.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Входом керує встановлене середовище Codex; сеанс спільний із Codex. PhotoCraft не зберігає токени.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex не знайдено. Установіть і відкрийте настільну програму Codex, а потім перевірте з’єднання знову.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Використовуйте повну інсталяцію Codex: копіювання лише codex.exe може не включати компоненти редагування зображень.
+	AI Edit	Редагування з ШІ
+	Codex Account	Обліковий запис Codex
+# Image API and related UI (original translations).
+	Image service	Сервіс зображень
+	Codex (ChatGPT subscription)	Codex (підписка ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Видиме полотно та інструкцію буде надіслано налаштованому сервісу. Постачальник може стягувати плату за використання.
+	Model ID	ID моделі
+	API address and protocol	Адреса та протокол API
+	API address	Адреса API
+	API protocol	Протокол API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Власні сервіси мають підтримувати вибраний протокол редагування зображень. Зміна адреси потребує ключа для цієї адреси.
+	API key	Ключ API
+	API key configured — leave empty to keep it	Ключ API налаштовано — залиште поле порожнім, щоб зберегти його
+	Remember API key in system credential store	Зберігати ключ API в системному сховищі облікових даних
+	The API key is available for this session only.	Ключ API доступний лише в поточному сеансі.
+	Save API settings	Зберегти налаштування API
+	Remove API key	Видалити ключ API
+	API configured. Saving settings does not generate an image.	API налаштовано. Збереження налаштувань не створює зображення.
+	Save your API settings before editing.	Перед редагуванням збережіть налаштування API.
+	API settings saved	Налаштування API збережено
+	Enter a valid API key without whitespace	Введіть дійсний ключ API без пробільних символів
+	API key removed	Ключ API видалено
+	Could not load API settings	Не вдалося завантажити налаштування API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Результат буде підігнано до полотна й додано як новий шар. Наявні шари буде збережено.
+	AI Edit via API	Редагування з ШІ через API
+	AI Provider Settings	Налаштування постачальника ШІ
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Редагування з ШІ не пройшло перевірку вмісту сервісу
+	The image service's content review is unavailable	Перевірка вмісту сервісу зображень недоступна
+	Your editing instruction did not pass the service's content review.	Ваша інструкція не пройшла перевірку вмісту сервісу.
+	Your reference image did not pass the service's content review.	Ваше референсне зображення не пройшло перевірку вмісту сервісу.
+	The generated image did not pass the service's content review.	Згенероване зображення не пройшло перевірку вмісту сервісу.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ваша інструкція зачепила правила сервісу щодо вмісту, які можуть включати обмеження авторського права.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Ваше референсне зображення зачепило правила сервісу щодо вмісту, які можуть включати обмеження авторського права.
+	Your reference image did not pass the service's privacy review.	Ваше референсне зображення не пройшло перевірку приватності сервісу.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Згенероване зображення зачепило правила сервісу щодо вмісту, які можуть включати обмеження авторського права.
+	The generated image triggered the service's impersonation restrictions.	Згенероване зображення зачепило обмеження сервісу щодо видавання себе за іншу особу.
+	The service rejected this edit without identifying the content-review stage.	Сервіс відхилив редагування, не вказавши етап перевірки вмісту.
+	The service's content review failed, so this edit could not be completed.	Під час перевірки вмісту сервісу сталася помилка, тому редагування не завершено.
+	Revise the instruction and try again manually.	Змініть інструкцію та повторіть спробу вручну.
+	Choose a reference image that meets the service's requirements.	Виберіть референсне зображення, що відповідає вимогам сервісу.
+	Adjust the editing request or contact the service provider for details.	Змініть запит на редагування або уточніть подробиці в постачальника сервісу.
+	Check that your editing request meets the service's content requirements.	Перевірте, чи відповідає запит вимогам сервісу щодо вмісту.
+	Check your editing content or ask the service provider for details.	Перевірте вміст редагування або зверніться до постачальника сервісу по подробиці.
+	Try again manually later. Contact the service provider if the problem continues.	Спробуйте ще раз вручну пізніше. Якщо проблема не зникає, зверніться до постачальника сервісу.
+	This edit did not change existing layers or add a new layer.	Це редагування не змінило наявні шари й не додало нового шару.
+	Error code: {code}	Код помилки: {code}
+	API settings	Налаштування API

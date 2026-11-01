@@ -4593,3 +4593,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI uređivanje…
+@id	edit.ai.codex	AI uređivanje…
+	Describe your edit	Opišite izmenu
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Vidljivo platno i uputstvo biće poslati Codexu putem prijave na ChatGPT. Rezultat se prilagođava platnu i dodaje kao novi sloj.
+	Codex account has not been checked	Codex nalog još nije proveren
+	Checking Codex connection…	Provera veze sa Codexom…
+	Complete ChatGPT sign-in in your browser	Dovršite prijavu na ChatGPT u pregledaču
+	Connected to ChatGPT	Povezano sa ChatGPT-om
+	ChatGPT plan	ChatGPT paket
+	ChatGPT sign-in is required	Potrebna je prijava na ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex koristi drugi način prijave. Prijavite se putem ChatGPT-a da biste koristili pretplatu.
+	Cancelling sign-in…	Otkazivanje prijave…
+	Sign-in cancelled	Prijava je otkazana
+	Could not verify the account. Check your connection or sign in again.	Nalog nije moguće proveriti. Proverite vezu ili se ponovo prijavite.
+	Connection details	Detalji veze
+	Sign in with ChatGPT	Prijavite se putem ChatGPT-a
+	Open sign-in page	Otvori stranicu za prijavu
+	Check connection	Proveri vezu
+	Cancel sign-in	Otkaži prijavu
+	Copy sign-in link	Kopiraj vezu za prijavu
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Pregledač nije moguće otvoriti. Pokušajte ponovo ili nalepite vezu za prijavu u pregledač.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Prijavom upravlja instalirano Codex okruženje i deli je sa Codexom. PhotoCraft ne čuva tokene.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex nije pronađen. Instalirajte i otvorite Codex aplikaciju za računar, pa ponovo proverite vezu.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Koristite celu Codex instalaciju; kopiranje samo datoteke codex.exe može izostaviti komponente za uređivanje slika.
+	AI Edit	AI uređivanje
+	Codex Account	Codex nalog
+# Image API and related UI (original translations).
+	Image service	Usluga za slike
+	Codex (ChatGPT subscription)	Codex (ChatGPT pretplata)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Vidljivo platno i uputstvo šalju se podešenoj usluzi. Pružalac usluge može naplatiti korišćenje.
+	Model ID	ID modela
+	API address and protocol	API adresa i protokol
+	API address	API adresa
+	API protocol	API protokol
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Prilagođene usluge moraju podržavati izabrani protokol za uređivanje slika. Promena adrese zahteva ključ za tu adresu.
+	API key	API ključ
+	API key configured — leave empty to keep it	API ključ je podešen — ostavite prazno da biste ga zadržali
+	Remember API key in system credential store	Sačuvaj API ključ u sistemskom skladištu akreditiva
+	The API key is available for this session only.	API ključ je dostupan samo tokom ove sesije.
+	Save API settings	Sačuvaj API podešavanja
+	Remove API key	Ukloni API ključ
+	API configured. Saving settings does not generate an image.	API je podešen. Čuvanje podešavanja ne generiše sliku.
+	Save your API settings before editing.	Sačuvajte API podešavanja pre uređivanja.
+	API settings saved	API podešavanja su sačuvana
+	Enter a valid API key without whitespace	Unesite važeći API ključ bez belina
+	API key removed	API ključ je uklonjen
+	Could not load API settings	API podešavanja nije moguće učitati
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Rezultat se prilagođava platnu i dodaje kao novi sloj. Postojeći slojevi se čuvaju.
+	AI Edit via API	AI uređivanje putem API-ja
+	AI Provider Settings	Podešavanja AI pružaoca
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI izmena nije prošla proveru sadržaja usluge
+	The image service's content review is unavailable	Provera sadržaja usluge za slike nije dostupna
+	Your editing instruction did not pass the service's content review.	Vaše uputstvo nije prošlo proveru sadržaja usluge.
+	Your reference image did not pass the service's content review.	Vaša referentna slika nije prošla proveru sadržaja usluge.
+	The generated image did not pass the service's content review.	Generisana slika nije prošla proveru sadržaja usluge.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Vaše uputstvo aktiviralo je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Vaša referentna slika aktivirala je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	Your reference image did not pass the service's privacy review.	Vaša referentna slika nije prošla proveru privatnosti usluge.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Generisana slika aktivirala je pravila sadržaja usluge, koja mogu uključivati ograničenja autorskih prava.
+	The generated image triggered the service's impersonation restrictions.	Generisana slika aktivirala je ograničenja usluge protiv lažnog predstavljanja.
+	The service rejected this edit without identifying the content-review stage.	Usluga je odbila ovu izmenu bez navođenja faze provere sadržaja.
+	The service's content review failed, so this edit could not be completed.	Provera sadržaja usluge nije uspela, pa ova izmena nije mogla biti završena.
+	Revise the instruction and try again manually.	Izmenite uputstvo i pokušajte ponovo ručno.
+	Choose a reference image that meets the service's requirements.	Izaberite referentnu sliku koja ispunjava zahteve usluge.
+	Adjust the editing request or contact the service provider for details.	Prilagodite zahtev za uređivanje ili pitajte pružaoca usluge za detalje.
+	Check that your editing request meets the service's content requirements.	Proverite da li vaš zahtev ispunjava pravila usluge o sadržaju.
+	Check your editing content or ask the service provider for details.	Proverite sadržaj izmene ili pitajte pružaoca usluge za detalje.
+	Try again manually later. Contact the service provider if the problem continues.	Pokušajte ponovo ručno kasnije. Ako problem potraje, obratite se pružaocu usluge.
+	This edit did not change existing layers or add a new layer.	Ova izmena nije promenila postojeće slojeve niti dodala novi sloj.
+	Error code: {code}	Kôd greške: {code}
+	API settings	API podešavanja

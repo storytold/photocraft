@@ -589,3 +589,77 @@ cameraRaw	Yellow	पीला
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI संपादन…
+@id	edit.ai.codex	AI संपादन…
+	Describe your edit	अपना संपादन बताएँ
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	दिखाई दे रहा कैनवस और निर्देश आपके ChatGPT साइन-इन से Codex को भेजे जाएँगे। परिणाम कैनवस के आकार में ढालकर नई परत के रूप में जोड़ा जाएगा।
+	Codex account has not been checked	Codex खाते की जाँच नहीं हुई है
+	Checking Codex connection…	Codex कनेक्शन की जाँच हो रही है…
+	Complete ChatGPT sign-in in your browser	अपने ब्राउज़र में ChatGPT साइन-इन पूरा करें
+	Connected to ChatGPT	ChatGPT से जुड़ा है
+	ChatGPT plan	ChatGPT सदस्यता
+	ChatGPT sign-in is required	ChatGPT में साइन इन करना आवश्यक है
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex किसी अन्य साइन-इन विधि का उपयोग कर रहा है। अपनी सदस्यता का उपयोग करने के लिए ChatGPT से साइन इन करें।
+	Cancelling sign-in…	साइन-इन रद्द किया जा रहा है…
+	Sign-in cancelled	साइन-इन रद्द हुआ
+	Could not verify the account. Check your connection or sign in again.	खाता सत्यापित नहीं हो सका। कनेक्शन जाँचें या फिर से साइन इन करें।
+	Connection details	कनेक्शन विवरण
+	Sign in with ChatGPT	ChatGPT से साइन इन करें
+	Open sign-in page	साइन-इन पेज खोलें
+	Check connection	कनेक्शन जाँचें
+	Cancel sign-in	साइन-इन रद्द करें
+	Copy sign-in link	साइन-इन लिंक कॉपी करें
+	Could not open your browser. Try again or copy the sign-in link into your browser.	ब्राउज़र नहीं खुल सका। फिर से कोशिश करें या साइन-इन लिंक अपने ब्राउज़र में पेस्ट करें।
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	साइन-इन का प्रबंधन इंस्टॉल किया गया Codex करता है और उसे Codex के साथ साझा करता है। PhotoCraft टोकन नहीं सहेजता।
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex नहीं मिला। Codex डेस्कटॉप ऐप इंस्टॉल करके खोलें, फिर कनेक्शन दोबारा जाँचें।
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex की पूरी स्थापना का उपयोग करें; केवल codex.exe कॉपी करने से चित्र-संपादन घटक छूट सकते हैं।
+	AI Edit	AI संपादन
+	Codex Account	Codex खाता
+# Image API and related UI (original translations).
+	Image service	चित्र सेवा
+	Codex (ChatGPT subscription)	Codex (ChatGPT सदस्यता)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	दिखाई दे रहा कैनवस और निर्देश निर्धारित सेवा को भेजे जाते हैं। सेवा प्रदाता उपयोग के लिए शुल्क ले सकता है।
+	Model ID	मॉडल ID
+	API address and protocol	API पता और प्रोटोकॉल
+	API address	API पता
+	API protocol	API प्रोटोकॉल
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	कस्टम सेवा को चुने गए चित्र-संपादन प्रोटोकॉल का समर्थन करना चाहिए। पता बदलने पर उस पते की कुंजी आवश्यक है।
+	API key	API कुंजी
+	API key configured — leave empty to keep it	API कुंजी सेट है — इसे बनाए रखने के लिए खाली छोड़ें
+	Remember API key in system credential store	API कुंजी सिस्टम के क्रेडेंशियल स्टोर में सहेजें
+	The API key is available for this session only.	API कुंजी केवल इस सत्र में उपलब्ध है।
+	Save API settings	API सेटिंग सहेजें
+	Remove API key	API कुंजी हटाएँ
+	API configured. Saving settings does not generate an image.	API सेट है। सेटिंग सहेजने से चित्र नहीं बनता।
+	Save your API settings before editing.	संपादन से पहले API सेटिंग सहेजें।
+	API settings saved	API सेटिंग सहेजी गईं
+	Enter a valid API key without whitespace	बिना रिक्त स्थान वाली मान्य API कुंजी दर्ज करें
+	API key removed	API कुंजी हटाई गई
+	Could not load API settings	API सेटिंग लोड नहीं हो सकीं
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	परिणाम कैनवस के आकार में ढालकर नई परत के रूप में जोड़ा जाएगा। मौजूदा परतें सुरक्षित रहेंगी।
+	AI Edit via API	API से AI संपादन
+	AI Provider Settings	AI प्रदाता सेटिंग
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI संपादन सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ
+	The image service's content review is unavailable	चित्र सेवा की सामग्री समीक्षा उपलब्ध नहीं है
+	Your editing instruction did not pass the service's content review.	आपका संपादन निर्देश सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	Your reference image did not pass the service's content review.	आपका संदर्भ चित्र सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	The generated image did not pass the service's content review.	बनाया गया चित्र सेवा की सामग्री समीक्षा में स्वीकार नहीं हुआ।
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	आपके निर्देश ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	आपके संदर्भ चित्र ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	Your reference image did not pass the service's privacy review.	आपका संदर्भ चित्र सेवा की गोपनीयता समीक्षा में स्वीकार नहीं हुआ।
+	The generated image triggered the service's content rules, which may include copyright restrictions.	बनाए गए चित्र ने सेवा के सामग्री नियम सक्रिय किए, जिनमें कॉपीराइट प्रतिबंध शामिल हो सकते हैं।
+	The generated image triggered the service's impersonation restrictions.	बनाए गए चित्र ने किसी अन्य व्यक्ति का रूप धारण करने संबंधी सेवा के प्रतिबंध सक्रिय किए।
+	The service rejected this edit without identifying the content-review stage.	सेवा ने यह संपादन अस्वीकार कर दिया, लेकिन सामग्री समीक्षा का चरण नहीं बताया।
+	The service's content review failed, so this edit could not be completed.	सेवा की सामग्री समीक्षा विफल होने के कारण यह संपादन पूरा नहीं हो सका।
+	Revise the instruction and try again manually.	निर्देश बदलें और स्वयं फिर से कोशिश करें।
+	Choose a reference image that meets the service's requirements.	सेवा की आवश्यकताओं के अनुरूप संदर्भ चित्र चुनें।
+	Adjust the editing request or contact the service provider for details.	संपादन अनुरोध बदलें या विवरण के लिए सेवा प्रदाता से संपर्क करें।
+	Check that your editing request meets the service's content requirements.	जाँचें कि संपादन अनुरोध सेवा की सामग्री आवश्यकताओं के अनुरूप है।
+	Check your editing content or ask the service provider for details.	संपादन की सामग्री जाँचें या सेवा प्रदाता से विवरण पूछें।
+	Try again manually later. Contact the service provider if the problem continues.	बाद में स्वयं फिर से कोशिश करें। समस्या बनी रहे तो सेवा प्रदाता से संपर्क करें।
+	This edit did not change existing layers or add a new layer.	इस संपादन ने मौजूदा परतें नहीं बदलीं और कोई नई परत नहीं जोड़ी।
+	Error code: {code}	त्रुटि कोड: {code}
+	API settings	API सेटिंग

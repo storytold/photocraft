@@ -4214,3 +4214,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Επεξεργασία με ΤΝ…
+@id	edit.ai.codex	Επεξεργασία με ΤΝ…
+	Describe your edit	Περιγράψτε την αλλαγή
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Ο ορατός καμβάς και η οδηγία θα σταλούν στο Codex μέσω της σύνδεσής σας στο ChatGPT. Το αποτέλεσμα προσαρμόζεται στον καμβά και προστίθεται ως νέο επίπεδο.
+	Codex account has not been checked	Ο λογαριασμός Codex δεν έχει ελεγχθεί
+	Checking Codex connection…	Έλεγχος σύνδεσης με το Codex…
+	Complete ChatGPT sign-in in your browser	Ολοκληρώστε τη σύνδεση στο ChatGPT στο πρόγραμμα περιήγησης
+	Connected to ChatGPT	Συνδεδεμένο στο ChatGPT
+	ChatGPT plan	Πρόγραμμα ChatGPT
+	ChatGPT sign-in is required	Απαιτείται σύνδεση στο ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Το Codex χρησιμοποιεί άλλη μέθοδο σύνδεσης. Συνδεθείτε μέσω ChatGPT για να χρησιμοποιήσετε τη συνδρομή σας.
+	Cancelling sign-in…	Ακύρωση σύνδεσης…
+	Sign-in cancelled	Η σύνδεση ακυρώθηκε
+	Could not verify the account. Check your connection or sign in again.	Δεν ήταν δυνατή η επαλήθευση του λογαριασμού. Ελέγξτε τη σύνδεση ή συνδεθείτε ξανά.
+	Connection details	Λεπτομέρειες σύνδεσης
+	Sign in with ChatGPT	Σύνδεση μέσω ChatGPT
+	Open sign-in page	Άνοιγμα σελίδας σύνδεσης
+	Check connection	Έλεγχος σύνδεσης
+	Cancel sign-in	Ακύρωση σύνδεσης
+	Copy sign-in link	Αντιγραφή συνδέσμου σύνδεσης
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Δεν ήταν δυνατό το άνοιγμα του προγράμματος περιήγησης. Δοκιμάστε ξανά ή επικολλήστε τον σύνδεσμο σύνδεσης στο πρόγραμμα περιήγησης.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Η εγκατεστημένη υποδομή του Codex διαχειρίζεται τη σύνδεση και τη μοιράζεται με το Codex. Το PhotoCraft δεν αποθηκεύει διακριτικά.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Το Codex δεν βρέθηκε. Εγκαταστήστε και ανοίξτε την εφαρμογή υπολογιστή Codex και ελέγξτε ξανά τη σύνδεση.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Χρησιμοποιήστε την πλήρη εγκατάσταση του Codex· η αντιγραφή μόνο του codex.exe ενδέχεται να παραλείψει στοιχεία επεξεργασίας εικόνων.
+	AI Edit	Επεξεργασία με ΤΝ
+	Codex Account	Λογαριασμός Codex
+# Image API and related UI (original translations).
+	Image service	Υπηρεσία εικόνων
+	Codex (ChatGPT subscription)	Codex (συνδρομή ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Ο ορατός καμβάς και η οδηγία αποστέλλονται στη ρυθμισμένη υπηρεσία. Ο πάροχος ενδέχεται να χρεώσει τη χρήση.
+	Model ID	Αναγνωριστικό μοντέλου
+	API address and protocol	Διεύθυνση και πρωτόκολλο API
+	API address	Διεύθυνση API
+	API protocol	Πρωτόκολλο API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Οι προσαρμοσμένες υπηρεσίες πρέπει να υποστηρίζουν το επιλεγμένο πρωτόκολλο επεξεργασίας εικόνας. Η αλλαγή διεύθυνσης απαιτεί κλειδί για τη νέα διεύθυνση.
+	API key	Κλειδί API
+	API key configured — leave empty to keep it	Το κλειδί API έχει ρυθμιστεί — αφήστε κενό για να διατηρηθεί
+	Remember API key in system credential store	Αποθήκευση κλειδιού API στον χώρο διαπιστευτηρίων του συστήματος
+	The API key is available for this session only.	Το κλειδί API είναι διαθέσιμο μόνο σε αυτή τη συνεδρία.
+	Save API settings	Αποθήκευση ρυθμίσεων API
+	Remove API key	Αφαίρεση κλειδιού API
+	API configured. Saving settings does not generate an image.	Το API έχει ρυθμιστεί. Η αποθήκευση ρυθμίσεων δεν δημιουργεί εικόνα.
+	Save your API settings before editing.	Αποθηκεύστε τις ρυθμίσεις API πριν από την επεξεργασία.
+	API settings saved	Οι ρυθμίσεις API αποθηκεύτηκαν
+	Enter a valid API key without whitespace	Εισαγάγετε έγκυρο κλειδί API χωρίς κενά
+	API key removed	Το κλειδί API αφαιρέθηκε
+	Could not load API settings	Δεν ήταν δυνατή η φόρτωση των ρυθμίσεων API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Το αποτέλεσμα προσαρμόζεται στον καμβά και προστίθεται ως νέο επίπεδο. Τα υπάρχοντα επίπεδα διατηρούνται.
+	AI Edit via API	Επεξεργασία με ΤΝ μέσω API
+	AI Provider Settings	Ρυθμίσεις παρόχου ΤΝ
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Η επεξεργασία με ΤΝ δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας
+	The image service's content review is unavailable	Ο έλεγχος περιεχομένου της υπηρεσίας εικόνων δεν είναι διαθέσιμος
+	Your editing instruction did not pass the service's content review.	Η οδηγία επεξεργασίας δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	Your reference image did not pass the service's content review.	Η εικόνα αναφοράς δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	The generated image did not pass the service's content review.	Η παραγόμενη εικόνα δεν πέρασε τον έλεγχο περιεχομένου της υπηρεσίας.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Η οδηγία ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Η εικόνα αναφοράς ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	Your reference image did not pass the service's privacy review.	Η εικόνα αναφοράς δεν πέρασε τον έλεγχο απορρήτου της υπηρεσίας.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Η παραγόμενη εικόνα ενεργοποίησε τους κανόνες περιεχομένου της υπηρεσίας, που μπορεί να περιλαμβάνουν περιορισμούς πνευματικών δικαιωμάτων.
+	The generated image triggered the service's impersonation restrictions.	Η παραγόμενη εικόνα ενεργοποίησε τους περιορισμούς της υπηρεσίας για πλαστοπροσωπία.
+	The service rejected this edit without identifying the content-review stage.	Η υπηρεσία απέρριψε την επεξεργασία χωρίς να αναφέρει το στάδιο ελέγχου περιεχομένου.
+	The service's content review failed, so this edit could not be completed.	Ο έλεγχος περιεχομένου της υπηρεσίας απέτυχε και η επεξεργασία δεν ολοκληρώθηκε.
+	Revise the instruction and try again manually.	Αναθεωρήστε την οδηγία και δοκιμάστε ξανά χειροκίνητα.
+	Choose a reference image that meets the service's requirements.	Επιλέξτε εικόνα αναφοράς που πληροί τις απαιτήσεις της υπηρεσίας.
+	Adjust the editing request or contact the service provider for details.	Προσαρμόστε το αίτημα επεξεργασίας ή ζητήστε λεπτομέρειες από τον πάροχο.
+	Check that your editing request meets the service's content requirements.	Ελέγξτε αν το αίτημά σας πληροί τις απαιτήσεις περιεχομένου της υπηρεσίας.
+	Check your editing content or ask the service provider for details.	Ελέγξτε το περιεχόμενο της επεξεργασίας ή ζητήστε λεπτομέρειες από τον πάροχο.
+	Try again manually later. Contact the service provider if the problem continues.	Δοκιμάστε ξανά χειροκίνητα αργότερα. Αν το πρόβλημα συνεχιστεί, επικοινωνήστε με τον πάροχο.
+	This edit did not change existing layers or add a new layer.	Αυτή η επεξεργασία δεν άλλαξε τα υπάρχοντα επίπεδα ούτε πρόσθεσε νέο επίπεδο.
+	Error code: {code}	Κωδικός σφάλματος: {code}
+	API settings	Ρυθμίσεις API

@@ -39,6 +39,7 @@ pub fn is_live(id: &str) -> bool {
 /// The command takes that item's submenu path, so it joins Photoshop's submenu even where the
 /// catalogue spells it differently (Filter › "Other…").
 const PLACE_AFTER: &[(&str, &str)] = &[
+    ("edit.ai.codex", "edit.contentAwareFill"),
     ("file.newFromClipboard", "file.new"),
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),

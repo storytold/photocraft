@@ -205,7 +205,8 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 fn wraps(id: &str) -> bool {
     matches!(
         id,
-        "file.openAs"
+        "edit.ai.codex"
+            | "file.openAs"
             | "file.openExrParts"
             | "file.saveACopy"
             | "file.placeEmbedded"

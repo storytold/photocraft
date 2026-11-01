@@ -4770,3 +4770,77 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Tekoälymuokkaus…
+@id	edit.ai.codex	Tekoälymuokkaus…
+	Describe your edit	Kuvaile muokkaus
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Näkyvä kangas ja ohje lähetetään Codexille ChatGPT-kirjautumisellasi. Tulos sovitetaan kankaaseen ja lisätään uutena tasona.
+	Codex account has not been checked	Codex-tiliä ei ole vielä tarkistettu
+	Checking Codex connection…	Tarkistetaan Codex-yhteyttä…
+	Complete ChatGPT sign-in in your browser	Viimeistele ChatGPT-kirjautuminen selaimessa
+	Connected to ChatGPT	Yhdistetty ChatGPT:hen
+	ChatGPT plan	ChatGPT-tilaus
+	ChatGPT sign-in is required	ChatGPT-kirjautuminen vaaditaan
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex käyttää toista kirjautumistapaa. Kirjaudu ChatGPT:llä käyttääksesi tilaustasi.
+	Cancelling sign-in…	Peruutetaan kirjautumista…
+	Sign-in cancelled	Kirjautuminen peruutettu
+	Could not verify the account. Check your connection or sign in again.	Tiliä ei voitu vahvistaa. Tarkista yhteys tai kirjaudu uudelleen.
+	Connection details	Yhteyden tiedot
+	Sign in with ChatGPT	Kirjaudu ChatGPT:llä
+	Open sign-in page	Avaa kirjautumissivu
+	Check connection	Tarkista yhteys
+	Cancel sign-in	Peruuta kirjautuminen
+	Copy sign-in link	Kopioi kirjautumislinkki
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Selainta ei voitu avata. Yritä uudelleen tai liitä kirjautumislinkki selaimeen.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Asennettu Codex-ympäristö hallinnoi kirjautumista ja jakaa sen Codexin kanssa. PhotoCraft ei tallenna tunnisteita.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codexia ei löytynyt. Asenna ja avaa Codex-työpöytäsovellus ja tarkista yhteys uudelleen.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Käytä koko Codex-asennusta; pelkän codex.exe-tiedoston kopiointi voi jättää kuvanmuokkausosia pois.
+	AI Edit	Tekoälymuokkaus
+	Codex Account	Codex-tili
+# Image API and related UI (original translations).
+	Image service	Kuvapalvelu
+	Codex (ChatGPT subscription)	Codex (ChatGPT-tilaus)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Näkyvä kangas ja ohje lähetetään määritettyyn palveluun. Palveluntarjoaja voi veloittaa käytöstä.
+	Model ID	Mallin tunnus
+	API address and protocol	API-osoite ja protokolla
+	API address	API-osoite
+	API protocol	API-protokolla
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Oman palvelun on tuettava valittua kuvanmuokkausprotokollaa. Osoitteen vaihtaminen vaatii kyseisen osoitteen avaimen.
+	API key	API-avain
+	API key configured — leave empty to keep it	API-avain määritetty — säilytä se jättämällä kenttä tyhjäksi
+	Remember API key in system credential store	Tallenna API-avain järjestelmän tunnistetietosäilöön
+	The API key is available for this session only.	API-avain on käytettävissä vain tässä istunnossa.
+	Save API settings	Tallenna API-asetukset
+	Remove API key	Poista API-avain
+	API configured. Saving settings does not generate an image.	API on määritetty. Asetusten tallennus ei luo kuvaa.
+	Save your API settings before editing.	Tallenna API-asetukset ennen muokkausta.
+	API settings saved	API-asetukset tallennettu
+	Enter a valid API key without whitespace	Anna kelvollinen API-avain ilman tyhjemerkkejä
+	API key removed	API-avain poistettu
+	Could not load API settings	API-asetuksia ei voitu ladata
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Tulos sovitetaan kankaaseen ja lisätään uutena tasona. Nykyiset tasot säilyvät.
+	AI Edit via API	Tekoälymuokkaus API:n kautta
+	AI Provider Settings	Tekoälypalveluntarjoajan asetukset
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Tekoälymuokkaus ei läpäissyt palvelun sisältötarkistusta
+	The image service's content review is unavailable	Kuvapalvelun sisältötarkistus ei ole käytettävissä
+	Your editing instruction did not pass the service's content review.	Muokkausohjeesi ei läpäissyt palvelun sisältötarkistusta.
+	Your reference image did not pass the service's content review.	Viitekuvasi ei läpäissyt palvelun sisältötarkistusta.
+	The generated image did not pass the service's content review.	Luotu kuva ei läpäissyt palvelun sisältötarkistusta.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ohjeesi käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Viitekuvasi käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	Your reference image did not pass the service's privacy review.	Viitekuvasi ei läpäissyt palvelun yksityisyystarkistusta.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Luotu kuva käynnisti palvelun sisältösäännöt, joihin voi sisältyä tekijänoikeusrajoituksia.
+	The generated image triggered the service's impersonation restrictions.	Luotu kuva käynnisti palvelun toisen henkilönä esiintymistä koskevat rajoitukset.
+	The service rejected this edit without identifying the content-review stage.	Palvelu hylkäsi muokkauksen ilmoittamatta sisältötarkistuksen vaihetta.
+	The service's content review failed, so this edit could not be completed.	Palvelun sisältötarkistus epäonnistui, joten muokkausta ei voitu suorittaa loppuun.
+	Revise the instruction and try again manually.	Muokkaa ohjetta ja yritä uudelleen manuaalisesti.
+	Choose a reference image that meets the service's requirements.	Valitse viitekuva, joka täyttää palvelun vaatimukset.
+	Adjust the editing request or contact the service provider for details.	Muuta muokkauspyyntöä tai kysy lisätietoja palveluntarjoajalta.
+	Check that your editing request meets the service's content requirements.	Tarkista, että muokkauspyyntö täyttää palvelun sisältövaatimukset.
+	Check your editing content or ask the service provider for details.	Tarkista muokattava sisältö tai pyydä lisätietoja palveluntarjoajalta.
+	Try again manually later. Contact the service provider if the problem continues.	Yritä myöhemmin uudelleen manuaalisesti. Jos ongelma jatkuu, ota yhteyttä palveluntarjoajaan.
+	This edit did not change existing layers or add a new layer.	Tämä muokkaus ei muuttanut nykyisiä tasoja eikä lisännyt uutta tasoa.
+	Error code: {code}	Virhekoodi: {code}
+	API settings	API-asetukset

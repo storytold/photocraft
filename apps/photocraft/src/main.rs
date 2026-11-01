@@ -521,6 +521,15 @@ fn main() -> eframe::Result {
             let session = Session::new();
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
+            if let Some(root) = services::config_dir() {
+                match photocraft_engine::cmd::ai_provider_cmds::open_settings(root.join("ai-providers.json")) {
+                    Ok(settings) => app.session.ai_api = settings,
+                    Err(error) => {
+                        app.ui.status = error.to_string();
+                        app.ui.status_error = true;
+                    }
+                }
+            }
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;

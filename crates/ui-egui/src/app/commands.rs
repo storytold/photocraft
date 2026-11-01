@@ -150,8 +150,10 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
-                self.ui.status = e.clone();
-                self.ui.status_error = true;
+                if !crate::ai_errors_ui::report(self, id, e) {
+                    self.ui.status = e.clone();
+                    self.ui.status_error = true;
+                }
             }
         }
         if suppress_events {
