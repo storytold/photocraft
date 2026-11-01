@@ -186,6 +186,25 @@ pub fn window_body<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -
     }
 }
 
+/// The body of a modal dialog, bounded to the dialog's content rect: in a right-to-left UI the
+/// body re-scopes with [`body_layout`] so its blocks right-align and its nested rows mirror, but
+/// the child is sized from the cursor — never seeded with the parent's full `max_rect`, which
+/// under RTL re-anchors the title and the content onto one baseline. As in [`popup_body`], the
+/// sizing pass runs in an LTR scope so the modal measures its rows' width, not the full default
+/// area width. Left-to-right the caller's own layout runs unchanged.
+pub fn dialog_content<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if is_rtl() {
+        if ui.is_sizing_pass() {
+            let _ltr = direction_scope(Dir::Ltr);
+            add(ui)
+        } else {
+            ui.with_layout(body_layout(), add).inner
+        }
+    } else {
+        add(ui)
+    }
+}
+
 /// A label inside a mirrored body ([`body_layout`]/[`window_body`]): in a right-to-left UI the
 /// paragraph base direction is pinned right-to-left and the galley aligns to the reading-start
 /// (right) edge, so mixed Arabic/Latin lines keep their phrase order instead of scrambling and
@@ -570,6 +589,22 @@ pub fn settings_grid(
 /// explicit reversal).
 pub fn ltr_grid<R>(ui: &mut egui::Ui, id: impl egui::AsIdSalt, cols: usize, spacing: egui::Vec2, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
     ltr_vertical(ui, |ui| egui::Grid::new(id).num_columns(cols).spacing(spacing).show(ui, add)).inner
+}
+
+/// A grid inside a scroll area, in an [`ltr_vertical`] child sized from the cursor: the
+/// direction-aware replacement for `ui.new_child(UiBuilder::new().max_rect(ui.max_rect()))` +
+/// `egui::Grid` + `advance_cursor_after_rect`. Seeding the child with the parent's full
+/// `max_rect` re-anchors the grid's rows against the whole scroll content under RTL (cells land
+/// on wrong baselines and past the window edge); sizing the child from the cursor keeps every
+/// row at the cursor, and the parent cursor advances from the child's actual
+/// [`egui::Ui::min_rect`] in both directions. Cell order inside a row stays the caller's —
+/// mirror it with [`grid_cells`]. Left-to-right the grid runs exactly as the raw pattern.
+pub fn scroll_grid<R>(ui: &mut egui::Ui, id: impl egui::AsIdSalt, cols: usize, spacing: egui::Vec2, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let max_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(row_width(ui), ui.available_height()));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(max_rect).layout(Layout::top_down(Align::Min)));
+    let inner = egui::Grid::new(id).num_columns(cols).spacing(spacing).show(&mut child, add).inner;
+    ui.advance_cursor_after_rect(child.min_rect());
+    inner
 }
 
 /// The usable row width: in RTL the fork's available-width read balloons, so read
