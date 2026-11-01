@@ -37,7 +37,9 @@ including hiding and revealing the selected components. Eye changes survive comm
 cancel and Undo. Eligible RGB previews cache one source and combine the selected
 components in one GPU pass; different scalar sampling outlines retain the CPU oracle.
 Move drags with a several-component pixel selection use the native CPU preview.
-Their marching ants follow the preview, snapping uses the selection frame without
+Their repaint bounds include the stationary transparency extent, so successive offsets
+refresh colour changes there as well as the translated area. Their marching ants follow
+the preview, snapping uses the selection frame without
 snapping back to its starting outline, and Shift constrains movement to axes or 45° diagonals.
 A shown Smart Filter mask keeps Move aimed at the whole object, even with colour rows
 retained behind it. Copying that object keeps its mask view on the copy. Set-copy refusal

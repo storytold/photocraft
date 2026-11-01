@@ -187,6 +187,9 @@ pub(crate) struct MovePreview {
     /// What moving them can change at offset (0, 0), not clipped to the canvas: a layer larger
     /// than the canvas brings its pixels from beyond the edge into view (`None` = anything).
     bounds: Option<Rect>,
+    /// Native component edits keep transparency in place, so their original extent can change
+    /// between offsets too (selected default samples can replace a vacated background value).
+    stationary: bool,
     canvas: Rect,
     /// Offsets shown so far, by preview key (`BASE + index`).
     offsets: Vec<(i32, i32)>,
@@ -334,7 +337,11 @@ impl MovePreview {
     }
     fn area(&self, d: (i32, i32)) -> Option<Rect> {
         let b = self.bounds?;
-        Some(if b.is_empty() { b } else { b.translate(d.0, d.1).inflate(1).intersect(&self.canvas) })
+        if b.is_empty() {
+            return Some(b);
+        }
+        let shifted = b.translate(d.0, d.1);
+        Some(if self.stationary { b.union(&shifted) } else { shifted }.inflate(1).intersect(&self.canvas))
     }
 }
 
@@ -397,7 +404,19 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let moving = if channel.is_some() { Vec::new() } else { with_descendants(&doc, &ids) };
         let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, too_big });
+        app.move_preview = Some(MovePreview {
+            doc: doc_id,
+            revision,
+            ids,
+            moving,
+            bounds,
+            stationary: channel.is_some(),
+            canvas,
+            offsets: Vec::new(),
+            shown: None,
+            floating: false,
+            too_big,
+        });
     }
     let p = app.move_preview.as_mut()?;
     if p.too_big {
@@ -486,6 +505,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             ids: vec![f.layer],
             moving: Vec::new(),
             bounds,
+            stationary: false,
             canvas,
             offsets: Vec::new(),
             shown: None,

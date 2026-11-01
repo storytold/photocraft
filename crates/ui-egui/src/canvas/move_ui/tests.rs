@@ -778,6 +778,48 @@ fn selecting_several_colours_releases_a_retained_single_channel_gpu_preview() {
 }
 
 #[test]
+fn colour_set_selected_move_redraws_stationary_transparency_between_frames() {
+    for depth in [8, 16, 32] {
+        for feather in [0, 3] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 2048, "height": 512, "depth": depth, "background": "transparent"})).unwrap();
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let square = Rect::new(768, 256, 800, 288);
+            app.session
+                .edit("stationary alpha", |doc, _| {
+                    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(square, &[1.0, 0.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+            app.run("select.all", json!({})).unwrap();
+            if feather > 0 {
+                app.run("select.modify.feather", json!({"radius": feather})).unwrap();
+            }
+            app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+            app.session.tools.background = [1.0; 4];
+            app.ui.tool = Tool::Move;
+            app.ui.tool_options.move_auto_select = false;
+            app.ui.extras.snap = false;
+            app.ui.view.show.smart_guides = false;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 780.0, y: 270.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            let mut frames = Vec::new();
+            for x in [1280.0, 1780.0] {
+                crate::canvas::tool_event(&mut app, ToolEvent::Move { x, y: 270.0, pressure: 1.0 }, egui::Modifiers::NONE);
+                frames.push(super::display_doc(&mut app, 0).unwrap());
+            }
+            let pixel = |doc: &Document| photocraft_compose::render(doc, square).get(780, 270);
+            assert_eq!(pixel(&frames[0].0), [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(pixel(&frames[1].0), [1.0, 0.0, 1.0, 1.0]);
+            let st = app.session.active().unwrap();
+            let damage = super::damage(&app, st.doc.id, st.revision, frames[0].1, frames[1].1).unwrap();
+            assert!(damage.contains(780, 270), "{depth}/{feather}: stationary alpha changed outside repaint {damage:?}");
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 1780.0, y: 270.0 }, egui::Modifiers::NONE);
+            assert_eq!(app.session.active().unwrap().doc.layer(id), frames[1].0.layer(id));
+        }
+    }
+}
+
+#[test]
 fn colour_set_selected_drag_previews_and_commits_only_selected_native_samples() {
     for colors in [vec![0, 1], vec![0, 2], vec![1, 2]] {
         let (mut app, id) = selected_pixels(8);
