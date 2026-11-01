@@ -166,20 +166,16 @@ fn unit_pt(units: &str) -> f64 {
     }
 }
 
-/// A number field in `units` for a value kept in points; true when edited.
+/// A nonnegative length field (paper and print size) in `units` for a value kept in points; true
+/// when edited.
 fn length_field(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str) -> bool {
-    length_field_prec(ui, label, pt, units, 0)
-}
-
-/// Edits a point-valued length in the selected units, with the requested decimal precision.
-/// Retains the nonnegative 0..=10000 display-unit range used by existing size fields.
-fn length_field_prec(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, decimals: u32) -> bool {
-    length_field_range(ui, label, pt, units, decimals, 0.0..=10000.0)
+    length_field_range(ui, label, pt, units, 0.0..=10000.0)
 }
 
 /// Edits a length stored in print points (72 per inch), returning true for a finite edit.
 /// `range` is in the displayed `units`; a signed range permits negative Top/Left offsets.
-fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, decimals: u32, range: std::ops::RangeInclusive<f32>) -> bool {
+/// Shows the unit's own decimals, as Photoshop does, so 2.5 in or 6.35 cm are kept (#9704).
+fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str, range: std::ops::RangeInclusive<f32>) -> bool {
     let t = Tokens::get(ui.ctx());
     let k = unit_pt(units);
     let mut v = (*pt / k) as f32;
@@ -187,6 +183,7 @@ fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str,
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(label).color(t.text_dim));
         let before = v;
+        let decimals = crate::widgets::unit_decimals(units);
         crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
         if (v - before).abs() > 1e-4 && v.is_finite() {
             *pt = f64::from(v) * k;
@@ -233,8 +230,8 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         let units = s(f, "units", "cm");
         let changed = ui
             .horizontal(|ui| {
-                let wc = length_field_prec(ui, tl!("Paper Width"), &mut w, &units, 2);
-                let hc = length_field_prec(ui, tl!("Paper Height"), &mut h, &units, 2);
+                let wc = length_field(ui, tl!("Paper Width"), &mut w, &units);
+                let hc = length_field(ui, tl!("Paper Height"), &mut h, &units);
                 wc || hc
             })
             .inner;
@@ -572,7 +569,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         let mut pt =
                             centered_layout.map_or_else(|| n(f, key, 0.0) * 72.0, |l| if key == "top" { l.paper.1 - l.rect.1 - l.rect.3 } else { l.rect.0 });
                         let limit = (photocraft_engine::print_cmds::MAX_POSITION_INCHES * 72.0 / unit_pt(&units)) as f32;
-                        if length_field_range(ui, label, &mut pt, &units, 2, -limit..=limit) {
+                        if length_field_range(ui, label, &mut pt, &units, -limit..=limit) {
                             let limit = photocraft_engine::print_cmds::MAX_POSITION_INCHES;
                             f.insert(key.into(), json!((pt / 72.0).clamp(-limit, limit)));
                         }
@@ -586,12 +583,14 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 let (mut w2, mut h2) = (w, h);
                 let fit = b(f, "scaleToFit", false);
                 if !fit {
-                    // Two decimals: Height and Width set fractional scales.
+                    // Written only when edited: the exact scale Height or Width set must survive
+                    // the field's rounded display.
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
                         let mut v = n(f, "scale", 100.0) as f32;
-                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale"));
-                        f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
+                        if crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale")).changed() {
+                            f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
+                        }
                     });
                 }
                 ui.horizontal(|ui| {
@@ -605,7 +604,8 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         None
                     };
                     if let Some(k) = k.filter(|k| k.is_finite() && *k > 0.0) {
-                        f.insert("scale".into(), json!(((l.scale * k * 100.0) * 100.0).round() / 100.0));
+                        // Unrounded, so the typed size prints exactly.
+                        f.insert("scale".into(), json!(l.scale * k * 100.0));
                         f.insert("scaleToFit".into(), json!(false));
                     }
                 });
