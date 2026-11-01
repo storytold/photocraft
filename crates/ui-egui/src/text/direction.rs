@@ -214,6 +214,25 @@ pub fn dialog_content<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R
     }
 }
 
+/// A resizable host's contents (a modal dialog body): in a right-to-left UI its sizing pass runs
+/// left-to-right — thread-local direction, the fork's direction flag and the body layout — so
+/// the fork measures the content's natural minimum left-anchored exactly as in LTR. Under the
+/// mirrored `top_down(Align::Max)` body the sizing-pass children right-anchor instead, which
+/// ballooned the measured min width to the offered width and made a resizable window's enforced
+/// minimum direction-dependent. Non-sizing frames and LTR run unchanged.
+pub fn sizing_pass_ltr<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if is_rtl() && ui.is_sizing_pass() {
+        let _ltr = direction_scope(Dir::Ltr);
+        let rtl_flag = ui.style().right_to_left;
+        ui.style_mut().set_right_to_left(false);
+        let r = ui.with_layout(Layout::top_down(Align::Min), add).inner;
+        ui.style_mut().set_right_to_left(rtl_flag);
+        r
+    } else {
+        add(ui)
+    }
+}
+
 /// A label inside a mirrored body ([`body_layout`]/[`window_body`]): in a right-to-left UI the
 /// paragraph base direction is pinned right-to-left and the galley aligns to the reading-start
 /// (right) edge, so mixed Arabic/Latin lines keep their phrase order instead of scrambling and
