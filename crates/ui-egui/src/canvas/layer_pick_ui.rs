@@ -76,9 +76,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let id = menu_id();
     let screen = ctx.content_rect();
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(200.0, 24.0 * menu.layers.len() as f32 + 12.0), |r| r.size());
-    let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
+    // Under RTL the menu grows leftward from the anchor (its right edge sits at the anchor),
+    // like every other context menu; LTR keeps the default rightward growth (LEFT_TOP).
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (
+            egui::Align2::RIGHT_TOP,
+            egui::pos2(menu.pos[0].max(screen.left() + size.x).min(screen.right()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top())),
+        )
+    } else {
+        (
+            egui::Align2::LEFT_TOP,
+            egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top())),
+        )
+    };
     let mut chosen = None;
-    let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    let area = egui::Area::new(id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             // As wide as the longest name (long names are cut short), like a menu.
             let font = egui::TextStyle::Button.resolve(ui.style());

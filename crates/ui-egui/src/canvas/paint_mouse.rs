@@ -261,8 +261,14 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_persisted(size_id, [content.x, content.y]));
     let style = ctx.global_style();
     let size = content + style.spacing.menu_margin.sum() + egui::Vec2::splat(2.0 * style.visuals.window_stroke().width);
-    let pos = egui::pos2(x.min(screen.right() - size.x).max(screen.left()), y.min(screen.bottom() - size.y).max(screen.top()));
-    let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+    // Under RTL the picker grows leftward from the anchor (its right edge sits at the anchor),
+    // like every other context menu; LTR keeps the default rightward growth (LEFT_TOP).
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (egui::Align2::RIGHT_TOP, egui::pos2(x.max(screen.left() + size.x).min(screen.right()), y.min(screen.bottom() - size.y).max(screen.top())))
+    } else {
+        (egui::Align2::LEFT_TOP, egui::pos2(x.min(screen.right() - size.x).max(screen.left()), y.min(screen.bottom() - size.y).max(screen.top())))
+    };
+    let area = egui::Area::new(id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
