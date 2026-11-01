@@ -16,7 +16,7 @@ so playback skips them.
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
 
-## Supported events (117)
+## Supported events (129)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -137,6 +137,150 @@ does not map yet, with everything needed to implement them without the reference
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
 | `Vbrn` | Vbrn | vibrance | `Vibrance` |
+| `Extr` | extrude | Extrude | `filter.stylize.extrude` |
+| `FndE` | findEdges | Find Edges | `filter.stylize.findEdges` |
+| `Slrz` | solarize | Solarize | `filter.stylize.solarize` |
+| `TrcC` | traceContour | Trace Contour | `filter.stylize.traceContour` |
+| `Wnd ` | wind | Wind | `filter.stylize.wind` |
+| `Tls ` | tiles | Tiles | `filter.stylize.tiles` |
+| `ClrH` | colorHalftone | Color Halftone | `filter.pixelate.colorHalftone` |
+| `Fct ` | facet | Facet | `filter.pixelate.facet` |
+| `Frgm` | fragment | Fragment | `filter.pixelate.fragment` |
+| `Mztn` | mezzotint | Mezzotint | `filter.pixelate.mezzotint` |
+| `Msc ` | mosaic | Mosaic | `filter.pixelate.mosaic` |
+| `Pntl` | pointillize | Pointillize | `filter.pixelate.pointillize` |
+
+### Group D: The Stylize and Pixelate filters
+
+These twelve events are mapped. The tables preserve their measured descriptor order, types, defaults and ranges.
+
+Missing descriptor keys load with the measured defaults below. Mosaic therefore imports
+with cell size 2, and Trace Contour imports with its upper edge. Saving a native command
+that omits these parameters preserves its native behavior: Mosaic cell size 10 and
+Trace Contour lower edge. Explicit imported values stay explicit, including changed
+Trace Contour levels and edges that the reference application applies but does not echo.
+
+Mosaic accepts a unitless pixel value on import and writes a `#Pxl` unit double.
+Other fields keep their documented integer, boolean and enum types. Unknown keys,
+wrong types or unknown enum values keep the original step intact. A native setting
+without a descriptor field, such as a nonzero seed, frozen foreground/background
+colors, an explicit layer or a non-pixel target, refuses export instead of being
+silently dropped. Seed 0 and the ordinary pixel target remain representable.
+These mappings reuse the existing filters; they do not establish new pixel-parity
+measurements against the reference application.
+
+#### Extrude
+
+- Event: `Extr` / `extrude`
+- PhotoCraft command: `filter.stylize.extrude`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `ExtS` | extrudeSize | integer |  | 30 | 2 .. 255 (out-of-range values are clamped) |
+| `ExtD` | extrudeDepth | integer |  | 30 | 1 .. 255 (out-of-range values are clamped) |
+| `ExtF` | extrudeSolidFace | boolean |  | false |  |
+| `ExtM` | extrudeMaskIncomplete | boolean |  | false |  |
+| `ExtT` | extrudeType | enumerated |  | `Blks` blacks | `Blks` blacks, `Pyrm` pyramids |
+| `ExtR` | extrudeRandom | enumerated |  | `Rndm` random | `LvlB` levelBased, `Rndm` random |
+
+#### Find Edges
+
+- Event: `FndE` / `findEdges`
+- PhotoCraft command: `filter.stylize.findEdges`
+
+No parameters: the step carries an empty descriptor.
+
+#### Solarize
+
+- Event: `Slrz` / `solarize`
+- PhotoCraft command: `filter.stylize.solarize`
+
+No parameters: the step carries an empty descriptor.
+
+#### Trace Contour
+
+- Event: `TrcC` / `traceContour`
+- PhotoCraft command: `filter.stylize.traceContour`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `Lvl ` | level | integer |  | 128 | applied, but not echoed: the returned step always shows 128. Levels <= 0 and >= 255 give the same image. Dialog range pending. |
+| `Edg ` | edge | enumerated |  | `Upr ` upper | `Lwr ` lower, `Upr ` upper (applied; the returned step always shows upper) |
+
+#### Wind
+
+- Event: `Wnd ` / `wind`
+- PhotoCraft command: `filter.stylize.wind`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `WndM` | windMethod | enumerated |  | `Wnd ` wind | `Blst` blast, `Stgr` stagger, `Wnd ` wind |
+| `Drct` | direction | enumerated |  | `Left` left | `Left` left, `Rght` right |
+
+#### Tiles
+
+- Event: `Tls ` / `tiles`
+- PhotoCraft command: `filter.stylize.tiles`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `TlNm` | tileNumber | integer |  | 10 | 1 .. 99 (out-of-range values are clamped) |
+| `TlOf` | tileOffset | integer |  | 10 | 1 .. 99 (out-of-range values are clamped) |
+| `FlCl` | fillColor | enumerated |  | `FlBc` fillBack | `FlBc` fillBack, `FlFr` fillFore, `FlIn` fillInverse, `FlSm` fillSame |
+
+#### Color Halftone
+
+- Event: `ClrH` / `colorHalftone`
+- PhotoCraft command: `filter.pixelate.colorHalftone`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `Rds ` | radius | integer |  | 8 | 4 .. 127 (out-of-range values are clamped) |
+| `Ang1` | angle1 | integer |  | 108 | -10000 .. 10000 (out-of-range values are clamped) |
+| `Ang2` | angle2 | integer |  | 162 | -10000 .. 10000 (out-of-range values are clamped) |
+| `Ang3` | angle3 | integer |  | 90 | -10000 .. 10000 (out-of-range values are clamped) |
+| `Ang4` | angle4 | integer |  | 45 | -10000 .. 10000 (out-of-range values are clamped) |
+
+#### Facet
+
+- Event: `Fct ` / `facet`
+- PhotoCraft command: `filter.pixelate.facet`
+
+No parameters: the step carries an empty descriptor.
+
+#### Fragment
+
+- Event: `Frgm` / `fragment`
+- PhotoCraft command: `filter.pixelate.fragment`
+
+No parameters: the step carries an empty descriptor.
+
+#### Mezzotint
+
+- Event: `Mztn` / `mezzotint`
+- PhotoCraft command: `filter.pixelate.mezzotint`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `MztT` | mezzotintType | enumerated |  | `FnDt` fineDots | `CrsD` coarseDots, `FnDt` fineDots, `GrnD` grainyDots, `LngL` longLines, `LngS` longStrokes, `MdmD` mediumDots, `MdmL` mediumLines, `MdmS` mediumStrokes, `ShSt` shortStrokes, `ShrL` shortLines |
+
+#### Mosaic
+
+- Event: `Msc ` / `mosaic`
+- PhotoCraft command: `filter.pixelate.mosaic`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `ClSz` | cellSize | unitdouble |  | 2 | 2 .. 200 pixels (out-of-range values are clamped). Write it as a unit double in `#Pxl`: the application accepts that and returns it unchanged. Read a value without a unit as pixels (the application returns its own default that way). |
+
+#### Pointillize
+
+- Event: `Pntl` / `pointillize`
+- PhotoCraft command: `filter.pixelate.pointillize`
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `ClSz` | cellSize | integer |  | 5 | 3 .. 300 (out-of-range values are clamped) |
 
 ## Event reference: events not mapped yet
 
@@ -862,123 +1006,6 @@ Nested values as recorded (defaults):
 #### Displace
 
 Displace reads a displacement map from a file chosen in a dialog; record one step and add its keys (file path form) before implementing.
-
-### Group D: The Stylize and Pixelate filters
-
-All commands exist in PhotoCraft (`filter.stylize.*`, `filter.pixelate.*`); only the `.atn` mapping is missing.
-
-#### Extrude
-
-- Event: `Extr` / `extrude`
-- PhotoCraft command: `filter.stylize.extrude`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `ExtS` | extrudeSize | integer |  | 30 | 2 .. 255 (out-of-range values are clamped) |
-| `ExtD` | extrudeDepth | integer |  | 30 | 1 .. 255 (out-of-range values are clamped) |
-| `ExtF` | extrudeSolidFace | boolean |  | false |  |
-| `ExtM` | extrudeMaskIncomplete | boolean |  | false |  |
-| `ExtT` | extrudeType | enumerated |  | `Blks` blacks | `Blks` blacks, `Pyrm` pyramids |
-| `ExtR` | extrudeRandom | enumerated |  | `Rndm` random | `LvlB` levelBased, `Rndm` random |
-
-#### Find Edges
-
-- Event: `FndE` / `findEdges`
-- PhotoCraft command: `filter.stylize.findEdges`
-
-No parameters: the step carries an empty descriptor.
-
-#### Solarize
-
-- Event: `Slrz` / `solarize`
-- PhotoCraft command: `filter.stylize.solarize`
-
-No parameters: the step carries an empty descriptor.
-
-#### Trace Contour
-
-- Event: `TrcC` / `traceContour`
-- PhotoCraft command: `filter.stylize.traceContour`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `Lvl ` | level | integer |  | 128 | applied, but not echoed: the returned step always shows 128. Levels <= 0 and >= 255 give the same image. Dialog range pending. |
-| `Edg ` | edge | enumerated |  | `Upr ` upper | `Lwr ` lower, `Upr ` upper (applied; the returned step always shows upper) |
-
-#### Wind
-
-- Event: `Wnd ` / `wind`
-- PhotoCraft command: `filter.stylize.wind`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `WndM` | windMethod | enumerated |  | `Wnd ` wind | `Blst` blast, `Stgr` stagger, `Wnd ` wind |
-| `Drct` | direction | enumerated |  | `Left` left | `Left` left, `Rght` right |
-
-#### Tiles
-
-- Event: `Tls ` / `tiles`
-- PhotoCraft command: `filter.stylize.tiles`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `TlNm` | tileNumber | integer |  | 10 | 1 .. 99 (out-of-range values are clamped) |
-| `TlOf` | tileOffset | integer |  | 10 | 1 .. 99 (out-of-range values are clamped) |
-| `FlCl` | fillColor | enumerated |  | `FlBc` fillBack | `FlBc` fillBack, `FlFr` fillFore, `FlIn` fillInverse, `FlSm` fillSame |
-
-#### Color Halftone
-
-- Event: `ClrH` / `colorHalftone`
-- PhotoCraft command: `filter.pixelate.colorHalftone`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `Rds ` | radius | integer |  | 8 | 4 .. 127 (out-of-range values are clamped) |
-| `Ang1` | angle1 | integer |  | 108 | -10000 .. 10000 (out-of-range values are clamped) |
-| `Ang2` | angle2 | integer |  | 162 | -10000 .. 10000 (out-of-range values are clamped) |
-| `Ang3` | angle3 | integer |  | 90 | -10000 .. 10000 (out-of-range values are clamped) |
-| `Ang4` | angle4 | integer |  | 45 | -10000 .. 10000 (out-of-range values are clamped) |
-
-#### Facet
-
-- Event: `Fct ` / `facet`
-- PhotoCraft command: `filter.pixelate.facet`
-
-No parameters: the step carries an empty descriptor.
-
-#### Fragment
-
-- Event: `Frgm` / `fragment`
-- PhotoCraft command: `filter.pixelate.fragment`
-
-No parameters: the step carries an empty descriptor.
-
-#### Mezzotint
-
-- Event: `Mztn` / `mezzotint`
-- PhotoCraft command: `filter.pixelate.mezzotint`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `MztT` | mezzotintType | enumerated |  | `FnDt` fineDots | `CrsD` coarseDots, `FnDt` fineDots, `GrnD` grainyDots, `LngL` longLines, `LngS` longStrokes, `MdmD` mediumDots, `MdmL` mediumLines, `MdmS` mediumStrokes, `ShSt` shortStrokes, `ShrL` shortLines |
-
-#### Mosaic
-
-- Event: `Msc ` / `mosaic`
-- PhotoCraft command: `filter.pixelate.mosaic`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `ClSz` | cellSize | unitdouble |  | 2 | 2 .. 200 pixels (out-of-range values are clamped). Write it as a unit double in `#Pxl`: the application accepts that and returns it unchanged. Read a value without a unit as pixels (the application returns its own default that way). |
-
-#### Pointillize
-
-- Event: `Pntl` / `pointillize`
-- PhotoCraft command: `filter.pixelate.pointillize`
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `ClSz` | cellSize | integer |  | 5 | 3 .. 300 (out-of-range values are clamped) |
 
 ### Group E: Video, Other and matting filters and the direct Gradient Map / Replace Color adjustments
 

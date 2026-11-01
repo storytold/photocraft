@@ -54,14 +54,7 @@ macro_rules! ev {
 
 macro_rules! stylize_event {
     ($code:literal, $name:literal, $label:literal, $id:literal) => {
-        Event {
-            code: $code,
-            name: $name,
-            label: $label,
-            ids: &[$id],
-            from: |d| super::steps_stylize::from($id, d),
-            to: |_, p| if pixel_target(p) { super::steps_stylize::to($id, p) } else { None },
-        }
+        Event { code: $code, name: $name, label: $label, ids: &[$id], from: |d| super::steps_stylize::from($id, d), to: super::steps_stylize::to }
     };
 }
 
@@ -202,6 +195,14 @@ pub(super) const EVENTS: &[Event] = &[
     stylize_event!("Slrz", "solarize", "Solarize", "filter.stylize.solarize"),
     stylize_event!("Fct ", "facet", "Facet", "filter.pixelate.facet"),
     stylize_event!("Frgm", "fragment", "Fragment", "filter.pixelate.fragment"),
+    stylize_event!("Extr", "extrude", "Extrude", "filter.stylize.extrude"),
+    stylize_event!("TrcC", "traceContour", "Trace Contour", "filter.stylize.traceContour"),
+    stylize_event!("Wnd ", "wind", "Wind", "filter.stylize.wind"),
+    stylize_event!("Tls ", "tiles", "Tiles", "filter.stylize.tiles"),
+    stylize_event!("ClrH", "colorHalftone", "Color Halftone", "filter.pixelate.colorHalftone"),
+    stylize_event!("Mztn", "mezzotint", "Mezzotint", "filter.pixelate.mezzotint"),
+    stylize_event!("Msc ", "mosaic", "Mosaic", "filter.pixelate.mosaic"),
+    stylize_event!("Pntl", "pointillize", "Pointillize", "filter.pixelate.pointillize"),
     ev!("GsnB", "gaussianBlur", "Gaussian Blur", "filter.blur.gaussianBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!(
         "UnsM",
