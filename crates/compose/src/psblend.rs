@@ -122,14 +122,15 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
 }
 
 /// Maps `mode` to [`craft_blitter::BlendMode`] when its published formula in `craft-blitter`
-/// matches PhotoCraft's CPU compositor (`psblend` + `photocraft_color::blend`).
+/// matches PhotoCraft's CPU compositor (`psblend` + `photocraft_color::blend`) bit-for-bit.
 ///
 /// Modes with PhotoCraft-specific rules return `None` and stay on the local scalar paths:
 /// - `PassThrough` (group scoping) and `Dissolve` (coordinate-seeded spatial noise)
 /// - `ColorBurn`, `ColorDodge`, and `HardMix` (`EDGE = 1e-4` backdrop tolerance)
+/// - `VividLight` (`vivid_light_ps` takes the burn branch at `cs == 0.5`, which rounds small `cb`
+///   through `1.0 - (1.0 - cb)`, whereas `craft-blitter` returns `cb`)
 /// - `DarkerColor` and `LighterColor` (Rec. 601 `lum()` comparison matching `compose.wgsl`)
-/// - `VividLight` and `PinLight` in 32-bit HDR mode (`hdr = true`), where out-of-unit channels
-///   differ at boundary branches.
+/// - `PinLight` in 32-bit HDR mode (`hdr = true`).
 #[inline]
 pub const fn to_blitter_mode(mode: BlendMode, hdr: bool) -> Option<craft_blitter::BlendMode> {
     match mode {
@@ -137,12 +138,12 @@ pub const fn to_blitter_mode(mode: BlendMode, hdr: bool) -> Option<craft_blitter
         | BlendMode::Dissolve
         | BlendMode::ColorBurn
         | BlendMode::ColorDodge
+        | BlendMode::VividLight
         | BlendMode::HardMix
         | BlendMode::DarkerColor
         | BlendMode::LighterColor => None,
-        BlendMode::VividLight if !hdr => Some(craft_blitter::BlendMode::VividLight),
         BlendMode::PinLight if !hdr => Some(craft_blitter::BlendMode::PinLight),
-        BlendMode::VividLight | BlendMode::PinLight => None,
+        BlendMode::PinLight => None,
         BlendMode::Normal => Some(craft_blitter::BlendMode::Normal),
         BlendMode::Darken => Some(craft_blitter::BlendMode::Darken),
         BlendMode::Multiply => Some(craft_blitter::BlendMode::Multiply),
@@ -262,12 +263,6 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
     }
     if mode == BlendMode::Normal {
         return normal_rgb(backdrop, source, as_, ao);
-    }
-    if (0.0..=1.0).contains(&opacity) && !source[3].is_nan() {
-        let hdr = HDR.with(|h| h.get());
-        if let Some(bm) = to_blitter_mode(mode, hdr) {
-            return craft_blitter::float::composite_f32(bm, backdrop, source, opacity, hdr);
-        }
     }
     let cb = [backdrop[0], backdrop[1], backdrop[2]];
     let cs = [source[0], source[1], source[2]];
