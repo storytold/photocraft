@@ -5,7 +5,8 @@
 //! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
 //! control changes: on a worker for the dialog's own controls, so a drag never waits for it, and
 //! on the UI thread for the control channel, so a reply describes its own settings. Settings
-//! whose stages are all per pixel develop on the GPU instead where it can (`camera_raw_gpu`).
+//! whose stages are per pixel, or Shadows and Highlights, develop on the GPU instead where it can
+//! (`camera_raw_gpu`).
 //! OK runs `filter.cameraRaw` with the non-default settings, so the result is one history step
 //! (or a smart filter on a smart object) and exactly replayable.
 //!
