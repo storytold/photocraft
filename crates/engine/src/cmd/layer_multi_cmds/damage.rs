@@ -407,8 +407,8 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
     fn walk(xs: &[Layer], ys: &[Layer], (ox, oy): (Outer, Outer), around: Around, a: &Document, b: &Document, out: &mut Rect) -> bool {
         // Pair the layers by id, stepping over layers only one side has: one that draws nothing
         // changes no pixels (a new empty layer or group, #1771), any other only where it draws.
-        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, out: &mut Rect| {
-            let Some(r) = one_sided_bounds(layers, k, outer, canvas) else { return false };
+        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, depth: SampleType, out: &mut Rect| {
+            let Some(r) = one_sided_bounds(layers, k, outer, canvas, depth) else { return false };
             if !r.is_empty() {
                 *out = if out.is_empty() { r } else { out.union(&r) };
             }
@@ -428,14 +428,14 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                     continue;
                 }
                 (_, Some(y)) if xs.iter().all(|x| x.id != y.id) => {
-                    if !one_sided(ys, j, oy, b.bounds(), out) {
+                    if !one_sided(ys, j, oy, b.bounds(), b.depth, out) {
                         return false;
                     }
                     j += 1;
                     continue;
                 }
                 (Some(x), _) if ys.iter().all(|y| y.id != x.id) => {
-                    if !one_sided(xs, i, ox, a.bounds(), out) {
+                    if !one_sided(xs, i, ox, a.bounds(), a.depth, out) {
                         return false;
                     }
                     i += 1;
@@ -459,9 +459,10 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             if tiles != Some(Rect::EMPTY) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
                 // A clipped adjustment reaches as far as its base (#6535).
-                let (Some(bx), Some(by)) =
-                    (photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds()))
-                else {
+                let (Some(bx), Some(by)) = (
+                    photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds(), a.depth),
+                    photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds(), b.depth),
+                ) else {
                     return false;
                 };
                 let whole = bx.union(&by);
@@ -540,7 +541,7 @@ fn tile_damage(a: &Layer, b: &Layer) -> Option<Rect> {
 /// of clipped layers above it (they would change base), and neither it nor anything inside it is
 /// a video layer or excludes channels (both reach outside the layer's bounds, see
 /// [`step_damage`]).
-fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
+fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect, depth: SampleType) -> Option<Rect> {
     fn contained(l: &Layer, depth: usize) -> bool {
         depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
     }
@@ -549,7 +550,7 @@ fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>
     if new_base || !contained(l, 0) {
         return None;
     }
-    photocraft_compose::change_bounds_in(layers, k, outer, canvas)
+    photocraft_compose::change_bounds_in(layers, k, outer, canvas, depth)
 }
 
 /// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
