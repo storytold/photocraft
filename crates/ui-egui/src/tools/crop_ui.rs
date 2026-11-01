@@ -419,6 +419,29 @@ pub fn active(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && app.crop.drag.is_some()
 }
 
+/// A drag that sizes or moves the frame over the image, which scrolls the view when held past the
+/// canvas edge (#4183). Not the turns, nor the default mode's image moves and live-centred resizes:
+/// those drive the camera themselves. A new frame's drag that hasn't left the size of a click (a
+/// long press that slipped past the edge) doesn't either: scrolling would draw a frame under the
+/// still pointer.
+pub fn autoscrolls(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::Crop
+        && match app.crop.drag {
+            Some(CropDrag::Draw { anchor, cur, .. }) => !is_click(app, anchor, cur),
+            Some(CropDrag::Move { .. } | CropDrag::Resize { view: None, .. }) => true,
+            _ => false,
+        }
+}
+
+/// A new-frame drag shorter than this (screen points) on both axes is still a click.
+const CLICK_PX: f64 = 3.0;
+
+/// Document points `a` and `b` lie within [`CLICK_PX`] screen points of each other on both axes.
+fn is_click(app: &PhotocraftApp, a: [f64; 2], b: [f64; 2]) -> bool {
+    let click = CLICK_PX / (app.point_zoom() as f64).max(0.01);
+    (b[0] - a[0]).abs() <= click && (b[1] - a[1]).abs() <= click
+}
+
 /// Cancel the pending crop: the frame, any gesture on it and the default-frame state. With the
 /// Crop tool still picked, [`ensure_frame`] then makes the active document a new default frame.
 pub fn cancel(app: &mut PhotocraftApp) {
