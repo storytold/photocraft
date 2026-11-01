@@ -201,6 +201,22 @@ pub(super) const EVENTS: &[Event] = &[
         from: |d| super::steps_render::clouds_from("filter.render.differenceClouds", d),
         to: super::steps_render::clouds_to,
     },
+    Event {
+        code: "Fbrs",
+        name: "",
+        label: "Fibers",
+        ids: &["filter.render.fibers"],
+        from: super::steps_render::fibers_from,
+        to: super::steps_render::fibers_to,
+    },
+    Event {
+        code: "LnsF",
+        name: "lensFlare",
+        label: "Lens Flare",
+        ids: &["filter.render.lensFlare"],
+        from: super::steps_render::flare_from,
+        to: super::steps_render::flare_to,
+    },
     ev!("GsnB", "gaussianBlur", "Gaussian Blur", "filter.blur.gaussianBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!(
         "UnsM",
@@ -633,7 +649,7 @@ const LEGACY_CODES: &[(&str, &str)] =
 
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
-    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id);
+    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || (!e.name.is_empty() && e.name == id));
     find(&id).or_else(|| match item {
         AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
         AtnEvent::Name(_) => None,

@@ -16,7 +16,7 @@ so playback skips them.
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
 
-## Supported events (117)
+## Supported events (121)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -72,6 +72,10 @@ does not map yet, with everything needed to implement them without the reference
 | `GEfc` | filterGallery | Filter Gallery | `filter.gallery.spatter` |
 | `FltI` | flattenImage | Flatten Image | `layer.flattenImage` |
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
+| `Clds` | clouds | Clouds | `filter.render.clouds` |
+| `DfrC` | differenceClouds | Difference Clouds | `filter.render.differenceClouds` |
+| `Fbrs` | (code only) | Fibers | `filter.render.fibers` |
+| `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
 | `GdMp` | GdMp | gradientMapEvent | `Gradient Map` |
 | `Grow` | grow | Grow | `select.grow` |
@@ -137,6 +141,59 @@ does not map yet, with everything needed to implement them without the reference
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
 | `Vbrn` | Vbrn | vibrance | `Vibrance` |
+
+### Group B: The Render filters Clouds, Difference Clouds, Fibers and Lens Flare
+
+These four events load, play and save through the existing Render commands. Lighting Effects still needs a recorded step through its dialog.
+
+#### Clouds
+
+- Event: `Clds` / `clouds`
+- PhotoCraft command: `filter.render.clouds`
+- Uses the current foreground and background colours; the step itself carries no colours.
+
+No parameters: the step carries an empty descriptor.
+
+#### Difference Clouds
+
+- Event: `DfrC` / `differenceClouds`
+- PhotoCraft command: `filter.render.differenceClouds`
+- Same as Clouds, blended with Difference.
+
+No parameters: the step carries an empty descriptor.
+
+#### Fibers
+
+- Event: `Fbrs` (no string ID)
+- PhotoCraft command: `filter.render.fibers`
+- `randomSeed` makes playback reproduce the recorded result; keep it.
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `Vrnc` | (none) | integer |  | 16 | not clamped in the step (values are returned unchanged); limits pending, see "Events that need a step recorded through their dialog" |
+| `Strg` | strengthPlugin | integer |  | 4 | not clamped in the step (values are returned unchanged); limits pending, see "Events that need a step recorded through their dialog" |
+| `RndS` | randomSeed | integer |  | random | any 32-bit integer; a new random value per recording |
+
+#### Lens Flare
+
+- Event: `LnsF` / `lensFlare`
+- PhotoCraft command: `filter.render.lensFlare`
+- Lens types: `Zm  ` 50-300 mm Zoom, `Nkn ` 35 mm Prime, `Nkn1` 105 mm Prime, `PnVs` Movie Prime.
+
+| Key | String ID | Type | Unit | Default | Allowed |
+|---|---|---|---|---|---|
+| `Brgh` | brightness | integer |  | 100 | 10 .. 300 (out-of-range values are clamped) |
+| `FlrC` | flareCenter | object |  | obj 'Pnt ' point | `Hrzn` / `Vrtc` doubles, 0.4 / 0.4 by default; not clamped: (5, -5) is kept as given and plays |
+| `Lns ` | lens | enumerated |  | `Zm  ` zoom | `Nkn ` nikon, `Nkn1` nikon105, `PnVs` panaVision, `Zm  ` zoom |
+
+Nested values as recorded (defaults):
+```
+    'Hrzn' horizontal : DOUBLETYPE = 0.40000000596046
+    'Vrtc' vertical : DOUBLETYPE = 0.40000000596046
+```
+
+Native commands without an explicit Lens Flare center still use 0.5 / 0.5. Imported steps materialize the measured center above. A missing Fibers seed is captured once at import and preserved for later playback and export. Native color overrides and other settings without ATN fields are refused during strict export.
+
 
 ## Event reference: events not mapped yet
 
@@ -714,56 +771,6 @@ Nested values as recorded (defaults):
 | `Intn` | intensity | integer |  | 40 | 0 .. 100 (out-of-range values are clamped) | same |
 | `Cntr` | contrast | integer |  | 50 | 0 .. 100 (out-of-range values are clamped) | maps to our `contrast` (same range and default) |
 | `Grnt` | grainType | enumerated |  | `GrnR` grainRegular | `GrCn` grainContrasty, `GrSf` grainSoft, `GrSp` grainSpeckle, `GrSr` grainSprinkles, `GrSt` grainStippled, `GrnC` grainClumped, `GrnE` grainEnlarged, `GrnH` grainHorizontal, `GrnR` grainRegular, `GrnV` grainVertical |  |
-
-### Group B: The Render filters Clouds, Difference Clouds, Fibers and Lens Flare
-
-All four commands exist in PhotoCraft; only the `.atn` mapping is missing. Lighting Effects is covered with the events that need a recorded step (its lights are only recorded through the dialog).
-
-#### Clouds
-
-- Event: `Clds` / `clouds`
-- PhotoCraft command: `filter.render.clouds`
-- Uses the current foreground and background colours; the step itself carries no colours.
-
-No parameters: the step carries an empty descriptor.
-
-#### Difference Clouds
-
-- Event: `DfrC` / `differenceClouds`
-- PhotoCraft command: `filter.render.differenceClouds`
-- Same as Clouds, blended with Difference.
-
-No parameters: the step carries an empty descriptor.
-
-#### Fibers
-
-- Event: `Fbrs` (no string ID)
-- PhotoCraft command: `filter.render.fibers`
-- `randomSeed` makes playback reproduce the recorded result; keep it.
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `Vrnc` | (none) | integer |  | 16 | not clamped in the step (values are returned unchanged); limits pending, see "Events that need a step recorded through their dialog" |
-| `Strg` | strengthPlugin | integer |  | 4 | not clamped in the step (values are returned unchanged); limits pending, see "Events that need a step recorded through their dialog" |
-| `RndS` | randomSeed | integer |  | random | any 32-bit integer; a new random value per recording |
-
-#### Lens Flare
-
-- Event: `LnsF` / `lensFlare`
-- PhotoCraft command: `filter.render.lensFlare`
-- Lens types: `Zm  ` 50-300 mm Zoom, `Nkn ` 35 mm Prime, `Nkn1` 105 mm Prime, `PnVs` Movie Prime.
-
-| Key | String ID | Type | Unit | Default | Allowed |
-|---|---|---|---|---|---|
-| `Brgh` | brightness | integer |  | 100 | 10 .. 300 (out-of-range values are clamped) |
-| `FlrC` | flareCenter | object |  | obj 'Pnt ' point | `Hrzn` / `Vrtc` doubles, 0.4 / 0.4 by default; not clamped: (5, -5) is kept as given and plays |
-| `Lns ` | lens | enumerated |  | `Zm  ` zoom | `Nkn ` nikon, `Nkn1` nikon105, `PnVs` panaVision, `Zm  ` zoom |
-
-Nested values as recorded (defaults):
-```
-    'Hrzn' horizontal : DOUBLETYPE = 0.40000000596046
-    'Vrtc' vertical : DOUBLETYPE = 0.40000000596046
-```
 
 ### Group C: The Distort filters (Pinch, Polar Coordinates, Shear, Spherize, Twirl, Wave, ZigZag)
 

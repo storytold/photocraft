@@ -478,6 +478,8 @@ fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
         ("filter.render.clouds", json!({})),
         ("filter.render.differenceClouds", json!({})),
+        ("filter.render.fibers", json!({"variance": 20, "strength": 7, "seed": -123})),
+        ("filter.render.lensFlare", json!({"brightness": 180, "centerX": 5, "centerY": -5, "lens": "moviePrime"})),
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),
         ("filter.sharpen.unsharpMask", json!({"amount": 120, "radius": 1.5, "threshold": 3})),
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
