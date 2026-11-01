@@ -128,6 +128,7 @@ mod tests {
     use super::*;
     use photocraft_color::PixelFormat;
 
+    /// Work buffers follow explicit selected pixels without cropping implicitly selected coverage.
     #[test]
     fn selected_work_bounds_preserve_implicit_selection_and_clip_explicit_pixels() {
         let content = Rect::new(-100, -100, 100, 100);

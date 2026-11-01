@@ -343,6 +343,7 @@ fn gradient_map_from(d: &Descriptor) -> Option<Value> {
     Some(out)
 }
 
+/// Write the legacy gradient form without absorbing settings owned by a direct recorded event.
 fn gradient_map_to(p: &Value) -> Option<Descriptor> {
     // A recorded GrMp has its own strict converter. Never fall back to the older
     // event if its origin/settings were changed into an unrepresentable form.

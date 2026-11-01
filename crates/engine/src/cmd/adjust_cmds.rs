@@ -403,6 +403,7 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
     }
 }
 
+/// Recorded Lab bounds use native profile matching; ordinary RGB samples keep their existing path.
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(result) = replace_color_range::apply(s, p)? {
         return Ok(result);

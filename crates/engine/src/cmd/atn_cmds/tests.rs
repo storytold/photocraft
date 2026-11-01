@@ -474,6 +474,7 @@ fn settings_at_the_value_the_event_plays_still_export() {
 }
 
 #[test]
+/// Each mapped command retains its parameters through its corresponding ATN descriptor.
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),

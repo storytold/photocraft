@@ -92,6 +92,7 @@ fn saved(s: &Session) -> AtnItem {
     atn::parse(&bytes).unwrap().actions.remove(0).items.remove(0)
 }
 
+/// Edit a known nested fixture object without replacing its surrounding descriptor.
 fn object<'a>(d: &'a mut Descriptor, key: &str) -> &'a mut Descriptor {
     match &mut d.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 {
         D::Descriptor(d) => d,
@@ -99,6 +100,7 @@ fn object<'a>(d: &'a mut Descriptor, key: &str) -> &'a mut Descriptor {
     }
 }
 
+/// Expose a fixture list so negative cases change only the intended wire setting.
 fn list<'a>(d: &'a mut Descriptor, key: &str) -> &'a mut Vec<D> {
     match &mut d.items.iter_mut().find(|(k, _)| k.is(key)).unwrap().1 {
         D::List(l) => l,
@@ -106,6 +108,7 @@ fn list<'a>(d: &'a mut Descriptor, key: &str) -> &'a mut Vec<D> {
     }
 }
 
+/// Locate the first color stop for fractional-color and unsupported-setting controls.
 fn first_stop(d: &mut Descriptor) -> &mut Descriptor {
     match &mut list(object(d, "Grad"), "Clrs")[0] {
         D::Descriptor(d) => d,
@@ -113,6 +116,7 @@ fn first_stop(d: &mut Descriptor) -> &mut Descriptor {
     }
 }
 
+/// Saving retains the measured wire forms, including source colors that hex would quantize.
 #[test]
 fn direct_forms_save_exact_descriptors_including_fractional_rgb() {
     let mut fractional = gradient();
@@ -171,6 +175,7 @@ fn play(s: &mut Session) {
     assert!(report.get("failed").is_none(), "{report}");
 }
 
+/// Execute fractional stops at every depth while preserving unselected samples and Undo.
 #[test]
 fn fractional_gradient_changes_pixels_and_preserves_selection_and_undo() {
     let mut descriptor = gradient();
@@ -227,6 +232,7 @@ fn set_lab_pixels(s: &mut Session) {
     .unwrap();
 }
 
+/// Different box widths must select different pixels even when their midpoint is identical.
 #[test]
 fn lab_boxes_with_the_same_midpoint_have_different_real_effects() {
     // Independent mask anchors: at zero fuzziness a neutral Lab50 pixel is
@@ -254,6 +260,7 @@ fn lab_boxes_with_the_same_midpoint_have_different_real_effects() {
     }
 }
 
+/// Conflicting or invalid Lab settings leave both pixels and history untouched.
 #[test]
 fn invalid_lab_inputs_are_rejected_before_any_edit() {
     let mut s = fixture("rgb", 32);
@@ -287,6 +294,7 @@ fn kept(event: [u8; 4], d: Descriptor) {
     assert_eq!(saved(&s).descriptor, Some(d));
 }
 
+/// Unsupported interpolation, transparency and wire types survive as complete kept steps.
 #[test]
 fn unsupported_gradient_settings_and_wire_forms_remain_kept() {
     let mut midpoint = gradient();
@@ -310,6 +318,7 @@ fn unsupported_gradient_settings_and_wire_forms_remain_kept() {
     assert_eq!(atn_cmds::import(&atn::write(&f).unwrap()).unwrap().unsupported.len(), 1);
 }
 
+/// Invalid recorded boxes stay preserved, and edited or unrepresentable native settings cannot save lossily.
 #[test]
 fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
     let mut model = replace();
@@ -334,6 +343,7 @@ fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
     }
 }
 
+/// Playback respects bounded and implicitly selected masks at every depth, including an offset selection and Undo.
 #[test]
 fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
     for (depth, inverse) in [8, 16, 32].into_iter().flat_map(|depth| [(depth, false), (depth, true)]) {
@@ -379,6 +389,7 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
     }
 }
 
+/// Matching uses original Lab/CMYK channels and tagged RGB rather than display-converted samples.
 #[test]
 fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
     use photocraft_cms::{Builtin, Transform, TransformOptions};
@@ -420,6 +431,7 @@ fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
     }
 }
 
+/// Existing RGB replacement and ordinary gradient export retain their native behavior.
 #[test]
 fn legacy_rgb_replace_color_and_ordinary_gradient_exports_are_unchanged() {
     let mut s = fixture("rgb", 32);
@@ -436,6 +448,7 @@ fn legacy_rgb_replace_color_and_ordinary_gradient_exports_are_unchanged() {
     assert_eq!(atn::parse(&b).unwrap().actions[0].items[0].event, AtnEvent::Code(*b"GdMp"), "10702 owns the named-event repair");
 }
 
+/// Replacement preserves alpha and refuses locked or profile-incompatible surfaces before editing.
 #[test]
 fn lab_replace_preserves_alpha_and_rejects_locked_or_mismatched_surfaces() {
     let p = json!({"labMinimum":[0,-128,-128],"labMaximum":[100,127,127],"lightness":100});
@@ -466,6 +479,7 @@ fn lab_replace_preserves_alpha_and_rejects_locked_or_mismatched_surfaces() {
     assert_eq!(mismatch.active().unwrap().doc, original);
 }
 
+/// A zero shift must not alter native ink values through an unnecessary RGB separation.
 #[test]
 fn an_unchanged_lab_tone_shift_preserves_native_cmyk_samples() {
     for depth in [8, 16, 32] {
