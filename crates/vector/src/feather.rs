@@ -306,9 +306,10 @@ mod tests {
         assert!(BoxPass::for_sigma(f32::MAX).is_some_and(|p| p.r < 2000 && (0.0..1.0).contains(&p.end)));
     }
 
-    /// A feathered edge follows the Gaussian Photoshop draws with sigma = feather: psd-tools
-    /// mask-parameters-no-real-channel.psd (a 6 px vector and 3 px pixel feather) matches it
-    /// within 1.5 levels, where whole-pixel boxes were 4 off.
+    /// A feathered edge follows the Gaussian Photoshop draws with sigma = [`feather_sigma`] (for
+    /// 6 px, within 0.02 px of the feather): psd-tools mask-parameters-no-real-channel.psd (a 6 px
+    /// vector and 3 px pixel feather) matches it within 1.5 levels, where whole-pixel boxes were
+    /// 4 off.
     #[test]
     fn a_feathered_edge_is_a_gaussian_step() {
         // erf, Abramowitz & Stegun 7.1.26 (1.5e-7).
@@ -317,7 +318,7 @@ mod tests {
             let y = 1.0 - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t + 0.254_829_592) * t * (-x * x).exp();
             y.copysign(x)
         };
-        let (w, edge, sigma) = (240usize, 120usize, 6.0f32);
+        let (w, edge, sigma) = (240usize, 120usize, feather_sigma(6.0));
         let mut v: Vec<f32> = (0..w).map(|i| if i >= edge { 1.0 } else { 0.0 }).collect();
         gaussian(&mut v, w, 1, sigma);
         for (i, &got) in v.iter().enumerate().skip(edge - 24).take(48) {
@@ -352,6 +353,19 @@ mod tests {
         assert_eq!(feather_sigma(f32::NAN), 0.0);
         assert!(feather_sigma(0.01) < 0.1, "a tiny feather barely blurs");
         assert!((feather_sigma(1000.0) - 1000.0).abs() < 1e-3);
+    }
+
+    /// A half-pixel feather blurs between none and a 1 px one, and the 3 px and 6 px feathers
+    /// (psd-tools mask-parameters-no-real-channel.psd's) keep sigma = feather within 0.05 px, so
+    /// the small-feather widening leaves the large feathers' calibration as it was.
+    #[test]
+    fn feather_sigma_widens_only_small_feathers() {
+        let half = feather_sigma(0.5);
+        assert!(half.is_finite() && feather_sigma(0.0) < half && half < feather_sigma(1.0), "0.5 px: {half}");
+        for feather in [3.0f32, 6.0] {
+            let sigma = feather_sigma(feather);
+            assert!((sigma - feather).abs() < 0.05, "{feather} px: sigma {sigma}");
+        }
     }
 
     #[test]
