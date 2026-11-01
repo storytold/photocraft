@@ -181,7 +181,7 @@ pub(crate) struct PlaceInput {
     /// otherwise. A linked place is always a smart object.
     smart: bool,
     /// The document as the job sees it, for rendering a vector source at its placement scale.
-    doc: Arc<Document>,
+    doc: Option<Arc<Document>>,
 }
 
 impl PlaceInput {
@@ -198,7 +198,7 @@ impl PlaceInput {
             // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
-            doc: Arc::clone(&d.doc),
+            doc: photocraft_io::svg::is_svg(&bytes).then(|| Arc::clone(&d.doc)),
             params: p.clone(),
             bytes,
             linked,
@@ -232,7 +232,6 @@ pub(crate) struct Prepared {
 /// and stops it between stages when cancelled.
 pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared> {
     let PlaceInput { name, bytes, linked, params: p, canvas: (cw, ch), fmt, opts, fit, smart, doc } = input;
-    let vector = photocraft_io::svg::is_svg(&bytes);
     let imported = ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&name, &bytes, &opts, ctl)).map_err(|e| match e {
         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
         e => EngineError::Other(format!("{name}: {e}")),
@@ -273,7 +272,7 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
         };
         let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
         // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
-        if vector {
+        if let Some(doc) = doc {
             ctx.progress(0.9, "Rendering");
             ctx.check()?;
             if let Some(sharp) = crate::smart_cmds::render(&doc, &so)? {
