@@ -167,13 +167,25 @@ saves: they do not hide an unrelated unsaved-changes prompt or prevent its answe
 
 ## Trust boundary and limits
 
-The API is a capability for trusted scripts executing in the editor's own origin. It has no
-cross-window `postMessage` listener, arbitrary engine-command endpoint, URL fetcher, storage
-credentials or filesystem access. Serve only host integrations that should be able to read
-the current document and acknowledge their own saves. Backend ownership checks, authentication,
-conflict detection, retention and quotas remain the provider's responsibility. Serialize writes
-and acknowledgements targeting the same mutable resource, or use immutable version IDs; the
-bridge does not implement remote compare-and-swap or cross-instance concurrency control.
+The API is a page-local capability for trusted scripts executing in the editor's own origin. The
+object is a set of direct function calls on the editor's window; its CustomEvent notifications are
+also dispatched on that window. It has no incoming MessageEvent or cross-window postMessage
+listener. An iframe on another origin cannot read the parent window's API under the browser's
+same-origin policy. There is consequently no incoming message origin to validate and no wildcard
+or configurable origin allowlist in this bridge. Adding a cross-window transport would require a
+separate reviewed protocol and origin/source validation; this API does not silently provide one.
+
+All scripts executing in this page share that capability, including analytics or other third-party
+scripts loaded into the page: the origin of a script's download does not sandbox its execution.
+Registration is explicit opt-in, not authentication or isolation from other page scripts. Only load
+integrations that may read the current document and acknowledge their own saves. Keep untrusted
+scripts out of the editor page. The provider backend must authenticate and authorize every list,
+read and write for the appropriate account; provider namespaces and request correlation do not
+replace those checks. The bridge has no arbitrary engine-command endpoint, URL fetcher, storage
+credentials or filesystem access. Conflict detection, retention and quotas remain the provider's
+responsibility. Serialize writes and acknowledgements targeting the same mutable resource, or use
+immutable version IDs; the bridge does not implement remote compare-and-swap or cross-instance
+concurrency control.
 
 Document IDs and revisions are decimal strings to preserve 64-bit values in JavaScript.
 Resource metadata, request counts and queued bytes are bounded. Request IDs include a fresh
@@ -186,6 +198,19 @@ inferred from local paths or filenames.
 This bridge is independent of the proposed embedding API in [PR #2263](https://github.com/storytold/photocraft/pull/2263).
 It does not install or replace `window.photocraft`. Taking an embedding/export snapshot and
 marking it clean is not a substitute for a durable provider acknowledgement.
+
+Related upstream proposals were open and unmerged when checked on 2026-11-01:
+
+| Proposal | Scope and relationship |
+| --- | --- |
+| [craft-libs #413](https://github.com/storytold/craft-libs/pull/413) | A common window command/request API over the control channel. Its current scope leaves file delivery and dirty-state messages with each app; the embedding package mentioned in its title was removed from that proposal. |
+| [craft-libs #420](https://github.com/storytold/craft-libs/pull/420) | A proposed shared host-message contract and bridge for page or same-origin-parent embedding, including open, save/saved, dirty and handoff messages. App adoption is proposed separately. |
+| [DeckCraft #983](https://github.com/storytold/deckcraft/pull/983), [#1143](https://github.com/storytold/deckcraft/pull/1143) and [SoundCraft #866](https://github.com/storytold/soundcraft/pull/866) | App-specific postMessage embedding proposals for file delivery and host notifications. |
+
+Those proposals are relevant to upstream contract alignment. This candidate does not claim to
+implement their message protocol, replace a landed shared contract or decide which API maintainers
+should adopt. Its page-local surface and account/revision acknowledgements can be evaluated against
+that work without adding an unused postMessage listener.
 
 This is a candidate integration for upstream review, not a bundled storage service. Protocol
 and native UI regressions live in `crates/ui-egui/src/file_providers/tests.rs` and
@@ -207,3 +232,40 @@ cargo run -p photocraft-ui-egui --example snapshot -- --out target/provider-home
 
 Omit the last flag for the default-local Home. This preview checks layout only; it is not a
 provider persistence or browser interoperability test.
+
+## Browser-boundary regression (test only)
+
+The web crate has a real-browser wasm-bindgen-test fixture named
+page_local_provider_boundary_checks_default_off_inputs_limits_and_opaque_frames. It installs the
+actual page API with a fresh Host and egui Context, without starting the editor or a GPU renderer.
+One fixture owns and removes its installed object, so its asynchronous cases do not depend on test
+ordering. It checks:
+
+- exposure without registration keeps storage disabled, and actual callbacks reject malformed
+  registration/enable arguments;
+- JS resource types, bounded fields, duplicate IDs and a 101-entry list are rejected without
+  mutating accepted metadata; valid registration and a 100-entry list also succeed;
+- a real 80 MiB + 1 Uint8Array is rejected by the JS/WASM adapter's size check while the valid
+  request remains cancellable; ordinary arrays, empty bytes and invalid filenames are rejected;
+- an allow-scripts sandboxed iframe without allow-same-origin has an opaque origin and cannot read
+  the existing parent API. It sends a forged registration message to the exact parent origin,
+  never a wildcard; that MessageEvent does not change the Host.
+
+The small inline iframe helper is restricted to this test module. It is not a product transport,
+UI or generated hosting script. The existing malformed-open Rust fixture injects an importer
+failure; it does not demonstrate decoding of a real corrupt file. Neither native nor browser
+boundary tests establish remote storage durability, backend authorization or cross-client
+interoperability.
+
+Use a browser WebDriver and wasm-bindgen-test-runner matching the locked wasm-bindgen version
+(0.2.129 for this change). With those tools already available, an example targeted command is:
+
+```sh
+CHROMEDRIVER=/absolute/path/to/chromedriver \
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+cargo test --locked -p photocraft-web --bin photocraft-web --target wasm32-unknown-unknown \
+  page_local_provider_boundary_checks_default_off_inputs_limits_and_opaque_frames
+```
+
+The fixture forces browser execution. Resolving the test-only dependency and running this command
+are separate validation steps; adding these sources does not claim a passing browser result.
