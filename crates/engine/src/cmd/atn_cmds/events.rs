@@ -1,6 +1,6 @@
 const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly"), ("LghO", "lightenOnly"), ("Anst", "anisotropic")];
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
-use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class, target_ref};
+use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, path_text, path_value, ref_class, target_ref};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
@@ -178,7 +178,8 @@ fn clipping_to(_: &str, p: &Value) -> Option<Descriptor> {
 // Target matching follows #10628's Link Layers adapter. Recorded Link and Unlink
 // need explicit state: replaying the UI toggle can perform the opposite operation.
 fn link_from(d: &Descriptor, linked: bool) -> Mapped {
-    if *d == desc("null").with("null", target_ref("Lyr ")) {
+    // The reference permits normalizing the top-level descriptor class to null.
+    if d.items == desc("null").with("null", target_ref("Lyr ")).items {
         step("layer.linkLayers", json!({"linked": linked}))
     } else {
         Mapped::Unsupported { harmless: false }
@@ -188,6 +189,38 @@ fn link_from(d: &Descriptor, linked: bool) -> Mapped {
 fn link_to(p: &Value, linked: bool) -> Option<Descriptor> {
     let p = p.as_object()?;
     (p.len() == 1 && p.get("linked") == Some(&Value::Bool(linked))).then(|| desc("null").with("null", target_ref("Lyr ")))
+}
+
+fn smart_path_from(d: &Descriptor, id: &str) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    let key = if id == "layer.smartObjects.convertToLinked" { "Usng" } else { "null" };
+    let Some(path) = d.get(key).and_then(path_text) else { return unsupported };
+    let p = json!({"path": path});
+    let Some(mut expected) = smart_path_to(id, &p) else { return unsupported };
+    if let Some(hint) = d.get("LyrI") {
+        // The reference explicitly omits recording-session IDs on save (#10603,
+        // docs/atn.md:200). They must never become PhotoCraft's playback target.
+        if !matches!(id, "layer.smartObjects.relinkToFile" | "layer.smartObjects.replaceContents") || !matches!(hint, D::Integer(n) if *n > 0) {
+            return unsupported;
+        }
+        expected = expected.with("LyrI", hint.clone());
+    }
+    // Normalize the top-level header as Open/Place do, but refuse unknown keys,
+    // targets and path encodings rather than partly replaying them.
+    if d.items == expected.items { step(id, p) } else { unsupported }
+}
+
+fn smart_path_to(id: &str, p: &Value) -> Option<Descriptor> {
+    let p = p.as_object()?;
+    let path = p.get("path")?.as_str()?;
+    if p.len() != 1 || path.is_empty() || path.contains('\0') {
+        return None;
+    }
+    Some(if id == "layer.smartObjects.convertToLinked" {
+        desc("null").with("null", target_ref("Lyr ")).with("Usng", path_value(path))
+    } else {
+        desc("null").with("null", path_value(path))
+    })
 }
 
 /// A clipping mask event: `clipping_from` / `clipping_to` with one command id.
@@ -496,6 +529,38 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "newPlacedLayer", "Convert to Smart Object", "layer.smartObjects.convertToSmartObject", &[]),
     ev!("", "placedLayerEditContents", "Edit Contents", "layer.smartObjects.editContents", &[]),
     ev!("", "updatePlacedLayer", "Update Smart Objects", "layer.smartObjects.updateModifiedContent", &[]),
+    Event {
+        code: "",
+        name: "placedLayerExportContents",
+        label: "Export Contents",
+        ids: &["layer.smartObjects.exportContents"],
+        from: |d| smart_path_from(d, "layer.smartObjects.exportContents"),
+        to: smart_path_to,
+    },
+    Event {
+        code: "",
+        name: "placedLayerConvertToLinked",
+        label: "Convert to Linked",
+        ids: &["layer.smartObjects.convertToLinked"],
+        from: |d| smart_path_from(d, "layer.smartObjects.convertToLinked"),
+        to: smart_path_to,
+    },
+    Event {
+        code: "",
+        name: "placedLayerRelinkToFile",
+        label: "Relink to File",
+        ids: &["layer.smartObjects.relinkToFile"],
+        from: |d| smart_path_from(d, "layer.smartObjects.relinkToFile"),
+        to: smart_path_to,
+    },
+    Event {
+        code: "",
+        name: "placedLayerReplaceContents",
+        label: "Replace Contents",
+        ids: &["layer.smartObjects.replaceContents"],
+        from: |d| smart_path_from(d, "layer.smartObjects.replaceContents"),
+        to: smart_path_to,
+    },
     Event { code: "Hd  ", name: "hide", label: "Hide", ids: &["layer.hideLayers"], from: |d| visibility_from(d, "layer.hideLayers"), to: visibility_to },
     Event { code: "Shw ", name: "show", label: "Show", ids: &["layer.showLayers"], from: |d| visibility_from(d, "layer.showLayers"), to: visibility_to },
     Event {
