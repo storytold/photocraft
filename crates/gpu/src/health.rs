@@ -38,6 +38,30 @@ impl Fault {
         matches!(self, Fault::Error(s) if s == OUT_OF_MEMORY)
     }
 
+    /// Why a lost device was lost, as far as its message says (`None` for an error on a device
+    /// that still works). wgpu-hal reports a Vulkan result it doesn't map as `Unexpected`
+    /// ("driver implementation is at fault") and drops the `vk::Result`, so for that cause the
+    /// message is all there is to log (#10464).
+    pub fn loss_cause(&self) -> Option<LossCause> {
+        match self {
+            Fault::Lost(s) => Some(LossCause::of(s)),
+            Fault::Error(_) => None,
+        }
+    }
+
+    /// What the canvas does about this fault: `auto_retries` is how many out-of-memory rebuilds
+    /// this session already did, `max_auto_retries` how many it may do. Pure, so the table of
+    /// faults and actions is testable without a GPU.
+    pub fn recovery(&self, auto_retries: u32, max_auto_retries: u32) -> Recovery {
+        if self.is_lost() {
+            Recovery::CpuForSession
+        } else if self.is_out_of_memory() && auto_retries < max_auto_retries {
+            Recovery::RebuildCanvas
+        } else {
+            Recovery::CpuUntilRetry
+        }
+    }
+
     /// The driver's or wgpu's message.
     pub fn detail(&self) -> &str {
         match self {
@@ -58,6 +82,69 @@ impl fmt::Display for Fault {
 
 /// The message an out-of-memory [`Fault::Error`] carries (wgpu's `Error::OutOfMemory`).
 pub const OUT_OF_MEMORY: &str = "Out of Memory";
+
+/// What to do about a [`Fault`] (see [`Fault::recovery`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recovery {
+    /// Out of memory on a device that still works: the dropped canvas freed its memory, so build
+    /// a new one at once (#6564).
+    RebuildCanvas,
+    /// An error on a device that still works (validation, internal, or out of memory again):
+    /// draw on the CPU and let the user choose Retry GPU (#6577).
+    CpuUntilRetry,
+    /// The device is lost and can't be used again in this process: draw on the CPU for the rest
+    /// of the session. When the window is drawn with that same device, it can't be drawn any
+    /// more either (see [`DeviceHealth::device_lost`]).
+    CpuForSession,
+}
+
+/// Why a device was lost, from the message wgpu passes to the device-lost callback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LossCause {
+    /// `Device::destroy` (a simulated loss, or the app tearing the device down).
+    Destroyed,
+    /// wgpu-hal's `DeviceError::Unexpected`: a driver result it has no mapping for. wgpu-core
+    /// loses the device for it and the `vk::Result` is not kept.
+    DriverFault,
+    /// wgpu-hal's `DeviceError::OutOfMemory`, which wgpu-core also answers by losing the device
+    /// when the failing call can't recover.
+    OutOfMemory,
+    /// The driver reset or removed the device ("Device is lost", a poll that found it gone).
+    Reset,
+    /// A message none of the above recognises.
+    Other,
+}
+
+impl LossCause {
+    /// Classify a device-lost message, case-insensitively. The strings are wgpu-hal's
+    /// `DeviceError` display texts and this crate's own ("device destroyed", "lost by the
+    /// driver", "the device stopped responding").
+    pub fn of(message: &str) -> Self {
+        let m = message.to_ascii_lowercase();
+        if m.contains("destroyed") {
+            Self::Destroyed
+        } else if m.contains("unexpected error variant") || m.contains("driver implementation is at fault") {
+            Self::DriverFault
+        } else if m.contains("out of memory") {
+            Self::OutOfMemory
+        } else if m.contains("lost") || m.contains("stopped responding") {
+            Self::Reset
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Short English wording for logs and notices.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Destroyed => "the device was destroyed",
+            Self::DriverFault => "the graphics driver reported an unexpected error",
+            Self::OutOfMemory => "the graphics device ran out of memory",
+            Self::Reset => "the graphics driver reset or removed the device",
+            Self::Other => "the graphics device stopped working",
+        }
+    }
+}
 
 #[derive(Default)]
 struct Inner {
@@ -255,7 +342,9 @@ fn fault_of(e: &wgpu::Error) -> Fault {
     let lower = text.to_ascii_lowercase();
     if matches!(e, wgpu::Error::OutOfMemory { .. }) {
         Fault::Error(OUT_OF_MEMORY.into())
-    } else if lower.contains("lost") || lower.contains("destroyed") {
+    } else if lower.contains("lost") || lower.contains("destroyed") || LossCause::of(&text) == LossCause::DriverFault {
+        // wgpu-core loses the device for a driver fault ("Unexpected error variant"), whether the
+        // error reaches us before or after the device-lost callback (#10464).
         Fault::Lost(first_line(&text))
     } else {
         Fault::Error(first_line(&text))
@@ -291,6 +380,94 @@ mod tests {
         assert_eq!(h.fault().map(|f| f.to_string()).as_deref(), Some("GPU device lost: reset"));
         // A recorded loss is not wgpu reporting the device lost (#3438).
         assert!(!h.device_lost());
+    }
+
+    fn internal(description: &str) -> wgpu::Error {
+        wgpu::Error::Internal { source: description.into(), description: description.into() }
+    }
+
+    fn validation(description: &str) -> wgpu::Error {
+        wgpu::Error::Validation { source: description.into(), description: description.into() }
+    }
+
+    /// #10464: wgpu-hal's `DeviceError::Unexpected` text reaches the app as the device-lost message
+    /// (wgpu-core loses the device for it). Every message wgpu-hal can produce maps to a cause.
+    #[test]
+    fn loss_messages_name_their_cause() {
+        let unexpected = "Unexpected error variant (driver implementation is at fault)";
+        assert_eq!(LossCause::of(unexpected), LossCause::DriverFault);
+        assert_eq!(LossCause::of(&unexpected.to_uppercase()), LossCause::DriverFault);
+        assert_eq!(LossCause::of("Device is lost"), LossCause::Reset);
+        assert_eq!(LossCause::of("lost by the driver"), LossCause::Reset);
+        assert_eq!(LossCause::of("the device stopped responding"), LossCause::Reset);
+        assert_eq!(LossCause::of("Out of memory"), LossCause::OutOfMemory);
+        assert_eq!(LossCause::of("Out of Memory"), LossCause::OutOfMemory);
+        assert_eq!(LossCause::of("device destroyed"), LossCause::Destroyed);
+        assert_eq!(LossCause::of(""), LossCause::Other);
+        assert_eq!(LossCause::of("something nobody wrote yet"), LossCause::Other);
+        // Never panics on odd input, including multi-byte text.
+        assert_eq!(LossCause::of("設備遺失 ✓"), LossCause::Other);
+        // Every cause has wording for the log and the notice.
+        for cause in [LossCause::Destroyed, LossCause::DriverFault, LossCause::OutOfMemory, LossCause::Reset, LossCause::Other] {
+            assert!(!cause.describe().is_empty());
+        }
+        assert_eq!(Fault::Lost(unexpected.into()).loss_cause(), Some(LossCause::DriverFault));
+        assert_eq!(Fault::Error("Validation Error".into()).loss_cause(), None);
+    }
+
+    /// An error that wgpu raises for a driver fault, or that names a lost device, is a loss: the
+    /// device is gone (or about to be) whichever of the error and the lost callback comes first.
+    #[test]
+    fn wgpu_errors_classify_into_faults() {
+        let oom = wgpu::Error::OutOfMemory { source: "x".into() };
+        assert_eq!(fault_of(&oom), Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(fault_of(&oom).is_out_of_memory());
+        assert_eq!(
+            fault_of(&internal("Unexpected error variant (driver implementation is at fault)")),
+            Fault::Lost("Unexpected error variant (driver implementation is at fault)".into())
+        );
+        assert!(fault_of(&internal("Parent device is lost")).is_lost());
+        assert!(fault_of(&validation("Buffer 'pc_compose_uniforms' is invalid\nBuffer is destroyed")).is_lost());
+        assert_eq!(fault_of(&validation("Buffer size 12 is not a multiple of 4")), Fault::Error("Buffer size 12 is not a multiple of 4".into()));
+        // A validation error that merely talks about memory is neither a loss nor an OOM.
+        let memory = fault_of(&validation("allocation would run out of memory"));
+        assert!(!memory.is_lost() && !memory.is_out_of_memory());
+        // The text shown to the user is one line, capped.
+        assert!(fault_of(&internal(&"x".repeat(1000))).detail().chars().count() <= 201);
+    }
+
+    /// The table of faults and what the canvas does about each (#6564, #6577, #243).
+    #[test]
+    fn faults_map_to_a_recovery() {
+        let oom = Fault::Error(OUT_OF_MEMORY.into());
+        let validation = Fault::Error("Validation Error".into());
+        let lost = Fault::Lost("Unexpected error variant (driver implementation is at fault)".into());
+        let max = 3;
+        // Out of memory on a live device is retried by itself while the budget lasts, then waits
+        // for the user.
+        for used in 0..max {
+            assert_eq!(oom.recovery(used, max), Recovery::RebuildCanvas, "retry {used}");
+        }
+        assert_eq!(oom.recovery(max, max), Recovery::CpuUntilRetry);
+        assert_eq!(oom.recovery(u32::MAX, max), Recovery::CpuUntilRetry);
+        assert_eq!(oom.recovery(0, 0), Recovery::CpuUntilRetry, "a budget of none never retries");
+        // Other errors are never retried by themselves.
+        assert_eq!(validation.recovery(0, max), Recovery::CpuUntilRetry);
+        // A loss is final for the process, whatever the retry budget.
+        assert_eq!(lost.recovery(0, max), Recovery::CpuForSession);
+        assert_eq!(Fault::Lost(String::new()).recovery(0, 0), Recovery::CpuForSession);
+        assert_eq!(Fault::Lost(OUT_OF_MEMORY.into()).recovery(0, max), Recovery::CpuForSession, "an out-of-memory loss is not an out-of-memory error");
+    }
+
+    /// A device-lost callback and an uncaptured error from the driver-fault path mark the same
+    /// flag: later calls see the loss, and a poll does nothing.
+    #[test]
+    fn a_driver_fault_error_marks_the_device_lost() {
+        let h = DeviceHealth::new();
+        h.uncaptured(&internal("Unexpected error variant (driver implementation is at fault)"));
+        assert!(!h.is_ok());
+        assert!(h.fault().is_some_and(|f| f.is_lost() && f.loss_cause() == Some(LossCause::DriverFault)));
+        assert_eq!(h.errors(), 1);
     }
 
     #[test]

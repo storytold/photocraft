@@ -59,7 +59,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
-pub use health::{DeviceHealth, Fault};
+pub use health::{DeviceHealth, Fault, LossCause, Recovery};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
