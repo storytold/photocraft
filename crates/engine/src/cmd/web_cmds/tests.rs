@@ -1337,3 +1337,62 @@ fn selected_slices_keep_their_place_in_the_html_table() {
     assert!(!cells[0].contains("images/right.png"), "the right slice is in column 0:\n{row}");
     assert!(cells[1].contains("images/right.png"), "column 1:\n{row}");
 }
+
+/// Two side-by-side user slices, `left` and `right`, and their numbers.
+fn two_slices() -> (Session, u64, u64) {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let all = photocraft_doc::slices::resolve(&s.active().unwrap().doc);
+    let number = |name: &str| all.iter().find(|r| r.name == name).unwrap().number as u64;
+    (s, number("left"), number("right"))
+}
+
+/// A refused slice export writes and remembers nothing, and (called directly, as the platform
+/// writer is) leaves a floating move in place.
+fn assert_refused(s: &mut Session, dir: &str, p: Value, expect: &str) {
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+    let mut written = Vec::new();
+    let err = save_for_web_with_writer(s, &p, &mut |path, _| {
+        written.push(path.to_string());
+        Ok(())
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains(expect), "{p}: {err}");
+    assert_eq!(written, Vec::<String>::new(), "{p}: nothing written");
+    assert!(s.file_menu.last_web.is_none(), "{p}: nothing remembered");
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{p}: the floating move is not committed");
+    let err = s.execute("file.export.saveForWebLegacy", p.clone()).unwrap_err().to_string();
+    assert!(err.contains(expect), "{p}: {err}");
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 0, "{p}: nothing written");
+}
+
+#[test]
+fn slice_numbers_that_do_not_exist_are_refused() {
+    // FredApps review on PR #10557: a number naming no slice was dropped, so an export of only
+    // missing numbers "succeeded" with no files and a page of empty cells. Photoshop's dialog
+    // can only select existing slices; a script naming others is refused.
+    let dir = tmp("missing-numbers");
+    let (mut s, left, right) = two_slices();
+    let count = photocraft_doc::slices::resolve(&s.active().unwrap().doc).len() as u64;
+    let (gone, also_gone) = (count + 1, count + 7);
+    assert_refused(&mut s, &dir, json!({"format": "png24", "dir": dir, "html": true, "numbers": [gone]}), &format!("no slice numbered {gone}"));
+    // Partly missing: the dialog builds `numbers` from slices it shows, so every number it sends
+    // exists; one that doesn't is a stale or mistyped script and the export is refused whole.
+    let err = s
+        .execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true, "numbers": [left, also_gone, right, gone]}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains(&format!("no slices numbered {gone}, {also_gone}")), "{err}");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing written");
+    // Slice numbers start at 1.
+    let err = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "numbers": [0]})).unwrap_err().to_string();
+    assert!(err.contains("no slice numbered 0"), "{err}");
+    // Existing numbers still export exactly those slices.
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "numbers": [right, left]})).unwrap();
+    let mut files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap()).collect();
+    files.sort_unstable();
+    assert_eq!(files, ["left.png", "right.png"]);
+}
