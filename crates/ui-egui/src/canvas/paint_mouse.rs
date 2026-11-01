@@ -42,9 +42,17 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         None => BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, ..current },
     };
-    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
-    // that preset with this tool's brush.
-    app.session.tools.current_preset = None;
+    // The picked preset belongs to the outgoing tool's brush: keep it with that tool, and take the
+    // incoming tool's own (none for a brush not picked from a preset), so Update Brush can't
+    // overwrite one tool's preset with another tool's brush. The engine keeps the set-aside
+    // presets, so renaming or deleting a preset updates them too.
+    let (outgoing, incoming) = (format!("{:?}", app.ui.brush_tool), format!("{tool:?}"));
+    let tools = &mut app.session.tools;
+    tools.tool_presets.retain(|(t, _)| *t != outgoing);
+    if let Some(name) = tools.current_preset.take() {
+        tools.tool_presets.push((outgoing, name));
+    }
+    tools.current_preset = tools.tool_presets.iter().position(|(t, _)| *t == incoming).map(|i| tools.tool_presets.remove(i).1);
     app.session.tools.brush_changed();
     app.ui.brush_tool = tool;
 }

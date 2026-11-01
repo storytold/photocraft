@@ -852,3 +852,87 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
 }
+
+/// #9014: each tool keeps the preset its brush was picked from, as in Photoshop's Brushes panel:
+/// Brush → Eraser → Brush marks the Brush's preset again. A tool that never picked one has none,
+/// so Update Brush can't overwrite another tool's preset.
+#[test]
+fn each_tool_keeps_the_preset_its_brush_came_from() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let names: Vec<String> = app.session.tools.presets.iter().take(2).map(|p| p.name.clone()).collect();
+    let [first, second] = [names[0].clone(), names[1].clone()];
+    let switch = |app: &mut PhotocraftApp, tool: Tool| {
+        app.ui.tool = tool;
+        sync_tool_brush(app);
+    };
+    switch(&mut app, Tool::Brush);
+    app.run("tools.setBrush", json!({"preset": first})).unwrap();
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(first.as_str()));
+    switch(&mut app, Tool::Eraser);
+    assert_eq!(app.session.tools.current_preset, None, "the Eraser never picked a preset");
+    app.run("tools.setBrush", json!({"preset": second})).unwrap();
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(first.as_str()), "the Brush's preset is marked again");
+    switch(&mut app, Tool::Eraser);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(second.as_str()), "and the Eraser's");
+}
+
+/// #9014: a tool's preset follows the library while another tool is active: renamed, the tool
+/// comes back marking the new name; deleted, it comes back with none, so Update Brush can't
+/// overwrite a later preset that reuses the name.
+#[test]
+fn a_tools_preset_follows_renames_and_deletes_while_it_is_away() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let first = app.session.tools.presets[0].name.clone();
+    let switch = |app: &mut PhotocraftApp, tool: Tool| {
+        app.ui.tool = tool;
+        sync_tool_brush(app);
+    };
+    switch(&mut app, Tool::Brush);
+    app.run("tools.setBrush", json!({"preset": first})).unwrap();
+    switch(&mut app, Tool::Eraser);
+    app.run("brush.presets.rename", json!({"name": first, "newName": "Renamed tip"})).unwrap();
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some("Renamed tip"), "the Brush marks the renamed preset");
+    switch(&mut app, Tool::Eraser);
+    app.run("brush.presets.delete", json!({"name": "Renamed tip"})).unwrap();
+    app.run("brush.presets.save", json!({"name": "Renamed tip"})).unwrap();
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset, None, "the Brush's preset is gone, not the new one of the same name");
+}
+
+/// #9014: deleting the active tool's preset forgets only that tool's: the Brush keeps its brush
+/// but marks no preset, and the Eraser still has the preset it was picked from.
+#[test]
+fn deleting_one_tools_preset_leaves_the_other_tools_preset() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let names: Vec<String> = app.session.tools.presets.iter().take(2).map(|p| p.name.clone()).collect();
+    let [x, y] = [names[0].clone(), names[1].clone()];
+    let switch = |app: &mut PhotocraftApp, tool: Tool| {
+        app.ui.tool = tool;
+        sync_tool_brush(app);
+    };
+    switch(&mut app, Tool::Brush);
+    app.run("tools.setBrush", json!({"preset": x})).unwrap();
+    switch(&mut app, Tool::Eraser);
+    app.run("tools.setBrush", json!({"preset": y})).unwrap();
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(x.as_str()));
+    let brush = app.session.tools.brush.clone();
+    app.run("brush.presets.delete", json!({"name": x})).unwrap();
+    assert_eq!(app.session.tools.current_preset, None, "the Brush's preset is gone");
+    assert!(app.session.tools.brush == brush, "the Brush keeps its settings");
+    let eraser = format!("{:?}", Tool::Eraser);
+    assert!(
+        app.session.tools.tool_presets.iter().any(|(t, n)| *t == eraser && *n == y),
+        "the Eraser still has its preset: {:?}",
+        app.session.tools.tool_presets
+    );
+    switch(&mut app, Tool::Eraser);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(y.as_str()), "switching back to the Eraser marks its preset");
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset, None, "and the Brush still marks none");
+}
