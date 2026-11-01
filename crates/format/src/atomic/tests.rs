@@ -438,6 +438,68 @@ fn a_refused_full_flush_falls_back_to_a_plain_fsync_on_apple_only() {
     assert!(or_plain_fsync(Ok(()), || panic!("no fallback after a full flush")).is_ok());
 }
 
+/// #6604: a successful save clears the temp files an interrupted save left beside the file,
+/// but only those whose owner process is gone.
+#[cfg(unix)]
+#[test]
+fn a_save_sweeps_orphan_temps_but_keeps_live_and_foreign_ones() {
+    let d = TempDir::new("sweep");
+    let p = d.0.join("doc.psd");
+    std::fs::write(&p, ORIGINAL).unwrap();
+    // i32::MAX is never a live pid: kill(pid, 0) answers ESRCH.
+    let dead = d.0.join(format!(".doc.psd.{}-0.pcsave.tmp", i32::MAX));
+    let init = d.0.join(".doc.psd.1-0.pcsave.tmp");
+    let own = d.0.join(format!(".doc.psd.{}-1.pcsave.tmp", std::process::id()));
+    let other_file = d.0.join(format!(".other.psd.{}-0.pcsave.tmp", i32::MAX));
+    let bogus = d.0.join(".doc.psd.not-a-pid-0.pcsave.tmp");
+    let dirlike = d.0.join(format!(".doc.psd.{}-2.pcsave.tmp", i32::MAX - 1));
+    for f in [&dead, &init, &own, &other_file, &bogus] {
+        std::fs::write(f, b"tmp").unwrap();
+    }
+    std::fs::create_dir(&dirlike).unwrap();
+
+    atomic_write(&p, b"new").unwrap();
+
+    assert!(!dead.exists(), "the orphan of a dead process is swept by the save");
+    assert!(init.exists(), "a running process's temp file is kept");
+    assert!(own.exists(), "this process's own temp files are kept");
+    assert!(other_file.exists() && bogus.exists() && dirlike.is_dir(), "anything else is left alone");
+}
+
+#[test]
+fn sweeping_a_missing_folder_is_a_no_op() {
+    sweep_stale_temps(Path::new("/nonexistent-pc-6604/doc.psd"));
+}
+
+/// #6662 review: a bare relative name (`doc.psd`) has the empty path as its parent; the sweep
+/// must fall back to the current directory exactly like the write does.
+#[test]
+fn a_bare_relative_name_sweeps_the_current_folder() {
+    assert_eq!(sibling_dir(Path::new("doc.psd")), Path::new("."));
+    assert_eq!(sibling_dir(Path::new("./doc.psd")), Path::new("."));
+    assert_eq!(sibling_dir(Path::new("/some/dir/doc.psd")), Path::new("/some/dir"));
+}
+
+/// #6662 review: `temp_name` truncates at 64 chars, so two destinations sharing their first 64
+/// characters have indistinguishable temps. A save of one must not delete the other's orphan.
+#[cfg(unix)]
+#[test]
+fn a_long_destination_name_skips_the_ambiguous_sweep() {
+    let d = TempDir::new("sweep-long");
+    let stem: String = "l".repeat(64);
+    let one = d.0.join(format!("{stem}-one.psd"));
+    let two = d.0.join(format!("{stem}-two.psd"));
+    std::fs::write(&one, ORIGINAL).unwrap();
+    std::fs::write(&two, ORIGINAL).unwrap();
+    // A dead process's temp beside `two`, indistinguishable from one of `one`.
+    let foreign = d.0.join(format!(".{stem}.{}-0.pcsave.tmp", i32::MAX));
+    std::fs::write(&foreign, b"tmp").unwrap();
+
+    atomic_write(&one, b"new").unwrap();
+
+    assert!(foreign.exists(), "a 64-char name is ambiguous, so the sweep is skipped and the other file's temp survives");
+}
+
 #[test]
 fn sync_file_flushes_a_local_file() {
     let dir = TempDir::new("sync");

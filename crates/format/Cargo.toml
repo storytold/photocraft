@@ -25,9 +25,10 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 ruzstd = "0.9.1"
 
 # Unix directory cleanup uses no-follow descriptor-relative operations; the same
-# dependency provides the plain-fsync fallback on Apple file systems.
+# dependency provides the plain-fsync fallback on Apple file systems and the
+# null-signal probe that tells a dead save process from a running one (#6604).
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
 
 # rustix does not expose Apple's directory-search open mode. Only the named
 # constant is used; all descriptor operations remain in safe rustix APIs.
