@@ -1,10 +1,10 @@
-use super::*;
+use super::{
+    Color, Fill, FillRule, GradientStyle, Knot, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp, Point, Result, Session, ShapeStroke, StrokeAlign, Subpath,
+    Value, bad, json,
+};
 
 pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => Ok(LayerId(id)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
+    crate::commands::layer_param(s, p)
 }
 
 pub(super) fn f64p(p: &Value, k: &str) -> Option<f64> {
@@ -69,7 +69,7 @@ fn hex(c: &Color) -> String {
     if c.alpha < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", q(r), q(g), q(b), q(c.alpha)) } else { format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b)) }
 }
 
-pub(super) fn op_from(s: &str) -> Option<PathOp> {
+pub(crate) fn op_from(s: &str) -> Option<PathOp> {
     Some(match s.to_ascii_lowercase().as_str() {
         "combine" | "add" | "union" => PathOp::Combine,
         "subtract" | "minus" => PathOp::Subtract,

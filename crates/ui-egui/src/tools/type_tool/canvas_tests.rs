@@ -127,6 +127,28 @@ mod panel_defaults {
         h
     }
 
+    /// Without a type target the preset chevrons set the next layer's defaults, with no
+    /// document edit.
+    #[test]
+    fn presets_without_a_type_layer_set_the_defaults() {
+        let app = new_app();
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = panels(app);
+        h.get_by_role_and_label(Role::ComboBox, "Font size presets").click();
+        h.run();
+        h.get_by_label("72 pt").scroll_to_me();
+        h.run();
+        h.get_by_label("72 pt").click();
+        h.run();
+        assert_eq!(h.state().ui.tool_options.type_size, 72.0);
+        h.get_by_role_and_label(Role::ComboBox, "Leading presets").click();
+        h.run();
+        h.get_by_label("Auto").click();
+        h.run();
+        assert_eq!(h.state().ui.tool_options.type_style_defaults.get("leading"), Some(&json!("auto")));
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "defaults are not a document edit");
+    }
+
     fn number(h: &mut Harness<'static, PhotocraftApp>, label: &str, value: &str) {
         h.get_by_role_and_label(Role::SpinButton, label).click();
         h.run();
@@ -1952,6 +1974,44 @@ mod multi_layer_formatting {
         h.run();
     }
 
+    fn preset(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+        // Presets near the end of the popup can be below its scroll viewport.
+        h.get_by_label(label).scroll_to_me();
+        h.run();
+        h.get_by_label(label).click();
+        h.run();
+    }
+
+    /// Opens a preset chevron by its accessible name and picks `label`.
+    fn pick(h: &mut Harness<'static, PhotocraftApp>, menu: &str, label: &str) {
+        h.get_by_role_and_label(Role::ComboBox, menu).click();
+        h.run();
+        preset(h, label);
+    }
+
+    /// The open preset popup's item labels, top to bottom, with "|" where a separator splits
+    /// them (a gap clearly larger than the row pitch). `any` is one item's label.
+    fn menu_items(h: &Harness<'static, PhotocraftApp>, any: &str) -> Vec<String> {
+        use egui_kittest::kittest::NodeT;
+        let role = h.get_by_label(any).accesskit_node().role();
+        let left = h.get_by_label(any).rect().left();
+        let mut items: Vec<(f32, String)> = h
+            .query_all_by_role(role)
+            .filter(|n| (n.rect().left() - left).abs() < 1.0)
+            .filter_map(|n| Some((n.rect().top(), n.accesskit_node().label()?)))
+            .collect();
+        items.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let pitch = items.windows(2).map(|w| w[1].0 - w[0].0).fold(f32::MAX, f32::min);
+        let mut out = Vec::new();
+        for (i, (top, label)) in items.iter().enumerate() {
+            if i > 0 && top - items[i - 1].0 > pitch + 2.0 {
+                out.push("|".to_owned());
+            }
+            out.push(label.clone());
+        }
+        out
+    }
+
     fn editing(app: &mut PhotocraftApp, id: LayerId) {
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: id.0,
@@ -2023,12 +2083,103 @@ mod multi_layer_formatting {
         assert_eq!(text(h.state(), id).paragraph_runs()[0].style.direction, TextDirection::Rtl, "new type starts right to left");
     }
 
+    /// The size, leading and tracking chevrons offer the reference application's lists: Leading
+    /// starts with Auto, Tracking splits tightening, 0 and loosening with separators.
+    #[test]
+    fn character_panel_preset_menus_list_the_reference_values() {
+        let (app, _) = fixture();
+        let mut h = controls(app, true);
+        let sizes = [
+            "6 pt", "8 pt", "9 pt", "10 pt", "11 pt", "12 pt", "14 pt", "16 pt", "18 pt", "24 pt", "30 pt", "36 pt", "48 pt", "60 pt", "72 pt", "150 pt",
+            "300 pt",
+        ];
+        h.get_by_role_and_label(Role::ComboBox, "Font size presets").click();
+        h.run();
+        assert_eq!(menu_items(&h, "72 pt"), sizes);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.get_by_role_and_label(Role::ComboBox, "Leading presets").click();
+        h.run();
+        let leading: Vec<&str> = std::iter::once("Auto").chain(sizes).collect();
+        assert_eq!(menu_items(&h, "72 pt"), leading);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.get_by_role_and_label(Role::ComboBox, "Tracking presets").click();
+        h.run();
+        let tracking = ["-100", "-75", "-50", "-25", "-10", "-5", "|", "0", "|", "5", "10", "25", "50", "75", "100", "200"];
+        assert_eq!(menu_items(&h, "200"), tracking);
+    }
+
+    #[test]
+    fn character_panel_preset_menus_edit_size_leading_and_tracking() {
+        let (app, ids) = fixture();
+        let untouched = style(&app, ids[2], 0);
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = controls(app, true);
+
+        // The chevrons use the same setStyle path as the editable fields beside them.
+        pick(&mut h, "Font size presets", "72 pt");
+        pick(&mut h, "Leading presets", "Auto");
+        pick(&mut h, "Tracking presets", "-5");
+
+        for id in &ids[..2] {
+            let c = style(h.state(), *id, 0);
+            assert_eq!(c.size_pt, 72.0);
+            assert_eq!(c.leading_pt, None, "Auto restores font-relative line spacing");
+            assert_eq!(c.tracking, -5.0);
+        }
+        assert_eq!(style(h.state(), ids[2], 0), untouched, "unselected type layers are unchanged");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 3, "one step per pick");
+
+        // The numeric spin boxes must remain usable beside their preset chevrons.
+        number(&mut h, "Font size", "40");
+        assert_eq!(style(h.state(), ids[0], 0).size_pt, 40.0);
+        assert_eq!(style(h.state(), ids[1], 0).size_pt, 40.0);
+    }
+
+    /// While typing, a preset changes only the selected characters, like a typed value.
+    #[test]
+    fn character_panel_presets_edit_only_the_selected_span() {
+        let (app, ids) = fixture();
+        let mut h = controls(app, true);
+        let peer = text(h.state(), ids[1]).char_runs();
+        editing(h.state_mut(), ids[0]);
+        h.run();
+        pick(&mut h, "Font size presets", "150 pt");
+        assert_eq!((size_at(h.state(), ids[0], 0), size_at(h.state(), ids[0], 1), size_at(h.state(), ids[0], 3)), (12.0, 150.0, 12.0));
+        assert_eq!(text(h.state(), ids[1]).char_runs(), peer);
+    }
+
+    /// Type units in millimetres: the lists show converted values with at most two decimals,
+    /// and a picked preset stores its exact point value (not 12.000001 from a unit round trip).
+    #[test]
+    fn character_panel_presets_in_millimetres_round_labels_and_store_exact_points() {
+        let mut app = new_app();
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "mm"})).unwrap();
+        let id = LayerId(app.run("type.create", json!({"text": "AéBCD", "font": "Inter", "size": 30, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap());
+        selected(&mut app, &[id]);
+        let mut h = controls(app, true);
+        h.get_by_role_and_label(Role::ComboBox, "Font size presets").click();
+        h.run();
+        let items = menu_items(&h, "25.4 mm");
+        assert_eq!(items.len(), 17, "{items:?}");
+        for item in &items {
+            let n = item.strip_suffix(" mm").unwrap_or_else(|| panic!("{item}"));
+            assert!(n.split('.').nth(1).is_none_or(|d| d.len() <= 2 && !d.ends_with('0')), "{item}");
+        }
+        assert_eq!(items[0], "2.12 mm", "6 pt");
+        preset(&mut h, "4.23 mm");
+        assert_eq!(style(h.state(), id, 0).size_pt, 12.0, "12 pt exactly");
+        pick(&mut h, "Leading presets", "105.83 mm");
+        assert_eq!(style(h.state(), id, 0).leading_pt, Some(300.0));
+    }
+
     #[test]
     fn options_font_family_preserves_peer_faces_and_batches_layer_flags() {
         let (app, ids) = fixture();
         let before = ids.map(|id| style(&app, id, 0));
         let mut h = controls(app, false);
-        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
         h.run();
         h.get_by_role(Role::TextInput).type_text("JetBrains");
         h.key_press(egui::Key::ArrowDown);
@@ -2051,7 +2202,7 @@ mod multi_layer_formatting {
             assert_eq!(style(h.state(), ids[i], 0), expected, "family changes preserve each peer's face and metrics");
         }
         assert_eq!(style(h.state(), ids[2], 0), before[2]);
-        h.get_all_by_role(Role::ComboBox).nth(2).unwrap().click();
+        h.get_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Smooth")).unwrap().click();
         h.run();
         h.get_by_label("Sharp").click();
         h.run();
@@ -2064,6 +2215,57 @@ mod multi_layer_formatting {
         }
         assert_eq!(text(h.state(), ids[2]).orientation, Orientation::Horizontal);
         assert_ne!(text(h.state(), ids[2]).antialias, AntiAlias::Sharp);
+    }
+
+    /// The family field and the style menu describe the selected run, not the layer's first run
+    /// (#9024), whichever way the selection was made; without a selection the first run shows, and
+    /// without a type target the tool defaults. Showing them never adds history. "Mé Regular" has
+    /// a two-byte `é`, so a byte offset taken for a character offset picks the wrong run.
+    #[test]
+    fn options_bar_font_and_style_follow_the_selected_run() {
+        let mut app = new_app();
+        let id = LayerId(
+            app.run("type.create", json!({"text": "Mé Regular", "font": "Inter", "fontStyle": "Medium", "size": 20, "x": 300, "y": 420})).unwrap()["layer"]
+                .as_u64()
+                .unwrap(),
+        );
+        app.run("type.setStyle", json!({"layer": id.0, "range": [3, 10], "font": "JetBrains Mono", "fontStyle": "Regular"})).unwrap();
+        assert_eq!((style(&app, id, 0).font_family.as_str(), style(&app, id, 5).font_family.as_str()), ("Inter", "JetBrains Mono"));
+        let edit = |anchor: usize, caret: usize| crate::state::TextEdit {
+            layer: id.0,
+            document: None,
+            caret,
+            anchor,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        };
+        let mut h = controls(app, false);
+        let shown = |h: &Harness<'static, PhotocraftApp>| {
+            (h.get_all_by_role(Role::TextInput).next().and_then(|n| n.value()).unwrap_or_default(), h.get_by_role_and_label(Role::ComboBox, "Style").value())
+        };
+        let steps = super::history_len(&h);
+        let (inter, mono) = (("Inter".to_string(), Some("Medium".to_string())), ("JetBrains Mono".to_string(), Some("Regular".to_string())));
+        for (anchor, caret, want) in [(3, 10, &mono), (10, 3, &mono), (0, 2, &inter), (2, 0, &inter)] {
+            h.state_mut().ui.text_edit = Some(edit(anchor, caret));
+            h.run_steps(4);
+            assert_eq!(&shown(&h), want, "selection {anchor}..{caret}");
+        }
+        // Ending the edit keeps the whole-layer rule: the layer is still selected, its style is the
+        // first run's (Medium) and, the runs using two families, the family field is blank.
+        h.state_mut().ui.text_edit = None;
+        h.run_steps(4);
+        assert_eq!(shown(&h), (String::new(), inter.1.clone()), "no edit: first run's style, mixed family blank");
+        assert_eq!(super::history_len(&h), steps, "displaying the controls adds no history");
+        // Control: no type target shows the tool defaults.
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.state_mut().ui.tool_options.type_font = "JetBrains Mono".into();
+        h.state_mut().ui.tool_options.type_style = "Regular".into();
+        h.run_steps(4);
+        assert_eq!(shown(&h), mono, "no type target: the tool defaults");
     }
 
     /// Other engines registering fonts and the served catalog growing (tests running in parallel)
@@ -2088,10 +2290,33 @@ mod multi_layer_formatting {
         );
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
-        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
         // The font menu's search caret repaints every pass; step a bounded number of times.
         h.run_steps(2);
         h.run_steps(2);
+    }
+
+    /// A style picked under a family's ">" in the Character section's font menu, with type
+    /// layers selected, sets them and is kept for new type, as the options bar's menu does.
+    #[test]
+    fn a_style_picked_in_the_character_sections_font_menu_is_kept_for_new_type() {
+        let (app, ids) = fixture();
+        // The first style row under the family (so it is in view), other than the defaults'.
+        let pick = super::super::styles("Inter").into_iter().find(|s| s != "Regular" && s != "Bold Italic").expect("Inter has several styles");
+        assert_ne!(app.ui.tool_options.type_style, pick);
+        let mut h = controls(app, true);
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
+        h.run();
+        h.get_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("the family field has the focus").type_text("Inter");
+        h.run();
+        h.get_all_by_label("Show Styles").next().unwrap().click();
+        h.run();
+        h.get_by_label(&super::super::style_label(&pick)).click();
+        h.run();
+        assert_eq!(h.state().ui.tool_options.type_style, pick, "new type takes the picked style");
+        for id in &ids[..2] {
+            assert_eq!(style(h.state(), *id, 0).font_style, pick, "the selected layers are set in it");
+        }
     }
 
     #[test]
@@ -2163,6 +2388,11 @@ mod multi_layer_formatting {
         let c = style(h.state(), ids[0], 0);
         assert_eq!((c.size_pt, c.leading_pt, c.baseline_shift_pt), (30.0, Some(42.0), 5.0));
         assert_eq!(text(h.state(), ids[0]).paragraph_runs()[0].style.start_indent_pt, 4.5);
+
+        pick(&mut h, "Font size presets", "144 px");
+        pick(&mut h, "Leading presets", "300 px");
+        let c = style(h.state(), ids[0], 0);
+        assert_eq!((c.size_pt, c.leading_pt), (72.0, Some(150.0)), "presets preserve point values in pixel display units");
     }
 
     /// #5717: a layer scaled so its shown size or leading is past a field's range (2400 pt, or
@@ -2825,6 +3055,237 @@ fn justify_buttons_are_greyed_on_point_text() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     assert!(h.get_by_label("Justify all").accesskit_node().is_disabled(), "one of the formatted layers is point text");
+}
+
+/// A box that can't hold its text shows the overflow handle (a black "+" in its enlarged
+/// lower-right handle): `ui.type_box_overflow` is the automation-visible flag. A fitting box (trailing breaks
+/// included) and point text — which has no box — never set it.
+#[test]
+fn the_overflow_handle_flags_a_box_that_cannot_hold_its_text() {
+    let build = |mut app: PhotocraftApp, p: serde_json::Value, caret: usize| {
+        let id = app.run("type.create", p).unwrap()["layer"].as_u64().unwrap();
+        app.session.select_layer(LayerId(id)).unwrap();
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id,
+            document: None,
+            caret,
+            anchor: caret,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        let mut h = harness(1.0, app);
+        h.run_steps(4);
+        h
+    };
+    // In the harness's window a 40 pt box holds 1.5 lines, so the second line is dropped.
+    let mut h = build(new_app(), json!({"text": "ab\ncd\nef", "size": 24, "box": [200, 150, 260, 40]}), 0);
+    assert!(h.state().ui.type_box_overflow, "a box shorter than the text");
+    // The same text in a tall box fits: nothing overflows.
+    h = build(new_app(), json!({"text": "ab cdef gh", "size": 24, "box": [200, 150, 260, 600]}), 0);
+    assert!(!h.state().ui.type_box_overflow, "a fitting box");
+    // Point text has no box: much text is fine.
+    h = build(new_app(), json!({"text": "ab cdef gh ab cdef gh ab cdef gh", "size": 24, "x": 200, "y": 200}), 0);
+    assert!(!h.state().ui.type_box_overflow, "point text");
+}
+
+/// `ui.inspect` reports the overflow handle only while an edit session is open: the flag is a
+/// per-frame overlay snapshot, and a commit or cancel can end the session before the overlay
+/// frame that resets the flag — an agent would otherwise read `typeBoxOverflow: true` beside
+/// a null `textEdit`.
+#[test]
+fn inspect_gates_the_overflow_flag_on_the_session() {
+    let mut a = new_app();
+    let id = a.run("type.create", json!({"text": "ab\n.cd", "size": 24, "box": [200, 150, 260, 40]})).unwrap()["layer"].as_u64().unwrap();
+    a.session.select_layer(LayerId(id)).unwrap();
+    a.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    // Snapshot state as the overlay wrote it while the session was still open.
+    a.ui.type_box_overflow = true;
+    let ctx = egui::Context::default();
+    assert_eq!(crate::control::inspect(&a, &ctx)["typeBoxOverflow"], json!(true), "an open session reports the overlay's snapshot");
+    // A commit (or cancel) between frames: `textEdit` is gone, so the flag must read as off.
+    a.ui.text_edit = None;
+    assert_eq!(crate::control::inspect(&a, &ctx)["typeBoxOverflow"], json!(false), "no session, no overflow");
+    assert_eq!(crate::control::inspect(&a, &ctx)["textEdit"], json!(null), "the session is closed either way");
+}
+
+/// The shapes the type overlay draws for an edit session on a paragraph box with `text`, `turn`
+/// radians rotated, and the box's lower-right corner on screen.
+fn box_overlay(text: &str, height: u32, turn: f64) -> (Vec<egui::Shape>, Pos2) {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": text, "size": 24, "box": [200, 150, 260, height]})).unwrap()["layer"].as_u64().unwrap();
+    if turn != 0.0 {
+        let aff = text_layer(&app.session.active().unwrap().doc, LayerId(id)).unwrap().transform;
+        app.run("type.edit", json!({"layer": id, "transform": aff.mul(&Affine::rotate(turn)).m})).unwrap();
+    }
+    app.session.select_layer(LayerId(id)).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+        zoom: 1.0,
+        center: [400.0, 300.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let (_, aff, _) = layout(&mut app, LayerId(id)).unwrap();
+    let photocraft_doc::text::TextShape::Box { x, y, width, height } = text_layer(&app.session.active().unwrap().doc, LayerId(id)).unwrap().shape.clone()
+    else {
+        panic!("a paragraph box")
+    };
+    let p = aff.apply(Point::new(f64::from(x + width), f64::from(y + height)));
+    let corner = xf.to_screen(p.x as f32, p.y as f32);
+    let mut h =
+        Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(move |ui, app: &mut PhotocraftApp| super::draw_overlay(app, ui.painter(), &xf), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    (h.output().shapes.iter().map(|s| s.shape.clone()).collect(), corner)
+}
+
+/// The handle square centred on `at` (within half a pixel), and how many black strokes lie
+/// inside it, drawn after its fill, one horizontal and one vertical through its centre.
+fn handle_at(shapes: &[egui::Shape], at: Pos2) -> (Option<egui::Rect>, usize) {
+    let near = |p: Pos2| (p - at).length() < 0.5;
+    let Some((k, rect)) = shapes.iter().enumerate().find_map(|(k, s)| match s {
+        egui::Shape::Rect(r) if near(r.rect.center()) && r.fill == egui::Color32::WHITE => Some((k, r.rect)),
+        _ => None,
+    }) else {
+        return (None, 0);
+    };
+    let strokes: Vec<[Pos2; 2]> = shapes[k..]
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::LineSegment { points, stroke } if stroke.color == egui::Color32::BLACK && rect.contains(points[0]) && rect.contains(points[1]) => {
+                Some(*points)
+            }
+            _ => None,
+        })
+        .collect();
+    let across = |f: fn(egui::Vec2) -> bool| strokes.iter().any(|[a, b]| near(a.lerp(*b, 0.5)) && (*b - *a).length() >= 4.0 && f(*b - *a));
+    let plus = usize::from(across(|d| d.y.abs() < 0.01)) + usize::from(across(|d| d.x.abs() < 0.01));
+    (Some(rect), if strokes.len() == 2 { plus } else { strokes.len() })
+}
+
+/// The reference application marks a paragraph box that can't hold its text with a "+" in an
+/// enlarged lower-right handle: nothing else is drawn (no disc below the box), and a box that
+/// fits keeps the ordinary 7 px handle. The mark follows the box when the layer is rotated.
+#[test]
+fn an_overflowing_box_shows_a_plus_in_its_enlarged_lower_right_handle() {
+    let circles = |shapes: &[egui::Shape]| shapes.iter().filter(|s| matches!(s, egui::Shape::Circle(_))).count();
+    for turn in [0.0, 0.5] {
+        let (shapes, corner) = box_overlay(
+            "ab
+cd
+ef", 40, turn,
+        );
+        let (rect, plus) = handle_at(&shapes, corner);
+        let rect = rect.unwrap_or_else(|| panic!("a handle on the lower-right corner at {turn} rad"));
+        assert_eq!(rect.size(), vec2(super::overlay::OVERFLOW_HANDLE, super::overlay::OVERFLOW_HANDLE), "enlarged at {turn} rad");
+        assert!(rect.width() > 7.0, "larger than the other handles");
+        assert_eq!(plus, 2, "a black + on top of it at {turn} rad");
+        assert_eq!(circles(&shapes), 0, "no disc at {turn} rad");
+    }
+    let (shapes, corner) = box_overlay(
+        "ab
+cd
+ef", 600, 0.0,
+    );
+    let (rect, plus) = handle_at(&shapes, corner);
+    assert_eq!(rect.map(|r| r.size()), Some(vec2(7.0, 7.0)), "a box that fits keeps the ordinary handle");
+    assert_eq!(plus, 0, "and no +");
+}
+
+/// An overflowing box, in an edit session, with its handle spots in document space: `[0]` the
+/// lower-right corner, `[1]` the top-left, `[2]` the right-middle.
+fn overflowing_box(height: f64) -> (PhotocraftApp, u64, [Point; 3]) {
+    let mut app = new_app();
+    let id = app
+        .run(
+            "type.create",
+            json!({"text": "ab
+cd
+ef", "size": 24, "box": [200.0, 150.0, 260.0, height]}),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    app.session.select_layer(LayerId(id)).unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let (_, aff, _) = layout(&mut app, LayerId(id)).unwrap();
+    let photocraft_doc::text::TextShape::Box { x, y, width, height } = text_layer(&app.session.active().unwrap().doc, LayerId(id)).unwrap().shape.clone()
+    else {
+        panic!("a paragraph box")
+    };
+    let pt = |a: f32, b: f32| aff.apply(Point::new(f64::from(a), f64::from(b)));
+    let spots = [pt(x + width, y + height), pt(x, y), pt(x + width, y + height / 2.0)];
+    // As the overlay sets it each frame for the box it draws.
+    app.ui.type_box_overflow = true;
+    (app, id, spots)
+}
+
+/// The enlarged overflow handle is square on screen. In a view turned 45°, its outer corner
+/// lies half a diagonal from the box corner along a document axis, past the ordinary handles'
+/// 6 px reach: a press there still grabs the lower-right handle. Only that handle, only on the
+/// box being edited, and only where no handle answers at the ordinary reach.
+#[test]
+fn the_whole_enlarged_overflow_handle_grabs_in_a_rotated_view() {
+    let (mut app, id, [corner, top_left, _]) = overflowing_box(40.0);
+    // The handle's corner, 5.5 px right and down on a screen turned 45°: 7.6 px along one axis.
+    let reach = f64::from(super::overlay::OVERFLOW_HANDLE / 2.0 * std::f32::consts::SQRT_2 * 0.98 / app.point_zoom());
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), corner.x + reach, corner.y), Some(2), "the enlarged handle");
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), corner.x + 3.0 * reach, corner.y), None, "but not far beyond it");
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), top_left.x - reach, top_left.y), None, "an ordinary handle keeps its reach");
+    app.ui.type_box_overflow = false;
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), corner.x + reach, corner.y), None, "a box that fits has the ordinary handle");
+    app.ui.type_box_overflow = true;
+    app.ui.text_edit.as_mut().unwrap().layer = id + 1;
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), corner.x + reach, corner.y), None, "the flag is the edited box's");
+}
+
+/// A box short on screen: its right-middle handle sits 6.75 px above the corner, inside the
+/// enlarged handle's wide reach but outside the ordinary one. A press on it is still that
+/// handle's, not the corner's.
+#[test]
+fn a_short_overflowing_box_keeps_its_middle_handles() {
+    let zoom = f64::from(new_app().point_zoom());
+    let (mut app, id, [_, _, right]) = overflowing_box(13.5 / zoom);
+    assert_eq!(super::box_handle_at(&mut app, LayerId(id), right.x, right.y), Some(5));
 }
 
 fn ellipse_layer(app: &mut PhotocraftApp) -> u64 {
