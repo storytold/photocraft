@@ -5,7 +5,7 @@
 //! gets a `_` in front). What is written, in this order:
 //! - a type layer: `font-size`, `font-family`, `color`, `line-height` and `text-align`, from its
 //!   first run and first paragraph;
-//! - a live rounded rectangle: `border-radius`;
+//! - a live rounded rectangle: `border-radius`; a live ellipse: `border-radius: 50%`;
 //! - a shape or fill layer with a solid colour: `background-color`; any other layer (pixels,
 //!   gradient or pattern fills, smart objects): `background-image`, an image named after it;
 //! - `opacity` when it isn't 100 %;
@@ -13,8 +13,9 @@
 //! - `z-index`, its place in the stack counted from the bottom layer as 1.
 //!
 //! Not written: strokes (`border`), layer effects (`box-shadow`, `text-shadow`), gradients as
-//! CSS gradients, blend modes (`mix-blend-mode`), fill opacity, and the styles of later runs and
-//! paragraphs. Groups and adjustment layers have no rule.
+//! CSS gradients, blend modes (`mix-blend-mode`), fill opacity, the styles of later runs and
+//! paragraphs, and the geometry of other shapes (live polygons, stars and lines, and custom
+//! paths), which get the rule of their box. Groups and adjustment layers have no rule.
 
 use photocraft_doc::text::{TextAlign, TextShape};
 use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape};
@@ -135,12 +136,15 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
         LayerContent::Shape(sh) => {
             // A live rounded rectangle's corners, before the fill as Photoshop writes them: one
             // value when all four are equal, else top-left, top-right, bottom-right, bottom-left.
-            if let Some(LiveShape::Rect { radii, .. }) = &sh.live
-                && radii.iter().any(|&r| r > 0.0)
-            {
-                let px = |r: f64| format!("{}px", number(r.max(0.0)));
-                let all = if radii.iter().all(|&r| r == radii[0]) { px(radii[0]) } else { radii.map(px).join(" ") };
-                props.push(("border-radius", all));
+            // A live ellipse fills its box, which half the box's size on each axis rounds to.
+            match &sh.live {
+                Some(LiveShape::Rect { radii, .. }) if radii.iter().any(|&r| r > 0.0) => {
+                    let px = |r: f64| format!("{}px", number(r.max(0.0)));
+                    let all = if radii.iter().all(|&r| r == radii[0]) { px(radii[0]) } else { radii.map(px).join(" ") };
+                    props.push(("border-radius", all));
+                }
+                Some(LiveShape::Ellipse { .. }) => props.push(("border-radius", "50%".into())),
+                _ => {}
             }
             match &sh.fill {
                 Some(Fill::Solid(c)) => props.push(("background-color", rgb(c))),

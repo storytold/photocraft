@@ -171,6 +171,19 @@ fn a_rounded_rectangle_writes_its_border_radius() {
     assert!(!css.contains("border-radius") && css.contains("  background-color: rgb(255, 0, 0);\n"), "{css}");
 }
 
+/// A live ellipse writes `border-radius: 50%;` where a rounded rectangle writes its radii, so the
+/// rule draws an ellipse, not a rectangle; other live shapes (a star here) write no geometry.
+#[test]
+fn an_ellipse_writes_a_half_border_radius() {
+    let mut s = session("Box");
+    let id = s.execute("shape.create", json!({"kind": "ellipse", "rect": [40, 30, 120, 80], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains(" {\n  border-radius: 50%;\n  background-color: rgb(255, 0, 0);\n  position: absolute;\n"), "{css}");
+    let star = s.execute("shape.create", json!({"kind": "star", "rect": [40, 30, 120, 80], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let css = s.execute(ID, json!({"layer": star})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(!css.contains("border-radius") && css.contains(" {\n  background-color: rgb(255, 0, 0);\n"), "{css}");
+}
+
 /// `css` without its double-quoted strings (escapes inside them skipped).
 fn outside_strings(css: &str) -> String {
     let (mut out, mut quoted, mut escaped) = (String::new(), false, false);
