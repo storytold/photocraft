@@ -193,7 +193,7 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     let inbox: crate::PlaceInbox = std::sync::Arc::default();
     app.services.place_inbox = Some(inbox.clone());
     inbox.lock().unwrap().extend([(doc, "photo.png".to_string(), png_bytes(4, 3)), (doc, "bad.png".to_string(), b"bad".to_vec())]);
-    app.take_place_inbox();
+    crate::file_open::take_place_inbox(&mut app);
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -667,7 +667,7 @@ fn a_web_drop_read_after_a_tab_switch_goes_to_the_document_it_was_dropped_on() {
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     let (other, other_layers) = (app.session.active().unwrap().doc.id, layer_count(&app));
     inbox.lock().unwrap().push((doc, "photo.png".into(), png_bytes(4, 3)));
-    app.take_place_inbox();
+    crate::file_open::take_place_inbox(&mut app);
     app.place_next_dropped(&ctx);
     assert_eq!(app.session.active().unwrap().doc.id, other, "the selected tab stays selected");
     assert_eq!(layer_count(&app), other_layers, "nothing lands in the selected document");
@@ -677,6 +677,50 @@ fn a_web_drop_read_after_a_tab_switch_goes_to_the_document_it_was_dropped_on() {
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1, "placed in the document it was dropped on");
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
+/// A web drop whose document is closed while the browser reads it is reported, not placed in the
+/// document selected when it arrives.
+#[test]
+fn a_web_drop_whose_document_closed_while_read_is_reported() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let inbox: crate::PlaceInbox = std::sync::Arc::default();
+    app.services.place_inbox = Some(inbox.clone());
+    app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
+    let [Some(doc)] = app.dropped_on_canvas(&ctx, &["photo.png".to_string()])[..] else { panic!("placed on the canvas") };
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other_layers = layer_count(&app);
+    app.refocus(doc).unwrap();
+    app.session.execute("file.close", json!({"save": false})).unwrap();
+    app.sync_views();
+    inbox.lock().unwrap().push((doc, "photo.png".into(), png_bytes(4, 3)));
+    crate::file_open::take_place_inbox(&mut app);
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert_eq!(layer_count(&app), other_layers, "nothing lands in the document left open");
+    assert!(app.ui.transform.is_none());
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.contains("photo.png")), "{:?}", app.ui.notices);
+}
+
+/// #8492: Skip Transform when Placing only concerns the interactive place. `file.placeEmbedded`
+/// with a `path` (actions, scripts, the control channel, MCP) runs the engine command, which never
+/// opens Free Transform, whatever the preference.
+#[test]
+fn a_scripted_place_never_opens_free_transform() {
+    let dir = std::env::temp_dir().join(format!("pc-scripted-place-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dot.png");
+    std::fs::write(&path, png_bytes(4, 3)).unwrap();
+    let mut app = app_with_canvas();
+    for skip in [false, true] {
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        let layers = layer_count(&app);
+        app.run("file.placeEmbedded", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(layer_count(&app), layers + 1, "skip={skip}");
+        assert!(app.ui.transform.is_none(), "skip={skip}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.

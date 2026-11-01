@@ -59,6 +59,13 @@ pub(crate) struct QueuedPlace {
     what: DropPlace,
 }
 
+/// Queue the web drops read since the last frame, each for the document named when it was dropped
+/// ([`PhotocraftApp::dropped_on_canvas`]), not the one selected now.
+pub(crate) fn take_place_inbox(app: &mut PhotocraftApp) {
+    let arrived = app.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
+    app.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| QueuedPlace { doc, what: DropPlace::Bytes(name, bytes) }));
+}
+
 /// `warnings` from an import, plus one for each font family the active document's type uses that
 /// isn't installed (#4559): Photoshop warns about missing fonts as a file opens, and the CLI and
 /// automation already report them; the type would otherwise silently render in a fallback face.
@@ -325,13 +332,6 @@ impl PhotocraftApp {
             Ok(doc) => self.drop_places.push_back(QueuedPlace { doc, what }),
             Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &what.name()), ("error", &e)])),
         }
-    }
-
-    /// Queue the web drops read since the last frame, each for the document named when it was
-    /// dropped ([`Self::dropped_on_canvas`]), not the one selected now.
-    pub(crate) fn take_place_inbox(&mut self) {
-        let arrived = self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| QueuedPlace { doc, what: DropPlace::Bytes(name, bytes) }));
     }
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
