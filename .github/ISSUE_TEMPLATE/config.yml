@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability reporting
+    url: https://github.com/storytold/photocraft/blob/main/SECURITY.md
+    about: Read the security policy before sharing vulnerability details or potentially harmful files.
+  - name: Questions and community support
+    url: https://discord.gg/artcraft
+    about: Ask usage questions and discuss PhotoCraft with the community.
