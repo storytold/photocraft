@@ -605,18 +605,21 @@ mod tests {
         fn items(dir: Dir) -> (egui::Rect, egui::Rect) {
             let _scope = direction_scope(dir);
             let ctx = egui::Context::default();
+            let mut out = None;
             ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
-                        let a = ui.label("Show");
-                        let b = ui.label("Sort");
-                        (a.rect, b.rect)
+                out = Some(
+                    ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
+                            let a = ui.label("Show");
+                            let b = ui.label("Sort");
+                            (a.rect, b.rect)
+                        })
+                        .inner
                     })
-                    .inner
-                })
-                .inner
-            })
-            .inner
+                    .inner,
+                );
+            });
+            out.unwrap()
         }
         let (ltr_a, ltr_b) = items(Dir::Ltr);
         let (rtl_a, rtl_b) = items(Dir::Rtl);
