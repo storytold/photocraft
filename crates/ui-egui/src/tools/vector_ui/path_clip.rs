@@ -244,4 +244,19 @@ mod tests {
         assert_eq!(l.surface().map(|s| s.content_bounds().width()), Some(2), "the OS image pasted as a new layer");
         drop(a);
     }
+
+    /// A pixel clip pastes as pixels even beside a path component selection: the one clipboard
+    /// holds the newest kind, and Paste does what matches it (Photoshop pastes the pixels).
+    #[test]
+    fn a_pixel_clip_pastes_as_pixels_beside_a_path_selection() {
+        let (mut app, _) = two_squares_inner_selected();
+        // Copy pixels: no component selected, so Edit › Copy takes the layer.
+        app.ui.direct_selection = Default::default();
+        app.run("edit.copy", json!({})).unwrap();
+        assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "the pixel copy replaced the path clip");
+        let layers = app.session.active().unwrap().doc.walk().len();
+        app.run("edit.paste", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.walk().len(), layers + 1, "the pixel clip pasted as a new layer");
+        assert_eq!(shape(&app).1.path.subpaths.len(), 2, "no path was touched");
+    }
 }

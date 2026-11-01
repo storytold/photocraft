@@ -120,6 +120,12 @@ fn paste_center(cmd: &str, s: &Session, p: &Value) -> Result<Point> {
 /// as `path.set` replaces by name). Either way the path is translated so its bounds centre
 /// lands on the paste centre: Photoshop centres the pasted path on the document window; the
 /// UI passes the view centre, the default is the canvas centre.
+///
+/// The position and scale rule (review on #10482): path components are resolution-independent
+/// vectors, so pasting into a document with a different resolution — or any other document —
+/// keeps their scale exactly (their print size follows the target's dpi, their geometry is
+/// untouched); position follows the paste centre like Photoshop's Paste, and only a future
+/// Paste In Place would keep the original coordinates.
 fn path_paste(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.paste";
     let clip = s.path_clipboard.clone().ok_or_else(|| bad(CMD, "the clipboard is empty"))?;
@@ -388,6 +394,25 @@ mod tests {
         let id = two_rects(&mut s);
         s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
         assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("path.copy"), "an action recording replays the copy a later paste relies on");
+    }
+
+    #[test]
+    fn paste_into_another_document_keeps_the_components_scale() {
+        let mut s = session();
+        let lo = s.active().unwrap().doc.resolution_dpi;
+        let id = two_rects(&mut s);
+        s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [1]})).unwrap();
+        // Another document at a different resolution: the session clipboard is shared, and the
+        // components keep their scale (paths are resolution-independent vectors) while their
+        // bounds centre (120, 40) lands on the paste centre, unscaled.
+        s.execute("file.new", json!({"width": 400, "height": 300, "resolution": 300})).unwrap();
+        let hi = s.active().unwrap().doc.resolution_dpi;
+        assert_ne!(lo, hi, "the two documents differ in resolution");
+        let r = s.execute("path.paste", json!({"center": [200, 150]})).unwrap();
+        assert_eq!(r["name"], json!("Pasted Path"));
+        let doc = &s.active().unwrap().doc;
+        let pasted = doc.paths.iter().find(|q| q.name == "Pasted Path").expect("pasted into the active document");
+        assert_eq!(pasted.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(180.0, 130.0), "translated by (+80, +110), not scaled");
     }
 
     #[test]
