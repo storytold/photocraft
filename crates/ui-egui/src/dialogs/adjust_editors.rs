@@ -45,7 +45,7 @@ use gradient_map::gradient_map;
 pub use gradient_map::{gradient_presets, is_gray, swatches};
 use hue_saturation::hue_saturation;
 #[cfg(test)]
-use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
+use hue_saturation::{hue_range_handle_at, hue_range_zone, lightness_track, move_hue_range_handle, move_hue_range_zone, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
@@ -259,6 +259,53 @@ mod tests {
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
         assert_eq!(track_stops(&cx(false), &stops), None);
+    }
+
+    /// #9272 review: at the narrowest Properties panel (a 230-point bar) a 30° zone is ~19 points
+    /// wide; a press in its middle grabs the zone, not a handle, while each handle stays grabbable.
+    #[test]
+    fn hue_range_zones_stay_selectable_on_a_narrow_bar() {
+        let w = 230.0;
+        let xs = [75.0f32, 105.0, 135.0, 165.0].map(|d| d / 360.0 * w);
+        for (a, z) in [(0, 1), (1, 2), (2, 3)] {
+            assert_eq!(hue_range_handle_at(xs, (xs[a] + xs[z]) / 2.0, w), None, "the middle of zone {a}..{z} is the zone's");
+        }
+        for (k, x) in xs.iter().enumerate() {
+            assert_eq!(hue_range_handle_at(xs, *x + 1.0, w), Some(k as u8), "handle {k}");
+        }
+        assert_eq!(hue_range_handle_at(xs, xs[0] - 9.0, w), Some(0), "the full reach outside the range");
+        let stacked = [50.0, 50.0, 80.0, 120.0];
+        assert!(hue_range_handle_at(stacked, 51.0, w).is_some(), "coinciding handles stay grabbable");
+        // Reds (315/345…15\45): its fully-on zone crosses the seam, ~9.6 points from each edge.
+        let reds = [315.0f32, 345.0, 15.0, 45.0].map(|d| d / 360.0 * w);
+        for x in [w - 1.0, w - 3.0, 0.5, 2.5] {
+            assert_eq!(hue_range_handle_at(reds, x, w), None, "x {x}: Reds' fully-on zone across the seam");
+        }
+        assert_eq!(hue_range_handle_at(reds, reds[1] + 1.0, w), Some(1));
+        assert_eq!(hue_range_handle_at(reds, reds[2] - 1.0, w), Some(2));
+    }
+
+    /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
+    /// moves all four handles, each fade its own two; a side stops at the other and the range
+    /// never passes a turn.
+    #[test]
+    fn hue_range_zones_move_their_handles() {
+        let reds = [-45.0, -15.0, 15.0, 45.0];
+        assert_eq!(hue_range_zone(reds, 345.0 - 15.0), Some(0));
+        assert_eq!(hue_range_zone(reds, 0.0), Some(1));
+        assert_eq!(hue_range_zone(reds, 30.0), Some(2));
+        assert_eq!(hue_range_zone(reds, 180.0), None);
+        let centre = move_hue_range_zone(reds, 1, 37.0);
+        assert_eq!(centre, [-8.0, 22.0, 52.0, 82.0], "all four, as Photoshop's 315/345…15\\45 → 352/21…52\\81");
+        let left = move_hue_range_zone(centre, 0, -19.0);
+        assert_eq!(left, [-27.0, 3.0, 52.0, 82.0], "the left two only");
+        let right = move_hue_range_zone(left, 2, 19.0);
+        assert_eq!(right, [-27.0, 3.0, 71.0, 101.0], "the right two only");
+        assert_eq!(move_hue_range_zone(reds, 0, 100.0), [-15.0, 15.0, 15.0, 45.0], "the left side stops at the right");
+        assert_eq!(move_hue_range_zone(reds, 2, -100.0), [-45.0, -15.0, -15.0, 15.0], "and the right at the left");
+        let wide = move_hue_range_zone(reds, 2, 500.0);
+        assert!(wide[3] - wide[0] <= 359.0 + 1e-3, "{wide:?}");
+        assert_eq!(move_hue_range_zone(reds, 1, f32::NAN), reds);
     }
 
     #[test]
