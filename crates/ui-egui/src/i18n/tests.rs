@@ -292,6 +292,55 @@ fn serbian_plural_rule_handles_teens_and_compound_counts() {
     assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
 }
 
+/// The catalog resolves regional tags, exposes its native name and falls back to English.
+#[test]
+fn azerbaijani_resolves_locales_and_preferences() {
+    let lang = Lang::from_code("az").expect("az registered");
+    assert_eq!(lang.name(), "Azərbaycanca");
+    assert_eq!(lang.dir(), Dir::Ltr);
+    assert!(lang.complete_menus());
+    for tag in ["az", "AZ", "az-AZ", "az_AZ.UTF-8", "az-Latn", "AZ-LATN-AZ"] {
+        assert_eq!(lang_from_tag(tag), Some(lang), "{tag}");
+        assert_eq!(Lang::from_pref(tag), lang, "{tag}");
+    }
+    assert_eq!(tr(lang, "unknown translation"), "unknown translation");
+}
+
+/// Integer plural boundaries select one only at 1, including large counts without overflow.
+#[test]
+fn azerbaijani_plural_counts_include_hundreds_and_large_values() {
+    let az = Lang::from_code("az").expect("az registered");
+    let counts = [0, 1, 2, 11, 19, 20, 21, 99, 100, 101, 102, 119, 120, 1000, 1001, u64::MAX];
+    assert_eq!(counts.map(az.0.plural), [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    for n in counts {
+        assert_eq!(trn(az, n, "{n} layer", "{n} layers"), format!("{n} qat"));
+    }
+}
+
+/// Exact lookups retain contextual meanings, dotted/dotless letters and product placeholders.
+#[test]
+fn azerbaijani_keeps_context_placeholders_and_command_names() {
+    let lang = Lang::from_code("az").expect("az registered");
+    for (source, translated) in [("File", "Fayl"), ("Layer", "Qat"), ("Kind", "Növ"), ("Type Layer", "Mətn qatı"), ("Light Theme", "Açıq mövzu")] {
+        assert_eq!(tr(lang, source), translated);
+    }
+    assert_eq!(tr_ctx(lang, "cameraRaw", "Light"), "İşıq");
+    assert_eq!(tr_ctx(lang, "fontWeight", "Light"), "İncə");
+    assert_ne!(tr_id(lang, "edit.clear", "Clear"), "Clear");
+    assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
+}
+
+/// Every menu label and submenu segment has a lookup entry in the Azerbaijani catalog.
+#[test]
+fn azerbaijani_covers_every_menu_label_and_path() {
+    let lang = Lang::from_code("az").expect("az registered");
+    for &(path, label, _, _) in crate::menu_catalog::CATALOG {
+        for source in path.iter().copied().chain(std::iter::once(label)).filter(|source| *source != "---") {
+            assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
+        }
+    }
+}
+
 #[test]
 fn catalog_kinds_are_parsed_and_looked_up() {
     let c = Catalog::parse("# c\n\tHello\tこんにちは\n@id\tfile.save\t保存する\nmenu\tWindows\tウィンドウ群\n@plural\t{n} file|{n} files\t{n} 個\n\n");

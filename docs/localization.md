@@ -33,6 +33,13 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
+| Azərbaycanca | `az` | one (1) / other (all other integer counts) |
+
+Azerbaijani (`az`, Latin script) is registered with a complete menu catalog. Regional tags
+such as `az-AZ` and `az-Latn-AZ` select it. The catalog includes the existing catalogs'
+dynamic labels, contextual translations and two integer plural forms. Machine-assisted
+drafts have edited core terminology; native-speaker review is pending. See
+[`localization-az.md`](localization-az.md) for terminology, provenance and validation limits.
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:
