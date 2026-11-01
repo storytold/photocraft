@@ -191,6 +191,32 @@ fn f16_exr_is_bit_exact() {
     }
 }
 
+/// EXR channel planes preserve native float bits and channel order for all supported lossless compressions.
+#[test]
+fn exr_float_channels_keep_native_bits() {
+    let half_bits: [u16; 11] = [0, 0x8000, 1, 0x03ff, 0x0400, 0x3c00, 0xc000, 0x7bff, 0x7c00, 0xfc00, 0x7e31];
+    let float_bits: [u32; 11] = [0, 0x80000000, 1, 0x007fffff, 0x00800000, 0x3f800000, 0xc0000000, 0x7f7fffff, 0x7f800000, 0xff800000, 0x7fc12345];
+    for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+        for sample in [SampleType::F16, SampleType::F32] {
+            let mut bytes = Vec::new();
+            for i in 0..7 * 3 * layout.channels() {
+                match sample {
+                    SampleType::F16 => bytes.extend_from_slice(&half_bits[i % half_bits.len()].to_ne_bytes()),
+                    SampleType::F32 => bytes.extend_from_slice(&float_bits[i % float_bits.len()].to_ne_bytes()),
+                    _ => unreachable!(),
+                }
+            }
+            let image = Image::from_raw(7, 3, layout, sample, bytes).unwrap();
+            for compression in [ExrCompression::None, ExrCompression::Rle, ExrCompression::Zip1, ExrCompression::Zip16, ExrCompression::Piz] {
+                let options = EncodeOptions { exr_compression: compression, ..Default::default() };
+                let decoded = decode(&encode(&image, Format::OpenExr, &options).unwrap()).unwrap();
+                assert_eq!((decoded.width(), decoded.height(), decoded.layout(), decoded.sample_type()), (7, 3, layout, sample));
+                assert_eq!(decoded.data(), image.data(), "{layout:?}/{sample:?}/{compression:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn tiff_all_compressions_lossless() {
     for layout in ChannelLayout::ALL {
