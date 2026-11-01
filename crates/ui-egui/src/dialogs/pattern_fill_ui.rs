@@ -165,7 +165,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
 /// The Pattern Fill dialog's fields.
 fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let pat = f.get("pattern").and_then(Value::as_str).unwrap_or_default().to_string();
         if app.session.patterns.items.is_empty() {
             ui.label(egui::RichText::new(tl!("No patterns")).color(Tokens::get(ui.ctx()).text_faint));
@@ -184,7 +184,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
     }
     let (min, max) = cmds::SCALE_RANGE;
     let mut scale = num(f, "scale", 100.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Scale:")).color(Tokens::get(ui.ctx()).text_dim));
         if crate::widgets::value_field(ui, &mut scale, min as f32..=max as f32, "%", 70.0).accessible_name(tl!("Scale:")).changed() {
             f.insert("scale".into(), json!(scale.clamp(min as f32, max as f32)));
@@ -277,5 +277,48 @@ mod rtl_tests {
         let rtl_scale = rtl.get_by_role_and_label(egui::accesskit::Role::Label, "Scale:").rect();
         assert!((rtl_col.right() - rtl_angle.right()).abs() < 1.0, "RTL: the Angle caption hugs the column's right edge: {rtl_angle:?} in {rtl_col:?}");
         assert!((rtl_col.right() - rtl_scale.right()).abs() < 1.0, "RTL: the Scale caption hugs the column's right edge: {rtl_scale:?} in {rtl_col:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Pattern Fill body drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>, egui::Rect)> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("pattern".into(), json!(""));
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 320.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, s: &mut (PhotocraftApp, Map<String, Value>, egui::Rect)| {
+                    s.2 = ui.max_rect();
+                    body(&s.0, ui, &mut s.1);
+                },
+                (app, fields, egui::Rect::ZERO),
+            );
+        h.run_steps(3);
+        h
+    }
+
+    /// The migrated Scale row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_scale_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let mut ltr_scale: Vec<egui::Rect> = ltr.query_all_by_label("Scale:").map(|n| n.rect()).collect();
+        ltr_scale.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert!(ltr_scale.len() >= 2, "the Scale caption and field are drawn: {ltr_scale:?}");
+        let ltr_gap = ltr_scale[1].left() - ltr_scale[0].right();
+        let mut rtl_scale: Vec<egui::Rect> = rtl.query_all_by_label("Scale:").map(|n| n.rect()).collect();
+        rtl_scale.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        assert!(rtl_scale[1].left() >= rtl_scale[0].right(), "RTL mirrors the row: {rtl_scale:?}");
+        let rtl_gap = rtl_scale[1].left() - rtl_scale[0].right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
