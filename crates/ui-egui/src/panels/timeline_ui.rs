@@ -154,7 +154,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
 
     crate::analysis_ui::panel_window(app, ctx, "timeline", tl!("Timeline"), vec2(0.0, 520.0), 660.0, |ui| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(RichText::new(tl!("Timeline")).strong().color(t.text));
             ui.with_layout(crate::direction::trailing(), |ui| {
                 if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
@@ -180,7 +180,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 });
             }
             Some(tl) => {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     // Media transport is physical: the frame axis runs LTR like the canvas,
                     // so the controls keep their physical order and hug the reading start,
                     // while the delete cluster takes the reading end.
