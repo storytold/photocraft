@@ -1301,7 +1301,19 @@ impl Preferences {
         match self.shortcuts.get(id) {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.as_str()),
-            None => self.interface.default_shortcut(id, default),
+            None => {
+                let key = self.interface.default_shortcut(id, default);
+                // The moved Extras default stays unbound when the user already gave ⌃⌘H to another
+                // command: their key would win in dispatch, so the menu would show a key that runs
+                // something else.
+                if id == EXTRAS && self.interface.cmd_h_hides_app && key == Some(EXTRAS_WHEN_CMD_H_HIDES) {
+                    let taken = normalize_shortcut(EXTRAS_WHEN_CMD_H_HIDES);
+                    if self.shortcuts.iter().any(|(other, s)| other != id && normalize_shortcut(s) == taken) {
+                        return None;
+                    }
+                }
+                key
+            }
         }
     }
 

@@ -414,6 +414,14 @@ fn cmd_h_hides_app_is_opt_in_and_moves_only_the_extras_default() {
         assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), None, "unbound Extras, pref {on}");
         p.shortcuts.remove("view.extras");
     }
+    // ⌃⌘H already the user's key for another command: the moved Extras default stays unbound
+    // instead of showing a key that runs that command.
+    p.interface.cmd_h_hides_app = true;
+    p.shortcuts.insert("layer.hide".into(), "Cmd+Ctrl+H".into());
+    assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), None, "⌃⌘H taken by another command");
+    assert_eq!(p.shortcut("layer.hide", None), Some("Cmd+Ctrl+H"), "the user's own key is kept");
+    p.interface.cmd_h_hides_app = false;
+    assert_eq!(p.shortcut("view.extras", Some("Cmd+H")), Some("Cmd+H"), "pref off: Photoshop's ⌘H");
 }
 
 /// #249: temporary tools (held keys) and the fill / colour keys are bindable like commands.
