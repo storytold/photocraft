@@ -1292,3 +1292,48 @@ fn arrowhead_flags_reject_wrong_types_without_mutation() {
     )
     .unwrap();
 }
+
+#[test]
+fn headless_diagonal_arrow_preserves_geometry_after_nonuniform_scale() {
+    let mut s = session(400, 400, 8);
+
+    let created = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [40.0, 40.0],
+                "to": [140.0, 140.0],
+                "weight": 5.0,
+                "arrowStart": false,
+                "arrowEnd": false
+            }),
+        )
+        .unwrap();
+
+    let id = created["layer"].as_u64().unwrap();
+
+    let transformed = s
+        .execute(
+            "shape.edit",
+            json!({
+                "layer": id,
+                "transform": [2.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            }),
+        )
+        .unwrap();
+
+    assert_ne!(transformed["path"], created["path"]);
+    assert!(transformed["live"].is_null());
+
+    let before = s.active().unwrap().doc.clone();
+
+    // Editing live parameters must not regenerate a different shape.
+    assert!(s.execute("shape.edit", json!({"layer": id, "weight": 8.0}),).is_err());
+
+    assert_eq!(s.active().unwrap().doc, before);
+
+    let info = s.execute("shape.info", json!({"layer": id})).unwrap();
+
+    assert_eq!(info["path"], transformed["path"]);
+}

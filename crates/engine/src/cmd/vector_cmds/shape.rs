@@ -197,8 +197,8 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
     let axis_aligned = m1.abs() < 1e-12 && m2.abs() < 1e-12 && m0 > 0.0 && m3 > 0.0;
     // The path has already received the exact affine transform. Drop live arrow
     // parameters if later edits would regenerate a different, unskewed head.
-    if let Some(LiveShape::ArrowLine { from, to, start, end, .. }) = sh.live.as_ref()
-        && (*start || *end)
+    if let Some(LiveShape::ArrowLine { from, to, .. }) = sh.live.as_ref()
+        && (to[0] - from[0]).hypot(to[1] - from[1]) > 1e-12
         && arrow_axis_scales(a, *from, *to).is_none()
     {
         sh.live = None;
@@ -762,7 +762,7 @@ mod arrow_affine_regression_tests {
         transform_shape(&mut sh, &a);
 
         assert_eq!(sh.path, expected_path);
-        assert!(matches!(sh.live, Some(LiveShape::ArrowLine { start: false, end: false, .. })));
+        assert!(sh.live.is_none());
     }
 
     #[test]
