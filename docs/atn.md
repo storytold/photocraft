@@ -302,15 +302,49 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 | `shapeBlur` | Filter > Blur > Shape Blur | `Rds ` radius in pixels (factory 10); the shape itself comes from the dialog |
 | Make `contentLayer` with `Usng` = reference to `textLayer` `Ordn.Trgt` | Type > Convert to Shape (recorded as Make, not as `convertToShape`) | `null`: class `contentLayer`; `Usng`: the type layer |
 
-**Needs a step recorded through its dialog or a matching document.** Without them the event either did
-nothing, returned no settings, or was not available: Export As and Quick Export (document and layers),
-Content-Aware Fill workspace (`cafWorkspace`), Perspective Warp, Color Lookup, Scale Effects
-(`scaleEffectsEvent`), Liquify (`LqFy`), Camera Raw Filter, Vanishing Point, Blur Gallery
-(`blurbTransform`), Calculations, Photomerge, Package, data sets and variables, Close All / Close Others,
-artboards (new, from layers), Frame from Layers, Create Layers from a layer style, Stack Modes
-(`applyImageStackPluginRenderer`), video frames and footage, Create Work Path, Check Spelling, Find and
-Replace Text, Import Notes, Measurement Scale, Convert Stroke to Fill (needs a selected path component),
-Sky Replacement.
+**Recorded through the menus** (2026-11-01, steps read back from the saved Actions panel):
+
+| Menu | Recorded step | Keys |
+|---|---|---|
+| Layer > Layer Style > Scale Effects | `scaleEffectsEvent` | `Scl ` percent, whole number 1..1000 (the dialog clamps) |
+| Layer > Layer Style > Create Layer(s) | Make, `null` = class `Lyr `, `Usng` = reference to the `Lefx` property of the target layer | none; the dialog first warns that some effects cannot be reproduced with layers (OK / Cancel) |
+| Layer > New > Frame from Layers | Make, `null` = class `framedGroupSection`, `From` = layer **by name**, `layerSectionStart`, `layerSectionEnd` long, `Nm  ` text | the dialog also shows width and height, which are not recorded |
+| Layer > New > Artboard from Layers | Make, `null` = class `artboardSection`, `From` = layer target, `layerSectionStart`, `layerSectionEnd`, `Nm  ` | |
+| Layer > New > Artboard | Make, `null` = class `artboardSection`, `layerSectionStart`, `layerSectionEnd`, `Nm  `, `artboardRect` (`Top `, `Left`, `Btom`, `Rght` doubles, pixels) | |
+| Layer > Smart Objects > Stack Mode > mode | `applyImageStackPluginRenderer`: `imageStackPlugin` **class** with the mode's code, `Nm  ` text = the menu name (localised, except "Entropy") | codes: Range `rang`, Entropy `entr`, Kurtosis `kurt`, Maximum `maxx`, Median `medn`, Minimum `minn`, Mean `avrg`, Skewness `skew`, Standard Deviation `stdv`, Summation `summ`, Variance `vari` |
+| Layer > Smart Objects > Stack Mode > None | `imageStackConvertSmartObject` | none |
+| Layer > Video Layers > New Blank Video Layer, Insert Blank Frame, Delete Frame, Show / Hide Altered Video | `addBlankVideoLayer`, `insertBlankFrame`, `deleteFrame`, `showAlteredVideo` / `hideAlteredVideo` | none |
+| Layer > Video Layers > Interpret Footage | `interpretFootage` | `Vrsn` long (1), `interpretAlpha` (`alphaInterpretation`: `Ignr` ignore, …), `colorConvertAlterations` bool |
+| Type > Create Work Path | Make, `null` = class `Path`, `From` = text layer (`TxLr`) target | |
+| Edit > Find and Replace Text (Replace All) | `replace`, `null` = reference: property `replace` of all text layers (`TxLr` `Ordn.Al`), `Usng` = `find` text, `replace` text, `checkAll`, `Fwd `, `caseSensitive`, `wholeWord`, `ignoreAccents` bool | |
+| Edit > Check Spelling | `spellCheck`, `null` = property `spellCheck` of all text layers, `Usng` = `checkAll` bool | recorded with its dialog switched on; the corrections themselves are not recorded |
+| Image > Analysis > Set Measurement Scale > Custom | Set, `null` = property `measurementScale` of the document target, `T   ` = `pixelLength` long, `logicalLength` double, `logicalUnits` text | |
+| Image > Analysis > Place Scale Marker | a script step (`AdobeScriptAutomation Scripts`) with `jsop` = `measurementScaleMarkerLength`, `measurementScaleMarkerDisplayText`, `measurementScaleMarkerTextPositionBottom` bool, `measurementScaleMarkerColor` text (`FFFFFF` / `000000`), `measurementScaleMarkerFont`, `measurementScaleMarkerFontSize` text ("4 pt") | the dialog is a bundled script; the step stores its options |
+| Image > Analysis > Record Measurements | `recordMeasurements` | none |
+| File > Close All | one `close` per document: `Svng` (`YsN ` `N   ` when "don't save" was chosen), `DocI`, `forceNotify` | not a `closeAll` event |
+
+**Not recorded:** File > Close Others, Image > Variables > Define (the variables are kept, no step).
+
+**Recorded with source files** (2026-11-01):
+
+| Menu | Recorded step | Keys |
+|---|---|---|
+| Image > Apply Data Set | `apply`, `null` = `dataSetClass` **by name** | |
+| File > Export > Data Sets as Files | `exportDataSet`, `null` = class `dataSetClass` | `All ` bool (all data sets), `T   ` alias (folder), `fileNamingRules` (`fileNamingComponents` list of 7 incl. `None`; components as in Batch plus `underscore` and `dataSetName`; `Mcnt`, `Win `, `unix`) |
+| File > Import > Variable Data Sets | `importDataSets`, `null` = class `dataSetClass` | `Usng` alias (the text file), `Encd` (`dataSetEncoding`: `dataSetEncodingAuto`, …), `eraseAll` bool (replace existing), `useFirstColumn` bool (first column = data set names) |
+| File > Package | `packageFile` | `T   ` alias (folder); writes "<document> Folder" (localised) with the document and a `Links` folder |
+| File > Import > Video Frames to Layers | `importVideoToLayers` | `Usng` alias (video), `makeAnimation` bool, `frameSkip` long (limit to every n-th frame; absent when off) |
+| File > Import > Notes (Annotations) | `importAnnots` | `Usng` alias (PDF). A file without notes shows "No annotations were imported" and records nothing |
+| Layer > Video Layers > New Video Layer from File | `addVideoLayer` | `null` alias (video) |
+| Layer > Video Layers > Replace Footage | `replaceFootage` | `null` alias (video) |
+| Layer > Video Layers > Duplicate Frame, Restore Frame, Restore All Frames, Reload Frame | `duplicateFrame`, `restoreFrame`, `restoreAllFrames`, `reloadFrame` | none. Duplicate needs a painted frame; Restore needs an altered frame; Restore All asks for confirmation |
+| File > Automate > Photomerge | the steps the script runs (open dialog, open, duplicate, `addLayerFromFile`, `align` with `layerTransformation`, `mergeAlignedLayers` …), then the script event `0f9db13f-a772-4035-9020-840f0e5e2f02` with an empty descriptor (class `cjsp`) | the layout and options are not in the step |
+| File > Automate > Crop and Straighten Photos | `CropPhotosAuto0001` (no keys), then the steps it runs: `CropPhotos0001` with `Vl  ` (list of 8 doubles: the four corners), duplicate, `crop` | needs a selected, visible, unlocked layer, otherwise an error message and a step without effect |
+| File > Automate > Conditional Mode Change | the Convert Mode it runs, then `8cba8cd6-cb66-11d1-bc43-0060b0a13dc4` | `Msge` text, `SrcM` list of `Cndn` enums (`UGry`, `URGB`, …: the source modes), `DstM` object whose class is the target mode (`CMYM` for CMYK) |
+| File > Automate > Fit Image | the Image Size it runs, then `3caa3434-cb67-11d1-bc43-0060b0a13dc4` | `Msge` text, `Hght`, `Wdth` pixels, `limit` bool (don't enlarge) |
+
+**Not recorded:** importing or applying inside Image > Variables > Data Sets (only the separate menu
+commands record).
 
 ## Measured through dialogs and recordings
 
