@@ -86,11 +86,7 @@ fn call(api: &JsValue, method: &str, arguments: &[JsValue]) -> Result<JsValue, J
 }
 
 fn field(object: &Object, key: &str, value: &JsValue) -> Result<(), JsValue> {
-    if Reflect::set(object, &key.into(), value)? {
-        Ok(())
-    } else {
-        Err(JsValue::from_str("fixture object rejected its field"))
-    }
+    if Reflect::set(object, &key.into(), value)? { Ok(()) } else { Err(JsValue::from_str("fixture object rejected its field")) }
 }
 
 fn resource(id: &str, name: &str, updated_at: &str) -> Result<Object, JsValue> {

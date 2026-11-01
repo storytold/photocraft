@@ -613,12 +613,8 @@ fn provider_open_still_rejects_pointer_motion_while_a_button_is_held() {
     let (mut app, host, doc) = app();
     let source = app.session.active().unwrap().doc.clone();
     let (request, imports) = request_deferred_open(&mut app, &host);
-    let down = egui::Event::PointerButton {
-        pos: egui::pos2(10.0, 10.0),
-        button: egui::PointerButton::Primary,
-        pressed: true,
-        modifiers: egui::Modifiers::NONE,
-    };
+    let down =
+        egui::Event::PointerButton { pos: egui::pos2(10.0, 10.0), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE };
     let mut output = ctx.run_ui(egui::RawInput { focused: true, events: vec![down], ..Default::default() }, |_| {});
     output.textures_delta.clear();
     host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
