@@ -538,9 +538,21 @@ const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
     ("microBrush", "bristleDetail", 10.0, 5.0),
 ];
 
+/// `filter.stylize.oilPaint`'s ranges. The command clamps a value outside them when it plays,
+/// so such a step keeps the Photoshop step on import and is refused on export, rather than
+/// mapping a step that plays clamped and saves back unchanged.
+const OIL_PAINT_LIMITS: &[(&str, f64, f64)] =
+    &[("stylization", 0.1, 10.0), ("cleanliness", 0.0, 10.0), ("scale", 0.1, 10.0), ("bristleDetail", 0.0, 10.0), ("shine", 0.0, 10.0)];
+
+/// Whether `n` is within `filter.stylize.oilPaint`'s range for `param` (a param without one is).
+fn in_oil_paint_limits(param: &str, n: f64) -> bool {
+    OIL_PAINT_LIMITS.iter().all(|(p, min, max)| *p != param || (*min..=*max).contains(&n))
+}
+
 /// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
 /// command's for cleanliness, scale, bristle detail and shine, so they are written out. A
-/// setting of another number type, or with a unit, keeps the Photoshop step.
+/// setting of another number type, with a unit, or outside the command's ranges keeps the
+/// Photoshop step.
 pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
     match oil_paint_params(d) {
         Some(p) => step("filter.stylize.oilPaint", Value::Object(p)),
@@ -556,22 +568,23 @@ fn oil_paint_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
     p.insert("lighting".into(), setting(d, "lightingOn", boolean, true)?.into());
     for (key, param, ps, _) in OIL_PAINT {
-        p.insert((*param).into(), setting(d, key, double, *ps)?.into());
+        p.insert((*param).into(), setting(d, key, double, *ps).filter(|n| in_oil_paint_limits(param, *n))?.into());
     }
     p.insert("angle".into(), setting(d, "LghD", |v| integer(v).map(f64::from), -60.0)?.into());
-    p.insert("shine".into(), setting(d, "specularity", double, 1.299_999_952_316_28)?.into());
+    p.insert("shine".into(), setting(d, "specularity", double, 1.299_999_952_316_28).filter(|n| in_oil_paint_limits("shine", *n))?.into());
     Some(p)
 }
 
 /// Every key in recorded order, the command's defaults for what the step leaves out. The light
-/// direction is an integer: a fractional angle would replay rounded, so the step is refused.
+/// direction is an integer: a fractional angle would replay rounded, so the step is refused, as
+/// is a setting outside the command's ranges.
 pub(super) fn oil_paint_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !pixel_target(p) || !sets_only(p, &["target", "lighting", "stylization", "cleanliness", "scale", "bristleDetail", "angle", "shine"]) {
         return None;
     }
     let num = |k: &str, default: f64| match p.get(k) {
         None | Some(Value::Null) => Some(default),
-        Some(v) => v.as_f64().filter(|n| n.is_finite()),
+        Some(v) => v.as_f64().filter(|n| n.is_finite() && in_oil_paint_limits(k, *n)),
     };
     let lighting = match p.get("lighting") {
         None | Some(Value::Null) => true,

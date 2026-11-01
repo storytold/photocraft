@@ -3434,3 +3434,56 @@ fn newer_feature_selection_steps_play() {
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(played["ran"], 3, "{played}");
 }
+
+/// `filter.stylize.oilPaint` takes a stylization and scale of 0.1..10 and a cleanliness, bristle
+/// detail and shine of 0..10, and clamps anything else when it plays. A step outside them would
+/// play clamped and save back unchanged, so it stays a Photoshop step, and a step outside them
+/// is not written either (#10610).
+#[test]
+fn oil_paint_outside_the_commands_ranges_is_kept_and_refused() {
+    kept_when_wrong_typed(
+        "oilPaint",
+        &[
+            ("stylization", D::Double(0.05)),
+            ("stylization", D::Double(10.5)),
+            ("cleanliness", D::Double(-0.5)),
+            ("cleanliness", D::Double(10.5)),
+            ("brushScale", D::Double(0.05)),
+            ("brushScale", D::Double(10.5)),
+            ("microBrush", D::Double(-1.0)),
+            ("microBrush", D::Double(10.5)),
+            ("specularity", D::Double(-0.5)),
+            ("specularity", D::Double(10.5)),
+        ],
+    );
+    for (low, high) in [(0.1, 0.0), (10.0, 10.0)] {
+        let d = desc("null")
+            .with("stylization", D::Double(low))
+            .with("cleanliness", D::Double(high))
+            .with("brushScale", D::Double(low))
+            .with("microBrush", D::Double(high))
+            .with("specularity", D::Double(high));
+        assert_eq!(
+            mapped(newer("oilPaint", d)),
+            (
+                "filter.stylize.oilPaint".into(),
+                json!({"lighting": true, "stylization": low, "cleanliness": high, "scale": low, "bristleDetail": high, "angle": -60.0, "shine": high})
+            ),
+            "{low} {high}"
+        );
+    }
+    for params in [
+        json!({"stylization": 0.05}),
+        json!({"stylization": 10.5}),
+        json!({"cleanliness": -0.5}),
+        json!({"cleanliness": 10.5}),
+        json!({"scale": 0.05}),
+        json!({"scale": 10.5}),
+        json!({"bristleDetail": -1}),
+        json!({"bristleDetail": 11}),
+        json!({"shine": -0.5}),
+        json!({"shine": 10.5}),
+    ] {
+        assert!(export_item("filter.stylize.oilPaint", &params, "S").is_none(), "{params} exported");
+    }
+}
