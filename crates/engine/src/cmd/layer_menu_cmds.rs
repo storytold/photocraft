@@ -318,6 +318,21 @@ fn remove_matte(s: &mut Session, white: bool) -> Result<Value> {
 
 fn decontamination_alpha(surf: &Surface, r: Rect) -> Surface {
     let mut alpha = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    let default_alpha = to_rgba(&surf.format(), &surf.default_pixel())[3].clamp(0.0, 1.0);
+    if default_alpha > 0.0 {
+        let shared = alpha.solid_tile(&[default_alpha]);
+        for tc in r.tiles() {
+            if surf.tile(tc).is_some() {
+                continue;
+            }
+            let area = tc.rect().intersect(&r);
+            if area == tc.rect() {
+                alpha.put_tiles([(tc, shared.clone())]);
+            } else {
+                alpha.fill_rect(area, &[default_alpha]);
+            }
+        }
+    }
     let mut converted = std::collections::HashMap::new();
     for (tc, tile) in surf.tiles() {
         let area = tc.rect().intersect(&r);

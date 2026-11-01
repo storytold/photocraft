@@ -69,8 +69,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(EngineError::Cancelled);
             }
             if refine {
-                ctx.progress(0.6, "Refining edge");
-                let refined = with_doc_sampler(doc, Some(id), sample_all, |smp, _| matting::refine_surface(smp, &surface, area, &REFINE, None));
+                let refined = ctx.stage(0.6, 0.95, "Refining edge", |interrupt| {
+                    with_doc_sampler(doc, Some(id), sample_all, |smp, _| matting::refine_surface_with_interrupt(smp, &surface, area, &REFINE, None, interrupt))
+                });
                 surface = refined.map_err(|e| EngineError::Other(e.to_string()))?.unwrap_or(surface);
                 if ctx.cancelled() {
                     return Err(EngineError::Cancelled);

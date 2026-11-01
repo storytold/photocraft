@@ -58,6 +58,9 @@ not full-window screenshots; unchanged workspace controls are not assessed by th
 
 Candidate work is capped at 1,048,576 blocks; scratch estimates, checked offsets and
 fallible output writes reject oversized requests before changing the document.
+Remove Background passes a cooperative interrupt; cancellation is checked while building
+candidates, between blocks, before batch execution and on workers before filtering.
+A cancelled refinement discards its partial output.
 The sparse representation does not make an inherently dense, detailed output small.
 Refine Hair, Object Aware and Presets remain open, so TOOL-214-1 stays partial and
 readiness percentages and performance-budget enforcement are unchanged.

@@ -502,6 +502,22 @@ pub fn refine_surface(
     p: &RefineParams,
     brush: Option<&EdgeBrush>,
 ) -> Result<Option<Surface>, photocraft_raster::AllocationError> {
+    refine_surface_with_interrupt(sampler, mask, canvas, p, brush, &photocraft_raster::Interrupt::NONE)
+}
+
+/// Interruptible refinement. Cancellation discards the partial result and returns `Ok(None)`.
+/// Callers distinguish cancellation from an empty mask through `interrupt.cancelled()`.
+pub fn refine_surface_with_interrupt(
+    sampler: &dyn Sampler,
+    mask: &Surface,
+    canvas: Rect,
+    p: &RefineParams,
+    brush: Option<&EdgeBrush>,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<Surface>, photocraft_raster::AllocationError> {
+    if interrupt.cancelled() {
+        return Ok(None);
+    }
     use std::collections::{BTreeSet, HashMap};
     use std::sync::Arc;
     let default = mask.default_pixel().first().copied().unwrap_or(0.0);
@@ -524,6 +540,9 @@ pub fn refine_surface(
         let y1 = (i64::from(area.y1) - 1 - i64::from(bbox.y0)) / i64::from(TILE);
         for y in y0..=y1 {
             for x in x0..=x1 {
+                if interrupt.cancelled() {
+                    return Ok(());
+                }
                 blocks.insert((y, x));
                 if blocks.len() > 1_048_576 {
                     return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: blocks.len().saturating_mul(64) });
@@ -536,13 +555,22 @@ pub fn refine_surface(
         include(bbox)?;
     } else {
         for (tc, _) in mask.tiles() {
+            if interrupt.cancelled() {
+                return Ok(None);
+            }
             include(tc.rect().inflate(p.spread()))?;
         }
     }
     if let Some(b) = brush {
         for tc in b.tile_coords() {
+            if interrupt.cancelled() {
+                return Ok(None);
+            }
             include(tc.rect().inflate(p.spread()))?;
         }
+    }
+    if interrupt.cancelled() {
+        return Ok(None);
     }
     let mut uniform: HashMap<usize, Option<f32>> = HashMap::new();
     let mut output = Surface::new(PixelFormat::GRAY8);
@@ -556,6 +584,9 @@ pub fn refine_surface(
     }
     let run = |work: &Work| {
         let (t, r) = (work.core, work.input);
+        if interrupt.cancelled() {
+            return (t, Vec::new());
+        }
         let m = crate::selection::mask_from_surface(Some(mask), r);
         let (rw, rh) = (r.width() as usize, r.height() as usize);
         let adds = work.painted.as_ref().is_some_and(|v| v.iter().any(|v| *v > 0.0));
@@ -582,6 +613,10 @@ pub fn refine_surface(
         (t, data)
     };
     let flush = |pending: &mut Vec<Work>, output: &mut Surface| -> Result<(), photocraft_raster::AllocationError> {
+        if interrupt.cancelled() {
+            pending.clear();
+            return Ok(());
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let results: Vec<_> = {
             use rayon::prelude::*;
@@ -589,6 +624,10 @@ pub fn refine_surface(
         };
         #[cfg(target_arch = "wasm32")]
         let results: Vec<_> = pending.iter().map(&run).collect();
+        if interrupt.cancelled() {
+            pending.clear();
+            return Ok(());
+        }
         for (t, data) in results {
             if data.iter().any(|v| *v != 0) {
                 output.try_write_interleaved(t, &data)?;
@@ -609,6 +648,9 @@ pub fn refine_surface(
     // The scratch budget still limits how many blocks can enter a batch.
     const MAX_FILTER_BATCH: usize = 24;
     for (by, bx) in blocks {
+        if interrupt.cancelled() {
+            return Ok(None);
+        }
         let x = (i64::from(bbox.x0) + bx * i64::from(TILE)) as i32;
         let y = (i64::from(bbox.y0) + by * i64::from(TILE)) as i32;
         let t = Rect::new(x, y, x.saturating_add(TILE).min(bbox.x1), y.saturating_add(TILE).min(bbox.y1));
@@ -681,6 +723,9 @@ pub fn refine_surface(
         }
     }
     flush(&mut pending, &mut output)?;
+    if interrupt.cancelled() {
+        return Ok(None);
+    }
     Ok((output.tile_count() > 0).then_some(output))
 }
 
@@ -972,6 +1017,30 @@ mod tests {
             let sparse = refine_surface(&sampler, &mask, canvas, &params, None).expect("allocation").expect("sparse");
             assert_eq!(sparse.to_interleaved(canvas), region_surface(&dense).to_interleaved(canvas));
         }
+    }
+
+    #[test]
+    fn refinement_discards_partial_output_after_cancellation() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct CancelGuide<'a>(&'a AtomicBool);
+        impl Sampler for CancelGuide<'_> {
+            fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
+                self.0.store(true, Ordering::Relaxed);
+                vec![[0.2, 0.4, 0.7, 1.0]; r.width() as usize * r.height() as usize]
+            }
+        }
+        let cancelled = AtomicBool::new(false);
+        let cancel = || cancelled.load(Ordering::Relaxed);
+        let interrupt = photocraft_raster::Interrupt::cancel_only(&cancel);
+        let canvas = Rect::new(0, 0, 1024, 1024);
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(Rect::new(100, 100, 800, 800), &[1.0]);
+        let before = mask.clone();
+        let params = RefineParams { radius: 4.0, ..Default::default() };
+        let result = refine_surface_with_interrupt(&CancelGuide(&cancelled), &mask, canvas, &params, None, &interrupt).unwrap();
+        assert!(cancelled.load(Ordering::Relaxed), "guide must trigger cancellation");
+        assert!(result.is_none(), "partial refinement must be discarded");
+        assert_eq!(mask, before);
     }
 
     #[test]

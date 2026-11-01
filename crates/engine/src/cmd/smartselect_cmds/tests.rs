@@ -552,6 +552,9 @@ fn refine_edge_accepts_huge_sparse_and_solid_selections() {
     s.execute("select.refineEdge", json!({"edits": [{"tool": "brush", "points": [[0, 0], [99_999, 99_999]], "size": 1}]})).expect("sparse refine");
     let diagonal = s.active().and_then(|d| d.doc.selection.as_ref()).expect("selected");
     assert!(diagonal.tile_count() < 4000);
+    for coordinate in [100, 50_000, 99_990] {
+        assert!(diagonal.sample_channel(coordinate, coordinate, 0) > 0.5, "diagonal stroke missing at {coordinate}");
+    }
     s.execute("select.all", json!({})).unwrap();
     s.execute("select.refineEdge", json!({"radius": 4})).expect("solid refine");
     let all = s.active().and_then(|d| d.doc.selection.as_ref()).expect("selected");
