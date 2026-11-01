@@ -693,3 +693,14 @@ fn refine_edge_rejects_bad_edits_and_keeps_the_selection() {
         assert_eq!(sel_bytes(&s, 80, 40), before, "{bad}");
     }
 }
+
+#[test]
+fn refine_edge_rejects_excessive_scratch_before_changing_selection() {
+    let mut s = Session::new();
+    s.add_document(Document::new("scratch", photocraft_doc::Size::new(10_000, 10_000), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
+    s.execute("select.rect", json!({"x": 5000, "y": 5000, "width": 1, "height": 1})).unwrap();
+    let before = s.active().unwrap().doc.selection.clone();
+    let error = s.execute("select.refineEdge", json!({"feather": 1000})).expect_err("scratch limit");
+    assert!(error.to_string().contains("not enough memory"), "{error}");
+    assert_eq!(s.active().unwrap().doc.selection, before);
+}
