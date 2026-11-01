@@ -3,6 +3,7 @@
 mod affinity;
 mod artboard_export_names;
 mod atn_crystallize_cell_size;
+mod atn_direct_adjustments;
 mod atn_ripple_amount;
 mod atn_selective_color;
 mod atn_stroke_width;
