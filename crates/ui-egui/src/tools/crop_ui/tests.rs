@@ -1179,3 +1179,72 @@ fn ratio_label_reduces_or_shows_a_decimal() {
     assert_eq!(ratio_label([0.0, 1.0]), None);
     assert!(ratio_label([f64::MAX, 1.0]).is_some());
 }
+
+/// #3145 review: the ratio of a frame that is 16:9 only after rounding to whole px, of a frame
+/// near 16:9 but not on it, and of degenerate frames (under a pixel, or a line).
+#[test]
+fn ratio_label_rounds_and_rejects_degenerate_frames() {
+    assert_eq!(ratio_label([1920.4, 1079.6]).as_deref(), Some("16:9"), "rounded to whole px first");
+    assert_eq!(ratio_label([1366.0, 768.0]).as_deref(), Some("1.779:1"), "near 16:9 is not 16:9");
+    assert_eq!(ratio_label([1.0, 1.0]).as_deref(), Some("1:1"));
+    assert_eq!(ratio_label([0.4, 100.0]), None, "under a pixel wide");
+    assert_eq!(ratio_label([100.0, 0.0]), None, "a line");
+    assert_eq!(ratio_label([-16.0, -9.0]), None, "negative");
+    assert_eq!(ratio_label([f64::INFINITY, 9.0]), None);
+    // A frame `frame_size` floors to 1 px stays labelled, never a division by zero.
+    let tiny = frame_size([0.0, 0.0, 0.2, 0.4]).unwrap();
+    assert_eq!(ratio_label(tiny).as_deref(), Some("1:1"));
+}
+
+/// #3145 review: the crop frame's W and H use the Info panel's formatter for the ruler unit,
+/// the same one the selection's go through.
+#[test]
+fn info_size_is_shown_in_the_ruler_unit() {
+    use crate::panels::info::wh_readout;
+    use photocraft_engine::prefs::{Unit, UnitsAndRulers};
+    let mut app = app(SampleType::U8);
+    app.ui.crop_rect = Some([0.0, 0.0, 144.0, 72.0]);
+    let wh = info_size(&app).unwrap();
+    let mut ur = UnitsAndRulers::default();
+    let extent = [200.0, 100.0];
+    ur.rulers = Unit::Pixels;
+    assert_eq!(wh_readout(&ur, 72.0, extent, wh), ["144", "72"]);
+    ur.rulers = Unit::Inches;
+    assert_eq!(wh_readout(&ur, 72.0, extent, wh), ["2", "1"]);
+    assert_eq!(wh_readout(&ur, 144.0, extent, wh), ["1", "0.5"], "at the document's resolution");
+    ur.rulers = Unit::Centimeters;
+    assert_eq!(wh_readout(&ur, 72.0, extent, wh), ["5.08", "2.54"]);
+    ur.rulers = Unit::Percent;
+    assert_eq!(wh_readout(&ur, 72.0, extent, wh), ["72", "72"], "W of the width, H of the height");
+}
+
+/// #3145 review: after the crop is cancelled or committed, or the tool is left, W and H are the
+/// selection's again. With the Crop tool still picked, the new default frame is the selection's
+/// bounds (or the canvas), as in Photoshop, so the panel shows the same size.
+#[test]
+fn info_size_returns_to_the_selection_after_cancel_or_commit() {
+    let mut app = app(SampleType::U8);
+    app.run("select.rect", json!({"x": 20, "y": 10, "width": 80, "height": 40})).unwrap();
+    // Cancel: no frame, then the new default frame frames the selection.
+    ensure_frame(&mut app);
+    app.ui.crop_rect = Some([10.0, 10.0, 50.0, 40.0]);
+    assert_eq!(info_size(&app), Some([40.0, 30.0]));
+    cancel(&mut app);
+    assert_eq!(info_size(&app), None, "cancelled: the panel falls back to the selection");
+    ensure_frame(&mut app);
+    assert_eq!(info_size(&app), Some([80.0, 40.0]), "the new frame is the selection's bounds");
+    // Commit: the document is cropped and the frame is gone.
+    app.run("select.deselect", json!({})).unwrap();
+    cancel(&mut app);
+    drag(&mut app, &[[10.0, 10.0], [50.0, 40.0]], NONE);
+    assert_eq!(info_size(&app), Some([40.0, 30.0]));
+    crate::canvas::commit_crop(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(40, 30));
+    assert_eq!(info_size(&app), None, "committed: no frame");
+    ensure_frame(&mut app);
+    assert_eq!(info_size(&app), Some([40.0, 30.0]), "the new frame is the cropped canvas");
+    // Leaving the tool: the panel shows the selection, whatever the frame.
+    app.ui.tool = Tool::Move;
+    ensure_frame(&mut app);
+    assert_eq!(info_size(&app), None);
+}
