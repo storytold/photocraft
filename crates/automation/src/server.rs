@@ -346,8 +346,9 @@ pub struct UiSetParams {
     /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
     /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
-    /// `shape.edit` names and units; colour comes from `tools.setColors`. camTransformOnDrop (bool,
-    /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
+    /// `shape.edit` names and units; the shape tools' own Fill and Stroke colours have no setter
+    /// (`tools.setColors` sets only the foreground and background). camTransformOnDrop (bool, the
+    /// Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
     /// active layer's storage tiles). layerFilter (an object patching by ("kind", "name" or
     /// "mode"), kinds (a list of layer kinds), name (matches part of the layer name) and mode (a
     /// blend mode name) for the Layers panel filter). strokeTrace (true, false, "stderr" or "off":

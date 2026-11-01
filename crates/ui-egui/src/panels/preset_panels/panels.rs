@@ -328,10 +328,10 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn shape_fill(app: &PhotocraftApp) -> Value {
-    let f = app.session.tools.foreground;
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    if app.ui.tool_options.shape_fill { json!(format!("#{:02x}{:02x}{:02x}", q(f[0]), q(f[1]), q(f[2]))) } else { Value::Null }
+/// The tool's fill as an RGBA array, alpha included, as the Shape tool sends it (`vector_ui`).
+pub(super) fn shape_fill(app: &PhotocraftApp) -> Value {
+    let o = &app.ui.tool_options;
+    if o.shape_fill { json!(o.shape_fill_color) } else { Value::Null }
 }
 
 /// Options-bar shape picker for the Custom Shape tool.

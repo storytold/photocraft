@@ -228,7 +228,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
     for label in ["Fill color", "Stroke color"] {
         let mut app = app("rgb", 32);
         let original = [0.123456, 0.345678, 0.567891, 0.372819];
-        app.run("tools.setColors", json!({"foreground": original, "background": original})).unwrap();
+        app.ui.tool_options.shape_fill_color = original;
+        app.ui.tool_options.shape_stroke_color = original;
         let mut h = harness(app, false);
         h.get_by_label(label).click();
         h.run_steps(3);
@@ -242,6 +243,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
             h.run_steps(1);
         }
         assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], opened, "four digits are not a colour yet");
+        assert_eq!(h.state().ui.tool_options.shape_fill_color, original);
+        assert_eq!(h.state().ui.tool_options.shape_stroke_color, original);
         for ch in "EF".chars() {
             h.event(Event::Text(ch.to_string()));
             h.run_steps(1);
@@ -255,9 +258,10 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
         assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#12abef");
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         let want = [18.0 / 255.0, 171.0 / 255.0, 239.0 / 255.0, original[3]];
-        let tools = &h.state().session.tools;
-        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want);
-        assert_eq!(if label == "Fill color" { tools.background } else { tools.foreground }, original);
+        let o = &h.state().ui.tool_options;
+        assert_eq!(if label == "Fill color" { o.shape_fill_color } else { o.shape_stroke_color }, want);
+        assert_eq!(if label == "Fill color" { o.shape_stroke_color } else { o.shape_fill_color }, original);
+        assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "the foreground is left alone");
         h.run_steps(2);
         finish_shape(h.state_mut(), Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
         let drawn = shape(h.state());
@@ -270,7 +274,8 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
 fn a_pasted_hex_colour_updates_the_selected_shape_and_undoes_once() {
     for label in ["Fill color", "Stroke color"] {
         let mut app = app("rgb", 32);
-        app.run("tools.setColors", json!({"foreground": [0.2, 0.3, 0.4, 0.6], "background": [0.5, 0.6, 0.7, 0.8]})).unwrap();
+        app.ui.tool_options.shape_fill_color = [0.2, 0.3, 0.4, 0.6];
+        app.ui.tool_options.shape_stroke_color = [0.5, 0.6, 0.7, 0.8];
         app.ui.tool_options.stroke_width = 3.0;
         finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
         let original = shape(&app).clone();
@@ -316,8 +321,13 @@ fn picking_tool_colours_enables_paint_and_reaches_the_next_shape() {
     }
     assert!(h.state().ui.tool_options.shape_fill);
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0);
-    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(h.state().session.tools.background, [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(h.state().ui.tool_options.shape_fill_color, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(h.state().ui.tool_options.shape_stroke_color, [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(
+        (h.state().session.tools.foreground, h.state().session.tools.background),
+        ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]),
+        "the foreground and background are left alone"
+    );
     // Both join the Recently Used Colors, newest first.
     let recent: Vec<String> = crate::paint_picker::recent_colors(&h.state().session).into_iter().map(crate::color_picker_ui::hex).collect();
     assert_eq!(recent, ["#0000ff", "#ff0000"]);
@@ -358,6 +368,7 @@ fn popover_lays_out_photoshops_paint_types_recent_colours_and_folders() {
 fn colour_picker_button_opens_the_full_picker_on_the_paint() {
     let mut app = app("rgb", 8);
     app.run("tools.setColors", json!({"foreground": "#102030", "background": "#405060"})).unwrap();
+    app.ui.tool_options.shape_stroke_color = [160.0 / 255.0, 176.0 / 255.0, 192.0 / 255.0, 1.0];
     let mut h = harness(app, false);
     h.get_by_label("Stroke color").click();
     h.run_steps(3);
@@ -365,13 +376,19 @@ fn colour_picker_button_opens_the_full_picker_on_the_paint() {
     h.run_steps(3);
     let d = h.state().ui.dialogs.last().expect("the Color Picker dialog");
     assert_eq!(d.fields["__label"], "Color Picker (Stroke Color)");
-    assert_eq!(d.fields["color"], "#405060", "on the next shape's stroke colour");
+    assert_eq!(d.fields["color"], "#a0b0c0", "on the next shape's stroke colour, not the background");
     assert!(!egui::Popup::is_any_open(&h.ctx), "the popover gives way to the dialog");
     let id = d.id;
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#ff8800"));
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
     let app = h.state();
-    assert_eq!(crate::color_picker_ui::hex([app.session.tools.background[0], app.session.tools.background[1], app.session.tools.background[2]]), "#ff8800");
+    let stroke = app.ui.tool_options.shape_stroke_color;
+    assert_eq!(crate::color_picker_ui::hex([stroke[0], stroke[1], stroke[2]]), "#ff8800");
+    assert_eq!(
+        crate::color_picker_ui::hex([app.session.tools.background[0], app.session.tools.background[1], app.session.tools.background[2]]),
+        "#405060",
+        "the background is left alone"
+    );
     assert_eq!(app.ui.tool_options.stroke_width, 3.0, "picking a stroke colour turns the stroke on");
     assert_eq!(app.session.active().unwrap().history.past_len(), 0, "tool defaults do not edit the document");
     assert_eq!(crate::paint_picker::recent_colors(&app.session).first().copied().map(crate::color_picker_ui::hex).as_deref(), Some("#ff8800"));
@@ -391,14 +408,14 @@ fn popover_colour_picker_samples_the_screen_for_the_next_shape() {
     app.ui.tool_options.shape_fill = false;
     let mut h = harness(app, false);
     for label in ["Fill color", "Stroke color"] {
-        let tools = (h.state().session.tools.foreground, h.state().session.tools.background);
+        let paints = (h.state().ui.tool_options.shape_fill_color, h.state().ui.tool_options.shape_stroke_color);
         h.get_by_label(label).click();
         h.run_steps(3);
         h.get_by_label("Color Picker").click();
         h.run_steps(3);
         h.get_by_label("Pick screen color").click();
         h.run_steps(4);
-        assert_eq!((h.state().session.tools.foreground, h.state().session.tools.background), tools, "{label}: sampling waits for OK");
+        assert_eq!((h.state().ui.tool_options.shape_fill_color, h.state().ui.tool_options.shape_stroke_color), paints, "{label}: sampling waits for OK");
         let id = h.state().ui.dialogs.last().expect("the Color Picker dialog").id;
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         h.run_steps(2);
@@ -409,9 +426,14 @@ fn popover_colour_picker_samples_the_screen_for_the_next_shape() {
         [r, g, b, 1.0]
     };
     let (fill, stroke) = (hex([0.91, 0.17, 0.32]), hex([0.12, 0.68, 0.93]));
-    assert_eq!((h.state().session.tools.foreground, h.state().session.tools.background), (fill, stroke));
+    assert_eq!((h.state().ui.tool_options.shape_fill_color, h.state().ui.tool_options.shape_stroke_color), (fill, stroke));
     assert!(h.state().ui.tool_options.shape_fill);
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0);
+    assert_eq!(
+        (h.state().session.tools.foreground, h.state().session.tools.background),
+        ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]),
+        "the foreground and background are left alone"
+    );
     finish_shape(h.state_mut(), Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
     assert_eq!(shape(h.state()).fill, Some(solid_paint(fill)));
     assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, solid_paint(stroke));
@@ -610,7 +632,8 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     h.run_steps(2);
     let edited = shape(h.state()).clone();
     assert_ne!(edited.fill, original.fill, "the Fill swatch recoloured the shape");
-    assert_eq!(edited.fill.as_ref().and_then(color_of), Some(h.state().session.tools.foreground), "and the next shape's fill");
+    assert_eq!(edited.fill.as_ref().and_then(color_of), Some(h.state().ui.tool_options.shape_fill_color), "and the next shape's fill");
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the foreground is left alone");
     assert_eq!(edited.stroke, original.stroke, "the stroke is untouched");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
     h.state_mut().run("edit.undo", json!({})).unwrap();
@@ -992,4 +1015,22 @@ fn a_refused_popover_swatch_is_not_a_recently_used_colour() {
         let recent: Vec<String> = crate::paint_picker::recent_colors(&h.state().session).into_iter().map(crate::color_picker_ui::hex).collect();
         assert_eq!(recent, ["#00ff00"], "properties={properties}");
     }
+}
+
+/// #6695: the shape tools' Fill and Stroke colours are their own, as in Photoshop: picking one
+/// leaves the foreground and background alone, and a new foreground leaves the tool's fill alone.
+#[test]
+fn shape_tool_paint_is_independent_of_foreground_and_background() {
+    let mut app = app("rgb", 8);
+    app.run("tools.setColors", json!({"foreground": "#204060", "background": "#c0d0e0"})).unwrap();
+    let fill = [0.75, 0.25, 0.5, 1.0];
+    let stroke = [0.125, 0.875, 0.375, 1.0];
+    set_tool_paint(&mut app, false, PaintChange::Color(fill)).unwrap();
+    set_tool_paint(&mut app, true, PaintChange::Color(stroke)).unwrap();
+    let colors = |app: &PhotocraftApp| (app.session.tools.foreground, app.session.tools.background);
+    assert_eq!(colors(&app), ([32.0 / 255.0, 64.0 / 255.0, 96.0 / 255.0, 1.0], [192.0 / 255.0, 208.0 / 255.0, 224.0 / 255.0, 1.0]));
+    app.run("tools.setColors", json!({"foreground": "#a0b0c0", "background": "#102030"})).unwrap();
+    finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [100.0, 80.0], Modifiers::NONE);
+    assert_eq!(shape(&app).fill, Some(solid_paint(fill)), "a new foreground leaves the tool fill alone");
+    assert_eq!(shape(&app).stroke.as_ref().unwrap().paint, solid_paint(stroke));
 }

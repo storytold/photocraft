@@ -2,8 +2,11 @@
 
 Shape stroke defaults are drivable with `ui.set {shapeStroke: {width, align, cap, join,
 miterLimit, dashes, dashOffset, opacity}}`; partial fields merge, null disables the stroke.
-Values use the existing `shape.edit` names and units. Colour uses `tools.setColors`.
-`ui.inspect` exposes `toolOptions.shape_stroke`, `stroke_width`, and `strokeEditor`.
+Values use the existing `shape.edit` names and units. The shape tools keep their own Fill and
+Stroke colours: `tools.setColors` sets only the foreground and background, and there is no
+setter for the tools' colours yet. `ui.inspect` exposes them as `toolOptions.shape_fill_color`
+and `toolOptions.shape_stroke_color`, with `toolOptions.shape_stroke`, `stroke_width`, and
+`strokeEditor`.
 Stroke Options applies valid UI edits immediately; `strokeEditor` is the open editor state,
 not an uncommitted document preview. Escape/outside clicks close it without reverting edits.
 See [Shape stroke options](shape-strokes.md) for limits, preview and persistence behavior.

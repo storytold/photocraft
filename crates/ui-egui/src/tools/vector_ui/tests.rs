@@ -1307,7 +1307,8 @@ fn shape_options_bar_edits_the_selected_shape() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let mut app = app();
-    app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 1.0];
+    app.ui.tool_options.shape_stroke_color = [0.0, 0.0, 1.0, 1.0];
     finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
     let shape = |app: &PhotocraftApp| {
         let st = app.session.active().unwrap();
@@ -1371,7 +1372,8 @@ fn path_selection_options_bar_edits_the_selected_shape() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let mut app = app();
-    app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 1.0];
+    app.ui.tool_options.shape_stroke_color = [0.0, 0.0, 1.0, 1.0];
     finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
     let shape = |app: &PhotocraftApp| {
         let st = app.session.active().unwrap();
