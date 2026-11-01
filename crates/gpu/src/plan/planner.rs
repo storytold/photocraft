@@ -700,7 +700,7 @@ impl<'a> Planner<'a> {
             if let Some(clip) = clip {
                 // Everything that built the layer's content only matters inside its bounds.
                 for p in &mut self.passes[start..] {
-                    if p.clip.is_none() && !matches!(p.kernel, Kernel::Clear | Kernel::CopyFull) && !(p.kernel == Kernel::MaskStack && p.adjust_kind == 6) {
+                    if p.clip.is_none() && !matches!(p.kernel, Kernel::Clear | Kernel::CopyFull | Kernel::MaskStack) {
                         p.clip = Some(clip);
                     }
                 }

@@ -699,7 +699,7 @@ impl MaskStackRenderer {
                     layers.push((layer_index, layer.opacity, mode, MaskLayer::Paint(paint_index)));
                     paint_index += 1;
                 }
-                EffectKind::Fill { value, .. } => {
+                EffectKind::Fill { value, rotation, repeat_u, repeat_v, mirror_u, mirror_v } => {
                     if !value.is_finite() || !(0.0..=1.0).contains(value) {
                         return Err("Mask Fill value is invalid".into());
                     }
@@ -732,10 +732,6 @@ impl MaskStackRenderer {
                         map_index = Some(fill_index);
                         fill_index += 1;
                     }
-                    let (rotation, repeat_u, repeat_v, mirror_u, mirror_v) = match &layer.kind {
-                        EffectKind::Fill { rotation, repeat_u, repeat_v, mirror_u, mirror_v, .. } => (*rotation, *repeat_u, *repeat_v, *mirror_u, *mirror_v),
-                        _ => unreachable!(),
-                    };
                     let bounds = layer.fill_bounds.unwrap_or([0; 4]);
                     layers.push((
                         layer_index,
@@ -745,11 +741,11 @@ impl MaskStackRenderer {
                             value: *value,
                             bounds,
                             has_bounds: layer.fill_bounds.is_some(),
-                            rotation,
-                            repeat_u,
-                            repeat_v,
-                            mirror_u,
-                            mirror_v,
+                            rotation: *rotation,
+                            repeat_u: *repeat_u,
+                            repeat_v: *repeat_v,
+                            mirror_u: *mirror_u,
+                            mirror_v: *mirror_v,
                             map_index,
                         },
                     ));

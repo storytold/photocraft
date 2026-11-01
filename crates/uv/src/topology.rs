@@ -185,10 +185,13 @@ impl Topology {
             }
             let same_uv = matches!(list.as_slice(), [a,b] if continuous(a,b));
             let shells: BTreeSet<usize> = list.iter().filter_map(|edge| result.triangle_shell.get(edge.triangle).copied()).collect();
-            let entries = shells.len().checked_mul(shells.len().saturating_sub(1)).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
-            neighbor_entries = neighbor_entries.checked_add(entries).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
-            if neighbor_entries > MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES {
-                return Err(Error(format!("Non-manifold UV topology exceeds the {MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES}-neighbor budget")));
+            if list.len() > 2 {
+                let entries =
+                    shells.len().checked_mul(shells.len().saturating_sub(1)).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
+                neighbor_entries = neighbor_entries.checked_add(entries).ok_or_else(|| Error("Non-manifold UV neighbor budget overflow".into()))?;
+                if neighbor_entries > MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES {
+                    return Err(Error(format!("Non-manifold UV topology exceeds the {MAX_NON_MANIFOLD_NEIGHBOR_ENTRIES}-neighbor budget")));
+                }
             }
             for &shell in &shells {
                 if let Some(s) = result.shells.get_mut(shell) {
@@ -686,6 +689,37 @@ mod import_budget_tests {
         let scene = Scene { positions, triangles, materials: vec![Material::default()], warnings: Vec::new() };
         let error = Topology::build(&scene).unwrap_err();
         assert!(error.to_string().contains("neighbor budget"));
+    }
+
+    #[test]
+    fn many_manifold_uv_seams_do_not_consume_the_non_manifold_neighbor_budget() {
+        // A long strip has two triangles per cell and manifold shared edges. Give each
+        // triangle its own UVs so every shared edge is a seam and every triangle a shell.
+        // This remains below MAX_TRIANGLES while exceeding the old seam-count budget.
+        let cells = 220_000usize;
+        let positions = (0..=cells).flat_map(|x| [[x as f64, 0.0, 0.0], [x as f64, 1.0, 0.0]]).collect();
+        let mut triangles = Vec::with_capacity(cells * 2);
+        for x in 0..cells {
+            let left_bottom = 2 * x;
+            let left_top = left_bottom + 1;
+            let right_bottom = left_bottom + 2;
+            let right_top = left_bottom + 3;
+            for (index, vertices) in [[left_bottom, right_bottom, left_top], [right_bottom, right_top, left_top]].into_iter().enumerate() {
+                let base = (x * 2 + index) as f64 * 0.000001;
+                triangles.push(Triangle {
+                    material: 0,
+                    corners: [
+                        Corner { vertex: vertices[0], uv: [base, 0.0], normal: None },
+                        Corner { vertex: vertices[1], uv: [base + 0.0000001, 0.0], normal: None },
+                        Corner { vertex: vertices[2], uv: [base, 0.25], normal: None },
+                    ],
+                });
+            }
+        }
+        let scene = Scene { positions, triangles, materials: vec![Material::default()], warnings: Vec::new() };
+        let topology = Topology::build(&scene).expect("manifold UV seams are bounded by triangle count");
+        assert_eq!(topology.non_manifold_edges, 0);
+        assert_eq!(topology.shells.len(), cells * 2);
     }
 
     #[test]
