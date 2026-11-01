@@ -75,7 +75,7 @@ fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], 
     if ch >= opts.len() {
         ch = 0;
     }
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, text);
         let width = if opts.len() == 1 { 160.0 } else { 110.0 };
         let key = format!("{id:?}-ch");
@@ -273,7 +273,7 @@ fn set_editor_pencil(v: &mut Value, pencil: bool, cx: &EditorCx) -> bool {
 fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, cx: &EditorCx) -> Edit {
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut e = Edit::default();
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if crate::icons::button(ui, "spline", 24.0, !pencil, tl!("Edit points to modify the curve")).clicked() && pencil {
             e.add(Edit::discrete(set_editor_pencil(v, false, cx)));
         }
@@ -427,7 +427,7 @@ fn curves_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 
     // Input / Output of the selected point.
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let i = st.gesture.selected.filter(|i| *i < pts.len() && !pencil);
         let (mut vi, mut vo) = i.map_or((0.0, 0.0), |i| (pts[i][0], pts[i][1]));
         label(ui, tl!("Input:"));
@@ -826,5 +826,61 @@ mod tests {
         assert!(!ltr_input.is_empty() && !ltr_output.is_empty(), "the value row is drawn");
         assert!(rightmost(&ltr_input) < leftmost(&ltr_output), "the LTR row reads Input then Output: {ltr_input:?} {ltr_output:?}");
         assert!(rightmost(&rtl_output) < leftmost(&rtl_input), "the RTL row reads Output then Input: {rtl_input:?} {rtl_output:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Curves panel over a fresh adjustment, drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                let _dir = crate::direction::direction_scope(dir);
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("curves-twin"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                curves(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    fn span(h: &egui_kittest::Harness<'_, Value>, name: &str) -> (f32, f32) {
+        let rs: Vec<egui::Rect> = h.query_all_by_label(name).map(|n| n.rect()).collect();
+        assert!(!rs.is_empty(), "{name} is drawn");
+        (rs.iter().map(|r| r.left()).fold(f32::MAX, f32::min), rs.iter().map(|r| r.right()).fold(f32::MIN, f32::max))
+    }
+
+    /// The migrated Input/Output row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_input_output_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let (ltr_in_l, ltr_in_r) = span(&ltr, "Input:");
+        let (ltr_out_l, _) = span(&ltr, "Output:");
+        assert!(ltr_in_r <= ltr_out_l, "LTR reads Input then Output: {ltr_in_r} vs {ltr_out_l}");
+        let ltr_gap = ltr_out_l - ltr_in_r;
+        let (rtl_in_l, rtl_in_r) = span(&rtl, "Input:");
+        let (rtl_out_l, rtl_out_r) = span(&rtl, "Output:");
+        assert!(rtl_out_r <= rtl_in_l, "RTL reads Output then Input: {rtl_out_r} vs {rtl_in_l}");
+        let rtl_gap = rtl_in_l - rtl_out_r;
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
