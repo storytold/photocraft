@@ -42,6 +42,11 @@ pub const OVER_CANVAS_BUDGET: &str = "the canvas exceeds the GPU texture budget;
 /// was created, and the caller draws the CPU canvas instead.
 pub const REFRESH_OVER_BUDGET: &str = "over-budget";
 
+/// [`Refresh::kind`] when the wgpu compositor couldn't draw a document with layer operators
+/// ([`GpuCanvas::set_operators`]): nothing was drawn, since the CPU compositor would show the
+/// layers without them. The caller previews on the CPU instead.
+pub const REFRESH_OPERATOR_FAILED: &str = "operator-failed";
+
 /// [`Refresh::kind`] of a CPU refresh left to the caller ([`GpuCanvas::refresh_with`]).
 pub const REFRESH_DEFERRED: &str = "deferred";
 

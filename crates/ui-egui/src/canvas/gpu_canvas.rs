@@ -48,8 +48,8 @@ mod texels;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes, memory_budget,
-    physical_memory, video_memory, vram_share,
+    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OPERATOR_FAILED, REFRESH_OVER_BUDGET, canvas_budget,
+    canvas_texture_bytes, memory_budget, physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
@@ -72,10 +72,10 @@ pub use setup::{Refresh, device_descriptor, device_limits, display_texels, timin
 use shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 #[cfg(not(target_arch = "wasm32"))]
 use texels::texel_to_f32;
-pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f};
+pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f, texels, texels_of_part};
+use texels::{canvas_texels, texel_bytes, texels_into};
 #[cfg(test)]
 use texels::{f16_to_f32, f32_to_f16};
-use texels::{texel_bytes, texels, texels_into};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
 pub const DEFAULT_TILE: u32 = 8192;
@@ -503,23 +503,47 @@ impl GpuCanvas {
     }
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
-    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
-        if size[0] == 0 || size[1] == 0 || texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) || !self.health.is_ok() {
-            return;
+    /// Returns whether it wrote the texture (not when the GPU is unhealthy or has no resources).
+    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) -> bool {
+        if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) {
+            return false;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if !self.reserve_in(res, doc, size, format) {
+            return false;
+        }
+        let Some(d) = res.docs.get(&doc) else { return false };
+        d.write(queue, [0, 0], size, size[0], texels);
+        d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        true
+    }
+
+    /// Make sure document `doc` has a `size` texture for a preview of a document of `depth`
+    /// (see [`GpuCanvas::format_for`]) without writing it, so [`GpuCanvas::upload_buffer_rect`]
+    /// can fill only what is shown. A texture it creates starts transparent; one it keeps holds its
+    /// old pixels. Returns false when there is no texture.
+    pub fn reserve_buffer(&self, doc: u64, size: [u32; 2], depth: photocraft_doc::SampleType) -> bool {
+        let format = self.format_for(depth, size);
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        self.reserve_in(res, doc, size, format)
+    }
+
+    /// [`GpuCanvas::reserve_buffer`] with the renderer's resources already locked.
+    fn reserve_in(&self, res: &mut Resources, doc: u64, size: [u32; 2], format: wgpu::TextureFormat) -> bool {
+        if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
+            return false;
+        }
         if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
-            let Some(tex) = DocTextures::new(device, res, size, self.tile, format) else {
+            let Some(tex) = DocTextures::new(&self.rs.device, res, size, self.tile, format) else {
                 res.docs.remove(&doc);
-                return;
+                return false;
             };
             res.docs.insert(doc, tex);
         }
-        let Some(d) = res.docs.get(&doc) else { return };
-        d.write(queue, [0, 0], size, size[0], texels);
-        d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        true
     }
 
     /// Replace a rectangle `origin..origin+size` of an uploaded document with premultiplied texels
@@ -555,10 +579,23 @@ impl GpuCanvas {
 
     /// Upload a CPU composite covering the whole document (a preview of a document of `depth`:
     /// see [`GpuCanvas::format_for`]).
-    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
+    /// Returns whether it wrote the texture.
+    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) -> bool {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px))
+    }
+
+    /// Upload the part `rect` (document pixels) of a CPU composite `buf` that covers it, converted
+    /// straight from `buf` (no copy of the part). Returns false as [`GpuCanvas::upload_rect`] does,
+    /// or when `buf` doesn't cover `rect`.
+    pub fn upload_buffer_part(&self, doc: u64, buf: &photocraft_compose::Buffer, rect: photocraft_geom::Rect) -> bool {
+        let Some(format) = self.format_of(doc) else { return false };
+        if rect.x0 < 0 || rect.y0 < 0 {
+            return false;
+        }
+        let Some(texels) = texels_of_part(format, buf, rect) else { return false };
+        self.upload_rect(doc, [rect.x0 as u32, rect.y0 as u32], [rect.width(), rect.height()], &texels)
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
@@ -568,7 +605,7 @@ impl GpuCanvas {
         if r.x0 < 0 || r.y0 < 0 {
             return false;
         }
-        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &texels(format, &buf.px))
+        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &canvas_texels(format, &buf.px))
     }
 
     /// Composite `region` of `doc` with the wgpu compositor straight into its display texture
@@ -599,6 +636,10 @@ impl GpuCanvas {
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
         }
+        #[cfg(test)]
+        if res.fail_operators && res.operators.contains_key(&doc.id) {
+            return Err(photocraft_gpu::Unsupported("injected operator failure".into()));
+        }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
             None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
@@ -620,6 +661,7 @@ impl GpuCanvas {
             comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
+        comp.set_operators(doc.id, res.operators.get(&doc.id).cloned().unwrap_or_default());
         let key = doc.id.0;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
@@ -787,6 +829,10 @@ impl GpuCanvas {
             }
             Err(e) => out.fallback = Some(self.reason(doc, e)),
         }
+        if self.has_operators(doc.id) {
+            out.kind = REFRESH_OPERATOR_FAILED;
+            return out;
+        }
         let px = region.width() as u64 * region.height() as u64;
         if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {
             out.kind = REFRESH_DEFERRED;
@@ -881,6 +927,8 @@ impl GpuCanvas {
         if let Some(c) = res.compositor.as_mut() {
             c.retain_docs(|d| live.contains(&d.0));
         }
+        // A closed document's layer operators (a filter preview open when it closed) go too.
+        res.operators.retain(|d, _| live.contains(&d.0));
         // LUTs and identity-transform signatures can outlive document textures. Prune both,
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
         res.luts.retain(|k, _| live.contains(&k.0));
@@ -993,6 +1041,57 @@ impl GpuCanvas {
             }
         }
         Some((d.format, d.size, out))
+    }
+
+    /// Layer operators for document `doc` (`photocraft_gpu::LayerOperator`): its composites show
+    /// them from the next refresh on; an empty list clears them. While a document has operators,
+    /// a refresh the wgpu compositor can't draw draws nothing ([`REFRESH_OPERATOR_FAILED`]).
+    pub fn set_operators(&self, doc: photocraft_doc::DocId, operators: Vec<photocraft_gpu::LayerOperator>) {
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        if operators.is_empty() {
+            res.operators.remove(&doc);
+        } else {
+            res.operators.insert(doc, operators);
+        }
+    }
+
+    /// Tests: make composites of documents with operators fail.
+    #[cfg(test)]
+    pub(crate) fn fail_operators(&self, on: bool) {
+        if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+            res.fail_operators = on;
+        }
+    }
+
+    /// Whether document `doc` has layer operators.
+    pub fn has_operators(&self, doc: photocraft_doc::DocId) -> bool {
+        let renderer = self.rs.renderer.read();
+        renderer.callback_resources.get::<Resources>().is_some_and(|res| res.operators.contains_key(&doc))
+    }
+
+    /// Whether the wgpu compositor can run layer operators on this device (it builds their
+    /// pipelines the first time, so a dialog can warm them as it opens).
+    pub fn operators_supported(&self) -> bool {
+        if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() || self.fault().is_some() {
+            return false;
+        }
+        let device = &self.rs.device;
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if res.compositor_failed.is_some() {
+            return false;
+        }
+        if res.compositor.is_none() {
+            match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
+                Ok(c) => res.compositor = Some(c),
+                Err(e) => {
+                    res.compositor_failed = Some(e);
+                    return false;
+                }
+            }
+        }
+        res.compositor.as_mut().is_some_and(|c| c.operators_supported(device))
     }
 
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).
