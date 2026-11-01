@@ -377,7 +377,7 @@ fn place_channel_plane(mut plane: Vec<u8>, source: &PlaneLayout, x: usize, y: us
 
 fn zeroed_pattern_plane(len: usize) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(|_| PsdError::LimitExceeded("not enough memory for the padded pattern channel"))?;
+    out.try_reserve_exact(len).map_err(|_| PsdError::OutOfMemory("not enough memory for the padded pattern channel"))?;
     out.resize(len, 0);
     Ok(out)
 }
