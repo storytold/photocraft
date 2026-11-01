@@ -126,7 +126,10 @@ fn auto_align_moves_the_background_as_a_normal_layer() {
         let r = s.execute("edit.autoAlignLayers", json!({"projection": projection})).unwrap_or_else(|e| panic!("{projection}: {e}"));
         let doc = &s.active().unwrap().doc;
         let moved = r["aligned"].as_array().unwrap().iter().any(|a| a["layer"] == bg.0);
-        assert_eq!(moved, projection != "auto" || r["layout"] != "perspective", "{projection}: {r}");
+        // A planar layout keeps the reference (here the Background) put; a reprojecting one
+        // (Cylindrical, Spherical) moves every layer, and Auto may now choose either.
+        let planar = matches!(r["layout"].as_str(), Some("perspective" | "collage" | "reposition"));
+        assert_eq!(moved, projection != "auto" || !planar, "{projection}: {r}");
         assert_eq!(doc.is_background(bg), !moved, "{projection}: a moved Background is a normal layer: {r}");
         if moved {
             assert_eq!(doc.layer(bg).unwrap().name, "Layer 0", "{projection}");
@@ -447,6 +450,25 @@ fn auto_align_registers_a_smooth_bracket_by_intensity() {
             s.undo();
         }
     }
+}
+
+#[test]
+fn auto_align_keeps_an_aligned_exposure_bracket_straight() {
+    // Five aligned exposures of one scene (#10568) were bent by a homography fitted to
+    // correspondences that were all within a pixel of the identity: the layers moved apart at
+    // the edges. The same picture at two exposures, already aligned, must stay that way.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 240, "background": "transparent"})).unwrap();
+    let a = texture_layer(&mut s, "A", 20, 20);
+    let b = texture_layer(&mut s, "B", 20, 20);
+    s.execute("image.adjustments.exposure", json!({"exposure": 1.5})).unwrap();
+    select(&mut s, &[a, b]);
+    let r = s.execute("edit.autoAlignLayers", json!({})).unwrap();
+    let m = r["aligned"][0]["matrix"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<_>>();
+    assert!(matches!(r["layout"].as_str(), Some("reposition" | "collage")), "{r}");
+    // No rotation, shear, aspect or perspective: only a (small) shift may remain.
+    assert!((m[0] - 1.0).abs() < 0.002 && m[1].abs() < 0.002 && m[3].abs() < 0.002 && (m[4] - 1.0).abs() < 0.002, "{r}");
+    assert!(m[6].abs() < 1e-5 && m[7].abs() < 1e-5 && (m[8] - 1.0).abs() < 1e-5, "{r}");
 }
 
 /// Layers with nothing in common are no fit: the intensity registration says so instead of

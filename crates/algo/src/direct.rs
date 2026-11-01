@@ -400,6 +400,20 @@ pub fn register(reference: &Plane, target: &Plane, motion: Motion, init: Pose, c
     Registration { pose, h: pose.matrix(w, h), rms, overlap, correlation }
 }
 
+/// The correlation of `reference` with `target` at `pose`, and the pixels both cover: the
+/// statistics [`register`] reports at full resolution (correlation 0 without overlap or texture).
+pub fn correlation(reference: &Plane, target: &Plane, pose: Pose) -> (f64, usize) {
+    let pref = levels(reference);
+    let ptgt = levels(target);
+    match (pref.first(), ptgt.first()) {
+        (Some(r), Some(t)) => {
+            let (_, n, c) = cost(r, t, &pose);
+            (c, n)
+        }
+        _ => (0.0, 0),
+    }
+}
+
 /// `src` (with its coverage) warped by `pose` into a plane of the same size with the cubic
 /// B-spline, and the coverage of the result: the points that land inside the source, on pixels
 /// it covers.
@@ -512,6 +526,23 @@ mod tests {
         assert_eq!(cost(&l[0], &flat[0], &Pose::IDENTITY).2, 0.0);
         let r = register(&plane(w, h, &src), &plane(w, h, &doubled), Motion::Similarity, Pose::IDENTITY, 0);
         assert!(r.correlation > 0.999, "{r:?}");
+    }
+
+    #[test]
+    fn correlation_reports_the_overlap_at_a_pose() {
+        let (w, h) = (96, 72);
+        let src = texture(w, h, 2);
+        let p = plane(w, h, &src);
+        let (c, n) = correlation(&p, &p, Pose::IDENTITY);
+        assert!(c > 0.9999 && n == w * h, "corr {c} n {n}");
+        // A whole width of shift leaves nothing in common.
+        let (c, n) = correlation(&p, &p, Pose { dx: 1.0, ..Pose::IDENTITY });
+        assert_eq!((c, n), (0.0, 0));
+        // A shift correlates less but still covers the plane.
+        let shifted: Vec<f32> = (0..w * h).map(|i| sample(&src, w, h, ((i % w) as f64 + 7.0).min((w - 1) as f64), (i / w) as f64)).collect();
+        let (c, n) = correlation(&p, &plane(w, h, &shifted), Pose::IDENTITY);
+        assert_eq!(n, w * h);
+        assert!(c > 0.0 && c < 0.999, "corr {c}");
     }
 
     #[test]

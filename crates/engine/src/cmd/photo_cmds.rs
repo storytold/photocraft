@@ -142,9 +142,148 @@ pub(crate) fn register(images: &[(&Surface, Rect)], layout: Layout, reference: O
     let feats = panorama::detect_many(&prepared, 800);
     let matches = panorama::match_pairs(&feats);
     let focal = focal35.map(|f| f / 36.0 * side as f64 / k as f64);
-    let a = panorama::align(&feats, &matches, &AlignOptions { layout, focal, reference, geometric })?;
+    let mut a = panorama::align(&feats, &matches, &AlignOptions { layout, focal, reference, geometric })?;
+    // Auto: layers that nearly coincide (an exposure or focus bracket) are the same scene and
+    // barely move. A full homography fitted to a few correspondences that are all within a pixel
+    // of the identity still bends the image at its edges, which misaligns a bracket that was
+    // already aligned. Keep the simplest placement that explains the pixels at least as well.
+    if layout == Layout::Auto && !geometric && matches!(a.layout, Layout::Perspective | Layout::Collage | Layout::Reposition) && nearly_coincident(&a, &feats) {
+        a = simplest_placement(&prepared, &feats, &matches, &AlignOptions { layout, focal, reference, geometric }, a);
+    }
     let kf = k as f64;
     Some(Alignment { placements: a.placements.iter().map(|p| p.as_ref().map(|p| p.scaled(kf))).collect(), focal: a.focal * kf, rms: a.rms * kf, ..a })
+}
+
+/// Whether every placed image stays within a twentieth of the image side of where it already is:
+/// a bracket or a burst, where a full homography has nothing to explain and can only bend the
+/// picture. A panorama moves its images much further, and skips the simpler candidates below.
+fn nearly_coincident(a: &Alignment, feats: &[panorama::ImageFeatures]) -> bool {
+    a.placements.iter().zip(feats).all(|(pl, f)| {
+        let Some(pl) = pl else { return true };
+        let (w, h) = (f.w as f64, f.h as f64);
+        let limit = 0.05 * w.max(h);
+        [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].iter().all(|&(x, y)| {
+            let (u, v) = pl.forward(x, y);
+            u.is_finite() && v.is_finite() && (u - x).hypot(v - y) <= limit
+        })
+    })
+}
+
+/// The simplest of the planar placements that is photometrically at least as good as `best`: the
+/// identity, then a translation, then a similarity, each having to beat the simpler one by a
+/// margin before its extra freedom is worth anything. For an exposure or focus bracket, whose
+/// correspondences are all within a pixel of the identity, this keeps the layers where they are
+/// instead of letting a homography bend them; for a panorama the perspective placement stays, as
+/// a similarity cannot agree with the reference nearly as well.
+fn simplest_placement(
+    prepared: &[panorama::PreparedImage],
+    feats: &[panorama::ImageFeatures],
+    matches: &[panorama::PairMatch],
+    opts: &AlignOptions,
+    best: Alignment,
+) -> Alignment {
+    let reference = best.reference;
+    let identity = Alignment {
+        layout: Layout::Reposition,
+        reference,
+        placements: prepared
+            .iter()
+            .map(|&(w, h, _, _)| {
+                Some(Placement {
+                    projection: panorama::Projection::Plane,
+                    focal: w.max(h) as f64,
+                    center: [w as f64 / 2.0, h as f64 / 2.0],
+                    k1: 0.0,
+                    h: Homography::IDENTITY,
+                })
+            })
+            .collect(),
+        focal: best.focal,
+        k1: 0.0,
+        pairs: Vec::new(),
+        rms: 0.0,
+    };
+    let mut candidates = vec![identity];
+    for layout in [Layout::Reposition, Layout::Collage] {
+        if let Some(a) = panorama::align(feats, matches, &AlignOptions { layout, ..opts.clone() }) {
+            candidates.push(a);
+        }
+    }
+    candidates.push(best);
+    // More freedom has to buy at least this much agreement (a percent of one layer's coverage).
+    const MARGIN: f64 = 0.01;
+    let mut chosen = 0;
+    let mut score = agreement(prepared, reference, &candidates[0].placements);
+    for (i, c) in candidates.iter().enumerate().skip(1) {
+        let s = agreement(prepared, reference, &c.placements);
+        if s > score + MARGIN {
+            chosen = i;
+            score = s;
+        }
+    }
+    candidates.swap_remove(chosen)
+}
+
+/// How well `placements` agrees with the reference at the registration scale: each placed layer's
+/// Pearson correlation with the reference over the pixels both cover, times the fraction of the
+/// reference it covers, summed over the layers. A bracket that is already aligned scores near its
+/// layer count; a misplaced layer, or an identity placement on a shifted panorama, far less.
+fn agreement(prepared: &[panorama::PreparedImage], reference: usize, placements: &[Option<Placement>]) -> f64 {
+    let Some((rw, rh, ref_luma, ref_valid)) = prepared.get(reference) else { return 0.0 };
+    let (rw, rh) = (*rw, *rh);
+    let valid = |mask: &Option<Vec<bool>>, i: usize| mask.as_ref().is_none_or(|m| m[i]);
+    let ref_px = (0..rw * rh).filter(|&i| valid(ref_valid, i)).count();
+    if ref_px == 0 {
+        return 0.0;
+    }
+    let mut score = 0.0;
+    for (i, pl) in placements.iter().enumerate() {
+        if i == reference {
+            continue;
+        }
+        let (Some(pl), Some((iw, ih, luma, layer_valid))) = (pl, prepared.get(i)) else { continue };
+        let (iw, ih) = (*iw, *ih);
+        // Plane placements only (the candidates are); the inverse maps panorama px to layer px.
+        let Some(inv) = plane_matrix(pl, (0.0, 0.0)).and_then(|h| h.inverse()) else { continue };
+        let (mut n, mut sr, mut si, mut srr, mut sii, mut sri) = (0u64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        for y in 0..rh {
+            for x in 0..rw {
+                if !valid(ref_valid, y * rw + x) || inv.w(x as f64, y as f64) <= 1e-9 {
+                    continue;
+                }
+                let (lx, ly) = inv.apply(x as f64, y as f64);
+                let (x0, y0) = (lx.floor(), ly.floor());
+                if !(x0 >= 0.0 && y0 >= 0.0 && x0 + 1.0 < iw as f64 && y0 + 1.0 < ih as f64) {
+                    continue;
+                }
+                let (x0, y0) = (x0 as usize, y0 as usize);
+                let (fx, fy) = (lx - x0 as f64, ly - y0 as f64);
+                let at = |x: usize, y: usize| y * iw + x;
+                let corners = [at(x0, y0), at(x0 + 1, y0), at(x0, y0 + 1), at(x0 + 1, y0 + 1)];
+                if corners.iter().any(|&c| !valid(layer_valid, c)) {
+                    continue;
+                }
+                let top = luma[corners[0]] as f64 + (luma[corners[1]] as f64 - luma[corners[0]] as f64) * fx;
+                let bottom = luma[corners[2]] as f64 + (luma[corners[3]] as f64 - luma[corners[2]] as f64) * fx;
+                let (r, t) = (ref_luma[y * rw + x] as f64, top + (bottom - top) * fy);
+                n += 1;
+                sr += r;
+                si += t;
+                srr += r * r;
+                sii += t * t;
+                sri += r * t;
+            }
+        }
+        if n < 100 {
+            continue;
+        }
+        let nf = n as f64;
+        let (vr, vl, cov) = ((srr - sr * sr / nf).max(0.0), (sii - si * si / nf).max(0.0), sri - sr * si / nf);
+        if vr > 0.0 && vl > 0.0 {
+            score += (cov / (vr * vl).sqrt()) * (nf / ref_px as f64);
+        }
+    }
+    score
 }
 
 /// The intensity registration searches planes at most this many pixels across: the pose is
@@ -153,6 +292,11 @@ pub(crate) const DIRECT_SIDE: usize = 2048;
 
 /// A layer and its neighbour must share at least this fraction of the plane at the pose found.
 const DIRECT_MIN_OVERLAP: f64 = 0.25;
+/// A pose kept for a layer that already coincides must not throw away more than this fraction of
+/// the plane: the intensity registration is for brackets, where the frames overlap almost
+/// entirely, and a pose that shrinks the overlap can otherwise find a small patch that happens to
+/// correlate better (an exposure gradient pulls a similarity to its search box).
+const DIRECT_KEEP_OVERLAP: f64 = 0.85;
 /// The reference and the warped layer must correlate at least this much: a bracket of one scene
 /// correlates near 1 whatever the exposure; unrelated pictures, or a pose that ran into the
 /// search box, do not.
@@ -166,8 +310,10 @@ pub(crate) const NO_DETAIL: &str = "Auto-Align couldn't find enough matching det
 /// a burst): outward from the reference, each layer to the previous one aligned, starting from
 /// its pose. The luminance planes are built at the search scale (≤ [`DIRECT_SIDE`] across), so
 /// nothing full-resolution is held or warped. A layer whose best pose overlaps its neighbour
-/// too little or explains too little of it is no fit, and fails with [`NO_DETAIL`]. Planar
-/// layouts only; Auto means a similarity (Collage).
+/// too little or explains too little of it is no fit, and fails with [`NO_DETAIL`]; a pose that
+/// does not explain the neighbour clearly better than leaving the layer where it is is dropped
+/// for the identity, so a bracket that already coincides is left alone. Planar layouts only;
+/// Auto means a similarity (Collage).
 pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, reference: usize) -> std::result::Result<Alignment, String> {
     use photocraft_algo::direct::{self, Plane, Pose};
     use photocraft_algo::transform::Homography;
@@ -196,7 +342,6 @@ pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, refer
         })
         .collect();
     let (w, h) = (fw.div_ceil(k).max(1), fh.div_ceil(k).max(1));
-    let min_overlap = (DIRECT_MIN_OVERLAP * (w * h) as f64) as usize;
     let mut poses: Vec<Option<Pose>> = vec![None; n];
     let mut rmss = Vec::new();
     let mut pairs = Vec::new();
@@ -209,18 +354,27 @@ pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, refer
             let idx = i as usize;
             let Some((l, v)) = planes.get(idx) else { break };
             let target = Plane { w, h, luma: l, valid: v.as_deref() };
-            let reg = direct::register(&Plane { w, h, luma: &prev_luma, valid: prev_valid.as_deref() }, &target, motion, init, 0);
-            if reg.overlap < min_overlap || reg.correlation < DIRECT_MIN_CORRELATION {
+            let prev = Plane { w, h, luma: &prev_luma, valid: prev_valid.as_deref() };
+            // A pose has to explain the neighbour better than leaving the layer where it is, over
+            // nearly the whole plane: a similarity can otherwise shrink the overlap until the
+            // small part left happens to correlate well, which misaligns a bracket that already
+            // coincides. The identity is then the better pose.
+            let (already, already_n) = direct::correlation(&prev, &target, Pose::IDENTITY);
+            let reg = direct::register(&prev, &target, motion, init, 0);
+            let area = (w * h) as f64;
+            let keep = reg.correlation > already + 0.01 && reg.overlap as f64 >= DIRECT_KEEP_OVERLAP * area;
+            if !keep && (already < DIRECT_MIN_CORRELATION || (already_n as f64) < DIRECT_MIN_OVERLAP * area) {
                 return Err(NO_DETAIL.into());
             }
-            init = reg.pose;
+            let pose = if keep { reg.pose } else { Pose::IDENTITY };
+            init = pose;
             (prev_luma, prev_valid) = {
-                let (wl, wv) = direct::warp(&target, &reg.pose);
+                let (wl, wv) = direct::warp(&target, &pose);
                 (wl, Some(wv))
             };
-            pairs.push(((i - dir) as usize, idx, reg.overlap * k * k));
-            rmss.push(reg.rms);
-            poses[idx] = Some(reg.pose);
+            pairs.push(((i - dir) as usize, idx, if keep { reg.overlap * k * k } else { w * h * k * k }));
+            rmss.push(if keep { reg.rms } else { 0.0 });
+            poses[idx] = Some(pose);
             i += dir;
         }
     }
