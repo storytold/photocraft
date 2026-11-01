@@ -576,3 +576,44 @@ fn picking_custom_clears_the_preview_while_a_superseded_one_still_runs() {
     assert_eq!(pv.shown, pv.want);
     assert!(pv.running.is_some(), "the superseded worker is still winding down");
 }
+
+/// Custom's "nothing painted yet" follows what the fill samples, the full-resolution area,
+/// not the proxy (2 document px per proxy px here): a 1 px stroke on the fill area's left edge
+/// keeps a column outside it that the proxy, sampling every other column, doesn't see, and one
+/// just past the canvas's right edge marks the proxy's last column (half of it off the canvas)
+/// while the fill has nothing there.
+#[test]
+fn custom_hint_follows_the_full_resolution_area_not_the_proxy() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 2201, "height": 40, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            s.fill_rect(Rect::new(0, 0, 2201, 40), &[0.2, 0.6, 0.4, 1.0]);
+            s.fill_rect(Rect::new(1091, 10, 1111, 30), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 1091, "y": 10, "width": 20, "height": 20})).unwrap();
+    app.sync_views();
+    open(&mut app).unwrap();
+    assert_eq!(ws(&app).k, 2);
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    // Column 1090 is sampled; the proxy's column 545 (document column 1091) is in the fill area.
+    let d = control(&mut app, &json!({"stroke": {"points": [[1091.0, 15.0], [1091.0, 25.0]], "size": 1}})).unwrap();
+    assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
+    assert!(d["previewHint"].is_null(), "{d}");
+    let (_, source, hole) = engine_source(&app);
+    assert!(source.iter().zip(&hole).any(|(s, h)| *s && !*h), "the fill samples column 1090");
+    control(&mut app, &json!({"apply": true})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "Apply fills");
+    // Past the canvas: the proxy's column 1100 (document column 2201) is marked, the fill
+    // samples nothing.
+    control(&mut app, &json!({"undo": true})).unwrap();
+    let d = control(&mut app, &json!({"stroke": {"points": [[2202.0, 5.0], [2202.0, 35.0]], "size": 1}})).unwrap();
+    assert!(d["sampledProxyPixels"].as_u64().unwrap() > 0, "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+}
