@@ -447,7 +447,13 @@ fn post(endpoint: &Endpoint, path: &str, body: &[u8]) -> Result<ParsedMessage> {
         .and_then(|()| stream.flush())
         .map_err(|e| Error::Protocol(format!("sending: {e}")))?;
     let raw = read_response(&mut stream)?;
-    let (status, headers, body) = http_response(&raw)?;
+    decode_reply(&raw)
+}
+
+/// The HTTP response `read_response` returned, as an IPP reply: a non-200 status, a broken body or
+/// an IPP error status is an error.
+fn decode_reply(raw: &[u8]) -> Result<ParsedMessage> {
+    let (status, headers, body) = http_response(raw)?;
     if status != 200 {
         return Err(Error::Protocol(match status {
             401 => "the print server asks for authentication (HTTP 401)".to_string(),
@@ -469,7 +475,7 @@ type Headers = Vec<(String, String)>;
 /// Reads one HTTP response: the headers, then as much body as `Content-Length` says, or up to
 /// the last chunk, or to the end of the stream when the server says neither. A server that keeps
 /// the connection open would otherwise hold the reply until the read times out.
-fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
+fn read_response(stream: &mut impl Read) -> Result<Vec<u8>> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 16 * 1024];
     let mut body_at = None;
@@ -608,6 +614,11 @@ fn queues(endpoint: &Endpoint, op: u16, is_class: bool) -> Result<Vec<Printer>> 
         Err(Error::Status(0x0406, _)) => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
+    printers_in(&parsed, is_class)
+}
+
+/// The printers (or classes) in a CUPS-Get-Printers / CUPS-Get-Classes reply, one per printer group.
+fn printers_in(parsed: &ParsedMessage, is_class: bool) -> Result<Vec<Printer>> {
     let mut out = Vec::new();
     let attributes = &parsed.reply.attributes;
     for group in parsed.groups.iter().filter(|group| group.tag == TAG_PRINTER_GROUP) {
@@ -683,6 +694,18 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
         .and_then(Attribute::int)
         .map(|id| id.max(0) as u32)
         .ok_or_else(|| Error::Protocol("no job id in the reply".into()))
+}
+
+/// What a print server's raw reply decodes to, for the fuzz targets in `fuzz/`: `stream` goes
+/// through the same reading and decoding a request's reply does after the socket (HTTP headers,
+/// `Content-Length` or chunks, the IPP message, the error status), then through the printer list
+/// a CUPS-Get-Printers reply becomes. Not part of the API.
+#[doc(hidden)]
+pub fn fuzz_reply(stream: &mut impl Read) -> Result<(Reply, Vec<Printer>)> {
+    let raw = read_response(stream)?;
+    let parsed = decode_reply(&raw)?;
+    let printers = printers_in(&parsed, false)?;
+    Ok((parsed.reply, printers))
 }
 
 /// A request as a server sees it: the operation (the request's status field), its attributes
