@@ -376,6 +376,9 @@ pub(crate) fn lighting(src: &Image, out: Rect, ctx: &Ctx, spec: &LightingSpec) -
 #[cfg(test)]
 mod clouds_tests {
     use super::{cloud_scale, clouds_value, tile_period, wrap_cells};
+    use crate::image::Image;
+    use crate::{Ctx, FilterParams};
+    use photocraft_geom::Rect;
 
     /// The mean jump between neighbouring values across the wrap seam and inside the pattern.
     fn jumps(w: u32, h: u32) -> (f32, f32) {
@@ -458,5 +461,25 @@ mod clouds_tests {
         for (x, y, want) in before {
             assert_eq!(clouds_value(x as f32, y as f32, scale, 7, period), want, "({x}, {y})");
         }
+    }
+
+    /// #8999 through the renderer: Filter › Render › Clouds on 256 × 256 bounds (away from the
+    /// canvas origin) tiles left to right and top to bottom, so the period comes from the bounds
+    /// and reaches the noise, not only when a test hands `clouds_value` one.
+    #[test]
+    fn rendered_clouds_tile_left_to_right_and_top_to_bottom() {
+        let bounds = Rect::new(40, -20, 296, 236);
+        let ctx = Ctx { bounds, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+        let params = FilterParams::Clouds { seed: 7, difference: false, foreground: [0.0, 0.0, 0.0, 1.0], background: [1.0; 4] };
+        let out = crate::kernel(&params, &Image::new(bounds, 4), bounds, &ctx);
+        assert_eq!(out.len(), 256 * 256 * 4);
+        let v = |x: usize, y: usize| out[(y * 256 + x) * 4];
+        let mean = |d: &dyn Fn(usize) -> f32| (0..256).map(d).sum::<f32>() / 256.0;
+        let seam = mean(&|y| (v(255, y) - v(0, y)).abs());
+        let inside = mean(&|y| (v(128, y) - v(129, y)).abs());
+        assert!(inside > 0.0 && seam < inside * 3.0 + 0.01, "right edge into the left: seam {seam} vs {inside}");
+        let seam = mean(&|x| (v(x, 255) - v(x, 0)).abs());
+        let inside = mean(&|x| (v(x, 128) - v(x, 129)).abs());
+        assert!(inside > 0.0 && seam < inside * 3.0 + 0.01, "bottom row into the top: seam {seam} vs {inside}");
     }
 }
