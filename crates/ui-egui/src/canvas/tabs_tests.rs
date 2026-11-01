@@ -257,8 +257,9 @@ fn crowded_tabs_keep_their_whole_names_and_the_menu_lists_every_document() {
             h.get_by_label("More documents").click();
             h.run_steps(2);
             for (i, label) in labels.iter().enumerate() {
-                // The menu bar's padding: an unchecked row keeps the check mark's room, so names line up.
-                let (on, off) = (format!("✔ {label}"), format!("   {label}"));
+                // The checked row's name leads with the check mark; an unchecked row's name is the
+                // bare title (its gutter is a layout advance, not text).
+                let (on, off) = (format!("✔ {label}"), label.clone());
                 let (want, other) = if i == active { (&on, &off) } else { (&off, &on) };
                 assert_eq!(h.query_all_by_label(want).count(), 1, "{theme:?}, active {active}: document {i} is in the menu as {want:?}");
                 assert_eq!(h.query_all_by_label(other).count(), 0, "{theme:?}, active {active}: document {i} is not {other:?}");
