@@ -624,6 +624,8 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
 /// Appearance row and the shape tools' options bar.
 fn assert_swatch_checkers_are_rounded(h: &Harness<'_, PhotocraftApp>, labels: [&str; 2]) {
     let panel = h.ctx.global_style().visuals.panel_fill;
+    // the fill's own corners: a checker rounded less would still show past them
+    let radius = egui::CornerRadius::from(crate::theme::Tokens::get(&h.ctx).radius_sm);
     for label in labels {
         let swatch = h.get_by_label(label).rect();
         let (mut square, mut rounded) = (Vec::new(), 0);
@@ -635,14 +637,14 @@ fn assert_swatch_checkers_are_rounded(h: &Harness<'_, PhotocraftApp>, labels: [&
                 }
                 if r.corner_radius == egui::CornerRadius::ZERO && r.fill != panel {
                     square.push(r.rect);
-                } else if r.corner_radius != egui::CornerRadius::ZERO && r.brush.is_some() {
-                    // `checker_rounded`: a rounded, textured rect
+                } else if r.corner_radius == radius && r.brush.is_some() {
+                    // `checker_rounded`: a textured rect rounded like the fill
                     rounded += 1;
                 }
             }
         }
         assert!(square.is_empty(), "{label}: square shapes inside the rounded swatch {swatch:?}: {square:?}");
-        assert_eq!(rounded, 1, "{label}: exactly one rounded checker inside the swatch {swatch:?}");
+        assert_eq!(rounded, 1, "{label}: exactly one checker rounded like the fill inside the swatch {swatch:?}");
     }
 }
 
