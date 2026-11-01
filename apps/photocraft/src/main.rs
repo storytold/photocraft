@@ -74,6 +74,8 @@ mod tablet;
 mod ui_state;
 mod updates;
 mod window_frame;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -340,6 +342,11 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
 }
 
 fn main() -> eframe::Result {
+    // Apply before logger/font/session setup; a successful re-exec must not repeat side effects.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if std::env::var_os("WAYLAND_DISPLAY").is_none_or(|v| v.is_empty()) {
+        x11_scale::apply();
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
