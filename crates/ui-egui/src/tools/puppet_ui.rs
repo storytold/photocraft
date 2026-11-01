@@ -295,12 +295,16 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
 
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     let tol = crate::distort_ui::tolerance(app);
+    // Pins hidden by View › Show › Edit Pins are not there to be grabbed, moved or deleted: a
+    // press lands on the mesh instead and places a new pin, as a hidden guide is not draggable
+    // either (`rulers::guide_at`, #1119). Keep this in step with the gate in [`draw`].
+    let pins_shown = app.ui.view.shows(app.ui.view.show.edit_pins);
     let Some(s) = app.distort.puppet.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, .. } => {
             let p = [x, y];
             let before = s.warp.pins.clone();
-            if let Some(i) = s.pin_at(p, tol) {
+            if let Some(i) = s.pin_at(p, tol).filter(|_| pins_shown) {
                 if mods.alt {
                     s.selected = Some(i);
                     s.delete_selected_pin();
@@ -346,6 +350,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     }
 }
 
+/// A pin's yellow disc.
+const PIN_FILL: Color32 = Color32::from_rgb(255, 214, 10);
+
 /// The warped pixels: image content, drawn under the grid and guides like the document so a
 /// guide stays visible across the layer being warped (#7781). The mesh lines and pins are [`draw`].
 pub fn draw_content(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
@@ -364,8 +371,9 @@ pub fn draw_content(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) 
     painter.add(mesh);
 }
 
-/// The mesh lines and pins over the warped pixels ([`draw_content`]) and the guides.
-pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
+/// The mesh lines and pins over the warped pixels ([`draw_content`]) and the guides; the pins only
+/// with `pins` (View › Show › Edit Pins under View › Extras, #1119).
+pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform, pins: bool) {
     if s.show_mesh {
         let line = Stroke::new(0.6, Color32::from_rgba_unmultiplied(40, 40, 40, 150));
         let mut seen = std::collections::HashSet::new();
@@ -379,10 +387,13 @@ pub fn draw(s: &PuppetSession, painter: &egui::Painter, xf: &ViewXform) {
             }
         }
     }
+    if !pins {
+        return;
+    }
     // Pins: yellow discs with a black ring; the selected pin has a black centre (Photoshop).
     for (i, p) in s.warp.pins.iter().enumerate() {
         let c = xf.to_screen(p.dst[0] as f32, p.dst[1] as f32);
-        painter.circle_filled(c, 5.5, Color32::from_rgb(255, 214, 10));
+        painter.circle_filled(c, 5.5, PIN_FILL);
         painter.circle_stroke(c, 5.5, Stroke::new(1.25, Color32::BLACK));
         if s.selected == Some(i) {
             painter.circle_filled(c, 2.0, Color32::BLACK);

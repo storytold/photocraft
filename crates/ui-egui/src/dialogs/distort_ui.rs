@@ -435,7 +435,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(p) = &app.distort.puppet
         && on_doc(app, p.document)
     {
-        crate::puppet_ui::draw(p, painter, xf);
+        crate::puppet_ui::draw(p, painter, xf, app.ui.view.shows(app.ui.view.show.edit_pins));
     }
     if let Some(p) = &app.distort.perspective
         && on_doc(app, p.document)
