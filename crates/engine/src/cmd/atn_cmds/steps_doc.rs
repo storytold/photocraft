@@ -1,7 +1,7 @@
 use super::convert::clip_name;
 use super::descriptors::{
-    PCT, PX, Target, ang, class, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, long, path_text,
-    path_value, pct, px, target, target_ref, text, trimmed,
+    PCT, PT, PX, Target, ang, class, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, long,
+    path_text, path_value, pct, px, target, target_ref, text, trimmed,
 };
 use super::fields::{Mapped, none, step, steps};
 use super::tables::{ALIGN, EXTENSION, INTENT, INTERPOLATION, MODES, PROFILES, PURGE, SAVE_FORMATS, lookup, lookup_back};
@@ -201,8 +201,18 @@ pub(super) fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("Usng", D::Descriptor(u)).with("In  ", path_value(path)))
 }
 
+/// Import layer-retaining conversions; keep unsupported destructive choices verbatim.
 pub(super) fn convert_mode_from(d: &Descriptor) -> Mapped {
+    let layer_options = d.get("Fltt").is_some() || d.get("Rstr").is_some();
+    for key in ["Fltt", "Rstr"] {
+        if !matches!(d.get(key), None | Some(D::Boolean(false))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+    }
     if let Some(depth) = get_num(d, "Dpth") {
+        if layer_options {
+            return Mapped::Unsupported { harmless: false };
+        }
         return match depth as i64 {
             8 => none("image.mode.bits8"),
             16 => none("image.mode.bits16"),
@@ -219,7 +229,13 @@ pub(super) fn convert_mode_from(d: &Descriptor) -> Mapped {
         _ => return Mapped::Unsupported { harmless: false },
     };
     if mode == "BtmM" {
+        if layer_options {
+            return Mapped::Unsupported { harmless: false };
+        }
         return bitmap_from(options);
+    }
+    if mode == "Mltc" && layer_options {
+        return Mapped::Unsupported { harmless: false };
     }
     // Bitmap to Grayscale records a size ratio; only 1 keeps the pixels as they are.
     if options.and_then(|o| get_num(o, "Rt  ")).is_some_and(|r| (r - 1.0).abs() > 1e-9) {
@@ -257,27 +273,46 @@ fn bitmap_to(p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("T   ", D::Descriptor(desc("BtmM").with("Mthd", enm("Mthd", method)))))
 }
 
+/// Write mode classes and the native CMS conversion's explicit layer-retaining policy.
 pub(super) fn convert_mode_to(id: &str, p: &Value) -> Option<Descriptor> {
     Some(match id {
         "image.mode.bits8" => desc("null").with("Dpth", long(8.0)),
         "image.mode.bits16" => desc("null").with("Dpth", long(16.0)),
         "image.mode.bits32" => desc("null").with("Dpth", long(32.0)),
         "image.mode.bitmap" => bitmap_to(p)?,
-        _ => desc("null").with("T   ", enm("ClrS", lookup_back(MODES, id.strip_prefix("image.mode.")?)?)),
+        _ => {
+            let mode = id.strip_prefix("image.mode.")?;
+            let mut d = desc("null").with("T   ", D::Class(class(lookup_back(MODES, mode)?)));
+            if mode != "multichannel" {
+                d = d.with("Fltt", D::Boolean(false)).with("Rstr", D::Boolean(false));
+            }
+            d
+        }
     })
 }
 
 /// Import canvas dimensions, anchors and explicit extension-colour choices.
 pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
+    let mut units = None;
     for (k, param) in [("Wdth", "width"), ("Hght", "height")] {
         match d.get(k) {
-            Some(D::UnitFloat { unit: PX, value }) => {
-                p.insert(param.into(), value.round().into());
+            Some(D::UnitFloat { unit, value }) if (*unit == PX || *unit == PCT) && value.is_finite() => {
+                if units.is_some_and(|previous| previous != *unit) || (*unit == PCT && *value <= 0.0) {
+                    return Mapped::Unsupported { harmless: false };
+                }
+                units = Some(*unit);
+                p.insert(param.into(), if *unit == PX { value.round() } else { *value }.into());
             }
             Some(_) => return Mapped::Unsupported { harmless: false },
             None => {}
         }
+    }
+    if units == Some(PCT) {
+        if !matches!(d.get("Rltv"), None | Some(D::Boolean(false))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        p.insert("units".into(), "percent".into());
     }
     if let Some(r) = get_bool(d, "Rltv") {
         p.insert("relative".into(), r.into());
@@ -317,6 +352,22 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
 
 /// Write canvas geometry and canonical extension-colour identifiers.
 pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let units = match p.get("units") {
+        None => PX,
+        Some(Value::String(unit)) if unit == "px" => PX,
+        Some(Value::String(unit)) if unit == "percent" && jbool(p, "relative") != Some(true) => PCT,
+        _ => return None,
+    };
+    if units == PCT {
+        for key in ["width", "height"] {
+            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || number <= 0.0)) {
+                return None;
+            }
+        }
+        if jnum(p, "width").is_none() && jnum(p, "height").is_none() {
+            return None;
+        }
+    }
     let anchor = jstr(p, "anchor").unwrap_or("center");
     let v = if anchor.starts_with("top") {
         "Top "
@@ -337,10 +388,16 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         d = d.with("Rltv", D::Boolean(r));
     }
     if let Some(w) = jnum(p, "width") {
-        d = d.with("Wdth", px(w));
+        if units == PCT && w <= 0.0 {
+            return None;
+        }
+        d = d.with("Wdth", D::UnitFloat { unit: units, value: w });
     }
     if let Some(hh) = jnum(p, "height") {
-        d = d.with("Hght", px(hh));
+        if units == PCT && hh <= 0.0 {
+            return None;
+        }
+        d = d.with("Hght", D::UnitFloat { unit: units, value: hh });
     }
     d = d.with("Hrzn", enm("HrzL", h)).with("Vrtc", enm("VrtL", v));
     if let Some(c) = jstr(p, "extensionColor") {
@@ -352,23 +409,45 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(d)
 }
 
+/// Keep recorded physical dimensions until playback can use the current document's dpi.
 pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     let mut percent: Option<f64> = None;
+    let mut physical = false;
     for (k, param) in [("Wdth", "width"), ("Hght", "height")] {
         match d.get(k) {
             Some(D::UnitFloat { unit: PX, value }) => {
+                if physical {
+                    return Mapped::Unsupported { harmless: false };
+                }
                 p.insert(param.into(), value.round().into());
             }
-            // Percent scales both sides at playback; two different percentages, or physical
-            // units, need the document's size and resolution and stay unsupported.
-            Some(D::UnitFloat { unit: PCT, value }) => match percent {
+            Some(D::UnitFloat { unit: PT, value }) if value.is_finite() && *value > 0.0 => {
+                if percent.is_some() || (!physical && !p.is_empty()) {
+                    return Mapped::Unsupported { harmless: false };
+                }
+                physical = true;
+                p.insert(param.into(), (*value).into());
+            }
+            // Percent scales both sides; retain the existing pixel/percent precedence.
+            Some(D::UnitFloat { unit: PCT, value }) if !physical => match percent {
                 Some(other) if (other - value).abs() > 1e-9 => return Mapped::Unsupported { harmless: false },
                 _ => percent = Some(*value),
             },
             Some(_) => return Mapped::Unsupported { harmless: false },
             None => {}
         }
+    }
+    if physical {
+        // A simultaneous dpi change or an ambiguous aspect choice needs its own reference form.
+        if d.get("Rslt").is_some()
+            || !matches!(d.get("CnsP"), None | Some(D::Boolean(_)))
+            || (get_bool(d, "CnsP") == Some(false) && (p.contains_key("width") != p.contains_key("height")))
+            || (get_bool(d, "CnsP") == Some(true) && p.contains_key("width") && p.contains_key("height"))
+        {
+            return Mapped::Unsupported { harmless: false };
+        }
+        p.insert("units".into(), "pt".into());
     }
     if let Some(pc) = percent {
         p.insert("percent".into(), pc.into());
@@ -403,7 +482,14 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     step("image.imageSize", Value::Object(p))
 }
 
+/// Export the recorded unit, avoiding sizes the native no-resample operation ignores.
 pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let unit = match p.get("units") {
+        None => PX,
+        Some(Value::String(unit)) if unit == "px" => PX,
+        Some(Value::String(unit)) if unit == "pt" => PT,
+        _ => return None,
+    };
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
     if jnum(p, "resolution").is_some()
         && jnum(p, "width").is_none()
@@ -419,6 +505,19 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     // descriptor has no "none" (it is the absence of `Intr`), so writing the ignored size would
     // turn the step into a pixel resize on playback (#7189).
     let resolution_only = jstr(p, "resample") == Some("none");
+    if unit == PT && !resolution_only {
+        for key in ["width", "height"] {
+            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || number <= 0.0)) {
+                return None;
+            }
+        }
+        if jnum(p, "width").is_none() && jnum(p, "height").is_none() {
+            return None;
+        }
+    }
+    if unit == PT && !resolution_only && (p.get("resolution").is_some() || p.get("percent").is_some()) {
+        return None;
+    }
     if resolution_only && jnum(p, "resolution").is_none() {
         // Nothing left to record: the step changes nothing.
         return None;
@@ -427,10 +526,19 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         d = d.with("Wdth", pct(pc)).with("Hght", pct(pc)).with("CnsP", D::Boolean(true));
     }
     if let Some(w) = jnum(p, "width").filter(|_| !resolution_only) {
-        d = d.with("Wdth", px(w));
+        if unit == PT && w <= 0.0 {
+            return None;
+        }
+        d = d.with("Wdth", D::UnitFloat { unit, value: w });
     }
     if let Some(h) = jnum(p, "height").filter(|_| !resolution_only) {
-        d = d.with("Hght", px(h));
+        if unit == PT && h <= 0.0 {
+            return None;
+        }
+        d = d.with("Hght", D::UnitFloat { unit, value: h });
+    }
+    if unit == PT && !resolution_only {
+        d = d.with("CnsP", D::Boolean(jnum(p, "width").is_none() || jnum(p, "height").is_none()));
     }
     if let Some(r) = jnum(p, "resolution") {
         d = d.with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: r });

@@ -51,8 +51,8 @@ fn recorded_canvas_percent_resolves_at_playback_and_keeps_an_omitted_side() {
             let mut s = sized_document(width, height, 72);
             replay_saved(&mut s, &action);
             assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(width * 2, if both_sides { height * 2 } else { height }));
-            assert_eq!(s.execute("document.pixel", json!({"x":0,"y":0})).unwrap(), json!([1, 0, 0, 1]));
-            assert_eq!(s.execute("document.pixel", json!({"x":1,"y":0})).unwrap(), json!([1, 1, 1, 1]), "canvas expansion must not stretch the mark");
+            assert_eq!(s.execute("document.pixel", json!({"x":0,"y":0})).unwrap(), json!([1.0, 0.0, 0.0, 1.0]));
+            assert_eq!(s.execute("document.pixel", json!({"x":1,"y":0})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]), "canvas expansion must not stretch the mark");
             s.execute("edit.undo", json!({})).unwrap();
             assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(width, height));
         }
@@ -125,6 +125,56 @@ fn recorded_mode_uses_a_class_and_retains_layers_with_false_flags() {
     replay_saved(&mut s, &action);
     assert_eq!(s.active().unwrap().doc.mode, photocraft_doc::ColorMode::Grayscale);
     assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+}
+
+/// Unsupported dimension combinations and destructive mode choices must not become different edits.
+#[test]
+fn unrepresented_units_and_mode_choices_stay_verbatim() {
+    let point = || Descriptor::new("null").with("Wdth", D::UnitFloat { unit: *b"#Rlt", value: 72.0 });
+    let mode = || Descriptor::new("null").with("T   ", D::Class(class("Grys")));
+    let canvas = || Descriptor::new("null").with("Wdth", D::UnitFloat { unit: *b"#Prc", value: 200.0 });
+    for (event, d) in [
+        (*b"CnvM", mode().with("Fltt", D::Boolean(true))),
+        (*b"CnvM", mode().with("Rstr", D::Boolean(true))),
+        (*b"CnvM", mode().with("Rstr", D::Integer(0))),
+        (*b"CnvS", canvas().with("Hght", D::UnitFloat { unit: *b"#Pxl", value: 40.0 })),
+        (*b"CnvS", canvas().with("Rltv", D::Boolean(true))),
+        (*b"ImgS", point().with("Hght", D::UnitFloat { unit: *b"#Pxl", value: 40.0 })),
+        (*b"ImgS", point().with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: 144.0 })),
+        (*b"ImgS", point().with("CnsP", D::Boolean(false))),
+    ] {
+        let action = recorded(AtnEvent::Code(event), d.clone());
+        assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(saved(&action).descriptor, Some(d));
+    }
+}
+
+/// New unit validation must fail before editing, while no-resample still ignores size fields.
+#[test]
+fn native_units_validate_before_edit_and_no_resample_remains_resolution_only() {
+    let mut s = sized_document(40, 20, 300);
+    for (id, params, refuse_export) in [
+        ("image.canvasSize", json!({"width":200,"units":"unknown"}), true),
+        ("image.canvasSize", json!({"width":"200","units":"percent"}), true),
+        ("image.canvasSize", json!({"width":200,"units":"percent","relative":true}), true),
+        ("image.imageSize", json!({"width":72,"units":1}), true),
+        ("image.imageSize", json!({"width":"72","units":"pt"}), true),
+        // A finite recorded point value is representable; overflow depends on playback dpi.
+        ("image.imageSize", json!({"width":1e308,"units":"pt"}), false),
+    ] {
+        let before = s.execute("document.inspect", json!({})).unwrap();
+        assert!(s.execute(id, params.clone()).is_err(), "{id} {params}");
+        assert_eq!(s.execute("document.inspect", json!({})).unwrap(), before);
+        let action = Action::new("Invalid", vec![(id.into(), params)]);
+        assert_eq!(atn_cmds::export("Identifiers", &[&action], &[], false).is_err(), refuse_export);
+    }
+    let params = json!({"width":1e308,"units":"pt","resolution":144,"resample":"none"});
+    s.execute("image.imageSize", params.clone()).unwrap();
+    assert_eq!(s.active().unwrap().doc.size, photocraft_geom::Size::new(40, 20));
+    assert_eq!(s.active().unwrap().doc.resolution_dpi, 144.0);
+    let action = Action::new("Resolution", vec![("image.imageSize".into(), params)]);
+    let d = saved(&action).descriptor.unwrap();
+    assert!(d.get("Wdth").is_none() && d.get("Hght").is_none());
 }
 
 fn class(id: &str) -> Class {
