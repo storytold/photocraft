@@ -779,7 +779,9 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if crate::workspace_ui::apply_custom(app) {
         return;
     }
-    // Presets use the default group order, heights and tabs (Reset brings everything back).
+    // Presets use the default group order, heights, tabs and floating bars.
+    app.ui.panels.toolbar = true;
+    app.ui.panels.options_bar = true;
     app.ui.dock = Default::default();
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
