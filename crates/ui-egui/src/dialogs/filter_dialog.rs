@@ -289,6 +289,11 @@ pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
 
 /// Commands outside `filter.*` that get the schema dialog *with* live preview.
 pub const PREVIEWED: &[&str] = &[
+    "select.modify.border",
+    "select.modify.smooth",
+    "select.modify.expand",
+    "select.modify.contract",
+    "select.modify.feather",
     "image.adjustments.selectiveColor",
     "image.adjustments.colorLookup",
     "image.adjustments.shadowsHighlights",
