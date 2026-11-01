@@ -16,6 +16,7 @@ use photocraft_raster::Surface;
 
 const W: u32 = 8;
 
+/// Builds a grayscale channel plane at the requested sample depth.
 fn plane(depth: SampleType, vals: &[f32]) -> Surface {
     let mut s = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
     s.write_region(Rect::from_xywh(0, 0, W, 1), vals);
@@ -46,10 +47,12 @@ fn unknown_spot_space(file: &mut PsdFile) {
     info.data[4..14].copy_from_slice(b"#15fc83e\0\0");
 }
 
+/// Reads the complete synthetic channel row.
 fn values(s: &Surface) -> Vec<f32> {
     s.read_region(Rect::from_xywh(0, 0, W, 1))
 }
 
+/// Compares channel samples within eight-bit quantization tolerance.
 fn assert_close(a: &[f32], b: &[f32], what: &str) {
     assert_eq!(a.len(), b.len(), "{what}");
     for (x, y) in a.iter().zip(b) {
@@ -156,7 +159,11 @@ fn alternate_resource_duplicates_and_unknown_spaces_round_trip() {
         unknown_spot_space(&mut file);
         let ids = &file.resource(1053).unwrap().data;
         let id = &ids[..4];
-        let mut data = vec![0, 1, 0, 3];
+        let mut data = vec![0, 1, 0, 4];
+        // An unrelated green ink must be skipped before the matching red ink.
+        let other_id = u32::from_be_bytes(id.try_into().unwrap()).wrapping_add(1);
+        data.extend_from_slice(&other_id.to_be_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0]);
         for color in [[0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0], [0x23, 0x31, 1, 2, 3, 4, 5, 6, 7, 8]] {
             data.extend_from_slice(id);
             data.extend_from_slice(&color);
