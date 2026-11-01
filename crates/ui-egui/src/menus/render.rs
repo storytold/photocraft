@@ -303,6 +303,55 @@ mod rtl_tests {
         texts
     }
 
+    /// The same level with a separator between the two rows: a separator must not reset the
+    /// level's direction, so the row below it mirrors like the row above.
+    #[test]
+    fn a_row_after_a_separator_mirrors_like_the_row_above_it() {
+        let item = |id: &str, label: &str| MenuItem {
+            id: id.to_string(),
+            label: label.to_string(),
+            path: vec!["Edit".into()],
+            shortcut: None,
+            enabled: true,
+            checked: None,
+            color: None,
+        };
+        let items = [item("edit.undo", "Undo"), item("edit.sep", "---"), item("edit.prefs", "Preferences")];
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut clicked = None;
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let refs: Vec<&MenuItem> = items.iter().collect();
+                let mut nav = crate::menu_nav::Nav::default();
+                ui.allocate_ui_with_layout(egui::vec2(300.0, 200.0), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    render_level_rows(ui, &refs, 1, &mut clicked, &mut nav);
+                });
+            });
+            let texts: Vec<(String, egui::Rect)> = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            texts
+        };
+        let rtl = rects(crate::direction::Dir::Rtl);
+        let ltr = rects(crate::direction::Dir::Ltr);
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t == s).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+        let (rtl_undo, rtl_prefs) = (at(&rtl, "Undo"), at(&rtl, "Preferences"));
+        let (ltr_undo, ltr_prefs) = (at(&ltr, "Undo"), at(&ltr, "Preferences"));
+        assert!(rtl_undo.is_positive() && rtl_prefs.is_positive(), "the rows painted: {rtl:?}");
+        assert!(rtl_prefs.center().x > 150.0, "rtl: the row after the separator hugs the right edge: {rtl_prefs:?}");
+        assert!(rtl_undo.center().x > 150.0, "rtl: the row before the separator hugs the right edge: {rtl_undo:?}");
+        assert!(ltr_prefs.center().x < 150.0 && ltr_undo.center().x < 150.0, "ltr: the rows hug the left edge: {ltr_prefs:?} {ltr_undo:?}");
+    }
+
+
     /// In a right-to-left menu the label sits at the row's right (reading start) and the shortcut
     /// at its left, whatever the label's script; left-to-right renders the mirror image.
     #[test]
