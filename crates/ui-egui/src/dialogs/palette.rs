@@ -138,6 +138,13 @@ fn search_edit(ui: &mut egui::Ui, q: &mut String, width: f32) -> egui::Response 
     ui.add(edit)
 }
 
+/// The palette popup's (pivot, position): horizontally centred, 110 px below the top. A
+/// screen-centred popup is symmetric, so the anchor is the same in both directions; the
+/// scrim above it covers the whole screen either way.
+fn palette_anchor(screen: egui::Rect) -> (Align2, egui::Pos2) {
+    (Align2::CENTER_TOP, egui::pos2(screen.center().x, screen.top() + 110.0))
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.palette_open {
         return;
@@ -154,10 +161,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     });
     let width = 560.0;
     let mut run: Option<String> = None;
+    let (pivot, pos) = palette_anchor(screen);
     egui::Area::new(egui::Id::unique("palette"))
         .order(egui::Order::Tooltip)
-        .pivot(Align2::CENTER_TOP)
-        .fixed_pos(egui::pos2(screen.center().x, screen.top() + 110.0))
+        .pivot(pivot)
+        .fixed_pos(pos)
         .show(ctx, |ui| {
             egui::Frame::NONE
                 .fill(t.card)
@@ -296,7 +304,7 @@ mod tests {
     use egui_kittest::Harness;
     use serde_json::json;
 
-    use super::{exact_bonus, fuzzy_score, push_recent};
+    use super::{exact_bonus, fuzzy_score, palette_anchor, push_recent};
     use crate::PhotocraftApp;
 
     #[test]
@@ -587,6 +595,24 @@ mod tests {
             } else {
                 assert!(rect.left() < field.center().x, "{dir:?}: hint left-aligned in {field:?}, got {rect:?}");
             }
+        }
+    }
+
+    /// The palette popup is screen-centred in both directions (a centred anchor mirrors onto
+    /// itself), and a 560 px-wide palette at that anchor stays inside the screen horizontally.
+    /// The scrim covers the whole screen either way.
+    #[test]
+    fn palette_anchor_is_centred_and_on_screen_in_both_directions() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1200.0, 800.0));
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _g = crate::direction::direction_scope(dir);
+            let (pivot, pos) = palette_anchor(screen);
+            assert_eq!(pivot, egui::Align2::CENTER_TOP, "{dir:?}");
+            assert!((pos.x - screen.center().x).abs() < 1e-3 && (pos.y - (screen.top() + 110.0)).abs() < 1e-3, "{dir:?}: {pos:?}");
+            let half = 560.0 / 2.0;
+            assert!(pos.x - half >= screen.left() && pos.x + half <= screen.right(), "{dir:?}: palette inside {screen:?}");
+            let scrim = egui::Rect::from_min_size(screen.min, screen.size());
+            assert!(scrim == screen, "{dir:?}: the scrim covers the whole screen");
         }
     }
 }
