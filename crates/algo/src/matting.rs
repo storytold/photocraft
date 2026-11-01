@@ -559,6 +559,12 @@ pub fn refine_surface(
         let m = crate::selection::mask_from_surface(Some(mask), r);
         let (rw, rh) = (r.width() as usize, r.height() as usize);
         let adds = work.painted.as_ref().is_some_and(|v| v.iter().any(|v| *v > 0.0));
+        // An allocated tile can be mixed while this block's clipped halo is constant.
+        // Preserve the dense path's local check before sampling the guide image.
+        let first = m.first().copied().unwrap_or(0.0);
+        if !adds && (first == 0.0 || first == 1.0) && m.iter().all(|v| *v == first) {
+            return (t, vec![(first * 255.0).round() as u8; t.width() as usize * t.height() as usize]);
+        }
         let img = (p.uses_image() || adds).then(|| sampler.rgb(r));
         let bb = match (&work.painted, brush) {
             (Some(v), Some(b)) => Some(BrushBuf { v, window: b.window() }),
@@ -567,9 +573,10 @@ pub fn refine_surface(
         let refined = refine_buffer_with(img.as_ref(), &m, rw, rh, p, bb);
         let mut data = Vec::with_capacity(t.width() as usize * t.height() as usize);
         for yy in t.y0..t.y1 {
-            for xx in t.x0..t.x1 {
-                let i = (yy - r.y0) as usize * rw + (xx - r.x0) as usize;
-                data.push((refined.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8);
+            let start = (yy - r.y0) as usize * rw + (t.x0 - r.x0) as usize;
+            let end = start + t.width() as usize;
+            if let Some(row) = refined.get(start..end) {
+                data.extend(row.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
             }
         }
         (t, data)
@@ -963,6 +970,22 @@ mod tests {
             let sparse = refine_surface(&sampler, &mask, canvas, &params, None).expect("allocation").expect("sparse");
             assert_eq!(sparse.to_interleaved(canvas), region_surface(&dense).to_interleaved(canvas));
         }
+    }
+
+    #[test]
+    fn constant_clipped_halo_does_not_sample_a_mixed_tile_guide() {
+        struct NoGuide;
+        impl Sampler for NoGuide {
+            fn rgba(&self, _: Rect) -> Vec<[f32; 4]> {
+                panic!("constant halo must not read the guide");
+            }
+        }
+        let canvas = Rect::new(10, 10, 30, 30);
+        let mut mask = Surface::new(PixelFormat::GRAY8);
+        mask.fill_rect(canvas, &[1.0]);
+        let params = RefineParams { radius: 4.0, feather: 1.0, ..Default::default() };
+        let output = refine_surface(&NoGuide, &mask, canvas, &params, None).unwrap().unwrap();
+        assert!(output.to_interleaved(canvas).iter().all(|v| *v == 255));
     }
 
     #[test]
