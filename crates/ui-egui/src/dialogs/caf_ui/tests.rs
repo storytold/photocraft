@@ -555,3 +555,24 @@ fn custom_sampling_erased_again_hints_and_apply_and_ok_do_not_run_the_fill() {
     assert!(d["previewHint"].is_null() && d["previewError"].is_null() && d["error"].is_null(), "{d}");
     assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
 }
+
+/// Picking Custom shows the image unfilled straight away, even while the preview of the
+/// previous state is still winding down: its fill (or error) isn't left on view until the
+/// superseded worker exits.
+#[test]
+fn picking_custom_clears_the_preview_while_a_superseded_one_still_runs() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"waitPreview": true})).unwrap();
+    assert!(ws(&app).preview.pending_image.is_some());
+    // A worker for that state that hasn't answered yet.
+    let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+    let w = app.distort.caf.as_mut().unwrap();
+    w.preview.running = Some((w.preview.want, rx, photocraft_engine::jobs::JobCtx::new()));
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    preview::drive_preview(&mut app, &egui::Context::default(), false);
+    let pv = &ws(&app).preview;
+    assert!(pv.pending_image.is_none() && pv.tex.is_none() && pv.error.is_none(), "the image is shown unfilled");
+    assert_eq!(pv.shown, pv.want);
+    assert!(pv.running.is_some(), "the superseded worker is still winding down");
+}

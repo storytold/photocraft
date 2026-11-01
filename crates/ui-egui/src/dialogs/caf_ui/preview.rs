@@ -27,7 +27,7 @@ pub(super) struct Preview {
     /// Bumped whenever the state changes; a result for an older generation is dropped.
     pub(super) want: u64,
     #[cfg(not(target_arch = "wasm32"))]
-    running: Option<(u64, std::sync::mpsc::Receiver<PreviewResult>, photocraft_engine::jobs::JobCtx)>,
+    pub(super) running: Option<(u64, std::sync::mpsc::Receiver<PreviewResult>, photocraft_engine::jobs::JobCtx)>,
     pub(super) shown: u64,
     /// A finished preview waiting to be uploaded (on the UI thread, which has the context).
     pub(super) pending_image: Option<(Rect, egui::ColorImage)>,
@@ -271,6 +271,11 @@ fn compute_preview(
 pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, dragging: bool) {
     let doc = app.session.active().map(|s| s.doc.clone());
     let Some(w) = app.distort.caf.as_mut() else { return };
+    // Custom with nothing to sample shows the image unfilled straight away, also while a
+    // superseded preview winds down (its result is for an older generation and is dropped).
+    if w.awaiting_custom_area() {
+        w.preview.clear(w.preview.want);
+    }
     let pv = &mut w.preview;
     if let Some((generation, rx, _)) = &pv.running {
         match rx.try_recv() {
@@ -298,10 +303,6 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
         }
     }
     if pv.running.is_some() || pv.shown == pv.want || dragging {
-        return;
-    }
-    if w.awaiting_custom_area() {
-        w.preview.clear(w.preview.want);
         return;
     }
     let Some(doc) = doc else { return };
