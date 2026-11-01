@@ -669,10 +669,15 @@ estimated and allowed byte counts; damaged-file recovery never bypasses that err
 an explicit warning on preflight refusal. Layer and mask pixel allocation failures also fail
 ordinary imports instead of opening partial content.
 
-This is the first part of #8593. The allowance covers the main pixel paths, not total process
+User and real masks decode into tiles one tile row at a time, converting sample byte order
+in place. Raw and RLE source-backed masks read only the current band (plus the RLE row index);
+ZIP still inflates one whole plane before handing out bands. No full-mask interleave copy is
+needed. A damaged later band discards all previously written bands of that mask.
+
+The #8593 allowance covers the main pixel paths, not total process
 RSS: encoded input, parser metadata, patterns, smart-filter caches, embedded smart-object
 contents, generated vector caches, and text preparation are outside it and retain their
-existing limits. Joining these paths to a shared budget and streaming whole-plane masks are follow-up work. An accepted
+existing limits. Joining these paths to a shared budget and streaming ZIP inflation are follow-up work. An accepted
 estimate does not guarantee allocation success on a memory-constrained host.
 
 ## Test corpora
