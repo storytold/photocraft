@@ -933,7 +933,7 @@ fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
     app.run("paint.stroke", json!({"points": [[8, 0], [8, 31]], "size": 16, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
     let surface = photocraft_engine::channel_cmds::GraySurface::FilterMask;
     let st = app.session.active().unwrap();
-    let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb);
+    let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
     assert!(h.ch[0][0] > 0 && h.ch[0][255] > 0, "black and white levels");
     assert_eq!(curve_mode(&app, "curves"), photocraft_doc::ColorMode::Grayscale);
 }
