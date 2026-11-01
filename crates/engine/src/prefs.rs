@@ -1099,6 +1099,44 @@ impl LayerMaskOverlay {
     }
 }
 
+/// The target colours of the Levels and Curves Set Black / Gray / White Point eyedroppers, which
+/// Photoshop shares with Auto Color Correction Options › Target Colors (#10091): a click with an
+/// eyedropper maps the sampled pixel to its target. One setting for every document. Each is
+/// `#rrggbb`, read as the document's own RGB levels, not converted between colour spaces.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TargetColors {
+    /// Set Black Point's target (Photoshop's default: 0, 0, 0).
+    pub shadows: String,
+    /// Set Gray Point's target (Photoshop's default: 128, 128, 128).
+    pub midtones: String,
+    /// Set White Point's target (Photoshop's default: 255, 255, 255).
+    pub highlights: String,
+}
+
+impl Default for TargetColors {
+    fn default() -> Self {
+        Self { shadows: "#000000".into(), midtones: "#808080".into(), highlights: "#ffffff".into() }
+    }
+}
+
+impl TargetColors {
+    /// The JSON keys, in eyedropper order (black, gray, white).
+    pub const KEYS: [&'static str; 3] = ["shadows", "midtones", "highlights"];
+
+    /// The target of `key` (one of [`Self::KEYS`]) as 0..1 RGB levels, or the default for that key
+    /// when the stored value isn't a colour. `None` for an unknown key.
+    pub fn rgb(&self, key: &str) -> Option<[f32; 3]> {
+        let (stored, fallback) = match key {
+            "shadows" => (&self.shadows, [0, 0, 0]),
+            "midtones" => (&self.midtones, [128, 128, 128]),
+            "highlights" => (&self.highlights, [255, 255, 255]),
+            _ => return None,
+        };
+        Some(parse_hex(stored).unwrap_or(fallback).map(|v| f32::from(v) / 255.0))
+    }
+}
+
 /// All preferences. JSON keys are the `edit.preferences.<section>` ids.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1186,6 +1224,9 @@ pub struct Preferences {
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
+    /// The Levels and Curves eyedroppers' target colours (Photoshop's Auto Color Correction
+    /// Options › Target Colors).
+    pub target_colors: TargetColors,
 }
 
 impl Preferences {

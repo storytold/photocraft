@@ -970,6 +970,10 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         set_field(&mut d.fields, field, json!(color))?;
         return Ok(json!({ "color": color }));
     }
+    // A Levels or Curves eyedropper's target colour.
+    if let Some(r) = crate::layer_picker::confirm_target(app, target, color) {
+        return r.map(|_| json!({ "color": color }));
+    }
     if target == "widget" {
         let widget = f.get("__widget").and_then(Value::as_u64).ok_or("the Color Picker has no swatch to set")?;
         let rgb = parse_hex(color).ok_or("not a colour")?;

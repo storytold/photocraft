@@ -63,7 +63,8 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         return true;
     }
     let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
-    let params = match photocraft_engine::adjust_params::adjustment_eyedropper(&kind, &base, eyedropper, sample, mode) {
+    let target = eyedropper.target_in(&app.session);
+    let params = match photocraft_engine::adjust_params::adjustment_eyedropper_to(&kind, &base, eyedropper, sample, target, mode) {
         Ok(adjustment) => photocraft_engine::adjust_params::to_params(&adjustment),
         Err(error) => {
             app.ui.status = error.to_string();
@@ -204,23 +205,28 @@ pub(crate) fn picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, to
     response
 }
 
-fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode) {
+/// The Set Black / Neutral Gray / White Point eyedroppers above the Levels or Curves editor. A
+/// double-click on one also asks for the Color Picker on its target colour (#10091), which the
+/// dialog loop opens over this dialog.
+fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode, swatches: [egui::Color32; 3]) {
     use photocraft_engine::adjust_params::CurvesEyedropper;
     let current = picker(fields.get(CURVE_PICKER));
     let mut chosen = None;
+    let mut double = None;
     ui.horizontal(|ui| {
         let tokens = crate::theme::Tokens::get(ui.ctx());
         ui.label(egui::RichText::new(tl!("Eyedroppers:")).color(tokens.text_dim).size(12.0));
-        // The swatch is the tone the picker maps the sample to (image data, like the Curves
-        // gradient bars), not chrome, so it is the same in every theme; its ring is a token.
-        for (id, eyedropper, label, tone) in [
-            ("black", CurvesEyedropper::Black, tl!("Set Black Point"), 0),
-            ("gray", CurvesEyedropper::NeutralGray, tl!("Set Neutral Gray Point"), 128),
-            ("white", CurvesEyedropper::White, tl!("Set White Point"), 255),
-        ] {
+        // The swatch is the target colour the picker maps the sample to (image data, like the
+        // Curves gradient bars), not chrome, so it is the same in every theme; its ring is a token.
+        let points = [("black", CurvesEyedropper::Black), ("gray", CurvesEyedropper::NeutralGray), ("white", CurvesEyedropper::White)];
+        for (((id, eyedropper), label), swatch) in points.into_iter().zip(crate::layer_picker::labels()).zip(swatches) {
             let enabled = picker_supported(mode, eyedropper);
-            if picker_button(ui, current == Some(eyedropper), enabled, label, egui::Color32::from_gray(tone)).clicked() {
+            let response = picker_button(ui, current == Some(eyedropper), enabled, label, swatch);
+            if response.clicked() || response.double_clicked() {
                 chosen = Some((id, eyedropper));
+            }
+            if response.double_clicked() {
+                double = Some(id);
             }
         }
         if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) {
@@ -233,6 +239,9 @@ fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: pho
         let base = crate::filter_dialog::params_of(fields);
         fields.insert(CURVE_PICKER.into(), json!(id));
         fields.insert(CURVE_PICKER_BASE.into(), base);
+    }
+    if let Some(id) = double {
+        crate::layer_picker::request_target(fields, id);
     }
 }
 
@@ -406,7 +415,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     let filter_mask = fields.get("target").and_then(Value::as_str) == Some("filterMask");
     let mode = curve_mode_for_fields(app, &kind, fields);
     if matches!(kind.as_str(), "levels" | "curves") {
-        picker_controls(ui, fields, mode);
+        picker_controls(ui, fields, mode, crate::layer_picker::target_swatches(app));
         ui.add_space(4.0);
     }
     let mut values = crate::filter_dialog::params_of(fields);
@@ -488,3 +497,6 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod target_tests;

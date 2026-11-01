@@ -744,6 +744,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // A colour swatch (Edit › Fill, Edit › Stroke) opens the Color Picker over the dialog.
         if outcome.is_none() {
             crate::color_picker_ui::open_requested(app, d.id);
+            // A double-clicked Levels or Curves eyedropper opens its target colour's picker.
+            crate::layer_picker::open_requested_target(app, d.id);
         }
         if apply_requested && outcome.is_none() {
             let _ = crate::prefs_ui::apply(app, d.id);

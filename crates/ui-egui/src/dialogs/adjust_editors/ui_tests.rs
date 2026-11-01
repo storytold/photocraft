@@ -795,6 +795,32 @@ fn properties_white_point_eyedropper_edits_the_layer(kind: &str) {
     assert_eq!(layer(&h).1, before);
 }
 
+/// #10091: double-clicking a Properties eyedropper of a Curves or Levels layer opens the Color
+/// Picker on its target colour and leaves the eyedropper armed; OK stores the target, and the next
+/// click on the image maps the pixel to it.
+#[test]
+fn properties_eyedropper_double_click_sets_the_target_color() {
+    for kind in ["curves", "levels"] {
+        let mut h = app_harness_stepped(kind, "rgb", 16, 1.0 / 60.0);
+        let at = h.get_by_label("Set White Point").rect().center();
+        clicks_with(&mut h, at, 2, egui::Modifiers::NONE);
+        let top = h.state().ui.dialogs.last().map(|d| d.fields.clone()).unwrap_or_default();
+        assert_eq!(top.get("__colorPicker").and_then(|v| v.as_str()), Some("eyedropperTarget.white"), "{kind}");
+        assert_eq!(top.get("__label").and_then(|v| v.as_str()), Some("Select target highlight color:"));
+        assert_eq!(crate::layer_picker::armed(h.state()).map(|(_, p)| p.to_string()).as_deref(), Some("white"), "{kind}: stays armed");
+        let id = h.state().ui.dialogs.last().map(|d| d.id).unwrap();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#e0d0c0"));
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().session.prefs().target_colors.highlights, "#e0d0c0");
+        let at = doc_on_screen(&h, 10.0, 10.0);
+        click(&mut h, at);
+        let px: Vec<f32> = serde_json::from_value(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()).unwrap();
+        let want = [224.0f32, 208.0, 192.0].map(|v| v / 255.0);
+        assert!(px.iter().zip(want).all(|(a, b)| (a - b).abs() < 1.5 / 255.0), "{kind}: {px:?}");
+    }
+}
+
 /// A bare `kind` editor over `params`, as the Properties panel and the dialog host it.
 fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'static, serde_json::Value> {
     use crate::adjust_editors::{EditorCx, editor};
