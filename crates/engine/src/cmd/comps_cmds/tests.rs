@@ -76,6 +76,119 @@ fn capture_apply_visibility_position_appearance_independently() {
     }
 }
 
+/// Partial updates retain other saved properties, follow live layers and remain undoable.
+#[test]
+fn partial_updates_preserve_saved_properties_and_live_layer_order() {
+    for depth in [8, 16, 32] {
+        for what in ["visibility", "position", "appearance"] {
+            for every in [false, true] {
+                let (mut s, a, b) = session(depth);
+                let first = s.execute("layerComp.new", json!({"name": "First"})).unwrap()["comp"].as_u64().unwrap() as u32;
+                let second = s.execute("layerComp.new", json!({"name": "Second"})).unwrap()["comp"].as_u64().unwrap() as u32;
+                let saved = doc(&s).comp(first).unwrap().states.clone();
+                s.execute("layer.translate", json!({"layer": a.0, "dx": 6, "dy": -3})).unwrap();
+                let c = s
+                    .edit("change layers", |d, active| {
+                        let layer = d.layer_mut(a).unwrap();
+                        layer.visible = false;
+                        layer.blend = BlendMode::Multiply;
+                        layer.opacity = 0.25;
+                        layer.fill_opacity = 0.5;
+                        d.remove(b);
+                        let fmt = d.pixel_format();
+                        let mut added = Layer::raster("C", fmt);
+                        added.surface_mut().unwrap().fill_rect(Rect::new(50, 20, 52, 22), &photocraft_raster::from_rgba(&fmt, [0.2, 0.4, 0.6, 1.0]));
+                        added.visible = false;
+                        added.opacity = 0.75;
+                        let id = added.id;
+                        d.layers.push(added);
+                        *active = Some(id);
+                        Ok(id)
+                    })
+                    .unwrap();
+                let target = if every { json!("*") } else { json!(first) };
+                s.execute("layerComp.update", json!({"comp": target, "what": what})).unwrap();
+                let comp = doc(&s).comp(first).unwrap();
+                let mut expected: Vec<_> = saved.iter().filter(|st| st.layer != b).map(|st| st.layer).collect();
+                expected.push(c);
+                assert_eq!(comp.states.iter().map(|st| st.layer).collect::<Vec<_>>(), expected);
+                assert!(comp.state(b).is_none());
+                let old = comp.state(a).unwrap();
+                assert_eq!(old.visible, Some(what != "visibility"));
+                assert_eq!(old.position, Some(if what == "position" { (10, 1) } else { (4, 4) }));
+                let app = old.appearance.as_ref().unwrap();
+                let expected = if what == "appearance" { (BlendMode::Multiply, 0.25, 0.5) } else { (BlendMode::Normal, 1.0, 1.0) };
+                assert_eq!((app.blend, app.opacity, app.fill_opacity), expected);
+                let added = comp.state(c).unwrap();
+                assert_eq!(added.visible, (what == "visibility").then_some(false));
+                assert_eq!(added.position, (what == "position").then_some((50, 20)));
+                assert_eq!(added.appearance.is_some(), what == "appearance");
+                if let Some(app) = &added.appearance {
+                    assert_eq!(app.opacity, 0.75);
+                }
+                let updated = comp.states.clone();
+                assert_eq!(&doc(&s).comp(second).unwrap().states, if every { &updated } else { &saved });
+                assert!(s.undo());
+                assert_eq!(doc(&s).comp(first).unwrap().states, saved);
+                assert!(s.redo());
+                assert_eq!(doc(&s).comp(first).unwrap().states, updated);
+            }
+        }
+    }
+}
+
+/// Application flags do not change what an explicit update captures or preserves.
+#[test]
+fn updates_match_full_capture_for_every_comp_flag_combination() {
+    for flags in 0..8 {
+        for what in ["all", "visibility", "position", "appearance"] {
+            let (mut s, a, b) = session(8);
+            let id = s
+                .execute(
+                    "layerComp.new",
+                    json!({
+                        "visibility": flags & 1 != 0,
+                        "position": flags & 2 != 0,
+                        "appearance": flags & 4 != 0,
+                    }),
+                )
+                .unwrap()["comp"]
+                .as_u64()
+                .unwrap() as u32;
+            let mut expected = doc(&s).comp(id).unwrap().clone();
+            s.execute("layer.translate", json!({"layer": a.0, "dx": 6, "dy": -3})).unwrap();
+            s.edit("change properties", |d, _| {
+                let layer = d.layer_mut(b).unwrap();
+                layer.visible = false;
+                layer.blend = BlendMode::Multiply;
+                layer.opacity = 0.25;
+                layer.fill_opacity = 0.5;
+                Ok(())
+            })
+            .unwrap();
+            // The previous implementation always captured every property, then merged only
+            // the requested field. Full capture itself is unchanged by the optimization.
+            expected.states = capture_states(doc(&s))
+                .into_iter()
+                .map(|live| {
+                    if what == "all" {
+                        return live;
+                    }
+                    let mut saved = expected.state(live.layer).unwrap().clone();
+                    match what {
+                        "visibility" => saved.visible = live.visible,
+                        "position" => saved.position = live.position,
+                        _ => saved.appearance = live.appearance,
+                    }
+                    saved
+                })
+                .collect();
+            s.execute("layerComp.update", json!({"comp": id, "what": what})).unwrap();
+            assert_eq!(doc(&s).comp(id).unwrap(), &expected, "flags={flags}, what={what}");
+        }
+    }
+}
+
 #[test]
 fn undo_redo_and_last_document_state() {
     let (mut s, a, _) = session(8);
