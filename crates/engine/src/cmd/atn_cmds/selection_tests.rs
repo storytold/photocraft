@@ -32,9 +32,8 @@ fn file(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
     .unwrap()
 }
 
-/// Both recorded event forms retain explicit example settings and descriptor key/type order.
-#[test]
-fn group_f_load_save_preserves_recorded_descriptors() {
+/// Recorded and changed descriptors shared by successful and kept-step round trips.
+fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
     let mut cases = vec![
         ("AddT", Some("addTo"), rectangle([30.0, 30.0, 90.0, 90.0], false)),
         ("AddT", Some("addTo"), rectangle([30.0, 30.0, 90.0, 90.0], true)),
@@ -60,7 +59,13 @@ fn group_f_load_save_preserves_recorded_descriptors() {
     for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
         cases.push(("Dstr", Some("distort"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
     }
-    for (id, name, d) in cases {
+    cases
+}
+
+/// Both recorded event forms retain explicit example settings and descriptor key/type order.
+#[test]
+fn group_f_load_save_preserves_recorded_descriptors() {
+    for (id, name, d) in fixtures() {
         let mut events = Vec::new();
         if !id.is_empty() {
             events.push(AtnEvent::Code(id.as_bytes().try_into().unwrap()));
@@ -77,6 +82,49 @@ fn group_f_load_save_preserves_recorded_descriptors() {
             let back = atn::parse(&bytes).unwrap();
             assert_eq!(back.actions[0].items[0].descriptor, Some(d.clone()), "{id}");
             assert_eq!(back.actions[0].items[0].event.id(), if id.is_empty() { name.unwrap() } else { id });
+        }
+    }
+}
+
+/// Outer and nested shape metadata stay kept, including headers on empty Group F events.
+#[test]
+fn noncanonical_group_f_headers_keep_their_bytes_and_flags() {
+    for (id, name, d) in fixtures() {
+        for variant in 0..5 {
+            let mut descriptor = d.clone();
+            match variant {
+                0 => descriptor.name = UnicodeString::new_nul("Recorded descriptor name"),
+                1 => descriptor.class_id = code("Lyr "),
+                2 => descriptor.class_id = Id::Str(b"null".to_vec()),
+                _ => {
+                    let Some((_, D::Descriptor(shape))) = descriptor.items.iter_mut().find(|(key, _)| key.is("T   ")) else { continue };
+                    if variant == 3 {
+                        shape.name = UnicodeString::new_nul("Recorded shape name");
+                    } else {
+                        shape.class_id = Id::Str(shape.class_id.as_bytes().to_vec());
+                    }
+                }
+            }
+            let event = if id.is_empty() { AtnEvent::name(name.unwrap()) } else { AtnEvent::Code(id.as_bytes().try_into().unwrap()) };
+            let mut original = atn::parse(&file(event, descriptor.clone())).unwrap();
+            original.actions[0].items[0].enabled = false;
+            original.actions[0].items[0].with_dialog = true;
+            original.actions[0].items[0].dialog_options = 2;
+            let mut s = Session::new();
+            let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
+            assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{variant}");
+            assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+            assert!(s.actions.list[0].disabled.contains(&0));
+            assert!(s.actions.list[0].dialogs.contains(&0));
+            let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
+            assert_eq!(saved["skipped"], json!([]));
+            let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+            let back = atn::parse(&bytes).unwrap();
+            let saved = &back.actions[0].items[0];
+            let original = &original.actions[0].items[0];
+            assert_eq!(saved.event, original.event);
+            assert_eq!((saved.enabled, saved.with_dialog, saved.dialog_options), (original.enabled, original.with_dialog, original.dialog_options));
+            assert_eq!(back.actions[0].items[0].descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
         }
     }
 }

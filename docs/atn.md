@@ -16,7 +16,7 @@ so playback skips them.
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
 
-## Supported events (128)
+## Supported events (127)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -97,7 +97,6 @@ does not map yet, with everything needed to implement them without the reference
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
 | `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
-| (string ID only) | animationFramesFromLayers | Make Frames from Layers | Kept, disabled (no frame-animation command) |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
 | `Mrg2` | mergeLayersNew | Merge Layers | `layer.mergeLayers` |
@@ -313,6 +312,16 @@ No parameters: the step carries an empty descriptor.
 
 The prepared-document values in this group are required inputs, rather than factory defaults. Unknown settings stay kept steps. Paste uses the current clipboard and selection; Fade uses the preceding edit. Link Layers uses the existing selected-layer toggle. Native exports retain their current Delete Mask and Merge Layers events; imported older events retain their original IDs.
 
+
+## Recognized steps kept disabled
+
+These recognized events have no playable command. They load as kept steps switched
+off, and Save Actions preserves their descriptors. They are excluded from the
+supported-event count and the measured unmapped reference.
+
+| String ID | Label |
+|---|---|
+| animationFramesFromLayers | Make Frames from Layers |
 
 ## Event reference: events not mapped yet
 

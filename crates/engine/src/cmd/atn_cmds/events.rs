@@ -182,62 +182,52 @@ macro_rules! clipping_event {
     };
 }
 
+/// Group F validates the outer descriptor before every converter, including empty events.
+macro_rules! selection_event {
+    ($code:literal, $name:literal, $label:literal, $ids:expr, $from:expr, $to:expr) => {
+        Event { code: $code, name: $name, label: $label, ids: $ids, from: |d| super::steps_selection::from(d, $from), to: $to }
+    };
+}
+
 /// Every Photoshop event PhotoCraft maps. The order matters only for the panel label.
 pub(super) const EVENTS: &[Event] = &[
-    Event {
-        code: "AddT",
-        name: "addTo",
-        label: "Add to Selection",
-        ids: &["select.rect"],
-        from: |d| super::steps_selection::selection_from(d, "add"),
-        to: |_, p| super::steps_selection::selection_to(p, "add"),
-    },
-    Event {
-        code: "SbtF",
-        name: "subtractFrom",
-        label: "Subtract from Selection",
-        ids: &["select.rect"],
-        from: |d| super::steps_selection::selection_from(d, "subtract"),
-        to: |_, p| super::steps_selection::selection_to(p, "subtract"),
-    },
-    Event {
-        code: "IntW",
-        name: "interfaceWhite",
-        label: "Intersect with Selection",
-        ids: &["select.rect"],
-        from: |d| super::steps_selection::selection_from(d, "intersect"),
-        to: |_, p| super::steps_selection::selection_to(p, "intersect"),
-    },
-    Event {
-        code: "PstI",
-        name: "pasteInto",
-        label: "Paste Into",
-        ids: &["edit.pasteSpecial.pasteInto"],
-        from: |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteInto"),
-        to: super::steps_selection::paste_to,
-    },
-    Event {
-        code: "PstO",
-        name: "pasteOutside",
-        label: "Paste Outside",
-        ids: &["edit.pasteSpecial.pasteOutside"],
-        from: |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteOutside"),
-        to: super::steps_selection::paste_to,
-    },
-    Event { code: "Fade", name: "fade", label: "Fade", ids: &["edit.fade"], from: super::steps_selection::fade_from, to: super::steps_selection::fade_to },
-    Event {
-        code: "",
-        name: "linkSelectedLayers",
-        label: "Link Layers",
-        ids: &["layer.linkLayers"],
-        from: super::steps_selection::link_from,
-        to: super::steps_selection::link_to,
-    },
-    Event {
-        code: "Dstr",
-        name: "distort",
-        label: "Distribute",
-        ids: &[
+    selection_event!("AddT", "addTo", "Add to Selection", &["select.rect"], |d| super::steps_selection::selection_from(d, "add"), |_, p| {
+        super::steps_selection::selection_to(p, "add")
+    }),
+    selection_event!("SbtF", "subtractFrom", "Subtract from Selection", &["select.rect"], |d| super::steps_selection::selection_from(d, "subtract"), |_, p| {
+        super::steps_selection::selection_to(p, "subtract")
+    }),
+    selection_event!(
+        "IntW",
+        "interfaceWhite",
+        "Intersect with Selection",
+        &["select.rect"],
+        |d| super::steps_selection::selection_from(d, "intersect"),
+        |_, p| super::steps_selection::selection_to(p, "intersect")
+    ),
+    selection_event!(
+        "PstI",
+        "pasteInto",
+        "Paste Into",
+        &["edit.pasteSpecial.pasteInto"],
+        |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteInto"),
+        super::steps_selection::paste_to
+    ),
+    selection_event!(
+        "PstO",
+        "pasteOutside",
+        "Paste Outside",
+        &["edit.pasteSpecial.pasteOutside"],
+        |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteOutside"),
+        super::steps_selection::paste_to
+    ),
+    selection_event!("Fade", "fade", "Fade", &["edit.fade"], super::steps_selection::fade_from, super::steps_selection::fade_to),
+    selection_event!("", "linkSelectedLayers", "Link Layers", &["layer.linkLayers"], super::steps_selection::link_from, super::steps_selection::link_to),
+    selection_event!(
+        "Dstr",
+        "distort",
+        "Distribute",
+        &[
             "layer.distribute.leftEdges",
             "layer.distribute.horizontalCenters",
             "layer.distribute.rightEdges",
@@ -245,33 +235,33 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.distribute.verticalCenters",
             "layer.distribute.bottomEdges",
         ],
-        from: super::steps_selection::distribute_from,
-        to: super::steps_selection::distribute_to,
-    },
-    Event {
-        code: "RmvL",
-        name: "removeLayerMask",
-        label: "Remove Layer Mask",
-        ids: &["layer.layerMask.delete"],
-        from: |d| super::steps_selection::empty_from(d, "layer.layerMask.delete", Some("RmvL")),
-        to: super::steps_selection::empty_to,
-    },
-    Event {
-        code: "DfnP",
-        name: "definePattern",
-        label: "Define Pattern",
-        ids: &["edit.definePattern"],
-        from: |d| super::steps_selection::empty_from(d, "edit.definePattern", None),
-        to: super::steps_selection::empty_to,
-    },
-    Event {
-        code: "MrgL",
-        name: "",
-        label: "Merge Layers",
-        ids: &["layer.mergeLayers"],
-        from: |d| super::steps_selection::empty_from(d, "layer.mergeLayers", Some("MrgL")),
-        to: super::steps_selection::empty_to,
-    },
+        super::steps_selection::distribute_from,
+        super::steps_selection::distribute_to
+    ),
+    selection_event!(
+        "RmvL",
+        "removeLayerMask",
+        "Remove Layer Mask",
+        &["layer.layerMask.delete"],
+        |d| super::steps_selection::empty_from(d, "layer.layerMask.delete", Some("RmvL")),
+        super::steps_selection::empty_to
+    ),
+    selection_event!(
+        "DfnP",
+        "definePattern",
+        "Define Pattern",
+        &["edit.definePattern"],
+        |d| super::steps_selection::empty_from(d, "edit.definePattern", None),
+        super::steps_selection::empty_to
+    ),
+    selection_event!(
+        "MrgL",
+        "",
+        "Merge Layers",
+        &["layer.mergeLayers"],
+        |d| super::steps_selection::empty_from(d, "layer.mergeLayers", Some("MrgL")),
+        super::steps_selection::empty_to
+    ),
     // Filters.
     ev!("GsnB", "gaussianBlur", "Gaussian Blur", "filter.blur.gaussianBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!(

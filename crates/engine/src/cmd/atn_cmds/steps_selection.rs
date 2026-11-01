@@ -5,6 +5,19 @@ use super::fields::{Mapped, step};
 use super::tables::{ALIGN, blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, ReferenceItem, Value, json};
 
+/// Exported headers use an empty name and the four-byte class identifier.
+fn canonical_header(d: &Descriptor, class: &str) -> bool {
+    d.name == Default::default() && d.class_id == code(class)
+}
+
+/// Group F checks the outer header before every converter, including empty events.
+pub(super) fn from(d: &Descriptor, convert: fn(&Descriptor) -> Mapped) -> Mapped {
+    if !canonical_header(d, "null") {
+        return Mapped::Unsupported { harmless: false };
+    }
+    convert(d)
+}
+
 /// Unknown or repeated descriptor keys must remain visible instead of disappearing on save.
 fn keys(d: &Descriptor, allowed: &[&str]) -> bool {
     d.items.iter().all(|(k, _)| allowed.iter().any(|name| k.is(name))) && allowed.iter().all(|name| d.items.iter().filter(|(k, _)| k.is(name)).count() <= 1)
@@ -48,7 +61,7 @@ pub(super) fn selection_from(d: &Descriptor, mode: &str) -> Mapped {
         }
         let D::Descriptor(shape) = d.get("T   ")? else { return None };
         let ellipse = shape.class_id.is("Elps");
-        if !(ellipse || shape.class_id.is("Rctn")) || (ellipse && mode != "add") || !keys(shape, &["Top ", "Left", "Btom", "Rght"]) {
+        if !canonical_header(shape, if ellipse { "Elps" } else { "Rctn" }) || (ellipse && mode != "add") || !keys(shape, &["Top ", "Left", "Btom", "Rght"]) {
             return None;
         }
         let [top, left, bottom, right] =
