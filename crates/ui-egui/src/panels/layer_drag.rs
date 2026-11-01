@@ -300,11 +300,12 @@ pub(super) fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect,
 
 /// A layer mask's thumbnail dropped on another layer or group moves the mask there, ⌥ copies it,
 /// as in Photoshop (#10485). A row that has a layer mask already doesn't take the drop (Photoshop
-/// asks whether to replace it).
+/// asks whether to replace it). Only the part of the row the list shows takes it: a row scrolled
+/// out of view still lies under the panel's header or footer.
 pub(super) fn mask_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect, actions: &mut Vec<(String, Value)>) {
     let Some((from, MaskKind::Pixel)) = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key())) else { return };
     let Some(p) = ctx.input(|i| i.pointer.interact_pos()) else { return };
-    if from == l.id.0 || l.mask.is_some() || !rect.contains(p) {
+    if from == l.id.0 || l.mask.is_some() || !rect.intersect(ui.clip_rect()).contains(p) {
         return;
     }
     let t = Tokens::get(ctx);

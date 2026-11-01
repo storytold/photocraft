@@ -983,3 +983,69 @@ fn dragging_a_mask_to_the_list_edge_scrolls_to_rows_out_of_view() {
     assert!(layer(&h, target).mask.is_some(), "the target has the mask");
     assert!(layer(&h, masked).mask.is_none(), "moved, not copied");
 }
+
+/// #10485: a layer mask dropped outside the Layers list, over the panel's header, doesn't land on
+/// the row scrolled out of view underneath it. The rows take drops only where the list shows them.
+#[test]
+fn dropping_a_mask_over_the_panel_header_skips_rows_scrolled_out_of_view() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let masked = s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": masked})).unwrap();
+    for i in 0..40 {
+        s.execute("layer.new.layer", json!({"name": format!("Filler {i}")})).unwrap();
+    }
+    s.execute("layer.select", json!({"layer": masked})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    // Scrolled to the bottom: "Masked" shows, the top rows went up under the header.
+    h.hover_at(h.get_by_label("Filler 39").rect().center());
+    h.run_steps(2);
+    for _ in 0..80 {
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Default::default(),
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(10);
+    let window = h.ctx.content_rect();
+    let fill = h.get_all_by_label("Fill").next().unwrap().rect();
+    let from = mask_rect(&h, masked, MaskKind::Pixel).center();
+    assert!(from.y > fill.bottom() && from.y < window.bottom(), "the masked row shows: {from:?}");
+    // The empty header space between Blend Mode and Opacity, over a row scrolled out of view.
+    let (blend, opacity) = (h.get_by_label("Blend Mode").rect(), h.get_all_by_label("Opacity").next().unwrap().rect());
+    let over = pos2((blend.right() + opacity.left()) / 2.0, blend.center().y);
+    let (target, row) = (0..40)
+        .map(|i| format!("Filler {i}"))
+        .map(|name| {
+            let rect = h.get_by_label(&name).rect();
+            (name, rect)
+        })
+        .find(|(_, rect)| rect.contains(over))
+        .expect("a row lies under the header");
+    assert!(row.bottom() <= fill.bottom(), "{target} is scrolled out of the list: {row:?}");
+    let target = h.state().session.active().unwrap().doc.layers.iter().find(|l| l.name == target).unwrap().id.0;
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let history = h.state().session.active().unwrap().history.entries();
+    h.hover_at(from);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    // Up through the list, clear of its edges (which scroll it), then out over the header and
+    // released there at once.
+    let inside = pos2(from.x, fill.bottom() + 48.0);
+    for k in 1..=8 {
+        h.event(egui::Event::PointerMoved(from + (inside - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerMoved(over));
+    h.event(egui::Event::PointerButton { pos: over, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(layer(&h, target).mask.is_none(), "the row under the header took no mask");
+    assert!(layer(&h, masked).mask.is_some(), "the mask stays where it was");
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc == doc, "the document is unchanged");
+    assert_eq!(st.history.entries(), history, "no history step");
+}
