@@ -122,7 +122,13 @@ fn enter_on_the_selection_frame_crops_to_it_at_8_and_16_bit() {
         assert_eq!(doc.size, Size::new(30, 40), "{depth:?}");
         assert_eq!(doc.depth, depth);
         assert!(doc.selection.is_none(), "cropping to the selection deselects, as in Photoshop");
-        // The new default frame is the whole (cropped) canvas: ↵ on it does nothing.
+        // No frame until a press or re-picking the tool; then the default one is the whole
+        // (cropped) canvas, and ↵ on it does nothing.
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        app.ui.tool = Tool::Move;
+        ensure_frame(&mut app);
+        app.ui.tool = Tool::Crop;
         ensure_frame(&mut app);
         assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 30.0, 40.0]));
         let steps = app.session.active().unwrap().history.past_len();
@@ -152,7 +158,7 @@ fn the_frame_is_edited_from_a_press_until_commit_cancel_or_another_tool() {
     assert!(shows_beyond_canvas(&app));
     crate::canvas::commit_crop(&mut app);
     ensure_frame(&mut app);
-    assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 50.0, 30.0]));
+    assert_eq!(app.ui.crop_rect, None, "no frame until the next press");
     assert!(!shows_beyond_canvas(&app));
     // Or until another tool is picked.
     drag(&mut app, &[[5.0, 5.0], [20.0, 20.0]], NONE);
@@ -851,7 +857,7 @@ fn enter_during_a_drag_ends_the_drag() {
     tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, NONE);
     ensure_frame(&mut app);
     assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
-    assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 100.0, 50.0]));
+    assert_eq!(app.ui.crop_rect, None);
     assert!(!pending(&app));
 }
 
