@@ -1318,9 +1318,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // Every pointer position the platform reported this frame, not just the
                     // last, so a quick curved stroke keeps its curve instead of being cut into
                     // one straight chord per frame.
-                    let path: Vec<Pos2> = ui.input(|i| {
-                        i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect()
-                    });
+                    let path: Vec<Pos2> =
+                        ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
                     for p in path.iter().take(path.len().saturating_sub(1)) {
                         let m = to_doc(d, area, *p);
                         events.push(ToolEvent::Move { x: m[0], y: m[1], pressure: pr });
