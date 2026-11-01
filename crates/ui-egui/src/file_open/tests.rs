@@ -1127,3 +1127,166 @@ fn opening_an_open_file_again_shows_its_tab() {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+// ---- Where a drop goes (#10492) ----
+
+/// A tab strip of three 100-wide tabs at y 14-50 over x 0-700, and a canvas below it.
+fn strip() -> crate::canvas::TabStrip {
+    let tab = |i: usize| (i, egui::Rect::from_min_max(egui::pos2(104.0 * i as f32, 20.0), egui::pos2(104.0 * i as f32 + 100.0, 46.0)));
+    crate::canvas::TabStrip { rect: egui::Rect::from_min_max(egui::pos2(0.0, 14.0), egui::pos2(700.0, 50.0)), tabs: vec![tab(0), tab(1), tab(2)] }
+}
+
+fn canvas() -> Option<egui::Rect> {
+    Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)))
+}
+
+#[test]
+fn a_drop_lands_on_the_region_under_the_pointer() {
+    let strip = strip();
+    let on = |at, uncovered, tabs, canvas, doc| target_at(at, uncovered, tabs, canvas, doc);
+    // Over the canvas of an open document: placed.
+    assert_eq!(on(Some(egui::pos2(300.0, 300.0)), true, Some(&strip), canvas(), true), DropTarget::Canvas);
+    // Over the tab strip: that tab position (the strip wins where it overlaps the canvas).
+    assert_eq!(on(Some(egui::pos2(4.0, 30.0)), true, Some(&strip), canvas(), true), DropTarget::Tabs(0));
+    assert_eq!(on(Some(egui::pos2(150.0, 30.0)), true, Some(&strip), canvas(), true), DropTarget::Tabs(1));
+    assert_eq!(on(Some(egui::pos2(690.0, 30.0)), true, Some(&strip), canvas(), true), DropTarget::Tabs(3));
+    // Over a panel, outside every region.
+    assert_eq!(on(Some(egui::pos2(750.0, 300.0)), true, Some(&strip), canvas(), true), DropTarget::Elsewhere);
+    // The pointer can't be read, or a window or dialog covers it: open, never place.
+    assert_eq!(on(None, true, Some(&strip), canvas(), true), DropTarget::Elsewhere);
+    assert_eq!(on(Some(egui::pos2(300.0, 300.0)), false, Some(&strip), canvas(), true), DropTarget::Elsewhere);
+    assert_eq!(on(Some(egui::pos2(4.0, 30.0)), false, Some(&strip), canvas(), true), DropTarget::Elsewhere);
+    // No document: the Home screen or an empty workspace. A canvas rectangle left from a document
+    // closed since doesn't make the drop a placement with nothing to place into.
+    assert_eq!(on(Some(egui::pos2(300.0, 300.0)), true, None, None, false), DropTarget::Elsewhere);
+    assert_eq!(on(Some(egui::pos2(300.0, 300.0)), true, None, canvas(), false), DropTarget::Elsewhere);
+}
+
+#[test]
+fn only_a_canvas_drop_of_a_non_preset_file_is_placed() {
+    let files =
+        ["photo.png", "photo.JPG", "layers.psd", "big.psb", "scan.tif", "shot.heic", "notes.txt", "no_extension", "", "C:\\pics\\a.webp", "/pics/b.svg"];
+    let presets = ["brushes.abr", "Sunsets.GRD", "/lib/set.abr", "C:\\lib\\x.grd"];
+    for target in [DropTarget::Canvas, DropTarget::Tabs(0), DropTarget::Tabs(7), DropTarget::Elsewhere] {
+        for name in files {
+            let want = if target == DropTarget::Canvas { DropRoute::Place } else { DropRoute::Open };
+            assert_eq!(target.route(name), want, "{target:?} {name:?}");
+        }
+        for name in presets {
+            assert_eq!(target.route(name), DropRoute::Open, "presets go to their libraries: {target:?} {name:?}");
+        }
+    }
+}
+
+/// A scratch folder, removed by the test.
+fn scratch(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("photocraft-drop-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn error_titles(app: &PhotocraftApp) -> Vec<String> {
+    app.ui.notices.iter().filter(|n| n.error).map(|n| n.title.clone()).collect()
+}
+
+/// The Home screen (no document open) is where a first drop lands: every file opens as its own
+/// document, in drop order, whatever the type, and nothing is placed.
+#[test]
+fn files_dropped_with_no_document_open_all_open() {
+    let dir = scratch("home");
+    let names = ["a.png", "b.jpg", "c.psd", "d.tif"];
+    let files: Vec<_> = names
+        .iter()
+        .map(|n| {
+            let p = dir.join(n);
+            std::fs::write(&p, b"x").unwrap();
+            dropped(p, Err("read from the path".into()))
+        })
+        .collect();
+    let (mut app, _) = app_with(Vec::new());
+    // A canvas rectangle left from an earlier document must not turn the drop into a placement.
+    app.drop_canvas_rect = canvas();
+    assert_eq!(app.drop_target(&egui::Context::default(), Some(egui::pos2(300.0, 300.0))), DropTarget::Elsewhere);
+    app.open_dropped(&egui::Context::default(), files, Some(egui::pos2(300.0, 300.0)));
+    assert_eq!(doc_names(&app), names);
+    assert!(app.drop_places.is_empty());
+    assert!(error_titles(&app).is_empty(), "{:?}", app.ui.notices);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder dragged in says it is a folder (Windows' own error for reading one is "Access is
+/// denied"), opens nothing and places nothing, and the files dropped with it still go through.
+#[test]
+fn a_dropped_folder_is_refused_with_a_clear_message() {
+    let dir = scratch("folder");
+    let folder = dir.join("Holiday photos");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = dir.join("ok.psd");
+    std::fs::write(&file, b"x").unwrap();
+    let ctx = egui::Context::default();
+    // Opened (no document, or off the canvas).
+    let (mut app, _) = app_with(Vec::new());
+    app.open_dropped(&ctx, vec![dropped(folder.clone(), Err("read from the path".into())), dropped(file, Err("read from the path".into()))], None);
+    assert_eq!(doc_names(&app), ["ok.psd"]);
+    let errors = error_titles(&app);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("Couldn't open Holiday photos: ") && errors[0].contains("folder"), "{errors:?}");
+    // On the canvas: not queued for placing, and the layers stay as they were.
+    let mut app = app_with_canvas();
+    let layers = layer_count(&app);
+    app.open_dropped(&ctx, vec![dropped(folder, Err("read from the path".into()))], Some(egui::pos2(300.0, 300.0)));
+    assert!(app.drop_places.is_empty());
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), layers);
+    assert_eq!(app.session.documents().len(), 1);
+    let errors = error_titles(&app);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("Couldn't place Holiday photos: ") && errors[0].contains("folder"), "{errors:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file that isn't an image is an error the user can read, on either route, not a silent no-op.
+#[test]
+fn a_dropped_file_that_is_not_an_image_reports_why() {
+    let dir = scratch("text");
+    let file = dir.join("notes.txt");
+    std::fs::write(&file, b"bad").unwrap();
+    let ctx = egui::Context::default();
+    let (mut app, _) = app_with(Vec::new());
+    app.open_dropped(&ctx, vec![dropped(file.clone(), Err("read from the path".into()))], None);
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.status_error);
+    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't open notes.txt: ")), "{:?}", app.ui.notices);
+    let mut app = app_with_canvas();
+    let layers = layer_count(&app);
+    app.open_dropped(&ctx, vec![dropped(file, Err("read from the path".into()))], Some(egui::pos2(300.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), layers);
+    assert!(app.ui.status_error);
+    assert!(error_titles(&app).iter().any(|t| t.starts_with("Couldn't place notes.txt: ")), "{:?}", app.ui.notices);
+    assert!(app.ui.transform.is_none(), "a failed place starts no Free Transform");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Several files dropped on the canvas together are all queued, in order; a preset file among
+/// them goes to its library instead.
+#[test]
+fn several_files_dropped_on_the_canvas_are_queued_in_order() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.open_dropped(
+        &ctx,
+        vec![dropped("/pics/one.png", Err("unused".into())), dropped("/pics/set.abr", Err("unused".into())), dropped("/pics/two.jpg", Err("unused".into()))],
+        Some(egui::pos2(300.0, 300.0)),
+    );
+    let queued: Vec<String> = app
+        .drop_places
+        .iter()
+        .map(|p| match p {
+            DropPlace::File(f) => dropped_name(f),
+            DropPlace::Bytes(name, _) => name.clone(),
+        })
+        .collect();
+    assert_eq!(queued, ["one.png", "two.jpg"]);
+}
