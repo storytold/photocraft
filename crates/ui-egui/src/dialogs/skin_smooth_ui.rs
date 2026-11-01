@@ -39,6 +39,7 @@ pub(crate) fn bind(app: &PhotocraftApp, f: &mut Map<String, Value>) {
         f.insert(key.into(), json!([]));
     }
     f.remove("__skinTool");
+    f.remove("__pointerDown");
     f.remove("__skinMask");
     f.remove("__skinError");
 }
@@ -53,6 +54,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
                 d.fields.insert(key.into(), json!([]));
             }
             d.fields.remove("__skinTool");
+            d.fields.remove("__pointerDown");
             d.fields.remove("__skinMask");
             d.fields.remove("__skinError");
         }

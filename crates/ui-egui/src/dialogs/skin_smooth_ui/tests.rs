@@ -104,6 +104,57 @@ fn control_pointer_samples_and_does_not_paint_through_the_dialog() {
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
 }
 
+/// Control drags sample each held move, including across requests, and stop sampling when released.
+#[test]
+fn control_pointer_review_regression_samples_held_moves() {
+    let mut app = app();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let surface = Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(layer).unwrap().surface_mut().unwrap();
+    let samples = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    for (x, rgb) in samples.iter().enumerate() {
+        surface.write_pixel(x as i32 + 2, 3, &[rgb[0], rgb[1], rgb[2], 1.0]);
+    }
+    let original = app.session.active().unwrap().doc.clone();
+    let ctx = egui::Context::default();
+    for tool in ["sample", "add", "subtract"] {
+        field(&mut app, "__skinTool", json!(tool));
+        field(&mut app, POSITIVE, json!([]));
+        field(&mut app, NEGATIVE, json!([]));
+        for events in [
+            json!([{"kind":"down","x":2,"y":3}]),
+            json!([{"kind":"move","x":3,"y":3}]),
+            json!([{"kind":"move","x":4,"y":3},{"kind":"up","x":4,"y":3}]),
+            json!([{"kind":"move","x":5,"y":3}]),
+        ] {
+            let (request, _) = crate::control::ControlRequest::new("ui.pointer", json!({"events":events}));
+            crate::control::handle(&mut app, &ctx, &request);
+        }
+        let fields = &app.ui.dialogs[0].fields;
+        let key = if tool == "subtract" { NEGATIVE } else { POSITIVE };
+        let expected = if tool == "sample" { vec![samples[2]] } else { samples.to_vec() };
+        assert_eq!(colors(fields, key), expected, "{tool}: held moves must sample, but a hover after release must not");
+        assert!(colors(fields, if tool == "subtract" { POSITIVE } else { NEGATIVE }).is_empty());
+    }
+    for guard in [json!({"button":"middle"}), json!({"button":"right"}), json!({"space":true})] {
+        field(&mut app, "__skinTool", json!("add"));
+        field(&mut app, POSITIVE, json!([]));
+        let mut params = guard;
+        params["events"] = json!([{"kind":"down","x":2,"y":3},{"kind":"move","x":3,"y":3},{"kind":"up","x":3,"y":3}]);
+        let (request, _) = crate::control::ControlRequest::new("ui.pointer", params);
+        crate::control::handle(&mut app, &ctx, &request);
+        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "guarded gestures must not sample");
+    }
+    assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "the drag must never paint through the dialog");
+    let mut fields = app.ui.dialogs[0].fields.clone();
+    fields.insert("__pointerDown".into(), json!(true));
+    bind(&app, &mut fields);
+    assert!(!fields.contains_key("__pointerDown"), "a fresh binding cannot inherit a held pointer");
+    field(&mut app, "__pointerDown", json!(true));
+    app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Color(0);
+    tick(&mut app);
+    assert!(!app.ui.dialogs[0].fields.contains_key("__pointerDown"), "a source change ends the control gesture");
+}
+
 /// Supersedes a pending mask, retries the cancelled request and verifies dialog cancellation releases preview state.
 #[test]
 fn background_mask_discards_stale_samples_and_cancel_releases_it() {

@@ -354,7 +354,16 @@ fn paint_canvas(
     let render_zoom = input.render_zoom;
     let target_xf = input.target_xf;
     let pixel_grid = input.pixel_grid;
-    if primary {
+    // One region feeds the shared preview worker: the docked view, or its floating window,
+    // independent of focus. Embedded document windows carry their own identity under ROOT.
+    let preview_owner = app
+        .ui
+        .windows
+        .iter()
+        .find(|w| w.open && w.floating && w.document == idx)
+        .map_or(egui::ViewportId::ROOT, |w| egui::ViewportId::from_hash_of(("docwin", w.id)));
+    let viewport = ctx.data(|data| data.get_temp::<egui::ViewportId>(egui::Id::unique("canvas-doc-window"))).unwrap_or_else(|| ctx.viewport_id());
+    if viewport == preview_owner {
         ctx.data_mut(|data| data.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), visible_doc_rect(&xf)));
     }
 

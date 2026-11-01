@@ -186,6 +186,94 @@ fn inline_filter_preview_is_composited_and_recorded_once() {
     assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms);
 }
 
+/// A focused duplicate with a different visible region must not replace the main view's preview or queue another job.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.background_jobs = true;
+    app.run("file.new", json!({"width": 1024, "height": 128, "background": "#204060"})).unwrap();
+    app.run("plugin.install", json!({"path": concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")})).unwrap();
+    crate::filter_dialog::open_with_spec(
+        &mut app,
+        "plugin.run",
+        "Invert",
+        "{}",
+        json!({"id": "org.photocraft.example.invert", "__preview": true}).as_object().unwrap().clone(),
+    );
+    app.ui.extras.rulers = false;
+    let main = View { zoom: 1.0, center: [128.0, 64.0], doc_size: [1024, 128], fit_pending: false, ..Default::default() };
+    let duplicate = View { center: [896.0, 64.0], ..main.clone() };
+    let id = app.ui.alloc_id();
+    app.ui.windows.push(crate::state::DocWindow { id, document: 0, view: duplicate.clone(), open: true, floating: false, focused: true, position: None });
+    let viewport = egui::ViewportId::from_hash_of(("docwin", id));
+    let ctx = egui::Context::default();
+    let paint = |app: &mut PhotocraftApp, view: &View, viewport_id, primary| {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(256.0, 128.0));
+        let mut input = egui::RawInput { viewport_id, screen_rect: Some(rect), ..Default::default() };
+        input.viewports.entry(viewport_id).or_default();
+        let mut shown = false;
+        ctx.run_ui(input, |ui| {
+            // Carry the same explicit document-window identity as tabs::extra_windows.
+            let window = egui::Id::unique("canvas-doc-window");
+            if viewport_id != egui::ViewportId::ROOT {
+                ui.data_mut(|data| data.insert_temp(window, viewport_id));
+            }
+            canvas_view(app, ui, 0, rect, view.clone(), primary);
+            shown = ensure_filter_preview(app, 0, ui.ctx()).is_some();
+            ui.data_mut(|data| data.remove::<egui::ViewportId>(window));
+        })
+        .textures_delta
+        .clear();
+        shown
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) {
+        assert!(std::time::Instant::now() < deadline, "the main view never received its preview");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let canonical = app.filter_preview.as_ref().unwrap().key.clone();
+    let original = app.session.active().unwrap().doc.clone();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let filtered = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(128, 64);
+    assert_ne!(filtered, original.layer(layer).unwrap().surface().unwrap().pixel(128, 64), "the main view has an actual filter result");
+
+    let shown = paint(&mut app, &duplicate, viewport, true);
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical, "the focused duplicate replaced the main view's preview");
+    assert!(!app.filter_preview_worker.busy(), "a different duplicate viewport queued redundant filtering");
+    assert!(shown, "the duplicate lost the shared canonical preview");
+    assert!(paint(&mut app, &main, egui::ViewportId::ROOT, true), "the main view lost its filter preview after drawing the duplicate");
+    let window = egui::Id::unique("canvas-doc-window");
+    ctx.data_mut(|data| data.insert_temp(window, viewport));
+    assert!(paint(&mut app, &duplicate, egui::ViewportId::ROOT, true), "an embedded duplicate reuses the canonical preview");
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical);
+    assert!(!app.filter_preview_worker.busy());
+
+    // Undocking transfers ownership even without focus; ROOT must then reuse the floating region.
+    app.ui.windows[0].floating = true;
+    app.ui.windows[0].focused = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &duplicate, viewport, false) || app.filter_preview.as_ref().unwrap().key == canonical {
+        assert!(std::time::Instant::now() < deadline, "the unfocused floating owner never received its region");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let floating = app.filter_preview.as_ref().unwrap().key.clone();
+    assert!(paint(&mut app, &main, egui::ViewportId::ROOT, true));
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, floating, "ROOT cannot take back a floating owner's region");
+    ctx.data_mut(|data| data.insert_temp(window, viewport));
+    assert!(paint(&mut app, &duplicate, egui::ViewportId::ROOT, false), "embedded floating windows retain ownership");
+    assert!(!app.filter_preview_worker.busy());
+
+    app.ui.windows[0].open = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) {
+        assert!(std::time::Instant::now() < deadline, "closing the floating window did not restore the main preview");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical);
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
+}
+
 /// #6326: a filter's live preview is never coarser than the screen. On a document big enough
 /// for a reduced proxy, the view at 100 % previews at full resolution, and only a view zoomed
 /// out far enough uses the proxy. Through `ensure_filter_preview`, so the factor the canvas
