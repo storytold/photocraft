@@ -110,11 +110,27 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         return true;
     }
-    let mut mode = "shape".to_string();
-    crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    if is_shape_tool(tool) {
+        // Shape draws a shape layer, Path adds the outline to the work path (#9453).
+        let opts = [("shape".to_string(), tl!("Shape")), ("path".to_string(), tl!("Path"))];
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut app.ui.tool_options.shape_mode, &opts, 80.0);
+    } else {
+        // Path Selection and Direct Selection edit the selected shape layer: the Shape tools'
+        // Path mode isn't theirs to show or change.
+        let mut mode = "shape".to_string();
+        crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
+    }
     crate::widgets::vline(ui, 22.0);
-    crate::shape_options::options_bar(app, ui, tool);
+    // The Shape tools' Path mode hides Fill and Stroke (an outline has no paint); the tool's
+    // geometry stays.
+    let paint = !(is_shape_tool(tool) && draws_path(&app.ui.tool_options));
+    crate::shape_options::options_bar(app, ui, tool, paint);
     true
+}
+
+/// Whether the Shape tools are in Path mode: a drag adds its outline to the work path.
+pub(crate) fn draws_path(o: &crate::state::ToolOptions) -> bool {
+    o.shape_mode == "path"
 }
 
 /// Whether the active layer supplies the selected-shape options.
