@@ -118,7 +118,11 @@ fn parse_manifest(json: &str) -> Vec<(f32, String)> {
     let mut out = Vec::with_capacity(map.len().min(1 << 20));
     for (name, hex) in map {
         let Some(hex) = hex.as_str() else { continue };
-        let Some(bits) = u32::from_str_radix(hex.trim_start_matches("0x"), 16).ok() else { continue };
+        let digits = hex.strip_prefix("0x").unwrap_or(hex);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        let Some(bits) = u32::from_str_radix(digits, 16).ok() else { continue };
         out.push((f32::from_bits(bits), name.clone()));
     }
     out
@@ -262,4 +266,17 @@ pub(crate) fn decode(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<
         out.sort_by(|a, b| b.1.total_cmp(&a.1));
     }
     Ok(CryptomatteBuffer { width: w32, height: h32, pixels })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_manifest;
+
+    #[test]
+    fn manifest_rejects_malformed_hex_ids() {
+        assert!(parse_manifest(r#"{"a":"+3f800000"}"#).is_empty());
+        assert!(parse_manifest(r#"{"a":"0x0x3f800000"}"#).is_empty());
+        assert_eq!(parse_manifest(r#"{"a":"0x3f800000"}"#), vec![(1.0, "a".to_string())]);
+        assert_eq!(parse_manifest(r#"{"a":"3f800000"}"#), vec![(1.0, "a".to_string())]);
+    }
 }
