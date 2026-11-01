@@ -460,7 +460,7 @@ fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
     egui::ScrollArea::vertical().id_salt("saved-document-presets").max_height(320.0).show(ui, |ui| {
         for preset in &presets {
             ui.push_id(&preset.name, |ui| {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     let selected = get_s(f, "__savedPreset", "") == preset.name;
                     let label = egui::Button::new(&preset.name).selected(selected).truncate();
                     let response = ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name);
@@ -506,7 +506,7 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
         let mut name = get_s(f, "__presetName", "");
         crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
         f.insert("__presetName".into(), json!(name));
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             if widgets::secondary_button(ui, tl!("Save"), 110.0).clicked() || enter {
                 match app.run("document.presets.save", json!({"name":name,"settings":document_settings(f)})) {
                     Ok(_) => {
@@ -558,7 +558,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     let cat = get_s(f, "__category", "Recent");
     let mut create = false;
     // Category tabs.
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
         for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
             let on = cat == name;
@@ -604,7 +604,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
             // Up to 20 recent documents: scroll past three rows rather than grow the dialog.
             egui::ScrollArea::vertical().id_salt("new-document-presets").max_height(3.0 * (card.y + 8.0)).show(ui, |ui| {
                 for row in presets.chunks(3) {
-                    ui.horizontal(|ui| {
+                    crate::direction::dialog_row(ui, |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         for c in row {
                             let (r, resp) = ui.allocate_exact_size(card, Sense::click());
@@ -692,7 +692,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
             // A typed unit (`210mm` while in pixels) converts at the new document's resolution.
             let units = widgets::FieldUnits { unit: widgets::unit_of_key(&unit), dpi: f64::from(ppi), ppi: 72.0 };
             small_label(ui, tl!("Width"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
                 if widgets::value_field_units(ui, &mut w, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Width")).changed()
                 {
@@ -705,7 +705,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
                 }
             });
             small_label(ui, tl!("Height"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
                 if widgets::value_field_units(ui, &mut h, 0.0..=300_000.0, 110.0, widgets::unit_decimals(&unit), units).accessible_name(tl!("Height")).changed()
                 {
@@ -733,7 +733,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
             }
             ui.add_space(4.0);
             small_label(ui, tl!("Resolution"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 let per_cm = get_s(f, "__resUnit", "in") == "cm";
                 let mut r = if per_cm { ppi / 2.54 } else { ppi };
                 if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).accessible_name(tl!("Resolution")).changed() {
@@ -754,7 +754,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
             });
             ui.add_space(4.0);
             small_label(ui, tl!("Color Mode"));
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 let mut mode = get_s(f, "mode", "rgb");
                 if widgets::dropdown(
                     ui,
@@ -821,7 +821,7 @@ fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
             ];
             let shown = background_rgb(app, f);
             let mut pick = false;
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 if widgets::dropdown(ui, "nd-bg", tl!("Background"), &mut bg, &opts, 240.0 - SWATCH - 6.0) {
                     if bg == CUSTOM {
                         // Custom… opens the Color Picker on the colour shown so far.
