@@ -960,26 +960,36 @@ fn duplicate_document() {
     assert_eq!(s.documents().len(), 2);
     assert_eq!(doc(&s).layers.len(), 1);
     assert!(doc(&s).name.ends_with("copy"));
+}
 
-    #[test]
-    fn moving_the_canvas_refuses_a_deep_origin_overflow() {
-        let mut s = session();
-        let deep = LayerContent::Deep(photocraft_doc::DeepData {
-            x: i32::MAX - 5,
-            y: 0,
-            width: 40,
-            height: 20,
-            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
-            counts: vec![0, 1],
-        });
-        s.edit("deep", |doc, _| {
-            doc.layers.push(Layer::new("deep", deep));
-            Ok(())
-        })
-        .unwrap();
-        let err = s.edit("move", |doc, _| translate_doc(doc, "move", 10, 0)).unwrap_err();
-        assert!(err.to_string().contains("32-bit coordinate range"), "{err}");
-    }
+#[test]
+fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40000, "height": 30000, "background": "transparent"})).unwrap();
+    let initial_layers = doc(&s).layers.len();
+    let initial_bounds = doc(&s).bounds();
+    let initial_rev = s.active().unwrap().revision;
+    let initial_docs = s.documents().len();
+
+    let trim_res = s.execute("image.trim", json!({"basedOn": "topLeft"}));
+    assert!(trim_res.is_err(), "trim on too-large document must return error");
+    let err = trim_res.unwrap_err().to_string();
+    assert!(err.contains("too large to trim"), "error should explain document is too large: {err}");
+    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed trim");
+    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed trim");
+    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed trim");
+
+    let dup_res = s.execute("image.duplicate", json!({"mergedOnly": true}));
+    assert!(dup_res.is_err(), "duplicate merged on too-large document must return error");
+    let dup_err = dup_res.unwrap_err().to_string();
+    assert!(dup_err.contains("too large to duplicate merged"), "error should explain document is too large: {dup_err}");
+    assert_eq!(s.documents().len(), initial_docs, "document count unchanged after failed duplicate");
+    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed duplicate");
+    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
+    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
+}
+
+
     #[test]
     fn deep_layers_move_with_the_canvas_and_refuse_resampling() {
         let mut s = session();
@@ -1009,6 +1019,26 @@ fn duplicate_document() {
         // Resampling deep samples is refused instead of silently desyncing them.
         let err = s.execute("image.imageSize", json!({"width": 20, "height": 10})).unwrap_err();
         assert!(err.to_string().contains("deep layers"), "{err}");
+    }
+
+    #[test]
+    fn moving_the_canvas_refuses_a_deep_origin_overflow() {
+        let mut s = session();
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: i32::MAX - 5,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        s.edit("deep", |doc, _| {
+            doc.layers.push(Layer::new("deep", deep));
+            Ok(())
+        })
+        .unwrap();
+        let err = s.edit("move", |doc, _| translate_doc(doc, "move", 10, 0)).unwrap_err();
+        assert!(err.to_string().contains("32-bit coordinate range"), "{err}");
     }
     #[test]
     fn canvas_ops_refuse_deep_documents() {
@@ -1041,31 +1071,3 @@ fn duplicate_document() {
         // A non-deleting crop (just moving the canvas) is fine.
         s.execute("image.crop", json!({"x": 0, "y": 0, "width": 30, "height": 20, "deleteCroppedPixels": false})).unwrap();
     }
-}
-
-#[test]
-fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 40000, "height": 30000, "background": "transparent"})).unwrap();
-    let initial_layers = doc(&s).layers.len();
-    let initial_bounds = doc(&s).bounds();
-    let initial_rev = s.active().unwrap().revision;
-    let initial_docs = s.documents().len();
-
-    let trim_res = s.execute("image.trim", json!({"basedOn": "topLeft"}));
-    assert!(trim_res.is_err(), "trim on too-large document must return error");
-    let err = trim_res.unwrap_err().to_string();
-    assert!(err.contains("too large to trim"), "error should explain document is too large: {err}");
-    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed trim");
-    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed trim");
-    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed trim");
-
-    let dup_res = s.execute("image.duplicate", json!({"mergedOnly": true}));
-    assert!(dup_res.is_err(), "duplicate merged on too-large document must return error");
-    let dup_err = dup_res.unwrap_err().to_string();
-    assert!(dup_err.contains("too large to duplicate merged"), "error should explain document is too large: {dup_err}");
-    assert_eq!(s.documents().len(), initial_docs, "document count unchanged after failed duplicate");
-    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed duplicate");
-    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
-    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
-}
