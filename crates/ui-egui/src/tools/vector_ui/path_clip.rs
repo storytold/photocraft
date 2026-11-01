@@ -63,8 +63,10 @@ fn view_center(app: &PhotocraftApp) -> Option<[f64; 2]> {
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     // A newer OS clipboard image supersedes a path clip, like any newer clip: refresh the import
     // first — its signature guard leaves an unchanged OS image (and the path clip) alone — and
-    // route only what is still the freshest clip. A read error keeps the usable internal clip.
-    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
+    // route only what is still the freshest clip. Only once the OS clipboard was seen (a
+    // signature baseline exists): an image of unknown age must not displace a known-fresh
+    // internal clip (the OS clipboard may have sat untouched since before the app started).
+    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() && app.os_clip_sig.is_some() {
         let _ = app.import_os_clipboard();
     }
     // The intercept only takes the plain menu/shortcut form: explicit params address the
@@ -234,7 +236,8 @@ mod tests {
     }
 
     /// Paste precedence, one clipboard: an unchanged OS clipboard leaves the path paste alone;
-    /// a newer OS image supersedes the path clip and ⌘V pastes the pixels.
+    /// a newer OS image supersedes the path clip and ⌘V pastes the pixels. An OS image that was
+    /// never seen (no signature baseline) never displaces a known-fresh internal clip.
     #[test]
     fn paste_prefers_a_newer_os_image() {
         let os = std::sync::Arc::new(std::sync::Mutex::new(None::<(u32, u32, Vec<u8>)>));
@@ -244,11 +247,15 @@ mod tests {
         app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
         app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [15, 5], [15, 15], [5, 15]]}]}})).unwrap();
 
-        // Nothing on the OS clipboard: the path clip pastes as "Pasted Path".
+        // The OS clipboard holds an image the app has never seen (no baseline): the known-fresh
+        // path clip wins over content of unknown age.
+        *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
         app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
         app.run("edit.paste", json!({})).unwrap();
-        assert!(saved(&app, "Pasted Path").is_some(), "the path clip pasted");
-        // A newer OS image supersedes the path clip: ⌘V pastes the pixels, no second Pasted Path.
+        assert!(saved(&app, "Pasted Path").is_some(), "the path clip pasted, the unseen OS image did not displace it");
+        // Establish the baseline (the app sees OS image A)…
+        assert!(app.import_os_clipboard().unwrap());
+        // …then a path copy, then a genuinely newer OS image B: ⌘V pastes the pixels.
         app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
         *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
         app.run("edit.paste", json!({})).unwrap();
