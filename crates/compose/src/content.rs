@@ -10,11 +10,13 @@ pub const RENDER_TILE: i32 = 256;
 #[cfg(test)]
 #[test]
 fn scratch_reuse_preserves_pixels() {
-    let rect = Rect::new(-2, -3, 18, 11);
+    // 256 × 256 pixels of [f32; 4] (1 MiB): over `MIN_POOLED_BYTES`, so the pool keeps it.
+    let rect = Rect::new(-2, -3, 254, 253);
     for fmt in [photocraft_color::PixelFormat::RGBA8, photocraft_color::PixelFormat::RGBA16, photocraft_color::PixelFormat::RGBA32F] {
         let s = Surface::with_default(fmt, &[0.2, 0.4, 0.6, 0.8]);
-        let buf = surface_to_scratch(&s, rect);
+        let mut buf = surface_to_scratch(&s, rect);
         assert_eq!(buf, surface_to_buffer(&s, rect));
+        buf.px.fill([1.0; 4]);
         // A dropped buffer goes back to the pool; the next one must come out cleared.
         drop(buf);
         let reused = Buffer::transparent(rect);
