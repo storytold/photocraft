@@ -8,7 +8,7 @@
 //! stack as `z-index`, counted from the bottom layer as 1.
 
 use photocraft_doc::text::{TextAlign, TextShape};
-use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, LiveShape};
 use photocraft_geom::Point;
 use serde_json::{Value, json};
 
@@ -123,10 +123,21 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
                 _ => sized = false,
             }
         }
-        LayerContent::Shape(sh) => match &sh.fill {
-            Some(Fill::Solid(c)) => props.push(("background-color", rgb(c))),
-            _ => props.push(("background-image", image(l))),
-        },
+        LayerContent::Shape(sh) => {
+            // A live rounded rectangle's corners, before the fill as Photoshop writes them: one
+            // value when all four are equal, else top-left, top-right, bottom-right, bottom-left.
+            if let Some(LiveShape::Rect { radii, .. }) = &sh.live
+                && radii.iter().any(|&r| r > 0.0)
+            {
+                let px = |r: f64| format!("{}px", number(r.max(0.0)));
+                let all = if radii.iter().all(|&r| r == radii[0]) { px(radii[0]) } else { radii.map(px).join(" ") };
+                props.push(("border-radius", all));
+            }
+            match &sh.fill {
+                Some(Fill::Solid(c)) => props.push(("background-color", rgb(c))),
+                _ => props.push(("background-image", image(l))),
+            }
+        }
         LayerContent::Fill(f) => {
             // A fill layer without a shape covers the canvas.
             if bounds.is_empty() {

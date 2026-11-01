@@ -151,3 +151,22 @@ fn bad_params_and_layers_without_css_are_errors() {
     let mut empty = Session::new();
     assert!(empty.execute(ID, json!({})).is_err(), "no document");
 }
+
+/// A live rounded rectangle gives its corners as Photoshop writes them, before the fill: one
+/// value when all four are equal, else top-left, top-right, bottom-right, bottom-left; a sharp
+/// one writes none.
+#[test]
+fn a_rounded_rectangle_writes_its_border_radius() {
+    let mut s = session("Box");
+    let id = s.execute("shape.create", json!({"kind": "roundedRect", "rect": [40, 30, 120, 80], "radius": 12, "fill": "#ff0000"})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains(" {\n  border-radius: 12px;\n  background-color: rgb(255, 0, 0);\n  position: absolute;\n"), "{css}");
+    s.execute("shape.edit", json!({"layer": id, "radii": [20, 0, 10.5, 5]})).unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("  border-radius: 20px 0px 10.5px 5px;\n  background-color: rgb(255, 0, 0);\n"), "{css}");
+    s.execute("shape.edit", json!({"layer": id, "radii": [0, 0, 0, 0]})).unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(!css.contains("border-radius") && css.contains("  background-color: rgb(255, 0, 0);\n"), "{css}");
+}
