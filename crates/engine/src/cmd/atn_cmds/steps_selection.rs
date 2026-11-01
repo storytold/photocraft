@@ -18,9 +18,17 @@ pub(super) fn from(d: &Descriptor, convert: fn(&Descriptor) -> Mapped) -> Mapped
     convert(d)
 }
 
-/// Unknown or repeated descriptor keys must remain visible instead of disappearing on save.
+/// Keys must retain the encoding and order used by export, with no repeats or unknowns.
 fn keys(d: &Descriptor, allowed: &[&str]) -> bool {
-    d.items.iter().all(|(k, _)| allowed.iter().any(|name| k.is(name))) && allowed.iter().all(|name| d.items.iter().filter(|(k, _)| k.is(name)).count() <= 1)
+    let mut previous = None;
+    d.items.iter().all(|(key, _)| {
+        let Some(index) = allowed.iter().position(|name| *key == code(name)) else { return false };
+        if previous.is_some_and(|previous| index <= previous) {
+            return false;
+        }
+        previous = Some(index);
+        true
+    })
 }
 
 /// Native settings without a recorded representation cannot be exported faithfully.
@@ -36,12 +44,12 @@ fn unit(d: &Descriptor, key: &str, expected: &[u8; 4]) -> Option<f64> {
     }
 }
 
-/// Validate an enum's type as well as its value.
+/// Enum identifiers must retain their encoded form, including short-code padding.
 fn enumeration(d: &Descriptor, key: &str, expected: &str) -> Option<String> {
-    match d.get(key)? {
-        D::Enumerated { type_id, value } if type_id.is(expected) => Some(trimmed(value)),
-        _ => None,
-    }
+    let raw = d.get(key)?;
+    let D::Enumerated { value, .. } = raw else { return None };
+    let value = trimmed(value);
+    (raw == &enm(expected, &value)).then_some(value)
 }
 
 /// The recorded reference identifies either the selection property or the targeted layers.
@@ -156,7 +164,12 @@ pub(super) fn fade_from(d: &Descriptor) -> Mapped {
         if !keys(d, &["Opct", "Md  "]) {
             return None;
         }
-        Some(json!({"opacity":unit(d,"Opct",b"#Prc")?.clamp(0.0,100.0),"mode":blend_label(&enumeration(d,"Md  ","BlnM")?)?}))
+        let mode = blend_label(&enumeration(d, "Md  ", "BlnM")?)?;
+        // An accepted alias would be rewritten to the exporter's preferred blend identifier.
+        if d.get("Md  ") != Some(&enm("BlnM", blend_ps(mode)?)) {
+            return None;
+        }
+        Some(json!({"opacity":unit(d,"Opct",b"#Prc")?.clamp(0.0,100.0),"mode":mode}))
     };
     mapped().map_or(Mapped::Unsupported { harmless: false }, |p| step("edit.fade", p))
 }

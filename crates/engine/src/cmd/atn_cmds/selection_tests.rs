@@ -55,7 +55,9 @@ fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
     let mut ellipse = rectangle([1.5, 2.5, 8.5, 10.5], true);
     ellipse.items.last_mut().unwrap().1 = D::Boolean(false);
     cases.push(("AddT", Some("addTo"), ellipse));
-    cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.5)).with("Md  ", enm("BlnM", "Scrn"))));
+    for mode in ["Scrn", "H", "linearDodge"] {
+        cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.5)).with("Md  ", enm("BlnM", mode))));
+    }
     for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
         cases.push(("Dstr", Some("distort"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
     }
@@ -86,6 +88,30 @@ fn group_f_load_save_preserves_recorded_descriptors() {
     }
 }
 
+/// A kept step retains its descriptor bytes, event identity and playback flags.
+fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
+    let event = if id.is_empty() { AtnEvent::name(name.unwrap()) } else { AtnEvent::Code(id.as_bytes().try_into().unwrap()) };
+    let mut original = atn::parse(&file(event, descriptor.clone())).unwrap();
+    original.actions[0].items[0].enabled = false;
+    original.actions[0].items[0].with_dialog = true;
+    original.actions[0].items[0].dialog_options = 2;
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{descriptor:?}");
+    assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+    assert!(s.actions.list[0].disabled.contains(&0));
+    assert!(s.actions.list[0].dialogs.contains(&0));
+    let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let back = atn::parse(&bytes).unwrap();
+    let saved = &back.actions[0].items[0];
+    let original = &original.actions[0].items[0];
+    assert_eq!(saved.event, original.event);
+    assert_eq!((saved.enabled, saved.with_dialog, saved.dialog_options), (original.enabled, original.with_dialog, original.dialog_options));
+    assert_eq!(saved.descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
+}
+
 /// Outer and nested shape metadata stay kept, including headers on empty Group F events.
 #[test]
 fn noncanonical_group_f_headers_keep_their_bytes_and_flags() {
@@ -105,27 +131,66 @@ fn noncanonical_group_f_headers_keep_their_bytes_and_flags() {
                     }
                 }
             }
-            let event = if id.is_empty() { AtnEvent::name(name.unwrap()) } else { AtnEvent::Code(id.as_bytes().try_into().unwrap()) };
-            let mut original = atn::parse(&file(event, descriptor.clone())).unwrap();
-            original.actions[0].items[0].enabled = false;
-            original.actions[0].items[0].with_dialog = true;
-            original.actions[0].items[0].dialog_options = 2;
-            let mut s = Session::new();
-            let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
-            assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{variant}");
-            assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
-            assert!(s.actions.list[0].disabled.contains(&0));
-            assert!(s.actions.list[0].dialogs.contains(&0));
-            let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
-            assert_eq!(saved["skipped"], json!([]));
-            let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
-            let back = atn::parse(&bytes).unwrap();
-            let saved = &back.actions[0].items[0];
-            let original = &original.actions[0].items[0];
-            assert_eq!(saved.event, original.event);
-            assert_eq!((saved.enabled, saved.with_dialog, saved.dialog_options), (original.enabled, original.with_dialog, original.dialog_options));
-            assert_eq!(back.actions[0].items[0].descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
+            assert_kept(id, name, descriptor);
         }
+    }
+}
+
+/// Every keyed converter rejects alternate key encodings and adjacent order changes.
+#[test]
+fn noncanonical_group_f_keys_keep_their_bytes_and_flags() {
+    let variants = |d: &Descriptor| {
+        let mut variants = Vec::new();
+        for index in 0..d.items.len() {
+            let mut changed = d.clone();
+            changed.items[index].0 = Id::Str(changed.items[index].0.as_bytes().to_vec());
+            variants.push(changed);
+            if index > 0 {
+                let mut changed = d.clone();
+                changed.items.swap(index - 1, index);
+                variants.push(changed);
+            }
+        }
+        variants
+    };
+    for (id, name, d) in fixtures() {
+        for changed in variants(&d) {
+            assert_kept(id, name, changed);
+        }
+        for (index, (_, value)) in d.items.iter().enumerate() {
+            let D::Descriptor(shape) = value else { continue };
+            for changed in variants(shape) {
+                let mut outer = d.clone();
+                outer.items[index].1 = D::Descriptor(changed);
+                assert_kept(id, name, outer);
+            }
+        }
+    }
+}
+
+/// Enum type/value encodings and Fade aliases must not be normalized on save.
+#[test]
+fn noncanonical_group_f_enums_keep_their_bytes_and_flags() {
+    for (id, name, d) in fixtures() {
+        for (index, (_, value)) in d.items.iter().enumerate() {
+            let D::Enumerated { type_id, value } = value else { continue };
+            let mut padded = value.as_bytes().to_vec();
+            padded.push(b' ');
+            for (type_id, value) in [
+                (Id::Str(type_id.as_bytes().to_vec()), value.clone()),
+                (type_id.clone(), Id::Str(value.as_bytes().to_vec())),
+                (type_id.clone(), Id::Str(padded)),
+            ] {
+                let mut changed = d.clone();
+                changed.items[index].1 = D::Enumerated { type_id, value };
+                if changed != d {
+                    assert_kept(id, name, changed);
+                }
+            }
+        }
+    }
+    for alias in ["normal", "multiply", "hue"] {
+        assert_kept("Fade", Some("fade"), desc("null").with("Opct", pct(50.0)).with("Md  ", enm("BlnM", alias)));
     }
 }
 
