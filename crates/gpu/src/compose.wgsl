@@ -1386,6 +1386,24 @@ fn fs_fxmerge(in: VOut) -> @location(0) vec4<f32> {
     return o;
 }
 
+// The cached stack above a boundary (`suffix.rs`) applied to its backdrop A. That stack is
+// affine in the premultiplied backdrop x: with F0, F1 and F2 (B, C, layer_tex) the stack rendered
+// over transparent, opaque black and opaque white, it gives F0 + (F1 - F0) x.a + (F2 - F1) x.rgb.
+@fragment
+fn fs_suffix(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let x = textureLoad(tex_a, p, 0);
+    let f0 = textureLoad(tex_b, p, 0);
+    let f1 = textureLoad(tex_c, p, 0);
+    let f2 = textureLoad(layer_tex, p, 0);
+    let c0 = f0.rgb * f0.a;
+    let c1 = f1.rgb * f1.a;
+    let c2 = f2.rgb * f2.a;
+    let a = f0.a + (f1.a - f0.a) * x.a;
+    if (a <= 0.0) { return vec4(0.0); }
+    return vec4((c0 + (c1 - c0) * x.a + (c2 - c1) * (x.rgb * x.a)) / a, a);
+}
+
 // ---- effect maps (compose::effects::build_maps) ----------------------------------------------
 //
 // Targets cover the effect region (`chunk` = region origin and size); reads outside it return 0,
