@@ -251,6 +251,13 @@
 	Fill…	Isi…
 	Stroke…	Stroke…
 	Content-Aware Fill…	Isi Content-Aware…
+	Generative Fill…	Isi Generatif…
+	Generative Remove	Hapus Generatif
+	(not configured)	(belum diatur)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Siapkan dulu server ComfyUI atau AUTOMATIC1111 di Preferensi › Integrasi.
+	Refresh	Segarkan
+	Automatic (the server's choice)	Otomatis (pilihan server)
+	Generative Fill needs a selection on a pixel layer	Isi Generatif memerlukan seleksi pada layer piksel
 	Delete and Fill Selection	Hapus dan Isi Seleksi
 	Content-Aware Scale	Skala Content-Aware
 	Puppet Warp	Puppet Warp
@@ -1993,6 +2000,11 @@
 	Column width	Lebar kolom
 	Concise	Ringkas
 	Control port	Port kontrol
+	Generative fill backend	Isi Generatif: jenis server
+	Generative fill host	Isi Generatif: host
+	Generative fill model	Isi Generatif: model
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Konversi ke sRGB
 	Cursors	Kursor
 	Custom dark	Gelap kustom

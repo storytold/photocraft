@@ -101,6 +101,10 @@ choice!(
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
+choice!(
+    /// Which kind of locally hosted model server Edit › Generative Fill talks to.
+    GenerativeBackend { ComfyUi = "comfyui", A1111 = "a1111" } default ComfyUi
+);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
 choice!(LineStyle { Lines = "lines", Dashed = "dashedLines", Dots = "dots" } default Lines);
@@ -1011,11 +1015,26 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Generative Fill: the kind of model server (ComfyUI, or AUTOMATIC1111/Forge/SD.Next).
+    pub generative_fill_backend: GenerativeBackend,
+    /// Generative Fill: where that server listens, e.g. `192.168.1.20:8188` (this machine or a
+    /// private network only). Empty = not set up: the selection menu lists the fill greyed; a command
+    /// without a `host` then uses this machine on the backend's usual port. The connection is plain
+    /// HTTP (unencrypted): use another machine only on a network you trust.
+    pub generative_fill_host: String,
+    /// Generative Fill: checkpoint to use. Empty = the server's first, preferring an inpainting one.
+    pub generative_fill_model: String,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            generative_fill_backend: GenerativeBackend::default(),
+            generative_fill_host: String::new(),
+            generative_fill_model: String::new(),
+        }
     }
 }
 

@@ -181,6 +181,13 @@
 	Fill…	Doldur…
 	Stroke…	Kontur…
 	Content-Aware Fill…	İçeriğe Duyarlı Dolgu…
+	Generative Fill…	Üretken Dolgu…
+	Generative Remove	Üretken Kaldırma
+	(not configured)	(yapılandırılmadı)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Önce Tercihler › Entegrasyonlar altında bir ComfyUI veya AUTOMATIC1111 sunucusu ayarlayın.
+	Refresh	Yenile
+	Automatic (the server's choice)	Otomatik (sunucunun seçimi)
+	Generative Fill needs a selection on a pixel layer	Üretken Dolgu için piksel katmanında bir seçim gerekir
 	Delete and Fill Selection	Seçimi Sil ve Doldur
 	Content-Aware Scale	İçeriğe Duyarlı Ölçekleme
 	Puppet Warp	Kukla Çarpıtma
@@ -1907,6 +1914,11 @@
 	Column width	Sütun genişliği
 	Concise	Kısa
 	Control port	Kontrol portu
+	Generative fill backend	Üretken Dolgu: sunucu türü
+	Generative fill host	Üretken Dolgu: ana makine
+	Generative fill model	Üretken Dolgu: model
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	sRGB'ye dönüştür
 	Cursors	İmleçler
 	Custom dark	Özel koyu

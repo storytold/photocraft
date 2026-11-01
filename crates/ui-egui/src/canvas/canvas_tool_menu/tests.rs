@@ -408,6 +408,8 @@ fn selection_menus_follow_photoshop_order() {
             Some("Distort"),
             Some("Perspective"),
             None,
+            Some("Generative Fill…"),
+            Some("Generative Remove"),
             Some("Delete and Fill Selection"),
             Some("Fill…"),
             Some("Stroke…"),
@@ -424,6 +426,29 @@ fn selection_menus_follow_photoshop_order() {
     let items = crate::menus::menu_items(&app);
     for (label, id) in [SELECTION_MENU, NO_SELECTION_MENU, PEN_MENU, TRANSFORM_MENU].into_iter().flatten().flatten() {
         assert!(items.iter().any(|i| i.id == *id) || photocraft_engine::commands::find(id).is_some(), "{label}: unknown command {id}");
+    }
+}
+
+/// Generative Fill and Remove are listed but greyed until a server is set up, and live once a
+/// host is saved (they never offer an unconfigured server as the normal workflow).
+#[test]
+fn generative_rows_are_greyed_until_a_server_is_configured() {
+    let mut app = app();
+    app.ui.tool = Tool::RectMarquee;
+    app.run("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8})).unwrap();
+    assert!(open(&mut app, &Context::default(), Tool::RectMarquee, [10.0, 10.0]));
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    let env_set = std::env::var(photocraft_engine::generative_fill_cmds::HOST_ENV).is_ok_and(|v| !v.trim().is_empty());
+    if !env_set {
+        for id in ["edit.generativeFill", "edit.generativeRemove"] {
+            assert!(rows(&menu).iter().flatten().any(|(_, c)| *c == id), "{id} stays listed");
+            assert!(!entry_enabled(&app, &menu, id), "{id} is greyed without a server");
+        }
+        assert!(entry_enabled(&app, &menu, "edit.fill"), "other rows are untouched");
+    }
+    app.run("prefs.set", json!({"path": "integrations.generativeFillHost", "value": "192.168.1.20:8188"})).unwrap();
+    for id in ["edit.generativeFill", "edit.generativeRemove"] {
+        assert!(entry_enabled(&app, &menu, id), "{id} is live once a host is saved");
     }
 }
 

@@ -145,7 +145,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
+pub(crate) fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
     pixel_layer_id(s, id)
@@ -165,7 +165,7 @@ fn pixel_layer_id(s: &Session, id: LayerId) -> std::result::Result<LayerId, Stri
     Ok(id)
 }
 
-fn writable_surface(doc: &mut Document, id: LayerId) -> Result<&mut Surface> {
+pub(crate) fn writable_surface(doc: &mut Document, id: LayerId) -> Result<&mut Surface> {
     let locks = doc.effective_locks(id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if locks.all || locks.pixels {
@@ -308,9 +308,10 @@ mod find_replace;
 mod presets;
 mod purge;
 
+pub(crate) use content_aware::can_caf;
 pub(crate) use content_aware::channel_mask;
 pub use content_aware::{CafPlan, FillEdit, MAX_CAF_EDITS, MAX_CAF_POINTS, SelOp, content_aware_plan, content_aware_plan_with};
-use content_aware::{can_caf, content_aware_fill, delete_and_fill};
+use content_aware::{content_aware_fill, delete_and_fill};
 pub use content_aware_scale::ContentAwareScalePreview;
 use content_aware_scale::content_aware_scale;
 pub use fade::fade_surface;

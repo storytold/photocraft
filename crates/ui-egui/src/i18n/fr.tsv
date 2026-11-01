@@ -258,6 +258,13 @@
 	Fill…	Remplir…
 	Stroke…	Contourner…
 	Content-Aware Fill…	Remplissage d'après le contenu…
+	Generative Fill…	Remplissage génératif…
+	Generative Remove	Suppression générative
+	(not configured)	(non configuré)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Configurez d'abord un serveur ComfyUI ou AUTOMATIC1111 dans Préférences › Intégrations.
+	Refresh	Actualiser
+	Automatic (the server's choice)	Automatique (choix du serveur)
+	Generative Fill needs a selection on a pixel layer	Le remplissage génératif nécessite une sélection sur un calque de pixels
 	Delete and Fill Selection	Supprimer et remplir la sélection
 	Content-Aware Scale	Mise à l'échelle d'après le contenu
 	Puppet Warp	Déformation par épingles
@@ -1985,6 +1992,11 @@
 	Column width	Largeur de colonne
 	Concise	Concis
 	Control port	Port de contrôle
+	Generative fill backend	Remplissage génératif : type de serveur
+	Generative fill host	Remplissage génératif : hôte
+	Generative fill model	Remplissage génératif : modèle
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Convertir en sRVB
 	Cursors	Curseurs
 	Custom dark	Personnalisé sombre

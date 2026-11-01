@@ -289,6 +289,13 @@
 	Fill…	Vyplnit…
 	Stroke…	Tah…
 	Content-Aware Fill…	Výplň s ohledem na obsah…
+	Generative Fill…	Generativní výplň…
+	Generative Remove	Generativní odstranění
+	(not configured)	(nenastaveno)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Nejprve nastavte server ComfyUI nebo AUTOMATIC1111 v Předvolby › Integrace.
+	Refresh	Obnovit
+	Automatic (the server's choice)	Automaticky (podle serveru)
+	Generative Fill needs a selection on a pixel layer	Generativní výplň vyžaduje výběr na pixelové vrstvě
 	Delete and Fill Selection	Odstranit a vyplnit výběr
 	Content-Aware Scale	Změna velikosti s ohledem na obsah
 	Puppet Warp	Loutková deformace
@@ -2047,6 +2054,11 @@
 	Column width	Šířka sloupce
 	Concise	Stručný
 	Control port	Řídicí port
+	Generative fill backend	Generativní výplň: typ serveru
+	Generative fill host	Generativní výplň: hostitel
+	Generative fill model	Generativní výplň: model
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Převést do sRGB
 	Cursors	Kurzory
 	Custom dark	Vlastní tmavý

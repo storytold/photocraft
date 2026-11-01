@@ -300,6 +300,13 @@
 	Render	Απόδοση
 	About PhotoCraft	Πληροφορίες για το PhotoCraft
 	Content-Aware Fill…	Γέμισμα βάσει περιεχομένου…
+	Generative Fill…	Παραγωγικό γέμισμα…
+	Generative Remove	Παραγωγική αφαίρεση
+	(not configured)	(δεν έχει ρυθμιστεί)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Ρυθμίστε πρώτα έναν διακομιστή ComfyUI ή AUTOMATIC1111 στις Προτιμήσεις › Ενσωματώσεις.
+	Refresh	Ανανέωση
+	Automatic (the server's choice)	Αυτόματα (επιλογή του διακομιστή)
+	Generative Fill needs a selection on a pixel layer	Το Παραγωγικό γέμισμα απαιτεί επιλογή σε επίπεδο εικονοστοιχείων
 	Content-Aware Scale	Κλιμάκωση βάσει περιεχομένου
 	Puppet Warp	Παραμόρφωση με σημεία ελέγχου
 	Auto-Align Layers…	Αυτόματη στοίχιση επιπέδων…
@@ -1772,6 +1779,11 @@
 	Column width	Πλάτος στήλης
 	Concise	Συνοπτικό
 	Control port	Θύρα ελέγχου
+	Generative fill backend	Παραγωγικό γέμισμα: τύπος διακομιστή
+	Generative fill host	Παραγωγικό γέμισμα: κεντρικός υπολογιστής
+	Generative fill model	Παραγωγικό γέμισμα: μοντέλο
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Μετατροπή σε sRGB
 	Cursors	Δείκτες
 	Custom dark	Προσαρμοσμένο σκοτεινό

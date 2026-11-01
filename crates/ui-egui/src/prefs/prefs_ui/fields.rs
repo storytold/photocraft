@@ -14,6 +14,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
+            super::generative_fill::refresh_generative_models(ui.ctx(), f);
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
         }
@@ -104,6 +105,8 @@ pub(super) fn choice_label(v: &str) -> String {
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
         "traditional" => "Traditional (72.27 points/inch)".into(),
+        "comfyui" => "ComfyUI".into(),
+        "a1111" => "AUTOMATIC1111 / Forge / SD.Next".into(),
         "vulkan" => "Vulkan".into(),
         "dx12" => "DirectX 12".into(),
         "metal" => "Metal".into(),
@@ -430,6 +433,38 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name())));
                 let mut cur = s.clone();
                 crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
+                obj.insert(k, json!(cur));
+            }
+            // The models the server has, as a menu; "Automatic" leaves it to the fill (Flux Fill,
+            // else an inpainting model). Without a list (no server answered) a text box.
+            Value::String(s) if path == "integrations.generativeFillModel" => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let (models, note): (Vec<String>, String) =
+                    ui.ctx().data(|d| d.get_temp(egui::Id::unique(super::generative_fill::GF_MODELS_ID))).unwrap_or_default();
+                let mut cur = s.clone();
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        if models.is_empty() {
+                            ui.add(egui::TextEdit::singleline(&mut cur).desired_width(260.0));
+                        } else {
+                            let auto = tl!("Automatic (the server's choice)");
+                            let mut pairs: Vec<(String, &str)> = vec![(String::new(), auto)];
+                            pairs.extend(models.iter().map(|m| (m.clone(), m.as_str())));
+                            // A saved model the server no longer lists stays selectable.
+                            let saved = cur.clone();
+                            if !saved.is_empty() && !models.contains(&saved) {
+                                pairs.push((saved.clone(), saved.as_str()));
+                            }
+                            crate::widgets::dropdown_literal(ui, &format!("pref-{path}"), &label, &mut cur, &pairs, 260.0);
+                        }
+                        if ui.small_button(tl!("Refresh")).clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(super::generative_fill::GF_REFRESH_ID), true));
+                        }
+                    });
+                    if !note.is_empty() {
+                        ui.label(RichText::new(note).color(t.text_faint));
+                    }
+                });
                 obj.insert(k, json!(cur));
             }
             Value::String(s) if prefs::choices(&path).is_some() => {

@@ -226,6 +226,13 @@
 	Fill…	Rellenar…
 	Stroke…	Contornear…
 	Content-Aware Fill…	Relleno según el contenido…
+	Generative Fill…	Relleno generativo…
+	Generative Remove	Eliminación generativa
+	(not configured)	(sin configurar)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Configura primero un servidor ComfyUI o AUTOMATIC1111 en Preferencias › Integraciones.
+	Refresh	Actualizar
+	Automatic (the server's choice)	Automático (la elección del servidor)
+	Generative Fill needs a selection on a pixel layer	El relleno generativo necesita una selección en una capa de píxeles
 	Delete and Fill Selection	Eliminar y rellenar selección
 	Content-Aware Scale	Escala según el contenido
 	Puppet Warp	Deformación de posición libre
@@ -1979,6 +1986,11 @@
 	Column width	Ancho de columna
 	Concise	Conciso
 	Control port	Puerto de control
+	Generative fill backend	Relleno generativo: tipo de servidor
+	Generative fill host	Relleno generativo: host
+	Generative fill model	Relleno generativo: modelo
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Convertir a sRGB
 	Cursors	Cursores
 	Custom dark	Personalizado (oscuro)

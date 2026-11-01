@@ -318,6 +318,13 @@
 	Fill…	Выполнить заливку…
 	Stroke…	Обвести…
 	Content-Aware Fill…	Заливка с учётом содержимого…
+	Generative Fill…	Генеративная заливка…
+	Generative Remove	Генеративное удаление
+	(not configured)	(не настроено)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Сначала настройте сервер ComfyUI или AUTOMATIC1111 в Настройки › Интеграции.
+	Refresh	Обновить
+	Automatic (the server's choice)	Автоматически (выбор сервера)
+	Generative Fill needs a selection on a pixel layer	Для генеративной заливки нужно выделение на пиксельном слое
 	Delete and Fill Selection	Удалить и залить выделение
 	Define Brush Preset…	Определить кисть…
 	Define Pattern…	Определить паттерн…
@@ -2438,6 +2445,11 @@
 	Column width	Ширина колонки
 	Concise	Кратко
 	Control port	Порт управления
+	Generative fill backend	Генеративная заливка: тип сервера
+	Generative fill host	Генеративная заливка: хост
+	Generative fill model	Генеративная заливка: модель
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Преобразовывать в sRGB
 	Cursors	Курсоры
 	Custom dark	Тёмная своя
