@@ -544,7 +544,9 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(r) = jnum(p, "resolution") {
         d = d.with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: r });
     }
-    if let Some(i) = jstr(p, "resample").filter(|r| *r != "none") {
+    // Point sizes need an interpolation entry; omission uses the native bicubic default.
+    let resample = jstr(p, "resample").or_else(|| (unit == PT).then_some("bicubic"));
+    if let Some(i) = resample.filter(|r| *r != "none") {
         d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, i)?));
     }
     // Write the effective native default explicitly: omission in an ATN means false.

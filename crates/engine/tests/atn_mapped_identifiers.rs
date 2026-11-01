@@ -90,6 +90,30 @@ fn review_point_resize_exports_with_null_optional_values() {
     }
 }
 
+/// The native default resampler must be explicit in a physical-size recording.
+#[test]
+fn review_point_resize_exports_the_default_resampler() {
+    for extras in [json!({}), json!({"resample":null})] {
+        let mut params = json!({"width":72,"units":"pt","scaleStyles":false});
+        params.as_object_mut().unwrap().extend(extras.as_object().unwrap().clone());
+        let action = Action::new("Recorded", vec![("image.imageSize".into(), params.clone())]);
+        let (bytes, skipped) = atn_cmds::export("Points", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let imported = atn_cmds::import(&bytes).unwrap();
+        assert!(imported.unsupported.is_empty(), "a point-size export must include its native default resampler");
+        assert_eq!(imported.actions[0].steps[0].1["resample"], "bicubic");
+        let mut expected = sized_document(40, 20, 144);
+        expected.execute("image.imageSize", params).unwrap();
+        let mut actual = sized_document(40, 20, 144);
+        actual.actions.list = imported.actions;
+        let result = actual.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        let (a, b) = (&actual.active().unwrap().doc, &expected.active().unwrap().doc);
+        assert_eq!(a.size, b.size);
+        assert_eq!(a.layers[0].surface().unwrap().read_region(a.bounds()), b.layers[0].surface().unwrap().read_region(b.bounds()));
+    }
+}
+
 /// Invalid metadata must keep the whole Copy/Cut event, before a layer or source pixels can change.
 #[test]
 fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
