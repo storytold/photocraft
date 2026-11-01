@@ -107,6 +107,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
+            root_only: false,
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
@@ -136,6 +137,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: None,
         },
         // Cross-group membership uses the Style domain command; sibling/group order is saved
         // in the canonical picker layout state.
@@ -195,6 +197,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
+            root_only: false,
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
@@ -220,6 +223,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: None,
         },
         // The projection also contains the derived `Custom Shapes` group, whose items live in
         // edit_state.custom_shapes and have no move command. Until that source supports the same
@@ -895,6 +899,7 @@ mod tests {
                 item_size: None,
                 list_item_height: None,
                 domain_hierarchy_actions: false,
+                root_item_group: None,
             },
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
@@ -940,6 +945,7 @@ mod tests {
                 item_size: None,
                 list_item_height: None,
                 domain_hierarchy_actions: false,
+                root_item_group: None,
             },
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
@@ -1004,7 +1010,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let groups =
-            vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
+            vec![GroupView { name: "Only group".into(), root_only: false, items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
         let mut st = PresetUi::default();
         let menu_calls = Rc::new(Cell::new(0));
         let search_calls = Rc::new(Cell::new(0));
@@ -1039,6 +1045,7 @@ mod tests {
                 item_size: None,
                 list_item_height: None,
                 domain_hierarchy_actions: false,
+                root_item_group: None,
             },
             capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false, canonical_hierarchy_drag: false },
             item_context_menu: None,
@@ -1104,6 +1111,7 @@ mod tests {
     fn asset_group_projects_legacy_folder_paths_into_the_shared_group_hierarchy() {
         let group = GroupView {
             name: "Brushes".into(),
+            root_only: false,
             items: vec![
                 ItemView { key: "a".into(), name: "A".into(), group_path: vec!["Imported".into()] },
                 ItemView { key: "b".into(), name: "B".into(), group_path: Vec::new() },
@@ -1284,7 +1292,7 @@ mod tests {
         use egui_kittest::{Harness, kittest::Queryable};
 
         let groups =
-            vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
+            vec![GroupView { name: "Only group".into(), root_only: false, items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
         let mut st = PresetUi::default();
         let mut adapter = BrowserAdapter {
             panel: "consumer-actions",
@@ -1299,6 +1307,7 @@ mod tests {
                 item_size: None,
                 list_item_height: None,
                 domain_hierarchy_actions: false,
+                root_item_group: None,
             },
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(consumer_item_menu),

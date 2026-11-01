@@ -11,8 +11,13 @@ use crate::pickers::asset_browser::{
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
+use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState};
 use crate::pickers::preset_commands::{generic, run};
 use crate::pickers::preset_preview::c32;
+
+/// The engine's fallback owner for gradients created when the library has no groups. The shared
+/// hierarchy treats it as an invisible backing group while its cards live at the root.
+const ROOT_ITEMS_GROUP: &str = "Presets";
 
 /// Draw a gradient swatch, showing transparency over the standard checkerboard.
 pub(crate) fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])]) {
@@ -48,16 +53,63 @@ pub(crate) fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])
 pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (foreground, background) = (app.session.tools.foreground, app.session.tools.background);
     let library = app.session.presets.gradients.clone();
-    // Keep the adapter projection domain-shaped and unsorted. The shared browser combines these
-    // groups with saved parent/sibling state into its canonical runtime hierarchy each frame.
+    // The reserved fallback group is the durable owner for root cards. Unlike generic picker
+    // layout state, the gradient library itself is saved across restarts, so membership in this
+    // group is the source of truth for root-level placement.
     let groups: Vec<GroupView> = library
         .iter()
         .map(|group| GroupView {
             name: group.name.clone(),
+            root_only: group.name == ROOT_ITEMS_GROUP,
             items: group.items.iter().map(|item| ItemView { key: item.name.clone(), name: item.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
     let mut state = std::mem::take(&mut app.ui.presets_ui);
+    let root_items: std::collections::BTreeSet<String> = library
+        .iter()
+        .find(|group| group.name == ROOT_ITEMS_GROUP)
+        .into_iter()
+        .flat_map(|group| group.items.iter().map(|item| item.name.clone()))
+        .collect();
+    // Preserve the canonical mixed root sequence written by commit_hierarchy_move. Rebuilding
+    // RootItems first on every frame silently discarded the requested insertion point, making a
+    // successful drop between groups or at the bottom appear to have failed (the card jumped to
+    // the beginning of the list, often outside the current viewport).
+    let visible_groups: std::collections::BTreeSet<String> = groups.iter().filter(|group| !group.root_only).map(|group| group.name.clone()).collect();
+    let mut root_order: Vec<HierarchyOrderEntry> = state
+        .hierarchy_order
+        .get("gradients")
+        .and_then(|orders| orders.get(""))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| match entry {
+            // commit_hierarchy_move records the item's original library group in the UI token,
+            // while the domain adapter has physically moved it into the reserved owner group.
+            // Match by durable key and normalize the backing group without changing its position.
+            HierarchyOrderEntry::RootItem { key, .. } if root_items.contains(key) => {
+                Some(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() })
+            }
+            HierarchyOrderEntry::Group(name) if visible_groups.contains(name) => Some(entry.clone()),
+            _ => None,
+        })
+        .collect();
+    let represented_root_items: std::collections::BTreeSet<String> = root_order
+        .iter()
+        .filter_map(|entry| match entry {
+            HierarchyOrderEntry::RootItem { key, .. } if root_items.contains(key) => Some(key.clone()),
+            _ => None,
+        })
+        .collect();
+    // Newly discovered durable root cards (for example after an app restart) have no transient
+    // mixed-order token. Seed them before the existing group sequence; subsequent drag commits
+    // then preserve their explicitly chosen positions.
+    let mut missing_root_items: Vec<HierarchyOrderEntry> = root_items
+        .difference(&represented_root_items)
+        .map(|key| HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: key.clone() })
+        .collect();
+    missing_root_items.append(&mut root_order);
+    let root_order = missing_root_items;
+    state.set_hierarchy_order("gradients", "", root_order);
     let canvas = canvas_drop_rect(app);
     let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
         run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
@@ -77,6 +129,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: Some(ROOT_ITEMS_GROUP),
         },
         // Cross-group membership uses the Gradient domain command; sibling/group order is saved
         // in the canonical picker layout state.
@@ -124,6 +177,32 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.presets_ui.set_selected_item("gradients", group, group_path, key);
                 run(app, "gradient.presets.apply", json!({"preset": key}));
             }
+            BrowserAction::New => {
+                let root_level = groups.iter().all(|group| group.root_only);
+                let destination_group = if root_level {
+                    ROOT_ITEMS_GROUP
+                } else {
+                    groups.iter().find(|group| !group.root_only).map(|group| group.name.as_str()).unwrap_or(ROOT_ITEMS_GROUP)
+                };
+                if let Some(result) = run(app, "gradient.presets.new", json!({"name": "Custom", "group": destination_group})) {
+                    let name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+                    if !name.is_empty() {
+                        app.ui.presets_ui.set_selected_item("gradients", destination_group, &[], &name);
+                        if root_level {
+                            let mut root = app.ui.presets_ui.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
+                            root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.clone() });
+                            app.ui.presets_ui.set_hierarchy_order("gradients", "", root);
+                        }
+                        app.ui.presets_ui.item_renaming = Some(ItemRenameState {
+                            panel: "gradients".into(),
+                            group: destination_group.into(),
+                            group_path: Vec::new(),
+                            key: name.clone(),
+                            text: name,
+                        });
+                    }
+                }
+            }
             // Only the brush browser supports nested-group context actions.
             BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
@@ -150,13 +229,259 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Modifiers, vec2};
+    use egui::{Event, Modifiers, PointerButton, vec2};
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
 
-    use super::gradients_panel;
+    use super::{ROOT_ITEMS_GROUP, gradients_panel};
     use crate::PhotocraftApp;
     use crate::pickers::asset_browser::last_group_headers;
     use crate::pickers::picker_state::HierarchyOrderEntry;
+
+    #[test]
+    fn creating_a_gradient_with_no_groups_places_the_card_at_root_without_a_visible_backing_group() {
+        let mut session = photocraft_engine::Session::new();
+        for group in session.presets.gradients.clone() {
+            session.execute("gradient.presets.edit", serde_json::json!({"action": "deleteGroup", "group": group.name})).unwrap();
+        }
+        assert!(session.presets.gradients.is_empty());
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(360.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let create = h.get_by_label("Create new gradient").rect().center();
+        h.event(Event::PointerMoved(create));
+        h.event(Event::PointerButton { pos: create, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: create, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(4);
+
+        let library = &h.state().session.presets.gradients;
+        assert_eq!(library.len(), 1);
+        assert_eq!(library[0].name, ROOT_ITEMS_GROUP);
+        assert_eq!(library[0].items.len(), 1);
+        let root = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
+        assert_eq!(root, &[HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: library[0].items[0].name.clone() }]);
+        assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "the domain backing group must not render as a folder");
+        assert!(h.query_all_by_label("Custom").next().is_some(), "the new gradient card should be visible at root");
+
+        // The UI mirror remains serde-safe, while durable root membership is stored in the
+        // gradient library's reserved owner group rather than depending on this transient state.
+        let restored_ui: crate::state::UiState = serde_json::from_value(serde_json::to_value(&h.state().ui).unwrap()).unwrap();
+        h.state_mut().ui = restored_ui;
+        h.run_steps(3);
+        assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "the backing folder must remain hidden after restoring UiState");
+        assert!(h.query_all_by_label("Custom").next().is_some(), "the root card must remain visible after restoring UiState");
+        h.state_mut().ui.presets_ui = Default::default();
+        h.run_steps(3);
+        assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "root placement must come from the saved gradient library, not transient UI state");
+        assert!(h.query_all_by_label("Custom").next().is_some(), "the card must stay at root even when picker layout state is reset");
+    }
+
+    #[test]
+    fn dropping_a_gradient_before_the_first_group_moves_it_into_the_persistent_root_owner() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let headers = last_group_headers(&h.ctx, "gradients");
+        assert!(headers.len() >= 2);
+        let (source_group, _) = headers.first().unwrap();
+        let source_key = h.state().session.presets.gradients.iter().find(|group| &group.name == source_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let source = h.get_by_label(&source_key).rect().center();
+        let first_header = headers.first().unwrap().1;
+        let target = egui::pos2(first_header.center().x, first_header.top() - 5.0);
+
+        h.event(Event::PointerMoved(source));
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=8 {
+            h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+
+        let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP).expect("the domain root owner is created on demand");
+        assert_eq!(root_owner.items.first().map(|item| item.name.as_str()), Some(source_key.as_str()));
+        assert!(last_group_headers(&h.ctx, "gradients").iter().all(|(name, _)| name != ROOT_ITEMS_GROUP));
+
+        // Clearing picker-only state simulates an application restart: domain membership still
+        // reconstructs the root item and the backing group remains invisible.
+        h.state_mut().ui.presets_ui = Default::default();
+        h.run_steps(3);
+        assert!(last_group_headers(&h.ctx, "gradients").iter().all(|(name, _)| name != ROOT_ITEMS_GROUP));
+        assert!(h.query_all_by_label(&source_key).next().is_some());
+    }
+
+    #[test]
+    fn dropping_a_gradient_between_groups_or_after_the_last_group_moves_it_to_root() {
+        for drop_position in ["gap_upper", "gap_lower", "root_end"] {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                        gradients_panel(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(3);
+
+            let initial_headers = last_group_headers(&h.ctx, "gradients");
+            assert!(initial_headers.len() >= 2);
+            let (source_group, _) = initial_headers.first().unwrap();
+            let source_key = h.state().session.presets.gradients.iter().find(|group| &group.name == source_group)
+                .and_then(|group| group.items.iter().find(|item| {
+                    !h.state().session.presets.gradients.iter().find(|owner| owner.name == ROOT_ITEMS_GROUP)
+                        .is_some_and(|owner| owner.items.iter().any(|root_item| root_item.name == item.name))
+                })).unwrap().name.clone();
+            if h.query_all_by_label(&source_key).next().is_none() {
+                let header = initial_headers.first().unwrap().1.center();
+                h.event(Event::PointerMoved(header));
+                h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+                h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                h.run_steps(2);
+            }
+            // Expanding a collapsed source group changes every later row's position. Always use
+            // the freshly rendered headers for the drop coordinate.
+            let headers = last_group_headers(&h.ctx, "gradients");
+            let source = h.get_by_label(&source_key).rect().center();
+            let target = match drop_position {
+                "gap_upper" | "gap_lower" => {
+                    let second_header = headers[1].1;
+                    let offset = if drop_position == "gap_upper" { -9.0 } else { -3.0 };
+                    egui::pos2(second_header.center().x, second_header.top() + offset)
+                }
+                "root_end" => {
+                    let (last_group, last_header) = headers.last().unwrap();
+                    let last_key = h.state().session.presets.gradients.iter().find(|group| &group.name == last_group)
+                        .and_then(|group| group.items.last()).unwrap().name.clone();
+                    if h.query_all_by_label(&last_key).next().is_none() {
+                        let header = last_header.center();
+                        h.event(Event::PointerMoved(header));
+                        h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                        h.run_steps(1);
+                        h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                        h.run_steps(2);
+                    }
+                    let last_card = h.get_by_label(&last_key).rect();
+                    // Drop well into the blank trailing area, not merely the narrow gap after the card.
+                    egui::pos2(last_card.center().x, last_card.bottom() + 48.0)
+                }
+                _ => unreachable!(),
+            };
+            h.event(Event::PointerMoved(source));
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            for step in 1..=8 {
+                h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+                h.run_steps(1);
+            }
+            h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+
+            let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP)
+                .unwrap_or_else(|| panic!("root owner should be created for drop_position={drop_position}"));
+            assert!(root_owner.items.iter().any(|item| item.name == source_key),
+                "drop_position={drop_position}: expected {source_key:?} in root owner, library={:?}", h.state().session.presets.gradients);
+            let root_order = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
+            let moved = HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: source_key.clone() };
+            let moved_index = root_order.iter().position(|entry| entry == &moved).expect("the mixed root sequence retains the moved card");
+            match drop_position {
+                "gap_upper" | "gap_lower" => {
+                    let first_group_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group(headers[0].0.clone())).unwrap();
+                    let second_group_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group(headers[1].0.clone())).unwrap();
+                    assert!(first_group_index < moved_index && moved_index < second_group_index,
+                        "drop_position={drop_position}: card must remain between the first two groups: {root_order:?}");
+                }
+                "root_end" => assert_eq!(root_order.last(), Some(&moved), "the card must remain at the root sequence's end: {root_order:?}"),
+                _ => unreachable!(),
+            }
+            assert!(last_group_headers(&h.ctx, "gradients").iter().all(|(name, _)| name != ROOT_ITEMS_GROUP));
+        }
+    }
+
+    #[test]
+    fn dropping_a_gradient_at_the_bottom_of_a_scrolled_browser_appends_to_root() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let scroll_to_bottom = |h: &mut Harness<'static, PhotocraftApp>| {
+            let viewport = crate::pickers::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
+            h.event(Event::PointerMoved(viewport.center()));
+            h.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -2400.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(3);
+        };
+        scroll_to_bottom(&mut h);
+
+        let (last_group, last_header) = last_group_headers(&h.ctx, "gradients").last().cloned().unwrap();
+        let last_key = h.state().session.presets.gradients.iter().find(|group| group.name == last_group)
+            .and_then(|group| group.items.last()).unwrap().name.clone();
+        if h.query_all_by_label(&last_key).next().is_none() {
+            let point = last_header.center();
+            h.event(Event::PointerMoved(point));
+            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+            scroll_to_bottom(&mut h);
+        }
+        let source = h.get_by_label(&last_key).rect().center();
+        let viewport = crate::pickers::asset_browser::last_browser_rect(&h.ctx, "gradients").unwrap();
+        let target = egui::pos2(viewport.center().x, viewport.bottom() - 8.0);
+        assert!(viewport.contains(target));
+        h.event(Event::PointerMoved(source));
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=8 {
+            h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+
+        let root_owner = h.state().session.presets.gradients.iter().find(|group| group.name == ROOT_ITEMS_GROUP)
+            .expect("dropping at the root end creates the durable owner group");
+        assert!(root_owner.items.iter().any(|item| item.name == last_key));
+        let root_order = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
+        assert_eq!(root_order.last(), Some(&HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: last_key }));
+    }
 
     #[test]
     fn gradients_group_drop_before_card_persists_the_unified_order() {

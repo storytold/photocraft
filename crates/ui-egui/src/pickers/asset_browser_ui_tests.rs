@@ -13,7 +13,7 @@ const PANEL: &str = "shared-browser-ui-tests";
 type UiTestState = (PresetUi, Vec<BrowserAction>, Vec<(String, String, String, usize)>);
 
 fn group(name: &str, items: Vec<ItemView>) -> GroupView {
-    GroupView { name: name.into(), items }
+    GroupView { name: name.into(), root_only: false, items }
 }
 
 fn item(key: &str, name: &str, path: &[&str]) -> ItemView {
@@ -49,6 +49,7 @@ fn harness_with_state(groups: Vec<GroupView>, size: Vec2, initial_state: PresetU
                     item_size: Some(vec2(72.0, 48.0)),
                     list_item_height: Some(26.0),
                     domain_hierarchy_actions: false,
+                    root_item_group: None,
                 },
                 capabilities: BrowserCapabilities {
                     item_drag: true,
@@ -183,12 +184,12 @@ fn actual_card_edge_drop_reorders_mixed_siblings_at_both_halves_across_many_card
 }
 
 #[test]
-fn actual_six_pixel_group_gap_selects_upper_and_lower_sibling_levels() {
+fn actual_twelve_pixel_group_gap_selects_upper_and_lower_sibling_levels() {
     for offset in [-2.5, -1.0, 1.0, 2.5] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
         let lower_header = h.get_by_label("B").rect();
-        let point = pos2(lower_header.center().x, lower_header.top() - 3.0 + offset);
+        let point = pos2(lower_header.center().x, lower_header.top() - 6.0 + offset);
         pointer_drag(&mut h, source, point);
         let a = &h.state().0.hierarchy_order[PANEL]["A"];
         assert_eq!(a.iter().filter(|entry| **entry == HierarchyOrderEntry::Group("C".into())).count(), 1);
@@ -211,7 +212,8 @@ fn actual_vertical_indent_column_appends_to_the_intended_group_from_many_subtree
         let card = h.get_by_label(card_label).rect();
         // The prepend/append column is the narrow vertical strip immediately left of the
         // group's indented card content. Staying inside it avoids overlapping the card hitbox.
-        let target = pos2(header.left() + 5.0, card.center().y);
+        // Stay inside the scroll viewport and the twelve-pixel-wide indent column.
+        let target = pos2(header.left() + 12.0, card.center().y);
         pointer_drag(&mut h, source, target);
         let children = &h.state().0.hierarchy_order[PANEL]["A"];
         assert_eq!(children.last(), Some(&HierarchyOrderEntry::Group("C".into())), "drop beside {card_label}: {children:?}");
@@ -314,6 +316,57 @@ fn actual_nested_card_drop_on_root_group_header_is_committed() {
     pointer_drag(&mut h, source, target);
 
     assert_eq!(h.state().2, [("A".into(), "a1".into(), "B".into(), 0)]);
+}
+
+#[test]
+fn actual_nested_card_drop_at_root_append_area_promotes_card_to_root_level() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let source = h.get_by_label("B card 1").rect().center();
+    let last_card = h.get_by_label("C card 1").rect();
+    // B is nested inside A; C is the final root sibling, so the root-end target follows C.
+    let target = pos2(last_card.center().x, last_card.bottom() + 8.0);
+
+    pointer_drag(&mut h, source, target);
+
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    assert!(
+        root_order.contains(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }),
+        "the nested card should be persisted in the root sibling sequence; root order: {root_order:?}"
+    );
+    assert!(!h.state().0.hierarchy_order[PANEL]["B"].contains(&HierarchyOrderEntry::Item("b1".into())));
+}
+
+#[test]
+fn actual_nested_card_drop_between_root_groups_promotes_card_to_root_level() {
+    let mut h = harness(nested_group_tree(), vec2(520.0, 900.0));
+    let source = h.get_by_label("A card 1").rect().center();
+    let b_header = h.get_by_label("B").rect();
+    let target = pos2(b_header.center().x, b_header.top() - 1.0);
+
+    pointer_drag(&mut h, source, target);
+
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    assert!(
+        root_order.contains(&HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() }),
+        "the card dropped between root groups should become a root sibling; root order: {root_order:?}"
+    );
+    assert!(!h.state().0.hierarchy_order[PANEL]["A"].contains(&HierarchyOrderEntry::Item("a1".into())));
+}
+
+#[test]
+fn actual_nested_card_drop_before_first_root_group_promotes_card_to_root_front() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let source = h.get_by_label("B card 1").rect().center();
+    let first_header = h.get_by_label("A").rect();
+    // The shared browser exposes a dedicated leading separator before the first root node.
+    let target = pos2(first_header.center().x, first_header.top() - 5.0);
+
+    pointer_drag(&mut h, source, target);
+
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    assert_eq!(root_order.first(), Some(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }));
+    assert_eq!(root_order.get(1), Some(&HierarchyOrderEntry::Group("A".into())));
+    assert!(!h.state().0.hierarchy_order[PANEL]["B"].contains(&HierarchyOrderEntry::Item("b1".into())));
 }
 
 #[test]

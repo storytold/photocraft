@@ -15,7 +15,8 @@ use crate::pickers::asset_browser_interaction::{
     asset_browser_take_release,
     asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_header_drop_hit, header_drop_before, hierarchy_group_drop,
-    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_sibling_anchor, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    root_prepend_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_state::escape_hierarchy_key_part;
@@ -27,6 +28,7 @@ use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
 const GROUP_HEADER_HEIGHT: f32 = 30.0;
+const GROUP_GAP_HEIGHT: f32 = 12.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
 const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
@@ -60,6 +62,9 @@ pub(crate) struct ItemView {
 pub(crate) struct GroupView {
     /// Group label and stable identity used for collapse state and group actions. Names are unique within a picker.
     pub(crate) name: String,
+    /// Domain-only backing container for cards represented directly in the root sequence.
+    /// It participates in item identity/commands but has no visible group header of its own.
+    pub(crate) root_only: bool,
     /// Items in the order they should appear within this group.
     pub(crate) items: Vec<ItemView>,
 }
@@ -78,7 +83,7 @@ pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView>
                 .filter(|item| item_visible_for_query(item, &query, group_matches))
                 .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
                 .collect();
-            group_visible_for_query(&query, group_matches, !items.is_empty()).then(|| GroupView { name: group.name.clone(), items })
+            group_visible_for_query(&query, group_matches, !items.is_empty()).then(|| GroupView { name: group.name.clone(), root_only: group.root_only, items })
         })
         .collect()
 }
@@ -102,6 +107,7 @@ fn item_visible_for_query(item: &ItemView, query: &str, group_matches: bool) -> 
 struct GroupRenderSegment {
     group_index: usize,
     depth: usize,
+    root_items: bool,
     show_header: bool,
     folder_path: Vec<String>,
     show_folder_header: bool,
@@ -260,6 +266,7 @@ fn build_hierarchy_projection(
                         out.push(GroupRenderSegment {
                             group_index,
                             depth,
+                            root_items: false,
                             show_header: folder_path.is_empty() && first,
                             folder_path: folder_path.to_vec(),
                             show_folder_header: !folder_path.is_empty() && first,
@@ -283,6 +290,7 @@ fn build_hierarchy_projection(
             out.push(GroupRenderSegment {
                 group_index,
                 depth,
+                root_items: false,
                 show_header: folder_path.is_empty() && first,
                 folder_path: folder_path.to_vec(),
                 show_folder_header: !folder_path.is_empty() && first,
@@ -301,6 +309,7 @@ fn build_hierarchy_projection(
     let mut roots: Vec<HierarchyNode> = display
         .iter()
         .filter_map(|&(index, depth)| (depth == 0).then_some(index))
+        .filter(|index| groups.get(*index).is_some_and(|group| !group.root_only))
         .filter_map(|index| build_group(index, 0, groups, display, parents, orders, &mut visited, &mut item_indices, &mut identities, &lifted_items))
         .collect();
     let root_entries = orders.get("").cloned().unwrap_or_default();
@@ -338,7 +347,11 @@ fn build_hierarchy_projection(
     for root in hierarchy.roots() {
         if let HierarchyNode::Item(id) = root {
             if let Some((group_index, item_index)) = item_indices.get(id) {
-                out.push(GroupRenderSegment { group_index: *group_index, depth: 0, show_header: false, folder_path: Vec::new(), show_folder_header: false, item_indices: vec![*item_index] });
+                if let Some(segment) = out.last_mut().filter(|segment: &&mut GroupRenderSegment| segment.root_items && segment.group_index == *group_index) {
+                    segment.item_indices.push(*item_index);
+                } else {
+                    out.push(GroupRenderSegment { group_index: *group_index, depth: 0, root_items: true, show_header: false, folder_path: Vec::new(), show_folder_header: false, item_indices: vec![*item_index] });
+                }
             }
         } else {
             let root_index = group_indices.get(root.id()).copied().unwrap_or_default();
@@ -573,6 +586,9 @@ pub(crate) struct BrowserOptions {
     pub(crate) list_item_height: Option<f32>,
     /// Emit group moves as domain actions instead of applying transient browser ordering.
     pub(crate) domain_hierarchy_actions: bool,
+    /// Optional domain-owned destination for cards dropped into the implicit root sequence.
+    /// Consumers without a persistent root owner keep root placement in picker layout state.
+    pub(crate) root_item_group: Option<&'static str>,
 }
 
 /// Features that can be enabled independently for a particular browser consumer.
@@ -722,6 +738,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
         item_size,
         list_item_height,
         domain_hierarchy_actions,
+        root_item_group,
     } = adapter.options;
     let capabilities = adapter.capabilities;
     // Canonical hierarchy drag/drop is opt-in: each adapter enables it only after its projected
@@ -834,12 +851,16 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let mut group_releases: Vec<GroupRelease> = Vec::new();
     let canonical_drop_hits = std::cell::RefCell::new(Vec::<(DropHitRegion, egui::Response)>::new());
     let non_root_hierarchy_target_hovered = std::cell::Cell::new(false);
-    let group_names: Vec<String> = groups.iter().map(|g| g.name.clone()).collect();
+    let visible_group_indices: Vec<usize> = groups.iter().enumerate().filter_map(|(index, group)| (!group.root_only).then_some(index)).collect();
+    let group_names: Vec<String> = visible_group_indices.iter().filter_map(|index| groups.get(*index).map(|group| group.name.clone())).collect();
     // Project the canonical mixed sibling sequences into the transient validated browser tree.
-    let display = if domain_hierarchy_actions {
-        groups.iter().enumerate().map(|(index, _)| (index, 0)).collect()
+    let display: Vec<(usize, usize)> = if domain_hierarchy_actions {
+        visible_group_indices.iter().map(|index| (*index, 0)).collect()
     } else {
         st.nested_display_order(panel, &group_names)
+            .into_iter()
+            .filter_map(|(visible_index, depth)| visible_group_indices.get(visible_index).map(|index| (*index, depth)))
+            .collect()
     };
     let parents = if domain_hierarchy_actions { std::collections::BTreeMap::new() } else { st.group_parents(panel) };
     let mut hierarchy_orders = std::collections::BTreeMap::new();
@@ -892,6 +913,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             // Resolve hierarchy-on-card candidates across every visible group segment so a
             // group drag can show only one insertion line in the entire shared browser.
             let mut item_hierarchy_targets: Vec<(egui::Response, Rect, bool, bool, usize, String, Vec<String>)> = Vec::new();
+            // The root is a real sibling sequence, not merely the area after the final group.
+            // Give its leading edge an explicit separator/drop target before the first root node.
+            if canonical_hierarchy_drag && let Some(first) = hierarchy.roots().first() {
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
+                let indicator = Rect::from_min_max(
+                    pos2(rect.left(), rect.center().y - 2.0),
+                    pos2(rect.right(), rect.center().y + 2.0),
+                );
+                let hit_index = canonical_drop_hits.borrow().len();
+                canonical_drop_hits.borrow_mut().push((root_prepend_hit(rect, indicator, first.id().clone(), hit_index), response));
+            }
             for segment in &render_segments {
                 let gi = segment.group_index;
                 let depth = segment.depth;
@@ -923,10 +955,10 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     expanded_groups.insert(g.name.clone());
                 }
                 if segment.show_header {
-                // Reserve six real pixels between group rows: two from normal row spacing and
-                // four explicit pixels for reliable insertion hit targets.
+                // Reserve a forgiving twelve-pixel separator between group rows. Keep the visual
+                // gap and its two semantic hit halves the same size.
                 if !gap_headers.is_empty() {
-                    ui.add_space(4.0);
+                    ui.add_space((GROUP_GAP_HEIGHT - ui.spacing().item_spacing.y).max(0.0));
                 }
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
                     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
@@ -1058,7 +1090,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_group = |ui: &mut egui::Ui, group: &HierarchyGroup<'_, ItemView>, group_open: bool, group_depth: usize| {
                             if !gap_headers.is_empty() {
-                                ui.add_space(4.0);
+                                ui.add_space((GROUP_GAP_HEIGHT - ui.spacing().item_spacing.y).max(0.0));
                             }
                             let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
                             let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
@@ -1140,9 +1172,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             // Cards and hierarchy rows share the same 20px-per-level visual
                             // coordinate. Grid-only padding is accounted for inside that amount,
                             // rather than being added on top of the hierarchy indentation.
-                            let visual_indent = row_indent(depth + group_depth + 1);
+                            let visual_indent = if segment.root_items { 0.0 } else { row_indent(depth + group_depth + 1) };
                             let content_indent = if list { visual_indent } else { (visual_indent - grid_indent).max(0.0) };
-                            let pad = content_indent + (if list { 0.0 } else { grid_indent });
+                            let pad = if segment.root_items { 0.0 } else { content_indent + (if list { 0.0 } else { grid_indent }) };
                             let gap = if list || flush { 0.0 } else { GRID_GAP };
                             let (cell, cols) = if list {
                                 let row_h = list_item_height.unwrap_or(24.0).max(1.0);
@@ -1529,22 +1561,22 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     }
                 }
             }
-            // Each adjacent visible group pair has an actual six-pixel gap. The upper half inserts
-            // after the last card in the upper group's own sibling sequence; when that sequence has
-            // no cards, it falls back to placing after the group header itself.
+            // Each adjacent visible group pair has an actual twelve-pixel gap. The upper half inserts
+            // after the last node in the lower group's parent sequence that precedes it. This is
+            // important when the preceding visible header is not a sibling of the lower header.
             if canonical_hierarchy_drag {
                 for pair in gap_headers.windows(2) {
-                    let (upper_id, _upper_rect, upper_depth, upper_open) = &pair[0];
+                    let (upper_id, _upper_rect, upper_depth, _upper_open) = &pair[0];
                     let (lower_id, lower_rect, lower_depth, _) = &pair[1];
                     let gap_rect = Rect::from_min_max(
-                        pos2(lower_rect.left(), lower_rect.top() - 6.0),
+                        pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_HEIGHT),
                         pos2(lower_rect.right(), lower_rect.top()),
                     );
-                    // The layout inserts exactly six pixels before every visible header after
+                    // The layout inserts exactly twelve pixels before every visible header after
                     // the first. Do not infer the gap from the upper group's content bounds: a
                     // mixed sibling sequence can render cards from that group after a child
                     // header, and nested descendants can extend beyond the upper group's own
-                    // card area. The six pixels immediately preceding the lower header are the
+                    // card area. The twelve pixels immediately preceding the lower header are the
                     // authoritative gap regardless of that content ordering.
                     if gap_rect.is_positive() {
                         let response = ui.interact(
@@ -1552,11 +1584,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             ui.id().with(("group-gap", panel, upper_id, lower_id)),
                             Sense::hover(),
                         );
-                        let (upper_anchor, upper_anchor_depth) = if *upper_open {
-                            group_gap_upper_anchor(&hierarchy, upper_id)
-                        } else {
-                            (upper_id.clone(), *upper_depth)
-                        };
+                        let (upper_anchor, upper_anchor_depth) =
+                            group_gap_sibling_anchor(&hierarchy, lower_id).unwrap_or_else(|| group_gap_upper_anchor(&hierarchy, upper_id));
                         let mut hits = group_gap_drop_hits(
                             gap_rect,
                             upper_anchor,
@@ -1668,19 +1697,37 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
             }
             if canonical_hierarchy_drag {
-                let (root_end_rect, root_end_response) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+                // The whole trailing blank area is the root append target, not just a narrow
+                // sixteen-pixel strip immediately after the final node. This lets users drop in
+                // the whitespace below the last group while keeping the indicator at its top edge.
+                let root_end_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(32.0);
+                let (root_end_rect, root_end_response) = ui.allocate_exact_size(vec2(ui.available_width(), root_end_height), Sense::hover());
                 let indicator = Rect::from_min_max(
                     pos2(root_end_rect.left(), root_end_rect.top() - 2.0),
                     pos2(root_end_rect.right(), root_end_rect.top() + 2.0),
                 );
                 let hit_index = canonical_drop_hits.borrow().len();
-                canonical_drop_hits.borrow_mut().push((root_append_hit(root_end_rect, indicator, hit_index), root_end_response));
+                let visible_root_end = root_end_rect.intersect(ui.clip_rect());
+                if visible_root_end.is_positive() {
+                    canonical_drop_hits.borrow_mut().push((root_append_hit(visible_root_end, indicator, hit_index), root_end_response));
+                }
             }
         });
     let mut hierarchy_drop_feedback = None;
     if canonical_hierarchy_drag {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
-            let hits: Vec<DropHitRegion> = canonical_drop_hits.borrow().iter().map(|(hit, _)| hit.clone()).collect();
+            // Geometric arbitration must respect the ScrollArea viewport. Otherwise a hit region
+            // clipped out of view can still win when its un-clipped rectangle overlaps another
+            // visible region near the viewport edge.
+            let hits: Vec<DropHitRegion> = canonical_drop_hits
+                .borrow()
+                .iter()
+                .filter_map(|(hit, _)| {
+                    let mut visible = hit.clone();
+                    visible.hit_rect = visible.hit_rect.intersect(scroll.inner_rect);
+                    visible.hit_rect.is_positive().then_some(visible)
+                })
+                .collect();
             if let Some(index) = arbitrate_hit_index(pointer, &hits)
                 && canonical_drop_hits.borrow().get(index).is_some()
             {
@@ -1706,24 +1753,29 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     }
                                     if let Some(HierarchyIdentity::Item { group, key }) = hierarchy_identities.get(&intent.source) {
                                         let resolved = hierarchy.resolve_move(&intent.source, &intent.position).map_err(|error| format!("Could not resolve item move: {error:?}"))?;
-                                        let ContainerId::Group(destination_id) = resolved.destination() else {
-                                            return Err("This asset library cannot move items outside a named group.".to_owned());
+                                        let destination_group = match resolved.destination() {
+                                            ContainerId::Group(destination_id) => {
+                                                let Some(HierarchyIdentity::Group(destination_group)) = hierarchy_identities.get(destination_id) else {
+                                                    return Err("The destination group is no longer available.".to_owned());
+                                                };
+                                                Some(destination_group.as_str())
+                                            }
+                                            ContainerId::Root => root_item_group,
                                         };
-                                        let Some(HierarchyIdentity::Group(destination_group)) = hierarchy_identities.get(destination_id) else {
-                                            return Err("The destination group is no longer available.".to_owned());
-                                        };
-                                        let Some(commit) = hierarchy_item_move.as_deref_mut() else {
-                                            return Err("This asset adapter does not support authoritative item moves.".to_owned());
-                                        };
-                                        let children = hierarchy.children_of(resolved.destination()).ok_or_else(|| "The destination group is no longer available.".to_owned())?;
-                                        let same_container = hierarchy.parent_of(&intent.source).as_ref() == Some(resolved.destination());
-                                        let domain_index = children
-                                            .iter()
-                                            .filter(|node| !same_container || node.id() != &intent.source)
-                                            .take(resolved.insertion_index())
-                                            .filter(|node| matches!(node, HierarchyNode::Item(_)))
-                                            .count();
-                                        commit(group, key, destination_group, domain_index)?;
+                                        if let Some(destination_group) = destination_group {
+                                            let Some(commit) = hierarchy_item_move.as_deref_mut() else {
+                                                return Err("This asset adapter does not support authoritative item moves.".to_owned());
+                                            };
+                                            let children = hierarchy.children_of(resolved.destination()).ok_or_else(|| "The destination is no longer available.".to_owned())?;
+                                            let same_container = hierarchy.parent_of(&intent.source).as_ref() == Some(resolved.destination());
+                                            let domain_index = children
+                                                .iter()
+                                                .filter(|node| !same_container || node.id() != &intent.source)
+                                                .take(resolved.insertion_index())
+                                                .filter(|node| matches!(node, HierarchyNode::Item(_)))
+                                                .count();
+                                            commit(group, key, destination_group, domain_index)?;
+                                        }
                                     }
                                     let legacy_persistable = hierarchy_identities.values().all(|identity| {
                                         matches!(identity, HierarchyIdentity::Item { .. } | HierarchyIdentity::Group(_))
@@ -1885,7 +1937,7 @@ mod filter_tests {
     use egui_kittest::kittest::Queryable;
 
     fn group(name: &str, items: Vec<ItemView>) -> GroupView {
-        GroupView { name: name.into(), items }
+        GroupView { name: name.into(), root_only: false, items }
     }
 
     fn item(key: &str, name: &str, group_path: &[&str]) -> ItemView {
@@ -1920,6 +1972,26 @@ mod filter_tests {
 
         assert_eq!(item_occurrence_position(&groups, "brush-occurrence-a"), Some((0, 0)));
         assert_eq!(item_occurrence_position(&groups, "brush-occurrence-b"), Some((0, 1)));
+    }
+
+    #[test]
+    fn adjacent_root_cards_share_an_unindented_grid_segment() {
+        let groups = vec![GroupView {
+            name: "Presets".into(),
+            root_only: true,
+            items: vec![item("first", "First", &[]), item("second", "Second", &[])],
+        }];
+        let orders = std::collections::BTreeMap::from([(
+            "".into(),
+            vec![HierarchyOrderEntry::RootItem { group: "Presets".into(), key: "first".into() }, HierarchyOrderEntry::RootItem { group: "Presets".into(), key: "second".into() }],
+        )]);
+
+        let segments = group_render_segments(&groups, &[], &Default::default(), &orders);
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].root_items);
+        assert_eq!(segments[0].depth, 0);
+        assert_eq!(segments[0].item_indices, [0, 1]);
     }
 
     #[test]
@@ -2158,6 +2230,7 @@ mod filter_tests {
                         item_size: None,
                         list_item_height: None,
                         domain_hierarchy_actions,
+                        root_item_group: None,
                     },
                     capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: true, selection: false, activation: false, canonical_hierarchy_drag: false },
                     item_context_menu: None,

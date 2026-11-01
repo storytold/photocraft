@@ -218,7 +218,7 @@ fn brush_group_views(presets: &[BrushPreset]) -> Vec<BrushGroupView<'_>> {
             let presets: Vec<&BrushPreset> = indices.into_iter().filter_map(|i| presets.get(i)).collect();
             let items =
                 presets.iter().map(|preset| ItemView { key: preview_identity(preset), name: preset.name.clone(), group_path: preset.folder.clone() }).collect();
-            BrushGroupView { view: GroupView { name, items }, presets }
+            BrushGroupView { view: GroupView { name, root_only: false, items }, presets }
         })
         .collect()
 }
@@ -525,6 +525,7 @@ pub(crate) fn picker_browser(
         .iter()
         .map(|group| GroupView {
             name: group.view.name.clone(),
+            root_only: false,
             items: group
                 .view
                 .items
@@ -595,6 +596,7 @@ pub(crate) fn picker_browser(
             item_size: Some(vec2(card_w, card_h)),
             list_item_height: Some(44.0),
             domain_hierarchy_actions: true,
+            root_item_group: None,
         },
         // Brush folders are projected from each item's full `group_path` by the canonical tree.
         // The shared resolver emits path-aware domain actions; Brush dispatches those through its
@@ -1279,6 +1281,7 @@ pub fn preset_list(
         .iter()
         .map(|group| GroupView {
             name: group.view.name.clone(),
+            root_only: false,
             items: group
                 .view
                 .items
@@ -1322,6 +1325,7 @@ pub fn preset_list(
             item_size: Some(vec2(layout.cell, layout.cell + 6.0)),
             list_item_height: Some(44.0),
             domain_hierarchy_actions: true,
+            root_item_group: None,
         },
         // Use the same canonical path-aware hierarchy as the floating Brush picker.
         capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },

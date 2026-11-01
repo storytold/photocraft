@@ -71,6 +71,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
+            root_only: false,
             items: g.items.iter().map(|s| ItemView { key: s.name.clone(), name: s.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
@@ -106,6 +107,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: None,
         },
         // Cross-group membership uses the Swatches domain command; sibling/group order is saved
         // in the canonical picker layout state.

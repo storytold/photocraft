@@ -84,6 +84,7 @@ pub(crate) fn pattern_group_views(patterns: &[photocraft_doc::Pattern], groups: 
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
+            root_only: false,
             items: g
                 .items
                 .iter()
@@ -102,7 +103,7 @@ pub(crate) fn pattern_group_views(patterns: &[photocraft_doc::Pattern], groups: 
         if let Some(group) = views.iter_mut().find(|g| g.name == "Patterns") {
             group.items.extend(loose);
         } else {
-            views.push(GroupView { name: "Patterns".into(), items: loose });
+            views.push(GroupView { name: "Patterns".into(), root_only: false, items: loose });
         }
     }
     views
@@ -135,6 +136,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: None,
         },
         // Cross-group membership uses the Pattern domain command; sibling/group order is saved
         // in the canonical picker layout state.
@@ -321,6 +323,7 @@ pub(crate) fn compact_pattern_browser(
             item_size: None,
             list_item_height: None,
             domain_hierarchy_actions: false,
+            root_item_group: None,
         },
         // Compact pickers have no domain-command context for committing item or group moves.
         // Keep selection/activation available, but do not expose drag semantics that could only
