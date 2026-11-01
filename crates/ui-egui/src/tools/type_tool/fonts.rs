@@ -600,6 +600,7 @@ pub(crate) fn family_picker_in(
             // the window leaves below it. That height is also its minimum, so the menu grows back
             // after a search that matched nothing (a popup never grows by itself, egui#5225); the
             // row beside the class list is no measure of it. With no rows it shrinks to its message.
+            let list_width = (menu_width - if filters.hide_classes { 16.0 } else { class_w + 30.0 }).max(FONT_LIST_WIDTH);
             let room = ui.ctx().content_rect().bottom() - ui.cursor().top() - 16.0;
             let height = FONT_LIST_HEIGHT.min(room).max(row_h);
             let mut list = egui::ScrollArea::vertical().id_salt(field.with("list")).auto_shrink([true, true]);
@@ -609,7 +610,7 @@ pub(crate) fn family_picker_in(
             // Top to bottom, though the list sits beside the class list.
             let shown = list.show(ui, |ui| {
                 ui.vertical(|ui| {
-                    ui.set_width(FONT_LIST_WIDTH);
+                    ui.set_width(list_width);
                     let weak = |ui: &mut egui::Ui, text: &str| {
                         ui.label(egui::RichText::new(text).weak());
                     };
@@ -636,7 +637,7 @@ pub(crate) fn family_picker_in(
                         }
                         // Only rows on screen read their font's format and styles, and an expanded
                         // family: its style rows stay listed when its own row scrolls out of view.
-                        let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(FONT_LIST_WIDTH, row_h)));
+                        let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(list_width, row_h)));
                         let format = if visible { lookup(f).map(|t| t.format) } else { None };
                         let open = !recent_row && expanded.contains(f);
                         let styles = if visible || open { library.styles_of(f) } else { Vec::new() };
@@ -650,7 +651,7 @@ pub(crate) fn family_picker_in(
                         button =
                             button.right_text(egui::Atom::custom(egui::IdSalt::new(("font-sample", f, recent_row)), egui::vec2(slot + FONT_BADGE_WIDTH, h)));
                         let response = ui
-                            .allocate_ui_with_layout(egui::vec2(FONT_LIST_WIDTH, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            .allocate_ui_with_layout(egui::vec2(list_width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = 2.0;
                                 // The star adds the font to (or removes it from) the favourites; it never picks it.
                                 let tip = if favorite { tl!("Remove from Favorites") } else { tl!("Add to Favorites") };

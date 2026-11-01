@@ -461,6 +461,17 @@ fn clearing_a_query_that_matches_nothing_grows_the_menu_back() {
 }
 
 #[test]
+fn collapsing_font_classes_expands_the_font_list() {
+    let mut h = harness();
+    open(&mut h);
+    let before = h.get_by_label("Family 02").rect().width();
+    h.get_by_label("Hide Font Classes").click();
+    h.run_steps(2);
+    let after = h.get_by_label("Family 02").rect().width();
+    assert!(after > before + 80.0, "collapsed class filter should widen font rows: {before} -> {after}");
+}
+
+#[test]
 fn reopening_selects_the_applied_name_and_clicking_it_keeps_the_menu_open() {
     let mut h = harness();
     let field = h.get_by_role(Role::TextInput).rect().center();
