@@ -43,8 +43,8 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("brushes", "Brushes", Group::Brushes),
 ];
 
-/// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
-/// craft-ui's English.
+/// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. Labels with no
+/// translation yet fall back to their English source.
 const DOCK_LABELS: &[(&str, &str)] = &[
     ("dock.float", "Float Panel"),
     ("dock.close", "Close Panel"),
@@ -54,6 +54,10 @@ const DOCK_LABELS: &[(&str, &str)] = &[
     ("dock.resizeWindow", "Resize panel window"),
     ("dock.closeGroup", "Close Tab Group"),
     ("dock.floatGroup", "Float Tab Group"),
+    ("dock.minimize", "Minimize"),
+    ("dock.expand", "Expand"),
+    ("dock.moveGroupTo", "Move Group To"),
+    ("dock.collapseToIcons", "Collapse to Icons"),
 ];
 
 /// Where a panel floats when a command gives no rect: craft-ui places it 24 points inside this
