@@ -1,7 +1,7 @@
 //! Photoshop's channel and colour steps (#10609): Split Channels, Merge Spot Channel, Trap and
 //! Match Color, with the keys Photoshop records.
 
-use super::descriptors::{boolean, desc, get_num, px, trimmed};
+use super::descriptors::{boolean, desc, num, px, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
@@ -53,14 +53,15 @@ pub(super) fn merge_spot_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// Trap's widest width: Photoshop clamps larger ones to it.
 const MAX_TRAP: f64 = 32767.0;
 
-/// Trap (`Trap`): `Wdth` in pixels.
+/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number keeps the Photoshop step.
 pub(super) fn trap_from(d: &Descriptor) -> Mapped {
     if !only_keys(d, &["Wdth"]) {
         return Mapped::Unsupported { harmless: false };
     }
-    match get_num(d, "Wdth") {
-        Some(w) => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
-        None => step("image.trap", json!({})),
+    match setting(d, "Wdth", |v| num(v).map(Some), None) {
+        Some(Some(w)) => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
+        Some(None) => step("image.trap", json!({})),
+        None => Mapped::Unsupported { harmless: false },
     }
 }
 
@@ -82,16 +83,23 @@ const MATCH_COLOR: &[(&str, &str, i32)] = &[("Lght", "luminance", 100), ("ClrR",
 
 /// Match Color (`matchColor`) without a source, as Photoshop records it (`noReference`). A
 /// step that matches another image (`noReference` false, or not a Boolean) names no source
-/// here, so it keeps the Photoshop step.
+/// here, so it keeps the Photoshop step, as does a setting that isn't a number.
 pub(super) fn match_color_from(d: &Descriptor) -> Mapped {
-    if !only_keys(d, &["Lght", "ClrR", "Fade", "noReference"]) || setting(d, "noReference", boolean, true) != Some(true) {
-        return Mapped::Unsupported { harmless: false };
+    match match_color_params(d) {
+        Some(p) => step("image.adjustments.matchColor", Value::Object(p)),
+        None => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn match_color_params(d: &Descriptor) -> Option<serde_json::Map<String, Value>> {
+    if !only_keys(d, &["Lght", "ClrR", "Fade", "noReference"]) || !setting(d, "noReference", boolean, true)? {
+        return None;
     }
     let mut p = serde_json::Map::new();
     for (key, param, default) in MATCH_COLOR {
-        p.insert((*param).into(), get_num(d, key).map_or(Value::from(*default), Value::from));
+        p.insert((*param).into(), setting(d, key, |v| num(v).map(Value::from), Value::from(*default))?);
     }
-    step("image.adjustments.matchColor", Value::Object(p))
+    Some(p)
 }
 
 /// Every key in recorded order. A source document or layer, Neutralize or a selection option

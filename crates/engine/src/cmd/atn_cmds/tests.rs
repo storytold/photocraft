@@ -3291,3 +3291,20 @@ fn match_color_with_a_non_boolean_no_reference_is_kept() {
         assert!(matches!(m, Mapped::Unsupported { harmless: false }), "noReference {v:?} was mapped");
     }
 }
+
+/// A recorded Match Color or Trap setting that isn't a number is the step's own setting, not a
+/// missing one: the step stays a Photoshop step instead of playing with the default (#10609).
+#[test]
+fn channel_and_color_steps_with_a_non_numeric_setting_are_kept() {
+    for (name, key, v) in [
+        ("matchColor", "Lght", text("120")),
+        ("matchColor", "ClrR", D::Boolean(true)),
+        ("matchColor", "Fade", enm("Ordn", "Trgt")),
+        ("matchColor", "Lght", D::Double(f64::NAN)),
+        ("Trap", "Wdth", text("2")),
+        ("Trap", "Wdth", D::Boolean(true)),
+    ] {
+        let m = channel_step(name, desc("null").with(key, v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{name} with {key} = {v:?} was mapped");
+    }
+}
