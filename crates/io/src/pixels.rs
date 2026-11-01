@@ -70,7 +70,7 @@ pub fn try_interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: S
         }
     }
     let mut out = Vec::new();
-    out.try_reserve_exact(len).map_err(|_| PsdError::LimitExceeded("not enough memory to interleave PSD pixels"))?;
+    out.try_reserve_exact(len).map_err(|_| PsdError::OutOfMemory("not enough memory to interleave PSD pixels"))?;
     out.resize(len, 0);
     interleave_into(planes, fill, n, s, invert, &mut out);
     Ok(out)

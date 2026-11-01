@@ -238,13 +238,13 @@ impl PsdFile {
         let merged = match merged {
             Ok(merged) => merged,
             Err(error) => {
-                if matches!(error, PsdError::LimitExceeded(_)) || !recover(file) {
+                if matches!(error, PsdError::LimitExceeded(_) | PsdError::OutOfMemory(_)) || !recover(file) {
                     return Err(error);
                 }
                 let compression = Compression::from_u16(encoded.u16()?);
                 let source = encoded.peek_rest();
                 let mut data = Vec::new();
-                data.try_reserve_exact(source.len()).map_err(|_| PsdError::LimitExceeded("not enough memory to retain the damaged merged image"))?;
+                data.try_reserve_exact(source.len()).map_err(|_| PsdError::OutOfMemory("not enough memory to retain the damaged merged image"))?;
                 data.extend_from_slice(source);
                 file.image_data = ImageData::new(compression, data);
                 Some(Err(error))
@@ -270,10 +270,18 @@ impl PsdFile {
         r.u16()?;
         let data = r.peek_rest();
         let decoded = decode_planes(compression, data, &layout);
+        // An allocation failure is the open's, before the encoded image is copied under the same
+        // memory pressure.
+        if matches!(decoded, Err(PsdError::OutOfMemory(_))) {
+            return decoded.map(Ok);
+        }
         if decoded.is_err() {
             validate_planes(compression, data, &layout)?;
         }
-        self.image_data = ImageData::new(compression, data.to_vec());
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(data.len()).map_err(|_| PsdError::OutOfMemory("not enough memory to retain the merged image"))?;
+        copy.extend_from_slice(data);
+        self.image_data = ImageData::new(compression, copy);
         r.skip(data.len())?;
         Ok(decoded)
     }
@@ -292,7 +300,7 @@ impl PsdFile {
             .saturating_add(usize::try_from(self.image_data.encoded_len()).unwrap_or(usize::MAX))
             .saturating_add(usize::try_from(widened).unwrap_or(usize::MAX));
         let mut out = Vec::new();
-        out.try_reserve(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
+        out.try_reserve(hint).map_err(|_| PsdError::OutOfMemory("not enough memory to serialize the file"))?;
         if widen {
             Header { version: v, ..self.header.clone() }.write(&mut out);
         } else {

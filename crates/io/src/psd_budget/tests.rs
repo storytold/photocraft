@@ -123,3 +123,22 @@ fn legacy_conversion_reports_a_rejected_import_instead_of_decoding_it() {
     assert!(doc.layers.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("pixel memory")));
 }
+
+/// An unknown colour mode imports as RGB (`import_format`), layers included, so it must pay
+/// for them: a layered file can't dodge the allowance by carrying mode 5.
+#[test]
+fn an_unknown_color_mode_pays_for_the_layers_it_imports_as_rgb() {
+    let rgb = testgen::small(Version::Psd, Compression::Raw);
+    assert!(!rgb.layers().is_empty() && !super::super::psd_import::merged_needed(&rgb), "the fixture must import its layers alone");
+    let mut unknown = rgb.clone();
+    unknown.header.color_mode = photocraft_psd::ColorMode::Unknown(5);
+    assert!(unknown.header.validate().is_ok());
+    let required = estimate(&unknown);
+    assert!(required >= estimate(&rgb), "the layers import as RGB and are counted");
+    let bytes = unknown.to_bytes().unwrap();
+    let opts = crate::ImportOptions { psd_max_pixel_bytes: required - 1, ..Default::default() };
+    assert!(matches!(crate::import_with_options("mode5.psd", &bytes, &opts), Err(IoError::PsdImportBudget { .. })));
+    let source = photocraft_psd::Source::new(bytes);
+    let refused = crate::import_source_with_limit("mode5.psd", source, &photocraft_raster::Interrupt::NONE, required - 1);
+    assert!(matches!(refused, Err(IoError::PsdImportBudget { .. })), "{:?}", refused.map(|(r, _)| r.warnings));
+}

@@ -115,6 +115,10 @@ pub enum IoError {
     /// The conservative PSD pixel-storage and workspace estimate exceeded its allowance.
     #[error("PSD import needs an estimated {required} bytes of pixel memory; limit is {limit} bytes")]
     PsdImportBudget { required: u64, limit: u64 },
+    /// A pixel buffer could not be allocated while reading a file: the file may be fine, but
+    /// this machine has no memory for it.
+    #[error("not enough memory: {0}")]
+    OutOfMemory(String),
     /// Codec failure.
     #[error("codec: {0}")]
     Codec(#[from] CodecError),
@@ -409,7 +413,9 @@ fn import_psd(
     let preflight_error = std::cell::RefCell::new(None);
     let parsed = parse(
         &|file| {
-            let checked = psd_import::check_group_depth(file).and_then(|()| psd_budget::check(file, pixel_limit));
+            // Only an import that keeps the layer tree is bound by the group nesting cap.
+            let depth = if psd_import::can_recover_layers(file) { psd_import::check_group_depth(file) } else { Ok(()) };
+            let checked = depth.and_then(|()| psd_budget::check(file, pixel_limit));
             if let Err(error) = checked {
                 *preflight_error.borrow_mut() = Some(error);
                 return Err(PsdError::LimitExceeded("PSD import preflight refused the file"));
@@ -423,6 +429,7 @@ fn import_psd(
     }
     let (file, merged) = parsed.map_err(|error| match error {
         PsdError::Read(message) => IoError::Read(message),
+        PsdError::OutOfMemory(message) => IoError::OutOfMemory(message.to_string()),
         error => error.into(),
     })?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -540,7 +547,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
         });
     }
-    flat::import_flat(name, bytes)
+    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
