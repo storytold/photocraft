@@ -235,6 +235,51 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_group_is_set_like_any_other() {
+        let (mut s, ids @ [a, ..]) = siblings_session();
+        // A new group lands above the active layer (`top`), at the top level, with nothing inside.
+        let empty = new_layer(&mut s, "layer.new.group", json!({"name": "empty"}));
+        let last = s.active().unwrap().doc.walk().last().map(|(_, d, l)| format!("{d}:{}", l.name));
+        assert_eq!(last.as_deref(), Some("0:empty"));
+        assert_eq!(s.execute(ID, json!({"layer": empty, "nested": true})).unwrap()["groups"], 1);
+        assert!(!expanded(&s, empty));
+        assert_eq!(open_groups(&s, ids), [true; 5], "nothing beside it changes");
+        assert_eq!(s.execute(ID, json!({"layer": a, "siblings": true, "expanded": true})).unwrap()["groups"], 3, "a, b and the empty group");
+        assert!(expanded(&s, empty));
+        assert_eq!(s.execute(ID, json!({"layer": empty, "siblings": true, "nested": true})).unwrap()["groups"], 6);
+        assert!(!expanded(&s, empty) && open_groups(&s, ids) == [false; 5]);
+    }
+
+    #[test]
+    fn a_locked_group_still_opens_and_closes() {
+        // Locks guard what is in a layer, not whether the panel shows it. The groups inside a
+        // locked group are locked through it.
+        let (mut s, ids @ [a, a1, ..]) = siblings_session();
+        s.execute("layer.select", json!({"layer": a})).unwrap();
+        s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+        assert!(s.active().unwrap().doc.layer(LayerId(a)).unwrap().locks.all);
+        assert_eq!(s.execute(ID, json!({"layer": a})).unwrap()["expanded"], false);
+        assert_eq!(s.execute(ID, json!({"layer": a, "nested": true})).unwrap()["groups"], 3);
+        assert_eq!(open_groups(&s, ids), [true; 5]);
+        assert_eq!(s.execute(ID, json!({"layer": a1, "siblings": true})).unwrap()["groups"], 2);
+        assert_eq!(open_groups(&s, ids), [true, false, false, true, true]);
+    }
+
+    #[test]
+    fn modifier_clicks_add_no_history_step_and_keep_a_clean_document_clean() {
+        let (mut s, [a, a1, ..]) = siblings_session();
+        let st = s.active_mut().unwrap();
+        st.saved_revision = st.revision;
+        let undo_steps = s.active().unwrap().history.entries().len();
+        for p in [json!({"layer": a, "nested": true}), json!({"layer": a1, "siblings": true}), json!({"layer": a, "siblings": true, "nested": true})] {
+            s.execute(ID, p.clone()).unwrap();
+            let st = s.active().unwrap();
+            assert_eq!(st.history.entries().len(), undo_steps, "{p}: no history step");
+            assert_eq!(st.saved_revision, st.revision, "{p}: still clean");
+        }
+    }
+
+    #[test]
     fn bad_params_fail_gracefully() {
         let (mut s, _, _) = session();
         let bg = s.active().unwrap().doc.layers[0].id.0;
