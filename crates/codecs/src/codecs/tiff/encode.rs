@@ -115,18 +115,37 @@ pub(super) fn try_with_capacity<T>(len: usize) -> io::Result<Vec<T>> {
     Ok(v)
 }
 
-fn bytes_as_u16(b: &[u8]) -> io::Result<Vec<u16>> {
-    let chunks = b.as_chunks::<2>().0;
-    let mut v = try_with_capacity(chunks.len())?;
-    v.extend(chunks.iter().map(|c| u16::from_ne_bytes(*c)));
-    Ok(v)
-}
-
-fn bytes_as_f32(b: &[u8]) -> io::Result<Vec<f32>> {
-    let chunks = b.as_chunks::<4>().0;
-    let mut v = try_with_capacity(chunks.len())?;
-    v.extend(chunks.iter().map(|c| f32::from_ne_bytes(*c)));
-    Ok(v)
+/// Interleave wide samples directly, avoiding a full interleaved byte buffer.
+fn interleave_wide<T, const N: usize>(img: &Image, read: impl Fn([u8; N]) -> T) -> Result<Vec<T>, String> {
+    let (w, h) = img.dimensions();
+    let n = (w as usize).checked_mul(h as usize).ok_or_else(|| "image size overflows".to_string())?;
+    let sb = img.sample_type().bytes();
+    if N != sb || std::mem::size_of::<T>() != sb {
+        return Err("sample width does not match TIFF storage".into());
+    }
+    let ch = img.layout().channels();
+    let extras = &img.meta.extra_samples;
+    let total = ch.checked_add(extras.len()).ok_or_else(|| "too many samples".to_string())?;
+    let px = total.checked_mul(sb).ok_or_else(|| "sample size overflows".to_string())?;
+    let len = n.checked_mul(px).ok_or_else(|| "image size overflows".to_string())?;
+    let mut out = try_with_capacity::<T>(len / sb).map_err(|e| e.to_string())?;
+    let base = img.data();
+    let base_px = ch.saturating_mul(sb);
+    for i in 0..n {
+        let src = i.saturating_mul(base_px);
+        let Some(pixel) = base.get(src..src.saturating_add(base_px)) else {
+            return Err("image buffer is shorter than its dimensions".into());
+        };
+        out.extend(pixel.as_chunks::<N>().0.iter().map(|b| read(*b)));
+        for (k, e) in extras.iter().enumerate() {
+            let at = i.saturating_mul(sb);
+            let Some(bytes) = e.data.get(at..at.saturating_add(sb)).and_then(|b| b.try_into().ok()) else {
+                return Err(format!("extra sample {k} is shorter than the image"));
+            };
+            out.push(read(bytes));
+        }
+    }
+    Ok(out)
 }
 
 /// Interleaves colour (and alpha) samples with [`Metadata::extra_samples`].
@@ -168,81 +187,83 @@ fn interleave_extras(img: &Image) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Write colour, alpha, and extra samples in the TIFF's sample type.
 fn write_with_extras<K: TiffKind>(enc: &mut TiffEncoder<&mut Cursor<Vec<u8>>, K>, img: &Image, tags: &TagSet<'_>) -> tiff::TiffResult<()> {
     use ChannelLayout as L;
     use SampleType as S;
+    let invalid_input = |e| io::Error::new(io::ErrorKind::InvalidInput, e);
     let (w, h) = img.dimensions();
     let n = img.meta.extra_samples.len();
     if img.layout().is_lab() {
         let file = lab_file(img);
-        let bytes = interleave_extras(&file).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let bytes = || interleave_extras(&file).map_err(invalid_input);
         return match (file.layout(), file.sample_type()) {
-            (L::Lab, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 8, 8, 3),
+            (L::Lab, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 8, 8, 3),
             (L::Lab, _) => {
-                let v = bytes_as_u16(&bytes)?;
+                let v = interleave_wide::<_, 2>(&file, u16::from_ne_bytes).map_err(invalid_input)?;
                 write_extras!(n, enc, w, h, &v, tags, u16, 8, 16, 3)
             }
-            (_, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 8, 8, 4),
+            (_, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 8, 8, 4),
             _ => {
-                let v = bytes_as_u16(&bytes)?;
+                let v = interleave_wide::<_, 2>(&file, u16::from_ne_bytes).map_err(invalid_input)?;
                 write_extras!(n, enc, w, h, &v, tags, u16, 8, 16, 4)
             }
         };
     }
-    let bytes = interleave_extras(img).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let bytes = || interleave_extras(img).map_err(invalid_input);
     match (img.layout(), img.sample_type()) {
-        (L::Gray, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 1, 8, 1),
+        (L::Gray, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 1, 8, 1),
         (L::Gray, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 1, 16, 1)
         }
         (L::Gray, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 1, 32, 1)
         }
-        (L::GrayA, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 1, 8, 2),
+        (L::GrayA, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 1, 8, 2),
         (L::GrayA, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 1, 16, 2)
         }
         (L::GrayA, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 1, 32, 2)
         }
-        (L::Rgb, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 2, 8, 3),
+        (L::Rgb, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 2, 8, 3),
         (L::Rgb, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 2, 16, 3)
         }
         (L::Rgb, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 2, 32, 3)
         }
-        (L::Rgba, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 2, 8, 4),
+        (L::Rgba, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 2, 8, 4),
         (L::Rgba, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 2, 16, 4)
         }
         (L::Rgba, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 2, 32, 4)
         }
-        (L::Cmyk, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 5, 8, 4),
+        (L::Cmyk, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 5, 8, 4),
         (L::Cmyk, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 5, 16, 4)
         }
         (L::Cmyk, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 5, 32, 4)
         }
-        (L::CmykA, S::U8) => write_extras!(n, enc, w, h, &bytes, tags, u8, 5, 8, 5),
+        (L::CmykA, S::U8) => write_extras!(n, enc, w, h, &bytes()?, tags, u8, 5, 8, 5),
         (L::CmykA, S::U16) => {
-            let v = bytes_as_u16(&bytes)?;
+            let v = interleave_wide::<_, 2>(img, u16::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, u16, 5, 16, 5)
         }
         (L::CmykA, S::F32) => {
-            let v = bytes_as_f32(&bytes)?;
+            let v = interleave_wide::<_, 4>(img, f32::from_ne_bytes).map_err(invalid_input)?;
             write_extras!(n, enc, w, h, &v, tags, f32, 5, 32, 5)
         }
         _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported extra samples ({n})")).into()),
