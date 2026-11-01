@@ -454,7 +454,7 @@ implemented, move it to the table above in the same change.
 
 ### Group A: The 47 Filter Gallery effects
 
-Each Filter Gallery effect is recorded as its own event (one per effect), carrying a `GEfk` key with the effect id plus the effect's settings. Today they all load as kept steps that stop at playback. PhotoCraft already has every effect (`crates/algo/src/artistic.rs`) behind `filter.filterGallery`; this issue only maps them. Where our own range or default differs from the measured one, fix ours to match (marked in each table).
+Each Filter Gallery effect is recorded as its own event (one per effect), carrying a `GEfk` key with the effect id plus the effect's settings. Today only Spatter (`GEfk` = `Spt`) is mapped (to `filter.gallery.spatter`); the other effects load as kept steps that stop at playback. PhotoCraft already has every effect (`crates/algo/src/artistic.rs`) behind `filter.filterGallery`; this issue only maps them. Where our own range or default differs from the measured one, fix ours to match (marked in each table).
 
 #### Accented Edges
 
@@ -1360,9 +1360,9 @@ No parameters: the step carries an empty descriptor.
 
 | Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
-| `Scl ` | scale | integer |  | 1 | ignored without the dialog; see "Events that need a step recorded through their dialog" |
-| `Ofst` | offset | integer |  | 0 | ignored without the dialog; see "Events that need a step recorded through their dialog" |
-| `Mtrx` | matrix | list |  | none: the 25 cells as set in the dialog | exactly 25 integers (5 x 5, row by row); a 3 x 3 list makes the application fail |
+| `Scl ` | scale | integer |  | 1 | 1 .. 9999 (measured in the dialog). Without the dialog the value is ignored |
+| `Ofst` | offset | integer |  | 0 | -9999 .. 9999 (measured in the dialog). Without the dialog the value is ignored |
+| `Mtrx` | matrix | list |  | none: a step always carries all 25 cells | exactly 25 integers (5 x 5, row by row), each -999 .. 999; a 3 x 3 list makes the application fail |
 
 #### Replace Color
 
