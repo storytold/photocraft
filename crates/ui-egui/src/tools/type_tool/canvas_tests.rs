@@ -639,6 +639,81 @@ fn type_click_between_paragraph_lines_keeps_the_paragraph_target() {
     }
 }
 
+/// Imported glyphs can be visible through minification even when the document pixel under the
+/// pointer is transparent and their substituted-font layout is elsewhere.
+#[test]
+fn gpu_type_click_picks_filtered_imported_ink() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for ppp in [1.0, 2.0] {
+        for zoom in [0.125, 0.25, 0.375, 0.5, 0.75, 1.5] {
+            let mut app = new_app();
+            let id = LayerId(
+                app.run("type.create", json!({"text": "IMPORTED TEXT", "font": "Inter", "size": 64, "color": "#e00000", "x": 100, "y": 100})).unwrap()["layer"]
+                    .as_u64()
+                    .unwrap(),
+            );
+            let mut imported = text(&app, id);
+            imported.transform = Affine::translate(803.0, 451.0);
+            let cache = photocraft_text::shared().lock().unwrap().render(&imported, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface;
+            let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(cache.clone());
+            app.session.active_mut().unwrap().revision += 1;
+            let view = &mut app.ui.views[0];
+            (view.zoom, view.center, view.fit_pending) = (zoom, [1000.0, 450.0], false);
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Harness::builder()
+                    .with_size(vec2(1440.0, 900.0))
+                    .with_pixels_per_point(ppp)
+                    .with_max_steps(64)
+                    .wgpu_setup(crate::gpu_canvas::wgpu_setup())
+                    .build_eframe(move |cc| {
+                        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                        if let Some(rs) = &cc.wgpu_render_state {
+                            app.set_wgpu(rs.clone());
+                        }
+                        app
+                    })
+            }));
+            let Ok(mut h) = built else {
+                eprintln!("skipping: no GPU adapter");
+                return;
+            };
+            h.run_steps(8);
+            assert!(h.state().perf.gpu, "exercise the actual mipmapped canvas");
+            let image = h.render().unwrap();
+            let xf = xf(h.state());
+            let bounds = cache.content_bounds();
+            let a = xf.to_screen(bounds.x0 as f32, bounds.y0 as f32) * ppp;
+            let b = xf.to_screen(bounds.x1 as f32, bounds.y1 as f32) * ppp;
+            let mut candidate: Option<(u16, Pos2, [f64; 2])> = None;
+            for y in (a.y.floor() as u32).saturating_sub(2)..(b.y.ceil() as u32 + 2).min(image.height()) {
+                for x in (a.x.floor() as u32).saturating_sub(2)..(b.x.ceil() as u32 + 2).min(image.width()) {
+                    let [r, g, b, _] = image.get_pixel(x, y).0;
+                    let p = egui::pos2((x as f32 + 0.5) / ppp, (y as f32 + 0.5) / ppp);
+                    let q = xf.to_doc(p);
+                    if r > g.saturating_add(8) && r > b.saturating_add(8) && cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3] == 0.0 {
+                        let strength = u16::from(r - g) + u16::from(r - b);
+                        if candidate.is_none_or(|c| strength > c.0) {
+                            candidate = Some((strength, p, q));
+                        }
+                    }
+                }
+            }
+            let (_, p, q) = candidate.expect("visible filtered ink over a transparent source pixel");
+            let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+            let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+            assert!(!photocraft_text::text_point_inside(&l, tx, ty, 6.0 / h.state().point_zoom()));
+            let empty = xf.to_screen(bounds.x0 as f32 - 40.0, bounds.y0 as f32 - 40.0);
+            let empty_doc = xf.to_doc(empty);
+            assert_eq!(super::layout::hit_layer(h.state_mut(), empty_doc[0], empty_doc[1]), None, "empty padding remains click-through");
+            click(&mut h, p);
+            assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(id.0), "zoom {zoom}, scale {ppp}: click visible imported ink");
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+        }
+    }
+}
+
 /// A PSD type layer keeps Photoshop's pixels until it is edited. Clicking into it re-renders it
 /// with our engine first (so the caret sits on what is shown), inside the edit session's single
 /// history step; Cancel brings Photoshop's pixels back.

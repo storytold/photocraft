@@ -56,6 +56,7 @@ use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
 #[cfg(all(test, windows))]
 use budget::{detect_physical_memory, detect_video_memory};
 use callback::CanvasCallback;
+pub(crate) use callback::sampled_doc_rect;
 #[cfg(test)]
 use callback::{filter_mode, map_doc_px, tile_screen_aabb};
 use doc_textures::init_buffer;

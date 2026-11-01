@@ -5,7 +5,7 @@
 //! `type.setStyle`. The Type tool calls the same word, line and hit-test helpers.
 
 use photocraft_doc::{Affine, Document, LayerContent, LayerId};
-use photocraft_geom::Point;
+use photocraft_geom::{Point, Rect, TILE_SIZE};
 use photocraft_text::TextLayout;
 use serde_json::{Value, json};
 
@@ -105,8 +105,70 @@ pub fn cached_ink_contains(doc: &Document, id: LayerId, x: f64, y: f64) -> bool 
     t.cache.as_ref().is_some_and(|c| c.rgba(x.floor() as i32, y.floor() as i32)[3] > 0.0)
 }
 
+/// Whether cached type ink contributes anywhere in a view's source-pixel sampling footprint.
+/// Reads only alpha in intersecting tiles, without allocating or scanning the cache's bounds.
+/// Sparse, very large footprints visit stored tiles rather than walking an unbounded empty grid.
+pub fn cached_ink_in_rect(doc: &Document, id: LayerId, area: Rect) -> bool {
+    if area.is_empty() {
+        return false;
+    }
+    let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { return false };
+    let Some(cache) = &t.cache else { return false };
+    if !cache.format().alpha {
+        return true;
+    }
+    let Some(alpha) = cache.channels().checked_sub(1) else { return false };
+    let mut row = [0.0; TILE_SIZE as usize];
+    let mut has_ink = |r: Rect| {
+        let Some(samples) = row.get_mut(..r.width() as usize) else { return false };
+        for y in r.y0..r.y1 {
+            cache.sample_row_strided(y, r.x0, 1, alpha, samples);
+            if samples.iter().any(|a| *a > 0.0) {
+                return true;
+            }
+        }
+        false
+    };
+    let tile_count = area.tile_count();
+    if tile_count <= cache.tile_count() as u64 {
+        for tc in area.tiles() {
+            let r = area.intersect(&tc.rect());
+            if cache.tile(tc).is_some() {
+                if has_ink(r) {
+                    return true;
+                }
+            } else if cache.sample_channel(r.x0, r.y0, alpha) > 0.0 {
+                return true;
+            }
+        }
+    } else {
+        let mut present = 0;
+        for (tc, _) in cache.tiles() {
+            let r = area.intersect(&tc.rect());
+            if !r.is_empty() {
+                present += 1;
+                if has_ink(r) {
+                    return true;
+                }
+            }
+        }
+        // Missing tiles share one default alpha. Find one without scanning the empty grid:
+        // a missing tile must occur within the first `present + 1` queried tiles.
+        if present < tile_count {
+            for tc in area.tiles() {
+                if cache.tile(tc).is_none() {
+                    let r = area.intersect(&tc.rect());
+                    return cache.sample_channel(r.x0, r.y0, alpha) > 0.0;
+                }
+            }
+        }
+    }
+    false
+}
+
 impl Frame {
-    /// Same hit as the Type tool, without its zoom slop: the laid-out line boxes or the rendered ink.
+    /// Headless document-coordinate hit: laid-out line boxes or the exact cached pixel,
+    /// without the Type tool's view-dependent filtering footprint or layout slop.
     fn contains(&self, doc: &Document, x: f64, y: f64) -> bool {
         let (tx, ty) = to_text(self.transform, x, y);
         photocraft_text::text_point_inside(&self.layout, tx, ty, 0.0) || cached_ink_contains(doc, self.id, x, y)
@@ -495,6 +557,34 @@ mod tests {
             for (x, y) in [(f64::NAN, 250.0), (320.0, f64::INFINITY), (f64::MAX, 250.0), (320.0, f64::MIN)] {
                 assert!(!cached_ink_contains(doc, LayerId(upper), x, y));
             }
+        }
+    }
+
+    /// Filtering must find neighboring alpha at every depth, without treating coloured padding,
+    /// an excluded half-open edge, or a vast sparse cache rectangle as ink.
+    #[test]
+    fn cached_ink_footprints_respect_alpha_edges_and_sparse_defaults() {
+        use photocraft_color::PixelFormat;
+        use photocraft_raster::Surface;
+        use std::sync::Arc;
+
+        for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let mut s = session();
+            let id = LayerId(create(&mut s, json!({"x": 10, "y": 40, "text": "A", "size": 18})));
+            let mut cache = Surface::new(format);
+            cache.write_pixel(256, -1, &[1.0, 0.0, 0.0, 0.25]);
+            cache.write_pixel(-256, 256, &[1.0, 0.0, 0.0, 0.0]);
+            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(cache);
+            assert!(cached_ink_in_rect(doc, id, Rect::new(254, -3, 258, 1)), "{format:?}: neighboring ink across a tile edge");
+            assert!(!cached_ink_in_rect(doc, id, Rect::new(254, -3, 256, 1)), "{format:?}: excluded right edge");
+            assert!(!cached_ink_in_rect(doc, id, Rect::new(-258, 254, -254, 258)), "{format:?}: transparent colour is not ink");
+            assert!(!cached_ink_in_rect(doc, id, Rect::new(i32::MIN, 1, i32::MAX, i32::MAX)), "{format:?}: sparse transparent region");
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(Surface::with_default(format, &[0.0, 0.0, 0.0, 0.5]));
+            assert!(cached_ink_in_rect(doc, id, Rect::new(-258, 254, -254, 258)), "{format:?}: default alpha is visible");
+            assert!(!cached_ink_in_rect(doc, id, Rect::EMPTY), "{format:?}: empty footprint");
         }
     }
 
