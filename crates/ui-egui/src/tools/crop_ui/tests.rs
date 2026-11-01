@@ -1178,9 +1178,10 @@ fn esc_hides_the_frame_until_a_press_or_re_picking_the_tool() {
         ensure_frame(&mut app);
         assert_eq!(app.ui.crop_rect, None);
         assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
-        // Re-picking the tool brings the default frame back.
+        // Re-picking the tool brings the default frame back. Leaving it after Esc crops nothing.
         app.ui.tool = Tool::Brush;
         ensure_frame(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100), "classic={classic}");
         app.ui.tool = Tool::Crop;
         ensure_frame(&mut app);
         assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
@@ -1228,4 +1229,24 @@ fn a_straighten_press_ends_the_dismissal() {
     drag(&mut app, &[[50.0, 20.0], [50.5, 20.0]], NONE);
     ensure_frame(&mut app);
     assert!(app.ui.crop_rect.is_some());
+}
+
+#[test]
+fn undoing_a_crop_after_esc_brings_the_frame_back() {
+    // Esc crops nothing, so it adds no step; an Undo that changes the canvas size shows a frame for it.
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    drag(&mut app, &[[20.0, 10.0], [70.0, 30.0], [120.0, 60.0]], NONE);
+    crate::canvas::commit_crop(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 50));
+    ensure_frame(&mut app);
+    let steps = app.session.active().unwrap().history.entries().len();
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
 }
