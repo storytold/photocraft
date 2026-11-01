@@ -91,3 +91,40 @@ fn letters_pick_blend_modes_in_the_open_list_without_switching_tools() {
     h.run_steps(2);
     assert!(h.state().ui.tool != Tool::Move, "M picks a marquee tool once the list is closed");
 }
+
+/// #9954 keeps a dropdown focused after its list is closed from the keyboard, so ↑/↓ go on
+/// stepping it. A mode picked with the pointer leaves the arrow keys to the Move tool's nudge.
+#[test]
+fn after_a_pointer_pick_the_arrow_keys_nudge_the_layer() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.ui.tool = Tool::Move;
+        app
+    });
+    h.run_steps(6);
+    let layer = |h: &Harness<'_, PhotocraftApp>| {
+        let st = h.state().session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        (l.blend, l.surface().unwrap().content_bounds())
+    };
+    let (_, bounds) = layer(&h);
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Normal") || a.label().as_deref() == Some("Normal")
+    };
+    h.query_all_by_role(Role::ComboBox).find(|n| named(n)).expect("the Layers panel's Blend Mode dropdown").click();
+    h.run_steps(2);
+    h.get_by_label("Multiply").click();
+    h.run_steps(3);
+    assert!(!crate::widgets::dropdown_list_open(&h.ctx), "picking closes the list");
+    assert_eq!(layer(&h).0, BlendMode::Multiply);
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    let (blend, moved) = layer(&h);
+    assert_eq!(blend, BlendMode::Multiply, "↓ doesn't step the blend mode picked with the pointer");
+    assert_ne!(moved, bounds, "↓ nudges the layer with the Move tool");
+}

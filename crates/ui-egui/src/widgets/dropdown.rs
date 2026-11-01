@@ -186,13 +186,25 @@ fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, c
 /// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
 /// choices. `craft_ui::ComboBox` opens a popup but leaves focus on the canvas by default, which makes
 /// controls such as the Layers panel's Blend Mode dropdown unreachable from the keyboard.
+///
+/// A list closed from the keyboard (↩, Esc) hands the focus back to its dropdown, and a focused
+/// closed dropdown goes on stepping through its choices with ↑/↓, as in Photoshop (#9954). Without
+/// that the focus was lost on closing, and the next arrow key moved it to another control.
 fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)]) -> bool {
     if response.clicked() {
         response.request_focus();
     }
     // The popup, rather than its button, becomes the focused egui layer after it opens. While it
     // is open it owns its navigation keys, even though `response.has_focus()` is then false.
-    if !craft_ui::ComboBox::is_open(ui.ctx(), response.id) || options.is_empty() {
+    let open = craft_ui::ComboBox::is_open(ui.ctx(), response.id);
+    let was_open_id = response.id.with("was-open");
+    let was_open = ui.data_mut(|d| std::mem::replace(d.get_temp_mut_or(was_open_id, false), open));
+    // Closed this frame without a press or release: by a key, not by choosing with the pointer or
+    // clicking elsewhere (which leave the focus where the pointer put it).
+    if was_open && !open && !ui.input(|i| i.pointer.any_pressed() || i.pointer.any_released()) {
+        response.request_focus();
+    }
+    if !(open || response.has_focus()) || options.is_empty() {
         return false;
     }
     let step = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
@@ -202,6 +214,8 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
     } else {
         return false;
     };
+    // The key is the dropdown's: egui mustn't also move the focus to the next control with it.
+    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     let index = options.iter().position(|(value, _)| value == current).unwrap_or(0);
     let next = if step > 0 { (index + 1).min(options.len() - 1) } else { index.saturating_sub(1) };
     match options.get(next) {
@@ -289,6 +303,9 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
         None => response.response.accessible_name(name),
     };
     press.after(&response);
+    // The arrow keys step it as they do a plain dropdown, open or closed (#9954).
+    let values: Vec<(T, &str)> = options.iter().map(|(v, l, _)| (v.clone(), *l)).collect();
+    changed |= combo_box_arrow_keys(ui, &response, current, &values);
     if let Some((_, _, tip)) = options.iter().find(|(v, _, _)| v == current) {
         response.on_hover_text(tl!(tip));
     }
