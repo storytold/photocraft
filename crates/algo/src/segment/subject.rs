@@ -13,7 +13,8 @@
 //!    S. Süsstrunk, "Frequency-tuned Salient Region Detection", CVPR 2009): distance of the
 //!    lightly blurred CIELAB image from its mean colour.
 //! 4. Otsu's threshold on the saliency map seeds a GrabCut trimap (low-saliency border pixels
-//!    are definite background); the result is cleaned (small islands dropped).
+//!    are definite background); the result is cleaned: small islands are dropped unless they lie
+//!    next to the main part (a head cut off by a neck too thin for the working resolution).
 //! 5. A second GrabCut whose background model only knows the backdrop: a colour model fitted
 //!    to the image's frame marks every pixel it explains as probable background, and the rest
 //!    (the blob, plus whatever the backdrop cannot account for) starts as probable foreground.
@@ -21,6 +22,9 @@
 //!    wall) have low saliency and in step 4 land in the background model, which then explains
 //!    them away; here they start as foreground and the cut keeps them (#2788). Only what
 //!    touches the first pass's result survives, so the pass cannot pull in unrelated things.
+//!    Where the subject runs out of the picture (a torso cut off by the bottom edge), the frame
+//!    pixels the rest of the frame cannot explain are left out of the backdrop model and left to
+//!    the cut; otherwise they would teach it the shirt's colour and be fixed as background.
 //! 6. Holes are filled only when their colour fits the foreground model better than the
 //!    background's, so a patch of backdrop enclosed by the subject (between an arm and the
 //!    torso) stays open; specks still fill. Then the mask is re-cut at full resolution.
@@ -82,7 +86,7 @@ pub fn select_subject_with(sampler: &dyn Sampler, canvas: Rect, ctl: &Interrupt)
     }
     let Some((fg, bg)) = grabcut::grabcut_with(&img, &mut trimap, 6, ctl)? else { return Ok(None) };
     let low: Vec<bool> = trimap.iter().map(|v| *v == PR_FG || *v == grabcut::FG).collect();
-    let low = super::clean_mask(&low, w, h, 0.2, 0.0);
+    let low = keep_main_and_nearby(&low, w, h);
     if !low.iter().any(|v| *v) {
         return Ok(None);
     }
@@ -94,7 +98,8 @@ pub fn select_subject_with(sampler: &dyn Sampler, canvas: Rect, ctl: &Interrupt)
 
 /// Step 5: GrabCut again with a background model that only knows the backdrop. A colour model
 /// is fitted to the image's frame (the outer pixels, minus a margin around `blob` in case the
-/// subject runs out of the picture); the frame is definite background, every other pixel it
+/// subject runs out of the picture, and minus what [`subject_at_edge`] finds of the subject
+/// there); the rest of the frame is definite background, every other pixel it
 /// explains well is probable background, and the rest (the blob, and anything the backdrop
 /// cannot account for, such as a cream shirt on a near-white wall) starts as probable
 /// foreground. `Ok(None)` when the frame cannot be modelled or the cut keeps nothing that
@@ -117,16 +122,14 @@ fn backdrop_pass(img: &super::RgbImage, blob: &[bool], ctl: &Interrupt) -> Resul
     let frame = ((w.min(h) as f32 * 0.06).round() as usize).max(2);
     let in_frame = |x: usize, y: usize| x < frame || y < frame || x + frame >= w || y + frame >= h;
     let near_blob = |x: usize, y: usize| (bx0..=bx1).contains(&x) && (by0..=by1).contains(&y);
-    let samples: Vec<[f32; 3]> = (0..w * h).filter(|i| in_frame(i % w, i / w) && !near_blob(i % w, i / w)).map(|i| img.px[i]).collect();
-    let Some(backdrop) = Gmm::fit(&super::subsample(&samples, 40_000), grabcut::K, super::gmm::DEFAULT_REG) else { return Ok(None) };
-    // What the frame itself costs under its own model bounds "explained well".
-    let mut frame_costs: Vec<f32> = samples.iter().map(|p| backdrop.neg_log(*p)).collect();
-    frame_costs.sort_by(|a, b| a.total_cmp(b));
-    let Some(limit) = frame_costs.get(frame_costs.len() * 99 / 100).map(|c| c + 4.0) else { return Ok(None) };
+    let edge = |i: usize| in_frame(i % w, i / w) && !near_blob(i % w, i / w);
+    // The subject running out of the picture is neither backdrop to learn nor fixed background.
+    let released = subject_at_edge(img, frame, &edge);
+    let samples: Vec<[f32; 3]> = (0..w * h).filter(|i| edge(*i) && !released[*i]).map(|i| img.px[i]).collect();
+    let Some((backdrop, limit)) = fit_backdrop(&samples) else { return Ok(None) };
     let mut trimap: Vec<u8> = (0..w * h)
         .map(|i| {
-            let (x, y) = (i % w, i / w);
-            if in_frame(x, y) && !near_blob(x, y) {
+            if edge(i) && !released[i] {
                 BG
             } else if blob[i] || backdrop.neg_log(img.px[i]) > limit {
                 PR_FG
@@ -139,6 +142,74 @@ fn backdrop_pass(img: &super::RgbImage, blob: &[bool], ctl: &Interrupt) -> Resul
     let cut: Vec<bool> = trimap.iter().map(|v| *v == PR_FG || *v == grabcut::FG).collect();
     let low = super::keep_seeded(&cut, blob, w, h);
     Ok(low.iter().any(|v| *v).then_some((low, fg, bg)))
+}
+
+/// The connected parts of `mask` that make up the subject: those at least a fifth the size of
+/// the largest, and smaller ones (not specks) that lie close to it. A part of the subject the
+/// cut separated from the rest, such as a head whose thin neck the working resolution lost, a
+/// tail or something held, would otherwise go missing; clutter further away is still dropped.
+fn keep_main_and_nearby(mask: &[bool], w: usize, h: usize) -> Vec<bool> {
+    let (lab, sizes) = super::components(mask, w, h);
+    let Some((main, largest)) = sizes.iter().copied().enumerate().skip(1).max_by_key(|(_, n)| *n) else { return vec![false; w * h] };
+    // Bounding boxes per component: (x0, y0, x1, y1).
+    let mut bbox = vec![(usize::MAX, usize::MAX, 0usize, 0usize); sizes.len()];
+    for (i, l) in lab.iter().enumerate() {
+        if let Some(b) = bbox.get_mut(*l as usize) {
+            let (x, y) = (i % w, i / w);
+            *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+        }
+    }
+    let Some(&(mx0, my0, mx1, my1)) = bbox.get(main) else { return vec![false; w * h] };
+    let margin = ((mx1 - mx0 + 1).max(my1 - my0 + 1) as f32 * 0.15).ceil() as usize;
+    let (nx0, ny0, nx1, ny1) = (mx0.saturating_sub(margin), my0.saturating_sub(margin), mx1 + margin, my1 + margin);
+    let (big, speck) = ((largest as f32 * 0.2).ceil() as usize, ((largest as f32 * 0.005).ceil() as usize).max(4));
+    let keep: Vec<bool> = sizes
+        .iter()
+        .zip(&bbox)
+        .enumerate()
+        .map(|(l, (n, b))| l != 0 && (*n >= big || (*n >= speck && b.0 <= nx1 && b.2 >= nx0 && b.1 <= ny1 && b.3 >= ny0)))
+        .collect();
+    lab.iter().map(|l| keep.get(*l as usize).copied().unwrap_or(false)).collect()
+}
+
+/// A colour model of `samples` and the cost above which a pixel is not explained by it: what
+/// the samples themselves cost under it (99th percentile), plus a margin. `None` without samples.
+fn fit_backdrop(samples: &[[f32; 3]]) -> Option<(Gmm, f32)> {
+    let model = Gmm::fit(&super::subsample(samples, 40_000), grabcut::K, super::gmm::DEFAULT_REG)?;
+    let mut costs: Vec<f32> = samples.iter().map(|p| model.neg_log(*p)).collect();
+    costs.sort_by(|a, b| a.total_cmp(b));
+    let limit = costs.get(costs.len() * 99 / 100)? + 4.0;
+    Some((model, limit))
+}
+
+/// The pixels of the frame (those `edge` accepts, `frame` wide) that belong to the subject
+/// running out of the picture, such as a torso cut off by the bottom edge: pixels of a side
+/// (its corners included) that the colours of the frame off that side cannot explain. Without
+/// this, such a part trains the backdrop model and is fixed as background, so a cream shirt on a
+/// near-white wall is lost. A floor or a table runs up the sides too, so the frame off the
+/// bottom knows its colour and it stays backdrop; only a band confined to one side's strip is
+/// released (and is then left to the cut). Patches under half a frame square stay backdrop.
+fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> bool) -> Vec<bool> {
+    let (w, h) = (img.w, img.h);
+    // Top, bottom, left, right.
+    let on = |i: usize, s: usize| {
+        let (x, y) = (i % w, i / w);
+        [y < frame, y + frame >= h, x < frame, x + frame >= w].get(s).copied().unwrap_or(false)
+    };
+    let mut odd = vec![false; w * h];
+    for s in 0..4 {
+        let others: Vec<[f32; 3]> = (0..w * h).filter(|i| edge(*i) && !on(*i, s)).map(|i| img.px[i]).collect();
+        let Some((model, limit)) = fit_backdrop(&others) else { continue };
+        for (i, o) in odd.iter_mut().enumerate() {
+            if !*o && edge(i) && on(i, s) && model.neg_log(img.px[i]) > limit {
+                *o = true;
+            }
+        }
+    }
+    // A stray pixel (noise, a dead pixel) is not a subject: only patches of some size count.
+    let (lab, sizes) = super::components(&odd, w, h);
+    let min = (frame * frame / 2).max(4);
+    lab.iter().map(|l| *l != 0 && sizes.get(*l as usize).is_some_and(|n| *n >= min)).collect()
 }
 
 /// Per-pixel saliency in `0..=1` (see the module docs).
