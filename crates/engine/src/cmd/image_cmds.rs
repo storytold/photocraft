@@ -580,6 +580,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
+    let given = ["x", "y", "width", "height"].into_iter().any(|k| p.get(k).is_some_and(|v| !v.is_null()));
     let explicit = match (
         crate::commands::int_i32("image.crop", p, "x")?,
         crate::commands::int_i32("image.crop", p, "y")?,
@@ -599,6 +600,14 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
                     .ok_or_else(|| bad("image.crop", format!("`{ko}` + `{kl}` = {} is outside the 32-bit coordinate range", i64::from(o) + i64::from(len))))
             };
             Some(Rect::new(x, y, end(x, w, "x", "width")?, end(y, h, "y", "height")?))
+        }
+        // A rectangle that is passed but incomplete or empty is refused: falling back to the
+        // selection would crop somewhere the caller didn't ask for (#9279).
+        _ if given => {
+            return Err(bad(
+                "image.crop",
+                "`x`, `y`, `width` and `height` go together: pass all four as numbers of pixels, with `width` and `height` rounding to at least 1",
+            ));
         }
         _ => None,
     };
@@ -999,7 +1008,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (x/y/width/height, all four or none: without them the selection's bounds are cropped to; targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
             has_doc,
             crop
         ),
