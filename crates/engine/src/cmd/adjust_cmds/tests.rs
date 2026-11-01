@@ -847,6 +847,45 @@ fn replace_color_subtracting_inside_the_added_range_takes_a_colour_out() {
     assert_eq!(covered, [true, true, false, false]);
 }
 
+/// FredApps review on #10443: Localized Color Clusters with several samples. A matching colour
+/// is replaced only near one of the samples, as in Select › Color Range.
+#[test]
+fn replace_color_localized_clusters_with_several_samples() {
+    // Two creams, sampled at x = 2 and x = 24; the first cream again far right (x ≥ 40).
+    let (cream, cream2, grey) = ([0.9, 0.88, 0.79, 1.0], [0.88, 0.86, 0.76, 1.0], [0.5, 0.5, 0.5, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| match x {
+        ..8 => cream,
+        20..28 => cream2,
+        40.. => cream,
+        _ => grey,
+    });
+    let at = [(3, 16), (24, 16), (44, 16), (14, 16)];
+    let before: Vec<_> = at.iter().map(|&(x, y)| rgba(&s, x, y)).collect();
+    let mut p = json!({"fuzziness": 20, "hue": 180, "saturation": 60, "points": [[2, 16], [24, 16]]});
+    // Without clusters both creams change everywhere, the far one too.
+    s.execute("image.adjustments.replaceColor", p.clone()).unwrap();
+    assert!(changed(rgba(&s, 44, 16), before[2]) > 0.05, "far cream without clusters");
+    s.execute("edit.undo", json!({})).unwrap();
+    // Range 20 % of 48 px: within about 10 px of either sample.
+    p["localized"] = json!(true);
+    p["range"] = json!(20);
+    s.execute("image.adjustments.replaceColor", p.clone()).unwrap();
+    assert!(changed(rgba(&s, 3, 16), before[0]) > 0.05, "near the first sample");
+    assert!(changed(rgba(&s, 24, 16), before[1]) > 0.05, "near the second sample");
+    assert_eq!(rgba(&s, 44, 16), before[2], "the same cream far from both samples");
+    assert_eq!(rgba(&s, 14, 16), before[3], "grey isn't sampled");
+    // Select › Color Range agrees for the same clicks.
+    s.execute("edit.undo", json!({})).unwrap();
+    for k in ["hue", "saturation"] {
+        p.as_object_mut().unwrap().remove(k);
+    }
+    s.execute("select.colorRange", p).unwrap();
+    let sel = doc(&s).selection.clone().unwrap();
+    let covered: Vec<bool> = at.iter().map(|&(x, y)| sel.read_region(Rect::from_xywh(x, y, 1, 1))[0] > 0.5).collect();
+    assert_eq!(covered, [true, true, false, false]);
+}
+
 /// #10443 review: with only Subtract from Sample clicks, the dialog's From colour is what the
 /// subtraction starts from, not the foreground (black here), so the red is still replaced.
 #[test]
