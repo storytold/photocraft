@@ -894,6 +894,12 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         crate::actions::abandoned(app, &d.fields);
         return Err("dialog has no command".into());
     };
+    // HDR Toning flattens the image it runs on: never another document than its dialog's.
+    if let Err(e) = crate::hdr_flatten_prompt::check_dialog(app, &d.fields) {
+        app.filter_preview = None;
+        crate::actions::abandoned(app, &d.fields);
+        return Err(e);
+    }
     if crate::filter_dialog::needs_displace_map(&cmd, &crate::filter_dialog::params_of(&d.fields)) {
         app.filter_preview = None;
         let result = crate::filter_dialog::ask_displace_map(app, cmd, d.fields.clone());

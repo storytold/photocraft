@@ -9,7 +9,9 @@
 //! and `ui.dialog.cancel` answer it). It is bound to the document it was asked about: when another
 //! document is active by the time it is answered (`ui.window.open`, say), Yes is refused and
 //! nothing is flattened. A document with only a Background, or no layers, has nothing to lose: its
-//! dialog opens directly. The command with parameters (an action, an agent) skips the
+//! dialog opens directly. The HDR Toning dialog itself is bound the same way (`__hdrDocument`): its
+//! OK with another document active is refused, so it never flattens a document nobody was asked
+//! about. The command with parameters (an action, an agent) skips the
 //! question and flattens, as Photoshop's action playback does.
 
 use serde_json::{Map, Value, json};
@@ -18,6 +20,8 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 
 const MARK: &str = "__hdrFlatten";
+/// On the HDR Toning dialog opened from the menu: the id of the document it is for.
+const DIALOG_DOCUMENT: &str = "__hdrDocument";
 /// The command the prompt guards.
 pub const COMMAND: &str = "image.adjustments.hdrToning";
 
@@ -75,7 +79,28 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     if needed(app) {
         app.run("layer.flattenImage", json!({}))?;
     }
-    Ok(json!({"dialog": crate::filter_dialog::open(app, COMMAND)}))
+    Ok(json!({"dialog": open_dialog(app)}))
+}
+
+/// Open the HDR Toning dialog for the active document, bound to it.
+pub fn open_dialog(app: &mut PhotocraftApp) -> Option<u64> {
+    let document = app.session.active().map(|st| st.doc.id.0)?;
+    let id = crate::filter_dialog::open(app, COMMAND)?;
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields.insert(DIALOG_DOCUMENT.into(), json!(document));
+    }
+    Some(id)
+}
+
+/// Before an HDR Toning dialog's OK runs the command: refused when it was opened for another
+/// document than the active one (HDR Toning flattens the image it runs on).
+pub fn check_dialog(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
+    let Some(document) = fields.get(DIALOG_DOCUMENT) else { return Ok(()) };
+    if app.session.active().map(|st| json!(st.doc.id.0)).as_ref() == Some(document) {
+        Ok(())
+    } else {
+        Err(tl!("The document changed. Choose HDR Toning again.").into())
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +175,37 @@ mod tests {
         assert_ne!(stale, fresh);
         assert_eq!(app.ui.dialogs.len(), 1);
         assert_eq!(app.ui.dialogs[0].fields["document"], json!(app.session.active().unwrap().doc.id.0));
+    }
+
+    /// The HDR Toning dialog is bound to its document too: confirmed with another (layered)
+    /// document active, it runs nothing, so it flattens no document nobody was asked about.
+    #[test]
+    fn the_hdr_dialog_never_runs_on_another_document() {
+        for layered in [true, false] {
+            let mut app = app_with(if layered { 2 } else { 1 });
+            let first = app.session.active().unwrap().doc.id;
+            let mut id = choose(&mut app, json!({}));
+            if layered {
+                id = crate::dialogs::confirm(&mut app, id).unwrap()["dialog"].as_u64().unwrap();
+            }
+            let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap();
+            assert_eq!(d.fields["__command"], json!(COMMAND));
+            assert_eq!(d.fields[DIALOG_DOCUMENT], json!(first.0), "layered {layered}");
+            app.session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            assert!(crate::dialogs::confirm(&mut app, id).is_err(), "layered {layered}");
+            assert_eq!(layers(&app), 2, "layered {layered}: the other document keeps its layers");
+            // On its own document the dialog runs as before.
+            app.session.set_active(0);
+            let id = choose(&mut app, json!({}));
+            let id = crate::dialogs::confirm(&mut app, id).unwrap()["dialog"].as_u64().unwrap_or(id);
+            let hdr = app.ui.dialogs.iter().find(|d| d.id == id).map(|d| d.fields.get("__hdrFlatten").is_none());
+            if hdr == Some(true) {
+                crate::dialogs::confirm(&mut app, id).unwrap();
+            }
+            assert_eq!(app.session.active().unwrap().doc.id, first);
+            assert_eq!(layers(&app), 1, "layered {layered}");
+        }
     }
 
     #[test]

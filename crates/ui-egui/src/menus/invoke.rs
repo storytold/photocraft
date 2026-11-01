@@ -647,8 +647,13 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         }
         "view.newGuide" if params.as_object().is_none_or(|object| object.is_empty()) => Some(Ok(json!({"dialog": crate::new_guide_ui::open(app)}))),
         // HDR Toning works on the flattened image: a layered document asks first (#10329).
-        crate::hdr_flatten_prompt::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::hdr_flatten_prompt::needed(app) => {
-            Some(Ok(json!({"dialog": crate::hdr_flatten_prompt::open(app)})))
+        // Its dialog is bound to the document it is for, as the prompt is.
+        crate::hdr_flatten_prompt::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) => {
+            Some(Ok(json!({"dialog": if crate::hdr_flatten_prompt::needed(app) {
+                Some(crate::hdr_flatten_prompt::open(app))
+            } else {
+                crate::hdr_flatten_prompt::open_dialog(app)
+            }})))
         }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(Ok(json!({"dialog": crate::filter_dialog::open(app, fl)})))
