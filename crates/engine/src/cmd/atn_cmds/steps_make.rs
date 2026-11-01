@@ -739,6 +739,7 @@ fn layer_set_to(p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", layer_ref(p)?).with("T   ", D::Descriptor(t)))
 }
 
+/// Encode selection and colour-setting steps as Photoshop Set descriptors.
 pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
     let fsel = D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }]);
     let sel = |t: D| desc("null").with("null", fsel.clone()).with("T   ", t);
