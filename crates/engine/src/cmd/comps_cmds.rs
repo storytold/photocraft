@@ -208,12 +208,13 @@ fn recorded_comp(doc: &Document, selector: &Value) -> Result<Option<u32>> {
     let fields = selector.as_object().filter(|fields| fields.len() == 1).ok_or_else(|| bad(CMD, "comp reference needs one index, id or ordinal"))?;
     if let Some(index) = fields.get("index") {
         if let Some(index) = index.as_u64() {
+            let index = u32::try_from(index).map_err(|_| bad(CMD, "comp index must be a 32-bit integer"))?;
             return Ok(index.checked_sub(1).and_then(|index| usize::try_from(index).ok()).and_then(|index| doc.layer_comps.get(index)).map(|comp| comp.id));
         }
-        if index.as_i64().is_some_and(|index| index < 0) {
+        if index.as_i64().is_some_and(|index| index < 0 && i32::try_from(index).is_ok()) {
             return Ok(None);
         }
-        return Err(bad(CMD, "comp index must be an integer"));
+        return Err(bad(CMD, "comp index must be a 32-bit integer"));
     }
     if let Some(id) = fields.get("id") {
         let id = crate::commands::u32_id(CMD, "comp id", id)?;
@@ -227,7 +228,7 @@ fn recorded_comp(doc: &Document, selector: &Value) -> Result<Option<u32>> {
     }
 }
 
-/// Apply the selected comp; an out-of-range recorded index succeeds without an edit.
+/// Apply the selected comp; a 32-bit index outside the comp list is a no-op.
 fn apply_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     if let Some(selector @ Value::Object(_)) = p.get("comp") {
