@@ -223,3 +223,22 @@ fn corpus_multichannel_round_trip_keeps_channels_and_resources() {
     let keys = |f: &PsdFile| f.global_blocks.iter().map(|b| b.key).collect::<Vec<_>>();
     assert_eq!(keys(&back), keys(&f));
 }
+
+/// A Multichannel spot whose DisplayInfo colour space is unknown takes its ink from the Alternate
+/// Spot Colors (1067), matched by the 1053 identifier, as in the other modes.
+#[test]
+fn unknown_display_space_takes_the_alternate_spot_colour() {
+    let mut f = file(8);
+    let info = f.resources.iter_mut().find(|r| r.id == 1077).unwrap();
+    info.data[4..6].copy_from_slice(&0x2331u16.to_be_bytes());
+    f.resources.push(ImageResource::new(1053, [3u32, 4].iter().flat_map(|id| id.to_be_bytes()).collect()));
+    let without = psd_to_document(&f).0;
+    // Lab 58.47 / −33.27 / −14.59 for channel id 3: about sRGB (0, 157, 165).
+    f.resources.push(ImageResource::new(1067, vec![0, 1, 0, 1, 0, 0, 0, 3, 0x00, 0x07, 0x16, 0xd7, 0xf3, 0x01, 0xfa, 0x4d, 0x00, 0x00]));
+    let (doc, _) = psd_to_document(&f);
+    let (ink, _) = doc.channels[0].spot.unwrap();
+    let rgb = ink.to_rgb().map(|v| (v * 255.0).round());
+    assert!(rgb[0] <= 3.0 && (rgb[1] - 157.0).abs() <= 3.0 && (rgb[2] - 165.0).abs() <= 3.0, "{rgb:?}");
+    assert_ne!(without.channels[0].spot.unwrap().0, ink);
+    assert!(doc.channels[1].spot.is_none(), "the alpha channel stays an alpha channel");
+}
