@@ -898,8 +898,12 @@ fn the_rename_field_runs_rtl_in_rtl_and_stays_ltr_in_ltr() {
     );
     assert!(g_ltr.iter().all(|(_, _, r)| r.left() < field_ltr.center().x), "LTR: left-aligned in {field_ltr:?}");
     let (field_rtl, g_rtl) = probe(Dir::Rtl);
-    let (_d, halign, r) = g_rtl.iter().find(|(d, _, _)| *d == TextDirection::RightToLeft).expect("RTL: an RTL galley for the name");
-    assert_eq!(*halign, egui::Align::Max, "RTL: right-aligned text");
+    // The row's own name label is now pinned RTL too (1ec6dc387) with halign Min, so the rename
+    // field's galley is the RTL one anchored at its end (halign Max, per rtl_singleline).
+    let (_d, _halign, r) = g_rtl
+        .iter()
+        .find(|(d, h, _)| *d == TextDirection::RightToLeft && *h == egui::Align::Max)
+        .expect("RTL: an RTL, right-aligned galley for the name, got {g_rtl:?}");
     assert!(r.right() > field_rtl.center().x, "RTL: galley at the field's right edge in {field_rtl:?}, got {r:?}");
 }
 

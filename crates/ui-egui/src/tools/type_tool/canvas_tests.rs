@@ -14,6 +14,15 @@ use super::{PathClick, layout, path_target, text_layer};
 use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
+/// A preset popup row's accessible label: exact, or with the ✔ prefix of a checked row (#5705).
+fn preset_row_label(h: &Harness<'static, PhotocraftApp>, label: &str) -> String {
+    if h.query_by_label(label).is_some() {
+        label.to_owned()
+    } else {
+        format!("{}{label}", crate::menu_keys::CHECK_MARK)
+    }
+}
+
 #[test]
 fn focused_font_search_does_not_type_into_the_canvas_layer() {
     let mut app = new_app();
@@ -143,8 +152,8 @@ mod panel_defaults {
         assert_eq!(h.state().ui.tool_options.type_size, 72.0);
         h.get_by_role_and_label(Role::ComboBox, "Leading presets").click();
         h.run();
-        // The checked row's label carries a ✔ prefix (#5705).
-        h.get_by_label_contains("Auto").click();
+        let auto = super::preset_row_label(&h, "Auto");
+        h.get_by_label(&auto).click();
         h.run();
         assert_eq!(h.state().ui.tool_options.type_style_defaults.get("leading"), Some(&json!("auto")));
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "defaults are not a document edit");
@@ -1977,15 +1986,11 @@ mod multi_layer_formatting {
     }
 
     fn preset(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
-        // Presets near the end of the popup can be below its scroll viewport. The checked row's
-        // label carries a ✔ prefix (#5705), so fall back to a contains query.
-        let node = match h.query_by_label(label) {
-            Some(n) => n,
-            None => h.get_by_label_contains(label),
-        };
-        node.scroll_to_me();
+        // Presets near the end of the popup can be below its scroll viewport.
+        let label = super::preset_row_label(h, label);
+        h.get_by_label(&label).scroll_to_me();
         h.run();
-        node.click();
+        h.get_by_label(&label).click();
         h.run();
     }
 
@@ -2014,7 +2019,8 @@ mod multi_layer_formatting {
             if i > 0 && top - items[i - 1].0 > pitch + 2.0 {
                 out.push("|".to_owned());
             }
-            out.push(label.clone());
+            // The checked row's label carries a ✔ prefix (#5705); compare the bare item text.
+            out.push(label.trim_start_matches(crate::menu_keys::CHECK_MARK).to_owned());
         }
         out
     }
