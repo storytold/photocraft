@@ -268,6 +268,11 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
         crate::move_ui::float_selected(app, duplicate_first, dx, dy);
         return;
     }
+    if duplicate_first && crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
+        app.ui.status = "Copy-nudging a colour set is not supported; use Copy and Paste into the selected channels".into();
+        app.ui.status_error = true;
+        return;
+    }
     let from = if duplicate_first { duplicate(app) } else { None };
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.

@@ -1,0 +1,145 @@
+[
+  [
+    "engine.execute",
+    {
+      "command": "file.new",
+      "params": {
+        "width": 256,
+        "height": 192,
+        "background": "black"
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "paint.stroke",
+      "params": {
+        "points": [
+          [
+            40,
+            60
+          ],
+          [
+            190,
+            100
+          ]
+        ],
+        "size": 20,
+        "hardness": 1,
+        "color": "#ffffff"
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "select.rect",
+      "params": {
+        "x": 65,
+        "y": 45,
+        "width": 100,
+        "height": 75,
+        "feather": 3
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "tools.setColors",
+      "params": {
+        "background": "#000000"
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "channel.target",
+      "params": {
+        "colors": [
+          0,
+          2
+        ]
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "channel.setVisible",
+      "params": {
+        "channel": "composite",
+        "visible": true
+      }
+    }
+  ],
+  [
+    "ui.set",
+    {
+      "zoom": 2,
+      "center": [
+        128,
+        96
+      ],
+      "dockTabs": {
+        "layers": 1
+      }
+    }
+  ],
+  [
+    "ui.menu.invoke",
+    {
+      "id": "edit.freeTransform"
+    }
+  ],
+  [
+    "ui.pointer",
+    {
+      "events": [
+        {
+          "kind": "down",
+          "x": 80,
+          "y": 100
+        },
+        {
+          "kind": "move",
+          "x": 110,
+          "y": 110
+        },
+        {
+          "kind": "up",
+          "x": 110,
+          "y": 110
+        }
+      ]
+    }
+  ],
+  [
+    "ui.menu.invoke",
+    {
+      "id": "edit.transform.warp"
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "channel.setVisible",
+      "params": {
+        "channel": "red",
+        "visible": false
+      }
+    }
+  ],
+  [
+    "engine.execute",
+    {
+      "command": "channel.setVisible",
+      "params": {
+        "channel": "blue",
+        "visible": false
+      }
+    }
+  ]
+]

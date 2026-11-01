@@ -1,0 +1,178 @@
+{
+  "date": "2026-11-01",
+  "baseline_head": "edfb403cfc192a341b5e4de1101a43b251d85141",
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+  "drivers": {
+    "vulkan": "/usr/share/vulkan/icd.d/lvp_icd.json",
+    "opengl": "Mesa llvmpipe",
+    "physical_gpu_used": false
+  },
+  "limits": {
+    "cargo_workers": 1,
+    "rayon_workers": 2,
+    "llvmpipe_workers": 2,
+    "test_threads": 1
+  },
+  "fixture": {
+    "width": 6000,
+    "height": 4000,
+    "mode": "RGB",
+    "depth": "U8",
+    "synthetic": true,
+    "viewport": [
+      1000,
+      700
+    ]
+  },
+  "method": {
+    "release": true,
+    "runs": 6,
+    "warm_frames_per_run_per_case": 9,
+    "interleaved": true,
+    "statistic": [
+      "p50",
+      "p95"
+    ],
+    "completed_frames_include_offscreen_readback": true,
+    "no_simultaneous_rust_builds": true
+  },
+  "scope": "Compare existing whole/single preview controls before/after; measure new R+B set. CPU fallback includes software-rendered UI. No physical GPU latency claim.",
+  "fonts_revision": "b076417b5880bd4154bd22f00695b1d28c6bea83",
+  "commit_method": {
+    "runs": 3,
+    "affine_commits_per_run": 3,
+    "warp_commits_per_frame_per_run": 1,
+    "warmup": false,
+    "includes": "native command execution, pixel edits and undo history commit; setup outside the timer",
+    "selection": "none"
+  },
+  "source_harnesses": {
+    "channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07",
+    "channel_transform_bench.rs": "65378f7e96ceb793035f53903bab88f3a38eaab27abdca59cf5b734dd86acc96",
+    "channel_move_gpu_bench.rs": "e73d447d8c20eec559f8ecb90943f4357b93936fe28097a80ff9c225cf1a3ca8"
+  },
+  "builds": {
+    "baseline": {
+      "seconds": 942.3721399080241,
+      "binaries": {
+        "transform": {
+          "name": "baseline-transform",
+          "sha256": "ce35810978a188bf77e97b769a9ca50ea53cbd35cb8bf4167edad89e9b5f6099"
+        },
+        "move": {
+          "name": "baseline-move",
+          "sha256": "d6c38950a19272ceb24d1410ef2eb8874d1dd2e5f70284b31369b673e04452b7"
+        }
+      },
+      "source_files": null,
+      "source_files_unchanged": null
+    },
+    "baseline-native": {
+      "seconds": 248.91859168896917,
+      "binaries": {
+        "native": {
+          "name": "baseline-native",
+          "sha256": "c2788b679b3bc78d5fb067d0da005e13af44d7c25af5f3118e7f631aa25d714f"
+        }
+      },
+      "source_files": {
+        "Cargo.lock": "2a7130074de8a0d1f10aa53cc62b1870da12e996aa21ea5ced7a8b2d72b14568",
+        "Cargo.toml": "42b945ed590b32ed7f866cdf0489b8b153aea14b03292532d6f5f0f71e6ff6d4",
+        "contributors/people.toml": "69a96aa5578bd9f1dfbb518649ea100e6ac3844e22e16f061317b848a9f4f0e7",
+        "crates/engine/src/channel_transform.rs": "c9d7a50fd061332a6de9ca83b08cfe656b7ec6400a17ce10853613fb85c7e584",
+        "crates/engine/src/channel_transform/tests.rs": "e116cfbcc6c01505b62d02c126f548429f18ed67c0272a2997431e7ea1b68145",
+        "crates/engine/src/cmd.rs": "2e4970b0bdfd98850eadae2a7a669150150137d5953893c13aa5bbc9957a63f0",
+        "crates/engine/src/cmd/channel_cmds.rs": "773dadba27f9be3e499b1baab5a7b1021631337f2e38699b6f77db34093a89a7",
+        "crates/engine/src/cmd/channel_cmds/targeting.rs": "3441d7bbf5760777887dadec8e068d921d4a09344471c2c1ff258010efa2bf5f",
+        "crates/engine/src/cmd/extra_cmds.rs": "2e342ab34084dfc0941f77c3226e675b7f2800f61c9c76c1544af5126a144259",
+        "crates/engine/src/cmd/layer_multi_cmds/moves.rs": "aa5a98ca1143bf96066eebd685d0ec78429b5bb1e527ded9bcc5b690029b0a94",
+        "crates/engine/src/cmd/transform_cmds.rs": "759f66d08c6336ef3bb4b40563cb78a67bedfd77830d84f6f1a2f43dba3a820a",
+        "crates/engine/src/cmd/warp_cmds.rs": "5cb9c584fd65947f792e7319ca963087681ea79a04595156d06ab5f8327b7720",
+        "crates/engine/src/color_channels.rs": "2bbed3d31497954fc28892030d3495faf35413c64520fac887f57d9c75bc1d12",
+        "crates/engine/tests/multi_channel_editing.rs": "83ce3d93a40bee64ed6316f2e4e0ec5ce622c590bc2a4554aecb5ce3fd413559",
+        "crates/ui-egui/examples/channel_move_gpu_bench.rs": "e73d447d8c20eec559f8ecb90943f4357b93936fe28097a80ff9c225cf1a3ca8",
+        "crates/ui-egui/examples/channel_transform_bench.rs": "65378f7e96ceb793035f53903bab88f3a38eaab27abdca59cf5b734dd86acc96",
+        "crates/ui-egui/examples/channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07",
+        "crates/ui-egui/src/canvas/channel_transform_gpu.rs": "00a9c035587d763400820af8139f8b75ef02b1b5311ce208b7e759713175bb92",
+        "crates/ui-egui/src/canvas/channel_transform_gpu.wgsl": "ccc840c0406374e8d02771d8123303594988b494b6267766c8e140bc805c8f19",
+        "crates/ui-egui/src/canvas/channel_transform_preview.rs": "679f9413f50fbe490cb0f3649b455911b4f22c82656b2085327e92b1f5f4e872",
+        "crates/ui-egui/src/canvas/move_ui.rs": "bff57a2f340293bee4d9cc9b6a2faaa2d177198f65a1d9f7e665ef0f03107449",
+        "crates/ui-egui/src/canvas/move_ui/tests.rs": "a13fb4fe7dc6880b3ac7fd2db136a9f689002068d2ac7b7da3ee6a8ff75e871a",
+        "crates/ui-egui/src/canvas/strokes.rs": "24b9acaa8e96d4b1f235a38d63afafd5d0756ecb5945abdd0eb9107b7b679262",
+        "crates/ui-egui/src/canvas/tool_input.rs": "7f6b63fcda20d81ee7b1db6545e210d964dcc3caa926b4ce76db58008e12b0fe",
+        "crates/ui-egui/src/tools/move_lock.rs": "170e2a4b48a1ed24fd694a54d8f0c3340304d0aebcab53f67772789df61c622a",
+        "crates/ui-egui/src/tools/move_mods.rs": "ea9e244936699e6acb8e20c200dc8ae9b1c33f88e683e730b6e20104955d562e",
+        "crates/ui-egui/src/tools/transform_tool/begin.rs": "261c2f167fcaa884eedaeb829d1a2d49fee2829249eff84e83c35fe9f15d0861",
+        "crates/ui-egui/src/tools/transform_tool/commit.rs": "40d513d6de0962a4cda7c52b7d25918730fcf8ca4d38635a52bf0bf008a9e696"
+      },
+      "source_files_unchanged": true
+    },
+    "current": {
+      "seconds": 896.0276899200398,
+      "binaries": {
+        "transform": {
+          "name": "current-transform",
+          "sha256": "135ffc838fd92fc2bffd2ad766c9082e087c959bfdbbbcf15c936bcb40ddc460"
+        },
+        "move": {
+          "name": "current-move",
+          "sha256": "7c96010484500c36795d5d776970a41ad3c452b81f91bb465cec177f247ef2be"
+        },
+        "native": {
+          "name": "current-native",
+          "sha256": "96beefcda49f39da8567b10c555b1c5989b66ead58cf27656794a4d46998bd7f"
+        }
+      },
+      "source_files": {
+        "Cargo.lock": "2a7130074de8a0d1f10aa53cc62b1870da12e996aa21ea5ced7a8b2d72b14568",
+        "Cargo.toml": "42b945ed590b32ed7f866cdf0489b8b153aea14b03292532d6f5f0f71e6ff6d4",
+        "contributors/people.toml": "de23f17b5e7103244d4a329226fee757795e8da44510145d57706cde38b0590f",
+        "crates/engine/src/channel_transform.rs": "4b044959c8d7a86faa9c936aebfdfbc983b92814f1509caa51385afce0f2f726",
+        "crates/engine/src/channel_transform/set_tests.rs": "4971def764385cf12e7bec116d05f7a20319bd52e02c597be9221723edd4dc79",
+        "crates/engine/src/channel_transform/tests.rs": "09b86229b4e1914eec6f69fd41d8754e8e6b69836b16af6c7b860a7c456d1c24",
+        "crates/engine/src/cmd.rs": "e40169013ce919c695f02a826b636387a5cc82c7894ca13ee5d5e41e827d08a9",
+        "crates/engine/src/cmd/channel_cmds.rs": "fcf497a563e060d6f7617903c7159116a69e2fdfb2bb34d9cf34e856e4ed6e54",
+        "crates/engine/src/cmd/channel_cmds/targeting.rs": "a988e7105d5b774dfe1917161a2e935ed57fae5b5af486d8ca1da9cdf9aa0504",
+        "crates/engine/src/cmd/extra_cmds.rs": "680c93599469573ffa1ac9e2fa13d28be91fd89c9d06f0819d633380230f6e04",
+        "crates/engine/src/cmd/layer_multi_cmds/moves.rs": "ff404f6aa04bc05d13469307b74a7e802d5094d5a292cdba00ade22426f27e86",
+        "crates/engine/src/cmd/transform_cmds.rs": "f79f2b6646c3a04e1979fc0e6a6010ff9c67e486f3074dce81fe5d94a78fb2fc",
+        "crates/engine/src/cmd/warp_cmds.rs": "955d018032681fe384480153fac4083aefb69678d1bd65859ac62565bf2b35a0",
+        "crates/engine/src/color_channels.rs": "0d70f904c0c9c58f5fa2516e94fb7cf34dc67360ba6865e27e862a8a84b2bc09",
+        "crates/engine/tests/multi_channel_editing.rs": "8cffb28de5ed43d827d180f53a1c4d71c82c6fc100427935b3430271378a40f5",
+        "crates/ui-egui/examples/channel_move_gpu_bench.rs": "e73d447d8c20eec559f8ecb90943f4357b93936fe28097a80ff9c225cf1a3ca8",
+        "crates/ui-egui/examples/channel_transform_bench.rs": "65378f7e96ceb793035f53903bab88f3a38eaab27abdca59cf5b734dd86acc96",
+        "crates/ui-egui/examples/channel_transform_gpu_bench.rs": "305f6f5f051bd7fa2773ae1030a51872814392528f90d2c7a23b11cc3916fb07",
+        "crates/ui-egui/src/canvas/channel_transform_gpu.rs": "80d270a6ec30e3e618da7ea419e1c58e4fae2e26474a63f922bacfa4cffbc5ce",
+        "crates/ui-egui/src/canvas/channel_transform_gpu.wgsl": "2fea22475c7a1ed0abb4cd669a4a114ded98e7f4cda67f4fefc9a6475e8fbe5a",
+        "crates/ui-egui/src/canvas/channel_transform_preview.rs": "0fdd7577b28f8930fcc6b7101c431b224caa56f251f0cdbf39c373e7000bc55b",
+        "crates/ui-egui/src/canvas/channel_transform_preview/set_tests.rs": "eb9b29a1d13b6a456f0088b0181d3117726a19c75069f2cacb13b881b6e83893",
+        "crates/ui-egui/src/canvas/move_ui.rs": "a56b808d53f7b96976285bb7f6adba9a87581d587822bd8185f0f0eb242ec2b3",
+        "crates/ui-egui/src/canvas/move_ui/tests.rs": "9582eefe3d3478140ca460acd39a49910ac926473f28677d0f5a482d41d83fcd",
+        "crates/ui-egui/src/canvas/strokes.rs": "2265011c635b401f74f96bfee9a983171c6d9a18bf642523f7c2809bb8356bd2",
+        "crates/ui-egui/src/canvas/tool_input.rs": "b0d04a8eff0c5b51209e3ec6a18c6e9c11be8bf83536dac0ca3bd2b1fce1bb45",
+        "crates/ui-egui/src/tools/move_lock.rs": "e2c49cb132067fc895e35618fe42da354100295d0a5522b954588d9494edb0e6",
+        "crates/ui-egui/src/tools/move_mods.rs": "22d6ad3f43f5d904f6316c3fa1b209de0d1df078239e9776cfa6040fb7861c3f",
+        "crates/ui-egui/src/tools/transform_tool/begin.rs": "1b8e565ad515539fa5feb2e10072e522d97b4327ec007ade3fb3b949ec414f37",
+        "crates/ui-egui/src/tools/transform_tool/commit.rs": "9abb7b635654ffe545c47da32d82bced3d0e04eaf4a284ce94b4a6e80c8ff8f2"
+      },
+      "source_files_unchanged": true
+    }
+  },
+  "adapter_descriptions": [
+    "adapter: AdapterInfo { name: \"llvmpipe (LLVM 21.1.8, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }; case=composite; CPU fallback=false",
+    "adapter: AdapterInfo { name: \"llvmpipe (LLVM 21.1.8, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }; case=red-all-visible; CPU fallback=false",
+    "adapter: AdapterInfo { name: \"llvmpipe (LLVM 21.1.8, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }; case=red-blue-all-visible; CPU fallback=false",
+    "adapter: AdapterInfo { name: \"llvmpipe (LLVM 21.1.8, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }; case=red-blue-only; CPU fallback=false",
+    "adapter: AdapterInfo { name: \"llvmpipe (LLVM 21.1.8, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 26.0.8-1ubuntu0.3 (LLVM 21.1.8)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: Some(false), limit_bucket: None }; case=red-only; CPU fallback=false"
+  ],
+  "post_measurement_follow_up": {
+    "changed_files": [
+      "crates/engine/src/channel_transform/set_tests.rs",
+      "crates/engine/src/color_channels.rs"
+    ],
+    "change": "Repeat-copy command availability and its regression only; image-processing and GPU sampler sources unchanged.",
+    "processing_sources_unchanged": true,
+    "measured_binary_source_map": "environment.json"
+  }
+}

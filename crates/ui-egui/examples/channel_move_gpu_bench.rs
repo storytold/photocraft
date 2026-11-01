@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let cpu = args.iter().any(|a| a == "--cpu");
     let whole = args.iter().any(|a| a == "--whole");
+    let set = args.iter().any(|a| a == "--set");
     let save = args.iter().position(|a| a == "--save").and_then(|i| args.get(i + 1));
     let mut doc = Document::new("24 MP channel Move", Size::new(6000, 4000), ColorMode::Rgb, SampleType::U8);
     doc.layers.push(Layer::raster("Unlocked image", doc.pixel_format()));
@@ -37,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = Session::new();
     session.add_document(doc, None);
     if !whole {
-        session.execute("channel.target", json!({"channel":"red"}))?;
+        session.execute("channel.target", if set { json!({"colors":[0,2]}) } else { json!({"channel":"red"}) })?;
         for channel in ["red", "green", "blue"] {
             session.execute("channel.setVisible", json!({"channel":channel,"visible":true}))?;
         }
@@ -89,6 +90,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             image.save(format!("{path}-{}-{}.png", if whole { "whole" } else { "channel" }, if cpu { "cpu" } else { "gpu" }))?;
         }
     }
-    println!("{}", json!({"cpu":cpu,"whole":whole,"cold_ms":cold_ms,"completed_frame_ms":frames}));
+    println!("{}", json!({"cpu":cpu,"whole":whole,"set":set,"cold_ms":cold_ms,"completed_frame_ms":frames}));
     Ok(())
 }

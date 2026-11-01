@@ -25,9 +25,6 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
     {
         return begin_path(app, ctx, params, path);
     }
-    if params.get("layer").is_none() && crate::canvas::multiple_color_target(app) {
-        return Err("Move and transforms on several colour channels are not implemented yet".into());
-    }
     if app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         app.run("select.drop", json!({}))?;
     }
@@ -273,6 +270,9 @@ pub const WARP_ONE_LAYER: &str = "Warp works on one layer at a time: select a si
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
 /// its selected pixels, as Layer via Copy) and transforms the copy (#352).
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if crate::canvas::multiple_color_target(app) && crate::vector_ui::free_transform_path(app).is_none() {
+        return Err("Free Transform a Copy requires the composite or one colour channel".into());
+    }
     let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
     let params = if selection { json!({}) } else { json!({"inPlace": true}) };
     app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, params)?;

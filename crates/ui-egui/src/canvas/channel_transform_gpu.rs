@@ -1,7 +1,7 @@
 //! Cached native RGB samples for channel previews. Only geometry/view uniforms change while
 //! dragging. Unsupported stacks, monitor transforms and devices use the CPU preview oracle.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use eframe::{egui_wgpu::RenderState, wgpu};
 use photocraft_color::{BlendMode, ColorMode, SampleType};
@@ -12,11 +12,16 @@ use crate::state::TransformSession;
 
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FLOAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-const UNIFORM_BYTES: u64 = 128;
+const UNIFORM_BYTES: u64 = 144;
 
 struct Pipelines {
     inputs: wgpu::BindGroupLayout,
     moved: wgpu::BindGroupLayout,
+    scalar: OnceLock<Option<Passes>>,
+    multiple: OnceLock<Option<Passes>>,
+}
+
+struct Passes {
     affine: wgpu::RenderPipeline,
     warp: wgpu::RenderPipeline,
     finish: wgpu::RenderPipeline,
@@ -270,10 +275,9 @@ impl Preview {
         factor: u32,
         move_bounds: Option<photocraft_geom::Rect>,
     ) -> Option<egui::TextureId> {
-        let component = t.target.as_ref()?.get("color")?.as_u64()?;
-        if component >= 3 {
-            return None;
-        }
+        let colors = photocraft_engine::color_channels::explicit(&serde_json::json!({"target":t.target}), 3).ok()??;
+        let component = colors.indices().next()?;
+        let mask = colors.indices().fold(0u32, |bits, k| bits | (1 << k));
         if self.last.as_ref().is_some_and(|(old, v, c, e, bounds)| old == t && v == view && *c == in_color && *e == encode && *bounds == move_bounds) {
             return Some(self.id);
         }
@@ -308,6 +312,15 @@ impl Preview {
             }
             frame
         };
+        // Shared coverage is exact only when the scalar resamplers use the same source
+        // outline. Differently sparse components retain the CPU oracle, never a union that
+        // would change edge-repeat sampling or Warp's source triangulation.
+        if move_bounds.is_none() && (self.selected || t.warp.is_none()) {
+            let bounds = if self.selected { &self.lifted } else { &self.content };
+            if colors.indices().any(|c| bounds.get(c).is_none_or(|b| *b != source_bounds)) {
+                return None;
+            }
+        }
         let source_rect = [source_bounds.x0, source_bounds.y0, source_bounds.x1, source_bounds.y1].map(f64::from);
         let mut interp = match t.interpolation.as_str() {
             "nearest" => 0.0,
@@ -331,12 +344,14 @@ impl Preview {
         if integer_translation {
             interp = 0.0;
         }
-        let mut data = Vec::with_capacity(32);
+        let mut data = Vec::with_capacity(36);
         for (i, row) in inv.0.as_chunks::<3>().0.iter().enumerate() {
             data.extend(row.iter().map(|v| *v as f32));
             data.push(if i == 0 { photocraft_geom::TILE_SIZE as f32 } else { 0.0 });
         }
-        data.extend([self.size[0] as f32, self.size[1] as f32, component as f32, *self.fill.get(component as usize)?]);
+        // Retain the original scalar uniform values; sets use the same layout with a mask.
+        let target = if colors.len() == 1 { [component as f32, *self.fill.get(component)?] } else { [mask as f32, 0.0] };
+        data.extend([self.size[0] as f32, self.size[1] as f32, target[0], target[1]]);
         data.extend(source_rect.map(|v| v as f32));
         let visible = (0..3).fold(0u32, |v, c| v | (u32::from(view.color_visible(c)) << c));
         data.extend([visible as f32, f32::from(in_color), self.opacity, f32::from(encode)]);
@@ -351,6 +366,7 @@ impl Preview {
             photocraft_geom::Rect::EMPTY
         };
         data.extend([output.x0, output.y0, output.x1, output.y1].map(|v| v as f32));
+        data.extend(self.fill);
         if data.iter().any(|v| !v.is_finite()) {
             return None;
         }
@@ -358,6 +374,7 @@ impl Preview {
             Some(w) => Some(warp_geometry(w, source_rect, k)?),
             None => None,
         };
+        let passes = self.pipes.passes(&self.rs.device, colors.len() > 1)?;
         self.rs.queue.write_buffer(&self.uniform, 0, &bytes(&data));
         let mut encoder = self.rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("channel preview") });
         if let Some((vertices, indices)) = geometry {
@@ -381,20 +398,20 @@ impl Preview {
             self.rs.queue.write_buffer(&self.indices, 0, &ib);
             {
                 let mut pass = render_pass(&mut encoder, &self.moved_view);
-                pass.set_pipeline(&self.pipes.warp);
+                pass.set_pipeline(&passes.warp);
                 pass.set_bind_group(0, &self.inputs, &[]);
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..u32::try_from(indices.len()).ok()?, 0, 0..1);
             }
             let mut pass = render_pass(&mut encoder, &self.output_view);
-            pass.set_pipeline(&self.pipes.finish);
+            pass.set_pipeline(&passes.finish);
             pass.set_bind_group(0, &self.inputs, &[]);
             pass.set_bind_group(1, &self.moved, &[]);
             pass.draw(0..3, 0..1);
         } else {
             let mut pass = render_pass(&mut encoder, &self.output_view);
-            pass.set_pipeline(&self.pipes.affine);
+            pass.set_pipeline(&passes.affine);
             pass.set_bind_group(0, &self.inputs, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -612,20 +629,15 @@ fn render_pass<'a>(encoder: &'a mut wgpu::CommandEncoder, view: &wgpu::TextureVi
     })
 }
 
+// Both variants share bindings and textures; only the sampler vector width differs.
 impl Pipelines {
     fn new(device: &wgpu::Device) -> Option<Self> {
-        use std::future::Future;
-        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-        let result = Self::build(device);
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        for pop in [internal.pop(), validation.pop()] {
-            if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
-                log::warn!("channel preview uses CPU: {e}");
-                return None;
-            }
-        }
-        Some(result)
+        validated(device, || Self::build(device))
+    }
+
+    fn passes(&self, device: &wgpu::Device, multiple: bool) -> Option<&Passes> {
+        let cache = if multiple { &self.multiple } else { &self.scalar };
+        cache.get_or_init(|| validated(device, || Passes::build(device, self, multiple)).flatten()).as_ref()
     }
 
     fn build(device: &wgpu::Device) -> Self {
@@ -657,20 +669,30 @@ impl Pipelines {
             ],
         });
         let moved = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("channel preview moved"), entries: &[tex(0)] });
+        Self { inputs, moved, scalar: OnceLock::new(), multiple: OnceLock::new() }
+    }
+}
+
+impl Passes {
+    fn build(device: &wgpu::Device, layouts: &Pipelines, multiple: bool) -> Option<Self> {
+        // WGSL has no vector-width generics. Specialize only this fixed header so scalar
+        // previews keep their original vec2 sampler and sets share the vec4 interpolation.
+        const SCALAR: &str = "alias Sample = vec2<f32>;\nconst COMPONENTS: u32 = 1u;";
+        const MULTIPLE: &str = "alias Sample = vec4<f32>;\nconst COMPONENTS: u32 = 3u;";
+        let shared = include_str!("channel_transform_gpu.wgsl");
+        let (prefix, suffix) = shared.split_once(SCALAR)?;
+        let source = if multiple { std::borrow::Cow::Owned(format!("{prefix}{MULTIPLE}{suffix}")) } else { std::borrow::Cow::Borrowed(shared) };
         let simple = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("channel preview"),
-            bind_group_layouts: &[Some(&inputs)],
+            bind_group_layouts: &[Some(&layouts.inputs)],
             immediate_size: 0,
         });
         let finish_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("channel preview finish"),
-            bind_group_layouts: &[Some(&inputs), Some(&moved)],
+            bind_group_layouts: &[Some(&layouts.inputs), Some(&layouts.moved)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("channel preview"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("channel_transform_gpu.wgsl").into()),
-        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("channel preview"), source: wgpu::ShaderSource::Wgsl(source) });
         let pipe = |layout: &wgpu::PipelineLayout, vertex, fragment, format, mesh| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("channel preview"),
@@ -705,8 +727,23 @@ impl Pipelines {
         let affine = pipe(&simple, "vs_full", "fs_affine", OUTPUT, false);
         let warp = pipe(&simple, "vs_mesh", "fs_warp", FLOAT, true);
         let finish = pipe(&finish_layout, "vs_full", "fs_finish", OUTPUT, false);
-        Self { inputs, moved, affine, warp, finish }
+        Some(Self { affine, warp, finish })
     }
+}
+
+fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> Option<T> {
+    use std::future::Future;
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let result = build();
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    for pop in [internal.pop(), validation.pop()] {
+        if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
+            log::warn!("channel preview uses CPU: {e}");
+            return None;
+        }
+    }
+    Some(result)
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use super::drag::Drag;
 use super::gesture::{finish_gesture, polygon_click, selection_mode};
 use super::selection::finish_selection_drag;
 use super::strokes::{HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, paint_target, snap_aliased_tip, stroke_params, strokes_live};
-use super::{PhotocraftApp, Tool, json, multiple_color_target};
+use super::{PhotocraftApp, Tool, json};
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -222,13 +222,16 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 app.guide_drag = Some(guide);
                 return true;
             }
-            if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several colour channels are not implemented yet".into();
+            if mods.alt && crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
+                app.ui.status = "Copy-dragging a colour set is not supported; use Copy and Paste into the selected channels".into();
+                app.ui.status_error = true;
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
             // (not when the selected pixels move: those are the active layer's).
-            if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
+            let selected_set =
+                crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) && app.session.active().is_some_and(|st| st.doc.selection.is_some());
+            if !selected_set && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());

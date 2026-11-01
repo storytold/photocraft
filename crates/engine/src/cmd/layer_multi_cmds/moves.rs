@@ -143,13 +143,19 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // An explicit target wins. An explicit layer without one retains whole-layer movement,
     // matching the other geometric commands; an implicit Move-tool command follows Channels.
-    let color = match crate::channel_transform::color_index(p)? {
-        Some(k) => Some(k),
-        None if p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null) => crate::channel_cmds::targeted_color(s),
-        None => None,
+    let color = if p.get("target").is_some() {
+        crate::color_channels::target(s, p)?
+    } else if p.get("layer").is_none_or(Value::is_null) && crate::mask_view_cmds::current(s.active().ok_or(EngineError::NoDocument)?).is_none() {
+        if matches!(s.active().ok_or(EngineError::NoDocument)?.channel_view.target, crate::channel_cmds::ChannelTarget::Color(_)) {
+            Some(crate::color_channels::selected(s).ok_or_else(|| bad("layer.translate", "the selected colour set is invalid"))?)
+        } else {
+            None
+        }
+    } else {
+        None
     };
-    if let Some(k) = color {
-        return translate_color_channel(s, p, k, dx, dy);
+    if let Some(colors) = color {
+        return translate_color_channel(s, p, colors, dx, dy);
     }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
@@ -193,10 +199,9 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// `layer.translate` with colour channel `k` targeted: [`crate::channel_cmds::move_color_channel`]
-/// on the named or active layer, one "Move" step. Its linked layers stay put: a channel is the
-/// active layer's alone.
-fn translate_color_channel(s: &mut Session, p: &Value, k: usize, dx: i32, dy: i32) -> Result<Value> {
+/// Move the captured native components on the named or active layer in one history step.
+/// Linked layers stay put; selected pixels and their outline move together.
+fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32) -> Result<Value> {
     let id = match crate::commands::explicit_layer(s, p)? {
         Some(id) => id,
         None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
@@ -208,7 +213,10 @@ fn translate_color_channel(s: &mut Session, p: &Value, k: usize, dx: i32, dy: i3
             let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
             return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
         }
-        crate::channel_cmds::move_color_channel(doc, id, k, dx, dy, background)
+        if locks.pixels {
+            return Err(EngineError::Other("the target layer is pixel-locked".into()));
+        }
+        crate::channel_cmds::move_color_channels(doc, id, colors, dx, dy, background)
     })?;
     Ok(Value::Null)
 }

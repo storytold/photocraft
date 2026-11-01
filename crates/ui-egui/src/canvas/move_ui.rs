@@ -17,6 +17,18 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, TransformSession};
 
+/// Effective native colour target; mask viewing and mask thumbnails take precedence.
+pub(crate) fn color_target(app: &PhotocraftApp) -> Option<photocraft_engine::color_channels::ColorChannels> {
+    if app.layer_mask_targeted() {
+        return None;
+    }
+    let st = app.session.active()?;
+    if !matches!(st.channel_view.target, ChannelTarget::Color(_)) {
+        return None;
+    }
+    photocraft_engine::color_channels::selected(&app.session)
+}
+
 /// Does the Move tool drag (and do the arrow keys nudge) the selected pixels of the active layer
 /// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
 /// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
@@ -151,7 +163,7 @@ pub(crate) struct MovePreview {
     too_big: bool,
 }
 
-/// An immutable, reduced source for a Move drag on one colour channel. The per-frame offset
+/// An immutable, reduced source for a Move drag on a native colour set. The per-frame offset
 /// changes only the affine shader's uniforms; the full-resolution edit still goes through
 /// `layer.translate` on release. `gpu: None` caches an unsupported source for this snapshot.
 pub(crate) struct MoveGpuPreview {
@@ -160,7 +172,7 @@ pub(crate) struct MoveGpuPreview {
     /// document snapshot so those changes only rerun the shader, never upload the source.
     snapshot: std::sync::Weak<Document>,
     layer: LayerId,
-    channel: usize,
+    colors: photocraft_engine::color_channels::ColorChannels,
     background: [f32; 4],
     factor: u32,
     bounds: Rect,
@@ -172,10 +184,6 @@ pub(crate) struct MoveGpuPreview {
 /// a faithful GPU representation. Unsupported stacks, profiles and selections use the CPU.
 pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Option<u32>) -> Option<egui::TextureId> {
     if app.session.active_index() != Some(idx) {
-        return None;
-    }
-    if crate::canvas::multiple_color_target(app) {
-        app.move_gpu_preview = None;
         return None;
     }
     let Some(offset) = drag_offset(app) else {
@@ -194,7 +202,8 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         return None;
     }
     let st = app.session.documents().get(idx)?;
-    let ChannelTarget::Color(channel) = st.channel_view.target else { return None };
+    let ChannelTarget::Color(_) = st.channel_view.target else { return None };
+    let colors = photocraft_engine::color_channels::selected(&app.session)?;
     let layer = st.active_layer?;
     if st.doc.selection.is_some() || photocraft_engine::float_cmds::floating(st).is_some() {
         return None;
@@ -215,7 +224,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         p.doc == doc.id
             && p.snapshot.ptr_eq(&Arc::downgrade(&doc))
             && p.layer == layer
-            && p.channel == channel
+            && p.colors == colors
             && p.background == background
             && p.factor == factor
     });
@@ -232,7 +241,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             (bounds, preview)
         };
         app.move_gpu_preview =
-            Some(MoveGpuPreview { doc: doc.id, snapshot: Arc::downgrade(&doc), layer, channel, background, factor, bounds, gpu: preview, shown: false });
+            Some(MoveGpuPreview { doc: doc.id, snapshot: Arc::downgrade(&doc), layer, colors, background, factor, bounds, gpu: preview, shown: false });
     }
     let p = app.move_gpu_preview.as_mut()?;
     let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(|v| f64::from(v) * f64::from(factor));
@@ -247,7 +256,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         interpolation: if offset.0.rem_euclid(factor as i32) == 0 && offset.1.rem_euclid(factor as i32) == 0 { "nearest" } else { "bilinear" }.into(),
         warp: None,
         selection: false,
-        target: Some(json!({"color": channel})),
+        target: Some(colors.params()),
         path: None,
         made: None,
         mode: Default::default(),
@@ -322,10 +331,6 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     {
         return floating_doc(app, idx);
     }
-    if crate::canvas::multiple_color_target(app) {
-        app.move_preview = None;
-        return None;
-    }
     // Preferences › Interface › Show bounding box when dragging layer: outline and arrow only.
     if app.session.active_index() != Some(idx) || app.session.prefs().interface.show_bounding_box_when_dragging_layer {
         return None;
@@ -338,10 +343,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let background = app.session.tools.background;
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
-    // One colour channel targeted (#6068): the drag moves that channel of the active layer, as
+    // A native colour target (#6068): the drag moves those components of the active layer, as
     // `layer.translate` will on release, and the layer itself stays.
     let channel = match st.channel_view.target {
-        photocraft_engine::channel_cmds::ChannelTarget::Color(k) if !mask_target => st.active_layer.map(|id| (id, k)),
+        photocraft_engine::channel_cmds::ChannelTarget::Color(_) if !mask_target => {
+            st.active_layer.zip(photocraft_engine::color_channels::selected(&app.session))
+        }
         _ => None,
     };
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
@@ -372,9 +379,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
         let moved = match channel {
-            Some((id, k)) => {
+            Some((id, colors)) => {
                 let mut d = (*doc).clone();
-                photocraft_engine::channel_cmds::move_color_channel(&mut d, id, k, offset.0, offset.1, background).map(|()| d)
+                photocraft_engine::channel_cmds::move_color_channels(&mut d, id, colors, offset.0, offset.1, background).map(|()| d)
             }
             None => photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target),
         };

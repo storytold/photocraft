@@ -308,11 +308,28 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
 /// value for it, as Clear does with a channel targeted (#2720); values moved past the layer's
 /// pixels are dropped. Only pixel layers have colour channels to move.
 pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy: i32, background: [f32; 4]) -> Result<()> {
+    let count = doc.layer(id).and_then(Layer::surface).map_or_else(|| color_count(doc), |s| s.format().mode.color_channels());
+    let colors = crate::color_channels::ColorChannels::from_indices([k], count)?;
+    move_color_channels(doc, id, colors, dx, dy, background)
+}
+
+/// Shift a native colour set in one tile pass, preserving every other encoded sample.
+pub fn move_color_channels(
+    doc: &mut Document,
+    id: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+) -> Result<()> {
+    if (dx != 0 || dy != 0) && colors.len() > 1 && doc.selection.is_some() {
+        return crate::channel_transform::move_selected_colors(doc, id, colors, dx, dy, background);
+    }
     let space = photocraft_compose::cmyk_space(doc);
     let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
     let fmt = surf.format();
-    if k >= fmt.mode.color_channels() {
-        return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+    if colors.indices().any(|k| k >= fmt.mode.color_channels()) {
+        return Err(EngineError::Other("colour channel index is out of range".into()));
     }
     let area = surf.content_bounds();
     if area.is_empty() || (dx == 0 && dy == 0) {
@@ -322,12 +339,11 @@ pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy
     let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&fmt, background));
     let bpp = fmt.bytes_per_pixel();
     let bytes = fmt.sample.bytes();
-    let offset = k * bytes;
-    let end = offset + bytes;
+    let offsets: Vec<_> = colors.indices().map(|k| k * bytes).collect();
     let mut encoded = [0u8; 20];
     let pixel = encoded.get_mut(..bpp).ok_or_else(|| bad("layer.translate", "invalid pixel format"))?;
     photocraft_raster::encode_pixel(&fmt, &native, pixel);
-    let fill = pixel.get(offset..end).ok_or_else(|| bad("layer.translate", "missing background component"))?;
+    let fill = pixel;
     // The snapshot keeps source samples intact while changed tiles copy on write. Work a tile at
     // a time so a large channel move never needs two full-document pixel buffers.
     let source = surf.clone();
@@ -351,8 +367,12 @@ pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy
         for y in r.y0..r.y1 {
             let base = (((y - tile_rect.y0) as usize) * tile_width + (r.x0 - tile_rect.x0) as usize) * bpp;
             let row = data.get_mut(base..base + width * bpp).ok_or_else(|| bad("layer.translate", "missing destination row"))?;
-            for pixel in row.chunks_exact_mut(bpp) {
-                pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing colour component"))?.copy_from_slice(fill);
+            for &offset in &offsets {
+                let end = offset + bytes;
+                let value = fill.get(offset..end).ok_or_else(|| bad("layer.translate", "missing background component"))?;
+                for pixel in row.chunks_exact_mut(bpp) {
+                    pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing colour component"))?.copy_from_slice(value);
+                }
             }
         }
         if let Some((src, values)) = shifted {
@@ -362,23 +382,18 @@ pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy
             for (y, row) in values.chunks_exact(sw * bpp).enumerate() {
                 let base = ((oy + y) * tile_width + ox) * bpp;
                 let dest = data.get_mut(base..base + sw * bpp).ok_or_else(|| bad("layer.translate", "missing shifted destination row"))?;
-                for (pixel, from) in dest.chunks_exact_mut(bpp).zip(row.chunks_exact(bpp)) {
-                    let sample = from.get(offset..end).ok_or_else(|| bad("layer.translate", "missing source component"))?;
-                    pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing destination component"))?.copy_from_slice(sample);
+                for &offset in &offsets {
+                    let end = offset + bytes;
+                    for (pixel, from) in dest.chunks_exact_mut(bpp).zip(row.chunks_exact(bpp)) {
+                        let sample = from.get(offset..end).ok_or_else(|| bad("layer.translate", "missing source component"))?;
+                        pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing destination component"))?.copy_from_slice(sample);
+                    }
                 }
             }
         }
     }
     surf.prune();
     Ok(())
-}
-
-/// The single colour component the Move tool targets.
-pub(crate) fn targeted_color(s: &Session) -> Option<usize> {
-    match s.active()?.channel_view.target {
-        ChannelTarget::Color(k) => Some(k),
-        _ => None,
-    }
 }
 
 /// Clear (Delete) with colour channel `k` of layer `id` targeted (#2720): fill the selected area

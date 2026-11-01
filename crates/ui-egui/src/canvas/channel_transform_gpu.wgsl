@@ -1,7 +1,10 @@
-// Native samples stay immutable. A transformed scalar is merged into just one component.
+// Native samples stay immutable. Only the captured colour set is replaced.
+// Rust specializes this header to vec4 / 3 for a set; all interpolation stays shared.
+alias Sample = vec2<f32>;
+const COMPONENTS: u32 = 1u;
 struct Params {
     h0: vec4<f32>, h1: vec4<f32>, h2: vec4<f32>,
-    size: vec4<f32>, rect: vec4<f32>, view: vec4<f32>, opts: vec4<f32>, bounds: vec4<f32>,
+    size: vec4<f32>, rect: vec4<f32>, view: vec4<f32>, opts: vec4<f32>, bounds: vec4<f32>, fill: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -19,29 +22,51 @@ fn quant(x: f32) -> f32 {
     if p.opts.z == 0.0 { return x; }
     return floor(clamp(x, 0.0, 1.0) * p.opts.z + 0.5) / p.opts.z;
 }
-fn lifted(pos: vec2<i32>, repeat_edge: bool) -> vec2<f32> {
+fn color_index(slot: u32) -> u32 {
+    if COMPONENTS == 1u { return u32(p.size.z); }
+    return slot;
+}
+fn background(c: u32) -> f32 {
+    if COMPONENTS == 1u { return p.size.w; }
+    return p.fill[c];
+}
+fn pack(value: Sample) -> vec4<f32> {
+    var out = vec4(0.0);
+    for (var i = 0u; i <= COMPONENTS; i++) { out[i] = value[i]; }
+    return out;
+}
+fn unpack(value: vec4<f32>) -> Sample {
+    var out = Sample(0.0);
+    for (var i = 0u; i <= COMPONENTS; i++) { out[i] = value[i]; }
+    return out;
+}
+fn lifted(pos: vec2<i32>, repeat_edge: bool) -> Sample {
     var at = pos;
     if repeat_edge { at = clamp(at, vec2<i32>(p.rect.xy), vec2<i32>(p.rect.zw) - vec2(1)); }
     let xy = vec2<f32>(at);
-    if any(at < vec2(0)) || any(at >= vec2<i32>(p.size.xy)) || any(xy < p.rect.xy) || any(xy >= p.rect.zw) { return vec2(0.0); }
+    if any(at < vec2(0)) || any(at >= vec2<i32>(p.size.xy)) || any(xy < p.rect.xy) || any(xy >= p.rect.zw) { return Sample(0.0); }
     let alpha = quant(textureLoad(selection, at, 0).r);
-    return vec2(textureLoad(source, at, 0)[u32(p.size.z)] * alpha, alpha);
+    let pixel = textureLoad(source, at, 0);
+    var value = Sample(0.0);
+    for (var i = 0u; i < COMPONENTS; i++) { value[i] = pixel[color_index(i)] * alpha; }
+    value[COMPONENTS] = alpha;
+    return value;
 }
 fn cubic(t: f32) -> vec4<f32> {
     let t2 = t * t; let t3 = t2 * t;
     // Match transform::bicubic: Keys a = -0.75, including Warp's scalar sampler.
     return vec4(-0.75*t3+1.5*t2-0.75*t, 1.25*t3-2.25*t2+1.0, -1.25*t3+1.5*t2+0.75*t, 0.75*t3-0.75*t2);
 }
-fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> vec2<f32> {
+fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> Sample {
     if p.opts.x == 0.0 { return lifted(vec2<i32>(floor(at + 0.5)), false); }
-    if any(p.rect.zw <= p.rect.xy) { return vec2(0.0); }
-    if repeat_edge && (any(at < p.rect.xy - vec2(1.0)) || any(at > p.rect.zw)) { return vec2(0.0); }
+    if any(p.rect.zw <= p.rect.xy) { return Sample(0.0); }
+    if repeat_edge && (any(at < p.rect.xy - vec2(1.0)) || any(at > p.rect.zw)) { return Sample(0.0); }
     let pos = vec2<i32>(floor(at)); let frac = fract(at);
     // Interior kernels already lie inside the source rectangle; their taps need no clamping.
     let first = pos - select(vec2(0), vec2(1), p.opts.x == 2.0);
     let last = pos + select(vec2(1), vec2(2), p.opts.x == 2.0);
     let clamp_samples = repeat_edge && (any(vec2<f32>(first) < p.rect.xy) || any(vec2<f32>(last) >= p.rect.zw));
-    var value = vec2(0.0);
+    var value = Sample(0.0);
     if p.opts.x == 1.0 {
         value = mix(mix(lifted(pos, clamp_samples), lifted(pos + vec2(1,0), clamp_samples), frac.x), mix(lifted(pos + vec2(0,1), clamp_samples), lifted(pos + vec2(1,1), clamp_samples), frac.x), frac.y);
     } else {
@@ -57,26 +82,38 @@ fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> vec2<f32
         let covered = clamp(distance / footprint + 0.5, vec2(0.0), vec2(1.0));
         value *= covered.x * covered.y;
     }
-    let coverage = clamp(value.y, 0.0, 1.0);
+    let coverage = clamp(value[COMPONENTS], 0.0, 1.0);
     let a = quant(coverage);
-    var gray = 0.0;
-    // The CPU divides the premultiplied sample by the original alpha before clipping it.
-    // Bicubic alpha may overshoot 1; dividing by clipped coverage lightens the sample.
-    if value.y > 0.000001 { gray = quant(value.x / value.y); }
-    return vec2(gray * a, a);
+    var out = Sample(0.0);
+    // Divide by the original alpha: bicubic alpha can overshoot clipped coverage.
+    if value[COMPONENTS] > 0.000001 {
+        for (var i = 0u; i < COMPONENTS; i++) { out[i] = quant(value[i] / value[COMPONENTS]); }
+    }
+    out *= a;
+    out[COMPONENTS] = a;
+    return out;
 }
+
 fn srgb(c: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(max(c, vec3(0.0)), vec3(1.0/2.4)) - 0.055, c * 12.92, c <= vec3(0.0031308));
 }
-fn finish(at: vec2<i32>, transformed: vec2<f32>) -> vec4<f32> {
-    var rgba = textureLoad(source, at, 0);
-    let c = u32(p.size.z); let weight = textureLoad(selection, at, 0).r;
-    let rest = quant(rgba[c] * (1.0-weight) + p.size.w * weight);
-    if p.opts.w == 0.0 { rgba[c] = quant(transformed.x + rest * (1.0-transformed.y)); }
+fn merge_color(at: vec2<i32>, rgba: vec4<f32>, transformed: Sample, slot: u32, c: u32, weight: f32) -> f32 {
+    let fill = background(c);
+    let rest = quant(rgba[c] * (1.0-weight) + fill * weight);
+    var value = rgba[c];
+    if p.opts.w == 0.0 { value = quant(transformed[slot] + rest * (1.0-transformed[COMPONENTS])); }
     if p.opts.w == 2.0 && all(vec2<f32>(at) >= p.bounds.xy) && all(vec2<f32>(at) < p.bounds.zw) {
-        // Move changes only the source layer's content rectangle. Its vacated samples take
-        // the background component; samples outside that rectangle remain untouched.
-        rgba[c] = quant(transformed.x + p.size.w * (1.0-transformed.y));
+        // Move fills vacated samples inside the original layer's content rectangle.
+        value = quant(transformed[slot] + fill * (1.0-transformed[COMPONENTS]));
+    }
+    return value;
+}
+fn finish(at: vec2<i32>, transformed: Sample) -> vec4<f32> {
+    var rgba = textureLoad(source, at, 0);
+    let mask = u32(p.size.z); let weight = textureLoad(selection, at, 0).r;
+    for (var slot = 0u; slot < COMPONENTS; slot++) {
+        let c = color_index(slot);
+        if COMPONENTS == 1u || (mask & (1u << c)) != 0u { rgba[c] = merge_color(at, rgba, transformed, slot, c, weight); }
     }
     rgba.a = clamp(rgba.a * p.view.z, 0.0, 1.0);
     let visible = u32(p.view.x);
@@ -100,7 +137,7 @@ fn finish(at: vec2<i32>, transformed: vec2<f32>) -> vec4<f32> {
     let src = vec2(dot(p.h0.xyz, dst), dot(p.h1.xyz, dst)) / denom - 0.5;
     // Integer translations retain the original nearest-sample path, without coverage work.
     if p.opts.x == 0.0 { return finish(vec2<i32>(v.position.xy), lifted(vec2<i32>(floor(src + 0.5)), false)); }
-    if any(v.position.xy < p.bounds.xy) || any(v.position.xy >= p.bounds.zw) { return finish(vec2<i32>(v.position.xy), vec2(0.0)); }
+    if any(v.position.xy < p.bounds.xy) || any(v.position.xy >= p.bounds.zw) { return finish(vec2<i32>(v.position.xy), Sample(0.0)); }
     var footprint = vec2(1.0);
     if p.opts.x != 0.0 {
         if p.h2.x == 0.0 && p.h2.y == 0.0 {
@@ -124,8 +161,8 @@ fn valid_extent(value: f32) -> f32 {
     if value > 0.000000000001 && value <= 3.4e38 { return value; }
     return 1.0;
 }
-@fragment fn fs_warp(v: Vertex) -> @location(0) vec4<f32> { return vec4(sample_at(v.src - 0.5, vec2(1.0), false), 0.0, 0.0); }
+@fragment fn fs_warp(v: Vertex) -> @location(0) vec4<f32> { return pack(sample_at(v.src - 0.5, vec2(1.0), false)); }
 @fragment fn fs_finish(v: Vertex) -> @location(0) vec4<f32> {
     let at = vec2<i32>(v.position.xy);
-    return finish(at, textureLoad(moved, at, 0).xy);
+    return finish(at, unpack(textureLoad(moved, at, 0)));
 }

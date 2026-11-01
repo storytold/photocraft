@@ -209,16 +209,7 @@ fn live_mixer_captures_selected_components_and_matches_commit_and_replay() {
 fn unsupported_geometric_edits_and_camera_raw_fail_before_modification() {
     let mut s = setup("rgb", 8);
     subset(&mut s);
-    for cmd in [
-        "layer.translate",
-        "select.float",
-        "edit.transform",
-        "edit.transform.rotate90Cw",
-        "edit.contentAwareScale",
-        "edit.puppetWarp",
-        "edit.perspectiveWarp",
-        "filter.cameraRaw",
-    ] {
+    for cmd in ["select.float", "edit.contentAwareScale", "edit.puppetWarp", "edit.perspectiveWarp", "filter.cameraRaw"] {
         let before = surface(&s);
         assert!(!s.is_enabled(cmd), "{cmd}");
         assert!(s.execute(cmd, json!({"dx":2,"dy":3})).is_err(), "{cmd}");

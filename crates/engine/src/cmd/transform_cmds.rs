@@ -786,15 +786,15 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if many.is_some()
         && (!matches!(p.get("layer"), None | Some(Value::Null))
             || !matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels)
-            || crate::channel_transform::color_index(p)?.is_some())
+            || crate::channel_transform::is_color(p))
     {
         return Err(bad("`layers` moves layers: pass it without `layer` or a mask or channel `target`"));
     }
     let explicit = crate::commands::explicit_layer(s, p)?;
     let id = explicit.or(st.active_layer);
     crate::channel_transform::check_locks(&st.doc, id, p)?;
-    let plane = if many.is_some() { None } else { crate::channel_transform::plane(&st.doc, id, p, s.tools.background)? };
-    let lone = plane.as_ref();
+    let planes = if many.is_some() { None } else { crate::channel_transform::planes(&st.doc, id, p, s.tools.background)? };
+    let lone = planes.as_ref().and_then(|planes| planes.first()).map(|(_, surface)| surface);
     let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
         (_, true) => None,
         (Some(id), false) => Some(id),
@@ -844,8 +844,8 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
-    if lone.is_some() {
-        let source = st.doc.selection.as_ref().map_or_else(|| lone.map_or(Rect::EMPTY, Surface::content_bounds), Surface::content_bounds);
+    for (_, surface) in planes.iter().flatten() {
+        let source = st.doc.selection.as_ref().map_or_else(|| surface.content_bounds(), Surface::content_bounds);
         crate::channel_transform::validate_area(source)?;
         let source_corners = [
             [f64::from(source.x0), f64::from(source.y0)],
@@ -864,6 +864,8 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         if b.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
             return Err(bad("channel transform coordinates are out of range"));
         }
+        // Report the user's transform-memory budget before the additional tile-padding cap.
+        check_budget(source, &h, "mask or channel", surface.format())?;
         crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
     }
     let m = h.0;
@@ -871,13 +873,12 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let layers: Vec<u64> = ids.iter().map(|id| id.0).collect();
-    let p = p.clone();
     // A background job when started with `Session::start` (#1015): the warp of a large layer runs
     // on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
         "Free Transform",
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, plane.as_ref(), &h, affine, interp, ctl)),
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, planes.as_deref(), &h, affine, interp, ctl)),
         move |()| json!({"rect": rect, "layers": layers}),
     )
 }
@@ -889,8 +890,7 @@ fn transform_doc(
     doc: &mut Document,
     id: Option<LayerId>,
     ids: &[LayerId],
-    p: &Value,
-    plane: Option<&Surface>,
+    planes: Option<&[(Value, Surface)]>,
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
@@ -901,16 +901,21 @@ fn transform_doc(
     if let Some(sel) = sel.as_ref().filter(|_| !h.is_identity()) {
         check_budget(sel.content_bounds(), h, "selection", sel.format())?;
     }
-    if let Some(surf) = plane {
-        // A captured colour component, raster mask or saved channel transforms by itself.
+    if let Some(planes) = planes {
         if !h.is_identity() {
-            let src = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
-            check_budget(src, h, "mask or channel", surf.format())?;
-            let moved = match &sel {
-                Some(sel) => warp_gray_selected(surf, sel, h, interp)?,
-                None => warp_gray(surf, h, interp)?,
-            };
-            crate::channel_transform::write_plane(doc, id, p, moved)?;
+            for (target, surf) in planes {
+                if ctl.cancelled() {
+                    return Err(EngineError::Cancelled);
+                }
+                let src = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
+                check_budget(src, h, "mask or channel", surf.format())?;
+                let moved = match &sel {
+                    Some(sel) => warp_gray_selected(surf, sel, h, interp)?,
+                    None => warp_gray(surf, h, interp)?,
+                };
+                crate::channel_transform::write_plane(doc, id, target, moved)?;
+            }
+            // Move the outline once, after every plane used the original coverage.
             if let Some(sel) = &doc.selection {
                 doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
             }
@@ -962,7 +967,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (a single colour component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
+        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

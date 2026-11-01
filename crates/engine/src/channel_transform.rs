@@ -1,4 +1,4 @@
-//! Isolated geometric edits of a native colour component, mask or saved channel.
+//! Isolated geometric edits of native colour components, a mask or a saved channel.
 //! Colour components are scalar data: resampling them must never move the layer's alpha.
 
 use photocraft_color::{ColorMode, PixelFormat};
@@ -18,7 +18,7 @@ pub struct Guard {
 }
 
 pub const LOCKED: &str = "Commit or cancel the channel transform before changing its target or document pixels";
-pub const HIDDEN: &str = "Show the selected channel using its eye before starting a transform";
+pub const HIDDEN: &str = "Show each selected channel using its eye before starting a transform";
 
 /// The captured target stays locked until its background commit has ended too.
 pub fn locked(s: &Session) -> bool {
@@ -76,11 +76,7 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
         if target.get("colors").is_some() {
             let count = s.active().map_or(0, |st| crate::channel_cmds::color_count(&st.doc));
             let colors = crate::color_channels::explicit(p, count)?.ok_or_else(|| bad("invalid colour target"))?;
-            if colors.len() != 1 {
-                return Err(bad("Move and transforms on several colour channels are not implemented yet"));
-            }
-            let k = colors.indices().next().ok_or_else(|| bad("no colour channel selected"))?;
-            map.insert("target".into(), json!({"color":k}));
+            map.insert("target".into(), canonical_target(colors));
             return Ok(out);
         }
         let valid = matches!(target.as_str(), Some("pixels" | "mask" | "quickMask"))
@@ -100,10 +96,7 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
     let target = match st.channel_view.target {
         ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter) => json!("mask"),
         ChannelTarget::Color(_) if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => json!("pixels"),
-        ChannelTarget::Color(_) if crate::color_channels::selected(s).is_some_and(|c| c.len() > 1) => {
-            return Err(bad("Move and transforms on several colour channels are not implemented yet"));
-        }
-        ChannelTarget::Color(k) => json!({"color": k}),
+        ChannelTarget::Color(_) => canonical_target(crate::color_channels::selected(s).ok_or_else(|| bad("no colour channel selected"))?),
         ChannelTarget::Alpha(i) => json!({"channel": i}),
         ChannelTarget::LayerMask => json!("mask"),
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
@@ -114,10 +107,77 @@ pub fn params(s: &Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// A colour set shares one geometry; individual planes retain native scalar sampling semantics.
+pub fn is_color(p: &Value) -> bool {
+    p.get("target").is_some_and(|t| t.get("color").is_some() || t.get("colors").is_some())
+}
+
+fn canonical_target(colors: crate::color_channels::ColorChannels) -> Value {
+    if colors.len() == 1 { json!({"color": colors.indices().next().unwrap_or(0)}) } else { colors.params() }
+}
+
+/// Bound the aggregate native source buffers before extraction or opening an interactive box.
+fn source_budget(doc: &Document, layer: Option<LayerId>, colors: crate::color_channels::ColorChannels) -> Result<()> {
+    let id = layer.ok_or_else(|| bad("no active layer"))?;
+    let fmt = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?.format();
+    let bytes = tiled_pixels(doc.bounds()).and_then(|n| n.checked_mul(fmt.sample.bytes() as u64)).and_then(|n| n.checked_mul(colors.len() as u64));
+    if bytes.is_none_or(|n| n > 512 * 1024 * 1024) {
+        return Err(bad("channel transform sources exceed the 512 MiB working buffer limit"));
+    }
+    Ok(())
+}
+
+/// Captured scalar sources share geometry and the original selection; the edit transaction
+/// publishes their writes together or discards them all on failure.
+pub(crate) fn planes(doc: &Document, layer: Option<LayerId>, p: &Value, background: [f32; 4]) -> Result<Option<Vec<(Value, Surface)>>> {
+    if let Some(colors) = crate::color_channels::explicit(p, crate::channel_cmds::color_count(doc))? {
+        source_budget(doc, layer, colors)?;
+        let mut out = Vec::new();
+        for k in colors.indices() {
+            let mut target = p.clone();
+            target["target"] = json!({"color": k});
+            let source = plane(doc, layer, &target, background)?.ok_or_else(|| bad("missing transform channel"))?;
+            out.push((target, source));
+        }
+        Ok(Some(out))
+    } else {
+        Ok(plane(doc, layer, p, background)?.map(|source| vec![(p.clone(), source)]))
+    }
+}
+
+/// Integer Move of selected colour samples, with one selection-outline update.
+pub(crate) fn move_selected_colors(
+    doc: &mut Document,
+    layer: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+) -> Result<()> {
+    let params = json!({"target": colors.params()});
+    check_locks(doc, Some(layer), &params)?;
+    let selection = doc.selection.clone().ok_or_else(|| bad("no selected pixels"))?;
+    let bounds = selection.content_bounds();
+    validate_area(bounds)?;
+    if [f64::from(bounds.x0) + f64::from(dx), f64::from(bounds.x1) + f64::from(dx), f64::from(bounds.y0) + f64::from(dy), f64::from(bounds.y1) + f64::from(dy)]
+        .iter()
+        .any(|v| v.abs() > f64::from(1 << 28))
+    {
+        return Err(bad("selected channel move coordinates are out of range"));
+    }
+    let h = photocraft_algo::transform::Homography([1.0, 0.0, f64::from(dx), 0.0, 1.0, f64::from(dy), 0.0, 0.0, 1.0]);
+    for (target, plane) in planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))? {
+        let moved = crate::transform_cmds::warp_gray_selected(&plane, &selection, &h, photocraft_algo::transform::Interp::Nearest)?;
+        write_plane(doc, Some(layer), &target, moved)?;
+    }
+    doc.selection = Some(selection.translated(dx, dy, bounds));
+    Ok(())
+}
+
 pub fn color_index(p: &Value) -> Result<Option<usize>> {
     let Some(target) = p.get("target") else { return Ok(None) };
     let index = if let Some(colors) = target.get("colors") {
-        let values = colors.as_array().filter(|v| v.len() == 1).ok_or_else(|| bad("transforms require one colour channel"))?;
+        let values = colors.as_array().filter(|v| v.len() == 1).ok_or_else(|| bad("a scalar plane requires one colour channel"))?;
         values.first()
     } else {
         target.get("color")
@@ -128,8 +188,9 @@ pub fn color_index(p: &Value) -> Result<Option<usize>> {
 /// Whether the channel's Channels-panel eye is currently on.
 pub fn visible(s: &Session, p: &Value) -> Result<bool> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    if let Some(k) = color_index(p)? {
-        return Ok(st.channel_view.color_visible(k) && crate::mask_view_cmds::current(st).is_none_or(|v| v.mode != crate::mask_view_cmds::MaskViewMode::Gray));
+    if let Some(colors) = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&st.doc))? {
+        return Ok(colors.indices().all(|k| st.channel_view.color_visible(k))
+            && crate::mask_view_cmds::current(st).is_none_or(|v| v.mode != crate::mask_view_cmds::MaskViewMode::Gray));
     }
     Ok(match crate::channel_cmds::target_of(p) {
         crate::channel_cmds::Target::Mask => crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter),
@@ -177,13 +238,14 @@ pub fn source_bounds(doc: &Document, layer: Option<LayerId>, p: &Value) -> Resul
     if let Some(selection) = &doc.selection {
         validate_area(selection.content_bounds())?;
     }
-    if let Some(k) = color_index(p)? {
+    if let Some(colors) = crate::color_channels::explicit(p, crate::channel_cmds::color_count(doc))? {
+        source_budget(doc, layer, colors)?;
         let id = layer.ok_or_else(|| bad("no active layer"))?;
         let surface = doc
             .layer(id)
             .and_then(|l| if let LayerContent::Raster(s) = &l.content { Some(s) } else { None })
             .ok_or_else(|| bad("individual colour transforms require a raster layer"))?;
-        if k >= surface.format().mode.color_channels() {
+        if colors.indices().any(|k| k >= surface.format().mode.color_channels()) {
             return Err(bad("colour channel index is out of range"));
         }
         validate_area(doc.bounds())?;
@@ -197,16 +259,31 @@ pub fn source_bounds(doc: &Document, layer: Option<LayerId>, p: &Value) -> Resul
         .transpose()
 }
 
-/// Reject enormous scalar buffers before a resampler allocates them.
+/// Tile padding matters for long, thin frames: one million pixels in a single row
+/// can otherwise materialize hundreds of millions of stored scalar samples.
+fn tiled_pixels(r: Rect) -> Option<u64> {
+    if r.is_empty() {
+        return Some(0);
+    }
+    let side = i64::from(photocraft_geom::TILE_SIZE);
+    let cols = u64::try_from((i64::from(r.x1) - 1).div_euclid(side) - i64::from(r.x0).div_euclid(side) + 1).ok()?;
+    let rows = u64::try_from((i64::from(r.y1) - 1).div_euclid(side) - i64::from(r.y0).div_euclid(side) + 1).ok()?;
+    cols.checked_mul(rows)?.checked_mul((side as u64).checked_mul(side as u64)?)
+}
+
+/// Reject enormous scalar buffers, including tile padding, before resampling.
 pub(crate) fn validate_area(r: Rect) -> Result<()> {
     if u64::from(r.width()).saturating_mul(u64::from(r.height())) > 100_000_000 {
         return Err(bad("channel transform exceeds the 100 megapixel working area limit"));
+    }
+    if tiled_pixels(r).is_none_or(|n| n > 128 * 1024 * 1024) {
+        return Err(bad("channel transform working area needs too much memory; use a smaller frame or selection"));
     }
     Ok(())
 }
 
 pub fn bounds(doc: &Document, plane: &Surface, p: &Value) -> Result<Rect> {
-    Ok(if color_index(p)?.is_some() {
+    Ok(if is_color(p) {
         doc.selection.as_ref().map_or(doc.bounds(), |s| s.content_bounds().intersect(&doc.bounds()))
     } else if let Some(selection) = &doc.selection {
         // Default-valued selected mask/channel samples move too, so the frame must contain them.
@@ -218,14 +295,14 @@ pub fn bounds(doc: &Document, plane: &Surface, p: &Value) -> Result<Rect> {
 
 /// Check geometric/pixel locks without interpreting a Background's structural lock as a user lock.
 pub fn check_locks(doc: &Document, layer: Option<LayerId>, p: &Value) -> Result<()> {
-    if color_index(p)?.is_none() && !crate::commands::is_mask_target(p) {
+    if !is_color(p) && !crate::commands::is_mask_target(p) {
         return Ok(());
     }
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let mut copy = doc.clone();
     crate::extra_cmds::background_to_layer(&mut copy, id);
     let locks = copy.effective_locks(id);
-    if locks.all || locks.position || (color_index(p)?.is_some() && locks.pixels) {
+    if locks.all || locks.position || (is_color(p) && locks.pixels) {
         return Err(bad("the target layer is locked"));
     }
     Ok(())
@@ -266,3 +343,6 @@ pub fn write_plane(doc: &mut Document, layer: Option<LayerId>, p: &Value, plane:
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod set_tests;

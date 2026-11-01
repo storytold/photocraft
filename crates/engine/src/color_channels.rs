@@ -86,7 +86,9 @@ pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
     if id == "layer.translate" && p.get("target").is_none() && p.get("layer").is_some_and(|v| !v.is_null()) {
         return None;
     }
-    let colors = match target(s, p) {
+    // Again on a Copy accepts no target parameter; its operation follows the panel.
+    let effective = if id == "edit.transform.againCopy" { &Value::Null } else { p };
+    let colors = match target(s, effective) {
         Ok(Some(c)) => c,
         Ok(None) => return None,
         Err(e) => return Some(e.to_string()),
@@ -111,20 +113,17 @@ pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
     if colors.len() < 2 {
         return None;
     }
-    if id.starts_with("edit.transform")
-        || matches!(
-            id,
-            "layer.translate"
-                | "select.float"
-                | "edit.freeTransform"
-                | "edit.contentAwareScale"
-                | "edit.puppetWarp"
-                | "edit.perspectiveWarp"
-                | "layer.smartObjects.puppetWarp"
-                | "layer.smartObjects.perspectiveWarp"
-        )
-    {
-        return Some("Move and transforms on several colour channels are not implemented yet".into());
+    if matches!(
+        id,
+        "select.float"
+            | "edit.transform.againCopy"
+            | "edit.contentAwareScale"
+            | "edit.puppetWarp"
+            | "edit.perspectiveWarp"
+            | "layer.smartObjects.puppetWarp"
+            | "layer.smartObjects.perspectiveWarp"
+    ) {
+        return Some("This operation does not support a selected colour set".into());
     }
     if id == "filter.cameraRaw" {
         return Some("Camera Raw requires the composite or one colour channel".into());

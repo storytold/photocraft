@@ -4,7 +4,7 @@ use photocraft_doc::{LayerMask, Size};
 use photocraft_geom::warp::{BezierMesh, Warp};
 use std::sync::Arc;
 
-fn session(mode: ColorMode, depth: SampleType) -> Session {
+pub(super) fn session(mode: ColorMode, depth: SampleType) -> Session {
     let mut s = Session::new();
     let mut doc = Document::with_background("channels", Size::new(12, 8), mode, depth, Color::WHITE);
     let fmt = doc.pixel_format();
@@ -24,12 +24,12 @@ fn session(mode: ColorMode, depth: SampleType) -> Session {
     s
 }
 
-fn surface(s: &Session) -> &Surface {
+pub(super) fn surface(s: &Session) -> &Surface {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap()
 }
 
-fn selection(s: &mut Session, kind: u8) {
+pub(super) fn selection(s: &mut Session, kind: u8) {
     match kind {
         1 => {
             s.execute("select.all", json!({})).unwrap();
@@ -308,7 +308,7 @@ fn prechecks_cannot_bypass_the_captured_channel_target() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn wait_for_job(s: &mut Session, job: crate::jobs::JobId) -> crate::jobs::JobEvent {
+pub(super) fn wait_for_job(s: &mut Session, job: crate::jobs::JobId) -> crate::jobs::JobEvent {
     let started = std::time::Instant::now();
     loop {
         if let Some(event) = s.poll_jobs().into_iter().find(|event| event.id == job) {
@@ -926,14 +926,17 @@ fn preset_selection_pivots_preserve_explicit_layer_and_colour_target_precedence(
 }
 
 #[test]
-fn selected_colour_sets_refuse_geometry_but_explicit_targets_and_layers_keep_precedence() {
+fn selected_colour_sets_and_explicit_targets_keep_layer_precedence() {
     let mut s = session(ColorMode::Rgb, SampleType::U8);
     s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
     let before = s.active().unwrap().doc.clone();
     for command in ["edit.transform", "edit.transform.warp", "edit.transform.flipHorizontal"] {
-        assert!(!s.is_enabled(command), "{command}");
-        assert!(s.execute(command, json!({"dx":1})).is_err());
-        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(s.is_enabled(command), "{command}");
+        let p = if command == "edit.transform.warp" { json!({"style":"arc","bend":10}) } else { json!({"dx":1}) };
+        s.precheck(command, &p).unwrap();
+        s.execute(command, p).unwrap();
+        s.undo();
+        assert_eq!(surface(&s), before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap());
     }
     let id = s.active().unwrap().active_layer.unwrap();
     let p = json!({"layer":id.0,"matrix":[1,0,0,1,1,0],"interpolation":"nearest"});

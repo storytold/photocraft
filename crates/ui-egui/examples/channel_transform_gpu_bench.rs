@@ -26,16 +26,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    for case in ["composite", "red-all-visible", "red-only"] {
+    let cases = if args.iter().any(|a| a == "--sets") {
+        vec!["composite", "red-all-visible", "red-only", "red-blue-all-visible", "red-blue-only"]
+    } else {
+        vec!["composite", "red-all-visible", "red-only"]
+    };
+    for case in cases {
         // The harness owns managed texture IDs; each context needs a fresh renderer.
         let rs = egui_kittest::wgpu::create_render_state(photocraft_ui_egui::gpu_canvas::wgpu_setup(), Default::default());
         eprintln!("adapter: {:?}; case={case}; CPU fallback={cpu}", rs.adapter.get_info());
         let mut session = Session::new();
         session.add_document(doc.clone(), None);
-        if case != "composite" {
+        if case.starts_with("red-blue") {
+            session.execute("channel.target", json!({"colors":[0,2]}))?;
+        } else if case != "composite" {
             session.execute("channel.target", json!({"channel":"red"}))?;
         }
-        if case == "red-all-visible" {
+        if case.ends_with("all-visible") {
             for channel in ["red", "green", "blue"] {
                 session.execute("channel.setVisible", json!({"channel":channel,"visible":true}))?;
             }

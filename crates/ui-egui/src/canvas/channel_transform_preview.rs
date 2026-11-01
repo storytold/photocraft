@@ -170,7 +170,7 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     if let Some(gpu) = &app.gpu
         && gpu.health().is_ok()
         && fast_view
-        && t.target.as_ref().is_some_and(|t| t.get("color").is_some())
+        && photocraft_engine::channel_transform::is_color(&json!({"target":t.target}))
     {
         if !preview.gpu_attempted {
             preview.gpu = crate::channel_transform_gpu::Preview::new(gpu, &preview.base, preview.layer, preview.background);
@@ -526,9 +526,10 @@ mod tests {
                 let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, fill).expect("GPU colour fast path");
                 let initial = a.ui.transform.clone().unwrap();
                 for (geometry, interpolation) in (0..9).flat_map(|g| ["nearest", "bilinear", "bicubic"].map(|i| (g, i))) {
-                    for component in 0..3 {
+                    for component in 1u32..8 {
                         let mut t = initial.clone();
-                        t.target = Some(json!({"color":component}));
+                        let colors: Vec<_> = (0..3).filter(|k| component & (1 << k) != 0).collect();
+                        t.target = Some(if let [k] = colors.as_slice() { json!({"color":k}) } else { json!({"colors":colors}) });
                         t.interpolation = interpolation.into();
                         match geometry {
                             1 => t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]),
@@ -636,7 +637,7 @@ mod tests {
         assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none());
     }
 
-    fn app() -> PhotocraftApp {
+    pub(super) fn app() -> PhotocraftApp {
         let mut session = Session::new();
         let mut doc = Document::with_background("channel preview", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
         let s = doc.layers[0].surface_mut().unwrap();
@@ -1360,3 +1361,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod set_tests;

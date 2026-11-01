@@ -286,7 +286,7 @@ fn average(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
-const TRANSFORM_TARGET: &str = r#"{"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
+const TRANSFORM_TARGET: &str = r#"{"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry; scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
 
 /// Flips and turns about the centre of the box Free Transform would open: with a selection
 /// limiting the transform it is the selection's own bounds, as in Photoshop, so Select All
@@ -308,7 +308,7 @@ fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         return Err(EngineError::Other("nothing to transform".into()));
     }
     // Integer offsets keep these exact pixel permutations on the grid (nearest sampling).
-    let (sx, sy) = ((b.x0 + b.x1) as f64, (b.y0 + b.y1) as f64);
+    let (sx, sy) = (f64::from(b.x0) + f64::from(b.x1), f64::from(b.y0) + f64::from(b.y1));
     let (cx, cy) = (sx / 2.0, sy / 2.0);
     let m: [f64; 6] = match kind {
         "rotate180" => [-1.0, 0.0, 0.0, -1.0, sx, sy],

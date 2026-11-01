@@ -468,9 +468,10 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     )?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let layer = p.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer);
-    if let Some(plane) = crate::channel_transform::plane(&st.doc, layer, p, s.tools.background)? {
+    if let Some(planes) = crate::channel_transform::planes(&st.doc, layer, p, s.tools.background)? {
+        let plane = &planes.first().ok_or_else(|| bad(cmd, "no transform channels"))?.1;
         crate::channel_transform::check_locks(&st.doc, layer, p)?;
-        let bounds = crate::channel_transform::bounds(&st.doc, &plane, p)?;
+        let bounds = crate::channel_transform::bounds(&st.doc, plane, p)?;
         let mut rect = match p.get("rect") {
             Some(r) => {
                 let r: [f64; 4] = serde_json::from_value(r.clone()).map_err(|_| bad(cmd, "rect must contain four numbers"))?;
@@ -481,7 +482,9 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             }
             None => rect_f(bounds),
         };
-        crate::channel_transform::validate_area(plane.content_bounds())?;
+        for (_, plane) in &planes {
+            crate::channel_transform::validate_area(plane.content_bounds())?;
+        }
         if let Some(sel) = &st.doc.selection {
             crate::channel_transform::validate_area(sel.content_bounds())?;
         }
@@ -508,8 +511,10 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         }
         let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
         s.edit("Warp", |doc, _| {
-            let moved = warp_scalar(&plane, doc.selection.as_ref(), frame, &w, interp, &Interrupt::NONE)?;
-            crate::channel_transform::write_plane(doc, layer, p, moved)?;
+            for (target, plane) in &planes {
+                let moved = warp_scalar(plane, doc.selection.as_ref(), frame, &w, interp, &Interrupt::NONE)?;
+                crate::channel_transform::write_plane(doc, layer, target, moved)?;
+            }
             if let Some(sel) = &doc.selection {
                 doc.selection = Some(warp_scalar(sel, None, frame, &w, Interp::Bilinear, &Interrupt::NONE)?).filter(|s| !s.content_bounds().is_empty());
             }
@@ -752,7 +757,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source box; default = layer content/selection bounds; scalar targets use inline warp bounds when given, otherwise target/selection bounds, and preserve samples outside the box),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest","target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (explicit layer without target transforms the layer; explicit mask transforms alone regardless of linking)} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source box; default = layer content/selection bounds; scalar targets use inline warp bounds when given, otherwise target/selection bounds, and preserve samples outside the box),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest","target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (explicit layer without target transforms the layer; explicit mask transforms alone regardless of linking)} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![

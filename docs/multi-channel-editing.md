@@ -27,17 +27,29 @@ RGB, CMYK and Lab are exercised at 8-bit, 16-bit and 32-bit float depths. Unsele
 encoded samples, including transparency and float NaN payloads, are preserved byte
 for byte. Active pixel selections, including feathering, still constrain editing.
 
-Move and pixel transforms, including Content-Aware Scale and mesh warps, on partial
-sets remain unavailable. Camera Raw requires
+Move, Free Transform, rotate/flip presets and Warp also edit the selected set. One
+box applies the same geometry to every selected native component, including partial
+and feathered selections; the selection outline moves once and the edit has one Undo
+step. Other encoded samples and layer transparency remain unchanged. Starting Free
+Transform preserves all eyes and requires every selected component to be visible.
+The complete target set stays locked until commit/cancel; every eye remains usable,
+including hiding and revealing the selected components. Eye changes survive commit,
+cancel and Undo. Eligible RGB previews cache one source and combine the selected
+components in one GPU pass; different scalar sampling outlines retain the CPU oracle.
+Move drags with a several-component pixel selection use the native CPU preview.
+
+Content-Aware Scale, Puppet/Perspective Warp, floating selections and Free Transform
+a Copy on partial sets remain unavailable. Repeat-transform copies and copy-drag/nudge
+of a set are also refused;
+Copy and Paste can copy the selected native components. Camera Raw requires
 the composite or one colour channel. HDR Toning requires the composite because it flattens
 the document. Filters that generate transparency cannot edit
 colour-only targets. Options that create a new layer, including Remove’s Create a new layer option, also
 require the composite.
 Rasterize a non-raster layer before editing its colour planes.
-Vector path transforms and moving guides remain available. This work is independent
-of [#4648](https://github.com/storytold/photocraft/pull/4648) and
-[#6864](https://github.com/storytold/photocraft/pull/6864); it does not include their
-isolated-channel geometry or remaining scalar-target tone-dialog changes.
+Vector path transforms and moving guides remain available. Channel-set geometry extends [#4648](https://github.com/storytold/photocraft/pull/4648).
+The remaining scalar-target tone-dialog changes are tracked separately in
+[#6864](https://github.com/storytold/photocraft/pull/6864).
 
 ## Automation
 
@@ -282,3 +294,84 @@ after, the stroke paints the mask while the layer's gradient stays intact.
 ![Before: the displayed mask stays white](images/multi-channel-editing/mask-view-before.png)
 
 ![After: the displayed mask receives the stroke](images/multi-channel-editing/mask-view-after.png)
+
+## 2026-11-01: channel-set geometry
+
+The transform branch extends #9274's colour sets to Move, Free Transform, rotate/flip
+and Warp. Native component planes share one geometry and the original selection;
+the selection outline and history are committed once. Aggregate captured colour
+source buffers are capped at 512 MiB including tile padding, in addition to the
+100 MP logical / 128 Mi-pixel padded working-area limits. Extreme aspect ratios
+are rejected before materialization. Eligible RGB previews sample all selected components in one cached GPU pass.
+Different scalar source outlines and other unsupported GPU cases retain CPU sampling.
+The regression matrix compares a set operation with independent single-component
+oracles across modes, depths, selections and geometry, and covers late allocation
+rollback, target/visibility capture, preview/commit and undo. The earlier performance
+measurements above describe drawing/tone/filter work, not this geometry extension.
+
+Synthetic R+B transform captures, with all channels visible initially and a black
+background colour for vacated samples. The target rows stay selected; Green stays
+in place. Hiding R+B keeps Warp controls active and shows the unchanged Green plane.
+
+![Before transforming R+B](images/multi-channel-editing/set-before.png)
+
+![R+B move together; Green remains fixed](images/multi-channel-editing/set-transform.png)
+
+![R+B hidden; Warp controls remain active](images/multi-channel-editing/set-hidden-warp.png)
+
+## Channel-set geometry measurements, 2026-11-01
+
+The extension of #4648 to merged #9274 was compared against the previous PR head
+`edfb403cfc192a341b5e4de1101a43b251d85141`, using identical harness sources on
+both versions. The baseline cannot execute an R+B geometry target; that column
+measures the new feature only. These are **software-rendered** measurements on an
+AMD Ryzen 7 9700X, Rust 1.99.0 release with thin LTO, two Rayon workers and two
+llvmpipe workers. No physical GPU was used. They do not replace the earlier
+hardware measurements or establish a performance budget.
+
+Every fixture is a synthetic 6000 × 4000 RGB8 image without a pixel selection.
+Preview cases use a 1000 × 700 offscreen viewport and include completed rendering
+and readback. CPU preview means the app's CPU fallback, still presented through
+software Vulkan. Six alternating baseline/candidate runs provide 54 measured
+frames per case after preview warmup. The native commit harness runs three times
+per target, with three affine commits and one of each Warp frame per run; it has
+no separate warmup. Commit timers include the command, full-resolution pixel edit
+and history commit, with document creation outside the timer.
+
+Each entry below is **p50 / p95 milliseconds**. Native affine has nine samples;
+each native Warp frame has three, so its p95 is the observed maximum.
+
+| Case | Red before | Red after | R+B after |
+|---|---:|---:|---:|
+| Shader preview (llvmpipe), affine | 19.81 / 20.91 | 19.78 / 20.32 | 19.88 / 22.28 |
+| Shader preview (llvmpipe), Warp | 54.60 / 56.08 | 54.42 / 55.46 | 61.78 / 63.85 |
+| Shader preview (llvmpipe), Move | 19.04 / 19.88 | 18.83 / 19.72 | 19.69 / 20.46 |
+| CPU preview, affine | 70.59 / 76.16 | 70.60 / 75.93 | 121.51 / 125.57 |
+| CPU preview, Warp | 85.31 / 87.47 | 85.64 / 87.58 | 152.59 / 155.88 |
+| CPU preview, Move | 159.94 / 180.18 | 164.71 / 189.37 | 211.63 / 259.52 |
+| Native affine commit | 1019.12 / 1034.25 | 1004.68 / 1013.65 | 2000.81 / 2013.96 |
+| Native full-frame Warp commit | 1193.64 / 1197.93 | 1191.42 / 1195.66 | 2353.13 / 2408.34 |
+| Native inner-frame Warp commit | 391.27 / 403.12 | 389.70 / 391.03 | 765.86 / 778.19 |
+
+The complete results also include whole-layer controls, Red-only and R+B-only
+visibility, plus cold Move frames. See the [summary](benchmarks/channel-set-transforms-20261101/summary.json),
+[raw samples](benchmarks/channel-set-transforms-20261101/samples.jsonl) and
+[environment, source hashes and binary hashes](benchmarks/channel-set-transforms-20261101/environment.json).
+The harnesses are `channel_transform_gpu_bench` (`--sets`, optionally `--cpu`),
+`channel_move_gpu_bench` (`--set`, `--whole`, optionally `--cpu`) and
+`channel_transform_bench` (`--commit-only`, optionally `--set`).
+
+The RGB set shader uses the existing source/selection/moved/output textures and
+resampling passes, replacing the selected components with a bitmask. The uniform
+grows from 128 to 144 bytes; no extra full-image texture or per-component draw pass
+is added. Both variants share the interpolation source: scalar previews retain their
+original `vec2` sampler and sets use `vec4`. Pipelines compile lazily for the required
+variant. CPU Move retains tile-local native copies with fixed sample widths. CPU
+transform commits retain native scalar resampling per selected component, so
+editing two components naturally does more commit work than editing one. Unsupported
+GPU source outlines, other colour modes and selected-set Move drags retain the CPU
+oracle. All untargeted samples and transparency remain protected.
+
+The final command review added a repeat-copy availability guard after measurement;
+the native Move, resampling and GPU sampler sources measured above are unchanged.
+The guard is covered separately by native command and adversarial tests.

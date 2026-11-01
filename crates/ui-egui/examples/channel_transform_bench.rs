@@ -1,5 +1,6 @@
 //! Reproducible 24 MP channel-transform measurements; synthetic pixels, no external assets.
 //! cargo run --release -p photocraft-ui-egui --example channel_transform_bench
+//! Add --set for R+B instead of Red, or --commit-only to omit the interactive preview.
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Size};
 use photocraft_engine::Session;
@@ -9,6 +10,9 @@ use serde_json::json;
 use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args().collect();
+    let set = args.iter().any(|a| a == "--set");
+    let colors = if set { json!({"colors":[0,2]}) } else { json!({"color":0}) };
     let mut doc = Document::with_background("24 MP synthetic channels", Size::new(6000, 4000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     if let Some(surface) = doc.layers.first_mut().and_then(|l| l.surface_mut()) {
         for y in (0..4000).step_by(128) {
@@ -21,10 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for rep in 0..3 {
             let mut session = Session::new();
             session.add_document(doc.clone(), None);
-            let target = if isolated { json!({"color":0}) } else { json!("pixels") };
+            let target = if isolated { colors.clone() } else { json!("pixels") };
             let start = Instant::now();
             session.execute("edit.transform", json!({"target":target,"matrix":[0.9,0,0,0.9,73,41],"interpolation":"bicubic"}))?;
-            println!("24MP isolated={isolated} rep={rep} commit_ms={:.2}", start.elapsed().as_secs_f64() * 1000.0);
+            println!("{}", json!({"case":if isolated { "channel" } else { "composite" },"set":set,"rep":rep,"commit_ms":start.elapsed().as_secs_f64()*1000.0}));
             std::hint::black_box(session.active());
         }
     }
@@ -34,13 +38,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let warp =
             photocraft_geom::warp::Warp::custom(photocraft_geom::warp::BezierMesh::identity(rect, 1, 1).map_points(|p| [p[0] + 73.0, p[1] + 41.0]), rect);
         let start = Instant::now();
-        session.execute("edit.transform.warp", json!({"target":{"color":0},"rect":rect,"warp":warp,"interpolation":"bicubic"}))?;
-        println!("24MP isolated_warp rect={rect:?} commit_ms={:.2}", start.elapsed().as_secs_f64() * 1000.0);
+        session.execute("edit.transform.warp", json!({"target":colors,"rect":rect,"warp":warp,"interpolation":"bicubic"}))?;
+        println!("{}", json!({"case":"warp","set":set,"rect":rect,"commit_ms":start.elapsed().as_secs_f64()*1000.0}));
         std::hint::black_box(session.active());
+    }
+    if args.iter().any(|a| a == "--commit-only") {
+        return Ok(());
     }
     let mut session = Session::new();
     session.add_document(doc, None);
-    session.execute("channel.target", json!({"channel":"red"}))?;
+    session.execute("channel.target", if set { json!({"colors":[0,2]}) } else { json!({"channel":"red"}) })?;
     let mut app = PhotocraftApp::new(session, Services::default());
     app.sync_views();
     let ctx = egui::Context::default();
