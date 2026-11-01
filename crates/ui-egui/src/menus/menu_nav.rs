@@ -36,8 +36,16 @@ struct Aim {
     index: usize,
     /// Where the pointer last was on that row.
     from: Pos2,
+    /// The row's rect, from when the pointer was last on it.
+    rect: Rect,
     /// The pointer was off the row with its submenu still open in the last frame.
     held: bool,
+    /// The pointer reached the submenu: the trip is over, and leaving the submenu for another
+    /// row of this menu doesn't hold it (`from` is where the pointer left the row on the way in).
+    arrived: bool,
+    /// When the pointer last moved (`InputState::time`). Resting is timed from here, not from
+    /// egui's smoothed velocity, which reads "moving" for about 0.1 s after the pointer stops.
+    moved_at: f64,
 }
 
 /// One actionable row of a menu level: a command or a submenu.
@@ -75,6 +83,12 @@ pub struct Nav {
     pub bar_bottom: Option<f32>,
     /// The visible (scrolled) part of each level.
     pub(crate) views: Vec<Rect>,
+    /// [`Self::views`] and each level's row rects as the frame before left them: a level's own
+    /// view is only known once its rows are drawn (and its submenu's once that is), and a
+    /// submenu's rows are dropped when its parent starts drawing, so the tests made while drawing
+    /// them use these.
+    last_views: Vec<Rect>,
+    last_rows: Vec<Vec<Rect>>,
     /// The full height of each level's rows (taller than its view when it scrolls).
     pub(crate) contents: Vec<f32>,
     /// Per level: the row its open submenu hangs from (level 0 has none). From the frame
@@ -136,7 +150,12 @@ impl Nav {
     }
 
     /// Start drawing `level`: forget its rows from before, and every deeper level's.
-    fn begin_level(&mut self, level: usize, root: Id) {
+    fn begin_level(&mut self, ui: &Ui, level: usize, root: Id) {
+        if level == 0 {
+            self.last_views = self.views.clone();
+            self.last_rows = self.rows.iter().map(|rows| rows.iter().map(|r| r.rect).collect()).collect();
+        }
+        self.follow_pointer(ui, level);
         self.rows.truncate(level);
         self.rows.resize(level + 1, Vec::new());
         self.roots.truncate(level);
@@ -145,6 +164,26 @@ impl Nav {
         self.views.resize(level + 1, Rect::NOTHING);
         self.contents.truncate(level);
         self.contents.resize(level + 1, 0.0);
+    }
+
+    /// Before `level`'s rows are drawn: the pointer having moved onto one of them (where they were
+    /// last frame) highlights it now, not once that row is drawn, so a row drawn before it (the
+    /// one above, stepping down) isn't drawn highlighted a frame longer. Where rows touch, the
+    /// lower one wins, as in egui's hit test. Not while the pointer heads for the open submenu of
+    /// the highlighted row: [`Self::hold`] keeps that row highlighted, and it went dark for a
+    /// frame in between. When that submenu is let go (the pointer rested), the row under the
+    /// pointer takes the highlight now too, moving or not: both rows were lit for a frame.
+    fn follow_pointer(&mut self, ui: &Ui, level: usize) {
+        let held = self.held_open(ui, level);
+        let moved = ui.ctx().input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+        if held == Some(true) || !(moved || held == Some(false)) || !self.last_views.get(level).is_some_and(|v| pointer_on(ui, *v)) {
+            return;
+        }
+        let under = self.last_rows.get(level).and_then(|rects| rects.iter().rposition(|r| pointer_on(ui, *r)));
+        if let Some(i) = under.filter(|&i| self.highlighted(level) != Some(i)) {
+            self.set_hi(level, Some(i));
+            self.level = level;
+        }
     }
 
     /// Draw a row of `level` with `add`, highlighted like a hovered row when the keyboard (or the
@@ -161,8 +200,8 @@ impl Nav {
     ) -> R {
         let i = self.rows.get(level).map_or(usize::MAX, Vec::len);
         // While a submenu is kept open for the pointer heading to it, its row stays lit and the
-        // rows crossed on the way don't light up.
-        let held = self.aims.get(level).and_then(Option::as_ref).filter(|a| a.held).map(|a| a.index);
+        // rows crossed on the way don't light up; not in the frame it's let go.
+        let held = self.aims.get(level).and_then(Option::as_ref).filter(|a| a.held).map(|a| a.index).filter(|_| self.held_open(ui, level) != Some(false));
         let lit = enabled && (held == Some(i) || held.is_none() && self.highlighted(level) == Some(i));
         let saved = (ui.visuals().widgets.inactive, ui.visuals().widgets.hovered);
         if lit {
@@ -198,6 +237,12 @@ impl Nav {
         let Some(p) = r.ctx.pointer_hover_pos() else { return };
         let was_held = self.aims.get(level).and_then(Option::as_ref).is_some_and(|a| a.row == r.id && a.held);
         let held = self.hold(level, index, root, open, p, r);
+        let sub = SubMenu::id_from_widget_id(r.id);
+        if open == Some(sub) && MenuState::from_id(&r.ctx, root, |s| s.open_item) != Some(sub) {
+            // Closed this frame (by egui or the hold), after it was drawn: draw the next frame
+            // without it, also with the pointer resting, when nothing else asks for one.
+            r.ctx.request_repaint();
+        }
         if was_held && !held {
             // Let go: the row under the pointer takes the highlight, moving or not.
             self.follow = Some(level);
@@ -209,6 +254,8 @@ impl Nav {
         let ctx = &r.ctx;
         let sub = SubMenu::id_from_widget_id(r.id);
         let target = self.views.get(level + 1).copied();
+        // On this menu's rows or separators, not its border (egui's own test for "on the menu").
+        let on_rows = ctx.layer_id_at(p) == Some(r.layer_id) && self.last_views.get(level).is_some_and(|v| v.contains(p));
         let Some(slot) = self.aims.get_mut(level) else { return false };
         if open != Some(sub) {
             if slot.as_ref().is_some_and(|a| a.row == r.id) {
@@ -216,29 +263,70 @@ impl Nav {
             }
             return false;
         }
-        if r.interact_rect.contains(p) {
-            *slot = Some(Aim { row: r.id, index, from: p, held: false });
+        let (now, moved) = ctx.input(|i| (i.time, i.pointer.delta() != egui::Vec2::ZERO));
+        if on_row(r.interact_rect, p) {
+            *slot = Some(Aim { row: r.id, index, from: p, rect: r.interact_rect, held: false, arrived: false, moved_at: now });
             return false;
         }
         let Some(aim) = slot.as_mut().filter(|a| a.row == r.id) else { return false };
-        // Off its row with the submenu still open (egui keeps it while the pointer moves straight
-        // at it): the row stays lit.
-        aim.held = true;
-        if MenuState::from_id(ctx, root, |s| s.open_item) == Some(sub) {
+        if moved {
+            aim.moved_at = now;
+        }
+        let kept = MenuState::from_id(ctx, root, |s| s.open_item) == Some(sub);
+        // Off this menu's rows (on the submenu, the menu's border, or anywhere else): egui
+        // decides, and the row stays lit while the submenu is open.
+        if kept && !on_rows {
+            aim.arrived |= target.is_some_and(|t| t.contains(p));
+            aim.held = true;
             return true;
         }
         aim.held = false;
-        // A click or a key closes menus as usual; so does leaving the submenu's direction, or
-        // resting on another row.
-        let (acted, rest) = ctx.input(|i| (i.pointer.any_pressed() || i.pointer.any_click() || !i.keys_down.is_empty(), i.pointer.time_since_last_movement()));
-        let Some(target) = target else { return false };
-        if acted || rest >= AIM_REST || !heading(aim.from, p, target) {
+        // On another row of this menu, the submenu stays only while the pointer heads for it,
+        // also when egui kept it: egui's own check counts a pointer moving straight up or down
+        // beside the submenu as moving toward it (its ray test skips the axis the pointer doesn't
+        // move along), and judges the direction over the last 0.1 s, so a slide toward the arrow
+        // and then a step down still reads as heading for it. A click or a key closes menus as
+        // usual; so does resting on the other row.
+        let rest = (now - aim.moved_at) as f32;
+        if aim.arrived || !keeps(ctx, aim.from, p, target, rest) {
+            if kept {
+                MenuState::from_id(ctx, root, |s| s.open_item = None);
+            }
             return false;
         }
-        MenuState::from_id(ctx, root, |s| s.open_item = Some(sub));
+        if !kept {
+            MenuState::from_id(ctx, root, |s| s.open_item = Some(sub));
+        }
         aim.held = true;
         ctx.request_repaint_after_secs(AIM_REST - rest);
         true
+    }
+
+    /// Is the pointer off the row `ui` draws next in `level`, whose submenu is open, on another
+    /// row or a separator of this menu? The row is then drawn highlighted while the pointer heads
+    /// for the submenu and plain once it closes, not in the open-submenu style, which is for the
+    /// pointer (or the keyboard) in the submenu: the row flashed gray for a frame when the pointer
+    /// stepped onto a separator or the next row, or came back out of the submenu onto another row.
+    pub(crate) fn elsewhere_in_menu(&self, ui: &Ui, level: usize) -> bool {
+        self.aims.get(level).and_then(Option::as_ref).is_some_and(|a| a.row == ui.next_auto_id()) && self.held_open(ui, level).is_some()
+    }
+
+    /// With the pointer off the row of `level` whose submenu is open, onto this menu's other rows
+    /// or separators (its view, on `ui`'s layer): does that submenu stay open this frame
+    /// ([`keeps`], as [`Self::hold`] will find once the row is drawn)? `None` while the pointer is
+    /// on that row, off this menu's rows (its border included), or no submenu of this level is
+    /// open.
+    fn held_open(&self, ui: &Ui, level: usize) -> Option<bool> {
+        let ctx = ui.ctx();
+        let aim = self.aims.get(level).and_then(Option::as_ref)?;
+        let p = ctx.pointer_hover_pos()?;
+        let on_rows = ctx.layer_id_at(p) == Some(ui.layer_id()) && self.last_views.get(level).is_some_and(|v| v.contains(p));
+        if on_row(aim.rect, p) || !on_rows {
+            return None;
+        }
+        let (now, moved) = ctx.input(|i| (i.time, i.pointer.delta() != egui::Vec2::ZERO));
+        let rest = if moved { 0.0 } else { (now - aim.moved_at) as f32 };
+        Some(!aim.arrived && keeps(ctx, aim.from, p, self.last_views.get(level + 1).copied(), rest))
     }
 
     /// After a row is drawn: the pointer moving onto it highlights it; a keyboard move scrolls
@@ -261,6 +349,30 @@ impl Nav {
         if lit && self.reveal && level == self.level {
             r.scroll_to_me(None);
             self.reveal = false;
+        }
+    }
+
+    /// Call with the response of a separator drawn in `level`. A separator is not a row, so nothing
+    /// else takes the highlight when the pointer moves onto it, and the last row would stay lit (a
+    /// native menu clears it). Leaves the highlight alone while a submenu is held open for the
+    /// pointer heading to it, since that row stays lit with its submenu. Once the submenu is let go
+    /// (`follow`), the separator takes the highlight even if the pointer has stopped.
+    pub fn separator(&mut self, level: usize, r: &egui::Response) {
+        let held = self.aims.get(level).and_then(Option::as_ref).is_some_and(|a| a.held);
+        if held || !r.contains_pointer() {
+            return;
+        }
+        let moved = r.ctx.input(|inp| inp.pointer.delta() != egui::Vec2::ZERO);
+        let follow = self.follow == Some(level);
+        if !(moved || follow) {
+            return;
+        }
+        if follow {
+            self.follow = None;
+        }
+        if self.highlighted(level).is_some() {
+            self.set_hi(level, None);
+            r.ctx.request_repaint();
         }
     }
 
@@ -403,6 +515,21 @@ impl Nav {
     }
 }
 
+/// Is the pointer at `p` on a row at `rect`? Its bottom edge is the next row's (rows touch), as
+/// in egui's hit test, where the row drawn later, the lower one, wins: otherwise the pointer on
+/// that shared edge is on both rows, and one row is highlighted while the other's submenu stays.
+pub(crate) fn on_row(rect: Rect, p: Pos2) -> bool {
+    rect.x_range().contains(p.x) && p.y >= rect.top() && p.y < rect.bottom()
+}
+
+/// Does a submenu at `target` stay open with the pointer at `p` on another part of its parent
+/// menu, having left the submenu's row at `from` and rested `rest` seconds? Only while it heads
+/// for the submenu and hasn't rested [`AIM_REST`]; a click or a key closes menus as usual.
+fn keeps(ctx: &egui::Context, from: Pos2, p: Pos2, target: Option<Rect>, rest: f32) -> bool {
+    let acted = ctx.input(|i| i.pointer.any_pressed() || i.pointer.any_click() || !i.keys_down.is_empty());
+    !acted && rest < AIM_REST && target.is_some_and(|target| heading(from, p, target))
+}
+
 /// Is the pointer at `p`, having left a submenu's row at `from`, heading for the submenu at
 /// `target`? It is while it stays inside the triangle from `from` to the submenu's near edge
 /// (with [`AIM_SLACK`] above and below), as macOS menus judge it.
@@ -465,7 +592,7 @@ pub fn level_room_in(screen: Rect, visible: Rect, bar_bottom: Option<f32>, depth
 pub fn level(ui: &mut Ui, depth: usize, nav: &mut Nav, rows: impl FnOnce(&mut Ui, &mut Nav)) {
     let ctx = ui.ctx().clone();
     let level = depth.saturating_sub(1);
-    nav.begin_level(level, find_menu_root(ui).scope_id);
+    nav.begin_level(ui, level, find_menu_root(ui).scope_id);
     let screen = ctx.content_rect();
     // Only the part of the window on its monitor, clear of the taskbar, can be seen (#315).
     let visible = crate::work_area::visible_rect(&ctx);
