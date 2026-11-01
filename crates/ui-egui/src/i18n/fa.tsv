@@ -2943,3 +2943,11 @@ layerLabel	Violet	بنفش
 @plural	{n} step|{n} steps	{n} گام|{n} گام
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} هشدار دیگر برای پیش‌تنظیم قلم‌مو)|{warning} (+{n} هشدار دیگر برای پیش‌تنظیم قلم‌مو)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what} با {n} هشدار|{what} با {n} هشدار
+
+# Color picker, gradient map and font list strings added on main
+	Color Picker	انتخابگر رنگ
+	Recently Used Colors	رنگ‌های اخیراً استفاده‌شده
+	Shapes can't use patterns yet	شکل‌ها هنوز نمی‌توانند از الگو استفاده کنند
+	Solid Color	رنگ یکدست
+	Stop Color	رنگ نقطهٔ توقف
+	Tint Color	رنگ ته‌رنگ
