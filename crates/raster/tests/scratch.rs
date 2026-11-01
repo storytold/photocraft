@@ -9,6 +9,7 @@ static SERIAL: Mutex<()> = Mutex::new(());
 /// Lets a miss evict every pooled byte for the test's lifetime, so sizes can be counted.
 struct NoFloor;
 impl NoFloor {
+    /// Sets the miss floor to zero for this guard's lifetime.
     fn new() -> Self {
         set_miss_floor(0);
         NoFloor
@@ -19,6 +20,7 @@ impl Drop for NoFloor {
         set_miss_floor(DEFAULT_MISS_FLOOR);
     }
 }
+/// Locks the process-wide pool tests against concurrent access.
 fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -33,6 +35,7 @@ impl Drop for Serial {
         set_idle_release(true);
     }
 }
+/// Serializes a test and disables idle release until the guard is dropped.
 fn serial() -> Serial {
     let _lock = lock_serial();
     set_idle_release(false);
@@ -40,6 +43,7 @@ fn serial() -> Serial {
 }
 
 #[test]
+/// Verifies pooled buffers are reused by pointer, retain capacity, and are refilled to the requested length.
 fn reuse_returns_same_capacity_and_refills() {
     let _g = serial();
     release();
@@ -62,6 +66,7 @@ fn reuse_returns_same_capacity_and_refills() {
 }
 
 #[test]
+/// Verifies oversized or non-exact buffers are discarded instead of reused.
 fn too_big_a_buffer_is_not_reused() {
     let _g = serial();
     release();
@@ -80,6 +85,7 @@ fn too_big_a_buffer_is_not_reused() {
 }
 
 #[test]
+/// Verifies exact try-takes reuse a matching buffer and succeed on a miss.
 fn try_take_exact_reuses_and_allocates() {
     let _g = serial();
     release();
@@ -92,6 +98,7 @@ fn try_take_exact_reuses_and_allocates() {
 }
 
 #[test]
+/// Verifies buffers below the pooling threshold are not retained.
 fn small_buffers_are_not_retained() {
     let _g = serial();
     release();
@@ -102,6 +109,7 @@ fn small_buffers_are_not_retained() {
 }
 
 #[test]
+/// Verifies zero-length take and give operations remain empty.
 fn zero_length() {
     let _g = serial();
     assert!(take(0, 0u8).is_empty());
@@ -110,6 +118,7 @@ fn zero_length() {
 }
 
 #[test]
+/// Verifies the byte budget evicts oldest buffers and rejects buffers larger than the budget.
 fn budget_evicts_oldest() {
     let _g = serial();
     release();
@@ -132,6 +141,7 @@ fn budget_evicts_oldest() {
 }
 
 #[test]
+/// Verifies release empties pooled buffers of several element types.
 fn release_empties() {
     let _g = serial();
     give(vec![0u8; 200_000]);
@@ -143,6 +153,7 @@ fn release_empties() {
 }
 
 #[test]
+/// Verifies the usage counter advances for both take and give.
 fn uses_counts_calls() {
     let _g = serial();
     let before = uses();
@@ -151,6 +162,7 @@ fn uses_counts_calls() {
 }
 
 #[test]
+/// Verifies dropping a `Buf` returns its storage to the pool.
 fn buf_returns_on_drop() {
     let _g = serial();
     release();
@@ -164,6 +176,7 @@ fn buf_returns_on_drop() {
 }
 
 #[test]
+/// Verifies concurrent take and give operations preserve initialized values and finish cleanly.
 fn concurrent_smoke() {
     let _g = serial();
     release();
@@ -186,6 +199,7 @@ fn concurrent_smoke() {
 }
 
 #[test]
+/// Verifies budget eviction uses insertion age across different element types.
 fn eviction_is_oldest_first_across_types() {
     let _g = serial();
     release();
@@ -203,6 +217,7 @@ fn eviction_is_oldest_first_across_types() {
 }
 
 #[test]
+/// Verifies reuse chooses the smallest eligible capacity and exact takes require an exact match.
 fn best_fit_picks_the_smallest_fitting_capacity() {
     let _g = serial();
     release();
@@ -225,6 +240,7 @@ fn best_fit_picks_the_smallest_fitting_capacity() {
 }
 
 #[test]
+/// Verifies repeated budget overflow evicts oldest entries across mixed types and capacities.
 fn eviction_walks_oldest_first_through_mixed_types_and_capacities() {
     let _g = serial();
     release();
@@ -262,6 +278,7 @@ fn eviction_walks_oldest_first_through_mixed_types_and_capacities() {
 }
 
 #[test]
+/// Verifies the idle-release worker clears an unused pooled buffer.
 fn idle_pool_is_released_by_the_background_thread() {
     // Idle release stays on here: it is what this test checks.
     let _g = lock_serial();
@@ -277,6 +294,7 @@ fn idle_pool_is_released_by_the_background_thread() {
 }
 
 #[test]
+/// Verifies a miss discards pooled bytes in proportion to its allocation and a hit preserves the pool.
 fn a_miss_drops_as_many_pooled_bytes_as_it_allocates() {
     let _g = serial();
     release();
@@ -298,6 +316,7 @@ fn a_miss_drops_as_many_pooled_bytes_as_it_allocates() {
 }
 
 #[test]
+/// Verifies miss eviction stops when the configured retained-byte floor is reached.
 fn a_miss_keeps_the_floor() {
     let _g = serial();
     release();
@@ -313,6 +332,7 @@ fn a_miss_keeps_the_floor() {
 }
 
 #[test]
+/// Verifies a failed oversized reservation leaves the pool empty.
 fn a_failed_reservation_releases_the_pool() {
     let _g = serial();
     release();
@@ -326,6 +346,7 @@ fn a_failed_reservation_releases_the_pool() {
 }
 
 #[test]
+/// Verifies a successful miss preserves unmatched buffers within the miss floor.
 fn a_successful_miss_keeps_unmatched_pooled_buffers() {
     let _g = serial();
     release();

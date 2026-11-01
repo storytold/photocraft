@@ -15,6 +15,7 @@ struct Quiet {
 }
 
 impl Quiet {
+    /// Locks the test process and disables idle pool release for this guard's lifetime.
     fn new() -> Self {
         let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
         scratch::set_idle_release(false);
@@ -29,6 +30,7 @@ impl Drop for Quiet {
 }
 
 #[test]
+/// Verifies closing one or all documents releases their scratch buffers.
 fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
     let _q = Quiet::new();
     for close in ["file.close", "file.closeAll"] {
@@ -44,6 +46,7 @@ fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
 }
 
 #[test]
+/// Verifies a command that keeps its document does not release unrelated pooled buffers.
 fn commands_that_keep_their_documents_keep_the_pool() {
     let _q = Quiet::new();
     let mut s = Session::new();
@@ -54,6 +57,7 @@ fn commands_that_keep_their_documents_keep_the_pool() {
 }
 
 #[test]
+/// Verifies a cancelled worker releases its document buffers after it exits.
 fn a_cancelled_job_of_a_closed_document_returns_its_buffers_once_it_exits() {
     let _q = Quiet::new();
     let mut s = Session::new();
@@ -70,6 +74,7 @@ fn a_cancelled_job_of_a_closed_document_returns_its_buffers_once_it_exits() {
 }
 
 #[test]
+/// Verifies cancelling a job before document close still releases its buffers.
 fn a_job_cancelled_before_its_document_closes_still_returns_its_buffers() {
     let _q = Quiet::new();
     let mut s = Session::new();
