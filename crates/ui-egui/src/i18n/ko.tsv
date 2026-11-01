@@ -3734,3 +3734,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+	Actual Color	실제 색상
+	Web Color	웹 색상
+	HSB Color	HSB 색상
+	HSL Color	HSL 색상
+	Total Ink	총 잉크
+	Spot Channels	별색 채널
+	Alpha Channels	알파 채널
+	Info Panel Options	정보 패널 옵션
+	Readouts	판독값
+	Total Spot Ink	총 별색 잉크
+	Include in Total Spot Ink	총 별색 잉크에 포함
