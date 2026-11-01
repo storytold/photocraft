@@ -48,7 +48,8 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 }
 
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
-/// options bar's Mode, which is the tool's own brush's.
+/// options bar's Mode, which is the tool's own brush's. For an Eraser with Erase to History they
+/// also carry `eraseToHistory` and the Eraser's Pencil or Block tip.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
     let mut p = json!({"mode": app.session.tools.brush.mode.label()});
     if app.ui.tool == Tool::Eraser && app.ui.tool_options.erase_to_history {
