@@ -701,7 +701,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let stored = n(f, "scale", 100.0);
     let passed = stored.clamp(1.0, 1000.0).round();
     let mut sc = passed as f32;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
         crate::widgets::value_field(ui, &mut sc, 1.0..=1000.0, "%", 70.0).accessible_name(tl!("Scale"));
     });
@@ -714,7 +714,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     let lock = f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true);
     let stored_w = n(f, "width", src_w.max(1.0));
     let mut width = stored_w.clamp(1.0, MAX_PX) as f32;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Width")).color(t.text_dim));
         crate::widgets::value_field(ui, &mut width, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Width"));
     });
@@ -726,7 +726,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
     }
     let stored_h = n(f, "height", src_h.max(1.0));
     let mut height = stored_h.clamp(1.0, MAX_PX) as f32;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Height")).color(t.text_dim));
         crate::widgets::value_field(ui, &mut height, 1.0..=MAX_PX as f32, "px", 70.0).accessible_name(tl!("Height"));
     });
@@ -749,7 +749,7 @@ fn size_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, src_w: f64, src_h:
 /// resampled; the document keeps its pixels).
 fn resample_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Resample")).color(t.text_dim));
         let mut method = resample_method(f, None).unwrap_or(DEFAULT_RESAMPLE).to_string();
         let opts: Vec<(String, &str)> = RESAMPLE.iter().map(|(k, label)| ((*k).to_string(), resample_label(label))).collect();
@@ -824,7 +824,7 @@ fn preset_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
     ui.add_space(8.0);
     let names: Vec<String> = app.session.presets.export_presets.iter().map(|p| p.name.clone()).collect();
     if !names.is_empty() {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
             let mut selected = s(f, "__preset");
             let mut opts = Vec::with_capacity(names.len() + 1);
@@ -944,7 +944,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     f.insert("metadata".into(), json!(m));
                 }
             });
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Color Profile")).color(t.text_dim));
                 let mut profile = s(f, "profile");
                 if profile != "srgb" {
