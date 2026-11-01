@@ -1040,7 +1040,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             if r.is_ok() {
                 crate::remember_new_document(app, &d.fields);
                 // File › New › Recent. Best effort: the document exists either way.
-                let _ = app.run("document.recent.add", json!({"settings": crate::new_doc_ui::document_settings(&d.fields)}));
+                if crate::new_doc_ui::records_recent(&d.fields) {
+                    let _ = app.run("document.recent.add", json!({"settings": crate::new_doc_ui::document_settings(&d.fields)}));
+                }
             }
             r
         }

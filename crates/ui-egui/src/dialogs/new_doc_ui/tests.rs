@@ -902,4 +902,29 @@ mod dialog {
             );
         }
     }
+
+    fn recent_widths(h: &Harness<'static, PhotocraftApp>) -> Vec<u32> {
+        h.state().session.presets.recent_documents.iter().map(|r| r.width).collect()
+    }
+
+    #[test]
+    fn a_document_at_the_clipboard_size_is_not_added_to_recent() {
+        let mut h = harness();
+        let mut f = fields(&h);
+        super::super::set_clipboard(&mut f, 590, 894);
+        set_fields(&mut h, f);
+        enter(&mut h);
+        assert_eq!(created(&h), (590, 894, 72.0));
+        assert!(recent_widths(&h).is_empty(), "the Clipboard card already offers this size");
+
+        // Changing the clipboard size makes it the user's own size, which Recent keeps.
+        h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+        h.run_steps(3);
+        let mut f = fields(&h);
+        super::super::set_clipboard(&mut f, 590, 894);
+        set_fields(&mut h, f);
+        type_into(&mut h, 0, "640");
+        enter(&mut h);
+        assert_eq!(recent_widths(&h), [640]);
+    }
 }
