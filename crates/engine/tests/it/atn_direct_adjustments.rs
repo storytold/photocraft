@@ -431,6 +431,67 @@ fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
     }
 }
 
+/// Full and selected edits agree across tile edges, including the final partial tiles and Undo.
+#[test]
+fn lab_replace_crosses_tile_edges_without_changing_unselected_native_pixels() {
+    let area = photocraft_doc::Rect::new(0, 0, 260, 132);
+    let window = photocraft_doc::Rect::new(127, 127, 130, 130);
+    for depth in [8, 16, 32] {
+        for selected in ["none", "window", "outside"] {
+            let mut s = fixture("lab", depth);
+            s.edit("Known Lab tiles", |doc, active| {
+                doc.size = photocraft_doc::Size::new(260, 132);
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(area, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+                if selected != "none" {
+                    let default = if selected == "outside" { 1.0 } else { 0.0 };
+                    let mut mask = photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[default]);
+                    mask.fill_rect(window, &[1.0 - default]);
+                    doc.selection = Some(mask);
+                }
+                Ok(())
+            })
+            .unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let original = raw(&s);
+            s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+            let after = raw(&s);
+            for (i, (pixel, original)) in after.chunks_exact(4).zip(original.chunks_exact(4)).enumerate() {
+                let inside = (127..130).contains(&(i % 260)) && (127..130).contains(&(i / 260));
+                let changed = selected == "none" || (selected == "window") == inside;
+                if changed {
+                    assert!(pixel[0] > 0.99, "{depth}/{selected} pixel {i}: {pixel:?}");
+                } else {
+                    assert_eq!(pixel, original, "{depth}/{selected} pixel {i}");
+                }
+                assert_eq!(pixel[3], original[3]);
+            }
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
+/// Sparse off-canvas content must not materialize or scan the large transparent gap between its tiles.
+#[test]
+fn lab_replace_visits_only_stored_tiles_when_the_default_is_transparent() {
+    let mut s = fixture("lab", 32);
+    let far = photocraft_doc::Rect::new(100_000, 100_000, 100_001, 100_001);
+    s.edit("Distant Lab pixel", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(far, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let count = before.layer(layer).unwrap().surface().unwrap().tiles().count();
+    s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+    let surface = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+    assert!(surface.read_region(far)[0] > 0.99);
+    assert_eq!(surface.tiles().count(), count);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
 /// Existing RGB replacement and ordinary gradient export retain their native behavior.
 #[test]
 fn legacy_rgb_replace_color_and_ordinary_gradient_exports_are_unchanged() {

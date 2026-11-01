@@ -82,42 +82,72 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     s.edit("Replace Color", |doc, _| {
         let selected = doc.selection.clone();
         let surface = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        let rect = edit_bounds(surface.content_bounds(), selected.as_ref());
-        if rect.is_empty() {
-            return Ok(Value::Null);
-        }
-        let raw = surface.read_region(rect);
-        let mut lab = vec![[0.0, 0.0, 0.0, 1.0]; raw.len() / format.channels()];
-        transform.convert_f32(&raw, format.channels(), lab.as_flattened_mut(), 4, true);
-        for p in &mut lab {
-            let value = [p[0] * 100.0, p[1] * 255.0 - 128.0, p[2] * 255.0 - 128.0];
-            let [l, a, b] = if grid { selection::quantize_lab8(value) } else { value };
-            *p = [l, a, b, p[3]];
-        }
-        let mask = selection::color_range_lab(&lab, rect.width() as usize, &range, fuzz, grid, None);
-        let mut rgba = raw.chunks_exact(format.channels()).map(|p| photocraft_raster::to_rgba(&format, p)).collect::<Vec<_>>();
-        let original_rgba = rgba.clone();
-        tone::replace_color_masked(&mut rgba, &mask, h, sat, l);
-        let mut output = crate::pixels::mix_through_selection(&format, rect, &original_rgba, &rgba, selected.as_ref());
-        // Unmatched native Lab/CMYK values must not take an incidental RGB roundtrip.
-        let width = rect.width() as usize;
-        let row_len = width * format.channels();
-        let mut selection_row = vec![1.0; width];
-        for (y, ((out, original), mask)) in output.chunks_exact_mut(row_len).zip(raw.chunks_exact(row_len)).zip(mask.chunks_exact(width)).enumerate() {
-            if let Some(selected) = selected.as_ref() {
-                selected.sample_row_strided(rect.y0.saturating_add(y as i32), rect.x0, 1, 0, &mut selection_row);
+        let bounds = edit_bounds(surface.content_bounds(), selected.as_ref());
+        // Transparent gaps cannot match. Visit stored tiles instead of the possibly
+        // enormous rectangle between two distant pixels.
+        let stored = if format.alpha && surface.default_pixel().last().is_some_and(|a| a.is_nan() || *a <= 0.0) {
+            let mut tiles = crate::allocation::capacity(surface.tiles().count(), "Replace Color tile coordinates")?;
+            tiles.extend(surface.tiles().map(|(tile, _)| *tile));
+            Some(tiles)
+        } else {
+            None
+        };
+        // Matching and tone changes are pointwise. Tile-sized work also bounds buffers
+        // for full-layer edits, without imposing a new image-size limit.
+        let mut process_tile = |tile: photocraft_geom::TileCoord| -> Result<()> {
+            let rect = tile.rect().intersect(&bounds);
+            if rect.is_empty() {
+                return Ok(());
             }
-            for (x, (((out, original), coverage), selected)) in
-                out.chunks_exact_mut(format.channels()).zip(original.chunks_exact(format.channels())).zip(mask).zip(&selection_row).enumerate()
-            {
-                let index = y * width + x;
-                let unchanged = rgba.get(index).zip(original_rgba.get(index)).is_some_and(|(a, b)| a == b);
-                if *coverage <= 0.0 || *selected <= 0.0 || unchanged {
-                    out.copy_from_slice(original);
+            let mut raw = crate::allocation::read_region(surface, rect, "Replace Color")?;
+            let mut lab = crate::allocation::filled(raw.len() / format.channels(), [0.0, 0.0, 0.0, 1.0], "Replace Color")?;
+            transform.convert_f32(&raw, format.channels(), lab.as_flattened_mut(), 4, true);
+            let width = rect.width() as usize;
+            let mut selection_row = crate::allocation::filled(width, 1.0, "Replace Color")?;
+            let mut changed = false;
+            for (y, (row, lab_row)) in raw.chunks_exact_mut(width * format.channels()).zip(lab.chunks_exact(width)).enumerate() {
+                if let Some(selected) = selected.as_ref() {
+                    selected.sample_row_strided(rect.y0.saturating_add(y as i32), rect.x0, 1, 0, &mut selection_row);
+                }
+                for ((pixel, sample), selected) in row.chunks_exact_mut(format.channels()).zip(lab_row).zip(&selection_row) {
+                    if sample[3].is_nan() || sample[3] <= 0.0 || *selected <= 0.0 {
+                        continue;
+                    }
+                    let value = [sample[0] * 100.0, sample[1] * 255.0 - 128.0, sample[2] * 255.0 - 128.0];
+                    let coverage = if grid {
+                        selection::lab_range_coverage_8bit(selection::quantize_lab8(value), &range, fuzz)
+                    } else {
+                        selection::lab_range_coverage(value, &range, fuzz)
+                    };
+                    if coverage <= 0.0 {
+                        continue;
+                    }
+                    let original = photocraft_raster::to_rgba(&format, pixel);
+                    let mut edited = [original];
+                    tone::replace_color_masked(&mut edited, &[coverage], h, sat, l);
+                    // Unchanged native samples must not take an incidental RGB roundtrip.
+                    if edited[0] == original {
+                        continue;
+                    }
+                    let mixed = std::array::from_fn(|c| original[c] * (1.0 - selected) + edited[0][c] * selected);
+                    photocraft_raster::from_rgba_into(&format, mixed, pixel);
+                    changed = true;
                 }
             }
+            if changed {
+                surface.try_write_region(rect, &raw).map_err(|e| crate::allocation::error("Replace Color", &e.to_string()))?;
+            }
+            Ok(())
+        };
+        if let Some(tiles) = stored {
+            for tile in tiles {
+                process_tile(tile)?;
+            }
+        } else {
+            for tile in bounds.tiles() {
+                process_tile(tile)?;
+            }
         }
-        surface.write_region(rect, &output);
         Ok(Value::Null)
     })
     .map(Some)
