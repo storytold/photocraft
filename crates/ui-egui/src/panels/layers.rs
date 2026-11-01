@@ -261,6 +261,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let held = ctx.data(|d| {
                 d.get_temp::<u64>(egui::Id::unique("layer-drag")).is_some()
                     || d.get_temp::<FxDrag>(fx_drag_key()).is_some()
+                    || d.get_temp::<MaskDrag>(mask_drag_key()).is_some()
                     || d.get_temp::<crate::smart_ui::FilterDrag>(crate::smart_ui::drag_key()).is_some()
             });
             let dragging = held && ctx.input(|i| i.pointer.primary_down());
