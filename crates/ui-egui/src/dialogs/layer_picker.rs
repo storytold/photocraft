@@ -73,7 +73,7 @@ pub fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     let Some(mode) = app.session.active().map(|s| s.doc.mode) else { return };
     let current = armed(app).filter(|(l, _)| *l == layer).map(|(_, p)| p.to_string());
     let mut clicked = None;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         // The swatch is the tone the picker maps the sample to, as in the dialog.
         for ((id, e), (label, tone)) in POINTS.iter().zip([(tl!("Set Black Point"), 0), (tl!("Set Neutral Gray Point"), 128), (tl!("Set White Point"), 255)]) {
             let enabled = crate::adjust_dialog::picker_supported(mode, *e);

@@ -136,7 +136,7 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     }
     (cx, cy) = clamp_center(cx, cy, doc.x, doc.y);
 
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if crate::icons::button(ui, "minus", 22.0, false, tl!("Zoom out")).clicked() {
             zoom = step_zoom(zoom, false);
         }
