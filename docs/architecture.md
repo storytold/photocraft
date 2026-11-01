@@ -414,6 +414,7 @@ psd/src/
   - `tiles/<blake3>.zst`: content-addressed tiles, zstd-compressed.
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
+- **Storage is a trait.** `BundleStore` (read and write) has a ZIP and a directory implementation in the crate; other backends (object storage, #3163) live in their own crates, so no network code enters `format`.
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
 - **PSD is the interchange format,** and `.pcraft` is the lossless native one.
 
