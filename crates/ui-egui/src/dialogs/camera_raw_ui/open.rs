@@ -106,7 +106,7 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpe
     let curve = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
         #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
+        (None, Some(p)) => photocraft_format::read_file(std::path::Path::new(p)).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
         _ => None,
     };
     if let Some(d) = app.camera_raw.as_mut() {
@@ -200,9 +200,9 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         let bytes = match source {
             photocraft_engine::jobs::OpenSource::Bytes(b) => b,
             #[cfg(not(target_arch = "wasm32"))]
-            photocraft_engine::jobs::OpenSource::Path(p) => {
-                std::sync::Arc::new(std::fs::read(&p).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?)
-            }
+            photocraft_engine::jobs::OpenSource::Path(p) => std::sync::Arc::new(
+                photocraft_format::read_file(std::path::Path::new(&p)).map_err(|e| photocraft_engine::EngineError::Other(format!("{p}: {e}")))?,
+            ),
             #[cfg(target_arch = "wasm32")]
             photocraft_engine::jobs::OpenSource::Path(p) => return Err(photocraft_engine::EngineError::Other(format!("{p}: cannot read files here"))),
         };
