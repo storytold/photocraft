@@ -25,7 +25,7 @@ pub(crate) const OPENTYPE_BUTTONS: [(&str, &str, &str); 8] = [
 fn opentype_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::text::CharStyle, full: f32) {
     let cw = cell_width(full, OPENTYPE_BUTTONS.len());
     let mut clicked = None;
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (tag, id, tip) in OPENTYPE_BUTTONS {
             let on = photocraft_engine::type_extra_cmds::feature_on(c, tag);
@@ -160,7 +160,7 @@ fn metric_field(
     let pad = sp.button_padding.x;
     let combo_w = (sp.icon_spacing + sp.icon_width).max(16.0 - 2.0 * pad) + 2.0 * pad;
     let mut chosen = None;
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if let Some(v) = num_field(ui, label, tip, value, range, unit, (width - combo_w).max(24.0)) {
             chosen = Some(MetricChoice::Typed(v));
@@ -295,7 +295,7 @@ fn type_sections_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: boo
         });
         row(ui, &mut |ui| {
             let shown = kerning_label(kerning_at(app).unwrap_or((c.kerning, c.kern)));
-            ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
                 icon_label(ui, "text-cursor", "Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)");
                 if let Some(v) = kerning_field(ui, &shown, w) {
@@ -321,7 +321,7 @@ fn type_sections_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: boo
                 apply(app, ui.ctx(), json!({"baselineShift": v / u}));
             }
             // Colour: label + a swatch filling the rest of the second column.
-            ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
                 let g = ui.painter().layout_no_wrap(tl!("Color").into(), egui::FontId::proportional(12.0), t.text_dim);
                 let lw = g.size().x.max(LABEL_W);
@@ -364,7 +364,7 @@ fn type_sections_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: boo
             ("T", "Strikethrough", c.strikethrough, json!({"strikethrough": !c.strikethrough})),
         ];
         let cw = cell_width(full, toggles.len());
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (i, (glyph, tip, on, props)) in toggles.into_iter().enumerate() {
                 let clicked = toggle_cell(ui, cw, on, tip, |ui, r, col| {
@@ -427,7 +427,7 @@ fn type_sections_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: boo
             let shape = app.session.active().and_then(|s| text_layer(&s.doc, LayerId(layer)).map(|t| t.shape.clone()));
             !matches!(shape, Some(photocraft_doc::text::TextShape::Box { .. } | photocraft_doc::text::TextShape::Area { .. }))
         });
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (key, tip, a) in items {
                 let justify = !matches!(a, A::Left | A::Center | A::Right);
@@ -447,7 +447,7 @@ fn type_sections_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: boo
             }
         });
         ui.add_space(ROW_GAP);
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (key, tip, d) in direction_items() {
                 let clicked = toggle_cell(ui, cw, para.direction == d, tip, |ui, r, col| {
@@ -684,5 +684,21 @@ mod rtl_tests {
         assert!(horiz(&ltr).left() < vert(&ltr).left(), "LTR: horizontal type comes first");
         assert!(aa(&rtl).left() > dd(&rtl).left(), "RTL: the aa caption leads its dropdown, at the right");
         assert!(horiz(&rtl).left() > vert(&rtl).left(), "RTL: horizontal type comes first, at the right");
+    }
+
+    /// The Character panel's toggle rows mirror: the first faux-style button and the first
+    /// OpenType button lead their rows at the reading start — left in LTR, right in RTL.
+    #[test]
+    fn character_panel_toggle_rows_follow_reading_order() {
+        let ltr = panel(Dir::Ltr);
+        let rtl = panel(Dir::Rtl);
+        let bold = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::Button, "Faux Bold").rect();
+        let strike = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::Button, "Strikethrough").rect();
+        assert!(bold(&ltr).left() < strike(&ltr).left(), "LTR: faux bold leads: {:?} {:?}", bold(&ltr), strike(&ltr));
+        assert!(bold(&rtl).left() > strike(&rtl).left(), "RTL: faux bold leads at the right: {:?} {:?}", bold(&rtl), strike(&rtl));
+        let liga = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::Button, "Standard Ligatures").rect();
+        let frac = |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(Role::Button, "Fractions").rect();
+        assert!(liga(&ltr).left() < frac(&ltr).left(), "LTR: standard ligatures leads: {:?} {:?}", liga(&ltr), frac(&ltr));
+        assert!(liga(&rtl).left() > frac(&rtl).left(), "RTL: standard ligatures leads at the right: {:?} {:?}", liga(&rtl), frac(&rtl));
     }
 }
