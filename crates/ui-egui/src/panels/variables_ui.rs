@@ -51,6 +51,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         "image.applyDataSet" if !has_params => {
             // No data set named: open the dialog on the Data Sets page to pick one.
             let mut f = Map::new();
+            f.insert("__command".into(), json!(id));
             let state = app.session.active().map(|st| crate::variables_ui::to_state(&st.doc.variables)).unwrap_or_else(|| json!({"defs": [], "dataSets": []}));
             f.insert("__variablesOrig".into(), state.clone());
             f.insert("__variables".into(), state);
@@ -151,8 +152,16 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     fields.insert("__variables".into(), state);
     fields.insert("__page".into(), json!(page));
     if apply {
+        fields.remove("__appliedAt");
         let result = confirm(app, fields);
         fields.remove("__apply");
+        if result.is_ok()
+            && fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet")
+            && let Some(st) = app.session.active()
+        {
+            fields.insert("__variables".into(), to_state(&st.doc.variables));
+            fields.insert("__appliedAt".into(), json!([st.doc.id.0, st.revision]));
+        }
         if let Err(error) = result {
             app.ui.status = error;
         }
@@ -358,11 +367,22 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     apply
 }
 
-/// Save the edited definitions and data sets, and apply the requested set if present.
+/// Save the edited definitions and data sets. Apply Data Set OK also applies the selected row.
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let state = fields.get("__variables").cloned().unwrap_or_else(|| json!({}));
     let defs = state.get("defs").cloned().unwrap_or_else(|| json!([]));
     let sets = state.get("dataSets").cloned().unwrap_or_else(|| json!([]));
+    let selected = (fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet") && !fields.contains_key("__apply"))
+        .then(|| data_set_index(fields, sets.as_array().map_or(0, Vec::len)));
+    // An unchanged OK after Apply closes without another application or history entry.
+    if let Some(index) = selected
+        && let Some(st) = app.session.active()
+        && fields.get("__appliedAt") == Some(&json!([st.doc.id.0, st.revision]))
+        && st.doc.variables.active == Some(index)
+        && state == to_state(&st.doc.variables)
+    {
+        return Ok(json!({"defined": true}));
+    }
     // Only define when there is at least one named variable (empty define clears).
     app.run("image.variables.define", json!({"defs": defs}))?;
     app.run("image.variables.dataSets", json!({"dataSets": sets}))?;
@@ -372,6 +392,9 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     // Keep name-based requests from existing automation callers working.
     if let Some(name) = fields.get("__apply").and_then(Value::as_str) {
         return app.run("image.applyDataSet", json!({"name": name}));
+    }
+    if let Some(index) = selected {
+        return app.run("image.applyDataSet", json!({"index": index}));
     }
     Ok(json!({"defined": true}))
 }

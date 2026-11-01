@@ -59,11 +59,13 @@ fn out_of_range_data_set_index_is_clamped_before_delete() {
 /// A real image file and unsaved dialog edits exercise the same path as manual entry.
 fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, PhotocraftApp>) {
     let dir = tempfile::tempdir().unwrap();
+    for (name, color) in [("blue.png", "#0000ff"), ("red.png", "#ff0000")] {
+        let mut source = photocraft_engine::Session::new();
+        source.execute("file.new", json!({"width": 8, "height": 8, "background": color})).unwrap();
+        let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+        std::fs::write(dir.path().join(name), png).unwrap();
+    }
     let path = dir.path().join("blue.png");
-    let mut source = photocraft_engine::Session::new();
-    source.execute("file.new", json!({"width": 8, "height": 8, "background": "#0000ff"})).unwrap();
-    let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
-    std::fs::write(&path, png).unwrap();
 
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
@@ -78,6 +80,15 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, Photocraf
         }),
     );
     (dir, harness(app))
+}
+
+fn save_draft_and_open_apply_menu(h: &mut Harness<'static, PhotocraftApp>) {
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty());
+    let ctx = h.ctx.clone();
+    photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "image.applyDataSet", json!({})).unwrap();
+    h.run_steps(3);
 }
 
 /// Apply updates the canvas immediately; OK must not apply the same request again.
@@ -111,11 +122,13 @@ fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
         let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
         let selected = fields["__variables"]["dataSets"][0].clone();
         fields["__variables"]["dataSets"] = json!([{"name": "Blue", "values": []}, selected]);
-        fields.insert("__cur".into(), json!(1));
-        if button == "OK" {
-            fields.insert("__apply".into(), json!(1));
-        }
+        save_draft_and_open_apply_menu(&mut h);
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]), "editing data sets only saves them");
+        h.get_by_label("▶").click();
         h.run_steps(2);
+        let fields = &h.state().ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["__cur"], 1);
+        assert!(!fields.contains_key("__apply"));
         h.get_by_label(button).click();
         h.run_steps(3);
         assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]), "{button}");
@@ -123,31 +136,124 @@ fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
     }
 }
 
-/// A failed request reports once; correcting it can be applied and kept when Cancel closes.
 #[test]
-fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
-    let (dir, mut h) = pixel_replacement_harness();
-    let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-    fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("missing.png"));
+fn apply_menu_apply_then_ok_keeps_one_history_entry() {
+    let (_dir, mut h) = pixel_replacement_harness();
+    save_draft_and_open_apply_menu(&mut h);
     h.get_by_label("Apply").click();
     h.run_steps(3);
-    assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
-    assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
+    let revision = h.state().session.active().unwrap().revision;
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
-    h.state_mut().ui.status.clear();
-    h.run_steps(3);
-    assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
+}
 
-    let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
-    fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("blue.png"));
-    h.get_by_label("Apply").click();
-    h.run_steps(3);
+#[test]
+fn apply_menu_ok_honors_changes_after_apply() {
+    for change in ["row", "value", "document"] {
+        let (dir, mut h) = pixel_replacement_harness();
+        let red = json!(dir.path().join("red.png"));
+        if change == "row" {
+            let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+            let mut row = fields["__variables"]["dataSets"][0].clone();
+            row["values"][0]["value"] = red.clone();
+            fields["__variables"]["dataSets"].as_array_mut().unwrap().push(row);
+        }
+        save_draft_and_open_apply_menu(&mut h);
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+        if change == "row" {
+            h.get_by_label("▶").click();
+        } else if change == "value" {
+            h.state_mut().ui.dialogs.last_mut().unwrap().fields["__variables"]["dataSets"][0]["values"][0]["value"] = red;
+        } else {
+            h.state_mut().run("image.adjustments.invert", json!({})).unwrap();
+        }
+        h.run_steps(3);
+        let before = if change == "document" { json!([1.0, 1.0, 0.0, 1.0]) } else { json!([0.0, 0.0, 1.0, 1.0]) };
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), before, "{change}: only document edits change pixels before OK");
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let after = if change == "document" { json!([0.0, 0.0, 1.0, 1.0]) } else { json!([1.0, 0.0, 0.0, 1.0]) };
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), after, "{change}");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), before);
+    }
+}
+
+#[test]
+fn apply_menu_cancel_does_not_apply_the_selected_row() {
+    let (_dir, mut h) = pixel_replacement_harness();
+    save_draft_and_open_apply_menu(&mut h);
     h.get_by_label("Cancel").click();
     h.run_steps(3);
     assert!(h.state().ui.dialogs.is_empty());
-    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
-    h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+}
+
+#[test]
+fn legacy_named_request_stays_draft_until_ok() {
+    let (_dir, mut h) = pixel_replacement_harness();
+    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__apply".into(), json!("Blue"));
+    h.run_steps(3);
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
+}
+
+#[test]
+fn variables_editor_ok_only_saves_configuration() {
+    for menu in ["image.variables.define", "image.variables.dataSets"] {
+        let (_dir, mut h) = pixel_replacement_harness();
+        let state = h.state().ui.dialogs.last().unwrap().fields["__variables"].clone();
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, menu, json!({})).unwrap();
+        h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__variables".into(), state);
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state().session.active().unwrap().doc.variables.data_sets.len(), 1, "{menu}");
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]), "{menu}");
+    }
+}
+
+/// A failed request reports once; correcting it can be applied and kept when Cancel closes.
+#[test]
+fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
+    for apply_mode in [false, true] {
+        let (dir, mut h) = pixel_replacement_harness();
+        if apply_mode {
+            save_draft_and_open_apply_menu(&mut h);
+        }
+        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+        fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("missing.png"));
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+        assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
+        assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+        h.state_mut().ui.status.clear();
+        h.run_steps(3);
+        assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
+
+        let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+        fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("blue.png"));
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+    }
 }
 
 /// `ui.dialog.set` can store any JSON in `__variables`; the editors write into its entries.
