@@ -193,6 +193,7 @@ impl PhotocraftApp {
             dds_options: None,
             dds_imports: Default::default(),
             held_opens: Default::default(),
+            held_preset_import: None,
             allow_close: false,
             stylus: Default::default(),
             control_click: Default::default(),
