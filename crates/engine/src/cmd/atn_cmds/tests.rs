@@ -3258,6 +3258,14 @@ fn distort_filter_steps_load_clamp_play_and_save_back() {
     assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
 }
 
+/// Photoshop clamps Wave's number of generators to 1..999 when it plays, so a recorded count far
+/// above it loads as 999, as the existing 0 loads as 1 (#10605).
+#[test]
+fn wave_generators_above_photoshops_limit_load_clamped() {
+    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(1_000_000)))).1;
+    assert_eq!(p["generators"], 999, "{p}");
+}
+
 /// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
 /// scaled below 100 % (the command has no scale), or a key the event does not have (#10605).
 #[test]
