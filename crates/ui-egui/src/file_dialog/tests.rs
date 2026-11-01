@@ -524,6 +524,32 @@ fn sandbox_save_rejects_normalized_names() {
     assert_eq!(checked_saved_path(&app, "/run/user/1000/doc/id/CAT.PSD", Some("psd"), true).unwrap(), "/run/user/1000/doc/id/CAT.PSD");
 }
 
+/// The same guard through the caller: in a sandbox, an answer the app would rewrite (another
+/// extension case, or a bare name) never reaches the writer, and the user is told why; an answer it
+/// would keep is written as granted.
+#[test]
+fn sandboxed_pick_save_never_writes_a_rewritten_name() {
+    let ctx = egui::Context::default();
+    for (answered, granted) in [("/run/user/1000/doc/id/CAT.PSD", false), ("/run/user/1000/doc/id/cat", false), ("/run/user/1000/doc/id/cat.psd", true)] {
+        let (mut app, open, written) = app();
+        app.pick_save_in(true, "/run/user/1000/doc/id/cat.psd", |app, path| {
+            let write = app.services.write.as_mut().ok_or("no writer")?;
+            write(&path, b"out")?;
+            Ok(json!({ "path": path }))
+        })
+        .unwrap();
+        app.poll_file_dialog(&ctx, None);
+        answer(&open, Some(FileDialogAnswer::SaveTo(answered.into())));
+        app.poll_file_dialog(&ctx, None);
+        if granted {
+            assert_eq!(*written.borrow(), [answered], "{answered}");
+        } else {
+            assert!(written.borrow().is_empty(), "{answered} must not be written");
+            assert!(app.ui.status.contains("extension"), "{answered}: {}", app.ui.status);
+        }
+    }
+}
+
 /// #5039: a name typed without an extension (where file extensions are hidden) gets the
 /// suggested file's extension, so the save picks its format instead of failing.
 #[test]
