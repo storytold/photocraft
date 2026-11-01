@@ -133,6 +133,17 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> bool,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_bytes_and_merged_preflight(data, |file| Ok(want(file)), recover)
+    }
+
+    /// Parses with a fallible pixel preflight after layer records are available and before
+    /// the merged image is read, validated or decoded. A preflight error is always fatal;
+    /// `recover` only handles damage encountered after an accepted preflight.
+    pub fn from_bytes_and_merged_preflight(
+        data: &[u8],
+        want: impl FnOnce(&PsdFile) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut r = Reader::new(data);
         let header = Header::read(&mut r)?;
         let psb = header.version.is_psb();
@@ -189,7 +200,7 @@ impl PsdFile {
                 layer_mask_trailing = s.peek_rest().to_vec();
             }
         }
-        let image_data = ImageData { compression: Compression::Raw, data: Vec::new() };
+        let image_data = ImageData::new(Compression::Raw, Vec::new());
         let mut file = PsdFile {
             header,
             color_mode_data,
@@ -202,11 +213,24 @@ impl PsdFile {
             image_data,
             write_as_psb: false,
         };
+        let want = want(&file)?;
+        let merged = file.read_merged_section(&mut r, want, recover)?;
+        Ok((file, merged))
+    }
+
+    /// Reads the merged image section from `rest` (the bytes after the layer and mask section) as
+    /// [`Self::from_bytes_and_merged_recovering`] does, decoding it.
+    pub(crate) fn read_merged_recovering(&mut self, rest: &[u8], recover: impl FnOnce(&PsdFile) -> bool) -> Result<Option<Result<Vec<u8>>>> {
+        self.read_merged_section(&mut Reader::new(rest), true, recover)
+    }
+
+    fn read_merged_section(&mut self, r: &mut Reader<'_>, want: bool, recover: impl FnOnce(&PsdFile) -> bool) -> Result<Option<Result<Vec<u8>>>> {
+        let file = self;
         let mut encoded = r.clone();
-        let merged = if want(&file) {
-            file.read_merged_decoded(&mut r).map(Some)
+        let merged = if want {
+            file.read_merged_decoded(r).map(Some)
         } else {
-            ImageData::read(&mut r, &file.header).map(|image| {
+            ImageData::read(r, &file.header).map(|image| {
                 file.image_data = image;
                 None
             })
@@ -214,19 +238,19 @@ impl PsdFile {
         let merged = match merged {
             Ok(merged) => merged,
             Err(error) => {
-                if matches!(error, PsdError::LimitExceeded(_)) || !recover(&file) {
+                if matches!(error, PsdError::LimitExceeded(_) | PsdError::OutOfMemory(_)) || !recover(file) {
                     return Err(error);
                 }
                 let compression = Compression::from_u16(encoded.u16()?);
                 let source = encoded.peek_rest();
                 let mut data = Vec::new();
-                data.try_reserve_exact(source.len()).map_err(|_| PsdError::LimitExceeded("not enough memory to retain the damaged merged image"))?;
+                data.try_reserve_exact(source.len()).map_err(|_| PsdError::OutOfMemory("not enough memory to retain the damaged merged image"))?;
                 data.extend_from_slice(source);
-                file.image_data = ImageData { compression, data };
+                file.image_data = ImageData::new(compression, data);
                 Some(Err(error))
             }
         };
-        Ok((file, merged))
+        Ok(merged)
     }
 
     /// Reads the merged image into `self.image_data` and decodes it. A ZIP stream within the
@@ -246,10 +270,18 @@ impl PsdFile {
         r.u16()?;
         let data = r.peek_rest();
         let decoded = decode_planes(compression, data, &layout);
+        // An allocation failure is the open's, before the encoded image is copied under the same
+        // memory pressure.
+        if matches!(decoded, Err(PsdError::OutOfMemory(_))) {
+            return decoded.map(Ok);
+        }
         if decoded.is_err() {
             validate_planes(compression, data, &layout)?;
         }
-        self.image_data = ImageData { compression, data: data.to_vec() };
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(data.len()).map_err(|_| PsdError::OutOfMemory("not enough memory to retain the merged image"))?;
+        copy.extend_from_slice(data);
+        self.image_data = ImageData::new(compression, copy);
         r.skip(data.len())?;
         Ok(decoded)
     }
@@ -265,10 +297,10 @@ impl PsdFile {
             .layer_info
             .as_ref()
             .map_or(0, LayerInfo::channel_data_len)
-            .saturating_add(self.image_data.data.len())
+            .saturating_add(usize::try_from(self.image_data.encoded_len()).unwrap_or(usize::MAX))
             .saturating_add(usize::try_from(widened).unwrap_or(usize::MAX));
         let mut out = Vec::new();
-        out.try_reserve(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
+        out.try_reserve(hint).map_err(|_| PsdError::OutOfMemory("not enough memory to serialize the file"))?;
         if widen {
             Header { version: v, ..self.header.clone() }.write(&mut out);
         } else {
@@ -325,8 +357,8 @@ impl PsdFile {
 
         out.put_u16(self.image_data.compression.as_u16());
         match self.merged_widened_rows(widen)? {
-            0 => out.put(&self.image_data.data),
-            rows => put_widened_rle(&mut out, &self.image_data.data, rows)?,
+            0 => out.put(&self.image_data.encoded()?),
+            rows => put_widened_rle(&mut out, &self.image_data.encoded()?, rows)?,
         }
         Ok(out)
     }
@@ -357,13 +389,13 @@ impl PsdFile {
             for c in &layer.channels {
                 match layer.widened_rows(c, true)? {
                     0 => {}
-                    rows => n = n.saturating_add(rle_widening(&c.data, rows)?),
+                    rows => n = n.saturating_add(rle_widening(&c.encoded()?, rows)?),
                 }
             }
         }
         match self.merged_widened_rows(true)? {
             0 => Ok(n),
-            rows => Ok(n.saturating_add(rle_widening(&self.image_data.data, rows)?)),
+            rows => Ok(n.saturating_add(rle_widening(&self.image_data.encoded()?, rows)?)),
         }
     }
 
@@ -406,9 +438,9 @@ impl PsdFile {
         }
         let merged = match self.merged_widened_rows(widen)? {
             0 => 0,
-            rows => rle_widening(&self.image_data.data, rows)?,
+            rows => rle_widening(&self.image_data.encoded()?, rows)?,
         };
-        Ok(n.saturating_add(2).saturating_add(self.image_data.data.len() as u64).saturating_add(merged))
+        Ok(n.saturating_add(2).saturating_add(self.image_data.encoded_len()).saturating_add(merged))
     }
 
     /// Marks a PSD model to be written as the equivalent PSB ([`Self::write_as_psb`]) without
@@ -834,5 +866,23 @@ mod write_tests {
             other.global_blocks.push(TaggedBlock::new(key, Vec::new()));
             assert!(!other.merged_has_alpha(), "{}", String::from_utf8_lossy(&key));
         }
+    }
+    #[test]
+    fn preflight_refusal_precedes_merged_validation_and_cannot_be_recovered() {
+        let file = testgen::small(Version::Psd, Compression::Zip);
+        let mut bytes = file.to_bytes().unwrap();
+        bytes.truncate(bytes.len() - file.image_data.data.len() - 2);
+        let recover_called = std::cell::Cell::new(false);
+        let preflight = |_: &PsdFile| Err(PsdError::LimitExceeded("test import budget"));
+        let recover = |_: &PsdFile| {
+            recover_called.set(true);
+            true
+        };
+        assert!(matches!(PsdFile::from_bytes_and_merged_preflight(&bytes, preflight, recover), Err(PsdError::LimitExceeded("test import budget"))));
+        assert!(matches!(
+            PsdFile::from_source_and_merged_preflight(crate::Source::new(bytes), preflight, recover),
+            Err(PsdError::LimitExceeded("test import budget"))
+        ));
+        assert!(!recover_called.get());
     }
 }

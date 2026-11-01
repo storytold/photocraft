@@ -432,6 +432,9 @@ fn svgz_is_inflated_with_a_size_cap() {
     let r = import("drawing.svgz", &gzip(plain.as_bytes())).unwrap();
     assert_eq!(r.document.layers.len(), 1);
     assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    let split = plain.len() / 2;
+    let members = [gzip(&plain.as_bytes()[..split]), gzip(&plain.as_bytes()[split..])].concat();
+    assert!(close(px(&import("members.svgz", &members).unwrap().document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
     // A bomb: a few hundred KB of gzip holding more than the cap of whitespace.
     let mut bomb = format!("<svg {NS} width=\"8\" height=\"8\">").into_bytes();
     bomb.resize(usize::try_from(svg::MAX_INFLATED_BYTES).unwrap() + 1024, b' ');

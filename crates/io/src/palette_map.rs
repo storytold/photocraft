@@ -45,7 +45,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
     let header = Header::new(version, doc.size.width, doc.size.height, 1, depth, mode);
     let image_data = ImageData::encode(Compression::Rle, &plane, &header)
         .or_else(|_| ImageData::encode(Compression::Raw, &plane, &header))
-        .unwrap_or(ImageData { compression: Compression::Raw, data: plane });
+        .unwrap_or(ImageData::new(Compression::Raw, plane));
     let mut resources = vec![
         ImageResource::new(ids::RESOLUTION_INFO, ResolutionInfo::from_dpi(f64::from(doc.resolution_dpi)).to_bytes()),
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
