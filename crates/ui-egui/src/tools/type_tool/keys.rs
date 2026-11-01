@@ -190,10 +190,10 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                 copy_selection(app, ctx);
             }
             egui::Event::Cut => cut_selection(app, ctx),
-            egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 let edit = KeyEditContext { id, vertical_flow, edit: &ed, selection: (a, b), text: &text, char_count: n };
                 let mut flow = EventFlow { handled: &mut handled, index: k, custom_mutations: &mut custom_mutations, deferred_custom: &mut deferred_custom };
-                handle_pressed_key(app, ctx, key, m, &edit, &mut flow);
+                handle_pressed_key(app, ctx, key, *physical_key, m, &edit, &mut flow);
             }
             egui::Event::Key { pressed: false, modifiers: m, .. } => handled[k] = !m.command,
             _ => handled[k] = false,
@@ -234,6 +234,7 @@ fn handle_pressed_key(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     raw_key: &egui::Key,
+    physical_key: Option<egui::Key>,
     modifiers: &egui::Modifiers,
     edit: &KeyEditContext<'_>,
     flow: &mut EventFlow<'_>,
@@ -245,8 +246,8 @@ fn handle_pressed_key(
 
     use egui::Key;
     match key {
-        Key::Enter if modifiers.command && edit.edit.preedit.is_none() => commit_with(app, *modifiers),
-        Key::Enter if modifiers.command => {} // IME owns confirmation until preedit ends.
+        Key::Enter if (modifiers.command || physical_key == Some(Key::NumpadEnter)) && edit.edit.preedit.is_none() => commit_with(app, *modifiers),
+        Key::Enter if modifiers.command || physical_key == Some(Key::NumpadEnter) => {} // IME owns confirmation until preedit ends.
         Key::Enter => insert(app, "\n"),
         Key::Tab if !modifiers.command && !modifiers.alt && !modifiers.shift => {
             // egui queues focus navigation before this handler runs; consuming the
