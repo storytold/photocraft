@@ -890,7 +890,12 @@ fn the_rename_field_runs_rtl_in_rtl_and_stays_ltr_in_ltr() {
     };
     let (field_ltr, g_ltr) = probe(Dir::Ltr);
     assert!(!g_ltr.is_empty(), "LTR: the name is painted");
-    assert!(g_ltr.iter().all(|(d, _, _)| *d == TextDirection::Auto), "LTR: auto direction, got {g_ltr:?}");
+    // The elided galley pins its base direction to the UI's (1ec6dc387): explicit LTR in an
+    // LTR UI, Auto is egui's default for the unelided text.
+    assert!(
+        g_ltr.iter().all(|(d, _, _)| matches!(d, TextDirection::Auto | TextDirection::LeftToRight)),
+        "LTR: auto or explicit LTR direction, got {g_ltr:?}"
+    );
     assert!(g_ltr.iter().all(|(_, _, r)| r.left() < field_ltr.center().x), "LTR: left-aligned in {field_ltr:?}");
     let (field_rtl, g_rtl) = probe(Dir::Rtl);
     let (_d, halign, r) = g_rtl.iter().find(|(d, _, _)| *d == TextDirection::RightToLeft).expect("RTL: an RTL galley for the name");
