@@ -328,9 +328,13 @@ fn color_decontaminate(s: &mut Session, p: &Value) -> Result<Value> {
         if r.is_empty() || !surf.format().alpha {
             return Ok(());
         }
-        let alpha: Vec<u8> = read_rgba(surf, r).iter().map(|q| (q[3].clamp(0.0, 1.0) * 255.0).round() as u8).collect();
-        let region = Region { bbox: r, mask: alpha };
-        *surf = photocraft_algo::matting::decontaminate(surf, &region, radius, amount);
+        let mut alpha = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        for (tc, _) in surf.tiles() {
+            let area = tc.rect().intersect(&r);
+            let values: Vec<u8> = read_rgba(surf, area).iter().map(|q| (q[3].clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            alpha.write_interleaved(area, &values);
+        }
+        *surf = photocraft_algo::matting::decontaminate_surface(surf, &alpha, radius, amount);
         Ok(())
     })?;
     Ok(Value::Null)
