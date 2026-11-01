@@ -1,6 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image_in, source_surface_from_buffer, svg_source_image_in,
+    vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -189,7 +190,7 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
-        None => source_image(name, bytes, fmt)?,
+        None => source_image_in(name, bytes, doc)?,
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
@@ -293,7 +294,7 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => source_image(&name, &bytes, fmt).ok()?.bounds,
+        None => source_image_in(&name, &bytes, doc).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }

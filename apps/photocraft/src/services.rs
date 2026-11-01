@@ -3,7 +3,7 @@
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
+use photocraft_ui_egui::{ClipboardImage, FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -493,7 +493,7 @@ fn recovery_services(dir: Option<PathBuf>) -> Services {
 /// The OS clipboard read and write run under the crash guard, like Open and Export (#7582): a
 /// panic in arboard, or in decoding a copied file, becomes the paste's (or copy's) error and the
 /// app keeps its documents.
-fn guarded_clipboard_get(mut read: impl FnMut() -> Result<Option<(u32, u32, Vec<u8>)>, String> + 'static) -> photocraft_ui_egui::ClipboardGetFn {
+fn guarded_clipboard_get(mut read: impl FnMut() -> Result<Option<ClipboardImage>, String> + 'static) -> photocraft_ui_egui::ClipboardGetFn {
     Box::new(move || crate::crash_guard::guard("Paste", &mut read))
 }
 
@@ -504,7 +504,7 @@ fn guarded_clipboard_set(mut write: impl FnMut(u32, u32, &[u8]) -> Result<(), St
 /// The pixels to paste when the clipboard holds copied files rather than an image (Copy in
 /// Files, Finder or Explorer puts paths on the clipboard, #338): the first file that decodes,
 /// upright, as RGBA8. Files that aren't images are skipped after reading only their header.
-fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
+fn image_from_files(paths: &[PathBuf]) -> Option<ClipboardImage> {
     use std::io::Read;
     paths.iter().find_map(|path| {
         // text/uri-list lines end in CRLF (RFC 2483, and GTK writes them so), but arboard splits
@@ -520,7 +520,7 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
             _ => {}
         }
         let img = photocraft_codecs::decode(&std::fs::read(&path).ok()?).ok()?;
-        Some((img.width(), img.height(), img.to_rgba8()))
+        Some((img.width(), img.height(), img.to_rgba8(), img.icc))
     })
 }
 
@@ -534,7 +534,7 @@ const MAX_CLIPBOARD_IMAGE_BYTES: u64 = 4 * 16384 * 16384;
 /// `image/webp` pasted nothing. Reads the other `image/*` types through the same data-control
 /// protocol arboard uses, and decodes them with our own codecs. `None` off Wayland.
 #[cfg(target_os = "linux")]
-fn wayland_clipboard_image() -> Option<(u32, u32, Vec<u8>)> {
+fn wayland_clipboard_image() -> Option<ClipboardImage> {
     use std::io::Read;
     use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents, get_mime_types_ordered};
     let offers = get_mime_types_ordered(ClipboardType::Regular, Seat::Unspecified).ok()?;
@@ -549,7 +549,7 @@ fn wayland_clipboard_image() -> Option<(u32, u32, Vec<u8>)> {
 /// The first clipboard offer, in the source's order, that `fetch` returns as a decodable image,
 /// upright as RGBA8. Only `image/*` types are fetched, so text offers are never transferred.
 #[cfg(any(target_os = "linux", test))]
-fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Vec<u8>>) -> Option<(u32, u32, Vec<u8>)> {
+fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Vec<u8>>) -> Option<ClipboardImage> {
     offers.iter().filter(|mime| mime.starts_with("image/")).find_map(|mime| {
         let bytes = fetch(mime)?;
         // TGA has no magic number (see `image_from_files`), so trust it only when the type says so.
@@ -557,7 +557,7 @@ fn image_from_offers(offers: &[String], mut fetch: impl FnMut(&str) -> Option<Ve
             return None;
         }
         let img = photocraft_codecs::decode(&bytes).ok()?;
-        Some((img.width(), img.height(), img.to_rgba8()))
+        Some((img.width(), img.height(), img.to_rgba8(), img.icc))
     })
 }
 
@@ -584,16 +584,16 @@ fn image_from_svg_text(text: &str) -> Option<(u32, u32, Vec<u8>)> {
 fn clipboard_image<C>(
     clipboard: &mut C,
     files: impl FnOnce(&mut C) -> Result<Option<Vec<PathBuf>>, String>,
-    image: impl FnOnce(&mut C) -> Result<Option<(u32, u32, Vec<u8>)>, String>,
+    image: impl FnOnce(&mut C) -> Result<Option<ClipboardImage>, String>,
     text: impl FnOnce(&mut C) -> Result<Option<String>, String>,
-) -> Result<Option<(u32, u32, Vec<u8>)>, String> {
+) -> Result<Option<ClipboardImage>, String> {
     if let Some(img) = files(clipboard)?.and_then(|paths| image_from_files(&paths)) {
         return Ok(Some(img));
     }
     if let Some(img) = image(clipboard)? {
         return Ok(Some(img));
     }
-    Ok(text(clipboard)?.and_then(|text| image_from_svg_text(&text)))
+    Ok(text(clipboard)?.and_then(|text| image_from_svg_text(&text)).map(|(w, h, px)| (w, h, px, None)))
 }
 
 /// One OS clipboard read as [`clipboard_image`] takes it: no content in the format asked for is
@@ -732,7 +732,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                     cb,
                     |cb| clipboard_read(cb.get().file_list()),
                     |cb| match cb.get_image() {
-                        Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
+                        Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned(), None))),
                         Err(error) => {
                             #[cfg(target_os = "linux")]
                             if let Some(image) = wayland_clipboard_image() {

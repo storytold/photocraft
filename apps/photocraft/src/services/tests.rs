@@ -603,7 +603,7 @@ fn copied_image_file_pastes_its_pixels() {
     let dir = temp("png");
     let png = dir.join("red.png");
     std::fs::write(&png, red_png(3, 2)).unwrap();
-    let (w, h, px) = image_from_files(&[png]).unwrap();
+    let (w, h, px, _) = image_from_files(&[png]).unwrap();
     assert_eq!((w, h), (3, 2));
     assert_eq!(px, [255u8, 0, 0, 255].repeat(6));
 }
@@ -615,7 +615,7 @@ fn crlf_from_a_uri_list_is_ignored() {
     let png = dir.join("red image.png");
     std::fs::write(&png, red_png(2, 2)).unwrap();
     let with_cr = PathBuf::from(format!("{}\r", png.display()));
-    assert_eq!(image_from_files(&[with_cr]).map(|(w, h, _)| (w, h)), Some((2, 2)));
+    assert_eq!(image_from_files(&[with_cr]).map(|(w, h, ..)| (w, h)), Some((2, 2)));
 }
 
 #[test]
@@ -625,7 +625,7 @@ fn non_images_are_skipped_for_the_first_image() {
     std::fs::write(&txt, b"not an image").unwrap();
     std::fs::write(&png, red_png(4, 1)).unwrap();
     let missing = dir.join("gone.png");
-    assert_eq!(image_from_files(&[missing.clone(), txt.clone(), dir.clone(), png]).map(|(w, h, _)| (w, h)), Some((4, 1)));
+    assert_eq!(image_from_files(&[missing.clone(), txt.clone(), dir.clone(), png]).map(|(w, h, ..)| (w, h)), Some((4, 1)));
     assert!(image_from_files(&[missing, txt, dir]).is_none());
     assert!(image_from_files(&[]).is_none());
 }
@@ -653,12 +653,12 @@ fn non_png_clipboard_images_paste() {
         asked.push(mime.to_string());
         Some(bmp.clone())
     });
-    assert_eq!(got, Some((3, 2, [255u8, 0, 0, 255].repeat(6))));
+    assert_eq!(got, Some((3, 2, [255u8, 0, 0, 255].repeat(6), None)));
     assert_eq!(asked, ["image/bmp"], "text offers are never fetched");
 
     let jpeg = encoded(photocraft_codecs::Format::Jpeg, 16, 8);
     let offers = vec!["image/jpeg".to_string()];
-    assert_eq!(image_from_offers(&offers, |_| Some(jpeg.clone())).map(|(w, h, _)| (w, h)), Some((16, 8)));
+    assert_eq!(image_from_offers(&offers, |_| Some(jpeg.clone())).map(|(w, h, ..)| (w, h)), Some((16, 8)));
 }
 
 #[test]
@@ -672,14 +672,14 @@ fn undecodable_clipboard_offers_fall_through_to_the_next() {
         "image/x-tga" => Some(b"not an image".to_vec()),
         _ => Some(bmp.clone()),
     });
-    assert_eq!(got.map(|(w, h, _)| (w, h)), Some((2, 2)));
+    assert_eq!(got.map(|(w, h, ..)| (w, h)), Some((2, 2)));
     assert!(image_from_offers(&offers[..3], |_| Some(cut.clone())).is_none());
     assert!(image_from_offers(&[], |_| Some(bmp.clone())).is_none());
 }
 
 #[test]
 fn clipboard_tga_is_trusted_only_by_its_type() {
-    assert_eq!(image_from_offers(&["image/x-tga".to_string()], |_| Some(tga_1x1())), Some((1, 1, vec![255, 0, 0, 255])));
+    assert_eq!(image_from_offers(&["image/x-tga".to_string()], |_| Some(tga_1x1())), Some((1, 1, vec![255, 0, 0, 255], None)));
     assert!(image_from_offers(&["image/x-unknown".to_string()], |_| Some(tga_1x1())).is_none());
 }
 
@@ -689,7 +689,7 @@ fn tga_is_trusted_only_with_its_extension() {
     let (tga, bin) = (dir.join("red.tga"), dir.join("red.bin"));
     std::fs::write(&tga, tga_1x1()).unwrap();
     std::fs::write(&bin, tga_1x1()).unwrap();
-    assert_eq!(image_from_files(&[tga]), Some((1, 1, vec![255, 0, 0, 255])));
+    assert_eq!(image_from_files(&[tga]), Some((1, 1, vec![255, 0, 0, 255], None)));
     assert!(image_from_files(&[bin]).is_none());
 }
 
@@ -705,11 +705,11 @@ const COPIED_RECTANGLE: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 const HALF_RED: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="20" height="20" fill="#ff0000"/></svg>"##;
 
 /// The clipboard as `clipboard_image` reads it when it holds only `text`.
-fn from_text(text: &str) -> Option<(u32, u32, Vec<u8>)> {
+fn from_text(text: &str) -> Option<ClipboardImage> {
     clipboard_image(&mut (), |_| Ok(None), |_| Ok(None), |_| Ok(Some(text.to_string()))).expect("no read fails")
 }
 
-fn pixel(img: &(u32, u32, Vec<u8>), x: u32, y: u32) -> [u8; 4] {
+fn pixel(img: &ClipboardImage, x: u32, y: u32) -> [u8; 4] {
     let at = ((y * img.0 + x) * 4) as usize;
     img.2[at..at + 4].try_into().unwrap()
 }
@@ -773,22 +773,22 @@ fn copied_files_and_images_come_before_svg_text() {
     let dir = temp("svg-order");
     let png = dir.join("red.png");
     std::fs::write(&png, red_png(3, 2)).unwrap();
-    let blue = (2, 2, [0u8, 0, 255, 255].repeat(4));
+    let blue = (2, 2, [0u8, 0, 255, 255].repeat(4), None);
     let mut text_read = false;
     let svg_text = |read: &mut bool| {
         *read = true;
         Ok(Some(COPIED_RECTANGLE.to_string()))
     };
     let got = clipboard_image(&mut text_read, |_| Ok(Some(vec![png.clone()])), |_| Ok(Some(blue.clone())), svg_text);
-    assert_eq!(got.unwrap().map(|(w, h, _)| (w, h)), Some((3, 2)), "the copied file");
+    assert_eq!(got.unwrap().map(|(w, h, ..)| (w, h)), Some((3, 2)), "the copied file");
     let got = clipboard_image(&mut text_read, |_| Ok(None), |_| Ok(Some(blue.clone())), svg_text);
-    assert_eq!(got.unwrap().map(|(w, h, _)| (w, h)), Some((2, 2)), "the image, not the SVG text");
+    assert_eq!(got.unwrap().map(|(w, h, ..)| (w, h)), Some((2, 2)), "the image, not the SVG text");
     assert!(!text_read, "the text isn't read while there is a file or an image");
     // A copied file that isn't an image (an .svg) falls through to the image, then the text.
     let svg = dir.join("drawing.svg");
     std::fs::write(&svg, COPIED_RECTANGLE).unwrap();
     let got = clipboard_image(&mut (), |_| Ok(Some(vec![svg.clone()])), |_| Ok(None), |_| Ok(Some(COPIED_RECTANGLE.to_string())));
-    assert_eq!(got.unwrap().map(|(w, h, _)| (w, h)), Some((121, 81)));
+    assert_eq!(got.unwrap().map(|(w, h, ..)| (w, h)), Some((121, 81)));
 }
 
 /// A failed read, such as one of a busy clipboard, is the paste's error: the reads after it,
@@ -869,7 +869,7 @@ fn paste_turns_svg_text_on_the_clipboard_into_a_layer() {
 fn a_panicking_clipboard_read_is_reported_not_a_crash() {
     let panics = Rc::new(Cell::new(true));
     let p = panics.clone();
-    let get = guarded_clipboard_get(move || if p.get() { panic!("clipboard decoder bug") } else { Ok(Some((2, 2, [0u8, 0, 255, 255].repeat(4)))) });
+    let get = guarded_clipboard_get(move || if p.get() { panic!("clipboard decoder bug") } else { Ok(Some((2, 2, [0u8, 0, 255, 255].repeat(4), None))) });
     let mut app = PhotocraftApp::new(Session::new(), Services { clipboard_get_image: Some(get), ..Default::default() });
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let layers = app.session.active().unwrap().doc.layers.len();

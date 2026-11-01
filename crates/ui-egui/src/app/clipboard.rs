@@ -1,9 +1,17 @@
 use super::PhotocraftApp;
 
-fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
+/// `icc`, the profile an image from another app is in, counts too: the same pixels in another
+/// profile are another image. Our own exports carry none, so they still match when read back.
+fn clip_signature(w: u32, h: u32, px: &[u8], icc: Option<&[u8]>) -> u64 {
+    use std::hash::{Hash, Hasher};
     let mut sig = (w as u64) << 32 | h as u64;
     for b in px.iter().step_by(997) {
         sig = sig.rotate_left(5) ^ *b as u64;
+    }
+    if let Some(icc) = icc {
+        let mut h = std::hash::DefaultHasher::new();
+        icc.hash(&mut h);
+        sig ^= h.finish();
     }
     sig
 }
@@ -24,7 +32,7 @@ impl PhotocraftApp {
         clip.surface.read_rgba8_into(b, &mut px);
         let bytes: Vec<u8> = px.into_iter().flatten().collect();
         if set(b.width(), b.height(), &bytes).is_ok() {
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes, None));
             self.clip_unmirrored = false;
         }
     }
@@ -57,8 +65,8 @@ impl PhotocraftApp {
                 return Err(error);
             }
         };
-        let image = image.filter(|(w, h, bytes)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
-        let Some((w, h, bytes)) = image else {
+        let image = image.filter(|(w, h, bytes, _)| *w > 0 && *h > 0 && bytes.len() == *w as usize * *h as usize * 4);
+        let Some((w, h, bytes, icc)) = image else {
             if self.os_clip_sig.take().is_some() && !self.clip_unmirrored {
                 self.session.clipboard = None;
                 self.clip_external = false;
@@ -66,15 +74,16 @@ impl PhotocraftApp {
             }
             return Ok(false);
         };
-        let sig = clip_signature(w, h, &bytes);
+        let sig = clip_signature(w, h, &bytes, icc.as_deref());
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
+        let profile = icc.map(std::sync::Arc::new);
         self.session.clipboard =
-            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
+            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None, profile });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;

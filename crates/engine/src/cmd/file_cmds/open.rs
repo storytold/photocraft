@@ -166,7 +166,9 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    let src = imported.document;
+    let mut src = imported.document;
+    // In the document's colours, as the smart object renders its source later.
+    crate::smart_cmds::source_into_profile(&mut src, &d.doc)?;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
     let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);
