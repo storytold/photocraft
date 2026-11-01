@@ -334,6 +334,7 @@ mod tests {
                     ChannelTarget::Alpha(0),
                     &[],
                     &Default::default(),
+                    Some((app.session.tools.foreground, app.session.tools.background)),
                 )
                 .unwrap();
                 let ctx = egui::Context::default();

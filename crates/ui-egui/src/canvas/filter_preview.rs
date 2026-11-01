@@ -69,6 +69,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         command: cmd,
         params,
         k,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let key = request.doc.0 ^ (1u64 << 61);
     // Every filter's preview computes off the UI thread in the desktop app: Gaussian Blur at
@@ -120,6 +121,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                     task.target,
                     &documents,
                     &color,
+                    Some(task.tool_colors),
                 )
                 .map(|doc| {
                     let buffer = photocraft_compose::flatten(&doc);
@@ -160,6 +162,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             request.target,
             &documents,
             &app.session.color.settings,
+            Some(request.tool_colors),
         )
         .map(|doc| {
             let buffer = photocraft_compose::flatten(&doc);
