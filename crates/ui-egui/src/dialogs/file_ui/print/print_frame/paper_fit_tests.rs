@@ -211,23 +211,73 @@ fn persisted_unknown_units_are_normalized_without_geometry_changes() {
 }
 
 #[test]
-fn footer_catalog_placeholders_can_be_reordered_without_changing_dimensions() {
+fn footer_distinguishes_dimensions_from_position_overflow_without_geometry_changes() {
+    let (app, mut f) = fixture();
+    f.insert("center".into(), json!(false));
+    for (left, top) in [(-0.1, 0.0), (0.0, -0.1), (20.0, 0.0), (0.0, 20.0)] {
+        f.insert("left".into(), json!(left));
+        f.insert("top".into(), json!(top));
+        let before = f.clone();
+        let l = resolved(&app, &f);
+        assert!(l.rect.2 < l.paper.0 && l.rect.3 < l.paper.1);
+        let text = super::super::print_preview_footer(l, "cm");
+        assert!(text.contains("image extends outside the paper"), "{left}, {top}: {text}");
+        assert!(!text.contains("larger than the paper"));
+        assert_eq!(f, before);
+        assert_eq!(resolved(&app, &f), l);
+    }
+    let mut l = resolved(&app, &f);
+    l.rect = (0.0, 0.0, l.paper.0, l.paper.1);
+    assert!(!super::super::print_preview_footer(l, "cm").contains("paper"), "exact fit has no warning");
+    for rect in [(0.0, 0.0, l.paper.0 + 1.0, 1.0), (-1.0, -1.0, 1.0, l.paper.1 + 1.0)] {
+        l.rect = rect;
+        let text = super::super::print_preview_footer(l, "cm");
+        assert!(text.contains("larger than the paper"));
+        assert!(!text.contains("image extends outside the paper"), "size warning takes precedence");
+    }
+}
+
+#[test]
+fn footer_uses_selected_catalog_for_summary_and_both_warnings() {
     let (app, f) = fixture();
-    let l = resolved(&app, &f);
+    let mut l = resolved(&app, &f);
+    l.scale = 0.371;
+    l.rect = (0.0, 0.0, 3.0 * 72.0 / 2.54, 2.0 * 72.0 / 2.54);
+    let original_language = crate::i18n::current();
+    let summary_source = "Scale {scale}%  ·  {width} × {height} {unit}";
     for lang in crate::i18n::Lang::all().filter(|lang| *lang != crate::i18n::Lang::EN) {
-        for source in ["Scale {scale}%  ·  {width} × {height} {unit}", "{summary}  ·  {note}", "larger than the paper"] {
+        for source in [summary_source, "{summary}  ·  {note}", "larger than the paper", "image extends outside the paper"] {
             assert!(crate::i18n::has(lang, source), "{}: {source}", lang.code());
         }
-        let translated = crate::i18n::tr(lang, "Scale {scale}%  ·  {width} × {height} {unit}");
-        let text = crate::i18n::fmt(translated, &[("height", "2.00"), ("width", "3.00"), ("unit", "cm"), ("scale", "37.1")]);
-        assert!(!text.contains('{'));
-        for value in ["2.00", "3.00", "cm", "37.1"] {
-            assert!(text.contains(value));
+        for note in ["", "image extends outside the paper", "larger than the paper"] {
+            let mut candidate = l;
+            if note == "image extends outside the paper" {
+                candidate.rect.0 = -1.0;
+            }
+            if note == "larger than the paper" {
+                candidate.rect.2 = candidate.paper.0 + 1.0;
+            }
+            let summary = crate::i18n::fmt(
+                crate::i18n::tr(lang, summary_source),
+                &[("height", "2.00"), ("width", &format!("{:.2}", candidate.rect.2 / super::super::unit_pt("cm"))), ("unit", "cm"), ("scale", "37.1")],
+            );
+            let expected = if note.is_empty() {
+                summary
+            } else {
+                crate::i18n::fmt(crate::i18n::tr(lang, "{summary}  ·  {note}"), &[("summary", &summary), ("note", crate::i18n::tr(lang, note))])
+            };
+            let actual = crate::i18n::with_language(lang, || super::super::print_preview_footer(candidate, "cm"));
+            assert_eq!(actual, expected, "{}: {note}", lang.code());
+            assert!(!actual.contains('{'));
+            assert_eq!(crate::i18n::current(), original_language);
+            if lang.code() == "ja" {
+                assert!(actual.contains("拡大・縮小"));
+                assert!(!actual.contains("Scale"));
+                if !note.is_empty() {
+                    assert!(!actual.contains(note));
+                }
+                assert_ne!(crate::i18n::tr(lang, summary_source), summary_source);
+            }
         }
     }
-    let footer = super::super::print_preview_footer(l, "cm");
-    assert!(!footer.contains('{'));
-    let mut outside = l;
-    outside.rect.0 = -1.0;
-    assert!(super::super::print_preview_footer(outside, "cm").contains("larger than the paper"));
 }

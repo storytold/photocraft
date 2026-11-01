@@ -4169,3 +4169,4 @@ curves	Smooth	スムーズ
 	Scale {scale}%  ·  {width} × {height} {unit}	{width} × {height} {unit}  ·  拡大・縮小 {scale}%
 	{summary}  ·  {note}	{summary}  ·  {note}
 	larger than the paper	用紙より大きい
+	image extends outside the paper	画像が用紙の外にはみ出しています

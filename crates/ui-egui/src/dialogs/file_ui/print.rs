@@ -181,8 +181,15 @@ fn print_preview_footer(l: photocraft_engine::print_cmds::PrintLayout, units: &s
         "mm" => "mm",
         _ => "cm",
     };
-    let fits = l.rect.0 >= 0.0 && l.rect.1 >= 0.0 && l.rect.0 + l.rect.2 <= l.paper.0 && l.rect.1 + l.rect.3 <= l.paper.1;
-    let note = if fits { "" } else { tl!("larger than the paper") };
+    let (x, y, w, h) = l.rect;
+    // Size takes precedence: moving oversized artwork alone cannot make it fit.
+    let note = if w > l.paper.0 || h > l.paper.1 {
+        tl!("larger than the paper")
+    } else if x < 0.0 || y < 0.0 || x + w > l.paper.0 || y + h > l.paper.1 {
+        tl!("image extends outside the paper")
+    } else {
+        ""
+    };
     let summary = crate::i18n::fmt(
         tl!("Scale {scale}%  ·  {width} × {height} {unit}"),
         &[
@@ -192,7 +199,7 @@ fn print_preview_footer(l: photocraft_engine::print_cmds::PrintLayout, units: &s
             ("unit", units),
         ],
     );
-    if fits { summary } else { crate::i18n::fmt(tl!("{summary}  ·  {note}"), &[("summary", &summary), ("note", note)]) }
+    if note.is_empty() { summary } else { crate::i18n::fmt(tl!("{summary}  ·  {note}"), &[("summary", &summary), ("note", note)]) }
 }
 
 /// A number field in `units` for a value kept in points; true when edited.

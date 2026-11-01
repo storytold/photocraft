@@ -4532,3 +4532,4 @@ shape	Appearance	Apparence
 	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
 	{summary}  ·  {note}	{summary}  ·  {note}
 	larger than the paper	larger than the paper
+	image extends outside the paper	image extends outside the paper
