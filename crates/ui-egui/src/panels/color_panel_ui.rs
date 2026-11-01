@@ -584,8 +584,9 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let part = match origin {
             Some(origin) => {
                 let d = origin.distance(center);
-                // The hue knob reaches past the ring's edge on a small wheel.
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0);
+                // The hue knob reaches past the ring's edge on a small wheel. The triangle's
+                // corners reach into the ring's inner band, and a press there is the triangle.
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !triangle_contains(tri, origin));
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
@@ -675,6 +676,13 @@ pub(crate) fn triangle(center: Pos2, r: f32) -> [Pos2; 3] {
 /// b·s·(hue − white).
 pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
     black + (white - black) * b + (hue - white) * (b * s)
+}
+
+/// Whether `p` lies inside the triangle or on its edge; `false` for a non-finite `p`.
+fn triangle_contains([a, b, c]: [Pos2; 3], p: Pos2) -> bool {
+    let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
+    let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
+    (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
 }
 
 /// Saturation and brightness at `p`, clamped into the triangle; `None` for a degenerate one or a

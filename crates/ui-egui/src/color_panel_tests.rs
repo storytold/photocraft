@@ -393,6 +393,27 @@ fn color_wheel_markers_pick_their_own_colour_when_the_hue_is_off_the_triangle_co
     }
 }
 
+/// The triangle's pure-hue corner reaches into the band where a press counts as the ring (#10122):
+/// a click just inside that corner sets saturation and brightness and keeps the hue, while a
+/// click beside it on the same radius still turns the hue.
+#[test]
+fn color_wheel_pure_hue_corner_keeps_the_hue() {
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([200.0, 0.5, 0.5]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, _) = crate::color_panel_ui::wheel_geometry(area);
+    let [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    // Half a point in from the corner: inside the triangle, beyond `inner - 2`.
+    press(&mut h, hue_c + (center - hue_c).normalized() * 0.5, Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 200.0).abs() < 2.0 && got[1] > 0.9 && got[2] > 0.9, "corner click picked {got:?}");
+    // The same radius 30 degrees round from the corner is the ring.
+    let a = 120f32.to_radians();
+    press(&mut h, center + vec2(a.cos(), -a.sin()) * (inner - 1.5), Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 120.0).abs() < 2.0, "ring click beside the corner picked {got:?}");
+}
+
 /// Picking a mode from the panel menu changes the panel; the theme never does.
 #[test]
 fn panel_menu_picks_the_mode_and_ramp() {
