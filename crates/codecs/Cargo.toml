@@ -13,7 +13,7 @@ default = []
 # AVIF *encode* via ravif (pure Rust). Decoding AVIF needs dav1d (C), so AVIF
 # stays read-unsupported and therefore asymmetric; it is off by default.
 avif = ["image/avif"]
-# HEIC/HEIF decode via the optional photocraft-heif crate (heic-rs, pure Rust). Off by default so
+# HEIC/HEIF decode via the optional photocraft-heif crate (heic-decoder, pure Rust). Off by default so
 # distributors choose it at build time; official builds and CI enable it (`--features heif` on the
 # apps). Without it HEIF files are still recognised and opening one is a clear "unsupported" error.
 heif = ["dep:photocraft-heif"]
