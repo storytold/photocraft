@@ -507,7 +507,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
         return;
     }
     let last = d.points.last().map(|p| [p[0], p[1]]).unwrap_or(d.start);
-    let marquee = marquee_preview_px(&app.ui.tool_options, d, app.point_zoom());
+    let marquee = marquee_preview_px(app, d);
     if let Some(r) = marquee {
         draw_marquee_readout(app, painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), size_readout(app, r));
     }

@@ -460,7 +460,18 @@ fn crop_image(app: &PhotocraftApp, p: [f64; 2], targets: &SnapTargets, tol: f64)
 fn drawn_rect(app: &PhotocraftApp, d: &crate::canvas::Drag) -> Option<[f64; 4]> {
     let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
     let (a, b) = match d.tool {
-        Tool::RectMarquee | Tool::EllipseMarquee => crate::canvas::marquee_corners(&app.ui.tool_options, d, last),
+        Tool::RectMarquee | Tool::EllipseMarquee => {
+            let o = &app.ui.tool_options;
+            // The ants show the bounded, pixel-snapped fixed-ratio rectangle. Snapping the raw
+            // corners lets a centre that hangs off the canvas hit a document edge and drag that
+            // preview (#6192).
+            if o.marquee_style == "fixedRatio" && o.marquee_width > 0.0 && o.marquee_height > 0.0 {
+                let [x0, y0, x1, y1] = crate::canvas::marquee_preview_px(app, d)?;
+                ([x0, y0], [x1, y1])
+            } else {
+                crate::canvas::marquee_corners(o, d, last)
+            }
+        }
         Tool::ObjectSelection => (d.start, last),
         t if crate::vector_ui::is_shape_tool(t) => return crate::vector_ui::shape_bounds(&app.ui.tool_options, t, d.start, last, d.live),
         _ => return None,
