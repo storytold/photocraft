@@ -912,7 +912,7 @@ mod dialog_content_rtl_tests {
         let _scope = crate::direction::direction_scope(dir);
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
-        let out = ctx.run_ui(
+        let mut out = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0))), ..Default::default() },
             |ui| {
                 ui.set_width(360.0);
@@ -925,6 +925,7 @@ mod dialog_content_rtl_tests {
                 });
             },
         );
+        out.textures_delta.clear();
         (raw_text_rect(&out, "job-title"), raw_text_rect(&out, "job-row-label"), raw_text_rect(&out, "job-row-button"))
     }
 
