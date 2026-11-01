@@ -686,7 +686,7 @@ fn vibrance_edit_keeps_the_files_method_and_other_keys() {
     assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 0.0, saturation: 9.0 }));
     assert_eq!(keys(&data), ["useLegacy", "Strt", "tint"]);
     // A legacy block (no method key) gets the sliders first, as Photoshop's legacy files have them.
-    let mut data = photoshop_vib(&[tint.clone()]);
+    let mut data = photoshop_vib(std::slice::from_ref(&tint));
     assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 3.0, saturation: 4.0 }));
     assert_eq!(keys(&data), ["vibrance", "Strt", "tint"]);
     let mut data = photoshop_vib(&[legacy_off.clone(), ("vibrance", Value::Integer(5))]);
