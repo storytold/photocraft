@@ -419,7 +419,8 @@ fn rows_hug_the_reading_start_edge_in_both_directions() {
 #[test]
 fn channel_options_popup_rows_mirror_only_under_rtl() {
     use crate::text::direction::{self, Dir};
-    let render = |dir: Dir| -> (egui::Rect, Vec<(String, egui::Rect, Vec<(char, f32)>)>) {
+    type Text = (String, egui::Rect, Vec<(char, f32)>);
+    let render = |dir: Dir| -> (egui::Rect, Vec<Text>) {
         let _scope = direction::direction_scope(dir);
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
@@ -453,8 +454,8 @@ fn channel_options_popup_rows_mirror_only_under_rtl() {
         }
         (popup, texts)
     };
-    let at = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
-    let glyph = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
+    let at = |v: &[Text], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
+    let glyph = |v: &[Text], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
     let slack = 32.0;
     let (rtl_popup, rtl) = render(Dir::Rtl);
     let (masked, selected) = (at(&rtl, "Masked Areas").unwrap().1, at(&rtl, "Selected Areas").unwrap().1);

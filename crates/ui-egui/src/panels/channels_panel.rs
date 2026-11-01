@@ -84,7 +84,7 @@ fn handle_row_interactions(ui: &mut egui::Ui, mut row: RowInteractions<'_>) {
     let rename_id = egui::Id::unique(("chan-rename", row.doc.id.0, format!("{:?}", row.row.reference())));
     handle_channel_row_click(ui, &mut row);
     handle_channel_row_double_click(ui, &mut row, rename_id);
-    row.response.context_menu(|ui| draw_row_menu(ui, row.row, row.doc, row.masked, row.actions));
+    row.response.context_menu(|ui| crate::menus::popup_body(ui, |ui| draw_row_menu(ui, row.row, row.doc, row.masked, row.actions)));
 }
 
 fn handle_channel_row_click(ui: &egui::Ui, row: &mut RowInteractions<'_>) {
@@ -568,7 +568,7 @@ pub fn fit_thumb(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 }
 
 fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd: &str, p: Value) {
-    if crate::menu_keys::menu_row(ui, &tl!(label), None, false, true).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!(label), None, false, true).clicked() {
         actions.push((cmd.into(), p));
         ui.close();
     }
@@ -577,11 +577,11 @@ fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd:
 /// Channel Options › Color Indicates.
 fn indicates_items(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel: Value, current: ColorIndicates) {
     let masked = current == ColorIndicates::MaskedAreas;
-    if crate::menu_keys::menu_row(ui, &tl!("Color Indicates Masked Areas"), None, masked, true).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Color Indicates Masked Areas"), None, masked, true).clicked() {
         actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "indicates": "masked" })));
         ui.close();
     }
-    if crate::menu_keys::menu_row(ui, &tl!("Color Indicates Selected Areas"), None, !masked, true).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Color Indicates Selected Areas"), None, !masked, true).clicked() {
         actions.push(("channel.options".into(), json!({ "channel": channel, "indicates": "selected" })));
         ui.close();
     }
@@ -599,7 +599,7 @@ fn overlay_colors(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel
                 "Magenta" => "#e000c0",
                 _ => "#f0d000",
             };
-            if crate::menu_keys::menu_row(ui, &tl!(label), None, false, true).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!(label), None, false, true).clicked() {
                 actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "color": hex })));
                 ui.close();
             }
