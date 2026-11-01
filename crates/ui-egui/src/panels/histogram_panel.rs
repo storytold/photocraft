@@ -826,14 +826,14 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Histogram items of the panel menu.
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.add_enabled(app.session.active().is_some(), egui::Button::new(tl!("Uncached Refresh"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Uncached Refresh"), None, false, app.session.active().is_some()).clicked() {
         uncached_refresh(app);
         ui.close();
     }
     ui.separator();
     let mut changed = false;
     for (view, label) in [(HistView::Compact, "Compact View"), (HistView::Expanded, "Expanded View"), (HistView::AllChannels, "All Channels View")] {
-        if ui.radio(app.ui.histogram_panel.view == view, tl!(label)).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!(label), None, app.ui.histogram_panel.view == view, true).clicked() {
             // The channel is one setting for every view, so it is kept.
             app.ui.histogram_panel.view = view;
             changed = true;
@@ -841,12 +841,14 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     let mut stats_on = app.ui.histogram_panel.show_statistics;
-    if crate::widgets::checkbox(ui, &mut stats_on, tl!("Show Statistics")).changed() {
+    if crate::menu_keys::menu_row(ui, tl!("Show Statistics"), None, stats_on, true).clicked() {
+        stats_on = !stats_on;
         app.ui.histogram_panel.show_statistics = stats_on;
         changed = true;
     }
     let mut color = app.ui.histogram_panel.show_channels_in_color;
-    if crate::widgets::checkbox(ui, &mut color, tl!("Show Channels in Color")).changed() {
+    if crate::menu_keys::menu_row(ui, tl!("Show Channels in Color"), None, color, true).clicked() {
+        color = !color;
         app.ui.histogram_panel.show_channels_in_color = color;
         changed = true;
     }
