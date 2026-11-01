@@ -569,7 +569,7 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ring_w = outer - inner;
     let (h, s, b) = (v[0] / 360.0, v[1] / 100.0, v[2] / 100.0);
     ui.painter().add(ring_mesh(center, inner, outer));
-    let tri = triangle(center, inner - 1.0, h);
+    let tri = triangle(center, inner - 1.0);
     ui.painter().add(triangle_mesh(tri, h));
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
     // The ring or the triangle, from where the press began (kept for frames without a press
@@ -584,8 +584,9 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let part = match origin {
             Some(origin) => {
                 let d = origin.distance(center);
-                // The hue knob reaches past the ring's edge on a small wheel.
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0);
+                // The hue knob reaches past the ring's edge on a small wheel. The triangle's
+                // corners reach into the ring's inner band, and a press there is the triangle.
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && !triangle_contains(tri, origin));
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
@@ -660,11 +661,12 @@ fn ring_mesh(center: Pos2, inner: f32, outer: f32) -> Mesh {
     m
 }
 
-/// The triangle's corners for hue `h` (0..1): the pure hue at the hue's angle, white 120° on and
-/// black 240° on, inside radius `r`.
-fn triangle(center: Pos2, r: f32, h: f32) -> [Pos2; 3] {
+/// The triangle's corners inside radius `r`: fixed in place whatever the hue (as Krita's), so the
+/// direction that adds saturation or brightness never changes (#10122). The pure hue is the top
+/// corner, white 120 degrees on (lower left) and black 240 degrees on (lower right).
+pub(crate) fn triangle(center: Pos2, r: f32) -> [Pos2; 3] {
     let at = |turns: f32| {
-        let a = (h + turns) * TAU;
+        let a = (0.25 + turns) * TAU;
         center + vec2(a.cos(), -a.sin()) * r
     };
     [at(0.0), at(1.0 / 3.0), at(2.0 / 3.0)]
@@ -672,8 +674,15 @@ fn triangle(center: Pos2, r: f32, h: f32) -> [Pos2; 3] {
 
 /// The point of saturation `s` and brightness `b` in the triangle: black + b·(white − black) +
 /// b·s·(hue − white).
-fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
+pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
     black + (white - black) * b + (hue - white) * (b * s)
+}
+
+/// Whether `p` lies inside the triangle or on its edge; `false` for a non-finite `p`.
+fn triangle_contains([a, b, c]: [Pos2; 3], p: Pos2) -> bool {
+    let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
+    let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
+    (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
 }
 
 /// Saturation and brightness at `p`, clamped into the triangle; `None` for a degenerate one or a
