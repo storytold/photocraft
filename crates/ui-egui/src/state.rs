@@ -314,6 +314,10 @@ pub struct UiState {
     /// Selection-tool context menu opened by a plain canvas right-click.
     #[serde(default)]
     pub canvas_tool_menu: Option<crate::canvas_tool_menu::CanvasToolMenu>,
+    /// An outside press dismissed the canvas tool menu; suppress the corresponding
+    /// release click from triggering a tool action.
+    #[serde(default)]
+    pub canvas_tool_menu_dismissed: bool,
     /// The guide a Move-tool click selected (`guide_select`): drawn blue, Delete removes it.
     #[serde(default)]
     pub selected_guide: Option<crate::guide_select::SelectedGuide>,
@@ -548,6 +552,7 @@ impl Default for UiState {
             color_hud: None,
             layer_menu: None,
             canvas_tool_menu: None,
+            canvas_tool_menu_dismissed: false,
             selected_guide: None,
             brush_tool: Tool::Brush,
             tool_brushes: Vec::new(),
