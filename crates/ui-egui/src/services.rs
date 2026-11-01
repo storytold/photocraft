@@ -423,6 +423,14 @@ pub struct Services {
     pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// Why the previous self-update failed, from the record its helper left before it started the
+    /// old copy again (desktop; read once at startup). Shown in the update-problem window so a
+    /// failed update is never a silent restart into the same prompt (#10477).
+    pub update_failure: Option<String>,
+    /// Whether the release with this tag (`v0.18.0`) is the one this copy installed itself a moment
+    /// ago (desktop). If that release is offered again the install did not take effect here, and
+    /// installing it again would loop.
+    pub update_installed: Option<fn(&str) -> bool>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

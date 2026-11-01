@@ -103,7 +103,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "statusError": app.ui.status_error,
         "notices": app.ui.notices,
         "updatesOpen": app.ui.updates_open,
-        "updates": {"supported": app.session.updates.check.is_some(), "currentVersion": photocraft_engine::build_info::VERSION, "result": app.session.updates.status},
+        "updates": {"supported": app.session.updates.check.is_some(), "currentVersion": photocraft_engine::build_info::VERSION, "result": app.session.updates.status, "problem": app.updates_rt.problem.as_ref().map(crate::updates_ui::Problem::message)},
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
