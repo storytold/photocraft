@@ -301,7 +301,7 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, p: &Value, stored: Value,
         }
         if let LayerContent::Smart(_) = l.content {
             let sf = SmartFilter { command: cmd.to_string(), params: stored.clone(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
-            return crate::smart_cmds::add_smart_filter(doc, id, sf, selection.as_ref());
+            return crate::smart_cmds::add_smart_filter(doc, id, sf, selection.as_ref(), None);
         }
         // A Background layer gains transparency when the edge mode exposes it (as in Photoshop).
         if float_bg && background && !colors {

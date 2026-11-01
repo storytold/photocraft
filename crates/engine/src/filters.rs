@@ -14,7 +14,13 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 mod validation;
-pub(crate) use validation::validate_params;
+pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
+    validation::validate_params(id, params)?;
+    if id == crate::palette_cmds::FILTER_ID {
+        crate::palette_cmds::validate_params(params)?;
+    }
+    Ok(())
+}
 
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
@@ -184,11 +190,14 @@ pub fn apply_filter_to_surface(
     bounds: photocraft_geom::Rect,
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<Option<photocraft_raster::Surface>> {
     // Replays bypass command dispatch; nested paths must still obey the requesting session's
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
     crate::jobs::authorize_render_command(id, params)?;
-    // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
+    if id == crate::palette_cmds::FILTER_ID {
+        return Ok(Some(crate::palette_cmds::apply_to_surface(params, surf, selection, canvas, bounds, cancelled)?));
+    }
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
         return Ok(Some(out));
     }
@@ -233,6 +242,9 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
 
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     validate_params(id, p)?;
+    if id == crate::palette_cmds::FILTER_ID {
+        return crate::palette_cmds::run_filter(s, p);
+    }
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
     let mut prepared = crate::filters_ext::prepare(s, id, p);
     if id == "filter.distort.displace" {
@@ -317,7 +329,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                     };
                     // Non-destructive: record the filter and re-render the smart object from its source.
                     let sf = SmartFilter { command: id.clone(), params, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
-                    return crate::smart_cmds::add_smart_filter(doc, layer, sf, selection.as_ref()).map(|()| fp);
+                    return crate::smart_cmds::add_smart_filter(doc, layer, sf, selection.as_ref(), Some(ctx)).map(|()| fp);
                 }
                 _ => return Err(EngineError::Other("not a pixel layer".into())),
             };
@@ -520,7 +532,12 @@ pub fn specs() -> Vec<CommandSpec> {
 /// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
 /// current layer, as in Photoshop (#1270).
 pub fn last_filter(s: &Session) -> Option<(String, Value)> {
-    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    let (id, mut params) = s
+        .journal
+        .iter()
+        .rev()
+        .find(|(id, _)| (id.as_str() == crate::palette_cmds::FILTER_ID || params_for(id, &Value::Null).is_some()) && id.starts_with("filter."))
+        .cloned()?;
     if let Value::Object(m) = &mut params {
         m.remove("layer");
         m.remove("target");

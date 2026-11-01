@@ -4407,6 +4407,81 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+
+	Generated palette	Generált paletta
+	Palette library	Palettakönyvtár
+	Search palettes…	Paletták keresése…
+	Import GPL…	GPL importálása…
+	Import ACT…	ACT importálása…
+	No bundled palette matches this search.	Nincs a keresésnek megfelelő beépített paletta.
+	{name}  ·  {n} entries	{name}  ·  {n} bejegyzés
+	Use generated palette	Generált paletta használata
+	Fixed snapshot	Rögzített pillanatkép
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	A generált paletta van kiválasztva. Válasszon beépített palettát, vagy importáljon GPL/ACT-fájlt a sorrendet megőrző, rögzített pillanatképhez.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Nincs rögzített paletta kiválasztva; a motor alapértelmezett palettája lesz használva. Válasszon beépített palettát, vagy importáljon GPL/ACT-et pillanatkép rögzítéséhez.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Importált pillanatkép · a forrás sorrendje és a duplikált bejegyzések megmaradnak
+	Algorithm	Algoritmus
+	Ingredient {n}	Összetevő {n}
+	Phase	Fázis
+	Custom threshold matrix (0–1)	Egyéni küszöbérték-mátrix (0–1)
+	Mapping settings are invalid: {error}	A leképezési beállítások érvénytelenek: {error}
+	Mapping	Leképezés
+	Threshold ingredients	Küszöbérték-összetevők
+	Add ingredient	Összetevő hozzáadása
+	Import matrix…	Mátrix importálása…
+	Generated palette options	Generált paletta beállításai
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	A rögzített paletta csak GIF/PNG-8 esetén használatos; a JPEG/PNG-24 figyelmen kívül hagyja.
+	Clear snapshot and choose generated palette	Pillanatkép törlése és generált paletta választása
+	Palette invalid: {error}	Érvénytelen paletta: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} {entries} bejegyzést tartalmaz, de ez a formátum {limit} bejegyzést engedélyez egy átlátszósági hely fenntartásával.
+	{name} has {entries} entries, but this format allows {limit}.	{name} {entries} bejegyzést tartalmaz, de ez a formátum {limit} bejegyzést engedélyez.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	A szándékos csökkentés engedélyezve; a motor a mentett pillanatkép módosítása nélkül kvantálja azt ehhez a formátumhoz.
+	Do not reduce (reject oversized palette)	Ne csökkentse (utasítsa el a túl nagy palettát)
+	Reduce to {limit} for this conversion/export	Csökkentés {limit} elemre ehhez az átalakításhoz/exportáláshoz
+	Palette reduction is enabled for this adapter.	A palettacsökkentés engedélyezve ehhez a formátumhoz.
+	threshold matrix must be UTF-8 text	a küszöbérték-mátrixnak UTF-8 szövegnek kell lennie
+	invalid threshold value `{token}`	érvénytelen küszöbérték: `{token}`
+	threshold values must be finite and between 0 and 1	a küszöbértékeknek végesnek és 0 és 1 közöttinek kell lenniük
+	threshold matrices are limited to 256 entries	a küszöbérték-mátrixok legfeljebb 256 bejegyzést tartalmazhatnak
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	a küszöbérték-mátrix oldalanként 2, 4, 8 vagy 16 bejegyzésű négyzet kell legyen
+	palette dialog was closed	a paletta párbeszédablaka bezárult
+	threshold ingredient no longer exists	a küszöbérték-összetevő már nem létezik
+	Bayer	Bayer
+	Clustered Dot	Csoportosított pont
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Kék zaj
+	White Noise	Fehér zaj
+	Riemersma	Riemersma
+	Serpentine traversal	Kígyózó bejárás
+	Decay	Lecsengés
+	Binary	Bináris
+	Matrix	Mátrix
+	Palette source	Palettaforrás
+	Generate from image	Generálás képből
+	Choose a palette	Paletta választása
+	Find a palette for this image.	Paletta keresése ehhez a képhez.
+	Use a built-in or imported palette.	Beépített vagy importált paletta használata.
+	Generation method	Generálási mód
+	Required colors	Szükséges színek
+	Dithering	Árnyalatkeverés
+	Combine dither patterns	Árnyalatkeverési minták kombinálása
+	Preserve transparency	Átlátszóság megőrzése
+	Transparency dithering	Átlátszóság árnyalatkeverése
+	Resulting palette	Eredményül kapott paletta
+	Updating preview…	Előnézet frissítése…
+	Preview is off	Az előnézet ki van kapcsolva.
+	Move up	Felfelé mozgatás
+	Move down	Lefelé mozgatás
+@id	filter.paletteMap	Palettatérkép…
+	Palette Map…	Palettatérkép…
+	Approximate preview	Közelítő előnézet
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások

@@ -4244,6 +4244,81 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+
+	Generated palette	Gegenereerd palet
+	Palette library	Palettenbibliotheek
+	Search palettes…	Paletten zoeken…
+	Import GPL…	GPL importeren…
+	Import ACT…	ACT importeren…
+	No bundled palette matches this search.	Geen ingebouwd palet komt overeen met deze zoekopdracht.
+	{name}  ·  {n} entries	{name}  ·  {n} items
+	Use generated palette	Gegenereerd palet gebruiken
+	Fixed snapshot	Vaste momentopname
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Genererend palet geselecteerd. Kies een ingebouwd palet of importeer een GPL/ACT-bestand voor een vaste momentopname die de volgorde behoudt.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Geen vast palet geselecteerd; het standaardpalet van de engine wordt gebruikt. Kies een ingebouwd palet of importeer GPL/ACT om een momentopname vast te zetten.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Geïmporteerde momentopname · bronvolgorde en dubbele items blijven behouden
+	Algorithm	Algoritme
+	Ingredient {n}	Ingrediënt {n}
+	Phase	Fase
+	Custom threshold matrix (0–1)	Aangepaste drempelmatrix (0–1)
+	Mapping settings are invalid: {error}	Toewijzingsinstellingen zijn ongeldig: {error}
+	Mapping	Toewijzing
+	Threshold ingredients	Drempelingrediënten
+	Add ingredient	Ingrediënt toevoegen
+	Import matrix…	Matrix importeren…
+	Generated palette options	Opties voor gegenereerd palet
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Een vast palet wordt alleen voor GIF/PNG-8 gebruikt; JPEG/PNG-24 negeren het.
+	Clear snapshot and choose generated palette	Momentopname wissen en gegenereerd palet kiezen
+	Palette invalid: {error}	Palet ongeldig: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} bevat {entries} items, maar dit formaat staat {limit} toe met één gereserveerde transparantieplek.
+	{name} has {entries} entries, but this format allows {limit}.	{name} bevat {entries} items, maar dit formaat staat {limit} toe.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Opzettelijke reductie is ingeschakeld; de engine kwantiseert deze momentopname voor het formaat zonder de opgeslagen momentopname te wijzigen.
+	Do not reduce (reject oversized palette)	Niet reduceren (te groot palet weigeren)
+	Reduce to {limit} for this conversion/export	Reducereren tot {limit} voor deze conversie/export
+	Palette reduction is enabled for this adapter.	Paletreductie is ingeschakeld voor dit formaat.
+	threshold matrix must be UTF-8 text	drempelmatrix moet UTF-8-tekst zijn
+	invalid threshold value `{token}`	ongeldige drempelwaarde `{token}`
+	threshold values must be finite and between 0 and 1	drempelwaarden moeten eindig zijn en tussen 0 en 1 liggen
+	threshold matrices are limited to 256 entries	drempelmatrices zijn beperkt tot 256 items
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	drempelmatrix moet een vierkant zijn met 2, 4, 8 of 16 items per zijde
+	palette dialog was closed	paletdialoog is gesloten
+	threshold ingredient no longer exists	drempelingrediënt bestaat niet meer
+	Bayer	Bayer
+	Clustered Dot	Gegroepeerde punt
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Blauwe ruis
+	White Noise	Witte ruis
+	Riemersma	Riemersma
+	Serpentine traversal	Slangvormige doorgang
+	Decay	Verval
+	Binary	Binair
+	Matrix	Matrix
+	Palette source	Paletbron
+	Generate from image	Genereren uit afbeelding
+	Choose a palette	Een palet kiezen
+	Find a palette for this image.	Een palet voor deze afbeelding vinden.
+	Use a built-in or imported palette.	Een ingebouwd of geïmporteerd palet gebruiken.
+	Generation method	Generatiemethode
+	Required colors	Vereiste kleuren
+	Dithering	Dithering
+	Combine dither patterns	Ditherpatronen combineren
+	Preserve transparency	Transparantie behouden
+	Transparency dithering	Transparantiedithering
+	Resulting palette	Resulterend palet
+	Updating preview…	Voorvertoning bijwerken…
+	Preview is off	Voorvertoning is uitgeschakeld.
+	Move up	Omhoog verplaatsen
+	Move down	Omlaag verplaatsen
+@id	filter.paletteMap	Palet toewijzen…
+	Palette Map…	Palet toewijzen…
+	Approximate preview	Benaderende voorvertoning
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring

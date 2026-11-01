@@ -1,9 +1,9 @@
-//! Colour reduction for Image › Mode › Indexed Color and Bitmap: palette construction (exact,
-//! system, web, uniform, perceptual, selective, adaptive), forced colours, and dithering
-//! (none, Floyd–Steinberg diffusion, ordered pattern, noise), plus 1-bit conversion methods.
+//! Indexed palette construction (exact, system, web, uniform, black & white, perceptual,
+//! selective, adaptive), forced colours, stock dithering and 1-bit Bitmap conversion. General
+//! palette mapping and configurable custom dithering live in [`crate::palette_map`].
 //!
 //! Buffers are straight RGBA in 0..=1, row-major. Median cut follows Heckbert (1982); k-means
-//! refinement is Lloyd's algorithm; error diffusion is Floyd & Steinberg (1976).
+//! refinement is Lloyd's algorithm.
 
 use photocraft_color::convert::srgb_to_lab;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,9 @@ pub enum PaletteKind {
     SystemWindows,
     Web,
     Uniform,
+    /// Fixed opaque black and white generation preset. Source pixels, count and forced colours
+    /// are ignored; the result is always black followed by white.
+    BlackWhite,
     /// Lab median cut + k-means (perceptually weighted).
     Perceptual,
     /// Perceptual, with entries near web-safe colours snapped to them.
@@ -37,6 +40,7 @@ impl PaletteKind {
             "systemWindows" => PaletteKind::SystemWindows,
             "web" => PaletteKind::Web,
             "uniform" => PaletteKind::Uniform,
+            "blackWhite" => PaletteKind::BlackWhite,
             "perceptual" | "localPerceptual" => PaletteKind::Perceptual,
             "selective" | "localSelective" => PaletteKind::Selective,
             "adaptive" | "localAdaptive" => PaletteKind::Adaptive,
@@ -387,8 +391,13 @@ fn lab_points(hist: &[(Rgb8, u32)]) -> Vec<([f32; 3], u32)> {
 }
 
 /// Builds the palette for `px`. `colors` is the requested count (2..=256) for the computed
-/// kinds; forced colours are included first and count toward it.
+/// kinds; forced colours are included first and count toward it. The [`PaletteKind::BlackWhite`]
+/// preset always returns exactly two opaque entries (black, white), independent of the source,
+/// requested count, and forced-colour setting.
 pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: Forced) -> Result<Vec<Rgb8>, String> {
+    if kind == PaletteKind::BlackWhite {
+        return Ok(vec![[0, 0, 0], [255, 255, 255]]);
+    }
     let colors = colors.clamp(2, 256);
     let mut pal = forced_colors(forced);
     let room = colors.saturating_sub(pal.len());
@@ -400,6 +409,7 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
         Vec::new()
     };
     let computed: Vec<Rgb8> = match kind {
+        PaletteKind::BlackWhite => vec![[0, 0, 0], [255, 255, 255]],
         PaletteKind::Exact => {
             if hist.len() > 256 {
                 return Err(format!("the image has {} colours; Exact needs 256 or fewer", hist.len()));
@@ -458,15 +468,6 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
     Ok(pal)
 }
 
-/// 8×8 Bayer threshold in -0.5..0.5.
-pub fn bayer8(x: usize, y: usize) -> f32 {
-    const M: [u8; 64] = [
-        0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41,
-        51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
-    ];
-    (f32::from(M[(y % 8) * 8 + x % 8]) + 0.5) / 64.0 - 0.5
-}
-
 fn hash01(x: usize, y: usize, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
     h ^= h >> 13;
@@ -492,6 +493,9 @@ fn quantize_with(
     transparent: Option<usize>,
     nearest: impl Fn([f32; 3]) -> usize + Sync,
 ) -> Vec<u8> {
+    if pal.is_empty() {
+        return vec![0; px.len()];
+    }
     let h = px.len().checked_div(w).unwrap_or(0);
     let mut idx = vec![0u8; px.len()];
     // Typical palette spacing sets the ordered/noise dither amplitude.
@@ -529,8 +533,8 @@ fn quantize_with(
     }
     let mut err = vec![[0.0f32; 3]; 2 * (w + 2)];
     for y in 0..h {
-        if dither == Dither::Diffusion {
-            // Rows ping-pong: `cur` is row y, `next` row y + 1 (offset by one for x = -1).
+        // Rows ping-pong: `cur` is row y, `next` row y + 1 (offset by one for x = -1).
+        {
             let (cur, next) = err.split_at_mut(w + 2);
             cur.copy_from_slice(next);
             next.iter_mut().for_each(|e| *e = [0.0; 3]);
@@ -569,21 +573,28 @@ fn quantize_with(
             let k = nearest(c);
             idx[i] = k as u8;
             let e = pal[k].map(|v| f32::from(v) / 255.0);
-            if dither == Dither::Diffusion {
-                let a = amount.clamp(0.0, 1.0);
-                let d: [f32; 3] = std::array::from_fn(|q| (c[q] - e[q]) * a);
-                let (cur, next) = err.split_at_mut(w + 2);
-                for q in 0..3 {
-                    cur[x + 2][q] += d[q] * 7.0 / 16.0;
-                    next[x][q] += d[q] * 3.0 / 16.0;
-                    next[x + 1][q] += d[q] * 5.0 / 16.0;
-                    next[x + 2][q] += d[q] / 16.0;
-                }
+            let a = amount.clamp(0.0, 1.0);
+            let d: [f32; 3] = std::array::from_fn(|q| (c[q] - e[q]) * a);
+            let (cur, next) = err.split_at_mut(w + 2);
+            for q in 0..3 {
+                cur[x + 2][q] += d[q] * 7.0 / 16.0;
+                next[x][q] += d[q] * 3.0 / 16.0;
+                next[x + 1][q] += d[q] * 5.0 / 16.0;
+                next[x + 2][q] += d[q] / 16.0;
             }
             px[i] = [e[0], e[1], e[2], if transparent.is_some() { 1.0 } else { p[3] }];
         }
     }
     idx
+}
+
+/// 8×8 Bayer threshold in -0.5..0.5.
+pub fn bayer8(x: usize, y: usize) -> f32 {
+    const M: [u8; 64] = [
+        0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41,
+        51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
+    ];
+    (f32::from(M[(y % 8) * 8 + x % 8]) + 0.5) / 64.0 - 0.5
 }
 
 /// Image › Mode › Bitmap methods.

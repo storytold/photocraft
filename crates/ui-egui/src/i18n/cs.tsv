@@ -4233,6 +4233,81 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Loose Curl	Volná smyčka
 	Stylized dabs from a history state	Stylizované šmouhy ze stavu historie
 	Aspect Ratio	Poměr stran
+
+	Generated palette	Generovaná paleta
+	Palette library	Knihovna palet
+	Search palettes…	Hledat palety…
+	Import GPL…	Importovat GPL…
+	Import ACT…	Importovat ACT…
+	No bundled palette matches this search.	Žádná vestavěná paleta neodpovídá tomuto hledání.
+	{name}  ·  {n} entries	{name}  ·  {n} položek
+	Use generated palette	Použít generovanou paletu
+	Fixed snapshot	Pevný snímek
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Je vybrána generovaná paleta. Vyberte vestavěnou paletu nebo importujte soubor GPL/ACT pro pevný snímek se zachováním pořadí.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Není vybrána pevná paleta; použije se výchozí paleta enginu. Vyberte vestavěnou paletu nebo importujte GPL/ACT a snímek připněte.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Importovaný snímek · zachováno pořadí zdroje i duplicitní položky
+	Algorithm	Algoritmus
+	Ingredient {n}	Složka {n}
+	Phase	Fáze
+	Custom threshold matrix (0–1)	Vlastní matice prahu (0–1)
+	Mapping settings are invalid: {error}	Nastavení mapování je neplatné: {error}
+	Mapping	Mapování
+	Threshold ingredients	Složky prahu
+	Add ingredient	Přidat složku
+	Import matrix…	Importovat matici…
+	Generated palette options	Možnosti generované palety
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Pevná paleta se používá pouze pro GIF/PNG-8; JPEG/PNG-24 ji ignorují.
+	Clear snapshot and choose generated palette	Vymazat snímek a vybrat generovanou paletu
+	Palette invalid: {error}	Paleta je neplatná: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} obsahuje {entries} položek, ale tento formát dovoluje {limit} s jedním místem vyhrazeným pro průhlednost.
+	{name} has {entries} entries, but this format allows {limit}.	{name} obsahuje {entries} položek, ale tento formát dovoluje {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Je zapnuto záměrné zmenšení; engine kvantizuje tento snímek pro formát bez změny uloženého snímku.
+	Do not reduce (reject oversized palette)	Nezmenšovat (odmítnout příliš velkou paletu)
+	Reduce to {limit} for this conversion/export	Zmenšit na {limit} pro tento převod/export
+	Palette reduction is enabled for this adapter.	Pro tento formát je zapnuto zmenšení palety.
+	threshold matrix must be UTF-8 text	matice prahu musí být text UTF-8
+	invalid threshold value `{token}`	neplatná hodnota prahu `{token}`
+	threshold values must be finite and between 0 and 1	hodnoty prahu musí být konečné a mezi 0 a 1
+	threshold matrices are limited to 256 entries	matice prahu jsou omezeny na 256 položek
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	matice prahu musí být čtverec se 2, 4, 8 nebo 16 položkami na stranu
+	palette dialog was closed	dialog palety byl zavřen
+	threshold ingredient no longer exists	složka prahu již neexistuje
+	Bayer	Bayer
+	Clustered Dot	Shlukovaný bod
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Modrý šum
+	White Noise	Bílý šum
+	Riemersma	Riemersma
+	Serpentine traversal	Hadovitý průchod
+	Decay	Útlum
+	Binary	Binární
+	Matrix	Matice
+	Palette source	Zdroj palety
+	Generate from image	Generovat z obrázku
+	Choose a palette	Vybrat paletu
+	Find a palette for this image.	Najít paletu pro tento obrázek.
+	Use a built-in or imported palette.	Použijte vestavěnou nebo importovanou paletu.
+	Generation method	Metoda generování
+	Required colors	Požadované barvy
+	Dithering	Rozptyl
+	Combine dither patterns	Kombinovat vzory rozptylu
+	Preserve transparency	Zachovat průhlednost
+	Transparency dithering	Rozptyl průhlednosti
+	Resulting palette	Výsledná paleta
+	Updating preview…	Aktualizace náhledu…
+	Preview is off	Náhled je vypnutý.
+	Move up	Přesunout nahoru
+	Move down	Přesunout dolů
+@id	filter.paletteMap	Mapování palety…
+	Palette Map…	Mapování palety…
+	Approximate preview	Přibližný náhled
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání

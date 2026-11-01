@@ -3992,6 +3992,84 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Loose Curl	Xoắn lỏng
 	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
 	Aspect Ratio	Tỷ lệ khung hình
+
+	Generated palette	Bảng màu tạo
+	Palette library	Thư viện bảng màu
+	Search palettes…	Tìm bảng màu…
+	Import GPL…	Nhập GPL…
+	Import ACT…	Nhập ACT…
+	No bundled palette matches this search.	Không có bảng màu tích hợp nào khớp với tìm kiếm này.
+	{name}  ·  {n} entries	{name}  ·  {n} mục
+	Use generated palette	Dùng bảng màu tạo
+	Fixed snapshot	Ảnh chụp cố định
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Đã chọn bảng màu tạo. Chọn bảng màu tích hợp hoặc nhập tệp GPL/ACT để tạo ảnh chụp cố định và giữ thứ tự.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Chưa chọn bảng màu cố định; sẽ dùng bảng màu mặc định của bộ máy. Chọn bảng màu tích hợp hoặc nhập GPL/ACT để ghim ảnh chụp.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Ảnh chụp đã nhập · giữ thứ tự nguồn và các mục trùng lặp
+	Algorithm	Thuật toán
+	Ingredient {n}	Thành phần {n}
+	Phase	Pha
+	Custom threshold matrix (0–1)	Ma trận ngưỡng tùy chỉnh (0–1)
+	Mapping settings are invalid: {error}	Cài đặt ánh xạ không hợp lệ: {error}
+	Mapping	Ánh xạ
+	Threshold ingredients	Thành phần ngưỡng
+	Add ingredient	Thêm thành phần
+	Import matrix…	Nhập ma trận…
+	Generated palette options	Tùy chọn bảng màu tạo
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Bảng màu cố định chỉ dùng cho GIF/PNG-8; JPEG/PNG-24 bỏ qua nó.
+	Clear snapshot and choose generated palette	Xóa ảnh chụp và chọn bảng màu tạo
+	Palette invalid: {error}	Bảng màu không hợp lệ: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} có {entries} mục, nhưng định dạng này cho phép {limit} mục và dành một ô cho trong suốt.
+	{name} has {entries} entries, but this format allows {limit}.	{name} có {entries} mục, nhưng định dạng này cho phép {limit} mục.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Đã bật giảm có chủ ý; bộ máy sẽ lượng tử hóa ảnh chụp cho định dạng mà không đổi ảnh chụp đã lưu.
+	Do not reduce (reject oversized palette)	Không giảm (từ chối bảng màu quá lớn)
+	Reduce to {limit} for this conversion/export	Giảm xuống {limit} cho chuyển đổi/xuất này
+	Palette reduction is enabled for this adapter.	Đã bật giảm bảng màu cho định dạng này.
+	threshold matrix must be UTF-8 text	ma trận ngưỡng phải là văn bản UTF-8
+	invalid threshold value `{token}`	giá trị ngưỡng không hợp lệ `{token}`
+	threshold values must be finite and between 0 and 1	giá trị ngưỡng phải hữu hạn và nằm giữa 0 và 1
+	threshold matrices are limited to 256 entries	ma trận ngưỡng giới hạn ở 256 mục
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	ma trận ngưỡng phải là hình vuông có 2, 4, 8 hoặc 16 mục mỗi cạnh
+	palette dialog was closed	hộp thoại bảng màu đã đóng
+	threshold ingredient no longer exists	thành phần ngưỡng không còn tồn tại
+	Bayer	Bayer
+	Clustered Dot	Chấm cụm
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Nhiễu xanh
+	White Noise	Nhiễu trắng
+	Riemersma	Riemersma
+	Serpentine traversal	Duyệt zíc-zắc
+	Decay	Suy giảm
+	Binary	Nhị phân
+	Matrix	Ma trận
+	Palette source	Nguồn bảng màu
+	Generate from image	Tạo từ ảnh
+	Choose a palette	Chọn bảng màu
+	Find a palette for this image.	Tìm bảng màu cho ảnh này.
+	Use a built-in or imported palette.	Dùng bảng màu tích hợp hoặc đã nhập.
+	Generation method	Phương pháp tạo
+	Required colors	Màu cần thiết
+	Dithering	Hòa sắc
+	Combine dither patterns	Kết hợp các mẫu hòa sắc
+	Preserve transparency	Giữ độ trong suốt
+	Transparency dithering	Hòa sắc độ trong suốt
+	Resulting palette	Bảng màu kết quả
+	Before	Trước
+	After	Sau
+	Updating preview…	Đang cập nhật bản xem trước…
+	Preview is off	Xem trước đang tắt.
+	Move up	Di chuyển lên
+	Move down	Di chuyển xuống
+	Disable	Vô hiệu hóa
+@id	filter.paletteMap	Ánh xạ bảng màu…
+	Palette Map…	Ánh xạ bảng màu…
+	Approximate preview	Xem trước gần đúng
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn

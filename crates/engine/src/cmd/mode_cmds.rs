@@ -7,8 +7,10 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
+use photocraft_algo::palette_map::{AlphaMode, Palette};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
+use photocraft_cms::{Builtin, ColorSpace, TransformOptions};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -21,10 +23,6 @@ use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
-}
-
-fn num(p: &Value, key: &str, default: f32) -> f32 {
-    p.get(key).and_then(Value::as_f64).map_or(default, |v| v as f32)
 }
 
 /// A finite number param, `default` when absent or null; anything else is a bad-params error.
@@ -245,22 +243,92 @@ fn parse_forced(s: &str) -> Option<Forced> {
     })
 }
 
-fn parse_dither(s: &str) -> Option<Dither> {
+fn parse_dither(s: &str) -> Option<quantize::Dither> {
     Some(match s {
-        "none" => Dither::None,
-        "diffusion" => Dither::Diffusion,
-        "pattern" => Dither::Pattern,
-        "noise" => Dither::Noise,
+        "none" => quantize::Dither::None,
+        "diffusion" => quantize::Dither::Diffusion,
+        "pattern" => quantize::Dither::Pattern,
+        "noise" => quantize::Dither::Noise,
         _ => return None,
     })
 }
 
-fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
+/// Stock Indexed Color accepts the legacy percentage amount. An explicit malformed value must
+/// remain an error instead of silently selecting the stock path.
+fn stock_amount(p: &Value, cmd: &str) -> Result<f32> {
+    for key in ["amount", "ditherAmount"] {
+        if let Some(value) = p.get(key).filter(|value| !value.is_null()) {
+            let amount = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| bad(cmd, format!("{key} must be a finite number from 0 to 100")))?;
+            if !(0.0..=100.0).contains(&amount) {
+                return Err(bad(cmd, format!("{key} must be a finite number from 0 to 100")));
+            }
+        }
+    }
+    let value = p.get("amount").filter(|value| !value.is_null()).or_else(|| p.get("ditherAmount").filter(|value| !value.is_null()));
+    let Some(value) = value else {
+        return Ok(0.75);
+    };
+    let amount = value.as_f64().ok_or_else(|| bad(cmd, "amount must be a finite number from 0 to 100"))?;
+    Ok((amount as f32 / 100.0).clamp(0.0, 1.0))
+}
+
+/// Advanced mapping is opt-in: a serialized mapping, a palette snapshot/catalog entry, or a
+/// non-legacy palette-map method. Legacy dither values stay on the stock quantizer.
+fn custom_mapping_requested(p: &Value, cmd: &str) -> Result<bool> {
+    let object = p.as_object().ok_or_else(|| bad(cmd, "params must be a JSON object"))?;
+    let dither = match object.get("dither").filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => {
+            let dither = value.as_str().ok_or_else(|| bad(cmd, "dither must be none|diffusion|pattern|noise or a palette-map method"))?;
+            if parse_dither(dither).is_none() && photocraft_algo::palette_map::Method::from_id(dither).is_none() {
+                return Err(bad(cmd, "dither must be none|diffusion|pattern|noise or a palette-map method"));
+            }
+            Some(dither)
+        }
+    };
+    if ["mapping", "paletteId", "paletteSnapshot"].into_iter().any(|key| object.get(key).is_some_and(|value| !value.is_null())) {
+        return Ok(true);
+    }
+    Ok(dither.is_some_and(|value| parse_dither(value).is_none()))
+}
+
+fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
+    let params = if raw.is_null() { json!({}) } else { raw.clone() };
+    let p = &params;
     const CMD: &str = "image.mode.indexedColor";
-    let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
-        .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
-    let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
-    let dither = parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?;
+    let transparent_hint = match p.get("transparentIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "transparentIndex must be a non-negative integer"))?),
+    };
+    // An explicit reserved slot must use the exclusion-aware renderer; the stock nearest-colour
+    // lookup considers every table entry, including that slot.
+    let advanced = custom_mapping_requested(p, CMD)? || transparent_hint.is_some();
+    let custom_palette = crate::palette_cmds::palette_from_snapshot_for_indexed(p)?;
+    let stock_amount_value = stock_amount(p, CMD)?;
+    let stock_dither =
+        if advanced { None } else { Some(parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?) };
+    let stock_amount = (!advanced).then_some(stock_amount_value);
+    let settings = if advanced {
+        Some(crate::palette_cmds::mapping_settings(p, "amount").map_err(|e| match e {
+            EngineError::BadParams { msg, .. } => bad(CMD, msg),
+            other => other,
+        })?)
+    } else {
+        None
+    };
+    let reduce = match p.get("reducePalette") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "reducePalette must be a boolean")),
+    };
+    let transparency = match p.get("transparency") {
+        None => true,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "transparency must be a boolean")),
+    };
+    if !transparency && transparent_hint.is_some() {
+        return Err(bad(CMD, "transparentIndex requires transparency=true"));
+    }
     let colors = match p.get("colors") {
         None => 256,
         Some(value) => {
@@ -271,25 +339,148 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             value as usize
         }
     };
-    let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
-    let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
+    let (kind, forced) = if custom_palette.is_none() {
+        let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
+            .ok_or_else(|| bad(CMD, "palette: blackWhite|exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
+        let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
+        (Some(kind), Some(forced))
+    } else {
+        // A fixed palette is authoritative: generated-palette and forced-colour controls do not
+        // alter its order or entries.
+        (None, None)
+    };
+    let generated_black_white = custom_palette.is_none() && kind == Some(PaletteKind::BlackWhite);
+    if let Some(custom) = &custom_palette {
+        if let Some(index) = transparent_hint
+            && index >= custom.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", custom.colors.len())));
+        }
+        if custom.colors.len() > 256 && !reduce {
+            return Err(bad(
+                CMD,
+                format!(
+                    "fixed palette has {} entries; Indexed Color supports at most 256 (including transparency). Enable reducePalette for deliberate reduction",
+                    custom.colors.len()
+                ),
+            ));
+        }
+    }
+    // Advanced palette-map comparisons use encoded sRGB, but stock Indexed Color stays in the
+    // document's encoded RGB coordinates and keeps its original profile.
+    let mapping_options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..TransformOptions::default() };
+    let (pal_len, transparent, palette_snapshot) = s.edit("Indexed Color", |doc, active| {
         let mut px = composite(doc, !transparency);
-        let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
-        let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
-        let transparent = if has_clear && pal.len() < 256 {
-            pal.push([255, 255, 255]);
-            Some(pal.len() - 1)
+        let source_profile = crate::color_cmds::document_profile(doc);
+        let srgb = Builtin::Srgb.profile();
+        let advanced_cms = advanced && source_profile.color_space == ColorSpace::Rgb && !source_profile.same_bytes(srgb);
+        if advanced_cms {
+            let transform = photocraft_cms::cached(&source_profile, srgb, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to sRGB: {e}")))?;
+            transform.apply(px.as_flattened_mut(), 4);
+        }
+        let mut mapping = settings.clone().unwrap_or_default();
+        let custom = custom_palette.clone();
+        let mut palette = if let Some(custom) = custom {
+            custom
         } else {
-            None
+            let has_clear = transparency
+                && px.iter().any(|q| match mapping.alpha {
+                    AlphaMode::Dither => q[3] < 1.0,
+                    _ => q[3] < 0.5,
+                });
+            let requested = if generated_black_white {
+                // BlackWhite is a fixed two-opaque-entry preset. Its palette count is intentionally
+                // independent of the Indexed Color total-count field so transparency can add a
+                // third slot without reducing either required entry.
+                2
+            } else if has_clear {
+                colors.saturating_sub(1).max(2)
+            } else {
+                colors
+            };
+            let kind = kind.ok_or_else(|| bad(CMD, "generated palette kind is missing"))?;
+            let forced = forced.ok_or_else(|| bad(CMD, "generated forced-colour mode is missing"))?;
+            let pal = quantize::build_palette(&px, kind, requested, forced).map_err(|e| bad(CMD, e))?;
+            let mut generated = Palette { name: str_or(p, "palette", "selective").to_string(), colors: pal.into_iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+            // The quantizer requires two samples, but a two-entry Indexed image with a
+            // transparency slot has capacity for exactly one opaque colour. Reduce that
+            // generated result algorithmically instead of silently exceeding `colors`; the
+            // explicit BlackWhite preset is the intentional two-opaque-entry exception.
+            if !generated_black_white && has_clear && colors == 2 {
+                generated = crate::palette_cmds::reduce_palette(&generated, 1).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+            generated
         };
-        let w = doc.size.width as usize;
-        quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
+        let mut transparent = transparent_hint;
+        if custom_palette.is_some() {
+            let (mapped, slot) = crate::palette_cmds::indexed_palette(palette, reduce, transparent).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                other => other,
+            })?;
+            palette = mapped;
+            transparent = slot;
+        } else if let Some(index) = transparent
+            && index >= palette.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", palette.colors.len())));
+        }
+        let needs_transparency = transparency
+            && transparent.is_none()
+            && px.iter().any(|q| match mapping.alpha {
+                AlphaMode::Dither => q[3] < 1.0,
+                _ => q[3] < 0.5,
+            });
+        if needs_transparency {
+            let room = if custom_palette.is_some() { 255 } else { colors.saturating_sub(1).max(1) };
+            if !generated_black_white && palette.colors.len() > room {
+                if custom_palette.is_some() && !reduce {
+                    return Err(bad(CMD, format!("the fixed palette has {} opaque entries but Indexed Color allows {room} with a transparency slot; enable reducePalette for deliberate reduction", palette.colors.len())));
+                }
+                palette = crate::palette_cmds::reduce_palette(&palette, room).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+        }
+        // Replayable snapshots contain the final opaque palette, never our reserved alpha slot.
+        let snapshot = palette.clone();
+        if needs_transparency {
+            transparent = if advanced {
+                crate::palette_cmds::append_transparency(&mut palette)
+            } else if palette.colors.len() < 256 {
+                palette.colors.push([1.0; 3]);
+                Some(palette.colors.len() - 1)
+            } else {
+                None
+            };
+        }
+        if advanced {
+            crate::palette_cmds::alpha_for_indexed(&mut mapping, transparent);
+            let w = doc.size.width as usize;
+            crate::palette_cmds::indexed_render(&mut px, w, &palette, &mapping, transparent)?;
+        } else {
+            let dither = stock_dither.ok_or_else(|| bad(CMD, "stock dither mode is missing"))?;
+            let amount = stock_amount.unwrap_or(0.75);
+            let pal: Vec<[u8; 3]> = palette.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            quantize::quantize(&mut px, doc.size.width as usize, &pal, dither, amount, transparent);
+        }
+        if advanced_cms {
+            let transform = photocraft_cms::cached(srgb, &source_profile, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;
+            transform.apply(px.as_flattened_mut(), 4);
+            transform.apply(palette.colors.as_flattened_mut(), 3);
+        }
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
-        doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
-        Ok((pal.len(), transparent))
+        let mut table = crate::palette_cmds::palette_to_color_table(&palette);
+        table.transparent = transparent.map(|index| index as u8);
+        doc.color_table = Some(table);
+        Ok((palette.colors.len(), transparent, snapshot))
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "paletteSnapshot": palette_snapshot}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -689,7 +880,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens)"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","paletteId":string?,"paletteSnapshot":json?,"colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparentIndex":integer?,"reducePalette":bool=false,"mapping":json?,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; fixed palette controls override generated palette; automation also accepts palette=blackWhite, always two opaque entries with an optional transparency slot)"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],
