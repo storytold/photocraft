@@ -691,8 +691,9 @@ impl Ex {
             return;
         }
         // `Sz  ` is in the descriptor's own units (`sm.placed_size`, #10207), not necessarily
-        // the source's pixels; a re-authored object has neither and writes its source size.
-        let size = same_source.and_then(|t| crate::smart_map::stored_size(&t.descriptor)).or(sm.placed_size).unwrap_or(src.size);
+        // the source's pixels; the stored value is the fallback for a document that predates
+        // the field, and a re-authored object has neither and writes its source size.
+        let size = sm.placed_size.or_else(|| same_source.and_then(|t| crate::smart_map::stored_size(&t.descriptor))).unwrap_or(src.size);
         let size = if size.0 > 0.0 && size.1 > 0.0 { size } else { size_from_layer(sm) };
         let mut warnings = Vec::new();
         let fx = (!stack.filters.is_empty()).then(|| filter_fx(&stack, &l.name, &mut warnings));
@@ -785,10 +786,11 @@ impl Ex {
         blocks::plld_transform(&corners, size, warp.as_ref()) != (sm.transform, sm.perspective)
     }
 
-    /// Whether an imported placed layer still says what the smart object is: transform, warp,
-    /// filter stack and filter mask as stored.
+    /// Whether an imported placed layer still says what the smart object is: transform, placed
+    /// size (`Sz  `), warp, filter stack and filter mask as stored.
     fn placed_unchanged(&self, t: &crate::smart_map::Placed, data: &[u8], sm: &photocraft_doc::SmartObject, stack: &crate::smart_map::FilterStack) -> bool {
-        if t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
+        let resized = sm.placed_size.is_some_and(|sz| crate::smart_map::stored_size(&t.descriptor) != Some(sz));
+        if resized || t.transform != sm.transform || blocks::parse_placed_warp(b"SoLd", data) != sm.warp || t.stack.clone().unwrap_or_default() != *stack {
             return false;
         }
         if stack.filters.is_empty() {
