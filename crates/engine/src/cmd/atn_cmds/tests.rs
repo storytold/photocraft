@@ -3341,3 +3341,18 @@ fn match_color_setting_that_cannot_be_saved_back_is_kept() {
         assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{key} = {v:?} was mapped");
     }
 }
+
+/// Photoshop's narrowest Trap width wasn't measured, so a recorded width below the command's
+/// 1 px isn't clamped up to it: the step stays a Photoshop step, and a PhotoCraft step that
+/// narrow is refused on export instead of written as a width the command doesn't trap (#10609).
+#[test]
+fn trap_width_below_one_pixel_is_kept() {
+    for w in [0.25, 0.0, -2.0] {
+        let m = channel_step("Trap", desc("null").with("Wdth", px(w)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "Wdth {w} was mapped");
+        assert!(export_item("image.trap", &json!({"width": w}), "S").is_none(), "width {w} exported");
+    }
+    let d = export_item("image.trap", &json!({"width": 1}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(d.items, desc("null").with("Wdth", px(1.0)).items);
+    assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(1.0))), Mapped::Steps(_)));
+}

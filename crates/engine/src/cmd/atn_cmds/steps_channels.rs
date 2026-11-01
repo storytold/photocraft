@@ -53,6 +53,10 @@ pub(super) fn merge_spot_to(_: &str, p: &Value) -> Option<Descriptor> {
 /// Trap's widest width: Photoshop clamps larger ones to it.
 const MAX_TRAP: f64 = 32767.0;
 
+/// Trap's narrowest width, the command's `width:px>=1`. Photoshop's own minimum wasn't
+/// measured, so a narrower recorded width isn't clamped up to it.
+const MIN_TRAP: f64 = 1.0;
+
 /// A width in `#Pxl`, the unit Trap saves: a width in another unit (points, millimetres) or
 /// without one would load as that many pixels and save back as pixels.
 fn pixels(v: &D) -> Option<f64> {
@@ -62,28 +66,29 @@ fn pixels(v: &D) -> Option<f64> {
     }
 }
 
-/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number of pixels keeps the Photoshop
-/// step.
+/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number of pixels, or is below
+/// `MIN_TRAP`, keeps the Photoshop step.
 pub(super) fn trap_from(d: &Descriptor) -> Mapped {
     if !only_keys(d, &["Wdth"]) {
         return Mapped::Unsupported { harmless: false };
     }
     match setting(d, "Wdth", |v| pixels(v).map(Some), None) {
-        Some(Some(w)) => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
+        Some(Some(w)) if w >= MIN_TRAP => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
         Some(None) => step("image.trap", json!({})),
-        None => Mapped::Unsupported { harmless: false },
+        _ => Mapped::Unsupported { harmless: false },
     }
 }
 
 /// `Wdth` is always written: the command traps 1 px when the step leaves the width out. A
-/// width above `MAX_TRAP` refuses the step rather than being clamped to another value.
+/// width outside `MIN_TRAP..=MAX_TRAP` refuses the step rather than being clamped to another
+/// value.
 pub(super) fn trap_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !sets_only(p, &["width"]) {
         return None;
     }
     let width = match p.get("width") {
         None | Some(Value::Null) => 1.0,
-        Some(v) => v.as_f64().filter(|n| n.is_finite() && *n <= MAX_TRAP)?,
+        Some(v) => v.as_f64().filter(|n| (MIN_TRAP..=MAX_TRAP).contains(n))?,
     };
     Some(desc("null").with("Wdth", px(width)))
 }
