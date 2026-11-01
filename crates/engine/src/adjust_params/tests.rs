@@ -487,6 +487,25 @@ fn exposure_gray_point_refuses_an_offset_past_the_target() {
     assert!(o == 0.3 && (e - 1.0).abs() < 1e-4, "white is still reachable: {e}");
 }
 
+/// #9288 review: each picker against the values Photoshop 2025 (26.2) wrote to a default
+/// Exposure layer, read back from its descriptor, on 8-bit gray patches 64 and 200. Photoshop
+/// samples the patch as its 16-bit value (64 → 8224/32768, 200 → 25700/32768), which accounts
+/// for every residual against the 8-bit value used here (at most 2.2e-5), inside the tolerance.
+#[test]
+fn exposure_eyedroppers_give_the_measured_photoshop_values() {
+    // (picker, 8-bit gray patch, Photoshop's exposure, Photoshop's offset)
+    let measured = [
+        (CurvesEyedropper::Black, 64.0, 0.0, -0.2509766),
+        (CurvesEyedropper::White, 200.0, 0.3505193, 0.0),
+        (CurvesEyedropper::NeutralGray, 64.0, -0.4795556, 0.0),
+    ];
+    for (picker, patch, ps_exposure, ps_offset) in measured {
+        let (e, o) = exposure_of(exposure_eyedropper(&json!({}), picker, [patch / 255.0; 3], ColorMode::Rgb).unwrap());
+        assert!((e - ps_exposure).abs() < 1e-4, "{picker:?} on {patch}: exposure {e}, Photoshop {ps_exposure}");
+        assert!((o - ps_offset).abs() < 1e-4, "{picker:?} on {patch}: offset {o}, Photoshop {ps_offset}");
+    }
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
