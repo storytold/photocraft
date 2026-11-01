@@ -9,11 +9,13 @@ use super::steps_make::is_tool_class;
 use super::tables::{FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, Id, Map, ReferenceItem, UnicodeString, Value, json};
 
+/// Resolve a recorded selection while retaining layer names, Background properties and modifiers.
 pub(super) fn select_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match (ref_class(r).as_deref(), target(r)) {
-        (Some("Lyr"), Target::Name(n)) => {
-            let mut p = json!({"layer": n});
+        (Some("Lyr"), Target::Name(_) | Target::Property(_)) => {
+            let Some(p) = layer_target(r) else { return Mapped::Unsupported { harmless: false } };
+            let mut p = Value::Object(p);
             match get_enum(d, "selectionModifier").as_deref() {
                 Some("addToSelection") => p["mode"] = json!("add"),
                 Some("removeFromSelection") => p["mode"] = json!("remove"),
@@ -55,11 +57,12 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         },
         // Switching to another open document: its offset from the active one, -1 for the previous
         // opened document and 1 for the next, independently of dragged tabs (#7103).
-        (Some("Dcmn"), Target::Offset(o)) => step("document.activate", json!({"offset": o})),
+        (Some("Dcmn"), Target::Offset(o)) if o != 0 => step("document.activate", json!({"offset": o})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
 
+/// Write the supported layer, channel, document and history selection references.
 pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
     let ord = |o: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(o) }]);
     let enumerated = |cls: &str, ty: &str, v: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class(cls), type_id: code(ty), value: code(v) }]);
@@ -68,8 +71,12 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
             if p.get("occurrence").is_some() {
                 return None;
             }
-            let name = jstr(p, "name").or_else(|| jstr(p, "layer"))?;
-            let mut d = desc("null").with("null", name_ref("Lyr ", name));
+            let reference = match jstr(p, "name") {
+                Some(name) => name_ref("Lyr ", name),
+                None if p.get("layer").is_some_and(|v| !v.is_null()) => layer_ref(p)?,
+                None => return None,
+            };
+            let mut d = desc("null").with("null", reference);
             match jstr(p, "mode") {
                 None | Some("replace") => {}
                 Some("add") => d = d.with("selectionModifier", enm("selectionModifierType", "addToSelection")),
@@ -98,6 +105,10 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         // An absolute tab index has no Photoshop equivalent; an offset is what Photoshop records.
         "document.activate" if p.get("document").is_none_or(Value::is_null) => {
             let offset = i32::try_from(p.get("offset")?.as_i64()?).ok()?;
+            // Photoshop rejects zero, though the native command permits that no-op.
+            if offset == 0 {
+                return None;
+            }
             desc("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("Dcmn"), offset }]))
         }
         _ => {
@@ -172,11 +183,21 @@ pub(super) fn delete_to(id: &str, p: &Value) -> Option<Descriptor> {
     })
 }
 
-/// `hide` / `show` take a list of references (or one).
+/// Import visibility references; a single Show with TglO is the reversible Show Only command.
 pub(super) fn visibility_from(d: &Descriptor, id: &str) -> Mapped {
     let refs: Vec<&[ReferenceItem]> = match d.get("null") {
-        Some(D::List(l)) => l.iter().filter_map(|v| if let D::Reference(r) = v { Some(r.as_slice()) } else { None }).collect(),
+        Some(D::List(l)) => {
+            let Some(refs) = l.iter().map(|v| if let D::Reference(r) = v { Some(r.as_slice()) } else { None }).collect() else {
+                return Mapped::Unsupported { harmless: false };
+            };
+            refs
+        }
         Some(D::Reference(r)) => vec![r.as_slice()],
+        _ => return Mapped::Unsupported { harmless: false },
+    };
+    let id = match d.get("TglO") {
+        Some(D::Boolean(true)) if id == "layer.showLayers" && refs.len() == 1 => "layer.showOnly",
+        Some(D::Boolean(false)) | None => id,
         _ => return Mapped::Unsupported { harmless: false },
     };
     let mut v = Vec::new();
@@ -189,8 +210,13 @@ pub(super) fn visibility_from(d: &Descriptor, id: &str) -> Mapped {
     if v.is_empty() { Mapped::Unsupported { harmless: false } } else { steps(v) }
 }
 
-pub(super) fn visibility_to(_: &str, p: &Value) -> Option<Descriptor> {
-    Some(desc("null").with("null", D::List(vec![layer_ref(p)?])))
+/// Write the layer reference and preserve Show Only's toggle flag.
+pub(super) fn visibility_to(id: &str, p: &Value) -> Option<Descriptor> {
+    let mut d = desc("null").with("null", D::List(vec![layer_ref(p)?]));
+    if id == "layer.showOnly" {
+        d = d.with("TglO", D::Boolean(true));
+    }
+    Some(d)
 }
 
 pub(super) fn move_from(d: &Descriptor) -> Mapped {

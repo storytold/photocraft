@@ -239,6 +239,7 @@ fn registry() -> &'static Registry {
 // ---------- the table ----------
 
 #[allow(clippy::too_many_lines)]
+/// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
     let mut v = vec![
         // File
@@ -305,11 +306,28 @@ fn build() -> Vec<CommandSpec> {
                 Ok(json!({ "document": i }))
             }
         ),
-        cmd!("file.close", "Close", ["File"], Some("Cmd+W"), r##"{"document":index?}"##, has_doc, |s, p| {
-            let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
-            s.close(i).ok_or(EngineError::NoDocument)?;
-            Ok(Value::Null)
-        }),
+        cmd!(
+            "file.close",
+            "Close",
+            ["File"],
+            Some("Cmd+W"),
+            r##"{"document":index?,"save":"discard|ask"="discard"} (ask refuses to close a changed document in headless playback)"##,
+            has_doc,
+            |s, p| {
+                let i = p.get("document").and_then(Value::as_u64).map(|v| v as usize).or(s.active_index()).ok_or(EngineError::NoDocument)?;
+                match p.get("save").filter(|v| !v.is_null()) {
+                    Some(v) if v == "ask" => {
+                        if s.documents().get(i).ok_or(EngineError::NoDocument)?.is_dirty() {
+                            return Err(bad("file.close", "the document has unsaved changes; save it or explicitly discard them"));
+                        }
+                    }
+                    Some(v) if v != "discard" => return Err(bad("file.close", "`save` must be ask or discard")),
+                    _ => {}
+                }
+                s.close(i).ok_or(EngineError::NoDocument)?;
+                Ok(Value::Null)
+            }
+        ),
         // Edit
         cmd!("edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{}", can_undo, |s, _| Ok(json!(s.undo()))),
         cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| Ok(json!(s.redo()))),
@@ -1053,8 +1071,7 @@ fn build() -> Vec<CommandSpec> {
                 let idx = match (given("document"), given("offset")) {
                     (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
                     (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),
-                    // Refuse offsets past the opening-order ends rather than wrap, so an action that
-                    // copies from one document never silently pastes into the wrong one (#7103).
+                    // Recorded offsets wrap in opening order, independently of dragged tabs.
                     (None, Some(o)) => {
                         let o = o.as_i64().ok_or_else(|| bad("document.activate", "`offset` must be an integer"))?;
                         s.document_at_offset(o)?
@@ -1184,7 +1201,7 @@ fn build() -> Vec<CommandSpec> {
             label,
             menu: &["Layer", "New Adjustment Layer"],
             shortcut: None,
-            params: Box::leak(format!("{params} + {{{NEW_LAYER_PATH}}}").into_boxed_str()),
+            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1}}"#).into_boxed_str()),
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();

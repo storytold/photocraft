@@ -7,6 +7,20 @@ use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
 use super::tables::{CHANNELS, INTERPOLATION, RADIAL_METHOD, RADIAL_QUALITY, channel_of, lookup, lookup_back};
 use super::{D, Descriptor, Map, ReferenceItem, UnicodeString, Value, json};
 
+/// Photoshop's nine frame anchors and the average/centre anchor.
+const TRANSFORM_REFERENCE: &[(&str, &str)] = &[
+    ("Qcsa", "center"),
+    ("Qcs0", "topLeft"),
+    ("Qcs1", "top"),
+    ("Qcs2", "topRight"),
+    ("Qcs3", "left"),
+    ("Qcs4", "center"),
+    ("Qcs5", "right"),
+    ("Qcs6", "bottomLeft"),
+    ("Qcs7", "bottom"),
+    ("Qcs8", "bottomRight"),
+];
+
 /// `transform`: Photoshop records a Free Transform relative to the frame (offset of its centre,
 /// width/height in percent, angle). A layer moved only becomes `layer.translate`; anything
 /// else is `edit.transform`'s relative form; the selection's frame is `select.transformSelection`.
@@ -40,6 +54,13 @@ pub(super) fn transform_from(d: &Descriptor) -> Mapped {
     // to keep its sub-pixel placement and interpolation.
     let whole_pixels = ["dx", "dy"].iter().all(|k| p.get(*k).and_then(Value::as_f64).is_none_or(|v| v.fract() == 0.0));
     let geometry_only = p.keys().all(|k| k == "dx" || k == "dy") && whole_pixels;
+    if let Some(value) = d.get("FTcs") {
+        let D::Enumerated { type_id, value } = value else { return unsupported };
+        let Some(reference) = lookup(TRANSFORM_REFERENCE, &trimmed(value)).filter(|_| type_id.is("QCSt")) else { return unsupported };
+        if reference != "center" && !geometry_only {
+            p.insert("reference".into(), reference.into());
+        }
+    }
     // The resampling applies to a selection as much as to a layer (#7515).
     // Photoshop's bicubic variants are kept (the transforms render them as Bicubic, and they export
     // back unchanged); Automatic and Preserve Details become the nearest bicubic choice. Dropping
@@ -74,17 +95,15 @@ pub(super) fn transform_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Export relative transforms with frame anchors, refusing unsupported geometry and targets.
 pub(super) fn transform_to(id: &str, p: &Value) -> Option<Descriptor> {
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     if ["quad", "corners", "matrix", "rect"].iter().any(|k| given(k)) {
         return None;
     }
-    // The descriptor scales and rotates about the centre (`FTcs` average) without skew or warp:
-    // another reference point, a skew or a warp would replay as a different transform (#7516,
-    // #7517, #7518, #7519).
+    // Skew and warp still have no descriptor mapping (#7517, #7518, #7519).
     let nonzero = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_f64() != Some(0.0));
-    let off_centre = p.get("reference").is_some_and(|v| !v.is_null() && *v != json!("center"));
-    if nonzero("skewX") || nonzero("skewY") || off_centre || ["warp", "style", "mesh", "grid"].iter().any(|k| given(k)) {
+    if nonzero("skewX") || nonzero("skewY") || ["warp", "style", "mesh", "grid"].iter().any(|k| given(k)) {
         return None;
     }
     let target = match id {
@@ -95,7 +114,11 @@ pub(super) fn transform_to(id: &str, p: &Value) -> Option<Descriptor> {
         "select.transformSelection" => D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: code("fsel") }]),
         _ => return None,
     };
-    let mut d = desc("null").with("null", target).with("FTcs", enm("QCSt", "Qcsa"));
+    let reference = match p.get("reference").filter(|v| !v.is_null()) {
+        Some(v) => lookup_back(TRANSFORM_REFERENCE, v.as_str()?)?,
+        None => "Qcsa",
+    };
+    let mut d = desc("null").with("null", target).with("FTcs", enm("QCSt", reference));
     d = d.with("Ofst", D::Descriptor(desc("Ofst").with("Hrzn", px(jnum(p, "dx").unwrap_or(0.0))).with("Vrtc", px(jnum(p, "dy").unwrap_or(0.0)))));
     for (key, param) in [("Wdth", "scaleX"), ("Hght", "scaleY")] {
         if let Some(v) = jnum(p, param) {
