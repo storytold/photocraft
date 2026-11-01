@@ -415,7 +415,7 @@ pub struct TextLayer {
     pub warp: Option<text::TextWarp>,
     /// Free Warp, Distort and Perspective kept on the live type, in order, after `warp`
     /// ([`text::TypeDistortion`]). Photoshop can't store these on type; PSD export writes such a
-    /// layer as a Smart Object holding the type.
+    /// layer as a Smart Object holding the type (layerless modes: only in the flattened image, with a warning).
     pub distortions: Vec<text::TypeDistortion>,
 }
 

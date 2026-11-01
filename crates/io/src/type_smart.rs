@@ -209,7 +209,7 @@ mod tests {
     /// Indexed/Bitmap paths, which write the document without going through the layered export.
     #[test]
     fn the_bent_type_warning_survives_multichannel_and_bitmap_export_without_claiming_a_smart_object() {
-        for mode in [photocraft_color::ColorMode::Multichannel, photocraft_color::ColorMode::Bitmap] {
+        for mode in [photocraft_color::ColorMode::Multichannel, photocraft_color::ColorMode::Bitmap, photocraft_color::ColorMode::Indexed] {
             let mut doc = Document::new("t", photocraft_geom::Size::new(300, 120), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
             let fmt = doc.pixel_format();
             let mut t = TextLayer { text: "Hello".into(), size_pt: 40.0, transform: Affine::translate(20.0, 80.0), ..Default::default() };
@@ -221,6 +221,7 @@ mod tests {
             t.distortions.push(TypeDistortion { frame: t.transform, kind: TypeDistortionKind::Warp(Warp::custom(BezierMesh::identity(r, 1, 1), r)) });
             doc.layers.push(Layer::new("Bent", LayerContent::Text(t)));
             doc.mode = mode;
+            doc.color_table = Some(photocraft_doc::ColorTable { colors: vec![[0, 0, 0], [255, 255, 255]], transparent: None });
             let (_, warnings) = crate::document_to_psd_with(&doc, &Default::default());
             assert!(warnings.iter().any(|w| w.contains("\"Bent\"") && w.contains("not kept as type") && !w.contains("Smart Object")), "{mode:?}: {warnings:?}");
             assert!(!warnings.iter().any(|w| w.contains("written as a Smart Object")), "{mode:?}: {warnings:?}");
