@@ -1005,14 +1005,13 @@ impl Frame {
 }
 
 /// The workspace open on a white 400 × 300 document with (100, 80)–(300, 220) selected, in the
-/// Marching Ants view at 100 %, on an offscreen wgpu harness; `None` without a GPU adapter.
-fn ants_harness(ppp: f32, step_dt: f32) -> Option<GpuHarness> {
+/// Marching Ants view at 100 %, on an offscreen wgpu harness, and the frame time the workspace
+/// opened at (after three frames); `None` without a GPU adapter.
+fn ants_harness(ppp: f32, step_dt: f32) -> Option<(GpuHarness, f64)> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
     app.run("select.rect", json!({"x": 100, "y": 80, "width": 200, "height": 140})).unwrap();
     app.sync_views();
-    open(&mut app).unwrap();
-    ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
     // `wgpu()` creates the render state and panics when no adapter is found.
     let builder = std::panic::catch_unwind(|| {
         egui_kittest::Harness::<PhotocraftApp>::builder().with_size(vec2(1000.0, 700.0)).with_pixels_per_point(ppp).with_step_dt(step_dt).wgpu()
@@ -1028,11 +1027,17 @@ fn ants_harness(ppp: f32, step_dt: f32) -> Option<GpuHarness> {
         app,
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    // The canvas's clock runs a few frames before the dialog opens, so a clock of the dialog's
+    // own, started when it opens, would be out of phase with it.
+    h.run_steps(3);
+    let opened = h.ctx.input(|i| i.time);
+    open(h.state_mut()).unwrap();
+    ui(h.state_mut(), json!({"view": "marchingAnts", "waitPreview": true}));
     h.run_steps(4);
     let w = h.state_mut().distort.select_mask.as_mut().unwrap();
     (w.zoom, w.center) = (1.0, [200.0, 150.0]);
     h.run_steps(2);
-    Some(h)
+    Some((h, opened))
 }
 
 fn frame(h: &mut GpuHarness) -> Frame {
@@ -1078,7 +1083,7 @@ fn scan(img: &Frame, a: (i64, i64), b: (i64, i64)) -> (Vec<Vec<i64>>, usize) {
 fn select_and_mask_ants_match_the_canvas() {
     let _gpu = photocraft_testkit::gpu_lock();
     for ppp in [1.0f32, 1.25] {
-        let Some(mut h) = ants_harness(ppp, 1.0 / 60.0) else { return };
+        let Some((mut h, _)) = ants_harness(ppp, 1.0 / 60.0) else { return };
         let img = frame(&mut h);
         let w = ppp.ceil() as usize;
         let [tl, tr, br, bl] = [[100.0, 80.0], [300.0, 80.0], [300.0, 220.0], [100.0, 220.0]].map(|p| device(&h, ppp, p));
@@ -1111,7 +1116,7 @@ fn select_and_mask_ants_match_the_canvas() {
 #[test]
 fn select_and_mask_ants_march_rather_than_blink() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = ants_harness(1.0, 0.125) else { return };
+    let Some((mut h, _)) = ants_harness(1.0, 0.125) else { return };
     let row = |h: &mut GpuHarness| {
         let img = frame(h);
         let ((x0, y), (x1, _)) = (device(h, 1.0, [100.0, 80.0]), device(h, 1.0, [300.0, 80.0]));
@@ -1146,8 +1151,12 @@ fn select_and_mask_ants_march_rather_than_blink() {
 fn select_and_mask_ants_have_the_canvas_phase() {
     let _gpu = photocraft_testkit::gpu_lock();
     for ppp in [1.0f32, 2.0] {
-        // 0.37 s steps, so the march has a phase that isn't zero or a whole dash.
-        let Some(mut h) = ants_harness(ppp, 0.37) else { return };
+        // 0.31 s steps, so the march has a phase that isn't zero or a whole dash at the frame, nor
+        // zero when the dialog opens.
+        let Some((mut h, opened)) = ants_harness(ppp, 0.31) else { return };
+        // A clock restarted when the dialog opened would be off by the canvas's phase then.
+        let (at_open, period) = crate::ants::Style::new(ppp, opened).march();
+        assert!(at_open.rem_euclid(period) != 0, "@{ppp}x: phase {at_open} when the dialog opened at {opened} s");
         let img = frame(&mut h);
         let time = h.ctx.input(|i| i.time);
         let (phase, period) = crate::ants::Style::new(ppp, time).march();
