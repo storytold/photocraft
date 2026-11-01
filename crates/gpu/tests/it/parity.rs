@@ -2606,14 +2606,17 @@ fn stroked_shapes_with_clipped_layers() {
     let Some(mut g) = gpu() else { return };
     use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        for (blend, masked) in [(BlendMode::Normal, false), (BlendMode::Multiply, true)] {
+        // A shape with its fill turned off: the clipped layers clip to its stroke.
+        for (blend, masked, filled) in
+            [(BlendMode::Normal, false, true), (BlendMode::Multiply, true, true), (BlendMode::Normal, false, false), (BlendMode::Multiply, true, false)]
+        {
             let mut d = Document::new("t", Size::new(80, 64), ColorMode::Rgb, depth);
             d.layers.push(noise_layer("bg", d.pixel_format(), Rect::from_xywh(0, 0, 80, 64), 1, 0.3));
             let path = Path::new(vec![Subpath::polygon(&[(10.3, 8.6), (66.2, 12.1), (58.7, 54.4), (16.9, 48.2)])]);
             let stroke = ShapeStroke { width: 5.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..Default::default() };
             let mut sh = ShapeLayer {
                 path,
-                fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))),
+                fill: filled.then(|| Fill::Solid(Color::rgb(0.2, 0.3, 0.8))),
                 stroke: Some(stroke),
                 live: None,
                 cache: None,
@@ -2633,7 +2636,7 @@ fn stroked_shapes_with_clipped_layers() {
             d.layers.extend([l, c]);
             let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
             assert!(st.is_ok(), "planned on the GPU");
-            check(&mut g, &d, &format!("{depth:?} stroked shape + clipped {blend:?} masked {masked}"));
+            check(&mut g, &d, &format!("{depth:?} stroked shape (filled {filled}) + clipped {blend:?} masked {masked}"));
         }
     }
 }
