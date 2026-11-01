@@ -294,6 +294,77 @@ fn unrepresented_units_and_mode_choices_stay_verbatim() {
     }
 }
 
+/// Explicit false layer flags mean the same thing as omitted flags for a bit-depth conversion.
+#[test]
+fn review_10702_depth_conversion_accepts_false_layer_flags() {
+    for (depth, command) in [(8, "image.mode.bits8"), (16, "image.mode.bits16"), (32, "image.mode.bits32")] {
+        for flags in [vec![], vec!["Fltt"], vec!["Rstr"], vec!["Fltt", "Rstr"]] {
+            let mut d = Descriptor::new("null").with("Dpth", D::Integer(depth));
+            for key in flags {
+                d = d.with(key, D::Boolean(false));
+            }
+            let action = recorded(AtnEvent::Code(*b"CnvM"), d);
+            assert_eq!(action.steps, vec![(command.into(), json!({}))]);
+            let mut s = sized_document(2, 1, 72);
+            s.execute("layer.new.layer", json!({"name":"Retained"})).unwrap();
+            replay_saved(&mut s, &action);
+            assert_eq!(s.active().unwrap().doc.layers.len(), 2);
+            assert_eq!(s.active().unwrap().doc.depth.bits(), depth as u32);
+        }
+    }
+    for key in ["Fltt", "Rstr"] {
+        for value in [D::Boolean(true), D::Integer(0), D::Text(UnicodeString::new_nul("false"))] {
+            let d = Descriptor::new("null").with("Dpth", D::Integer(16)).with(key, value);
+            let action = recorded(AtnEvent::Code(*b"CnvM"), d.clone());
+            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+            assert_eq!(saved(&action).descriptor, Some(d));
+        }
+    }
+}
+
+/// A recorded name is resolved at playback, including names that collide with native sentinels.
+#[test]
+fn review_10702_transparency_names_resolve_at_playback() {
+    use photocraft_doc::LayerId;
+    use photocraft_geom::Rect;
+
+    for name in ["Subject", "merged", ""] {
+        let d = Descriptor::new("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }])).with(
+            "T   ",
+            D::Reference(vec![
+                ReferenceItem::Enumerated { class: class("Chnl"), type_id: Id::new("Chnl"), value: Id::new("Trsp") },
+                ReferenceItem::Name { class: class("Lyr "), name: UnicodeString::new_nul(name) },
+            ]),
+        );
+        let action = recorded(AtnEvent::Code(*b"setd"), d.clone());
+        assert_eq!(action.steps[0].0, "select.loadSelection");
+        let mut s = sized_document(2, 1, 72);
+        for alpha in [[1.0, 0.0], [0.0, 1.0]] {
+            let id = LayerId(s.execute("layer.new.layer", json!({"name":"Placeholder"})).unwrap()["layer"].as_u64().unwrap());
+            s.edit("Fixture", |doc, _| {
+                let layer = doc.layer_mut(id).unwrap();
+                layer.name = name.into();
+                layer.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 2, 1), &[1.0, 0.0, 0.0, alpha[0], 1.0, 0.0, 0.0, alpha[1]]);
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
+        s.execute("edit.fill", json!({"contents":"color","color":"#ffffff"})).unwrap();
+        s.actions.list = vec![action.clone()];
+        let played = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        assert_eq!(played["ran"], 1, "{played}");
+        let doc = &s.active().unwrap().doc;
+        let selected = doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]);
+        assert_eq!(selected, vec![0.0, 1.0], "{name:?}: use the topmost named layer, not the active layer or merged image");
+        assert!(s.undo());
+        assert!(s.active().unwrap().doc.selection.is_none());
+        assert_eq!(saved(&action).descriptor, Some(d));
+        replay_saved(&mut s, &action);
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![0.0, 1.0]);
+    }
+}
+
 /// New unit validation must fail before editing, while no-resample still ignores size fields.
 #[test]
 fn native_units_validate_before_edit_and_no_resample_remains_resolution_only() {
