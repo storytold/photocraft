@@ -167,6 +167,37 @@ fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     });
 }
 
+/// Which slices an export writes.
+enum SlicePick {
+    All,
+    User,
+    Numbers(Vec<u64>),
+}
+
+/// The slices chosen by `slices` and `numbers`. Photoshop's dialog can only select slices it
+/// shows, so a script naming one that doesn't exist is refused rather than exporting too few
+/// files.
+fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<SlicePick> {
+    let Some(numbers) = p.get("numbers").filter(|v| !v.is_null()) else {
+        return Ok(if p.get("slices").and_then(Value::as_str) == Some("user") { SlicePick::User } else { SlicePick::All });
+    };
+    let numbers: Vec<u64> = numbers
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .and_then(|a| a.iter().map(Value::as_u64).collect())
+        .ok_or_else(|| bad(cmd, "numbers must be a list of slice numbers"))?;
+    let count = slices::resolve(doc).len();
+    let mut missing: Vec<u64> = numbers.iter().copied().filter(|n| !(1..=count as u64).contains(n)).collect();
+    missing.sort_unstable();
+    missing.dedup();
+    if !missing.is_empty() {
+        let list = missing.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+        let what = if missing.len() == 1 { "slice" } else { "slices" };
+        return Err(bad(cmd, format!("no {what} numbered {list} (the document's slices are 1–{count})")));
+    }
+    Ok(SlicePick::Numbers(numbers))
+}
+
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
@@ -174,6 +205,8 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     }
     // Settings are checked first, so a refused export leaves a floating selection where it is.
     let st = WebSettings::from_params(p, cmd)?;
+    // So are the slices: committing a floating move doesn't change them.
+    let pick = slice_pick(p, cmd, &s.active().ok_or(EngineError::NoDocument)?.doc)?;
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
     crate::float_cmds::before_command(s, cmd)?;
@@ -191,12 +224,10 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let dpi = wdoc.resolution_dpi;
     let warnings = web_warnings(&st, exif, dpi);
     let all = slices::resolve(&doc);
-    let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
-    let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let picked = |r: &ResolvedSlice| match (&numbers, pick) {
-        (Some(n), _) => n.contains(&(r.number as u64)),
-        (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-        _ => true,
+    let picked = |r: &ResolvedSlice| match &pick {
+        SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
+        SlicePick::User => r.origin != photocraft_doc::SliceOrigin::Auto,
+        SlicePick::All => true,
     };
     let chosen: Vec<&ResolvedSlice> = all.iter().filter(|r| picked(r)).collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
