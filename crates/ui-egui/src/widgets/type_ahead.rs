@@ -20,6 +20,11 @@ pub fn list_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(open_id())).is_some_and(|seen| seen.saturating_add(2) >= pass)
 }
 
+/// Where the id of the dropdown whose list was drawn last is kept.
+fn last_list_id() -> Id {
+    Id::unique("pc-dropdown-list-last")
+}
+
 /// Close the open dropdown list now, ahead of this frame's drawing.
 pub fn close_list(ctx: &egui::Context) {
     egui::Popup::close_all(ctx);
@@ -35,10 +40,12 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
     let was_open = list_open(ui.ctx());
     ui.data_mut(|d| d.insert_temp(open_id(), pass));
     let key = id.with("type-ahead");
-    // A list opened anew starts with no letters typed.
+    // A list opened anew starts with no letters typed, also right after another dropdown's list.
     let shown_id = key.with("pass");
     ui.data_mut(|d| {
-        if !was_open || d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
+        let other_since = d.get_temp::<Id>(last_list_id()) != Some(id);
+        d.insert_temp(last_list_id(), id);
+        if !was_open || other_since || d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
             d.remove::<(String, f64)>(key);
         }
         d.insert_temp(shown_id, pass);
@@ -230,6 +237,39 @@ mod tests {
         type_key(&h, egui::Key::A, "a");
         h.run_steps(1);
         assert_eq!(h.state().1, Some(0), "a starts over: Alpha");
+    }
+
+    /// #9314 review: letters typed in one dropdown's list don't carry over to another's opened
+    /// right after: "g" in Color, Mode opened, Color again, "r" is Red, not "gr" (Gray).
+    #[test]
+    fn a_list_reopened_right_after_another_list_starts_a_new_prefix() {
+        let color = ["Red", "Orange", "Gray"];
+        let mode = ["Normal", "Multiply"];
+        // Frames as quick as a real click's, so the letters are typed with no pause between them.
+        let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
+            move |ui, (open, picked): &mut (u8, Option<usize>)| match open {
+                1 => {
+                    if let Some(i) = super::keys(ui, egui::Id::unique("color"), *picked, &color) {
+                        *picked = Some(i);
+                    }
+                }
+                2 => {
+                    super::keys(ui, egui::Id::unique("mode"), Some(0), &mode);
+                }
+                _ => {}
+            },
+            (1, Some(0)),
+        );
+        h.run_steps(1);
+        type_key(&h, egui::Key::G, "g");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(2), "g picks Gray");
+        h.state_mut().0 = 2;
+        h.run_steps(1);
+        h.state_mut().0 = 1;
+        type_key(&h, egui::Key::R, "r");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(0), "r starts over: Red");
     }
 
     #[test]
