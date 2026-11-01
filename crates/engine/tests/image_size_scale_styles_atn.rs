@@ -67,6 +67,7 @@ fn assert_size_and_style(s: &Session, id: LayerId, scale: bool) {
     assert_eq!(stroke.size, if scale { 10.0 } else { 20.0 });
 }
 
+/// Recorded true, false and omitted flags retain their meaning through save and playback.
 #[test]
 fn imported_style_scaling_survives_saved_bytes_and_playback() {
     for event in ["ImgS", "imageSize"] {
@@ -95,6 +96,7 @@ fn imported_style_scaling_survives_saved_bytes_and_playback() {
     }
 }
 
+/// Saving native calls writes their effective default instead of changing style scaling.
 #[test]
 fn native_default_is_written_explicitly_and_keeps_its_behavior() {
     for option in [None, Some(json!(false)), Some(json!(true)), Some(Value::Null), Some(json!(1)), Some(json!("false"))] {
@@ -121,6 +123,7 @@ fn native_default_is_written_explicitly_and_keeps_its_behavior() {
     }
 }
 
+/// Unsupported flags and empty steps remain complete descriptors instead of becoming resizes.
 #[test]
 fn malformed_or_empty_steps_are_kept_without_becoming_resizes() {
     for event in ["ImgS", "imageSize"] {
