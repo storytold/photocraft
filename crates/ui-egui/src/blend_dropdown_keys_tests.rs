@@ -97,6 +97,19 @@ fn letters_pick_blend_modes_in_the_open_list_without_switching_tools() {
 /// Letters and arrows stay the list's (the tests above).
 #[test]
 fn a_command_shortcut_closes_the_open_list_and_runs() {
+    command_shortcut_closes_the_open_list_and_runs(egui::Modifiers::COMMAND);
+}
+
+/// #9314 review: the same with the modifiers a real key press carries, not just egui's logical
+/// `command`: Ctrl on Windows and Linux, ⌘ on macOS.
+#[test]
+fn a_command_shortcut_with_each_platforms_modifiers_closes_the_open_list_and_runs() {
+    command_shortcut_closes_the_open_list_and_runs(egui::Modifiers::CTRL | egui::Modifiers::COMMAND);
+    command_shortcut_closes_the_open_list_and_runs(egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND);
+}
+
+/// ⌘1 / Ctrl+1 (100%), pressed with `mods`, with the Blend Mode list open.
+fn command_shortcut_closes_the_open_list_and_runs(mods: egui::Modifiers) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -113,12 +126,12 @@ fn a_command_shortcut_closes_the_open_list_and_runs() {
     h.query_all_by_role(Role::ComboBox).find(|n| named(n)).expect("the Layers panel's Blend Mode dropdown").click();
     h.run_steps(2);
     assert!(crate::widgets::dropdown_list_open(&h.ctx), "the list is open");
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1);
+    h.key_press_modifiers(mods, egui::Key::Num1);
     h.run_steps(3);
-    assert_eq!(h.state().ui.views[0].zoom, 1.0, "⌘1 (100%) runs with the list open");
-    assert!(!crate::widgets::dropdown_list_open(&h.ctx), "and closes the list");
+    assert_eq!(h.state().ui.views[0].zoom, 1.0, "⌘1 (100%) runs with the list open: {mods:?}");
+    assert!(!crate::widgets::dropdown_list_open(&h.ctx), "and closes the list: {mods:?}");
     let st = h.state().session.active().unwrap();
-    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().blend, BlendMode::Normal, "the mode is unchanged");
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().blend, BlendMode::Normal, "the mode is unchanged: {mods:?}");
 }
 
 /// #9065 (CodeRabbit on #9314): with the Layers panel's options menu open, a command shortcut
