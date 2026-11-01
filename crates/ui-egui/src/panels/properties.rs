@@ -259,8 +259,11 @@ fn adjustments_grid_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ("colorLookup", "grid-3x3", tl!("Color Lookup")),
     ];
     let mut run = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+    // The adjustment buttons are a physical grid strip: ltr_grid keeps the cells in
+    // left-to-right order in both directions; the column count matches the old wrapped
+    // flow of 30 pt buttons with 2 pt spacing.
+    let cols = ((ui.available_width() + 2.0) / 32.0).floor().max(1.0) as usize;
+    crate::direction::ltr_grid(ui, "adjustments-grid", cols, vec2(2.0, 2.0), |ui| {
         for (kind, icon, tip) in items {
             if icons::button(ui, icon, 30.0, false, tip).clicked() {
                 run = Some(format!("layer.newAdjustmentLayer.{kind}"));
@@ -519,6 +522,37 @@ mod properties_rtl_tests {
             drag(&mut h, grab, grab + vec2(40.0, 0.0));
             let after = card_rect(&h);
             assert!(after.left() > card.left(), "the strip drags the card: {card:?} -> {after:?}");
+        }
+    }
+
+    /// Twin of the migrated `ltr_grid` adjustments strip: cell order stays left-to-right in
+    /// both directions (the strip is physical), with equal gaps.
+    #[test]
+    fn migrated_ltr_grid_keeps_cell_order_in_both_directions() {
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            ctx.run_ui(input, |ui| {
+                crate::direction::ltr_grid(ui, "twin-adjustments-grid", 3, vec2(2.0, 2.0), |ui| {
+                    for _ in 0..3 {
+                        out.push(ui.allocate_exact_size(vec2(30.0, 30.0), egui::Sense::hover()).0);
+                    }
+                });
+            });
+            out
+        };
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let r = rects(dir);
+            assert!(r[0].left() < r[1].left() && r[1].left() < r[2].left(), "{dir:?}: cells stay LTR: {r:?}");
+            let gap01 = r[1].left() - r[0].right();
+            let gap12 = r[2].left() - r[1].right();
+            assert!((gap01 - gap12).abs() < 0.5, "{dir:?}: equal gaps: {gap01} {gap12}");
         }
     }
 }
