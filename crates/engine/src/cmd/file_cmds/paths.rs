@@ -202,11 +202,23 @@ pub(crate) fn join(dir: &str, name: &str) -> String {
     }
 }
 
+/// Longest sanitized name in bytes, leaving room for a prefix, an index and an extension under the
+/// 255-byte file-name limit of most filesystems.
+const MAX_NAME_BYTES: usize = 100;
+
 /// A file-name-safe version of a layer name. A Windows device name (`nul`, `con.v2`) gets a `_`
 /// before its first dot, so the file or folder is usable on Windows, wherever it was written.
 pub(crate) fn sanitize(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
-    let s = s.trim().trim_matches('.').to_string();
+    let mut s = s.trim().trim_matches('.').to_string();
+    if s.len() > MAX_NAME_BYTES {
+        let mut end = MAX_NAME_BYTES;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s = s.trim_end().trim_end_matches('.').to_string();
+    }
     if s.is_empty() { "layer".into() } else { portable_device_name(s) }
 }
 
