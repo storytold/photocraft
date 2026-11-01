@@ -543,6 +543,61 @@ fn save_for_web_matte_takes_only_whole_colours() {
     }
 }
 
+/// #8830, review follow-ups: the field takes `#rrggbb` only (no `#rgb` short form: `parse_hex`
+/// wants six digits), accepts upper case (stored lower case) and a paste, keeps the typed draft in
+/// the field while the setting holds the last whole colour, and on blur shows that committed colour
+/// instead of the invalid draft.
+#[test]
+fn save_for_web_matte_short_form_case_paste_and_blur() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (app, _) = app();
+    let (mut h, id) = web_size_dialog(app);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+    h.run_steps(3);
+    let matte = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["matte"].clone();
+    let values = |h: &egui_kittest::Harness<'static, PhotocraftApp>| -> Vec<String> {
+        h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.accesskit_node().value().unwrap_or_default()).collect()
+    };
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("#ffffff"))
+        .map(|n| n.rect())
+        .expect("the Matte field");
+    h.hover_at(field.center());
+    h.run_steps(1);
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    let replace_with = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, text: &str, paste: bool| {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.key_press(egui::Key::Backspace);
+        h.event(if paste { egui::Event::Paste(text.into()) } else { egui::Event::Text(text.into()) });
+        h.run_steps(2);
+    };
+    // (text, pasted, setting afterwards)
+    for (typed, paste, want) in [
+        ("#fff", false, "#ffffff"),    // short form is not a colour here: draft only, setting unchanged
+        ("#ABCDEF", false, "#abcdef"), // upper case is accepted and stored lower case
+        ("#12AB3", true, "#abcdef"),   // a partial paste is a draft like partial typing
+        ("#12AB34", true, "#12ab34"),  // a whole pasted colour is taken
+    ] {
+        replace_with(&mut h, typed, paste);
+        assert_eq!(matte(&h), json!(want), "{typed:?} (paste: {paste})");
+        assert!(values(&h).iter().any(|v| v == typed), "the field keeps {typed:?} as typed: {:?}", values(&h));
+    }
+    // Blur with an invalid draft: the field shows the last committed colour, not the draft.
+    replace_with(&mut h, "#22222g", false);
+    assert_eq!(matte(&h), json!("#12ab34"));
+    assert!(values(&h).iter().any(|v| v == "#22222g"), "the draft is shown while focused");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let shown = values(&h);
+    assert!(shown.iter().any(|v| v == "#12ab34"), "blur restores the committed colour: {shown:?}");
+    assert!(!shown.iter().any(|v| v == "#22222g"), "the invalid draft is gone after blur: {shown:?}");
+    assert_eq!(matte(&h), json!("#12ab34"));
+}
+
 /// #8830, the review follow-up: alt-tabbing away from the window and back must not throw away a
 /// partial Matte that is still being typed. egui keeps keyboard focus on the field while the OS
 /// window is unfocused (`Memory::has_focus` ignores the window, `Response::has_focus` does not),
