@@ -258,18 +258,18 @@ fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<L
 }
 
 fn color_menu(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) {
-    use egui::containers::menu::SubMenu;
     let rtl = ui.style().right_to_left;
     let label = tl!("Color");
     // The row mirrors like any menu row: under RTL the label hugs the row's right edge and the
     // arrow sits at its left (the glyph itself rotates with the direction flag in the fork).
+    // Through the shared `submenu_row`, so the submenu body is scoped through `popup_body`
+    // like every other popup — a raw `SubMenu::show` body stays pinned left-to-right.
     let text = if rtl {
         crate::menu_keys::menu_row_text(ui, false, label, None, false, crate::menu_keys::GutterSide::ReadingStart)
     } else {
         egui::RichText::new(label).into()
     };
-    let response = ui.add(crate::menu_keys::submenu_row_button(text, rtl));
-    SubMenu::new().show(ui, &response, |ui| color_choices(app, ui, l, on_set, actions));
+    crate::menu_keys::submenu_row(ui, text, |ui| color_choices(app, ui, l, on_set, actions));
 }
 
 /// The eye column opens the same color choices directly, without the row's full context menu.

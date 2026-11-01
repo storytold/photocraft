@@ -46,15 +46,32 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     egui::Popup::menu(&more).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(200.0);
         let mut section = |ui: &mut egui::Ui, title: &str, items: &[(&str, &str, &str)]| {
-            ui.label(egui::RichText::new(title).small().color(t.text_dim));
+            // The header reads from the row's reading start (a plain label in the pinned body
+            // would stay at the popup's physical left edge).
+            crate::direction::full_row(ui, |ui| {
+                crate::text::direction::body_label(ui, egui::RichText::new(title).small().color(t.text_dim));
+            });
             for (cmd, icon, label) in items {
                 let on = app.session.is_enabled(cmd);
                 let tint = if on { t.icon } else { t.text_dim };
-                let button = egui::Button::image_and_text(icons::image(icon, 16.0, tint), tl!(label));
-                if ui.add_enabled(on, button).clicked() {
-                    let _ = app.run(cmd, json!({}));
-                    ui.close();
-                }
+                // An icon+text row through the shared atom helpers: the atoms mirror under a
+                // right-to-left direction (a plain `Button::image_and_text` keeps its icon at
+                // the physical left), and left-to-right pixels are unchanged.
+                let icon_id = egui::IdSalt::new(("align-row", *cmd));
+                let atoms = crate::menu_keys::mirror_atoms(
+                    egui::IntoAtoms::into_atoms((egui::Atom::custom(icon_id, egui::vec2(16.0, 16.0)), tl!(label), egui::Atom::grow())),
+                    ui.style().right_to_left,
+                );
+                ui.add_enabled_ui(on, |ui| {
+                    let b = egui::Button::new(atoms).atom_ui(ui);
+                    if let Some(r) = b.rect(icon_id) {
+                        crate::icons::paint(ui, r, icon, 16.0, tint);
+                    }
+                    if b.response.clicked() {
+                        let _ = app.run(cmd, json!({}));
+                        ui.close();
+                    }
+                });
             }
         };
         section(ui, tl!("Align"), &ALIGN);
