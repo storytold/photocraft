@@ -598,6 +598,44 @@ fn save_for_web_matte_keeps_typed_text_across_window_focus_loss() {
     assert_eq!(matte(&h), json!("#111111"), "typing on completes as usual");
 }
 
+/// #8830, the second follow-up: a middle-click paste into an unfocused Matte field inserts the text
+/// and moves focus to the field inside the same `ui.add`. In the pinned egui fork
+/// (`crates/egui/src/widgets/text_edit/builder.rs:933-974`) the `MiddleClickPaste` branch writes the
+/// text into the field's buffer and then calls `Memory::request_focus`, which takes effect the same
+/// frame (`crates/egui/src/memory/mod.rs:945-950`). If the cache write side looks at the focus state
+/// read before `add`, it drops the pasted partial text, and the following frame restores the saved
+/// colour even though the field now has focus.
+#[test]
+fn save_for_web_matte_caches_a_middle_click_paste_that_arrives_with_focus() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (app, _) = app();
+    let (mut h, id) = web_size_dialog(app);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+    h.run_steps(3);
+    let matte = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["matte"].clone();
+    let values = |h: &egui_kittest::Harness<'static, PhotocraftApp>| -> Vec<String> {
+        h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.accesskit_node().value().unwrap_or_default()).collect()
+    };
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("#ffffff"))
+        .map(|n| n.rect())
+        .expect("the Matte field");
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "the Matte field starts unfocused");
+    h.hover_at(field.center());
+    h.run_steps(1);
+    // One frame: the PRIMARY-selection "#1111" is pasted at the click pos while the field gains
+    // focus, all inside `ui.add` - run_steps(1) so the single stale frame is visible, not a run()
+    // that would settle past the restore.
+    h.event(egui::Event::MiddleClickPaste { pos: field.center(), text: "#1111".into() });
+    h.run_steps(1);
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "the paste moved focus to the field");
+    h.run_steps(1);
+    let shown = values(&h);
+    assert!(shown.iter().any(|v| v.contains("#1111")), "the pasted partial must survive into the next frame, not be restored to the saved colour: {shown:?}");
+    assert_eq!(matte(&h), json!("#ffffff"), "a partial value must not reach the settings");
+}
+
 #[test]
 fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     let (mut app, _) = app();

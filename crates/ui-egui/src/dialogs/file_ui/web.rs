@@ -420,15 +420,22 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
 /// Both sides ask `Memory::has_focus`, which ignores whether the OS window is focused: egui keeps
 /// focus on the field while the user alt-tabs away, and `Response::has_focus` would drop the typed
 /// text for those frames and restore the saved colour when the window comes back.
+/// Focus is asked twice, because the two sides ask different questions. The state *before* `ui.add`
+/// decides what this frame shows - that is the frame the user is looking at. The state *after*
+/// `ui.add` decides whether typed text goes into the cache: egui can move focus into the field
+/// during the add itself, and a middle-click paste on an unfocused field inserts the pasted text and
+/// then calls `Memory::request_focus` inside the add (pinned egui fork, text_edit/builder.rs:933-974;
+/// `Memory::request_focus` is effective the same frame, memory/mod.rs:945-950), so caching against
+/// the pre-add state would drop that paste and restore the saved colour the next frame.
 fn matte_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
     let id = ui.make_persistent_id("web-matte");
-    let focused = ui.memory(|m| m.has_focus(id));
-    let typed = if focused { ui.data(|d| d.get_temp::<String>(id)) } else { None };
+    let was_focused = ui.memory(|m| m.has_focus(id));
+    let typed = if was_focused { ui.data(|d| d.get_temp::<String>(id)) } else { None };
     let mut text = typed.unwrap_or_else(|| s(f, "matte", "#ffffff"));
     let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(80.0)).labelled_by(label.id);
-    if focused {
+    if ui.memory(|m| m.has_focus(id)) {
         ui.data_mut(|d| d.insert_temp(id, text.clone()));
     } else {
         ui.data_mut(|d| d.remove::<String>(id));
