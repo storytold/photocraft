@@ -523,3 +523,15 @@ fn declared_canvas_outside_the_budget_is_refused() {
     let opts = LoadOptions { max_canvas_side: 65_536, ..Default::default() };
     assert!(matches!(load_from_bytes_with(&with_size(65_537, 1), &opts), Err(FormatError::LimitExceeded(_))));
 }
+
+/// #8595: by default a load may decode at most half the machine's memory (between 1 GiB and
+/// 16 GiB), so a small bundle of nearly empty tiles that names 16 GiB of them stops with an error
+/// on an ordinary machine instead of running it out of memory.
+#[test]
+fn the_default_decode_budget_follows_the_machines_memory() {
+    assert_eq!(total_budget(None), MAX_TOTAL_BYTES);
+    assert_eq!(total_budget(Some(8 << 30)), 4 << 30);
+    assert_eq!(total_budget(Some(64 << 30)), MAX_TOTAL_BYTES);
+    assert_eq!(total_budget(Some(512 << 20)), 1 << 30);
+    assert_eq!(LoadOptions::default().max_total_bytes, total_budget(photocraft_raster::system::physical_memory()));
+}

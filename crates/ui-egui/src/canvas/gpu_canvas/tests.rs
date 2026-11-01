@@ -294,7 +294,7 @@ fn nvidia_video_memory_only_asks_for_an_nvidia_vendor_id() {
 #[cfg(windows)]
 #[test]
 fn windows_reports_installed_ram() {
-    let ram = detect_physical_memory().unwrap_or(0);
+    let ram = physical_memory().unwrap_or(0);
     assert!(ram >= 256 << 20, "{ram} bytes");
     assert!(ram < 1 << 50, "{ram} bytes");
 }

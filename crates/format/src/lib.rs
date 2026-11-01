@@ -117,12 +117,25 @@ pub const MAX_CANVAS_SIDE: u32 = 300_000;
 /// canvas with no content allocates nothing for its area.
 pub const MAX_CANVAS_PIXELS: u64 = MAX_CANVAS_SIDE as u64 * MAX_CANVAS_SIDE as u64;
 
+/// Most decoded tile and blob bytes a load takes by default, on any machine.
+pub const MAX_TOTAL_BYTES: u64 = 16 << 30;
+
+/// The default [`LoadOptions::max_total_bytes`] on a machine with `ram` installed (#8595): half
+/// of it, between 1 GiB and [`MAX_TOTAL_BYTES`] ([`MAX_TOTAL_BYTES`] when unknown). A bundle
+/// names each tile's decoded size, so a small file of nearly empty, highly compressed tiles can
+/// ask for far more memory than the machine has; past this budget the load stops with an error
+/// before decoding more, instead of the process running out of memory. Tiles are held in memory
+/// (nothing pages them to disk), so a document this large couldn't be worked on anyway.
+pub fn total_budget(ram: Option<u64>) -> u64 {
+    ram.map_or(MAX_TOTAL_BYTES, |r| (r / 2).clamp(1 << 30, MAX_TOTAL_BYTES))
+}
+
 impl Default for LoadOptions {
     fn default() -> Self {
         LoadOptions {
             max_manifest_bytes: 256 << 20,
             max_blob_bytes: 1 << 30,
-            max_total_bytes: 16 << 30,
+            max_total_bytes: total_budget(photocraft_raster::system::physical_memory()),
             preserve_ids: true,
             max_canvas_side: MAX_CANVAS_SIDE,
             max_canvas_pixels: MAX_CANVAS_PIXELS,

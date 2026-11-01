@@ -45,6 +45,8 @@ mod setup;
 mod shaders;
 mod texels;
 
+#[cfg(all(test, windows))]
+use budget::detect_video_memory;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
@@ -53,8 +55,6 @@ pub use budget::{
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
-#[cfg(all(test, windows))]
-use budget::{detect_physical_memory, detect_video_memory};
 use callback::CanvasCallback;
 #[cfg(test)]
 use callback::{filter_mode, map_doc_px, tile_screen_aabb};

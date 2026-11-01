@@ -9,6 +9,7 @@
 
 mod interrupt;
 pub use interrupt::{Cancelled, Interrupt};
+pub mod system;
 
 use std::collections::BTreeMap;
 use std::fmt;
