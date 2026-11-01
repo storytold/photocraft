@@ -848,3 +848,22 @@ fn changing_default_preserves_tiles_and_is_copy_on_write() {
     assert_eq!(clone.pixel(300, 3), vec![64.0 / 255.0]);
     assert_eq!(clone.default_pixel(), vec![64.0 / 255.0]);
 }
+
+#[test]
+fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let format = PixelFormat::new(ColorMode::Rgb, sample, true);
+        let rect = Rect::new(-2, -1, 3, 2);
+        let bytes: Vec<u8> = (0..rect.width() as usize * rect.height() as usize * format.bytes_per_pixel()).map(|i| (i % 251) as u8).collect();
+        let mut surface = Surface::new(format);
+        assert!(surface.try_write_interleaved(rect, &bytes[..bytes.len() - 1]).is_err());
+        assert!(surface.tiles.is_empty());
+        surface.try_write_interleaved(rect, &bytes).unwrap();
+        assert_eq!(surface.to_interleaved(rect), bytes);
+        let mut shared = surface.clone();
+        let replacement = vec![0; bytes.len()];
+        shared.try_write_interleaved(rect, &replacement).unwrap();
+        assert_eq!(surface.to_interleaved(rect), bytes);
+        assert_eq!(shared.to_interleaved(rect), replacement);
+    }
+}
