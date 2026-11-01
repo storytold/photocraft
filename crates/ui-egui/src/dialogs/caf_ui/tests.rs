@@ -617,3 +617,52 @@ fn custom_hint_follows_the_full_resolution_area_not_the_proxy() {
     assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
     assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
 }
+
+/// A big Sampling Brush stroke kept inside the fill area can't sample anything, so working that
+/// out paints nothing: each segment of it would otherwise paint its whole brush (here 100 px
+/// across, up to 25 million px at the largest size) at full resolution, again and again while the
+/// area stays empty. One that reaches past the fill area paints only the pixels outside it.
+#[test]
+fn custom_hint_paints_nothing_for_a_stroke_inside_the_fill_area() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 300, 200), &[0.2, 0.6, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 50, "y": 40, "width": 200, "height": 120})).unwrap();
+    app.sync_views();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let inside = SamplingStroke { add: true, size: 100.0, points: vec![[120.0, 100.0], [180.0, 100.0]] };
+    assert!(!inside.bounds().is_empty() && Rect::new(50, 40, 250, 160).contains_rect(&inside.bounds()));
+    assert_eq!(ws(&app).sampling_reach(std::slice::from_ref(&inside)), Rect::EMPTY);
+    let d = control(&mut app, &json!({"stroke": {"points": [[120.0, 100.0], [180.0, 100.0]], "size": 100}})).unwrap();
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    // 10 px past the fill area's right edge: only those columns.
+    let past = SamplingStroke { add: true, size: 100.0, points: vec![[160.0, 100.0], [210.0, 100.0]] };
+    assert_eq!(ws(&app).sampling_reach(std::slice::from_ref(&past)), Rect::new(250, 50, 261, 151));
+    let d = control(&mut app, &json!({"stroke": {"points": [[160.0, 100.0], [210.0, 100.0]], "size": 100}})).unwrap();
+    assert!(d["previewHint"].is_null(), "{d}");
+}
+
+/// The pixels outside the fill area are found pixel by pixel, not from its bounds: a gap in it
+/// is found, and anything past the fill area's rectangle is outside it.
+#[test]
+fn outside_fill_bounds_follow_the_fill_area_pixel_by_pixel() {
+    let rect = Rect::new(10, 10, 20, 20);
+    let mut hole = vec![true; 100];
+    let b = |hole: &Vec<bool>| preview::Base { window: rect, rect, hole: hole.clone(), base: vec![false; 100] };
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(12, 12, 18, 18)), Rect::EMPTY);
+    assert_eq!(b(&hole).outside_fill_bounds(rect), Rect::EMPTY);
+    hole[3 * 10 + 6] = false; // (16, 13)
+    hole[7 * 10 + 4] = false; // (14, 17)
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(12, 12, 18, 18)), Rect::new(14, 13, 17, 18));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(10, 10, 16, 16)), Rect::EMPTY);
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(15, 5, 18, 12)), Rect::new(15, 5, 18, 10));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(0, 0, 5, 5)), Rect::new(0, 0, 5, 5));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(18, 16, 25, 18)), Rect::new(20, 16, 25, 18));
+}

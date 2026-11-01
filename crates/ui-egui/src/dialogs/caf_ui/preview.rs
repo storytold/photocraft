@@ -15,6 +15,33 @@ impl Base {
         let (xi, yi) = (x.floor() as i32, y.floor() as i32);
         self.rect.contains(xi, yi).then(|| (yi - self.rect.y0) as usize * self.rect.width() as usize + (xi - self.rect.x0) as usize)
     }
+
+    /// Bounds of the pixels of `r` outside the fill area, pixel by pixel (everything beyond
+    /// `rect` is outside it); empty when the fill area covers all of `r`. Only the rows of `r`
+    /// within `rect` are scanned, from each end to the first pixel outside.
+    pub(super) fn outside_fill_bounds(&self, r: Rect) -> Rect {
+        let inner = r.intersect(&self.rect);
+        if inner.is_empty() {
+            return if r.is_empty() { Rect::EMPTY } else { r };
+        }
+        let beyond = [
+            Rect::new(r.x0, r.y0, r.x1, inner.y0),
+            Rect::new(r.x0, inner.y1, r.x1, r.y1),
+            Rect::new(r.x0, inner.y0, inner.x0, inner.y1),
+            Rect::new(inner.x1, inner.y0, r.x1, inner.y1),
+        ];
+        let mut out = beyond.iter().filter(|b| !b.is_empty()).fold(Rect::EMPTY, |o, b| o.union(b));
+        let w = self.rect.width() as usize;
+        for y in inner.y0..inner.y1 {
+            let row = (y - self.rect.y0) as usize * w;
+            let outside = |x: &i32| !self.hole.get(row + (x - self.rect.x0) as usize).copied().unwrap_or(false);
+            if let Some(a) = (inner.x0..inner.x1).find(outside) {
+                let b = (inner.x0..inner.x1).rev().find(outside).unwrap_or(a);
+                out = out.union(&Rect::new(a, y, b + 1, y + 1));
+            }
+        }
+        out
+    }
 }
 
 /// A computed preview: the filled rectangle as an image, or why it failed.

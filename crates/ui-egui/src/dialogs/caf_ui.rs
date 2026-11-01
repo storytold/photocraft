@@ -385,7 +385,7 @@ impl CafWorkspace {
     /// `paint_strokes` over the canvas pixels they add to), not the proxy, which at more than
     /// one document px per proxy px can see a thin stroke's pixels differently.
     fn samples_outside_fill(&self, strokes: &[SamplingStroke]) -> bool {
-        let rect = strokes.iter().filter(|s| s.add).fold(Rect::EMPTY, |r, s| r.union(&s.bounds())).intersect(&self.canvas);
+        let rect = self.sampling_reach(strokes);
         if rect.is_empty() {
             return false;
         }
@@ -396,6 +396,14 @@ impl CafWorkspace {
             let (x, y) = (rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32);
             *s && !self.base.index(f64::from(x), f64::from(y)).is_some_and(|j| self.base.hole.get(j).copied().unwrap_or(false))
         })
+    }
+
+    /// The only pixels `samples_outside_fill` has to paint `strokes` over: the bounds of the
+    /// canvas pixels outside the fill area within reach of their added strokes. Empty when they
+    /// can't reach one, as a stroke kept within the fill area can't, however big its brush.
+    fn sampling_reach(&self, strokes: &[SamplingStroke]) -> Rect {
+        let rect = strokes.iter().filter(|s| s.add).fold(Rect::EMPTY, |r, s| r.union(&s.bounds())).intersect(&self.canvas);
+        self.base.outside_fill_bounds(rect)
     }
 
     /// The preview is out of date.
