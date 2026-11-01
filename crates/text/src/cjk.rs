@@ -76,9 +76,16 @@ pub fn locale_script(locale: Option<&str>) -> Option<CjkScript> {
         "ja" => Some(Japanese),
         "ko" => Some(Korean),
         "zh" | "yue" => {
-            let hant = rest.iter().any(|p| matches!(*p, "hant" | "tw" | "hk" | "mo"));
-            let hans = rest.iter().any(|p| matches!(*p, "hans" | "cn" | "sg"));
-            if (hant || lang == "yue") && !hans { Some(TraditionalChinese) } else { Some(SimplifiedChinese) }
+            // An explicit script subtag decides; the region is only a fallback without one.
+            if rest.contains(&"hans") {
+                Some(SimplifiedChinese)
+            } else if rest.contains(&"hant") {
+                Some(TraditionalChinese)
+            } else {
+                let hant = rest.iter().any(|p| matches!(*p, "tw" | "hk" | "mo"));
+                let hans = rest.iter().any(|p| matches!(*p, "cn" | "sg"));
+                if (hant || lang == "yue") && !hans { Some(TraditionalChinese) } else { Some(SimplifiedChinese) }
+            }
         }
         _ => None,
     }
@@ -662,6 +669,11 @@ mod tests {
         assert_eq!(locale_script(Some("zh_CN")), Some(SimplifiedChinese));
         assert_eq!(locale_script(Some("zh-Hant-TW")), Some(TraditionalChinese));
         assert_eq!(locale_script(Some("yue-HK")), Some(TraditionalChinese));
+        // An explicit script subtag decides; the region only matters when no script is given.
+        assert_eq!(locale_script(Some("zh-Hant-CN")), Some(TraditionalChinese));
+        assert_eq!(locale_script(Some("zh-Hant-SG")), Some(TraditionalChinese));
+        assert_eq!(locale_script(Some("zh-Hans-TW")), Some(SimplifiedChinese));
+        assert_eq!(locale_script(Some("zh-Hans-HK")), Some(SimplifiedChinese));
         for unknown in [None, Some(""), Some("en_US.UTF-8"), Some("C"), Some("de"), Some("!!@@")] {
             assert_eq!(locale_script(unknown), None, "{unknown:?}");
         }
