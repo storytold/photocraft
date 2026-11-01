@@ -492,7 +492,7 @@ mod tests {
                 (),
             );
             h.run_steps(2);
-            (h.get_by_role_and_label(Role::TextEdit, "Kerning").rect(), h.get_by_role_and_label(Role::ComboBox, "Kerning").rect())
+            (h.get_by_role_and_label(Role::TextInput, "Kerning").rect(), h.get_by_role_and_label(Role::ComboBox, "Kerning").rect())
         };
         let (ltr_edit, ltr_combo) = row(crate::direction::Dir::Ltr);
         assert!(ltr_edit.left() < ltr_combo.left(), "LTR: the field leads the chevron: {ltr_edit:?} {ltr_combo:?}");
