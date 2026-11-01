@@ -8,6 +8,8 @@ on:
       - apps/photocraft/src/gpu_startup.rs
       - apps/photocraft/src/gpu_startup/**
       - apps/photocraft/Cargo.toml
+      - crates/engine/**
+      - crates/ui-egui/**
       - Cargo.toml
       - Cargo.lock
       - docs/windows-dxgi-audit.md
@@ -18,6 +20,8 @@ on:
       - apps/photocraft/src/gpu_startup.rs
       - apps/photocraft/src/gpu_startup/**
       - apps/photocraft/Cargo.toml
+      - crates/engine/**
+      - crates/ui-egui/**
       - Cargo.toml
       - Cargo.lock
       - docs/windows-dxgi-audit.md

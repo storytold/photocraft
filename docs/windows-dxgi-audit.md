@@ -61,9 +61,10 @@ uses a normal import library. A missing `dxgi.dll` or missing exported function
 can fail in the Windows loader before Rust runs; it cannot be converted into the
 factory-error fallback. The app must not claim otherwise.
 
-The pinned `wgpu-hal 30.0.1` source already calls the statically imported
-`windows::Win32::Graphics::Dxgi::CreateDXGIFactory1` from
-`src/auxil/dxgi/hdr.rs`; this HDR path is shared by DX12 and Windows Vulkan. Its
+The pinned `wgpu-hal 30.0.1` archive was also verified against its `Cargo.lock`
+checksum. Its [HDR source](https://github.com/gfx-rs/wgpu/blob/40f4a34ebaf56f9a046231f54125ad046239d3f3/wgpu-hal/src/auxil/dxgi/hdr.rs)
+already calls the statically imported
+`windows::Win32::Graphics::Dxgi::CreateDXGIFactory1`; this HDR path is shared by DX12 and Windows Vulkan. Its
 separate DX12 factory helper loads DXGI dynamically, so inspecting only that
 helper is insufficient to establish the executable's loader requirements.
 
