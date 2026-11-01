@@ -36,7 +36,7 @@ pub(crate) fn picker_supported(mode: photocraft_doc::ColorMode, eyedropper: phot
 /// The kind of an adjustment dialog with Set Black/Neutral Gray/White Point eyedroppers (Levels,
 /// Curves), if `fields` are one.
 fn picker_kind(fields: &Map<String, Value>) -> Option<&str> {
-    fields.get("__adjust").and_then(Value::as_str).filter(|k| matches!(*k, "levels" | "curves"))
+    fields.get("__adjust").and_then(Value::as_str).filter(|k| matches!(*k, "levels" | "curves" | "exposure"))
 }
 
 /// Whether the top modal has a supported Levels or Curves eyedropper armed.
@@ -405,7 +405,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     let mask = fields.get("target").and_then(Value::as_str) == Some("mask");
     let filter_mask = fields.get("target").and_then(Value::as_str) == Some("filterMask");
     let mode = curve_mode_for_fields(app, &kind, fields);
-    if matches!(kind.as_str(), "levels" | "curves") {
+    if matches!(kind.as_str(), "levels" | "curves" | "exposure") {
         picker_controls(ui, fields, mode);
         ui.add_space(4.0);
     }

@@ -879,7 +879,7 @@ fn build() -> Vec<CommandSpec> {
             "Adjustment Properties",
             [],
             None,
-            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only)"##,
+            r##"{"layer":id?, …params of that adjustment kind} (Levels, Curves, Exposure: "eyedropper":{"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1} = the Properties panel's Set Black/Neutral Gray/White Point, sampling the image below the layer, RGB and Grayscale (no gray) only)"##,
             has_layer,
             |s, p| {
                 let id = layer_param(s, p)?;
@@ -1134,7 +1134,11 @@ fn build() -> Vec<CommandSpec> {
             "Curves…",
             r##"{"points":json,"red":json,"green":json,"blue":json,"pencil":bool=false,"smooth":0..10=0,"eyedropper":json} (curves as [[in,out],…] in 0..255, 2..19 points: points = composite; red/green/blue, gray, cyan/magenta/yellow/black or lightness/a/b per channel; pencil = drawn curves (Draw to modify the curve): each curve is 256 output levels in 0..255 (point curves given are drawn in, and turning pencil off fits points to the drawing); smooth = Smooth passes over the drawn curves; eyedropper = the dialog's Set Black/Neutral Gray/White Point picker {"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1}, RGB and Grayscale (no gray) only, applied over the given curves)"##,
         ),
-        ("exposure", "Exposure…", r##"{"exposure":-20..20=0,"offset":-0.5..0.5=0,"gamma":0.01..9.99=1}"##),
+        (
+            "exposure",
+            "Exposure…",
+            r##"{"exposure":-20..20=0,"offset":-0.5..0.5=0,"gamma":0.01..9.99=1,"eyedropper":json} (eyedropper = the Set Black/Gray/White Point pickers {"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1}: black sets the offset that takes the sample to black, gray and white the exposure that takes it to 18 % gray or white; RGB and Grayscale (no gray) only)"##,
+        ),
         ("vibrance", "Vibrance…", r##"{"vibrance":-100..100=0,"saturation":-100..100=0}"##),
         (
             "hueSaturation",
@@ -1188,7 +1192,8 @@ fn build() -> Vec<CommandSpec> {
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
+                let eyedropped =
+                    if matches!(kind.as_str(), "levels" | "curves" | "exposure") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 let adj = match eyedropped {
                     Some(adj) => adj,
                     None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
@@ -1214,7 +1219,8 @@ fn build() -> Vec<CommandSpec> {
             enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
+                let eyedropped =
+                    if matches!(kind.as_str(), "levels" | "curves" | "exposure") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
                 // to, not the sample (#3127).
                 let recorded = eyedropped.as_ref().map(|adj| {
