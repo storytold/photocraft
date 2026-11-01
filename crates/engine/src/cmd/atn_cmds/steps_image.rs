@@ -513,6 +513,23 @@ pub(super) fn select_sky_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("sampleAllLayers", D::Boolean(all)))
 }
 
+/// A plain double, as Photoshop records Oil Paint's settings and the step saves them back: a
+/// value with a unit, or an integer, would save back as another value.
+fn double(v: &D) -> Option<f64> {
+    match v {
+        D::Double(n) if n.is_finite() => Some(*n),
+        _ => None,
+    }
+}
+
+/// An integer, as Photoshop records Oil Paint's light direction and the step saves it back.
+fn integer(v: &D) -> Option<i32> {
+    match v {
+        D::Integer(n) => Some(*n),
+        _ => None,
+    }
+}
+
 /// Oil Paint's keys in recorded order: (key, param, Photoshop's default, the command's default).
 const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
     ("stylization", "stylization", 4.0, 4.0),
@@ -522,7 +539,8 @@ const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
 ];
 
 /// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
-/// command's for cleanliness, scale, bristle detail and shine, so they are written out.
+/// command's for cleanliness, scale, bristle detail and shine, so they are written out. A
+/// setting of another number type, or with a unit, keeps the Photoshop step.
 pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
     match oil_paint_params(d) {
         Some(p) => step("filter.stylize.oilPaint", Value::Object(p)),
@@ -538,10 +556,10 @@ fn oil_paint_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
     p.insert("lighting".into(), setting(d, "lightingOn", boolean, true)?.into());
     for (key, param, ps, _) in OIL_PAINT {
-        p.insert((*param).into(), setting(d, key, num, *ps)?.into());
+        p.insert((*param).into(), setting(d, key, double, *ps)?.into());
     }
-    p.insert("angle".into(), setting(d, "LghD", num, -60.0)?.into());
-    p.insert("shine".into(), setting(d, "specularity", num, 1.299_999_952_316_28)?.into());
+    p.insert("angle".into(), setting(d, "LghD", |v| integer(v).map(f64::from), -60.0)?.into());
+    p.insert("shine".into(), setting(d, "specularity", double, 1.299_999_952_316_28)?.into());
     Some(p)
 }
 

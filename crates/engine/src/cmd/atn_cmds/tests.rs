@@ -3332,3 +3332,22 @@ fn smart_sharpen_reads_an_unpadded_radius() {
     let d = desc("null").with("Amnt", pct(150.0)).with("Rds", px(2.5));
     assert_eq!(mapped(newer("smartSharpen", d)), ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})));
 }
+
+/// Oil Paint records its settings as plain doubles and the light direction as an integer, and
+/// saves them back so: a value with a unit, or of the other number type, would load as a bare
+/// number and save back changed, so the step stays a Photoshop step (#10610).
+#[test]
+fn oil_paint_setting_with_a_unit_or_another_number_type_is_kept() {
+    kept_when_wrong_typed(
+        "oilPaint",
+        &[
+            ("stylization", pct(4.0)),
+            ("cleanliness", px(2.0)),
+            ("brushScale", D::UnitFloat { unit: *b"#Rlt", value: 0.8 }),
+            ("microBrush", D::Integer(10)),
+            ("LghD", ang(-60.0)),
+            ("LghD", D::Double(-60.5)),
+            ("specularity", D::UnitFloat { unit: *b"#Prc", value: 1.3 }),
+        ],
+    );
+}
