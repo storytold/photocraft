@@ -671,15 +671,17 @@ mod rtl_direction_tests {
         })
     }
 
-    /// The screen-mode popup's clickable rows from the last pass: one interact height tall,
-    /// centred inside the popup's area.
+    /// The screen-mode popup's clickable rows from the last pass: one interact height tall and
+    /// centred inside the popup's area. The area is shrunk by a couple of points so the toggle
+    /// button the popup opened from (whose centre sits on the area's corner) is not counted.
     fn screen_mode_rows(ctx: &egui::Context, menu: Rect) -> Vec<Rect> {
+        let inner = menu.shrink(2.0);
         ctx.viewport(|v| {
             v.prev_pass
                 .widgets
                 .layers()
                 .flat_map(|(_, w)| w.iter())
-                .filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() < menu.width() && menu.contains(w.rect.center()))
+                .filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() < menu.width() && inner.contains(w.rect.center()))
                 .map(|w| w.rect)
                 .collect()
         })
