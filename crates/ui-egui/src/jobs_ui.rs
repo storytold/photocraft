@@ -817,7 +817,10 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
             let Some(j) = app.session.active_job() else { return };
             // A save shows its progress in the tab and the status bar; so does a place, which
             // leaves the view free to zoom and pan while the file is decoded.
-            let place = place_uses_status_bar(&j.command, !app.ui.view.hides_chrome() && app.ui.panels.status_bar);
+            let place = place_uses_status_bar(
+                &j.command,
+                !app.ui.view.hides_chrome() && app.ui.panels.status_bar && job_in_view(app).is_some_and(|shown| shown.id == j.id),
+            );
             if j.elapsed_ms < DIALOG_DELAY_MS || place || app.jobs.saves.iter().any(|s| s.job == j.id) {
                 return;
             }

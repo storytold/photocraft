@@ -766,13 +766,14 @@ fn web_drops_go_to_the_document_they_were_dropped_on() {
     let ctx = egui::Context::default();
     let mut app = app_with_canvas();
     let layers = layer_count(&app);
-    let inbox: crate::Inbox = Default::default();
+    let inbox: crate::PlaceInbox = Default::default();
     app.services.place_inbox = Some(inbox.clone());
     app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
     assert_eq!(app.dropped_on_canvas(&ctx, &["photo.png".to_string()]), [true]);
+    let target = app.session.active().map(|st| st.doc.id).unwrap();
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
-    inbox.lock().unwrap().push(("photo.png".into(), png_bytes(4, 3)));
+    inbox.lock().unwrap().push((target, "photo.png".into(), png_bytes(4, 3)));
     app.queue_web_places();
     app.place_next_dropped(&ctx);
     assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
@@ -781,6 +782,30 @@ fn web_drops_go_to_the_document_they_were_dropped_on() {
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
+#[test]
+fn overlapping_web_drop_deliveries_keep_each_target() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let a = app.session.active().unwrap().doc.id;
+    let a_layers = layer_count(&app);
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let b = app.session.active().unwrap().doc.id;
+    let b_layers = layer_count(&app);
+    let inbox: crate::PlaceInbox = Default::default();
+    app.services.place_inbox = Some(inbox.clone());
+    // B's read finishes before A's, although A was dropped first.
+    inbox.lock().unwrap().extend([(b, "b.png".into(), png_bytes(3, 2)), (a, "a.png".into(), png_bytes(4, 3))]);
+    app.queue_web_places();
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), b_layers + 1);
+    crate::transform_tool::commit(&mut app);
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), a_layers + 1);
+    assert!(app.drop_places.is_empty());
 }
 
 /// A file dropped from a path is placed by the `file.placeEmbedded` job, read by the worker's

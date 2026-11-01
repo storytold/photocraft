@@ -273,7 +273,6 @@ impl PhotocraftApp {
         if places.contains(&true) {
             // The shell reads the files after this returns: they go to this document even if the
             // tab changes before they arrive.
-            self.canvas_drop_doc = self.session.active().map(|st| st.doc.id);
             if self.ui.transform.is_some() {
                 crate::transform_tool::commit(self);
             }
@@ -360,11 +359,9 @@ impl PhotocraftApp {
     /// ([`Services::place_inbox`](crate::Services::place_inbox)), for the document they were
     /// dropped on.
     pub(crate) fn queue_web_places(&mut self) {
-        let arrived: Vec<(String, Vec<u8>)> =
+        let arrived: Vec<(DocId, String, Vec<u8>)> =
             self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        if let Some(doc) = self.canvas_drop_doc.or_else(|| self.session.active().map(|st| st.doc.id)) {
-            self.drop_places.extend(arrived.into_iter().map(|(name, bytes)| (doc, DropPlace::Bytes(name, bytes))));
-        }
+        self.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| (doc, DropPlace::Bytes(name, bytes))));
     }
 
     /// Drop the queued files whose document has been closed, saying so.

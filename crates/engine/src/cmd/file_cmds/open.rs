@@ -1,7 +1,7 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param,
-    flattened_checked, json, resize_surface, str_param, translate_surface,
+    Affine, Arc, Document, EngineError, Layer, LayerContent, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, json,
+    str_param, translate_surface,
 };
 use crate::jobs::JobCtx;
 
@@ -198,7 +198,7 @@ impl PlaceInput {
             // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
-            doc: photocraft_io::svg::is_svg(&bytes).then(|| Arc::clone(&d.doc)),
+            doc: photocraft_io::is_svg_input(name, &bytes).then(|| Arc::clone(&d.doc)),
             params: p.clone(),
             bytes,
             linked,
@@ -255,12 +255,20 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     };
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     ctx.progress(0.6, "Flattening");
-    let mut px = flattened_checked(&src, fmt, "file.place")?;
+    let bounds = src.bounds();
+    if u64::from(bounds.width()) * u64::from(bounds.height()) > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(EngineError::Other("the document canvas is too large to flatten".into()));
+    }
+    let mut px = ctx
+        .stage(0.6, 0.7, "Flattening", |ctl| photocraft_compose::composite_to_surface_with_interrupt(&src, bounds, fmt, None, ctl))
+        .map_err(|_| EngineError::Cancelled)?;
     drop(src);
     ctx.check()?;
     if (scale - 1.0).abs() > 1e-9 {
         ctx.progress(0.7, "Resizing");
-        px = resize_surface(&px, scale, scale, Resample::Bicubic);
+        px = ctx
+            .stage(0.7, 0.9, "Resizing", |ctl| photocraft_algo::resample::resize_surface_with_interrupt(&px, scale, scale, Resample::Bicubic, ctl))
+            .map_err(|_| EngineError::Cancelled)?;
         ctx.check()?;
     }
     let px = translate_surface(&px, dx as i32, dy as i32);
