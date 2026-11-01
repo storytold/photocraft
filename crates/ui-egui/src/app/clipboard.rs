@@ -1,11 +1,15 @@
 use super::PhotocraftApp;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
+/// Hash dimensions and the complete RGBA payload for a process-local freshness check.
+/// Sampling can miss changed channels even in a 1×1 image. This finite signature is a
+/// comparison hint, not a persistent identifier or a guarantee against hash collisions.
 fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
-    let mut sig = (w as u64) << 32 | h as u64;
-    for b in px.iter().step_by(997) {
-        sig = sig.rotate_left(5) ^ *b as u64;
-    }
-    sig
+    let mut sig = DefaultHasher::new();
+    w.hash(&mut sig);
+    h.hash(&mut sig);
+    px.hash(&mut sig);
+    sig.finish()
 }
 
 impl PhotocraftApp {
