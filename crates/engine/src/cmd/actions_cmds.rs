@@ -448,7 +448,10 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         match playback_params(s, id, params).and_then(|p| if saves_smart_contents(s, id) { s.execute(SAVE_CONTENTS, json!({})) } else { s.execute(id, p) }) {
             Ok(value) => {
                 if let Some(error) = nested_failure(id, &value) {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
+                    // Like Scripts, retain the child result so partial Batch outputs remain visible.
+                    let mut failure = json!({"step": i, "id": id, "error": error});
+                    failure["result"] = value;
+                    failed = Some(failure);
                     break;
                 }
                 ran += 1;
@@ -495,9 +498,15 @@ pub fn restore_recording(s: &mut Session, idx: usize, action: &str, from: usize)
 
 /// Nested playback and Batch return structured failures even though the command succeeded.
 /// Promote it to the caller's failed step so no later parent steps run after a child fails.
+/// Batch text summarizes counts and the first failure; its full result retains every file outcome.
 pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
     if id == "file.automate.batch" {
-        return value.get("errors")?.as_array()?.first()?.get("error")?.as_str().map(str::to_string);
+        let errors = value.get("errors")?.as_array()?;
+        let first = errors.first()?;
+        let error = first.get("error")?.as_str()?;
+        let file = first.get("file").and_then(Value::as_str).unwrap_or("unknown input");
+        let saved = value.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+        return Some(format!("Batch: {} file(s) failed, {saved} saved; first failure `{file}`: {error}", errors.len()));
     }
     (id == "actions.play" || id == "actions.conditional").then(|| value.get("failed")).flatten().map(|failure| {
         format!(

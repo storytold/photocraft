@@ -1401,6 +1401,7 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
     }
 }
 
+/// Parent failures retain per-file outcomes and stop, while a successful Batch continues.
 #[test]
 fn nested_batch_errors_stop_actions_and_scripts_without_changing_top_level_results() {
     use crate::actions_cmds::Action;
@@ -1424,6 +1425,43 @@ fn nested_batch_errors_stop_actions_and_scripts_without_changing_top_level_resul
     assert!(!std::path::Path::new(&output).exists());
     assert_eq!(crate::actions_cmds::nested_failure("file.automate.batch", &json!({"files": ["ok.png"], "errors": []})), None);
     assert_eq!(crate::actions_cmds::nested_failure("file.automate.batch", &json!({"errors": "invalid"})), None);
+
+    let corrupt = join(&dir, "corrupt.png");
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    for caller in ["batch", "action", "script"] {
+        let output = join(&dir, caller);
+        let batch = json!({"input": [input, corrupt], "output": output, "steps": [], "format": "png"});
+        let steps = vec![("file.automate.batch".into(), batch.clone()), ("file.new".into(), json!({"width": 2, "height": 2}))];
+        let result = match caller {
+            "batch" => s.execute("file.automate.batch", batch).unwrap(),
+            "action" => {
+                s.actions.list.push(Action::new("Mixed", steps));
+                let result = s.execute("actions.play", json!({"action": "Mixed"})).unwrap();
+                assert_eq!(result["ran"], 0, "{result}");
+                let error = result["failed"]["error"].as_str().unwrap();
+                assert!(error.contains("1 file(s) failed") && error.contains("1 saved") && error.contains(&corrupt), "{error}");
+                result["failed"]["result"].clone()
+            }
+            _ => {
+                let result = s.execute("file.scripts.browse", json!({"steps": steps})).unwrap();
+                assert_eq!(result["ok"], false, "{result}");
+                assert_eq!(result["results"].as_array().unwrap().len(), 1);
+                result["results"][0]["result"].clone()
+            }
+        };
+        let saved = join(&output, "red.png");
+        assert_eq!(result["files"], json!([saved]), "{caller}: {result}");
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(result["errors"][0]["file"], corrupt);
+        assert!(std::path::Path::new(&saved).exists(), "{caller}: partial success remains saved");
+        assert!(s.documents().is_empty(), "{caller}: neither parent reaches file.new");
+    }
+    let batch = json!({"input": [input], "output": join(&dir, "success"), "steps": [], "format": "png"});
+    s.actions.list.push(Action::new("Success", vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
+    let result = s.execute("actions.play", json!({"action": "Success"})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert_eq!(result["ran"], 2);
+    assert_eq!(s.documents().len(), 1, "a successful Batch reaches file.new");
 }
 
 #[test]
