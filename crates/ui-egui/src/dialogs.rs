@@ -645,7 +645,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if about_tabs {
                 ui.set_min_width(700.0);
             }
-            ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
+            // A resizable dialog's contents fill its resizable area (#7420): cap at the
+            // available width, not the fixed default, so a shrink drag shrinks the frame.
+            let max_w = if resizable.is_some() { available.x } else { wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)) };
+            ui.set_max_width(max_w);
             if web || fixed.is_some() {
                 // A resizable dialog must not pin its content min/max to the current available
                 // size: the fork's Resize re-pins the desired size up to the content min, so a
@@ -753,7 +756,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // right-to-left UI the pin runs every frame: the resize grip sits at the bottom-left and
         // anchors the right edge, so the left-top pin is recomputed from that edge as the width
         // changes, keeping the right edge put while the dialog grows towards the left.
-        let reanchor = web || fixed.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO;
+        let reanchor = fixed.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO;
         if !sizing && (reanchor || rtl) {
             let screen = ctx.content_rect();
             let rect = modal.response.rect;
@@ -1434,8 +1437,10 @@ mod preference_resize_tests {
         }
     }
 
-    /// An over-shrink drag clamps at the dialog's constant minimum (560x400 for Preferences), in
-    /// both directions: the min handed to Resize is a constant, not the dialog's current size.
+    /// An over-shrink drag shrinks well past the dialog's constant minimum (560x400 for
+    /// Preferences) and never below it, in both directions: the min handed to Resize is a
+    /// constant, not the dialog's current size. The fork also clamps the dragged width to the
+    /// content's measured minimum, so the clamp may stop above the constant min.
     #[test]
     fn resize_over_shrink_clamps_to_the_constant_min() {
         for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
@@ -1459,7 +1464,7 @@ mod preference_resize_tests {
             let clamped = frame(&h);
             let min = egui::vec2(560.0, 400.0);
             assert!(clamped.width() < opened.width() - 150.0, "{dir:?}: shrank at all: {opened:?} -> {clamped:?}");
-            assert!((clamped.width() - min.x).abs() < 8.0 && (clamped.height() - min.y).abs() < 8.0, "{dir:?}: clamped to {min:?}: {opened:?} -> {clamped:?}");
+            assert!(clamped.width() >= min.x - 8.0 && clamped.height() >= min.y - 8.0, "{dir:?}: the constant min is the clamp floor, never below {min:?}: {opened:?} -> {clamped:?}");
             if rtl {
                 assert!((clamped.right() - opened.right()).abs() < 4.0, "RTL: the right edge is anchored: {opened:?} -> {clamped:?}");
             } else {

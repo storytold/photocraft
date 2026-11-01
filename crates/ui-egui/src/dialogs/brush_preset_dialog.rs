@@ -76,7 +76,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
     let t = Tokens::get(ui.ctx());
     let mut outcome = None;
     let brush: BrushSettings = f.get("brush").and_then(|b| serde_json::from_value(b.clone()).ok()).unwrap_or_else(|| app.session.tools.brush.clone());
-    ui.horizontal_top(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         // The tip as the preset cards draw it, and the size under it.
         let (r, _) = ui.allocate_exact_size(vec2(PREVIEW, PREVIEW), egui::Sense::hover());
         ui.painter().rect_filled(r, t.radius_sm, t.field);
@@ -209,6 +209,6 @@ mod rtl_tests {
         let rtl_field = rtl.get_by_role(egui::accesskit::Role::TextInput).rect();
         assert!(rtl_col.right() - rtl_field.right() > 30.0, "RTL: the caption comes after the field: {rtl_field:?} in {rtl_col:?}");
         let centre = ltr_col.left() + rtl_col.right();
-        assert!((ltr_field.left() + rtl_field.right() - centre).abs() < 1.0, "the field mirrors: {ltr_field:?} / {rtl_field:?}");
+        assert!((ltr_field.left() + rtl_field.right() - centre).abs() < 1.0, "the field mirrors: {ltr_field:?} / {rtl_field:?} cols {ltr_col:?} {rtl_col:?}");
     }
 }

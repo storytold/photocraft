@@ -544,11 +544,11 @@ mod rtl_tests {
     #[test]
     fn the_number_row_mirrors_in_a_right_to_left_ui() {
         let (ltr, ltr_col) = harness(Dir::Ltr);
-        let ltr_field = ltr.get_by_label("Width").rect();
+        let ltr_field = ltr.get_by_role(egui::accesskit::Role::SpinButton).rect();
         assert!(ltr_field.left() - ltr_col.left() > 30.0, "LTR: the caption comes before the field: {ltr_field:?} in {ltr_col:?}");
 
         let (rtl, rtl_col) = harness(Dir::Rtl);
-        let rtl_field = rtl.get_by_label("Width").rect();
+        let rtl_field = rtl.get_by_role(egui::accesskit::Role::SpinButton).rect();
         assert!(rtl_col.right() - rtl_field.right() > 30.0, "RTL: the caption comes after the field: {rtl_field:?} in {rtl_col:?}");
         // The field mirrors about the column's centre.
         let centre = ltr_col.left() + rtl_col.right();
