@@ -194,17 +194,21 @@ fn hdr_values_survive_float_formats() {
     }
 }
 
+/// Raw and RLE rows keep bright floats within RGBE shared-exponent precision.
 #[test]
 fn hdr_format_keeps_bright_values_approximately() {
-    let vals: Vec<f32> = (0..16 * 8 * 3).map(|i| 0.01 + i as f32 * 0.25).collect();
-    let img = Image::from_f32(16, 8, ChannelLayout::Rgb, &vals).unwrap();
-    let back = decode(&encode(&img, Format::Hdr, &EncodeOptions::default()).unwrap()).unwrap();
-    // RGBE shares one exponent per pixel: error is relative to the brightest channel.
-    let got = back.to_f32_samples().unwrap();
-    for (pa, pb) in vals.chunks(3).zip(got.chunks(3)) {
-        let m = pa.iter().copied().fold(0.0, f32::max);
-        for (a, b) in pa.iter().zip(pb) {
-            assert!((a - b).abs() <= m * 0.01, "{a} vs {b}");
+    for width in [7, 8, 9, 16] {
+        let vals: Vec<f32> = (0..width * 8 * 3).map(|i| 0.01 + i as f32 * 0.25).collect();
+        let img = Image::from_f32(width, 8, ChannelLayout::Rgb, &vals).unwrap();
+        let back = decode(&encode(&img, Format::Hdr, &EncodeOptions::default()).unwrap()).unwrap();
+        // RGBE shares one exponent per pixel: error is relative to the brightest channel.
+        let got = back.to_f32_samples().unwrap();
+        assert_eq!(got.len(), vals.len());
+        for (pa, pb) in vals.chunks(3).zip(got.chunks(3)) {
+            let m = pa.iter().copied().fold(0.0, f32::max);
+            for (a, b) in pa.iter().zip(pb) {
+                assert!((a - b).abs() <= m * 0.01, "{a} vs {b}");
+            }
         }
     }
 }

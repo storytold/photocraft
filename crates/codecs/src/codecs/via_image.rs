@@ -251,7 +251,7 @@ fn to_dynamic(img: &Image) -> Result<DynamicImage, CodecError> {
     })
 }
 
-/// Encode a planned image, passing QOI pixels directly without a temporary image copy.
+/// Encode a planned image, borrowing compatible QOI and Radiance HDR pixels.
 pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let fmt = image_format(f).ok_or_else(|| CodecError::unsupported(f, "not handled by image backend"))?;
     if let Some((mw, mh)) = f.max_dimensions()
@@ -264,15 +264,15 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
     if f == Format::Tga {
         return super::tga::encode(&img);
     }
-    if f == Format::Qoi {
-        // Image validates an exact, interleaved buffer size; rows have no padding.
-        // Public encode plans RGB(A)8 for QOI, so converted() above handles grayscale
-        // and higher-depth sources before this guard.
-        let color = match (img.layout(), img.sample_type()) {
-            (ChannelLayout::Rgb, SampleType::U8) => image::ColorType::Rgb8,
-            (ChannelLayout::Rgba, SampleType::U8) => image::ColorType::Rgba8,
-            _ => return Err(CodecError::InvalidImage("QOI requires RGB8 or RGBA8 pixels".into())),
-        };
+    // Image validates the interleaved buffer size; these encoders can borrow its bytes.
+    let color = match (f, img.layout(), img.sample_type()) {
+        (Format::Qoi, ChannelLayout::Rgb, SampleType::U8) => Some(image::ColorType::Rgb8),
+        (Format::Qoi, ChannelLayout::Rgba, SampleType::U8) => Some(image::ColorType::Rgba8),
+        (Format::Qoi, _, _) => return Err(CodecError::InvalidImage("QOI requires RGB8 or RGBA8 pixels".into())),
+        (Format::Hdr, ChannelLayout::Rgb, SampleType::F32) => Some(image::ColorType::Rgb32F),
+        _ => None,
+    };
+    if let Some(color) = color {
         let mut cursor = Cursor::new(Vec::new());
         image::write_buffer_with_format(&mut cursor, img.data(), img.width(), img.height(), color, fmt).map_err(|e| CodecError::encode(f, e))?;
         return Ok(cursor.into_inner());
