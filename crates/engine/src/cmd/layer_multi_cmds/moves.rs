@@ -190,10 +190,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"nested": nested.iter().map(|id| id.0).collect::<Vec<_>>()}))
 }
 
-/// The artboard a layer at `bounds` is on: the topmost board holding the centre of its bounds, the
-/// rule a new layer is placed by ([`crate::layer_place`]). `boards` are top to bottom.
+/// The artboard a layer at `bounds` is on: the topmost board holding the centre of its bounds
+/// ([`crate::layer_place::centre`]), the rule a new layer is placed by. `boards` are top to bottom.
 fn board_under(boards: &[(LayerId, photocraft_geom::Rect)], bounds: photocraft_geom::Rect) -> Option<LayerId> {
-    let (cx, cy) = (bounds.x0 / 2 + bounds.x1 / 2, bounds.y0 / 2 + bounds.y1 / 2);
+    let (cx, cy) = crate::layer_place::centre(bounds);
     boards.iter().find(|(_, r)| r.contains(cx, cy)).map(|(id, _)| *id)
 }
 

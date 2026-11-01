@@ -845,3 +845,42 @@ fn layers_moved_together_keep_their_order_on_the_new_board() {
     assert_eq!(children(&s, b), vec![red, blue], "same order, blue still above red");
     assert!(children(&s, a).is_empty());
 }
+
+/// Where `id`'s pixels are. Its own name: main's tests (#10489) already have a `content`.
+fn pixel_bounds(s: &Session, id: LayerId) -> Rect {
+    doc(s).layer(id).unwrap().surface().unwrap().content_bounds()
+}
+
+/// The board a dragged layer joins is the one under the true middle of its bounds (#10512
+/// review): boards L (20..30) and R (30..40) meet at x = 30, and a layer dropped at 29..31 is
+/// centred at 30, on R. Halving each edge first put it at 29, on L, where it was clipped.
+#[test]
+fn a_layer_straddling_two_boards_joins_the_one_under_its_middle() {
+    let mut s = session(8);
+    let l = LayerId(s.execute("layer.new.artboard", json!({"rect": [20, 0, 10, 20], "name": "L"})).unwrap()["layer"].as_u64().unwrap());
+    let r = LayerId(s.execute("layer.new.artboard", json!({"rect": [30, 0, 10, 20], "name": "R"})).unwrap()["layer"].as_u64().unwrap());
+    // A loose 2-pixel-wide layer at 49..51, off both boards.
+    let id = add_square(&mut s, Rect::new(49, 5, 51, 10), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(doc(&s).artboard_of(id), None);
+    s.execute("layer.translate", json!({"layer": id.0, "dx": -20, "dy": 0, "nest": true})).unwrap();
+    assert_eq!(pixel_bounds(&s, id), Rect::new(29, 5, 31, 10));
+    assert_eq!(doc(&s).artboard_of(id), Some(r), "its middle, x = 30, is on R");
+    assert_ne!(doc(&s).artboard_of(id), Some(l));
+}
+
+/// Negative coordinates round down too (#10512 review): a layer dropped at -4..3 is centred at
+/// -0.5, left of a board starting at x = 0, so it stays off the board. Truncating toward zero put
+/// its middle at 0, inside the board.
+#[test]
+fn a_layer_centred_just_left_of_a_board_at_negative_coordinates_stays_off_it() {
+    let mut s = session(8);
+    let b = LayerId(s.execute("layer.new.artboard", json!({"rect": [0, 0, 20, 20], "name": "B"})).unwrap()["layer"].as_u64().unwrap());
+    let id = add_square(&mut s, Rect::new(-24, 5, -17, 10), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(doc(&s).artboard_of(id), None);
+    s.execute("layer.translate", json!({"layer": id.0, "dx": 20, "dy": 0, "nest": true})).unwrap();
+    assert_eq!(pixel_bounds(&s, id), Rect::new(-4, 5, 3, 10));
+    assert_eq!(doc(&s).artboard_of(id), None, "centred at -0.5, left of B");
+    // One pixel further right (-3..4, middle 0.5) is on the board.
+    s.execute("layer.translate", json!({"layer": id.0, "dx": 1, "dy": 0, "nest": true})).unwrap();
+    assert_eq!(doc(&s).artboard_of(id), Some(b));
+}
