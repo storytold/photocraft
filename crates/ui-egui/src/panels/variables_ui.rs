@@ -369,34 +369,35 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
 
 /// Save the edited definitions and data sets. Apply Data Set OK also applies the selected row.
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    let state = fields.get("__variables").cloned().unwrap_or_else(|| json!({}));
-    let defs = state.get("defs").cloned().unwrap_or_else(|| json!([]));
-    let sets = state.get("dataSets").cloned().unwrap_or_else(|| json!([]));
-    let selected = (fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet") && !fields.contains_key("__apply"))
-        .then(|| data_set_index(fields, sets.as_array().map_or(0, Vec::len)));
+    let empty = json!([]);
+    let state = fields.get("__variables").unwrap_or(&Value::Null);
+    let defs = state.get("defs").unwrap_or(&empty);
+    let sets = state.get("dataSets").unwrap_or(&empty);
+    let selected = if fields.get("__command").and_then(Value::as_str) == Some("image.applyDataSet") && !fields.contains_key("__apply") {
+        sets.as_array().filter(|rows| !rows.is_empty()).map(|rows| data_set_index(fields, rows.len()))
+    } else {
+        None
+    };
     // An unchanged OK after Apply closes without another application or history entry.
     if let Some(index) = selected
         && let Some(st) = app.session.active()
         && fields.get("__appliedAt") == Some(&json!([st.doc.id.0, st.revision]))
         && st.doc.variables.active == Some(index)
-        && state == to_state(&st.doc.variables)
+        && state == &to_state(&st.doc.variables)
     {
         return Ok(json!({"defined": true}));
     }
-    // Only define when there is at least one named variable (empty define clears).
     app.run("image.variables.define", json!({"defs": defs}))?;
     app.run("image.variables.dataSets", json!({"dataSets": sets}))?;
-    if let Some(index) = fields.get("__apply").and_then(Value::as_u64) {
-        return app.run("image.applyDataSet", json!({"index": index}));
+    let request = match fields.get("__apply") {
+        Some(Value::String(name)) => Some(json!({"name": name})),
+        Some(value) => value.as_u64().map(|index| json!({"index": index})),
+        None => selected.map(|index| json!({"index": index})),
+    };
+    match request {
+        Some(params) => app.run("image.applyDataSet", params),
+        None => Ok(json!({"defined": true})),
     }
-    // Keep name-based requests from existing automation callers working.
-    if let Some(name) = fields.get("__apply").and_then(Value::as_str) {
-        return app.run("image.applyDataSet", json!({"name": name}));
-    }
-    if let Some(index) = selected {
-        return app.run("image.applyDataSet", json!({"index": index}));
-    }
-    Ok(json!({"defined": true}))
 }
 
 #[cfg(test)]
