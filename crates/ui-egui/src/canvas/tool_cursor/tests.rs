@@ -567,6 +567,44 @@ fn circle_bitmaps_evaluate_only_the_ring_and_match_every_pixel() {
     }
 }
 
+/// #10022: a shaped tip's outline (Calligraphy Flat's thin 45° ellipse: mostly transparent
+/// pixels) is splatted into a distance field, and every pixel of the bitmap is what measuring the
+/// rings at that pixel gives. Built with `-C target-cpu=znver3` (or `native` on an AVX2 CPU),
+/// splitting the pixel index into a column and row only for covered pixels crashed here.
+#[test]
+fn outline_bitmaps_match_every_pixel() {
+    let [dark, light] = crate::theme::Tokens::cursor_outline();
+    let presets = photocraft_paint::presets::builtin();
+    let calligraphy = &photocraft_paint::presets::find(&presets, "Calligraphy Flat").unwrap().brush;
+    // The centre cross only at 1×: `coverage` scales the cross's (physical) distance once more.
+    for (size, scale, full, centre) in [(28.0, 1.0, true, true), (28.0, 2.0, false, false), (9.0, 1.25, true, false), (140.0, 1.0, false, true)] {
+        let brush = photocraft_paint::BrushSettings { size, ..calligraphy.clone() };
+        let rings = photocraft_paint::outline::tip_outline(&brush, full).unwrap();
+        // Radius units to screen points at 100 % zoom, as `brush_cursor::on_screen` maps them.
+        let r = size / 2.0;
+        let rings: Vec<Vec<Vec2>> = rings.iter().map(|ring| ring.iter().map(|p| vec2(p[0] * r, p[1] * r)).collect()).collect();
+        let shape = Shape::Outline { rings: rings.into(), centre };
+        let image = rasterize(&shape, scale).unwrap();
+        let [hot, _] = image.hotspot;
+        let side = usize::from(image.size[0]);
+        assert_eq!(image.rgba.len(), side * side * 4);
+        let mut drawn = 0;
+        for row in 0..side {
+            for col in 0..side {
+                let (dx, dy) = (col as f32 - f32::from(hot), row as f32 - f32::from(hot));
+                let want = stroke_pixel(coverage(&shape, dx, dy, scale), dark, light);
+                let i = (row * side + col) * 4;
+                // The splat measures in physical pixels, `coverage` in points: allow a rounding step.
+                let got = &image.rgba[i..i + 4];
+                assert!(got.iter().zip(want).all(|(&g, w)| g.abs_diff(w) <= 1), "{size} px tip at {scale}×, pixel ({col}, {row}): {got:?} != {want:?}");
+                drawn += usize::from(got[3] > 0);
+            }
+        }
+        // A thin outline in a mostly transparent square: some pixels drawn, most left clear.
+        assert!(drawn > 0 && drawn < side * side / 2, "{size} px tip at {scale}×: {drawn} of {} pixels drawn", side * side);
+    }
+}
+
 /// The arrow is the handle's direction as the view shows it: turned with a rotated view and
 /// mirrored with a flipped one.
 #[test]

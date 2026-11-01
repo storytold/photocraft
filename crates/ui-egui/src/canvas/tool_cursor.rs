@@ -542,11 +542,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     let n = usize::from(side);
     let hotf = f32::from(hot);
-    let mut put = |col: usize, row: usize, cov: (f32, f32)| {
-        if let Some(px) = row.checked_mul(n).and_then(|i| i.checked_add(col)).and_then(|i| rgba.get_mut(i * 4..i * 4 + 4)) {
-            px.copy_from_slice(&stroke_pixel(cov, dark, light));
-        }
-    };
     if let Shape::Outline { rings, centre } = shape {
         // Splat each segment into its bounding box instead of measuring every ring per pixel:
         // tip outlines may carry hundreds of points.
@@ -564,13 +559,22 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         if *centre {
             splat_cross(&mut dist, n, hotf, 3.0 * scale);
         }
-        for (i, &d) in dist.iter().enumerate() {
+        // `dist` and the bitmap are both row-major `n` × `n`: walk them together. Splitting `i` back
+        // into a column and row here (`i % n`, `i / n`) only where `d` is finite made LLVM's AVX2
+        // vectorizer (rustc 1.99, `-C target-cpu=znver3`/`native`) take a masked store's address from
+        // a lane it skipped, so a transparent pixel crashed the app on selecting a tip (#10022).
+        for (px, &d) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(&dist) {
             if d.is_finite() {
-                put(i % n, i / n, stroke_coverage(d, scale));
+                *px = stroke_pixel(stroke_coverage(d, scale), dark, light);
             }
         }
         return Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] });
     }
+    let mut put = |col: usize, row: usize, cov: (f32, f32)| {
+        if let Some(px) = row.checked_mul(n).and_then(|i| i.checked_add(col)).and_then(|i| rgba.get_mut(i * 4..i * 4 + 4)) {
+            px.copy_from_slice(&stroke_pixel(cov, dark, light));
+        }
+    };
     // Columns to evaluate in each row: the ring's two arcs (and the centre mark) for a circle,
     // the whole row otherwise.
     let last = f32::from(side - 1);
