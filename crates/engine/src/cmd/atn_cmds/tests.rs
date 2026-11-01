@@ -3333,6 +3333,36 @@ fn smart_sharpen_reads_an_unpadded_radius() {
     assert_eq!(mapped(newer("smartSharpen", d)), ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})));
 }
 
+/// A step recording one of its keys twice, padded or not, can't be saved back with both values,
+/// so it stays a Photoshop step instead of playing the first and dropping the second (#10610).
+#[test]
+fn newer_feature_steps_with_a_repeated_key_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let mapped = [
+        ("smartSharpen", "Amnt", "Amnt", pct(150.0), pct(250.0)),
+        ("smartSharpen", "Rds ", "Rds ", px(2.0), px(3.0)),
+        ("smartSharpen", "Rds ", "Rds", px(2.0), px(3.0)),
+        ("smartSharpen", "Rds", "Rds", px(2.0), px(2.0)),
+        ("smartSharpen", "presetKind", "presetKind", enm("presetKindType", "presetKindCustom"), enm("presetKindType", "presetKindCustom")),
+        ("smartSharpen", "useLegacy", "useLegacy", D::Boolean(true), D::Boolean(true)),
+        ("smartSharpen", "moreAccurate", "moreAccurate", D::Boolean(false), D::Boolean(false)),
+        ("smartSharpen", "blur", "blur", enm("blurType", "lensBlur"), enm("blurType", "lensBlur")),
+        ("oilPaint", "lightingOn", "lightingOn", D::Boolean(true), D::Boolean(false)),
+        ("oilPaint", "stylization", "stylization", D::Double(4.0), D::Double(6.0)),
+        ("oilPaint", "cleanliness", "cleanliness", D::Double(2.0), D::Double(3.0)),
+        ("oilPaint", "brushScale", "brushScale", D::Double(1.0), D::Double(2.0)),
+        ("oilPaint", "microBrush", "microBrush", D::Double(5.0), D::Double(7.0)),
+        ("oilPaint", "LghD", "LghD", D::Integer(-60), D::Integer(45)),
+        ("oilPaint", "specularity", "specularity", D::Double(1.0), D::Double(2.0)),
+        ("selectSky", "sampleAllLayers", "sampleAllLayers", D::Boolean(false), D::Boolean(true)),
+    ]
+    .into_iter()
+    .filter(|(name, key, again, a, b)| !kept(newer(name, desc("null").with(key, a.clone()).with(again, b.clone()))))
+    .map(|(name, key, again, ..)| format!("{name} {key:?} {again:?}"))
+    .collect::<Vec<_>>();
+    assert!(mapped.is_empty(), "mapped with a repeated key: {mapped:?}");
+}
+
 /// Oil Paint records its settings as plain doubles and the light direction as an integer, and
 /// saves them back so: a value with a unit, or of the other number type, would load as a bare
 /// number and save back changed, so the step stays a Photoshop step (#10610).
