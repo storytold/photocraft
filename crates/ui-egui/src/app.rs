@@ -252,7 +252,8 @@ impl eframe::App for PhotocraftApp {
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
         // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
         if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
-            wheel_nav::fold_legacy_pinch(ctx, raw_input);
+            let two_axis = self.session.prefs().enhanced_controls.two_axis_scroll_zooms;
+            wheel_nav::fold_legacy_pinch(ctx, raw_input, two_axis);
         }
         self.inject_synthetic(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
