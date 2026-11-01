@@ -196,6 +196,115 @@ fn tiff_f32_output_matches_oracle() {
 }
 
 // ---------------------------------------------------------------------------
+// PNG decoded in steps (PngDecodeRows)
+// ---------------------------------------------------------------------------
+
+/// Decodes `bytes` with [`PngDecodeRows`], going on for `per_call` rows per call (0: unlimited);
+/// returns the image and how many calls it took.
+fn decode_in_steps(bytes: &[u8], per_call: usize) -> Result<(Image, usize), CodecError> {
+    let mut rows = PngDecodeRows::new(bytes, &Limits::default())?;
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let mut left = per_call;
+        let mut more = || {
+            left = left.wrapping_sub(1);
+            per_call == 0 || left > 0
+        };
+        if let Some(img) = rows.step(&mut more)? {
+            return Ok((img, calls));
+        }
+        assert!(calls < 100_000, "the decoder never finished");
+    }
+}
+
+fn assert_steps_equal_decode(bytes: &[u8], what: &str) {
+    let whole = decode(bytes);
+    for per_call in [1, 7, 0] {
+        // `decode` also takes the resolution from EXIF or XMP and turns the image upright;
+        // `finish_png_decode` does that for a stepped decode, as the stepped import does.
+        let stepped = decode_in_steps(bytes, per_call).and_then(|(img, calls)| Ok((finish_png_decode(img, &DecodeOptions::default())?, calls)));
+        match (&whole, stepped) {
+            (Ok(a), Ok((b, _))) => assert_eq!(a, &b, "{what}, {per_call} rows per call"),
+            (Err(_), Err(_)) => {}
+            (a, b) => panic!("{what}, {per_call} rows per call: decode {:?}, steps {:?}", a.as_ref().map(|_| ()), b.map(|_| ())),
+        }
+    }
+}
+
+#[test]
+fn png_rows_equal_decode_in_every_layout_and_depth() {
+    for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+        for sample in [SampleType::U8, SampleType::U16] {
+            let mut img = synth(41, 29, layout, sample, 77, 0.3).with_icc(Some(sample_icc(400)));
+            img.meta.text.push(("Comment".into(), "stepped".into()));
+            img.meta.dpi = Some((300.0, 300.0));
+            for interlaced in [false, true] {
+                let bytes = encode(&img, Format::Png, &EncodeOptions { png_interlaced: interlaced, ..Default::default() }).unwrap();
+                assert_steps_equal_decode(&bytes, &format!("{layout:?} {sample:?} interlaced={interlaced}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn png_rows_equal_decode_for_palette_and_transparency() {
+    let pal = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [9, 9, 9]];
+    let idx: Vec<u8> = (0..50 * 20).map(|i| (i % 4) as u8).collect();
+    let bytes = encode_png_indexed(50, 20, &idx, &pal, Some(3), None, None).unwrap();
+    assert_steps_equal_decode(&bytes, "palette with a transparent entry");
+}
+
+#[test]
+fn png_rows_take_one_call_per_row_and_report_progress() {
+    let bytes = encode(&synth(16, 40, ChannelLayout::Rgb, SampleType::U8, 5, 0.2), Format::Png, &EncodeOptions::default()).unwrap();
+    let mut rows = PngDecodeRows::new(bytes.as_slice(), &Limits::default()).unwrap();
+    assert_eq!(rows.size(), (16, 40));
+    assert_eq!(rows.progress(), 0.0);
+    let mut seen = Vec::new();
+    let img = loop {
+        if let Some(img) = rows.step(&mut || false).unwrap() {
+            break img;
+        }
+        seen.push(rows.progress());
+    };
+    assert_eq!(seen.len(), 39, "one call per row but the last, which also finishes the file");
+    assert!(seen.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(rows.progress(), 1.0);
+    assert_eq!(img, decode(&bytes).unwrap());
+    // A decoder that has finished says so instead of decoding again.
+    assert!(rows.step(&mut || true).is_err());
+}
+
+#[test]
+fn png_rows_share_their_bytes_without_copying_them() {
+    let bytes = std::sync::Arc::new(encode(&synth(20, 20, ChannelLayout::Rgba, SampleType::U8, 3, 0.2), Format::Png, &EncodeOptions::default()).unwrap());
+    let mut rows = PngDecodeRows::new(SharedBytes(bytes.clone()), &Limits::default()).unwrap();
+    let img = rows.step(&mut || true).unwrap().unwrap();
+    assert_eq!(img, decode(&bytes).unwrap());
+    drop(rows);
+    assert_eq!(std::sync::Arc::strong_count(&bytes), 1, "the decoder let go of the bytes");
+}
+
+#[test]
+fn png_rows_fail_like_decode_on_damaged_files() {
+    let img = synth(64, 64, ChannelLayout::Rgb, SampleType::U8, 11, 1.0);
+    for interlaced in [false, true] {
+        let bytes = encode(&img, Format::Png, &EncodeOptions { png_interlaced: interlaced, ..Default::default() }).unwrap();
+        for cut in [8, 20, 40, bytes.len() / 3, bytes.len() / 2, bytes.len() - 20] {
+            assert_steps_equal_decode(bytes.get(..cut).unwrap(), &format!("cut at {cut} interlaced={interlaced}"));
+        }
+        // A flipped byte in the middle of the compressed data.
+        let mut bad = bytes.clone();
+        let mid = bad.len() / 2;
+        bad[mid] ^= 0xFF;
+        assert_steps_equal_decode(&bad, "a damaged byte");
+    }
+    assert!(decode_in_steps(&[], 1).is_err());
+    assert!(decode_in_steps(b"not a png at all, just some text bytes", 1).is_err());
+}
+
+// ---------------------------------------------------------------------------
 // PngSuite corpus (repo-root corpus/pngsuite/*.png; feature `corpus`, fetched by
 // `cargo xtask corpus --all`; missing = failure)
 // ---------------------------------------------------------------------------
@@ -226,5 +335,25 @@ fn pngsuite_corpus_matches_oracle() {
         }
     }
     eprintln!("pngsuite: {checked} files compared");
+    assert!(checked > 100, "{}: only {checked} PNGs compared: run `cargo xtask corpus --all`", dir.display());
+}
+
+#[cfg(feature = "corpus")]
+#[test]
+fn png_rows_equal_decode_on_the_pngsuite_corpus() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pngsuite");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        panic!("{} is missing: run `cargo xtask corpus --all`", dir.display());
+    };
+    let mut checked = 0;
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("png") {
+            continue;
+        }
+        let bytes = std::fs::read(&p).unwrap();
+        assert_steps_equal_decode(&bytes, &p.display().to_string());
+        checked += 1;
+    }
     assert!(checked > 100, "{}: only {checked} PNGs compared: run `cargo xtask corpus --all`", dir.display());
 }

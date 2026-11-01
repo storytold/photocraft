@@ -25,6 +25,7 @@ mod export;
 mod info;
 mod open;
 mod paths;
+mod place_steps;
 mod processing;
 mod save;
 
@@ -40,13 +41,14 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, place_bytes, raw_defaults};
+pub(crate) use open::{PlaceInput, apply_place, import, tag_exr_colorspace};
 use open::{close_all, close_others, open_as, place, revert};
-pub(crate) use open::{import, tag_exr_colorspace};
 use paths::is_file;
 #[cfg(test)]
 use paths::openable_name;
 pub use paths::{extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, same_file, saves_in_place, template_name, untitled_name};
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, portable_device_name, read_file, sanitize, stem, write_file};
+pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};
@@ -149,11 +151,17 @@ pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
 /// a sparse bundle declares its canvas, and one the size of the format allows would be rendered
 /// in full, however little it holds. Refused past the compositor's own per-render limit.
 pub(crate) fn flattened_checked(doc: &Document, fmt: PixelFormat, cmd: &str) -> Result<Surface> {
+    check_flatten_size(doc, cmd)?;
+    Ok(flattened(doc, fmt))
+}
+
+/// The refusal of [`flattened_checked`]: a canvas past the compositor's per-render limit.
+pub(crate) fn check_flatten_size(doc: &Document, cmd: &str) -> Result<()> {
     let b = doc.bounds();
     if u64::from(b.width()) * u64::from(b.height()) > photocraft_compose::MAX_RENDER_PIXELS {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("the document's {}×{} canvas is too large to flatten", b.width(), b.height()) });
     }
-    Ok(flattened(doc, fmt))
+    Ok(())
 }
 
 fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {
@@ -371,6 +379,10 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_job_tests.rs"]
+mod place_job_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

@@ -1,8 +1,5 @@
 use super::paths::{file_name, read_file, stem, template_name};
-use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, flattened_checked, json,
-    resize_surface, str_param, translate_surface,
-};
+use super::{Arc, Document, EngineError, Layer, LayerContent, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
 
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     import_result(name, bytes).map(|r| r.document)
@@ -154,62 +151,89 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// `linked` makes it a linked smart object that refers to that path instead of embedding the bytes.
 /// With Preferences ▸ General ▸ Always Create Smart Objects When Placing off, an embedded place
 /// lands as a plain pixel layer instead (an explicit `"smartObject": false` asks for one).
+///
+/// The decoding and resampling are a background job when the command was started with
+/// [`Session::start`] (see [`crate::jobs`]): on a worker thread, or where there are none (the web
+/// build) a slice per frame on the calling thread ([`PlaceSteps`]); inline otherwise. The layer is
+/// inserted by the apply step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let fmt = d.doc.pixel_format();
-    let vector = photocraft_io::svg::is_svg(&bytes);
-    let opts = crate::jobs::import_options(s.prefs());
-    let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
-    if imported.preview_only {
-        return Err(EngineError::Other(format!(
-            "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
-        )));
+    let input = PlaceInput::new(s, name, bytes, linked, p)?;
+    let label = input.job_label();
+    crate::jobs::run_stepped(s, &label, true, PlaceSteps::new(input, s.cooperative_jobs()), apply_place)
+}
+
+/// Everything a place reads from the session, taken up front so [`PlaceSteps`] can run on a
+/// worker that never sees the [`Session`].
+pub(crate) struct PlaceInput {
+    pub(super) name: String,
+    /// Shared with the decoder and the embedded source, so the bytes exist once.
+    pub(super) bytes: Arc<Vec<u8>>,
+    pub(super) linked: Option<String>,
+    pub(super) params: Value,
+    pub(super) canvas: (f64, f64),
+    pub(super) fmt: PixelFormat,
+    pub(super) opts: photocraft_io::ImportOptions,
+    /// Preferences ▸ General ▸ Resize Image During Place, unless the params say otherwise.
+    pub(super) fit: bool,
+    /// Preferences ▸ General ▸ Always Create Smart Objects When Placing, unless the params say
+    /// otherwise. A linked place is always a smart object.
+    pub(super) smart: bool,
+    /// The document as the job sees it, for rendering a vector source at its placement scale.
+    pub(super) doc: Arc<Document>,
+}
+
+impl PlaceInput {
+    pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let prefs = s.prefs();
+        Ok(Self {
+            name: name.to_string(),
+            canvas: (d.doc.size.width as f64, d.doc.size.height as f64),
+            fmt: d.doc.pixel_format(),
+            opts: crate::jobs::import_options(prefs),
+            // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
+            fit: p.get("fit").and_then(Value::as_bool).unwrap_or(prefs.general.resize_image_during_place),
+            // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
+            // an embedded place lands as a plain pixel layer.
+            smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
+            doc: Arc::clone(&d.doc),
+            params: p.clone(),
+            bytes: Arc::new(bytes),
+            linked,
+        })
     }
-    let src = imported.document;
-    let (w, h) = (src.size.width as f64, src.size.height as f64);
-    // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
-    let fit = p.get("fit").and_then(Value::as_bool).unwrap_or(s.prefs().general.resize_image_during_place);
-    let scale = match f64_param(p, "scale") {
-        Some(k) => (k / 100.0).max(1e-4),
-        None if fit && (w > cw || h > ch) => (cw / w).min(ch / h),
-        None => 1.0,
-    };
-    let center = match p.get("center").and_then(Value::as_array) {
-        Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
-        _ => (cw / 2.0, ch / 2.0),
-    };
-    let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    let mut px = flattened_checked(&src, fmt, "file.place")?;
-    if (scale - 1.0).abs() > 1e-9 {
-        px = resize_surface(&px, scale, scale, Resample::Bicubic);
+
+    /// The job's name in the progress UI.
+    pub(crate) fn job_label(&self) -> String {
+        format!("Placing {}", file_name(&self.name))
     }
-    let px = translate_surface(&px, dx as i32, dy as i32);
-    // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an
-    // embedded place lands as a plain pixel layer. A linked place is always a smart object.
-    let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
-    let source = match linked {
-        Some(path) => SmartSource::Linked { path },
-        None => SmartSource::Embedded { file_name: file_name(name), bytes: Arc::new(bytes) },
-    };
-    let layer_name = stem(name);
-    let label = if matches!(&source, SmartSource::Linked { .. }) { "Place Linked" } else { PLACE_EMBEDDED };
-    let id = s.edit(label, |doc, active| {
-        let layer = if smart {
-            let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
-            // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
-            if vector && let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
-                so.cache = Some(sharp);
-            }
-            Layer::new(layer_name, LayerContent::Smart(so))
-        } else {
-            Layer::new(layer_name, LayerContent::Raster(px))
-        };
-        let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+
+    /// The command this place stands for.
+    pub(crate) fn command(&self) -> &'static str {
+        if self.linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" }
+    }
+}
+
+/// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
+pub(crate) struct Prepared {
+    pub(super) content: LayerContent,
+    pub(super) layer_name: String,
+    /// The history step's name.
+    pub(super) label: &'static str,
+    pub(super) scale: f64,
+    pub(super) bounds: [f64; 4],
+    pub(super) smart: bool,
+}
+
+/// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
+pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
+    let Prepared { content, layer_name, label, scale, bounds, smart } = p;
+    let id = s.edit(label, move |doc, active| {
+        let id = crate::layer_place::insert_new(doc, *active, Layer::new(layer_name, content), crate::layer_place::Place::AutoEditable);
         *active = Some(id);
         Ok(id)
     })?;
-    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "smartObject": smart}))
+    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
 }
 
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {

@@ -6,6 +6,7 @@
 //! are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
 /// A request from the operating system, delivered by the platform shell through
@@ -33,7 +34,8 @@ pub enum DropTarget {
     Elsewhere,
 }
 
-/// A file dropped on the canvas, waiting its turn to be placed.
+/// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
+/// (queued with its [`DocId`] in `drop_places`).
 pub(crate) enum DropPlace {
     /// Dropped onto the window (desktop): read from its path, or through egui.
     File(egui::DroppedFileHandle),
@@ -214,6 +216,11 @@ impl PhotocraftApp {
         });
     }
 
+    /// Show "Couldn't place <name>: <error>" as an error (status bar + notice).
+    pub fn place_failed(&mut self, name: &str, err: &str) {
+        self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", name), ("error", err)]));
+    }
+
     /// Log `msg` and show it as an error (status bar + notice).
     fn failed(&mut self, msg: String) {
         log::warn!("{msg}");
@@ -238,7 +245,9 @@ impl PhotocraftApp {
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
-                self.drop_places.push_back(DropPlace::File(f));
+                if let Some(doc) = self.session.active().map(|st| st.doc.id) {
+                    self.drop_places.push_back((doc, DropPlace::File(f)));
+                }
                 continue;
             }
             match self.open_dropped_file(&f, &name, slot) {
@@ -261,8 +270,13 @@ impl PhotocraftApp {
         let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
         let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
         let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
-        if places.contains(&true) && self.ui.transform.is_some() {
-            crate::transform_tool::commit(self);
+        if places.contains(&true) {
+            // The shell reads the files after this returns: they go to this document even if the
+            // tab changes before they arrive.
+            self.canvas_drop_doc = self.session.active().map(|st| st.doc.id);
+            if self.ui.transform.is_some() {
+                crate::transform_tool::commit(self);
+            }
         }
         places
     }
@@ -302,9 +316,20 @@ impl PhotocraftApp {
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
+    /// With background jobs on (or a session that steps its jobs, as on the web), a file is placed
+    /// by a job: the next one waits until that job has landed and its Free Transform has been
+    /// applied (see `jobs_ui::finish_place`).
+    ///
+    /// Each file goes into the document it was dropped on, never into whichever one is active now:
+    /// files dropped on a document in another tab wait until it is back in view, and are discarded
+    /// (with a message) when it is closed.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
-        while self.ui.transform.is_none() {
-            let Some(next) = self.drop_places.pop_front() else { return };
+        self.discard_drops_of_closed_documents();
+        while self.ui.transform.is_none() && self.jobs.place.is_none() {
+            let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
+            let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
+                return;
+            };
             let (name, placed) = match next {
                 DropPlace::File(f) if f.path().is_absolute() => {
                     (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
@@ -320,20 +345,52 @@ impl PhotocraftApp {
                 }
             };
             match placed {
+                // Running in the background: Free Transform starts when the layer has landed.
+                Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
                 Ok(_) => {
                     if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
                         self.ui.status = e;
                     }
                 }
-                Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &e)])),
+                Err(e) => self.place_failed(&name, &e),
             }
         }
     }
 
+    /// Queue the web drops onto the canvas that the shell has read since the last frame
+    /// ([`Services::place_inbox`](crate::Services::place_inbox)), for the document they were
+    /// dropped on.
+    pub(crate) fn queue_web_places(&mut self) {
+        let arrived: Vec<(String, Vec<u8>)> =
+            self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
+        if let Some(doc) = self.canvas_drop_doc.or_else(|| self.session.active().map(|st| st.doc.id)) {
+            self.drop_places.extend(arrived.into_iter().map(|(name, bytes)| (doc, DropPlace::Bytes(name, bytes))));
+        }
+    }
+
+    /// Drop the queued files whose document has been closed, saying so.
+    fn discard_drops_of_closed_documents(&mut self) {
+        if self.drop_places.is_empty() {
+            return;
+        }
+        let before = self.drop_places.len();
+        let open: Vec<DocId> = self.session.documents().iter().map(|st| st.doc.id).collect();
+        self.drop_places.retain(|(doc, _)| open.contains(doc));
+        if self.drop_places.len() < before {
+            self.ui.status = tl!("Dropped files weren't placed: their document was closed.").into();
+            self.ui.status_error = false;
+        }
+    }
+
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
-    /// path), for files that weren't read from a path the command can read.
+    /// path), for files that weren't read from a path the command can read. With background jobs
+    /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
+        let r = if crate::jobs_ui::place_in_background(self) {
+            crate::jobs_ui::start_place_bytes(self, name, bytes, linked)
+        } else {
+            photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string())
+        };
         self.sync_views();
         r
     }

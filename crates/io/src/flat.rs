@@ -27,6 +27,12 @@ pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64)
         return import_tiff_page_with_limit(name, bytes, None, pixel_limit);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
+    flat_document(name, bytes, format, img)
+}
+
+/// The document of a flat image `img` that was decoded from `bytes` (not a TIFF), which are of
+/// `format`.
+pub(crate) fn flat_document(name: &str, bytes: &[u8], format: Option<Format>, img: Image) -> Result<ImportResult, IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
     let palette = match format {
