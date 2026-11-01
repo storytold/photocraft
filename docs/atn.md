@@ -207,8 +207,8 @@ step does; each line says what is lost and the fix.
 
 How the reference application resolves a layer or document a step names, measured on 2026-11-01 by
 playing `select` and `move` steps with each form (documents with and without a Background, a group,
-layers above and below it). A recorded step can use any of these; PhotoCraft reads names and the target
-today.
+layers above and below it). PhotoCraft resolves the supported recorded forms below against the
+playback document and retains their reference kinds on save (#10701).
 
 ### Layers
 
@@ -219,13 +219,13 @@ children. Example stack, bottom to top: Background, L1, L2, *group end*, Gchild,
 |---|---|---|
 | By name (`name`) | The layer with that name (the first match). | (supported) |
 | Target (`Ordn.Trgt`) | The active layer. | (supported) |
-| By index (`indx`) | Position in the stack above. With a Background, the Background is 0 and L1 is 1. Without one, the bottom layer is 1, and 0 fails. The group end is a position but cannot be selected: the step leaves the selection unchanged. A number past the top fails. | with Background: 0 Background, 1 L1, 2 L2, 3 (group end: no change), 4 Gchild, 5 G, 6 L3, 7 fails |
+| By index (`indx`) | Position in the stack above. With a Background, the Background is 0 and L1 is 1. Without one, the bottom layer is 1, and 0 fails. The group end is a position but cannot be selected: the step leaves the selection unchanged. A number past the top fails. | (supported) with Background: 0 Background, 1 L1, 2 L2, 3 (group end: no change), 4 Gchild, 5 G, 6 L3, 7 fails |
 | By id (`Idnt`) | The layer id of the document the step was recorded in (`LyrI`, never reused in that document). In another document it names an unrelated layer or none. | id 3 = L2 with a Background, L1 without |
 | By offset (`rele`) | Not supported for layers: every offset fails. | -3..3 all fail |
-| `Ordn.Frwr` / `Ordn.Bckw` | The next layer up / down in the stack, entering groups (group ends are skipped). | from L2: Frwr Gchild, Bckw L1 |
-| `Ordn.Frnt` / `Ordn.Back` | The top layer / the bottom layer (the Background when there is one). | L3 / Background |
+| `Ordn.Frwr` / `Ordn.Bckw` | The next layer up / down in the stack, entering groups (group ends are skipped). | (supported) from L2: Frwr Gchild, Bckw L1 |
+| `Ordn.Frnt` / `Ordn.Back` | The top layer / the bottom layer (the Background when there is one). | (supported) L3 / Background |
 
-**Move to an index** (`move`, `T` = layer by index `m`): counted as above on the stack before the move.
+**Move to an index** (supported) (`move`, `T` = layer by index `m`): counted as above on the stack before the move.
 Moving down, the layer lands at index `m`; moving up, at `m - 1` (directly below the layer that had index
 `m`). With a Background, `m` = 0 fails; without one, `m` = 0 sends the layer to the bottom. Moving to an
 index inside a group puts the layer into that group.
@@ -239,7 +239,7 @@ index inside a group puts the layer into that group.
 | Form | Meaning | Measured (D1, D2, D3 opened in that order, D2 active) |
 |---|---|---|
 | By offset (`rele`) | That many documents after (positive) or before (negative) the active one, in opening order, **wrapping around** at the ends. 0 fails. | -1 D1, +1 D3, -2 D3, +2 D1 |
-| By index (`indx`) | 1-based, in opening order; 0 fails. | 1 D1, 2 D2, 3 D3 |
+| By index (`indx`) | 1-based, in opening order; 0 fails. | (supported) 1 D1, 2 D2, 3 D3 |
 
 PhotoCraft's `document.activate {"offset"}` refuses to wrap (#7103); the reference application wraps.
 
@@ -252,14 +252,14 @@ Measured with three comps (CompA, CompB, CompC) that each show a different layer
 | Form | Result |
 |---|---|
 | By name (`name`) | Applies that comp. An unknown name fails. |
-| By index (`indx`) | 1-based, in panel order. 0, negative and past-the-end indexes are **accepted and change nothing**. |
-| By ID (`Idnt`) | Applies the comp with that `ID`. An unknown ID fails. |
+| By index (`indx`) | (supported) 1-based, in panel order. 0, negative and past-the-end indexes are **accepted and change nothing**. |
+| By ID (`Idnt`) | (supported) Applies the comp with that `ID`. An unknown ID fails. |
 | By offset (`rele`) | Always fails, for every offset. |
-| Ordinal (`Ordn`) `Trgt`, `Nxt `, `Prvs` | Applies the current (last applied) comp; `Nxt ` and `Prvs` do not move. |
-| Ordinal `Frst`, `Lst `, `Al  ` | Applies the **first** comp (also for `Lst `). |
+| Ordinal (`Ordn`) `Trgt`, `Nxt `, `Prvs` | (supported) Applies the current (last applied) comp; `Nxt ` and `Prvs` do not move. |
+| Ordinal `Frst`, `Lst `, `Al  ` | (supported) Applies the **first** comp (also for `Lst `). |
 
-Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import reads only the
-name form today; the index, ID and ordinal forms load as kept steps.
+Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import preserves
+name, index, ID and ordinal references; offset references remain kept steps (#10701).
 
 ## Newer events (string ID only)
 
