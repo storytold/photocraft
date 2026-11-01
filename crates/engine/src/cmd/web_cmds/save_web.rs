@@ -174,12 +174,22 @@ enum SlicePick {
     Numbers(Vec<u64>),
 }
 
-/// The slices chosen by `slices` and `numbers`. Photoshop's dialog can only select slices it
-/// shows, so a script naming one that doesn't exist is refused rather than exporting too few
-/// files.
+/// The slices chosen by `slices` (`all|user|selected`) and `numbers`. Photoshop's dialog can
+/// only select slices it shows, so a script naming one that doesn't exist, an unknown mode, or
+/// Selected Slices with nothing selected is refused rather than exporting too few or too many
+/// files. A document without slices is one image whatever the mode, as in the dialog.
 fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<SlicePick> {
+    let mode = match p.get("slices") {
+        None | Some(Value::Null) => "all",
+        Some(Value::String(m)) if matches!(m.as_str(), "all" | "user" | "selected") => m.as_str(),
+        Some(v) => return Err(bad(cmd, format!("unknown slices `{}` (all|user|selected)", v.as_str().map_or_else(|| v.to_string(), str::to_string)))),
+    };
     let Some(numbers) = p.get("numbers").filter(|v| !v.is_null()) else {
-        return Ok(if p.get("slices").and_then(Value::as_str) == Some("user") { SlicePick::User } else { SlicePick::All });
+        return match mode {
+            "selected" if !doc.slices.is_empty() => Err(bad(cmd, "no slices are selected: Selected Slices needs `numbers`")),
+            "user" => Ok(SlicePick::User),
+            _ => Ok(SlicePick::All),
+        };
     };
     let numbers: Vec<u64> = numbers
         .as_array()
