@@ -346,8 +346,8 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 | Sky Replacement (`skyReplacement`) | `shiftEdge` double, `borderSmoothness` long (fade edge, default 50), `Brgh` long, `temperature` long, `harmonizationOpacity` long (35), `foregroundLightingOpacity` long, `lightingMode` blend mode (`Mltp`), `edgeLightingOpacity` long (70), `skyReplacementOutput` (`skyReplacementOutputToNewSheets` new layers, …), `Idnt` text (the sky preset's id), `Nm  ` text (its name), `File` alias (the sky image) | Scale and Flip are **not** in the step: with 150 % and Flip on, the returned keys were the same. `foregroundLightingOpacity` is computed from the sky (44 and 29 for two skies). Without a chosen sky the dialog returns no keys. |
 
 **Not recordable:** Edit > Purge (no step is recorded; this version's Purge menu has Clipboard,
-Histories, All and Video Cache, no Undo); File > Export > Export As (the file is written, no step is
-recorded). Convert Stroke to Fill (`vectorStrokeToFill`) was not available in the measured version, even
+Histories, All and Video Cache, no Undo); File > Export > Export As and Quick Export as PNG (the file
+is written, no step is recorded). Convert Stroke to Fill (`vectorStrokeToFill`) was not available in the measured version, even
 on a shape layer with a stroke and its path component selected, and it is not in the path context menu.
 
 ### Batch
@@ -357,11 +357,15 @@ descriptor itself (`Btch`, as the dialog returns it):
 
 | Key | Type | Meaning |
 |---|---|---|
-| `null` | alias | source folder (absent for open files) |
+| `null` | alias, or enum | source folder; for open documents the enum `batchSourceType` `sourceOpenFiles` |
+| `OvrO` | bool | override action "Open" commands (written only when on) |
 | `Fldr` | bool | include all subfolders |
 | `suppressWarnings` | bool | suppress colour profile warnings |
+| `suppressOpenOptions` | bool | suppress file open options dialogs |
 | `Usng` | reference | the action: `Actn` by name in `ASet` by name |
-| `T   ` | alias | destination folder |
+| `T   ` | alias | destination folder (destination Folder) |
+| `SvAn` | bool | destination Save and Close (written instead of `T   `) |
+| `Ovrd` | bool | override action "Save As" commands (written only when on) |
 | `fileNamingRules` | object | file naming (below) |
 | `Log ` | alias | folder of the error log ("log errors to file") |
 | `Nm  ` | text | error log file name |
@@ -378,9 +382,63 @@ descriptor itself (`Btch`, as the dialog returns it):
 | `mmddyy` `mmdd` `yyyymmdd` `yymmdd` `yyddmm` `ddmmyy` `ddmm` | dates |
 | `lowerCaseExtension` / `upperCaseExtension` | extension / EXTENSION |
 
-The extension component has no dot: Document Name + extension + 3 digit serial + "_pc", starting at 5,
-named `other.png` → `otherpng005_pc` (the saved file then gets its own extension). The two short date
-entries are `mmdd` and `ddmm` (on 1 November they give `1101` and `0111`).
+The extension component is written **without a dot, unless it is the last component**, and nothing
+else adds an extension: the name is exactly what the components spell. Measured on `a.png`:
+
+| Components | Saved as |
+|---|---|
+| Name + extension | `a.png` |
+| Name + EXTENSION | `a.PNG` |
+| Name + extension + 3 digit serial | `apng001` (no extension) |
+| Name + 3 digit serial | `a001` (no extension) |
+| Name + extension + text `x` | `apngx` |
+| Name + extension + extension | `apng.png` |
+| Name + text `.jpg` | `a.jpg` (still PNG data) |
+| DOCUMENT NAME + `_` + serial letter + `_` + SERIAL LETTER | `A_a_A` |
+
+The two short date entries are `mmdd` and `ddmm` (on 1 November they give `1101` and `0111`).
+
+#### Batch behaviour
+
+Measured with a folder `in` holding `a.png`, `b.png`, `notes.txt` and `sub/a.png`, `sub/c.png`,
+`sub/deeper/d.png`:
+
+- **Order:** the folder's files by name, then each subfolder (by name, depth first). The serial number
+  counts across all of them: `a_001` (`in/a`), `b_002`, `a_003` (`in/sub/a`), `c_004`, `d_005`.
+- **Include All Subfolders:** results all go **flat into the destination folder**; the subfolder structure
+  is not rebuilt. A later file with the same output name **silently overwrites** an earlier one
+  (`in/a.png` and `in/sub/a.png` give one `a.png`).
+- **Destination None:** every processed file stays open, changed and unsaved. **Save and Close** saves
+  each file over itself in its own format and closes it. **Folder** saves a copy named by the file
+  naming rules. An open document that was never saved asks with a Save As dialog (Photoshop format,
+  the document's name) even with Folder as the destination.
+- **Override Open:** files are opened only by the action's own Open steps; without one the action runs
+  with no document and every file fails. **Override Save As:** files are saved only by the action's own
+  Save As steps, into the destination folder; without one nothing is saved. The dialog says both when
+  the box is ticked.
+- **Files that are not images** (`notes.txt`) are an error for that file (code -25600, "extension not
+  recognised"), not skipped silently.
+- **Errors, Stop For Errors** (no `Log ` key): the batch stops at the failing file; files before it are
+  saved, nothing after it is processed.
+- **Errors, Log Errors To File:** the batch goes on, and at the end a message says an error occurred and
+  the details are in the log. The log file is **UTF-16 LE with BOM and CRLF**, and is written even when
+  nothing failed. In German the lines are (the application's own language):
+
+  ```
+  Stapelanfang
+  <blank>
+  Datei: "<full path, or the document's name for open documents>"
+  Fehler: <message> (<error code>)
+  <blank>
+  …one pair per failed file…
+  Stapelende
+  ```
+- **Cancel:** Esc during a batch stops the running command and asks "A command was cancelled or stopped
+  during batch processing. Continue with the next file or stop?" (Continue / Stop). Stop ends the batch
+  at once; the file being processed is not saved (12 of 60 written in the test). There is no progress
+  bar: the documents open and close in the window as they are processed.
+- **Return value:** when any file failed, the Batch step itself reports "cancelled" (the dialog returns no
+  descriptor); a script run with Stop For Errors reports success even though it stopped.
 
 ### Actions panel menu
 
@@ -396,6 +454,45 @@ descriptor (Image > Image Size gives an `imageSize` step without settings; playb
 **Insert Path** records a `set` of the work path: `null` = reference `Path` property `WrPt`, `T   ` = list
 of path components (`shapeOperation`, `SbpL` list of subpaths, each with `Clsp` closed and `Pts ` list of
 points with `Anch` in pixels).
+
+## Recording that plays on any document
+
+What the reference application records when a user works normally, measured on 2026-11-01 by recording
+an action through the panel, mouse and keyboard on a document with layers A, B and C and a second open
+document, then reading the steps back. This is the form PhotoCraft's recorder should write (AUTO-219-1);
+today it copies journal entries with explicit layer ids.
+
+| User action | Recorded step |
+|---|---|
+| Click a layer in the Layers panel | `select`, `null` = layer **by name** (`"B"`), `MkVs` false, `LyrI` list of layer ids (a hint, not the reference) |
+| Ctrl+J (Layer via Copy) | `copyToLayer`, no keys |
+| Click an empty spot of the canvas with Auto-Select on | `selectNoLayers`, `null` = layer target |
+| Arrow keys with the Move tool | **one** `move` step per run of key presses, `null` = layer target, `T   ` offset in pixels: Right, Right, Right, Shift+Down gave `Hrzn` 3, `Vrtc` 10 |
+| Eye icon | `hide` (or `show`), `null` = **list** of layers by name |
+| Opacity typed in the Layers panel | `set` of the target layer, `T   ` = `Opct` percent (pressing Enter after typing recorded the same step twice) |
+| Select All, Deselect | `set` of the selection (`fsel`) to `Al  ` / `None` |
+| Alt+Backspace (fill with foreground) | `fill`, `Usng` `FrgC`, `Opct` 100 %, `Md  ` Normal |
+| Type tool: click, type "Hallo", commit | **one** `make` of a text layer (`TxLr`) with `Txt ` = the whole text; position `TxtC` in **percent of the canvas**; bounds in points |
+| Ctrl+E (Merge Down) | `mergeLayersNew`, no keys |
+| Ctrl+Tab / Ctrl+Shift+Tab | `select` of a document **by offset** (`rele` +1 / -1) plus `DocI` (the document id, a hint) and `forceNotify` |
+
+So the recorder names layers by name and acts on the target layer, never by id; it merges a run of
+nudges into one relative move and a typing session into one text step; text and document positions are
+relative.
+
+### Playing on another document
+
+The same recording played on two other documents (Play from step 2, skipping the setup step):
+
+- **Same layer names, new ids:** plays through; layers are found by name, `LyrI` and `DocI` are ignored.
+- **No layer with that name** (layers X, Y, Z): each step that names a missing layer stops with a
+  message and Continue / Stop. Select by name: "The command 'Select' is not currently available". Hide by
+  name: "The object 'Layer "A"' is not currently available". Steps on the target layer act on whatever
+  layer is selected (Ctrl+J copied Z into "Z Kopie").
+- **After `selectNoLayers`**, steps that need a target layer (move, set opacity, fill) each stop with
+  "The command '…' is not currently available" and Continue / Stop. Continue skips the step; nothing is
+  undone.
+- **Play from a step:** selecting a step in the panel and pressing Play plays from that step to the end.
 
 ## Older files: version 12
 
@@ -1205,8 +1302,8 @@ No parameters: the step carries an empty descriptor.
 
 | Key | String ID | Type | Unit | Default | Allowed |
 |---|---|---|---|---|---|
-| `Lvl ` | level | integer |  | 128 | applied, but not echoed: the returned step always shows 128. Levels <= 0 and >= 255 give the same image. Dialog range pending. |
-| `Edg ` | edge | enumerated |  | `Upr ` upper | `Lwr ` lower, `Upr ` upper (applied; the returned step always shows upper) |
+| `Lvl ` | level | integer |  | 128 | whole number 0..255 (the dialog clamps to the nearest value). A recorded step carries the real level (e.g. 77); only a script run echoes 128 back. Levels <= 0 and >= 255 give the same image. |
+| `Edg ` | edge | enumerated |  | `Upr ` upper | `CntE` enum: `Lwr ` lower, `Upr ` upper; recorded as set in the dialog |
 
 #### Wind
 
@@ -1695,8 +1792,6 @@ their tables will be added once a recorded step was read.
 
 | Event | Why |
 |---|---|
-| Trace Contour | The step's level and edge are applied, but the returned descriptor always shows the defaults (level 128, upper). Lower (`Lwr `) is valid; levels at or below 0 and at or above 255 give the same image. |
-| Quick Export | Not read yet; Export As records no step (see Measured through dialogs and recordings). |
 | Generative Fill (`syntheticFill`) | AI feature: in PhotoCraft this goes through the shared AI layer; until then such steps stay kept steps. |
 
 ### Recorded under another event
