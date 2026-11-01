@@ -1017,3 +1017,35 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
+
+/// #10697: a release, button-up movement and a new press in one frame end the first stroke at the
+/// release and start a separate one; the movement in between connects nothing.
+#[test]
+fn release_and_repress_in_one_frame_make_two_strokes() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 30})).unwrap();
+    frame(&mut app, &ctx, vec![]);
+    let c = frame(&mut app, &ctx, vec![]);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(c)]);
+    frame(&mut app, &ctx, vec![button(c, true)]);
+    let a = c + vec2(10.0, 0.0);
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(a)]);
+    assert!(app.distort.liquify.as_ref().unwrap().cur.is_some(), "the first stroke is open");
+    let gap = c + vec2(60.0, 0.0);
+    let again = c + vec2(80.0, 0.0);
+    let end = c + vec2(90.0, 0.0);
+    let events = vec![button(a, false), egui::Event::PointerMoved(gap), egui::Event::PointerMoved(again), button(again, true), egui::Event::PointerMoved(end)];
+    frame(&mut app, &ctx, events);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.strokes.len(), 1, "the release ended the first stroke");
+    let first = &d.strokes[0].points;
+    assert_eq!(first.len(), 2, "no segment was added for the button-up movement");
+    let (open, _) = d.cur.as_ref().unwrap();
+    assert_eq!(open.points.len(), 2, "the new press started its own stroke and dragged on");
+    let last_x = first.last().unwrap()[0];
+    assert!(open.points.first().unwrap()[0] > last_x + 10.0, "the second stroke starts at the new press, not at the release");
+}

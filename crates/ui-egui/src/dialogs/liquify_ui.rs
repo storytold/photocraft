@@ -1267,6 +1267,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Mouse → strokes (Space or middle button pans). Alt+right-drag resizes the brush (#4702).
         let (pan, secondary, mods_now) =
             ui.input(|i| (i.key_down(egui::Key::Space) || i.pointer.middle_down(), i.pointer.button_down(egui::PointerButton::Secondary), i.modifiers));
+        let raw_events = ui.input(|i| i.events.clone());
+        let mut ordered = false;
+        let (over, stroke_open) = (resp.contains_pointer(), d.cur.is_some() || d.lasso.is_some());
         // From the press, not once the drag is recognised a few points later: that first frame
         // would otherwise start a stroke.
         let resize = d.brush_resize.is_some() || (resp.is_pointer_button_down_on() && brush_resize_gesture(mods_now, secondary));
@@ -1291,6 +1294,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else if pan && resp.dragged() {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
+        } else if let Some(seq) = ordered_primary_events(&raw_events, area, over, stroke_open, |p| to_doc(d, area, p)) {
+            // The frame holds a primary-button release: replay the presses, moves and releases in
+            // the order they arrived, so a release and a new press in one frame stay two strokes.
+            mods = ui.input(|i| i.modifiers);
+            events.extend(seq);
+            ordered = true;
+            ctx.request_repaint();
         } else if let Some(pp) = resp.interact_pointer_pos() {
             let q = to_doc(d, area, pp);
             let pr = 1.0;
@@ -1316,7 +1326,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         let primary_down = ui.input(|i| i.pointer.primary_down());
         let lasso_up = d.lasso.is_some() && !primary_down;
-        if resp.drag_stopped() || lasso_up || (d.cur.is_some() && !primary_down) {
+        if !ordered && (resp.drag_stopped() || lasso_up || (d.cur.is_some() && !primary_down)) {
             let q = d.lasso.as_ref().and_then(|(_, pts)| pts.last().copied()).or_else(|| d.cur.as_ref().map(|(_, l)| [l[0], l[1]])).unwrap_or_default();
             events.push(ToolEvent::Up { x: q[0], y: q[1] });
         }
@@ -1331,6 +1341,40 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some("cancel") => cancel(app),
         _ => {}
     }
+}
+
+/// The frame's primary-button presses, moves and releases as tool events, in arrival order, when
+/// the frame holds a release (`None` otherwise). `over` is whether the preview is under the pointer
+/// (no popup on top), as a press must be to start a stroke; `held` is whether one is open at the start.
+/// A release ends the stroke, moves while the button is up are dropped, and a later press starts
+/// a new stroke; frame-level button state would merge a release and a re-press into one drag.
+fn ordered_primary_events(raw: &[egui::Event], area: ERect, over: bool, held: bool, to_doc: impl Fn(Pos2) -> [f64; 2]) -> Option<Vec<ToolEvent>> {
+    let released = |e: &egui::Event| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. });
+    if !raw.iter().any(released) {
+        return None;
+    }
+    let mut held = held;
+    let mut out = Vec::new();
+    for ev in raw {
+        match ev {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if over && area.contains(*pos) => {
+                let q = to_doc(*pos);
+                held = true;
+                out.push(ToolEvent::Down { x: q[0], y: q[1], pressure: 1.0 });
+            }
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } if held => {
+                let q = to_doc(*pos);
+                held = false;
+                out.push(ToolEvent::Up { x: q[0], y: q[1] });
+            }
+            egui::Event::PointerMoved(pos) if held => {
+                let q = to_doc(*pos);
+                out.push(ToolEvent::Move { x: q[0], y: q[1], pressure: 1.0 });
+            }
+            _ => {}
+        }
+    }
+    Some(out)
 }
 
 /// The preview's zoom range (1 = the dialog's 100 %). Liquify keeps its own zoom, apart from the
