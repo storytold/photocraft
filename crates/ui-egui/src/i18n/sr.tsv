@@ -4593,3 +4593,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H sakriva PhotoCraft
+	View › Extras uses ⌃⌘H.	Prikaz › Dodatni elementi koristi ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Sakrij PhotoCraft koristi ⌃⌘H.

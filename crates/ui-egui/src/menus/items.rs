@@ -213,14 +213,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.splice(last + 1..last + 1, rows);
         }
     }
-    // Edit › Keyboard Shortcuts overrides, Edit › Menus hidden items and colours.
+    // Edit › Keyboard Shortcuts overrides (and defaults a preference moves: ⌘H, see
+    // `Interface::default_shortcut`), Edit › Menus hidden items and colours.
     let prefs = app.session.prefs();
-    if !prefs.shortcuts.is_empty() {
-        for it in &mut items {
-            if prefs.shortcuts.contains_key(&it.id) {
-                it.shortcut = prefs.shortcut(&it.id, None).map(str::to_string);
-            }
-        }
+    for it in &mut items {
+        it.shortcut = prefs.shortcut(&it.id, it.shortcut.as_deref()).map(str::to_string);
     }
     if !prefs.menus.hidden.is_empty() {
         items.retain(|i| !prefs.menus.is_hidden(&i.id));
