@@ -1600,6 +1600,7 @@
 	Untitled-1	بدون عنوان-1
 	Update layer comp (visibility, position and appearance)	تحديث تركيبة الطبقات (الرؤية والموضع والمظهر)
 	Use Default	استخدام الافتراضي
+	Use In-Window Bar on Linux	استخدام شريط القوائم داخل النافذة على Linux
 	Use Legacy	استخدام القديم
 	Use Measurement Scale	استخدام مقياس القياس
 	Variables bind a layer's visibility, text or pixels to a named data slot.	تربط المتغيرات رؤية الطبقة أو نصها أو بكسلاتها بخانة بيانات مسماة.

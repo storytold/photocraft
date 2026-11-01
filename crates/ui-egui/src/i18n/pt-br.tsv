@@ -1652,6 +1652,7 @@
 	Untitled-1	Sem título-1
 	Update layer comp (visibility, position and appearance)	Atualizar composição de camadas (visibilidade, posição e aparência)
 	Use Default	Usar padrão
+	Use In-Window Bar on Linux	Usar a barra de menus na janela no Linux
 	Use Legacy	Usar legado
 	Use Measurement Scale	Usar escala de medida
 	Variables bind a layer's visibility, text or pixels to a named data slot.	As variáveis vinculam a visibilidade, o texto ou os pixels de uma camada a um campo de dados nomeado.

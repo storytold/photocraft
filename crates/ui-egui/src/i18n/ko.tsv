@@ -1675,6 +1675,7 @@
 	Untitled-1	제목 없음-1
 	Update layer comp (visibility, position and appearance)	레이어 구성 요소 업데이트(표시 여부, 위치 및 모양새)
 	Use Default	기본값 사용
+	Use In-Window Bar on Linux	Linux에서 창 안 메뉴 막대 사용
 	Use Legacy	기존 방식 사용
 	Use Measurement Scale	측정 비율 사용
 	Variables bind a layer's visibility, text or pixels to a named data slot.	변수는 레이어의 표시 여부, 텍스트 또는 픽셀을 이름이 지정된 데이터 슬롯에 연결합니다.

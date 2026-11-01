@@ -229,6 +229,21 @@ mod title_tests {
         }
     }
 
+    #[test]
+    fn in_window_menu_stays_visible_when_no_native_menu_was_installed() {
+        let mut app = app(true);
+        assert!(app.services.native_menu.is_none());
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::title_bar(&mut app, ui));
+        out.textures_delta.clear();
+        let mut texts = Vec::new();
+        for shape in &out.shapes {
+            collect_text(&shape.shape, &mut texts);
+        }
+        assert!(texts.iter().any(|text| text == "File"), "in-window menu remains drawn: {texts:?}");
+    }
+
     fn collect_text(shape: &egui::Shape, out: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(t) => out.push(t.galley.text().to_string()),

@@ -1577,6 +1577,7 @@
 	Untitled-1	Adsız-1
 	Update layer comp (visibility, position and appearance)	Katman kompozisyonunu güncelleyin (görünürlük, konum ve görünüm)
 	Use Default	Varsayılanı Kullan
+	Use In-Window Bar on Linux	Linux'ta pencere içi menü çubuğunu kullan
 	Use Legacy	Eskiyi Kullan
 	Use Measurement Scale	Ölçüm Ölçeğini Kullan
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Değişkenler bir katmanın görünürlüğünü, metnini veya piksellerini adlandırılmış bir veri yuvasına bağlar.

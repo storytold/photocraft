@@ -1646,13 +1646,15 @@ fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
     h.run_steps(4);
     h.get_by_label("System title bar").scroll_to_me();
     h.run_steps(4);
-    h.get_by_label("Applies at next launch.");
+    // On Linux, Use In-Window Bar on Linux on the same page says so too.
+    let notices = 1 + usize::from(cfg!(target_os = "linux"));
+    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), notices);
     for desired in [true, false] {
         h.get_by_label("System title bar").click();
         h.run_steps(4);
         assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["values"]["interface"]["systemTitleBar"], desired);
         assert_eq!(h.state().session.prefs().interface.system_title_bar, !desired, "the draft is not applied yet");
-        h.get_by_label("Applies at next launch.");
+        assert_eq!(h.query_all_by_label("Applies at next launch.").count(), notices);
         h.get_by_label("Apply").click();
         h.run_steps(4);
         assert_eq!(h.state().session.prefs().interface.system_title_bar, desired);
@@ -1660,7 +1662,7 @@ fn system_title_bar_explains_next_launch_and_preserves_apply_and_cancel() {
         assert!(h.state().custom_titlebar, "do not change the current window or restart it");
         let (reloaded, _) = app_with_saved(store.lock().unwrap().clone());
         assert_eq!(reloaded.session.prefs().interface.system_title_bar, desired);
-        h.get_by_label("Applies at next launch.");
+        assert_eq!(h.query_all_by_label("Applies at next launch.").count(), notices);
     }
     h.get_by_label("System title bar").click();
     h.run_steps(4);
