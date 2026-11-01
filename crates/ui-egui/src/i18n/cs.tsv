@@ -2218,7 +2218,7 @@
 	Collapse	Sbalit
 	Collapse All Groups	Sbalit všechny skupiny
 	Collapse Panel Group	Sbalit skupinu panelů
-	Collapse group  ({key}-click: all groups)	Sbalit skupinu  ({key}+kliknutí: všechny skupiny)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Sbalit skupinu  ({alt}+kliknutí: i s vnořenými skupinami · {cmd}+kliknutí: i se skupinami na stejné úrovni)
 	Create new brush from the current settings	Vytvořit nový štětec z aktuálního nastavení
 	Create new brush from these settings	Vytvořit nový štětec z tohoto nastavení
 	Update the current brush with these settings	Aktualizovat aktuální štětec těmito nastaveními
@@ -2226,7 +2226,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Tažením šipky nastavíte úhel, tažením bodů kulatost
 	Expand	Rozbalit
 	Expand Panel Group	Rozbalit skupinu panelů
-	Expand group  ({key}-click: all groups)	Rozbalit skupinu  ({key}+kliknutí: všechny skupiny)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Rozbalit skupinu  ({alt}+kliknutí: i s vnořenými skupinami · {cmd}+kliknutí: i se skupinami na stejné úrovni)
 	Fade steps	Kroky zeslabení
 	Hide the layer's effects  ({key}-click: all layers)	Skrýt efekty vrstvy  ({key}+kliknutí: všechny vrstvy)
 	Import Brushes… (.abr or image)	Importovat štětce… (.abr nebo obrázek)

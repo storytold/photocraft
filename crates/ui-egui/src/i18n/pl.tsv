@@ -2187,7 +2187,7 @@
 	Collapse	Zwiń
 	Collapse All Groups	Zwiń wszystkie grupy
 	Collapse Panel Group	Zwiń grupę paneli
-	Collapse group  ({key}-click: all groups)	Zwiń grupę  (kliknięcie z {key}: wszystkie grupy)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Zwiń grupę  (kliknięcie z {alt}: razem z grupami zagnieżdżonymi · kliknięcie z {cmd}: razem z grupami na tym samym poziomie)
 	Create new brush from the current settings	Utwórz nowy pędzel z bieżących ustawień
 	Create new brush from these settings	Utwórz nowy pędzel z tych ustawień
 	Update the current brush with these settings	Zaktualizuj bieżący pędzel tymi ustawieniami
@@ -2195,7 +2195,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Przeciągnij strzałkę, aby ustawić kąt, a punkty, aby ustawić zaokrąglenie
 	Expand	Rozwiń
 	Expand Panel Group	Rozwiń grupę paneli
-	Expand group  ({key}-click: all groups)	Rozwiń grupę  (kliknięcie z {key}: wszystkie grupy)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Rozwiń grupę  (kliknięcie z {alt}: razem z grupami zagnieżdżonymi · kliknięcie z {cmd}: razem z grupami na tym samym poziomie)
 	Fade steps	Kroki zanikania
 	Hide the layer's effects  ({key}-click: all layers)	Ukryj efekty warstwy  (kliknięcie z {key}: wszystkie warstwy)
 	Import Brushes… (.abr or image)	Importuj pędzle… (.abr lub obraz)

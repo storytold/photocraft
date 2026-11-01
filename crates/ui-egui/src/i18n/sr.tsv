@@ -2163,7 +2163,7 @@
 	Collapse	Skupi
 	Collapse All Groups	Skupi sve grupe
 	Collapse Panel Group	Skupi grupu panela
-	Collapse group  ({key}-click: all groups)	Skupi grupu  ({key}-klik: sve grupe)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Skupi grupu  ({alt}-klik: sa ugnežđenim grupama · {cmd}-klik: sa grupama na istom nivou)
 	Create new brush from the current settings	Napravi novu četkicu od tekućih podešavanja
 	Create new brush from these settings	Napravi novu četkicu od ovih podešavanja
 	Update the current brush with these settings	Ažuriraj tekuću četkicu ovim podešavanjima
@@ -2171,7 +2171,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Prevucite strelicu da podesite ugao, a tačke da podesite zaobljenost
 	Expand	Proširi
 	Expand Panel Group	Proširi grupu panela
-	Expand group  ({key}-click: all groups)	Proširi grupu  ({key}-klik: sve grupe)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Proširi grupu  ({alt}-klik: sa ugnežđenim grupama · {cmd}-klik: sa grupama na istom nivou)
 	Fade steps	Koraci iščezavanja
 	Hide the layer's effects  ({key}-click: all layers)	Sakrij efekte sloja  ({key}-klik: svi slojevi)
 	Import Brushes… (.abr)	Uvezi četkice… (.abr)

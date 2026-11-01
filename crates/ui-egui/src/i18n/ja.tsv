@@ -2203,7 +2203,7 @@
 	Collapse	折りたたむ
 	Collapse All Groups	すべてのグループを折りたたむ
 	Collapse Panel Group	パネルグループを折りたたむ
-	Collapse group  ({key}-click: all groups)	グループを折りたたむ ({key}+クリック: すべてのグループ)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	グループを折りたたむ ({alt}+クリック: ネストされたグループも · {cmd}+クリック: 同じ階層のグループも)
 	Create new brush from the current settings	現在の設定から新規ブラシを作成
 	Create new brush from these settings	この設定から新規ブラシを作成
 	Delete brush	ブラシを削除
@@ -2211,7 +2211,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	矢印をドラッグして角度、点をドラッグして真円率を設定
 	Expand	展開
 	Expand Panel Group	パネルグループを展開
-	Expand group  ({key}-click: all groups)	グループを展開 ({key}+クリック: すべてのグループ)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	グループを展開 ({alt}+クリック: ネストされたグループも · {cmd}+クリック: 同じ階層のグループも)
 	Fade steps	フェードのステップ数
 	Hide the layer's effects  ({key}-click: all layers)	レイヤーの効果を隠す ({key}+クリック: すべてのレイヤー)
 	Import Brushes… (.abr)	ブラシを読み込み…(.abr)

@@ -2075,7 +2075,7 @@
 	Collapse	Daralt
 	Collapse All Groups	Tüm Grupları Daralt
 	Collapse Panel Group	Panel Grubunu Daralt
-	Collapse group  ({key}-click: all groups)	Grubu daralt ({key}-tıklama: tüm gruplar)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Grubu daralt ({alt}-tıklama: iç içe gruplarla birlikte · {cmd}-tıklama: aynı düzeydeki gruplarla birlikte)
 	Create new brush from the current settings	Geçerli ayarlardan yeni fırça oluştur
 	Create new brush from these settings	Bu ayarlardan yeni fırça oluştur
 	Update the current brush with these settings	Geçerli fırçayı bu ayarlarla güncelle
@@ -2083,7 +2083,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Açıyı ayarlamak için oku, yuvarlaklığı ayarlamak için noktaları sürükleyin
 	Expand	Genişlet
 	Expand Panel Group	Panel Grubunu Genişlet
-	Expand group  ({key}-click: all groups)	Grubu genişlet ({key}-tıklayın: tüm gruplar)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Grubu genişlet ({alt}-tıklama: iç içe gruplarla birlikte · {cmd}-tıklama: aynı düzeydeki gruplarla birlikte)
 	Fade steps	Solma Adımı Sayısı
 	Hide the layer's effects  ({key}-click: all layers)	Katmanın efektlerini gizle ({key}-tıklama: tüm katmanlar)
 	Import Brushes… (.abr)	Fırçaları İçe Aktar… (.abr)

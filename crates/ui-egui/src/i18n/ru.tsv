@@ -914,8 +914,8 @@
 	Unlock: picking a preset replaces these settings	Разблокировать: выбор набора заменит эти параметры
 	Show the layer's effects  ({key}-click: all layers)	Показать эффекты слоя  ({key}-клик: все слои)
 	Hide the layer's effects  ({key}-click: all layers)	Скрыть эффекты слоя  ({key}-клик: все слои)
-	Expand group  ({key}-click: all groups)	Развернуть группу  ({key}-клик: все группы)
-	Collapse group  ({key}-click: all groups)	Свернуть группу  ({key}-клик: все группы)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Развернуть группу  ({alt}-клик: вместе с вложенными группами · {cmd}-клик: вместе с группами того же уровня)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Свернуть группу  ({alt}-клик: вместе с вложенными группами · {cmd}-клик: вместе с группами того же уровня)
 	Effects	Эффекты
 	Blending	Наложение
 	Blend If	Изображение если

@@ -2174,7 +2174,7 @@
 	Collapse	접기
 	Collapse All Groups	모든 그룹 접기
 	Collapse Panel Group	패널 그룹 접기
-	Collapse group  ({key}-click: all groups)	그룹 접기  ({key} 키를 누른 채 클릭: 모든 그룹)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	그룹 접기  ({alt} 키를 누른 채 클릭: 중첩된 그룹 포함 · {cmd} 키를 누른 채 클릭: 같은 수준의 그룹 포함)
 	Create new brush from the current settings	현재 설정으로 새 브러시 만들기
 	Create new brush from these settings	이 설정으로 새 브러시 만들기
 	Update the current brush with these settings	이 설정으로 현재 브러시 업데이트
@@ -2182,7 +2182,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	화살표를 드래그하여 각도를, 점을 드래그하여 원형률을 설정하세요
 	Expand	펼치기
 	Expand Panel Group	패널 그룹 펼치기
-	Expand group  ({key}-click: all groups)	그룹 펼치기  ({key} 키를 누른 채 클릭: 모든 그룹)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	그룹 펼치기  ({alt} 키를 누른 채 클릭: 중첩된 그룹 포함 · {cmd} 키를 누른 채 클릭: 같은 수준의 그룹 포함)
 	Fade steps	약화 단계
 	Hide the layer's effects  ({key}-click: all layers)	레이어 효과 숨기기  ({key} 키를 누른 채 클릭: 모든 레이어)
 	Import Brushes… (.abr or image)	브러시 가져오기… (.abr 또는 이미지)

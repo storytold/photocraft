@@ -756,8 +756,8 @@
 	Unlock: picking a preset replaces these settings	Lås upp: om du väljer en förinställning ersätts de här inställningarna
 	Show the layer's effects  ({key}-click: all layers)	Visa lagrets effekter  ({key}-klicka: alla lager)
 	Hide the layer's effects  ({key}-click: all layers)	Dölj lagrets effekter  ({key}-klicka: alla lager)
-	Expand group  ({key}-click: all groups)	Expandera grupp  ({key}-klicka: alla grupper)
-	Collapse group  ({key}-click: all groups)	Fäll ihop grupp  ({key}-klicka: alla grupper)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Expandera grupp  ({alt}-klicka: med kapslade grupper · {cmd}-klicka: med grupper på samma nivå)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Fäll ihop grupp  ({alt}-klicka: med kapslade grupper · {cmd}-klicka: med grupper på samma nivå)
 	Effects	Effekter
 	Blending	Blandning
 	Blend If	Blandningsvillkor

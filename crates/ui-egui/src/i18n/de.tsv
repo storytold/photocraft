@@ -2177,7 +2177,7 @@
 	Collapse	Einklappen
 	Collapse All Groups	Alle Gruppen einklappen
 	Collapse Panel Group	Bedienfeldgruppe einklappen
-	Collapse group  ({key}-click: all groups)	Gruppe einklappen  ({key}-Klick: alle Gruppen)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Gruppe einklappen  ({alt}-Klick: mit verschachtelten Gruppen · {cmd}-Klick: mit Gruppen derselben Ebene)
 	Create new brush from the current settings	Neuen Pinsel aus den aktuellen Einstellungen erstellen
 	Create new brush from these settings	Neuen Pinsel aus diesen Einstellungen erstellen
 	Update the current brush with these settings	Aktuellen Pinsel mit diesen Einstellungen aktualisieren
@@ -2185,7 +2185,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Ziehe den Pfeil für den Winkel, die Punkte für die Rundung
 	Expand	Ausklappen
 	Expand Panel Group	Bedienfeldgruppe ausklappen
-	Expand group  ({key}-click: all groups)	Gruppe ausklappen  ({key}-Klick: alle Gruppen)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Gruppe ausklappen  ({alt}-Klick: mit verschachtelten Gruppen · {cmd}-Klick: mit Gruppen derselben Ebene)
 	Fade steps	Verblassen-Schritte
 	Hide the layer's effects  ({key}-click: all layers)	Effekte der Ebene ausblenden  ({key}-Klick: alle Ebenen)
 	Import Brushes… (.abr or image)	Pinsel importieren… (.abr oder Bild)

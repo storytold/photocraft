@@ -2102,7 +2102,7 @@
 	Collapse	طي
 	Collapse All Groups	طي كل المجموعات
 	Collapse Panel Group	طي مجموعة اللوحات
-	Collapse group  ({key}-click: all groups)	طي المجموعة  ({key}+نقر: كل المجموعات)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	طي المجموعة  ({alt}+نقر: مع المجموعات المتداخلة · {cmd}+نقر: مع المجموعات في المستوى نفسه)
 	Create new brush from the current settings	إنشاء فرشاة جديدة من الإعدادات الحالية
 	Create new brush from these settings	إنشاء فرشاة جديدة من هذه الإعدادات
 	Update the current brush with these settings	تحديث الفرشاة الحالية بهذه الإعدادات
@@ -2110,7 +2110,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	اسحب السهم لتعيين الزاوية، والنقاط لتعيين الاستدارة
 	Expand	توسيع
 	Expand Panel Group	توسيع مجموعة اللوحات
-	Expand group  ({key}-click: all groups)	توسيع المجموعة  ({key}+نقر: كل المجموعات)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	توسيع المجموعة  ({alt}+نقر: مع المجموعات المتداخلة · {cmd}+نقر: مع المجموعات في المستوى نفسه)
 	Fade steps	خطوات التلاشي
 	Hide the layer's effects  ({key}-click: all layers)	إخفاء تأثيرات الطبقة  ({key}+نقر: كل الطبقات)
 	Import Brushes… (.abr or image)	استيراد الفُرش… (.abr أو صورة)

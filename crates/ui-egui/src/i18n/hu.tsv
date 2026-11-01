@@ -1535,7 +1535,7 @@ fontWeight	Thin	Hajszálvékony
 	CMYK:	CMYK:
 	Collapse	Összecsukás
 	Collapse All Groups	Összes csoport összecsukása
-	Collapse group  ({key}-click: all groups)	Csoport összecsukása  ({key}+kattintás: minden csoport)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Csoport összecsukása  ({alt}+kattintás: a beágyazott csoportokkal együtt · {cmd}+kattintás: az azonos szintű csoportokkal együtt)
 	Color Burn	Színégetés
 	Color Burn (Paint.NET)	Színégetés (Paint.NET)
 	Color Decontaminate	Színszennyeződés eltávolítása
@@ -1594,7 +1594,7 @@ fontWeight	Thin	Hajszálvékony
 	Exit Quick Mask	Kilépés a gyorsmaszkból
 	Expand	Kibontás
 	Expand Detection Area	Észlelési terület bővítése
-	Expand group  ({key}-click: all groups)	Csoport kibontása  ({key}+kattintás: minden csoport)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Csoport kibontása  ({alt}+kattintás: a beágyazott csoportokkal együtt · {cmd}+kattintás: az azonos szintű csoportokkal együtt)
 	F cycles the views; hold X to see the image	Az F lépteti a nézeteket; az X nyomva tartásával a kép látszik
 	File Format	Fájlformátum
 	Fill Opacity	Kitöltés átlátszatlansága
