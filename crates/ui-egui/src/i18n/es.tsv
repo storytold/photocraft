@@ -4262,6 +4262,7 @@ navigator	Zoom	Zoom
 	Chisel Soft	Cincelar suave
 	Open color-less EXR as ACEScg	Abrir EXR sin espacio de color como ACEScg
 	Do not append "copy" to filename when saving a copy	No añadir «copy» al nombre de archivo al guardar una copia
+	Save As to Original Folder	Guardar como en la carpeta original
 	Edit Selected Guides	Editar guías seleccionadas
 	Clear Selected Guides	Borrar guías seleccionadas
 	Bicubic Automatic	Bicúbica automática

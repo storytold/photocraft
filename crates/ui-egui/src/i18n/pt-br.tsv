@@ -4148,6 +4148,7 @@ layerLabel	No Color	Sem cor
 	Chisel Soft	Cinzel suave
 	Open color-less EXR as ACEScg	Abrir EXR sem espaço de cor como ACEScg
 	Do not append "copy" to filename when saving a copy	Não acrescentar "copy" ao nome do arquivo ao salvar uma cópia
+	Save As to Original Folder	Salvar como na pasta original
 	Edit Selected Guides	Editar guias selecionadas
 	Clear Selected Guides	Limpar guias selecionadas
 	Bicubic Automatic	Bicúbica automática

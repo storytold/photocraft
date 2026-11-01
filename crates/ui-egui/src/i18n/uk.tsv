@@ -4051,6 +4051,7 @@ curves	Smooth	Згладити
 	Chisel Soft	М'яке різьблення
 	Open color-less EXR as ACEScg	Відкривати EXR без колірного профілю як ACEScg
 	Do not append "copy" to filename when saving a copy	Не додавати «copy» до імені файлу під час збереження копії
+	Save As to Original Folder	«Зберегти як» в початкову папку
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
 	Bicubic Automatic	Бікубічна, автоматично

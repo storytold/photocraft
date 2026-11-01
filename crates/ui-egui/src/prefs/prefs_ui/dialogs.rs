@@ -320,7 +320,12 @@ pub(super) fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     match f.get("__prefsui").and_then(Value::as_str).unwrap_or("") {
         "prefs" => {
-            let values = f.get("values").cloned().unwrap_or(Value::Null);
+            let mut values = f.get("values").cloned().unwrap_or(Value::Null);
+            // The dialog never shows the last save folder; the draft's copy may be older than the
+            // live one (a Save As while the dialog was open), so it is not applied (#9656).
+            if let Some(file_handling) = values.get_mut("fileHandling").and_then(Value::as_object_mut) {
+                file_handling.remove("lastSaveFolder");
+            }
             app.run("prefs.set", json!({"path": "", "value": values}))
         }
         "shortcuts" => {
