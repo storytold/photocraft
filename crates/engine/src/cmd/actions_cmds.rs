@@ -235,17 +235,47 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
     Ok((action, from))
 }
 
-/// The actions that `steps` call through Play Action steps and the branches of Conditional steps,
-/// followed transitively, in list order, so a droplet can run without the Actions panel that made
-/// it (#2794, #6804). Index references in `steps` and in the copies become names, which resolve
+/// The actions that `steps` call through Play Action, Batch and Conditional steps, followed
+/// transitively, in list order, so a droplet can run without the Actions panel that made it
+/// (#2794, #6804). Effective inline Batch steps are followed too. Index references become names, which resolve
 /// without the rest of the list. A target that doesn't resolve is left alone: it fails at
 /// playback, as it would have before.
 pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
+    /// Follow saved calls and effective inline Batch steps without changing their serialized shape.
     fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut Vec<(usize, usize)>) {
-        for (id, params) in steps.iter_mut() {
+        let mut pending: Vec<_> = steps.iter_mut().rev().map(|(id, params)| (id.clone(), params)).collect();
+        while let Some((id, params)) = pending.pop() {
             match id.as_str() {
-                "actions.play" => {
-                    let Ok(i) = resolve(list, params, "actions.play") else { continue };
+                "actions.play" | "file.automate.batch" => {
+                    if id == "file.automate.batch" {
+                        let inline =
+                            if params.get("steps").is_some() { Some("steps") } else { params.get("action").is_some_and(Value::is_array).then_some("action") };
+                        if let Some(key) = inline {
+                            // A present invalid `steps` still wins over `action`, just as at runtime.
+                            let Some(steps) = params.get_mut(key).and_then(Value::as_array_mut) else { continue };
+                            for step in steps.iter_mut().rev() {
+                                let call = match step {
+                                    Value::Array(a) => {
+                                        let Some(id) = a.first().and_then(Value::as_str).map(str::to_owned) else { continue };
+                                        a.get_mut(1).map(|params| (id, params))
+                                    }
+                                    Value::Object(o) => {
+                                        let Some(id) = o.get("command").or_else(|| o.get("id")).and_then(Value::as_str).map(str::to_owned) else {
+                                            continue;
+                                        };
+                                        o.get_mut("params").map(|params| (id, params))
+                                    }
+                                    // String steps and omitted params use `{}`, with no action target.
+                                    _ => None,
+                                };
+                                if let Some(call) = call {
+                                    pending.push(call);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                    let Ok(i) = resolve(list, params, &id) else { continue };
                     if let (Some(action), Some(obj)) = (list.get(i), params.as_object_mut()) {
                         obj.insert("action".into(), json!(action.name));
                     }

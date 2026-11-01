@@ -129,6 +129,19 @@ pub(crate) fn process_tree(
     suffix: &str,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
+    process_tree_with_results(s, inputs, output, format, save, suffix, &|scratch, out| f(scratch, out).map_err(FileFailure::from))
+}
+
+/// Process default output paths without discarding a failed child's returned file outcomes.
+fn process_tree_with_results(
+    s: &Session,
+    inputs: &[BatchInput],
+    output: &str,
+    format: &str,
+    save: SaveOpts,
+    suffix: &str,
+    f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
+) -> Value {
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
@@ -176,11 +189,24 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+/// A per-input error, optionally carrying the original result of failed nested work.
+struct FileFailure {
+    error: EngineError,
+    result: Option<Value>,
+}
+
+impl From<EngineError> for FileFailure {
+    fn from(error: EngineError) -> Self {
+        Self { error, result: None }
+    }
+}
+
+/// Save successful inputs and retain structured nested results alongside their error summaries.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
-    f: &dyn Fn(&mut Session, &str) -> Result<bool>,
+    f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
     let raw_ppi = s.prefs().raw_defaults.resolution;
@@ -188,7 +214,7 @@ fn process_outputs<'a>(
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     for (path, out) in outputs {
-        let r = (|| -> Result<()> {
+        let r = (|| -> std::result::Result<(), FileFailure> {
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
@@ -205,7 +231,13 @@ fn process_outputs<'a>(
                 written.record(&out, path);
                 files.push(out);
             }
-            Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
+            Err(FileFailure { error, result }) => {
+                let mut failure = json!({"file": path, "error": error.to_string()});
+                if let Some(result) = result {
+                    failure["result"] = result;
+                }
+                errors.push(failure);
+            }
         }
     }
     json!({"files": files, "errors": errors})
@@ -316,7 +348,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         scratch.authorize = authorize;
         scratch.actions = actions.clone();
         scratch.actions.playback_steps = carried.get();
-        let result = (|| {
+        let result = (|| -> std::result::Result<bool, FileFailure> {
             // The document as the last recorded save found it, written once the action has run so a
             // failing step still writes nothing.
             let mut saved: Option<Arc<Document>> = None;
@@ -328,7 +360,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 let r = scratch.execute(id, params.clone())?;
                 // A failed step inside a called action makes this file an error, not a saved result.
                 if let Some(error) = crate::actions_cmds::nested_failure(id, &r) {
-                    return Err(EngineError::Other(error));
+                    return Err(FileFailure { error: EngineError::Other(error), result: Some(r) });
                 }
             }
             // While the saved document is still open the steps after the save reach the result too
@@ -347,7 +379,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = match names {
         Some(names) => process_outputs(s, inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run),
-        None => process_tree(s, &inputs, &output, &format, save, "", &run),
+        None => process_tree_with_results(s, &inputs, &output, &format, save, "", &run),
     };
     if s.actions.playing > 0 {
         s.actions.playback_steps = carried.get();

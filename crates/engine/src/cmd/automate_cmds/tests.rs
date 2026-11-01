@@ -300,6 +300,7 @@ fn droplet_shim_passes_shell_metacharacters_as_a_literal_path() {
     assert_eq!(std::fs::read(&capture).unwrap(), expected.to_string_lossy().as_bytes());
 }
 
+/// Droplets retain transitive calls and effective Batch references across fresh or different sessions.
 #[test]
 fn droplets_carry_the_actions_their_play_steps_call() {
     use crate::actions_cmds::Action;
@@ -337,6 +338,80 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     assert_eq!(out.dimensions(), (20, 40));
     let r = fresh.execute("file.automate.runDroplet", json!({"droplet": looping, "input": [dir.clone()]})).unwrap();
     assert_eq!(r["errors"].as_array().unwrap().len(), inputs.len(), "a self-call fails instead of looping: {r}");
+
+    // Retain the copied action's flags as well as its steps.
+    s.actions.list[1].steps.push(("file.close".into(), json!({})));
+    s.actions.list[1].disabled.insert(1);
+    s.actions.list[1].dialogs.insert(0);
+    s.actions.list[1].set = Some("Captured".into());
+    s.actions.list.push(act(
+        "BatchLoop",
+        json!([["file.automate.batch", {"action": "BatchLoop", "input": [inputs[0]], "output": format!("{dir}/loop"), "format": "png"}]]),
+    ));
+    for (name, source, expected_names, error) in [
+        ("batch-name", json!({"action": "Rotate"}), &["Rotate"][..], None),
+        ("batch-index", json!({"action": 1}), &["Rotate"][..], None),
+        ("batch-transitive", json!({"action": "Outer"}), &["Rotate", "Outer"][..], None),
+        ("batch-explicit", json!({"steps": [["actions.play", {"action": 1, "note": "keep"}, "tail"]], "action": 3}), &["Rotate"][..], None),
+        ("batch-legacy", json!({"action": [{"id": "actions.play", "params": {"action": 1}, "tag": "keep"}]}), &["Rotate"][..], None),
+        (
+            "batch-objects",
+            json!({"steps": [
+            {"command": "actions.play", "id": "ignored", "params": {"action": 1}, "tag": "keep"},
+            "image.imageRotation.180", ["image.imageRotation.180"], {"id": "image.imageRotation.180"},
+            {"command": "image.imageRotation.180", "id": "actions.play", "params": {"action": 3}}
+        ], "action": 3}),
+            &["Rotate"][..],
+            None,
+        ),
+        ("batch-empty", json!({"steps": [], "action": 1}), &[][..], None),
+        ("batch-null", json!({"steps": null, "action": 1}), &[][..], Some("steps")),
+        ("batch-invalid", json!({"steps": {}, "action": 1}), &[][..], Some("steps")),
+        ("batch-invalid-command", json!({"steps": [{"command": null, "id": "actions.play", "params": {"action": 1}}]}), &[][..], Some("command")),
+        ("batch-missing", json!({"action": "Missing"}), &[][..], Some("no action named")),
+        ("batch-cycle", json!({"action": "BatchLoop"}), &["BatchLoop"][..], Some("recursive action call")),
+    ] {
+        let inner = format!("{dir}/inner-{name}");
+        let mut params = json!({"input": [inputs[0]], "output": inner, "format": "png", "note": {"action": 3}});
+        params.as_object_mut().unwrap().extend(source.as_object().unwrap().clone());
+        let mut expected = params.clone();
+        match name {
+            "batch-index" => expected["action"] = json!("Rotate"),
+            "batch-explicit" => expected["steps"][0][1]["action"] = json!("Rotate"),
+            "batch-legacy" => expected["action"][0]["params"]["action"] = json!("Rotate"),
+            "batch-objects" => expected["steps"][0]["params"]["action"] = json!("Rotate"),
+            _ => {}
+        }
+        let dp = make(&mut s, name, json!([["file.automate.batch", params]]));
+        let saved: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
+        assert_eq!(saved["action"]["steps"][0][1], expected, "{name}: keep the effective source's shape and unrelated fields");
+        let names: Vec<&str> =
+            saved["calledActions"].as_array().map(|actions| actions.iter().map(|a| a["name"].as_str().unwrap()).collect()).unwrap_or_default();
+        assert_eq!(names, expected_names, "{name}: capture only effective dependencies in original list order");
+        if expected_names.is_empty() {
+            assert!(saved.get("calledActions").is_none(), "{name}: preserve deferred missing-target and legacy policy");
+        }
+        if let Some(captured) = saved["calledActions"].as_array().and_then(|actions| actions.iter().find(|a| a["name"] == "Rotate")) {
+            assert_eq!(*captured, json!(s.actions.list[1]), "{name}: preserve disabled/dialog/set flags");
+        }
+        for different in [false, true] {
+            let mut replay = Session::new();
+            if different {
+                replay.actions.list = vec![Action::new("Unrelated", Vec::new()), Action::new("Rotate", Vec::new())];
+            }
+            let r = replay
+                .execute("file.automate.runDroplet", json!({"droplet": dp, "input": [inputs[0]], "output": format!("{dir}/outer-{name}-{different}")}))
+                .unwrap();
+            if let Some(error) = error {
+                assert_eq!(r["files"], json!([]), "{name}: {r}");
+                assert!(r["errors"][0]["error"].as_str().unwrap().contains(error), "{name}: {r}");
+            } else {
+                assert_eq!(r["errors"], json!([]), "{name}/{different}: {r}");
+                let out = photocraft_codecs::decode(&std::fs::read(format!("{inner}/img0.png")).unwrap()).unwrap();
+                assert_eq!(out.dimensions(), if name == "batch-empty" { (40, 20) } else { (20, 40) }, "{name}/{different}");
+            }
+        }
+    }
 
     // Droplets written before `calledActions` still run.
     let old = format!("{dir}/old.pcdroplet");

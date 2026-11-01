@@ -1257,6 +1257,7 @@ fn load_files_into_stack_and_image_processor_and_batch() {
     assert!(s.execute("file.automate.batch", json!({"steps": [["no.such.command", {}]], "input": input, "output": out})).is_err());
 }
 
+/// Named Batch and Play cycles hit production guards before the test-only authorization ceiling.
 #[test]
 fn named_batch_cycles_stop_before_the_test_ceiling() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1296,6 +1297,7 @@ fn named_batch_cycles_stop_before_the_test_ceiling() {
     }
 }
 
+/// Rejected and successful named batches preserve the caller's playback and recording state.
 #[test]
 fn named_batch_limits_nesting_and_keeps_the_callers_state() {
     use crate::actions_cmds::Action;
@@ -1331,6 +1333,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
     assert_eq!(s.actions.list[1].steps, vec![("file.automate.batch".into(), params)]);
 }
 
+/// Inputs and children share playback work, while a new top-level named batch starts fresh.
 #[test]
 fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     use crate::actions_cmds::{Action, MAX_PLAYBACK_STEPS};
@@ -1367,6 +1370,7 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
     assert_eq!(s.actions.playback_stack, ["Parent"]);
 }
 
+/// Nested named batches honor the caller's authorization and preserve its action state.
 #[test]
 fn named_batch_allows_nested_work_and_preserves_authorization() {
     use crate::actions_cmds::Action;
@@ -1413,6 +1417,7 @@ fn nested_batch_errors_stop_actions_and_scripts_without_changing_top_level_resul
     let result = s.execute("file.automate.batch", batch.clone()).unwrap();
     assert_eq!(result["files"], json!([]));
     assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+    assert_eq!(result["errors"][0].as_object().unwrap().len(), 2, "ordinary errors still contain only file/error");
     let steps = vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))];
     s.actions.list.push(Action::new("Caller", steps.clone()));
     let result = s.execute("actions.play", json!({"action": "Caller"})).unwrap();
@@ -1462,6 +1467,46 @@ fn nested_batch_errors_stop_actions_and_scripts_without_changing_top_level_resul
     assert!(result.get("failed").is_none(), "{result}");
     assert_eq!(result["ran"], 2);
     assert_eq!(s.documents().len(), 1, "a successful Batch reaches file.new");
+}
+
+/// An outer Batch retains saved child outputs and failed inputs for either naming route.
+#[test]
+fn nested_batches_retain_partial_results() {
+    let dir = tmp("nested-batch-results");
+    let input = png(&dir, "red.png", 8, 8, "#ff0000");
+    let corrupt = join(&dir, "corrupt.png");
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    let mut s = Session::new();
+    for naming in [None, Some("{serial}")] {
+        let output = join(&dir, if naming.is_some() { "named" } else { "default" });
+        let outer = join(&output, "outer");
+        let later = join(&output, "later.png");
+        let mut params = json!({
+            "input": [input], "output": outer, "format": "png",
+            "steps": [
+                ["file.automate.batch", {"input": [input, corrupt], "output": output, "steps": [], "format": "png"}],
+                ["file.export.saveForWebLegacy", {"path": later, "format": "png"}]
+            ]
+        });
+        if let Some(naming) = naming {
+            params["naming"] = json!(naming);
+        }
+        let result = s.execute("file.automate.batch", params).unwrap();
+        assert_eq!(result["files"], json!([]), "{result}");
+        assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(result["errors"][0]["file"], input);
+        let error = result["errors"][0]["error"].as_str().unwrap();
+        assert!(error.contains("1 file(s) failed") && error.contains("1 saved"), "{error}");
+        let child = &result["errors"][0]["result"];
+        let saved = join(&output, "red.png");
+        assert_eq!(child["files"], json!([saved]), "{result}");
+        assert_eq!(child["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(child["errors"][0]["file"], corrupt);
+        assert!(std::path::Path::new(&saved).exists(), "the successful child output remains saved");
+        assert!(!std::path::Path::new(&outer).exists(), "the failed outer input is not written");
+        assert!(!std::path::Path::new(&later).exists(), "later steps do not execute");
+        assert!(s.documents().is_empty());
+    }
 }
 
 #[test]
