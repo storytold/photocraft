@@ -149,12 +149,12 @@ fn open_filters_cover_uppercase_and_mixed_case_extensions() {
     assert!(svg_filter.iter().any(|glob| matches(glob, "svg")) && svg_filter.iter().any(|glob| matches(glob, "svgz")));
 }
 
-/// #6337: after All Formats, every format File › Open reads has its own filter, and no filter
-/// offers an extension All Formats doesn't.
+/// #6337: after All Formats, every format File › Open reads has its own filter.
+/// All Formats itself is `*` so native pickers do not hang (#5126).
 #[test]
 fn every_open_format_has_its_own_filter() {
     let filters = open_filters();
-    assert_eq!(filters[0], ("All Formats", open_filter_extensions(OPEN_EXTS)), "All Formats comes first");
+    assert_eq!(filters[0], ("All Formats", vec!["*".into()]), "All Formats comes first");
     let mut named: Vec<&str> = OPEN_FILTERS.iter().flat_map(|(_, exts)| exts.iter().copied()).collect();
     let total = named.len();
     named.sort_unstable();
@@ -162,7 +162,7 @@ fn every_open_format_has_its_own_filter() {
     assert_eq!(named.len(), total, "an extension is listed under two filters");
     let mut all = OPEN_EXTS.to_vec();
     all.sort_unstable();
-    assert_eq!(named, all, "the named filters cover All Formats exactly");
+    assert_eq!(named, all, "the named filters cover every openable extension exactly");
     let names: Vec<&str> = filters.iter().map(|(name, _)| *name).collect();
     for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
         assert!(names.contains(&name), "{name}");
@@ -175,6 +175,9 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
     assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
     assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
     assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts), Some(vec!["svg".to_string(), "svgz".to_string()]));
+    let (name, exts) = open_filters().into_iter().next().expect("All Formats first");
+    assert_eq!(name, "All Formats");
+    assert_eq!(exts, ["*"]);
     assert_eq!(
         open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts),
         Some(vec!["psd".to_string(), "psb".to_string(), "psdt".to_string()])
