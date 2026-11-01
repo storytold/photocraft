@@ -1,15 +1,17 @@
 //! Filter › Liquify…: a full-window dialog like Photoshop's (tool strip on the left, properties on
 //! the right, preview in the middle, OK / Cancel).
 //!
-//! The preview is a CPU proxy: the layer box-downsampled once to at most 1600 px
-//! (`ProxyImage`), re-rendered through the displacement field only where a dab changed it
-//! (bilinear field and source), and uploaded with a partial texture update. A dab plus its
-//! update costs well under a millisecond on a 24 MP layer (see `bench_liquify`). Strokes are
-//! recorded exactly as the engine replays them (`stroke_begin` + `stroke_segment` per point), so
-//! OK runs `filter.liquify` with the same strokes and gets the same field.
+//! The preview is a CPU proxy: the layer copied once at document resolution (`ProxyImage`,
+//! box-downsampled by a whole number only past 24 MP or the GPU's texture side), re-rendered
+//! through the displacement field only where a dab changed it (bilinear field and source), and
+//! uploaded with a partial texture update, so it stays sharp at every zoom like the reference's.
+//! A downsampled proxy that the zoom would magnify gets a document-resolution viewport instead.
+//! A dab plus its update costs a few milliseconds on a 24 MP layer (see `bench_liquify`). Strokes
+//! are recorded exactly as the engine replays them (`stroke_begin` + `stroke_segment` per point,
+//! `stroke_end`), so OK runs `filter.liquify` with the same strokes and gets the same field.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, PendingDab, ProxyImage, auto_cell};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -20,8 +22,11 @@ use crate::canvas::ToolEvent;
 use crate::theme::Tokens;
 use crate::widgets;
 
-/// Longest side of the preview proxy (px).
-const PROXY_SIDE: usize = 1600;
+/// Longest side of the preview proxy (px), when the GPU's texture limit isn't known.
+const PROXY_SIDE: usize = 2048;
+/// Most pixels the preview proxy holds at document resolution (RGBA8 twice over: the copy and
+/// the rendered preview, 96 MB each at this size); a larger layer is downsampled.
+const PROXY_MAX_PIXELS: usize = 24_000_000;
 const MAX_VIEW_PREVIEW_PIXELS: usize = 8 * 1024 * 1024;
 const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
@@ -231,6 +236,9 @@ pub struct LiquifyDialog {
     redo: Vec<LiquifyStroke>,
     /// The stroke being drawn and its last point.
     cur: Option<(LiquifyStroke, [f64; 3])>,
+    /// The stroke's travel since its last dab, shown in the field as a dab of its own
+    /// (`LiquifyField::show_pending`): taken back before the stroke goes on, final when it ends.
+    pending: Option<PendingDab>,
     /// The lasso polygon being drawn (document px) and whether it thaws (Alt held at pointer-down).
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
@@ -263,6 +271,16 @@ pub struct LiquifyDialog {
     pub dab_ms: f64,
     /// CPU time spent refreshing the zoomed-in source-resolution preview.
     pub preview_ms: f64,
+    /// When the dialog last drew a frame (`now_ms`), for [`Self::frame_ms`].
+    last_show: f64,
+    /// Time between the last two frames while a stroke was being drawn (ms), and the longest
+    /// such gap of the stroke: the feedback lag a brush move sees, whatever caused it. Shown in
+    /// the footer so a slow machine can say where its time goes.
+    pub frame_ms: f64,
+    pub frame_max_ms: f64,
+    /// Pointer events the last frame fed to the stroke (0 or 1: the preview samples the pointer
+    /// once a frame).
+    pub frame_events: usize,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
 }
@@ -300,6 +318,9 @@ impl LiquifyDialog {
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
+            "frameMs": self.frame_ms,
+            "frameMaxMs": self.frame_max_ms,
+            "frameEvents": self.frame_events,
             "fullResolutionPreview": self.view_bounds.is_some(),
             "previewMs": self.preview_ms,
             "smartFilter": self.smart_filter,
@@ -343,14 +364,26 @@ impl LiquifyDialog {
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
         self.cur = Some((s, p));
         self.last_dab = now;
+        self.frame_max_ms = 0.0;
     }
 
     fn extend(&mut self, p: [f64; 3], now: f64) {
         let Some((mut s, last)) = self.cur.take() else { return };
         let t0 = crate::gpu_canvas::now_ms();
+        let mask = matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw);
+        // The pending travel shown so far comes off before the stroke goes on from its real dabs.
+        if let Some(pending) = self.pending.take() {
+            self.mark(pending.dirty, mask);
+            self.field.hide_pending(pending);
+        }
         let d = self.field.stroke_segment(&s, last, p);
         s.points.push(p.to_vec());
-        self.mark(d, matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw));
+        self.mark(d, mask);
+        // Then the travel since the last dab goes on as a dab, so the picture follows the pointer.
+        if let Some(pending) = self.field.show_pending(&s) {
+            self.mark(pending.dirty, mask);
+            self.pending = Some(pending);
+        }
         self.render_dirty();
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
         self.cur = Some((s, p));
@@ -359,6 +392,15 @@ impl LiquifyDialog {
 
     fn end(&mut self) {
         if let Some((s, _)) = self.cur.take() {
+            // The pending travel becomes the stroke's last dab, as a replay ends it too.
+            let mask = matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw);
+            if let Some(pending) = self.pending.take() {
+                self.mark(pending.dirty, mask);
+                self.field.hide_pending(pending);
+            }
+            let d = self.field.stroke_end(&s);
+            self.mark(d, mask);
+            self.render_dirty();
             self.strokes.push(s);
         }
     }
@@ -397,6 +439,7 @@ impl LiquifyDialog {
     }
 
     fn rebuild(&mut self) {
+        self.pending = None;
         self.field = LiquifyField::from_strokes(self.canvas, self.cell, &self.strokes);
         self.dirty = Some([0, 0, self.proxy.w, self.proxy.h]);
         // Undo rebuilds the whole field. The zoomed viewport is a separate buffer; leaving it
@@ -429,6 +472,7 @@ impl LiquifyDialog {
 
     fn restore_all(&mut self) {
         self.cur = None;
+        self.pending = None;
         self.lasso = None;
         self.strokes.clear();
         self.redo.clear();
@@ -448,10 +492,20 @@ impl LiquifyDialog {
         }
     }
 
-    /// Builds or updates the visible source-resolution viewport. At ordinary zoom the whole-layer
-    /// proxy remains cheaper; above 100%, a full-resolution crop is enough to fill the preview.
+    /// Whether the zoom magnifies a downsampled proxy (`ppp` physical pixels per point): the
+    /// visible part is then drawn at document resolution instead ([`Self::update_view_preview`]).
+    /// A proxy at document resolution is simply scaled by the GPU, sharp at any zoom.
+    fn uses_view(&self, ppp: f32) -> bool {
+        self.proxy.scale > 1.0 && self.zoom * ppp * self.proxy.scale as f32 > 1.0
+    }
+
+    /// Builds or updates the visible document-resolution viewport while the zoom magnifies a
+    /// downsampled proxy ([`Self::uses_view`]); otherwise the whole-layer proxy is cheaper.
     fn update_view_preview(&mut self, ctx: &egui::Context, area: ERect) {
-        if self.zoom <= 1.0 {
+        if !self.uses_view(ctx.pixels_per_point()) {
+            self.view_bounds = None;
+            self.view_tex = None;
+            self.view_dirty = None;
             return;
         }
         let half_w = f64::from(area.width() / self.zoom) * 0.5;
@@ -471,7 +525,10 @@ impl LiquifyDialog {
             return;
         }
         let (w, h) = (bounds.width() as usize, bounds.height() as usize);
-        let Some(len) = w.checked_mul(h).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS) else {
+        // Too many pixels, or a side past the GPU's texture limit (a wide, shallow document at a
+        // low zoom): the whole-layer proxy, sized to the limit, stands in.
+        let fits = w.checked_mul(h).filter(|n| *n <= MAX_VIEW_PREVIEW_PIXELS && w.max(h) <= ctx.input(|i| i.max_texture_side));
+        let Some(len) = fits else {
             self.view_bounds = None;
             self.view_tex = None;
             self.view_dirty = None;
@@ -610,7 +667,7 @@ fn open_on(
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let proxy = ProxyImage::new_within(&surf, canvas, proxy_side(ctx), PROXY_MAX_PIXELS);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
     let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
     let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
@@ -626,6 +683,7 @@ fn open_on(
         strokes,
         redo: Vec::new(),
         cur: None,
+        pending: None,
         lasso: None,
         proxy,
         source: surf,
@@ -650,6 +708,10 @@ fn open_on(
         last_dab: 0.0,
         dab_ms: 0.0,
         preview_ms: 0.0,
+        last_show: 0.0,
+        frame_ms: 0.0,
+        frame_max_ms: 0.0,
+        frame_events: 0,
         smart_filter,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
@@ -663,6 +725,11 @@ fn open_on(
     d.upload(ctx);
     app.distort.liquify = Some(d);
     Ok(())
+}
+
+/// The longest side a preview texture may have: the GPU's limit, within reason.
+fn proxy_side(ctx: &egui::Context) -> usize {
+    ctx.input(|i| i.max_texture_side).clamp(PROXY_SIDE, 16384)
 }
 
 /// Keeps the brush settings for the next time Liquify opens, also after a restart.
@@ -917,7 +984,7 @@ fn load_backdrop(app: &PhotocraftApp, ctx: &egui::Context, of: Option<u64>, canv
     let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
     s.write_region(canvas, &flat);
-    Some(ctx.load_texture("liquify-backdrop", crate::distort_ui::surface_image(&s, canvas, PROXY_SIDE), egui::TextureOptions::LINEAR))
+    Some(ctx.load_texture("liquify-backdrop", crate::distort_ui::surface_image(&s, canvas, proxy_side(ctx)), egui::TextureOptions::LINEAR))
 }
 
 /// The document [`load_backdrop`] renders for Use `of`.
@@ -1056,6 +1123,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let animated_zoom = app.session.prefs().general.animated_zoom;
     egui::Area::new(egui::Id::unique("liquify-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.liquify.as_mut() else { return };
+        // The gap since the last frame, while a stroke is on: what a brush move waits for.
+        let now = crate::gpu_canvas::now_ms();
+        if d.cur.is_some() && d.last_show > 0.0 {
+            d.frame_ms = now - d.last_show;
+            d.frame_max_ms = d.frame_max_ms.max(d.frame_ms);
+        }
+        d.last_show = now;
         d.upload(ctx);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
         let painter = ui.painter().clone();
@@ -1143,11 +1217,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::hairline(ui);
             ui.label(
                 egui::RichText::new(format!(
-                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms",
+                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms · frame {:.0} ms (max {:.0}) · {} event(s)",
                     d.strokes.len(),
                     d.cell,
                     d.dab_ms,
-                    d.preview_ms
+                    d.preview_ms,
+                    d.frame_ms,
+                    d.frame_max_ms,
+                    d.frame_events
                 ))
                 .color(t.text_faint)
                 .size(11.0),
@@ -1185,14 +1262,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             to_screen(d, area, [f64::from(d.canvas.x1), f64::from(d.canvas.y1)]),
         );
         let clip = painter.with_clip_rect(area);
-        widgets::checker(&clip, img.intersect(area), 8.0);
+        // One textured rect: the per-cell checker was thousands of shapes a frame on a big preview.
+        widgets::checker_rounded(&clip, img.intersect(area), 8.0, 0.0);
         let uv = ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         let backdrop = d.backdrop.as_ref().filter(|_| d.opts.show_backdrop).map(|(_, t)| t.id());
         let Layering { image: image_tint, behind, front } = backdrop_layering(backdrop, d.opts.backdrop_mode, d.opts.backdrop_opacity / 100.0);
         if let Some((b, c)) = behind {
             clip.image(b, img, uv, c);
         }
-        if d.zoom > 1.0
+        if d.uses_view(ctx.pixels_per_point())
             && let (Some(bounds), Some(tex)) = (d.view_bounds, &d.view_tex)
         {
             let detail = ERect::from_min_max(
@@ -1321,6 +1399,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             events.push(ToolEvent::Up { x: q[0], y: q[1] });
         }
     });
+    if let Some(d) = app.distort.liquify.as_mut() {
+        d.frame_events = events.len();
+    }
     for ev in events {
         pointer(app, ev, mods);
     }

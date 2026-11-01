@@ -1759,6 +1759,12 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+/// Whether a full-window workspace hides the whole canvas, so there is nothing to draw under it
+/// ([`crate::distort_ui::modal_workspace`]: each of them is a full-screen area over the window).
+pub(crate) fn canvas_covered(app: &PhotocraftApp) -> bool {
+    crate::distort_ui::modal_workspace(app).is_some()
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
@@ -1863,8 +1869,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
+    // A full-window workspace (Liquify, Select and Mask, Content-Aware Fill, Filter Gallery,
+    // Adaptive Wide Angle) covers the canvas completely: its document is neither refreshed on
+    // the GPU nor drawn while one is open, so the workspace's frames don't pay for a hidden image.
+    let painted = if crop_camera {
+        None
+    } else if canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT {
+        // Only the main window is covered: a floating document window keeps its image.
+        Some((false, painter.add(egui::Shape::Noop), img_rect))
+    } else {
+        Some(paint_canvas(app, ui, &display_view, xf, &paint_input))
+    };
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
@@ -2101,6 +2117,8 @@ mod tests;
 #[cfg(test)]
 mod transform_controls_tests;
 
+#[cfg(test)]
+mod covered_tests;
 #[cfg(test)]
 mod layer_edges_tests;
 

@@ -354,17 +354,21 @@ fn full_resolution_preview_matches_the_unit_scale_proxy_and_partial_updates() {
         let mut want = vec![[0; 4]; proxy.w * proxy.h];
         proxy.render(&field, [0, 0, proxy.w, proxy.h], &mut want);
 
+        // The proxy holds 8-bit texels and interpolates those, the viewport interpolates the
+        // source: a level apart at most.
+        let within_a_level =
+            |got: &[[u8; 4]], want: &[[u8; 4]]| got.len() == want.len() && got.iter().zip(want).all(|(g, w)| g.iter().zip(w).all(|(a, b)| a.abs_diff(*b) <= 1));
         let mut got = vec![[0; 4]; proxy.w * proxy.h];
         let mut scratch = Vec::new();
         assert!(ProxyImage::render_full_resolution(&source, &field, canvas, canvas, &mut got, &mut scratch));
-        assert_eq!(got, want, "full-resolution render at {sample_type:?}");
+        assert!(within_a_level(&got, &want), "full-resolution render at {sample_type:?}");
 
         let mut more = LiquifyStroke::new(LiquifyTool::Bloat, 16.0);
         more.points = vec![vec![43.0, 32.0, 1.0]];
         let dirty = field.apply_stroke(&more);
         proxy.render(&field, proxy.proxy_rect(dirty), &mut want);
         assert!(ProxyImage::render_full_resolution(&source, &field, canvas, dirty, &mut got, &mut scratch));
-        assert_eq!(got, want, "partial update at {sample_type:?}");
+        assert!(within_a_level(&got, &want), "partial update at {sample_type:?}");
     }
 }
 
@@ -529,4 +533,65 @@ fn proxy_matches_the_full_render_roughly() {
         }
     }
     assert!(bad < 96 * 64 / 50, "{bad}");
+}
+
+/// The preview shows a stroke's travel since its last dab as a provisional dab, takes it back
+/// before the stroke goes on, and the stroke's end makes the travel final: what a drag shorter
+/// than a dab spacing shows is what it leaves, and a replay of its points agrees.
+#[test]
+fn the_pending_travel_shows_at_once_comes_off_and_ends_the_stroke() {
+    use LiquifyTool::*;
+    for tool in [ForwardWarp, TwirlCw, Bloat, Freeze] {
+        let s = LiquifyStroke::new(tool, 40.0); // spacing 1 px
+        let mut f = LiquifyField::new(bounds(), 2.0);
+        f.stroke_begin(&s, [40.0, 30.0, 1.0]);
+        // Half a spacing: no dab of its own yet.
+        f.stroke_segment(&s, [40.0, 30.0, 1.0], [40.5, 30.0, 1.0]);
+        let before = f.clone();
+        let p = f.show_pending(&s).unwrap_or_else(|| panic!("{tool:?}: travel is pending"));
+        assert!(!p.dirty.is_empty());
+        assert!(f != before, "{tool:?}: the pending travel shows");
+        f.hide_pending(p);
+        assert_eq!(f, before, "{tool:?}: and comes off again");
+        f.stroke_segment(&s, [40.5, 30.0, 1.0], [40.8, 30.0, 1.0]);
+        let shown = {
+            let mut g = f.clone();
+            g.show_pending(&s);
+            g
+        };
+        f.stroke_end(&s);
+        assert_eq!(f, shown, "{tool:?}: the end leaves what the preview showed");
+        assert!(f.show_pending(&s).is_none(), "nothing pending after the end");
+        let mut replay = s.clone();
+        replay.points = vec![vec![40.0, 30.0, 1.0], vec![40.5, 30.0, 1.0], vec![40.8, 30.0, 1.0]];
+        assert_eq!(LiquifyField::from_strokes(bounds(), 2.0, &[replay]), f, "{tool:?}: a replay ends the same way");
+    }
+    // A stroke that ends exactly on a dab has nothing pending; a lasso never does.
+    let s = LiquifyStroke::new(ForwardWarp, 40.0);
+    let mut f = LiquifyField::new(bounds(), 2.0);
+    f.stroke_begin(&s, [40.0, 30.0, 1.0]);
+    f.stroke_segment(&s, [40.0, 30.0, 1.0], [41.0, 30.0, 1.0]);
+    assert!(f.show_pending(&s).is_none());
+    let mut f = LiquifyField::new(bounds(), 2.0);
+    assert!(f.show_pending(&LiquifyStroke::new(LassoMask, 40.0)).is_none());
+}
+
+/// The proxy keeps document resolution while it fits the pixel budget and the side limit, and
+/// otherwise takes the smallest whole scale that fits both.
+#[test]
+fn the_proxy_downsamples_only_past_its_budget() {
+    let src = sample(SampleType::U8);
+    let full = ProxyImage::new_within(&src, bounds(), 4096, 96 * 64);
+    assert_eq!((full.w, full.h, full.scale), (96, 64, 1.0));
+    let budget = ProxyImage::new_within(&src, bounds(), 4096, 1000);
+    assert_eq!((budget.w, budget.h, budget.scale), (32, 22, 3.0), "scale 2 would be 48 × 32 = 1536 pixels");
+    let side = ProxyImage::new_within(&src, bounds(), 50, usize::MAX);
+    assert_eq!((side.w, side.h, side.scale), (48, 32, 2.0));
+    // The full-resolution copy reads the source back exactly (opaque 8-bit).
+    let mut out = vec![[0u8; 4]; full.w * full.h];
+    full.render(&LiquifyField::new(bounds(), 2.0), [0, 0, full.w, full.h], &mut out);
+    let mut px = [0.0f32; 4];
+    src.read_pixel(10, 7, &mut px);
+    let o = out[7 * 96 + 10];
+    assert!((f32::from(o[1]) / 255.0 - px[1] * px[3]).abs() < 1.5 / 255.0, "{o:?} vs {px:?}");
 }

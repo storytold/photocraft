@@ -94,6 +94,11 @@ fn zoomed_liquify_preview_uses_only_the_visible_full_resolution_crop() {
     let mut app = app_with_layer();
     open(&mut app, &ctx).unwrap();
     let d = app.distort.liquify.as_mut().unwrap();
+    // A proxy the preview had to downsample (the layer is small, so make one): zooming in
+    // magnifies it, and the visible part is drawn at document resolution instead.
+    d.proxy = ProxyImage::new(&d.source, d.canvas, 50);
+    assert!(d.proxy.scale > 1.0);
+    d.out = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
     d.zoom = 2.0;
     d.center = [60.0, 40.0];
     d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
@@ -1016,4 +1021,63 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let st = app.session.active().unwrap();
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
+}
+
+/// The footer's frame diagnostics: the longest frame gap resets with each stroke, and the
+/// control channel reports them with the dab and preview times.
+#[test]
+fn frame_diagnostics_reset_per_stroke_and_are_reported() {
+    let mut app = app_with_layer();
+    crate::liquify_ui::open(&mut app, &egui::Context::default()).unwrap();
+    let d = app.distort.liquify.as_mut().unwrap();
+    d.frame_max_ms = 9.0;
+    d.frame_ms = 4.0;
+    pointer(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert_eq!(d.frame_max_ms, 0.0, "a new stroke starts its own maximum");
+    d.frame_events = 3;
+    let v = d.describe();
+    assert_eq!(v["dabMs"].as_f64(), Some(d.dab_ms), "{v}");
+    assert_eq!(v["frameMs"].as_f64(), Some(d.frame_ms), "{v}");
+    assert_eq!(v["frameMaxMs"].as_f64(), Some(d.frame_max_ms), "{v}");
+    assert_eq!(v["frameEvents"].as_u64(), Some(d.frame_events as u64), "{v}");
+}
+
+/// A drag shorter than a dab spacing moves the picture at once, and the release keeps it.
+#[test]
+fn a_short_drag_shows_at_once_and_stays_on_release() {
+    let mut app = app_with_layer();
+    crate::liquify_ui::open(&mut app, &egui::Context::default()).unwrap();
+    app.distort.liquify.as_mut().unwrap().opts.size = 40.0; // dab spacing 1 px
+    let moved = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().field.max_displacement();
+    pointer(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Move { x: 40.4, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.pending.is_some() && moved(&app) > 0.0, "the travel shows before its dab lands");
+    let shown = d.field.clone();
+    pointer(&mut app, ToolEvent::Up { x: 40.4, y: 30.0 }, egui::Modifiers::NONE);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.pending.is_none() && d.cur.is_none());
+    assert_eq!(d.field, shown, "the release keeps what was shown");
+    assert_eq!(d.strokes.len(), 1);
+    assert_eq!(LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes), d.field, "the recorded stroke replays to the same field");
+}
+
+/// A layer the preview can hold is copied at document resolution and scaled by the GPU at any
+/// zoom; only a downsampled proxy that the zoom would magnify gets the document-resolution viewport.
+#[test]
+fn the_preview_is_at_document_resolution_unless_the_layer_is_too_large() {
+    let mut app = app_with_layer();
+    crate::liquify_ui::open(&mut app, &egui::Context::default()).unwrap();
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert_eq!(d.proxy.scale, 1.0);
+    assert_eq!((d.proxy.w, d.proxy.h), (d.canvas.width() as usize, d.canvas.height() as usize));
+    d.zoom = 4.0;
+    assert!(!d.uses_view(2.0), "a document-resolution proxy needs no viewport");
+    d.proxy.scale = 2.0;
+    d.zoom = 0.4;
+    assert!(!d.uses_view(1.0), "minified: the proxy is enough");
+    assert!(d.uses_view(2.0), "on a 2× display the same zoom magnifies the proxy");
+    d.zoom = 1.5;
+    assert!(d.uses_view(1.0));
 }
