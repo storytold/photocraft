@@ -18,20 +18,22 @@ enum G {
     /// value keeps the step.
     Enum(&'static str, &'static str, &'static [(&'static str, &'static str)], &'static str),
     Bool(&'static str, &'static str, bool),
-    /// A colour object ↔ `#rrggbb`; left out, it is the effect's own default colour.
-    Color(&'static str, &'static str),
+    /// A colour object ↔ `#rrggbb` and Photoshop's default, which a step recorded without the
+    /// key loads with. A PhotoCraft step without it saves the effect's own default colour, the
+    /// one it plays with.
+    Color(&'static str, &'static str, &'static str),
 }
 
 impl G {
     fn key(&self) -> &'static str {
         match self {
-            G::Int(k, ..) | G::Enum(k, ..) | G::Bool(k, ..) | G::Color(k, _) => k,
+            G::Int(k, ..) | G::Enum(k, ..) | G::Bool(k, ..) | G::Color(k, ..) => k,
         }
     }
 
     fn param(&self) -> &'static str {
         match self {
-            G::Int(_, p, ..) | G::Enum(_, p, ..) | G::Bool(_, p, _) | G::Color(_, p) => p,
+            G::Int(_, p, ..) | G::Enum(_, p, ..) | G::Bool(_, p, _) | G::Color(_, p, _) => p,
         }
     }
 }
@@ -225,7 +227,11 @@ const GALLERY: &[(&str, &str, &[G])] = &[
         &[G::Int("TlSz", "tileSize", 2, 100, 12), G::Int("GrtW", "groutWidth", 1, 15, 3), G::Int("LghG", "lightenGrout", 0, 10, 9)],
     ),
     // Neon Glow
-    ("NGlw", "filter.gallery.neonGlow", &[G::Int("Sz  ", "glowSize", -24, 24, 5), G::Int("Brgh", "glowBrightness", 0, 50, 15), G::Color("Clr ", "glowColor")]),
+    (
+        "NGlw",
+        "filter.gallery.neonGlow",
+        &[G::Int("Sz  ", "glowSize", -24, 24, 5), G::Int("Brgh", "glowBrightness", 0, 50, 15), G::Color("Clr ", "glowColor", "#0000ff")],
+    ),
     // Note Paper
     (
         "NtPr",
@@ -542,9 +548,9 @@ fn effect_step(d: &Descriptor) -> Option<Mapped> {
             G::Int(key, _, min, max, default) => Value::from(get_num(d, key).map_or(*default, |n| n.round().clamp(f64::from(*min), f64::from(*max)) as i32)),
             G::Enum(key, _, table, default) => Value::from(lookup(table, &get_enum(d, key).unwrap_or_else(|| (*default).to_string()))?),
             G::Bool(key, _, default) => Value::from(get_bool(d, key).unwrap_or(*default)),
-            G::Color(key, _) => match get_obj(d, key) {
+            G::Color(key, _, default) => match get_obj(d, key) {
                 Some(c) => Value::from(color_hex(c)?),
-                None => continue,
+                None => Value::from(*default),
             },
         };
         p.insert(k.param().into(), v);

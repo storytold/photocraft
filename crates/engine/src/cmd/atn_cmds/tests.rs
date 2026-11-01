@@ -3373,3 +3373,20 @@ fn gallery_effect_enumerations_save_with_photoshops_type_ids() {
     assert_eq!(enum_type("filter.gallery.paintDaubs", json!({}), "BrsT"), "BrsT");
     assert_eq!(enum_type("filter.gallery.grain", json!({}), "Grnt"), "Grnt");
 }
+
+/// Neon Glow recorded without `Clr ` glows in Photoshop's default colour, blue (0, 0, 255) per
+/// the event reference, not PhotoCraft's own default: the step loads with that colour and saves
+/// it back, loading again as the same step (#10592).
+#[test]
+fn gallery_neon_glow_without_a_colour_loads_photoshops_blue() {
+    let (id, p) = gallery_params(gallery_step("GEfc", "NGlw", desc("null")));
+    assert_eq!(id, "filter.gallery.neonGlow");
+    assert_eq!(p, json!({"glowSize": 5, "glowBrightness": 15, "glowColor": "#0000ff"}));
+    let d = export_item(&id, &p, "S").expect("refused").descriptor.unwrap();
+    let c = get_obj(&d, "Clr ").expect("no colour");
+    assert_eq!(trimmed(&c.class_id), "RGBC");
+    assert_eq!([get_num(c, "Rd  "), get_num(c, "Grn "), get_num(c, "Bl  ")], [Some(0.0), Some(0.0), Some(255.0)]);
+    let event = AtnEvent::Code(*b"GEfc");
+    let back = (events::event_for(&event).unwrap().from)(&d);
+    assert_eq!(gallery_params(back), (id, p));
+}
