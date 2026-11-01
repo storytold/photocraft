@@ -240,7 +240,15 @@ fn selected_slice_format_limits_are_checked_before_any_write() {
         params["numbers"] = json!([2]);
         sizes.clear();
         save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
-            sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            if format == "webp" && lossless {
+                // image-webp 0.2.4 misreads valid 16,384-pixel VP8L dimensions as zero.
+                assert_eq!(&bytes[12..16], b"VP8L");
+                assert_eq!(bytes[20], 0x2f);
+                let header = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
+                sizes.push(((header & 0x3fff) + 1, ((header >> 14) & 0x3fff) + 1));
+            } else {
+                sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            }
             Ok(())
         })
         .unwrap();
