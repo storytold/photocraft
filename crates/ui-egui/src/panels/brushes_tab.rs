@@ -329,7 +329,7 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
     } else if resp.clicked() {
         acts.push(Action::Select(p.name.clone()));
     }
-    crate::menus::context_menu(&resp, |ui| {
+    crate::menus::context_menu(resp, |ui| {
         if crate::menu_keys::menu_row(ui, tl!("Rename Brush…"), None, false, true).clicked() {
             acts.push(Action::BeginRename(Renaming { group: false, name: p.name.clone(), folder: Vec::new(), text: String::new() }));
             ui.close();

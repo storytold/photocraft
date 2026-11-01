@@ -23,7 +23,7 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>, prefix: &str) {
     ui.add_space(4.0);
     crate::widgets::section_label(ui, tl!("Blending"));
     crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Mode:"));
         let mut mode = fields.get("mode").and_then(Value::as_str).unwrap_or("normal").to_string();
         let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (mode_key(*m), m.label())).collect();
@@ -31,14 +31,14 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>, prefix: &str) {
             fields.insert("mode".into(), json!(mode));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Opacity:"));
         let mut opacity = fields.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
         if crate::widgets::value_field(ui, &mut opacity, 0.0..=100.0, "%", 70.0).accessible_name(tl!("Opacity:")).changed() {
             fields.insert("opacity".into(), json!(opacity.round()));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, "");
         let mut preserve = fields.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
         if crate::widgets::checkbox(ui, &mut preserve, tl!("Preserve Transparency")).changed() {
@@ -116,5 +116,47 @@ mod tests {
         assert!((ltr_field.left() - ltr_cap.right()).abs() <= 16.0, "LTR: flush: {ltr_cap:?} / {ltr_field:?}");
         assert!(rtl_cap.center().x > rtl_field.center().x, "RTL: the caption leads from the right: {rtl_cap:?} / {rtl_field:?}");
         assert!((rtl_cap.left() - rtl_field.right()).abs() <= 16.0, "RTL: flush: {rtl_cap:?} / {rtl_field:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Blending section drawn in `dir`, with the column it draws in.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, (Map<String, Value>, egui::Rect)> {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(440.0, 360.0))
+            .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                move |ui, s: &mut (Map<String, Value>, egui::Rect)| {
+                    let _dir = crate::direction::direction_scope(dir);
+                    s.1 = ui.max_rect();
+                    ui.with_layout(crate::direction::body_layout(), |ui| body(ui, &mut s.0, "t"));
+                },
+                (Map::new(), egui::Rect::ZERO),
+            );
+        h.run_steps(3);
+        h
+    }
+
+    /// The migrated rows mirror with the body: each field's gap from the reading-start edge of
+    /// the column is the same in LTR and RTL (the caption box leads the field in both).
+    #[test]
+    fn the_blending_rows_mirror_to_the_reading_start() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let ltr_col = ltr.state().1;
+        let rtl_col = rtl.state().1;
+        let ltr_combo = ltr.get_by_label("Blend Mode").rect();
+        let rtl_combo = rtl.get_by_label("Blend Mode").rect();
+        let ltr_field = ltr.get_by_label("Opacity:").rect();
+        let rtl_field = rtl.get_by_label("Opacity:").rect();
+        assert!((ltr_combo.left() - ltr_col.left() - (rtl_col.right() - rtl_combo.right())).abs() < 1.0, "the mode row mirrors: {ltr_combo:?} {rtl_combo:?} in {ltr_col:?} {rtl_col:?}");
+        assert!((ltr_field.left() - ltr_col.left() - (rtl_col.right() - rtl_field.right())).abs() < 1.0, "the opacity row mirrors: {ltr_field:?} {rtl_field:?}");
+        assert!(ltr_combo.left() - ltr_col.left() > 100.0, "the caption leads the field in LTR: {ltr_combo:?} {ltr_col:?}");
+        assert!(rtl_col.right() - rtl_combo.right() > 100.0, "the caption leads the field in RTL: {rtl_combo:?} {rtl_col:?}");
     }
 }

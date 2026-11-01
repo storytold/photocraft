@@ -228,16 +228,18 @@ pub fn show_offer(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .default_width(440.0)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
-            ui.label(line);
-            ui.label(tl!("Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import."));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                use crate::widgets::{ButtonRole, DialogButton};
-                let buttons =
-                    [DialogButton::new(ButtonRole::Default, tl!("Import"), 100.0), DialogButton::new(ButtonRole::Alternate, tl!("Don't Import"), 120.0)];
-                if let Some(role) = crate::widgets::dialog_buttons(ui, &buttons) {
-                    answer = Some(role == ButtonRole::Default);
-                }
+            crate::direction::window_body(ui, |ui| {
+                ui.label(line);
+                ui.label(tl!("Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import."));
+                ui.add_space(8.0);
+                ui.with_layout(crate::direction::trailing_min(), |ui| {
+                    use crate::widgets::{ButtonRole, DialogButton};
+                    let buttons =
+                        [DialogButton::new(ButtonRole::Default, tl!("Import"), 100.0), DialogButton::new(ButtonRole::Alternate, tl!("Don't Import"), 120.0)];
+                    if let Some(role) = crate::widgets::dialog_buttons(ui, &buttons) {
+                        answer = Some(role == ButtonRole::Default);
+                    }
+                });
             });
         });
     if let Some(import) = answer {

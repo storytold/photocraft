@@ -198,9 +198,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (mut quality, mut format) = (p.quality, p.format);
     let modal = egui::Modal::new(egui::Id::unique("jpeg-options")).show(ctx, |ui| {
         ui.set_max_width(360.0);
-        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
-        // moves; in RTL the blocks right-align and every nested row mirrors.
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+        // One direction-aware body: LTR runs the Modal's own layout unchanged; RTL re-scopes with
+        // `body_layout()` sized from the cursor, so the blocks right-align and nested rows mirror.
+        crate::direction::dialog_content(ui, |ui| {
             ui.label(egui::RichText::new(tl!("JPEG Options")).font(crate::theme::semibold(15.0)));
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
@@ -209,13 +209,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 let quality_caption = ui.label(tl!("Quality"));
                 ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
-                // Photoshop's presets: picking one sets the quality it starts at.
+                // Photoshop's presets: picking one sets the quality it starts at. The combo's
+                // popup body is pinned left-to-right by the fork; the shared body scope and
+                // menu rows mirror it under a right-to-left direction.
                 let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
-                    for q in [3, 5, 8, 10] {
-                        if ui.selectable_label(quality_label(quality) == quality_label(q), quality_label(q)).clicked() {
-                            quality = q;
+                    crate::direction::popup_body(ui, |ui| {
+                        for q in [3, 5, 8, 10] {
+                            if crate::menu_keys::menu_row(ui, quality_label(q), None, quality_label(quality) == quality_label(q), true).clicked() {
+                                quality = q;
+                            }
                         }
-                    }
+                    })
                 });
                 let _ = preset.response.accessible_name(tl!("Preset"));
             });
@@ -415,6 +419,41 @@ mod tests {
         // The body stays inside the modal's own box in both directions.
         for (title, modal) in [(title_l, modal_l), (title_r, modal_r)] {
             assert!(title.left() >= modal.left() - 1.0 && title.right() <= modal.right() + 1.0, "the title stays inside the modal box: {title:?} in {modal:?}");
+        }
+    }
+
+    /// Twin of the migrated `dialog_content` body: the title and the first body row never share a
+    /// baseline and stay inside the modal box in both directions (LTR unchanged).
+    #[test]
+    fn dialog_content_keeps_title_and_body_apart_in_both_directions() {
+        use egui_kittest::kittest::Queryable;
+
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.jpeg_options = Some(Prompt {
+                doc: photocraft_doc::DocId(1),
+                path: "a.jpg".into(),
+                quality: 8,
+                format: JpegFormat::Baseline,
+                own_quality: None,
+                copy: false,
+                record: "file.saveAs",
+            });
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+                .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+            h.run_steps(3);
+            let modal = h.ctx.memory(|m| m.area_rect(egui::Id::unique("jpeg-options"))).expect("the modal");
+            (modal, h.get_by_label("JPEG Options").rect(), h.get_by_label("Image Options").rect())
+        };
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let (modal, title, body) = rects(dir);
+            assert!(title.bottom() <= body.top() + 0.5, "{dir:?}: the title and the body never share a baseline: {title:?} vs {body:?}");
+            for r in [title, body] {
+                assert!(r.left() >= modal.left() - 1.0 && r.right() <= modal.right() + 1.0, "{dir:?}: the content stays inside the modal: {r:?} in {modal:?}");
+            }
         }
     }
 }

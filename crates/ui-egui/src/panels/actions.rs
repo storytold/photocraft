@@ -656,31 +656,31 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let any = !app.session.actions.list.is_empty();
     let selected = app.ui.actions.selected.is_some_and(|i| i < app.session.actions.list.len());
     let can_delete = selected && (!recording || app.ui.actions.selected_step.is_some());
-    if ui.add_enabled(!recording, egui::Button::new(tl!("New Action…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("New Action…"), None, false, !recording).clicked() {
         act = Some("new");
     }
-    if ui.add_enabled(any, egui::Button::new(tl!("Play"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Play"), None, false, any).clicked() {
         act = Some("play");
     }
     if recording {
-        if ui.button(tl!("Stop Recording")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Stop Recording"), None, false, true).clicked() {
             act = Some("stopRec");
         }
-    } else if ui.button(tl!("Start Recording")).clicked() {
+    } else if crate::menu_keys::menu_row(ui, tl!("Start Recording"), None, false, true).clicked() {
         act = Some("record");
     }
-    if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Delete"), None, false, can_delete).clicked() {
         act = Some("delete");
     }
     ui.separator();
-    if ui.add_enabled(selected, egui::Button::new(tl!("Insert Stop…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Insert Stop…"), None, false, selected).clicked() {
         act = Some("stop");
     }
     ui.separator();
-    if ui.button(tl!("Load Actions…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Load Actions…"), None, false, true).clicked() {
         act = Some("load");
     }
-    if ui.add_enabled(any, egui::Button::new(tl!("Save Actions…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Save Actions…"), None, false, any).clicked() {
         act = Some("save");
     }
     let Some(a) = act else { return };
@@ -891,7 +891,7 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, to
         // Popup bodies are pinned left-to-right whatever the direction flag; the shared popup
         // body re-scopes them under RTL (the menus/render.rs pattern).
         crate::menus::popup_body(ui, |ui| {
-            if ui.button(tl!("Save Set…")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Save Set…"), None, false, true).clicked() {
                 save = true;
                 ui.close();
             }
@@ -905,27 +905,30 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
         // Popup bodies are pinned left-to-right whatever the direction flag; the shared popup
         // body re-scopes them under RTL (the menus/render.rs pattern).
         crate::menus::popup_body(ui, |ui| {
-        ui.label(tl!("Keyboard Shortcuts"));
+        // The section header reads from the row's reading start, like the rows below it.
+        crate::direction::full_row(ui, |ui| crate::text::direction::body_label(ui, tl!("Keyboard Shortcuts")));
         let current = app.session.prefs().shortcuts.get(&shortcut_id(name)).cloned().unwrap_or_default();
         // Photoshop's Action Options: a function key, with Shift and Command (#7646).
         let (key, mut shift, mut command) = photocraft_engine::atn_cmds::parse_function_key(&current).unwrap_or((0, false, false));
         for number in std::iter::once(0).chain(1..=12) {
             let label = if number == 0 { tl!("None").to_string() } else { format!("F{number}") };
-            if ui.selectable_label(key == number, label).clicked() {
+            if crate::menu_keys::menu_row(ui, &label, None, key == number, true).clicked() {
                 let chosen = if number == 0 { String::new() } else { photocraft_engine::atn_cmds::function_key_name(number, shift, command) };
                 let _ = assign_shortcut(app, name, &chosen);
                 ui.close();
             }
         }
-        ui.add_enabled_ui(key > 0, |ui| {
-            let command_label = if cfg!(target_os = "macos") { tl!("Command") } else { tl!("Ctrl") };
-            let toggled = ui.checkbox(&mut shift, tl!("Shift")).changed() | ui.checkbox(&mut command, command_label).changed();
-            if toggled {
-                let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
-            }
-        });
+        let command_label = if cfg!(target_os = "macos") { tl!("Command") } else { tl!("Ctrl") };
+        if crate::menu_keys::menu_row(ui, tl!("Shift"), None, shift, key > 0).clicked() {
+            shift = !shift;
+            let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
+        }
+        if crate::menu_keys::menu_row(ui, command_label, None, command, key > 0).clicked() {
+            command = !command;
+            let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
+        }
         ui.separator();
-        ui.menu_button(tl!("Color"), |ui| {
+        crate::menus::menu_button(ui, tl!("Color"), |ui| {
             for (id, label) in [
                 ("", tl!("None")),
                 ("red", tl!("Red")),
@@ -936,7 +939,7 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
                 ("violet", tl!("Violet")),
                 ("gray", tl!("Gray")),
             ] {
-                if ui.selectable_label(swatch == id, label).clicked() {
+                if crate::menu_keys::menu_row(ui, label, None, swatch == id, true).clicked() {
                     let _ = app.run("actions.setColor", json!({"action": index, "color": id}));
                     ui.close();
                 }

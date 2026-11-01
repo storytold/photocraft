@@ -515,7 +515,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
         let c = ramp_color(cp.ramp, cp.web_safe_ramp, fg, bg, x, y);
         set_color(app, ui.ctx(), target, c);
     }
-    resp.context_menu(|ui| {
+    crate::menus::context_menu(&resp, |ui| {
         widgets::style_spectrum_popup_menu(ui);
         ramp_menu(app, ui);
     });
@@ -725,9 +725,17 @@ pub(crate) fn hex_code(rgb: [f32; 3]) -> String {
     hex(rgb).trim_start_matches('#').to_string()
 }
 
-/// A panel menu row with Photoshop's check mark column.
+/// A panel menu row with Photoshop's check mark column. Left-to-right keeps the padded plain
+/// label (pixel- and label-identical); right-to-left the row mirrors through the shared
+/// helpers: checkmark column at the reading start, label hugging the row's right edge.
 fn check_item(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
-    ui.button(format!("{}{}", if on { "✔ " } else { "   " }, tl!(label))).clicked()
+    let rtl = ui.style().right_to_left;
+    let text = if rtl {
+        crate::menu_keys::menu_row_text(ui, on, tl!(label), None, false, crate::menu_keys::GutterSide::ReadingStart)
+    } else {
+        egui::RichText::new(format!("{}{}", if on { "✔ " } else { "   " }, tl!(label))).into()
+    };
+    ui.add(crate::menu_keys::menu_row_button_atom(text, None, rtl)).clicked()
 }
 
 /// The ramp choices and Make Ramp Web Safe (the panel menu's last section and the ramp's
@@ -757,11 +765,11 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     let rgb = active(app);
-    if ui.button(tl!("Copy Color as HTML")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Copy Color as HTML"), None, false, true).clicked() {
         ui.ctx().copy_text(html_color(rgb));
         ui.close();
     }
-    if ui.button(tl!("Copy Color's Hex Code")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Copy Color's Hex Code"), None, false, true).clicked() {
         ui.ctx().copy_text(hex_code(rgb));
         ui.close();
     }

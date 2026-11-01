@@ -315,7 +315,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             stop = ui.button(tr("Stop syncing this Smart Object")).clicked();
         }
         ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let enabled = !file_dialog_open && (pending.editor != Editor::Program || pending.program.is_some());
             ok = ui.add_enabled_ui(enabled, |ui| crate::widgets::primary_button(ui, "OK", 84.0)).inner.clicked();
             cancel = crate::widgets::secondary_button(ui, "Cancel", 84.0).clicked();

@@ -1494,28 +1494,37 @@ mod rtl_tests {
     }
 
     /// The properties rows read in reading order: in a right-to-left UI the first button of
-    /// each row sits at the row's right edge, in a left-to-right UI at its left edge.
+    /// each row sits at the row's right edge, in a left-to-right UI at its left edge, and the
+    /// gap between the two buttons is the same in both directions.
     #[test]
     fn props_rows_mirror_item_order_in_rtl() {
-        fn first_button_x(dir: Dir) -> f32 {
+        fn buttons(dir: Dir) -> (egui::Rect, egui::Rect) {
             let _scope = direction_scope(dir);
             let ctx = egui::Context::default();
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                crate::direction::dialog_row(ui, |ui| {
-                    let r = widgets::secondary_button(ui, "A", 110.0);
-                    widgets::secondary_button(ui, "B", 110.0);
-                    r.rect.left()
-                })
-                .inner
-            })
-            .inner
+            let mut out = None;
+            let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+                out = Some(
+                    ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        crate::direction::dialog_row(ui, |ui| {
+                            let a = widgets::secondary_button(ui, "A", 110.0);
+                            let b = widgets::secondary_button(ui, "B", 110.0);
+                            (a.rect, b.rect)
+                        })
+                        .inner
+                    })
+                    .inner,
+                );
+            });
+            full.textures_delta.clear();
+            out.unwrap()
         }
-        let ltr = first_button_x(Dir::Ltr);
-        let rtl = first_button_x(Dir::Rtl);
-        let ctx = egui::Context::default();
-        let width = ctx.run_ui(egui::RawInput::default(), |ui| ui.available_width()).inner;
-        assert!(ltr < rtl, "LTR row starts left ({ltr}), RTL row starts right ({rtl})");
-        assert!(rtl + 110.0 <= width + 1.0, "RTL row hugs the right edge: {rtl} + 110 <= {width}");
+        let (ltr_a, ltr_b) = buttons(Dir::Ltr);
+        let (rtl_a, rtl_b) = buttons(Dir::Rtl);
+        assert!(ltr_a.left() < ltr_b.left(), "LTR: A leads on the left: {ltr_a:?} then {ltr_b:?}");
+        assert!(rtl_b.left() < rtl_a.left(), "RTL: A leads on the right: {rtl_a:?} then {rtl_b:?}");
+        let ltr_gap = ltr_b.left() - ltr_a.right();
+        let rtl_gap = rtl_a.left() - rtl_b.right();
+        assert!((ltr_gap - rtl_gap).abs() < 0.01, "same gap in both directions: {ltr_gap} vs {rtl_gap}");
     }
 
     /// The tool strip hugs the reading-start edge and the properties panel the reading-end edge.

@@ -767,3 +767,32 @@ fn finished_session_retains_final_save_until_target_is_safe() {
     poll(&mut app, &ctx);
     assert!(app.smart_svg.editing.is_empty());
 }
+
+/// The editor-choice OK/Cancel row mirrors item order under RTL and keeps LTR order and gap.
+#[test]
+fn dialog_button_row_mirrors_item_order_under_rtl() {
+    use crate::direction::{Dir, dialog_row, direction_scope};
+    let mut gaps = [0.0_f32; 2];
+    for (i, dir) in [Dir::Ltr, Dir::Rtl].into_iter().enumerate() {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut rects = [egui::Rect::NOTHING; 2];
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.set_max_width(470.0);
+            dialog_row(ui, |ui| {
+                rects[0] = ui.add_enabled_ui(true, |ui| crate::widgets::primary_button(ui, "OK", 84.0)).inner.rect;
+                rects[1] = crate::widgets::secondary_button(ui, "Cancel", 84.0).rect;
+            });
+        });
+        out.textures_delta.clear();
+        let (ok, cancel) = (rects[0], rects[1]);
+        gaps[i] = if dir == Dir::Rtl { ok.left() - cancel.right() } else { cancel.left() - ok.right() };
+        if dir == Dir::Rtl {
+            assert!(ok.center().x > cancel.center().x, "{dir:?}: OK leads from the right: {ok:?} {cancel:?}");
+        } else {
+            assert!(ok.center().x < cancel.center().x, "{dir:?}: OK leads from the left: {ok:?} {cancel:?}");
+        }
+    }
+    assert!((gaps[0] - gaps[1]).abs() < 0.5, "item gap changed under RTL: LTR {} vs RTL {}", gaps[0], gaps[1]);
+}

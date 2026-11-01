@@ -48,11 +48,13 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        let s = &mut b.smoothing;
-        widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
-        widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
-        widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
-        widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        crate::menus::popup_body(ui, |ui| {
+            let s = &mut b.smoothing;
+            widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
+            widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
+            widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
+            widgets::checkbox(ui, &mut s.adjust_for_zoom, tl!("Adjust for Zoom"));
+        });
     });
 }
 
@@ -83,10 +85,10 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut run = None;
     egui::Popup::menu(&resp).show(|ui| {
         crate::menus::popup_body(ui, |ui| {
-            if ui.button(tl!("Load Brush")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Load Brush"), None, false, true).clicked() {
                 run = Some("brush.mixer.load");
             }
-            if ui.button(tl!("Clean Brush")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Clean Brush"), None, false, true).clicked() {
                 run = Some("brush.mixer.clean");
             }
         });
@@ -123,7 +125,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
         if state.brush_picker.is_some() {
             crate::brush_picker::close(state);
         } else {
-            crate::brush_picker::open(state, ui.ctx(), [r.left(), r.bottom() + 2.0]);
+            crate::brush_picker::open(state, ui.ctx(), crate::brush_picker::chip_anchor(r));
         }
     }
 }

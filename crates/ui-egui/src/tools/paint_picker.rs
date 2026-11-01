@@ -239,10 +239,13 @@ fn grid(ui: &mut egui::Ui, n: usize, mut draw: impl FnMut(&mut egui::Ui, usize))
     ui.scope(|ui| {
         ui.set_max_width(WIDTH);
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        ui.horizontal_wrapped(|ui| {
-            for i in 0..n {
-                draw(ui, i);
-            }
+        // Swatch cells are physical data: the grid stays left-to-right even in a right-to-left UI.
+        crate::direction::ltr(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for i in 0..n {
+                    draw(ui, i);
+                }
+            });
         });
     });
 }
@@ -268,7 +271,7 @@ pub(crate) fn body(
         _ => None,
     };
     ui.set_width(WIDTH);
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         if type_button(ui, tab == Kind::None, true, tl!("No Color"), tl!("No Color"), draw_no_color) {
             tab = Kind::None;
@@ -290,7 +293,7 @@ pub(crate) fn body(
         }
         // Shapes don't render pattern paint yet: the type shows, as in Photoshop, but is off.
         type_button(ui, tab == Kind::Pattern, false, tl!("Pattern"), tl!("Shapes can't use patterns yet"), draw_pattern);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             if picker_button(ui) {
                 out = Some(PaintChange::OpenPicker);
             }
@@ -379,5 +382,34 @@ mod tests {
         remember(&mut app, [f32::NAN, 0.0, 0.0]);
         app.session.prefs.edit(|p| p.recent_colors.insert(0, "not a colour é".into()));
         assert_eq!(crate::color_picker_ui::hex(recent_colors(&app.session)[0]), "#0a0000");
+    }
+
+    /// The swatch grid is physical data: its cells keep left-to-right order and position even
+    /// in a right-to-left UI.
+    #[test]
+    fn swatch_grid_stays_ltr_under_rtl() {
+        use crate::direction::{Dir, direction_scope};
+        use egui_kittest::Harness;
+        let cells = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+                |ui, s: &mut Vec<egui::Rect>| {
+                    s.clear();
+                    grid(ui, 3, |ui, i| {
+                        s.push(ui.button(format!("c{i}")).rect);
+                    });
+                },
+                Vec::new(),
+            );
+            h.run();
+            h.state().clone()
+        };
+        let ltr = cells(Dir::Ltr);
+        let rtl = cells(Dir::Rtl);
+        assert_eq!(ltr.len(), 3);
+        assert!(ltr[0].left() < ltr[1].left() && ltr[1].left() < ltr[2].left(), "LTR order kept: {ltr:?}");
+        for (a, b) in ltr.iter().zip(&rtl) {
+            assert!((a.left() - b.left()).abs() < 0.01 && (a.right() - b.right()).abs() < 0.01, "cell {a:?} moved under RTL: {b:?}");
+        }
     }
 }

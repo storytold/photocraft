@@ -164,11 +164,23 @@ pub(crate) fn paint(ui: &egui::Ui, family: &str, row: Rect, size: f32) {
         let tint = crate::theme::Tokens::get(ctx).text;
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         let [w, h] = box_for(size);
-        let latin = Rect::from_min_size(pos2(row.right() - w - 8.0, row.center().y - h / 2.0), vec2(w, h));
+        // The sample sits at the row's reading end: its right edge in a left-to-right UI, its
+        // left edge in a right-to-left one, with the Arabic run beside it toward the reading
+        // start.
+        let rtl = crate::direction::is_rtl();
+        let latin = if rtl {
+            Rect::from_min_size(pos2(row.left() + 8.0, row.center().y - h / 2.0), vec2(w, h))
+        } else {
+            Rect::from_min_size(pos2(row.right() - w - 8.0, row.center().y - h / 2.0), vec2(w, h))
+        };
         ui.painter().image(samples.latin.id(), latin, uv, tint);
         if let Some(arabic) = samples.arabic {
             let aw = scaled(ARABIC_WIDTH, size);
-            let rect = Rect::from_min_size(pos2(latin.left() - GAP - aw, latin.top()), vec2(aw, h));
+            let rect = if rtl {
+                Rect::from_min_size(pos2(latin.right() + GAP, latin.top()), vec2(aw, h))
+            } else {
+                Rect::from_min_size(pos2(latin.left() - GAP - aw, latin.top()), vec2(aw, h))
+            };
             ui.painter().image(arabic.id(), rect, uv, tint);
         }
     }

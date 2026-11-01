@@ -208,27 +208,27 @@ fn export_dialog(app: &mut PhotocraftApp, format: &str) -> Result<Value, String>
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let empty = app.session.presets.swatches.iter().all(|g| g.items.is_empty());
     let mut act: Option<&str> = None;
-    if ui.button(tl!("New Swatch…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("New Swatch…"), None, false, true).clicked() {
         act = Some("new");
     }
-    if ui.button(tl!("New Swatch Group…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("New Swatch Group…"), None, false, true).clicked() {
         act = Some("group");
     }
     ui.separator();
-    if ui.button(tl!("Import Swatches…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Import Swatches…"), None, false, true).clicked() {
         act = Some("import");
     }
-    if ui.button(tl!("Replace Swatches…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Replace Swatches…"), None, false, true).clicked() {
         act = Some("replace");
     }
-    if ui.add_enabled(!empty, egui::Button::new(tl!("Export Swatches…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Export Swatches…"), None, false, !empty).clicked() {
         act = Some("aco");
     }
-    if ui.add_enabled(!empty, egui::Button::new(tl!("Export Swatches for Exchange…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Export Swatches for Exchange…"), None, false, !empty).clicked() {
         act = Some("ase");
     }
     ui.separator();
-    if ui.button(tl!("Reset Swatches")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Reset Swatches"), None, false, true).clicked() {
         act = Some("reset");
     }
     let Some(a) = act else { return };

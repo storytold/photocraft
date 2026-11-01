@@ -38,18 +38,6 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true)
 }
 
-/// The body of an open dropdown list. egui pins popup bodies left-to-right (`Popup::menu` lays
-/// them out `top_down_justified(Align::Min)` whatever the direction flag), so in a right-to-left
-/// UI the list scopes its own body: rows keep filling the list's width but align to the reading
-/// start. Left-to-right the popup's own layout is used unchanged.
-fn list_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
-    if crate::direction::is_rtl() {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(egui::Layout::top_down_justified(egui::Align::Max)), add_contents).inner
-    } else {
-        add_contents(ui)
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn dropdown_with<T: PartialEq + Clone>(
     ui: &mut Ui,
@@ -100,7 +88,7 @@ fn dropdown_with<T: PartialEq + Clone>(
                 let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
                 let mut nearest: Option<(f32, &T)> = None;
                 for ((v, _), text) in options.iter().zip(texts.iter()) {
-                    let item = ui.selectable_label(v == current, text.as_str());
+                    let item = crate::menu_keys::menu_row(ui, text.as_str(), None, v == current, true);
                     if reveal && v == current {
                         item.scroll_to_me(None);
                     }
@@ -246,6 +234,15 @@ const MENU_EDGE: f32 = 4.0;
 
 const MENU_MIN_HEIGHT: f32 = 120.0;
 
+/// The body of an open dropdown list, through [`crate::direction::popup_body`]: in a
+/// right-to-left UI the rows keep filling the list's width but their labels align to the
+/// reading start (the right edge), and the scope is never seeded with an `Align::Max` layout
+/// that would re-anchor it at the far edge of the pinned `max_rect`; left-to-right the
+/// popup's own layout is used unchanged.
+fn list_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    crate::direction::popup_body(ui, add_contents)
+}
+
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its reading-start edge stays where it first showed (the swatch's left
 /// edge, or further left when the window edge needs it; mirrored to the right edge in a
@@ -301,7 +298,7 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
                     changed = true;
                 }
                 for (v, l, tip) in options {
-                    let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
+                    let item = crate::menu_keys::menu_row(ui, tl!(l), None, v == current, true).on_hover_text(tl!(tip));
                     if press.chosen(ui, &item) {
                         *current = v.clone();
                         changed = true;
@@ -413,5 +410,85 @@ mod tests {
         assert!((item.left() - button.left()).abs() < 12.0, "LTR: the item label starts at the list's left edge ({item:?} vs button {button:?})");
         let (button, item) = open_dropdown(crate::direction::Dir::Rtl);
         assert!((button.right() - item.right()).abs() < 12.0, "RTL: the item label ends at the list's right edge ({item:?} vs button {button:?})");
+    }
+
+    /// Twin of [`open_list_rows_align_from_the_reading_start`]: the list body goes through
+    /// `direction::popup_body`, so the RTL reading-start gap equals the LTR one — the item
+    /// label ends at the list's right edge by the same distance it starts from the left edge
+    /// left-to-right.
+    #[test]
+    fn open_list_reading_start_gap_mirrors_ltr() {
+        // Measured against the popup's edge, not the button's text: the button's own padding is
+        // chevron-asymmetric, the popup body's is not.
+        let (_, items, popup) = open_dropdown_rows(crate::direction::Dir::Ltr);
+        let gap_ltr = items[0].left() - popup.left();
+        let (_, items, popup) = open_dropdown_rows(crate::direction::Dir::Rtl);
+        let gap_rtl = popup.right() - items[0].right();
+        assert!((gap_ltr - gap_rtl).abs() < 1.0, "the RTL gap mirrors the LTR gap: ltr {gap_ltr} rtl {gap_rtl}");
+    }
+
+    /// Draw a [`dropdown`], press its button to open the list, in `dir`; returns the button
+    /// label's rect, every option label's rect in option order, and the open popup's area
+    /// rect. The current value matches no option, so the button's "—" text never collides
+    /// with a row's galley.
+    fn open_dropdown_rows(dir: crate::direction::Dir) -> (Rect, Vec<Rect>, Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        crate::theme::set_direction(&ctx, dir == crate::direction::Dir::Rtl);
+        let options = [("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")];
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let text_rect = |shapes: &[egui::epaint::ClippedShape], text: &str| -> Rect {
+            shapes
+                .iter()
+                .find(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text() == text))
+                .unwrap_or_else(|| panic!("no text {text:?} painted"))
+                .shape
+                .visual_bounding_rect()
+        };
+        let frame = |events: Vec<Event>| -> egui::FullOutput {
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+                let mut current = "x";
+                dropdown(ui, "rtl-rows-test", "List", &mut current, &options, 120.0);
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let button = text_rect(&frame(Vec::new()).shapes, "—");
+        let at = button.center();
+        frame(vec![Event::PointerMoved(at)]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        let out = frame(Vec::new());
+        let items = ["Alpha", "Beta", "Gamma"].iter().map(|t| text_rect(&out.shapes, t)).collect();
+        let popup = ctx
+            .memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
+            .expect("the list popup is open and placed");
+        (button, items, popup)
+    }
+
+    /// Twin test (w40a report §7): an open dropdown list in either direction keeps its rows
+    /// disjoint (no row painted across two baselines), clips no label past the popup's edge,
+    /// and the popup stays clamped inside the screen; in a right-to-left UI the rows mirror,
+    /// labels at the reading start.
+    #[test]
+    fn open_list_rows_mirror_without_overlap_or_clip() {
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let name = if dir == crate::direction::Dir::Ltr { "LTR" } else { "RTL" };
+            let (button, items, popup) = open_dropdown_rows(dir);
+            let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+            assert!(screen.contains_rect(popup), "{name}: the popup is clamped inside the screen ({popup:?})");
+            for (i, a) in items.iter().enumerate() {
+                assert!(popup.expand(1.0).contains_rect(*a), "{name}: row {i} is clipped by the popup edge ({a:?} vs {popup:?})");
+                for (j, b) in items.iter().enumerate().skip(i + 1) {
+                    let o = a.intersect(*b);
+                    assert!(o.width() <= 0.5 || o.height() <= 0.5, "{name}: rows {i} and {j} overlap ({o:?})");
+                }
+            }
+            if dir == crate::direction::Dir::Ltr {
+                assert!((items[0].left() - button.left()).abs() < 12.0, "LTR: the rows start at the list's left edge");
+            } else {
+                assert!((button.right() - items[0].right()).abs() < 12.0, "RTL: the rows end at the list's right edge");
+            }
+        }
     }
 }

@@ -136,3 +136,32 @@ fn the_dropdown_switches_the_panel_between_filter_types() {
     h.run_steps(4);
     assert_eq!(drawn(&h), ["ink notes"]);
 }
+
+/// The filter bar mirrors in a right-to-left UI: the Kind dropdown and the kind toggles swap
+/// ends, keeping the same gap.
+#[test]
+fn the_filter_bar_row_mirrors_in_a_right_to_left_ui() {
+    let rects = |dir: crate::direction::Dir| {
+        let _d = crate::direction::direction_scope(dir);
+        let app = PhotocraftApp::new(session(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(360.0, 120.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                super::bar(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        (h.get_by_label("Kind").rect(), h.get_by_label("Filter for pixel layers").rect())
+    };
+    let (kind_l, pixel_l) = rects(crate::direction::Dir::Ltr);
+    assert!(kind_l.right() <= pixel_l.left(), "LTR: the dropdown starts the row: {kind_l:?} {pixel_l:?}");
+    let (kind_r, pixel_r) = rects(crate::direction::Dir::Rtl);
+    assert!(pixel_r.right() <= kind_r.left(), "RTL: the dropdown ends the row: {kind_r:?} {pixel_r:?}");
+    let gap_ltr = pixel_l.left() - kind_l.right();
+    let gap_rtl = kind_r.left() - pixel_r.right();
+    assert!((gap_ltr - gap_rtl).abs() < 1.0, "the gap is direction-independent: {gap_ltr} vs {gap_rtl}");
+}

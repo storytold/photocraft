@@ -355,3 +355,25 @@ fn a_windows_set_with_tool_keys_imports_as_photoshop_meant_it() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(crate::tool_shortcuts::shortcut(&app, crate::state::Tool::Pencil).as_deref(), Some("N"));
 }
+
+/// The offer prompt's button row reads in order: Import then Don't Import left to right in a
+/// left-to-right UI, mirrored in a right-to-left one, with the same gap between them in both.
+#[test]
+fn offer_button_row_mirrors_item_order_in_rtl() {
+    use crate::text::direction::{Dir, direction_scope};
+    let draw = |dir: Dir| {
+        let _scope = direction_scope(dir);
+        let mut h = Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            with_photoshop(SAMPLE, None).0
+        });
+        h.run_steps(3);
+        (h.get_by_label("Import").rect(), h.get_by_label("Don't Import").rect())
+    };
+    let (ltr_import, ltr_dont) = draw(Dir::Ltr);
+    assert!(ltr_import.right() <= ltr_dont.left() + 1.0, "ltr keeps the add order: {ltr_import:?} then {ltr_dont:?}");
+    let (rtl_import, rtl_dont) = draw(Dir::Rtl);
+    assert!(rtl_dont.right() <= rtl_import.left() + 1.0, "rtl mirrors the item order: {rtl_import:?} {rtl_dont:?}");
+    let gap = |a: egui::Rect, b: egui::Rect| (b.left() - a.right()).abs();
+    assert!((gap(ltr_import, ltr_dont) - gap(rtl_dont, rtl_import)).abs() < 1.0, "equal gaps in both directions");
+}

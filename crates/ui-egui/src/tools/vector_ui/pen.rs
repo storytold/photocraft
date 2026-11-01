@@ -630,7 +630,7 @@ pub(super) fn path_operations_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let merge = merge_target(app).filter(|(.., n)| *n > 1);
     let mut run = None;
     let mut pick = None;
-    egui::Popup::menu(&resp).show(|ui| {
+    egui::Popup::menu(&resp).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(240.0);
         for (value, label, glyph) in PATH_OPS {
             if ui.add_enabled_ui(shape || value != "newLayer", |ui| path_op_button(ui, glyph, tl!(label), value == current)).inner.clicked() {
@@ -643,7 +643,7 @@ pub(super) fn path_operations_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             run = merge.clone();
             ui.close();
         }
-    });
+    }));
     if let Some(op) = pick
         && let Err(e) = crate::path_components::set_op(app, op)
     {
@@ -661,7 +661,11 @@ pub(super) fn path_operations_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// A Path Operations menu row: its icon and label, highlighted when it is the current operation.
 fn path_op_button(ui: &mut egui::Ui, glyph: &str, label: &str, checked: bool) -> egui::Response {
     let icon = egui::IdSalt::new((glyph, "icon"));
-    let b = egui::Button::new((egui::Atom::custom(icon, vec2(16.0, 16.0)), label, egui::Atom::grow())).selected(checked).atom_ui(ui);
+    let atoms = crate::menu_keys::mirror_atoms(
+        egui::IntoAtoms::into_atoms((egui::Atom::custom(icon, vec2(16.0, 16.0)), label, egui::Atom::grow())),
+        ui.style().right_to_left,
+    );
+    let b = egui::Button::new(atoms).selected(checked).atom_ui(ui);
     if let Some(r) = b.rect(icon) {
         crate::icons::paint(ui, r, glyph, 16.0, Tokens::get(ui.ctx()).icon);
     }

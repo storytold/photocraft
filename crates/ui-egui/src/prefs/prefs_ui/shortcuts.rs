@@ -779,7 +779,7 @@ mod rtl_tests {
                 |ui, _f: &mut Map<String, Value>| {
                     crate::direction::dialog_row(ui, |ui| {
                         ui.label("row-label");
-                        ui.button("row-button");
+                        let _ = ui.button("row-button");
                     });
                 },
                 Map::new(),
@@ -837,7 +837,7 @@ mod scroll_grid_rtl_tests {
             .build_ui(|ui| {
                 egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
                     crate::direction::scroll_grid(ui, "probe-grid", 2, egui::vec2(12.0, 3.0), |ui| {
-                        crate::direction::grid_cells(ui, |ui| { ui.label("probe-label"); }, |ui| { ui.button("probe-key"); });
+                        crate::direction::grid_cells(ui, |ui| { ui.label("probe-label"); }, |ui| { let _ = ui.button("probe-key"); });
                         ui.end_row();
                     });
                 });

@@ -55,7 +55,9 @@ mod tests {
                 secondary |= r.secondary_clicked();
                 primary |= r.clicked();
                 r.context_menu(|ui| {
-                    ui.label("Layer context menu");
+                    crate::menus::popup_body(ui, |ui| {
+                        ui.label("Layer context menu");
+                    });
                 });
             })
             .textures_delta

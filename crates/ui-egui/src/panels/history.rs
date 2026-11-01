@@ -197,7 +197,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// row, so the click doesn't also step to the state or snapshot.
 fn history_source_column(ui: &mut egui::Ui, row: Rect, salt: egui::Id, is_source: bool) -> bool {
     let t = Tokens::get(ui.ctx());
-    let cell = Rect::from_min_size(pos2(crate::direction::start_x(row, 0.0), row.top()), vec2(24.0, row.height()));
+    let cell = Rect::from_min_size(pos2(crate::direction::start_x_w(row, 0.0, 24.0), row.top()), vec2(24.0, row.height()));
     let resp = ui.interact(cell, ui.scope_id().with(salt), Sense::click()).on_hover_text(tl!("Sets the source for the history brush"));
     if is_source {
         icons::paint(ui, cell.shrink(4.0), icons::tool_icon(Tool::HistoryBrush), 12.0, t.icon);
@@ -281,7 +281,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
         } else if resp.hovered() {
             ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
         }
-        let thumb = Rect::from_min_size(pos2(crate::direction::start_x(rect, 28.0), rect.center().y - 14.0), vec2(28.0, 28.0));
+        let thumb = Rect::from_min_size(pos2(crate::direction::start_x_w(rect, 28.0, 28.0), rect.center().y - 14.0), vec2(28.0, 28.0));
         widgets::checker(ui.painter(), thumb, 4.0);
         let tex = app.snapshot_thumb(&ctx, doc_id, snap, &live);
         ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -321,12 +321,12 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
         } else if resp.clicked() {
             cmd = Some(("history.selectSnapshot", json!({"snapshot": snap.id})));
         }
-        resp.context_menu(|ui| {
-            if ui.button(tl!("Rename…")).clicked() {
+        crate::menus::context_menu(&resp, |ui| {
+            if crate::menu_keys::menu_row(ui, tl!("Rename…"), None, false, true).clicked() {
                 renaming = Some((snap.id, snap.name.clone()));
                 ui.close();
             }
-            if ui.button(tl!("Delete")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Delete"), None, false, true).clicked() {
                 cmd = Some(("history.deleteSnapshot", json!({"snapshot": snap.id})));
                 ui.close();
             }
@@ -338,4 +338,43 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
     }
     ui.data_mut(|d| d.insert_temp(rename_id, renaming));
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    /// The snapshot's context menu goes through `menus::context_menu` + `menu_row`, so under
+    /// RTL the row labels hug the popup's reading-start (right) edge; LTR keeps them at the left.
+    #[test]
+    fn history_context_menu_rows_hug_the_reading_start_edge() {
+        use crate::direction::{Dir, direction_scope};
+        let rects = |dir: Dir| -> Vec<(String, egui::Rect)> {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let strip = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(220.0, 120.0));
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::menus::popup_body(&mut strip_ui, |ui| {
+                    let _ = crate::menu_keys::menu_row(ui, "Rename…", None, false, true);
+                    let _ = crate::menu_keys::menu_row(ui, "Delete", None, false, true);
+                });
+            });
+            let v = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), ts.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            v
+        };
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::ZERO);
+        let (l, r) = (at(&rects(Dir::Ltr), "Rename"), at(&rects(Dir::Rtl), "Rename"));
+        assert!(l.is_positive() && r.is_positive(), "the row label is drawn both ways: {l:?} {r:?}");
+        assert!(l.left() < 20.0 + 40.0, "ltr: the label hugs the left edge: {l:?}");
+        assert!(r.right() > 240.0 - 40.0, "rtl: the label hugs the right edge: {r:?}");
+        assert!(r.right() > l.right() + 10.0, "rtl: the label sits at the reading start: ltr {l:?} rtl {r:?}");
+    }
 }

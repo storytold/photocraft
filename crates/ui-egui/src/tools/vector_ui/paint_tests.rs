@@ -797,7 +797,8 @@ fn gradient_tab_strip_adds_moves_recolours_and_deletes_stops() {
     h.run_steps(2);
     // The inline picker opens under the stop's rows (readouts, preview, then the saturation /
     // value field); a click in that field.
-    let field = pos2(swatch.left() + 30.0, h.get_by_label("Location").rect().bottom() + 120.0);
+    let location = egui_kittest::kittest::by().label("Location").role(egui::accesskit::Role::SpinButton);
+    let field = pos2(swatch.left() + 30.0, h.get(location).rect().bottom() + 120.0);
     click(&mut h, field);
     let after = gradient_stops(&tool_stroke_gradient(&h)).0;
     assert_eq!(after.len(), before.len());
@@ -852,7 +853,7 @@ fn gradient_tab_keeps_the_stop_colour_after_a_preset_with_fewer_stops() {
     h.get_by_label("Blue 01").click();
     h.run_steps(3);
     assert_eq!(gradient_stops(&tool_stroke_gradient(&h)).0.len(), 2);
-    assert!(h.query_by_label("Location").is_some(), "the selected stop's rows stay after a preset with fewer stops");
+    assert!(h.query_all_by_label("Location").count() > 0, "the selected stop's rows stay after a preset with fewer stops");
     let color_well = egui_kittest::kittest::by().label("Color").role(egui::accesskit::Role::ColorWell);
     assert!(h.query(color_well).is_some());
     // Double-click the right colour stop: its picker opens, and a click in it recolours only that stop.
@@ -867,7 +868,8 @@ fn gradient_tab_keeps_the_stop_colour_after_a_preset_with_fewer_stops() {
     h.run_steps(2);
     let before = gradient_stops(&tool_stroke_gradient(&h)).0;
     let swatch = h.get(egui_kittest::kittest::by().label("Color").role(egui::accesskit::Role::ColorWell)).rect();
-    let field = pos2(swatch.left() + 30.0, h.get_by_label("Location").rect().bottom() + 120.0);
+    let location = egui_kittest::kittest::by().label("Location").role(egui::accesskit::Role::SpinButton);
+    let field = pos2(swatch.left() + 30.0, h.get(location).rect().bottom() + 120.0);
     click(&mut h, field);
     let after = gradient_stops(&tool_stroke_gradient(&h)).0;
     assert_eq!(after[0], before[0], "the left stop keeps its colour");

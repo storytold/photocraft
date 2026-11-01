@@ -123,7 +123,7 @@ fn refine_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for row in refine.chunks(cols) {
         // A short last row (or a lone button) still spans the panel.
         let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = COL_GAP;
             for &(label, id) in row {
                 // Greyed when its command can't run, by the same rule as the menu item.

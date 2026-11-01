@@ -156,31 +156,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.colored_label(ui.visuals().error_fg_color, error);
         ui.add_space(4.0);
     }
-    if crate::text::direction::is_rtl() {
-        // The fork's `egui::Grid` cannot be drawn in a right-to-left body: its cursor only
-        // advances left-to-right, so the placer's available width goes NaN and egui panics. The
-        // same rows are drawn without it: each caption occupies the shared label column at the
-        // reading start, its editor follows toward the reading end.
-        let spacing = ui.spacing().item_spacing;
-        ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
-        let label_w = caption_width(ui, &[tl!("Orientation"), tl!("Position"), tl!("Color")]);
-        settings_line(ui, label_w, tl!("Orientation"), |ui, _| orientation_choices(ui, &mut orientation));
-        settings_line(ui, label_w, tl!("Position"), |ui, caption| position_field(ui, &mut position, caption.id));
-        settings_line(ui, label_w, tl!("Color"), |ui, _| color_choices(ui, f, &mut color));
-        ui.spacing_mut().item_spacing = spacing;
-    } else {
-        egui::Grid::new("new-guide-dialog").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-            ui.label(tl!("Orientation"));
-            orientation_choices(ui, &mut orientation);
-            ui.end_row();
-            let position_label = ui.label(tl!("Position"));
-            position_field(ui, &mut position, position_label.id);
-            ui.end_row();
-            ui.label(tl!("Color"));
-            color_choices(ui, f, &mut color);
-            ui.end_row();
-        });
-    }
+    // A direction-aware two-column label/editor grid: left-to-right it is the plain
+    // `egui::Grid`, unchanged; right-to-left the fork's `Grid` cannot run under a mirrored
+    // body, so the same rows are hand-drawn with the caption in the shared label column at
+    // the reading start and the editor toward the reading end.
+    let label_w = caption_width(ui, &[tl!("Orientation"), tl!("Position"), tl!("Color")]);
+    crate::text::direction::settings_grid(ui, "new-guide-dialog", [12.0, 8.0], label_w, None, |row| {
+        row(tl!("Orientation").into(), &mut |ui, _| orientation_choices(ui, &mut orientation));
+        row(tl!("Position").into(), &mut |ui, caption| position_field(ui, &mut position, caption));
+        row(tl!("Color").into(), &mut |ui, _| color_choices(ui, f, &mut color));
+    });
     f.insert("orientation".into(), json!(orientation));
     f.insert("position".into(), json!(position));
     f.insert("color".into(), json!(color));
@@ -191,21 +176,6 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn caption_width(ui: &egui::Ui, captions: &[&str]) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
     captions.iter().map(|c| ui.painter().layout_no_wrap((*c).to_owned(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0, f32::max)
-}
-
-/// A caption beside its editor, in reading order: the caption at the reading start, its text
-/// hugging the column's edge, the editor toward the reading end. The caption keeps the column's
-/// width, so the editors line up the way the grid's second column lines them up.
-fn settings_line(ui: &mut egui::Ui, label_w: f32, caption: &str, editor: impl FnOnce(&mut egui::Ui, egui::Response)) -> egui::Response {
-    // The caption's own cell: the caption hugs the reading start of the column, its text in a
-    // box as wide as the text, the way the grid's caption does.
-    let cell = egui::Layout::top_down(if crate::text::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min });
-    crate::text::direction::dialog_row(ui, |ui| {
-        let response = ui.allocate_ui_with_layout(egui::vec2(label_w, ui.spacing().interact_size.y), cell, |ui| ui.label(caption)).inner;
-        editor(ui, response.clone());
-        response
-    })
-    .inner
 }
 
 /// The Orientation choices: the two radios (the caption is drawn by the caller).
@@ -325,3 +295,56 @@ fn confirm_edit(app: &mut PhotocraftApp, f: &Map<String, Value>, params: &Value)
 mod rtl_tests;
 #[cfg(test)]
 mod tests;
+
+/// Twin for the dialog's settings grid: the same body drawn left-to-right and right-to-left —
+/// only the direction is forced. The caption hugs the reading start in both and the
+/// label↔editor gap equals the LTR formula in both directions.
+#[cfg(test)]
+mod grid_rtl_tests {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    use super::*;
+
+    const WINDOW: f32 = 640.0;
+
+    /// The Orientation caption and its Horizontal radio, drawn in `dir`.
+    fn orientation_row(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect) {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(WINDOW, 400.0)).with_max_steps(64).build_ui_state(
+            |ui, _state| {
+                // The named font families land in the second pass; drawing before that paints
+                // text with an empty family and panics.
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let mut f = Map::new();
+                f.insert("orientation".into(), json!("horizontal"));
+                f.insert("position".into(), json!("0 cm"));
+                f.insert("color".into(), json!("cyan"));
+                body(ui, &mut f);
+            },
+            (),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        let caption = h
+            .query_all_by_label("Orientation")
+            .find(|n| n.accesskit_node().role() != Role::ComboBox)
+            .expect("the Orientation caption")
+            .rect();
+        (caption, h.get_by_label("Horizontal").rect())
+    }
+
+    #[test]
+    fn the_grid_rows_mirror_and_keep_the_ltr_gap() {
+        let (ltr_cap, ltr_edit) = orientation_row(crate::text::direction::Dir::Ltr);
+        let (rtl_cap, rtl_edit) = orientation_row(crate::text::direction::Dir::Rtl);
+        assert!(ltr_edit.left() > ltr_cap.right(), "LTR: the editor follows its caption: {ltr_cap:?} vs {ltr_edit:?}");
+        assert!(rtl_edit.right() < rtl_cap.left(), "RTL: the editor leads toward the reading end: {rtl_cap:?} vs {rtl_edit:?}");
+        let ltr_gap = ltr_edit.left() - ltr_cap.right();
+        let rtl_gap = rtl_cap.left() - rtl_edit.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the label↔editor gap matches: LTR {ltr_gap} vs RTL {rtl_gap}");
+        assert!((ltr_cap.center().x + rtl_cap.center().x - WINDOW).abs() < 2.0, "the caption mirrors about the window centre: {ltr_cap:?} / {rtl_cap:?}");
+    }
+}

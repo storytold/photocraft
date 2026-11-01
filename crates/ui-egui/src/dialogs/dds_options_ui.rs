@@ -71,9 +71,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut options = p.options;
     let modal = egui::Modal::new(egui::Id::unique("dds-options")).show(ctx, |ui| {
         ui.set_max_width(340.0);
-        // One mirrored scope for the whole body: the title, the section label and the radio rows
-        // read from the right in a right-to-left UI, and the nested rows mirror with them.
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+        // One direction-aware body: LTR runs the Modal's own layout unchanged; RTL re-scopes with
+        // `body_layout()` sized from the cursor, so the title, section label and radio rows read
+        // from the right and the nested rows mirror with them.
+        crate::direction::dialog_content(ui, |ui| {
             ui.label(egui::RichText::new(tl!("DDS Options")).font(crate::theme::semibold(15.0)));
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
@@ -205,5 +206,25 @@ mod tests {
 
         // The mirrored body keeps the modal's width.
         assert!((rtl_win.width() - ltr_win.width()).abs() < 1.0, "the modal keeps its width: {ltr_win:?} vs {rtl_win:?}");
+    }
+
+    /// Twin of the migrated `dialog_content` body: the title and the first body row never share a
+    /// baseline and stay inside the modal box in both directions (LTR unchanged).
+    #[test]
+    fn dialog_content_keeps_title_and_body_apart_in_both_directions() {
+        use egui_kittest::kittest::Queryable;
+
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let (h, win) = options_window();
+            (win, h.get_by_label("DDS Options").rect(), h.get_by_label("Compression").rect())
+        };
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let (win, title, body) = rects(dir);
+            assert!(title.bottom() <= body.top() + 0.5, "{dir:?}: the title and the body never share a baseline: {title:?} vs {body:?}");
+            for r in [title, body] {
+                assert!(r.left() >= win.left() - 1.0 && r.right() <= win.right() + 1.0, "{dir:?}: the content stays inside the modal: {r:?} in {win:?}");
+            }
+        }
     }
 }

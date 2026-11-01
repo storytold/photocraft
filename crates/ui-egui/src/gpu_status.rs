@@ -270,24 +270,28 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .default_width(440.0)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new(tl!("GPU acceleration could not continue. Your documents are unchanged.")).color(t.warning));
-            ui.label(tl!("PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter."));
-            ui.collapsing(tl!("Details"), |ui| {
-                ui.label(&reason);
-            });
-            if retry_now {
-                ui.label(tl!("Retry GPU tries the graphics processor again now."));
-            } else {
-                ui.label(tl!("Retry GPU requires a restart. Save your work first."));
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                use crate::widgets::{ButtonRole, DialogButton};
-                let buttons =
-                    [DialogButton::new(ButtonRole::Default, tl!("Keep Using CPU"), 150.0), DialogButton::new(ButtonRole::Alternate, tl!("Retry GPU"), 120.0)];
-                if let Some(role) = crate::widgets::dialog_buttons(ui, &buttons) {
-                    choice = Some(role == ButtonRole::Alternate);
+            crate::direction::window_body(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("GPU acceleration could not continue. Your documents are unchanged.")).color(t.warning));
+                ui.label(tl!("PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter."));
+                ui.collapsing(tl!("Details"), |ui| {
+                    ui.label(&reason);
+                });
+                if retry_now {
+                    ui.label(tl!("Retry GPU tries the graphics processor again now."));
+                } else {
+                    ui.label(tl!("Retry GPU requires a restart. Save your work first."));
                 }
+                ui.add_space(8.0);
+                ui.with_layout(crate::direction::trailing_min(), |ui| {
+                    use crate::widgets::{ButtonRole, DialogButton};
+                    let buttons = [
+                        DialogButton::new(ButtonRole::Default, tl!("Keep Using CPU"), 150.0),
+                        DialogButton::new(ButtonRole::Alternate, tl!("Retry GPU"), 120.0),
+                    ];
+                    if let Some(role) = crate::widgets::dialog_buttons(ui, &buttons) {
+                        choice = Some(role == ButtonRole::Alternate);
+                    }
+                });
             });
         });
     if let Some(retry) = choice
@@ -466,5 +470,30 @@ mod tests {
         choose_recovery(&mut app, true).unwrap();
         assert!(!app.gpu_active());
         assert_eq!(app.ui.notices.len(), 1, "the restart notice");
+    }
+
+    /// The fallback window's button row reads in order: Keep Using CPU then Retry GPU left to
+    /// right in a left-to-right UI, mirrored in a right-to-left one, with the same gap in both.
+    #[test]
+    fn fallback_button_row_mirrors_item_order_in_rtl() {
+        use crate::text::direction::{Dir, direction_scope};
+        use egui_kittest::kittest::Queryable;
+        let draw = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            queue_fallback_notice(&mut app, "GPU fault");
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(900.0, 600.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+                .build_ui_state(|ui, app: &mut PhotocraftApp| show_fallback(app, ui.ctx()), app);
+            h.run_steps(3);
+            (h.get_by_label("Keep Using CPU").rect(), h.get_by_label("Retry GPU").rect())
+        };
+        let (ltr_keep, ltr_retry) = draw(Dir::Ltr);
+        assert!(ltr_keep.right() <= ltr_retry.left() + 1.0, "ltr keeps the add order: {ltr_keep:?} then {ltr_retry:?}");
+        let (rtl_keep, rtl_retry) = draw(Dir::Rtl);
+        assert!(rtl_retry.right() <= rtl_keep.left() + 1.0, "rtl mirrors the item order: {rtl_keep:?} {rtl_retry:?}");
+        let gap = |a: egui::Rect, b: egui::Rect| (b.left() - a.right()).abs();
+        assert!((gap(ltr_keep, ltr_retry) - gap(rtl_retry, rtl_keep)).abs() < 1.0, "equal gaps in both directions");
     }
 }

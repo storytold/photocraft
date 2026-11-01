@@ -212,7 +212,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.5));
                 }
-                let thumbnail = Rect::from_min_size(pos2(r.left() + 8.0, r.top() + 4.0), vec2(28.0, 28.0));
+                let thumbnail = Rect::from_min_size(pos2(crate::direction::start_x_w(r, 8.0, 28.0), r.top() + 4.0), vec2(28.0, 28.0));
                 thumb(ui, thumbnail, path, &doc);
                 let mut job = egui::text::LayoutJob::default();
                 // Temporary paths (the work path, the selected layer's shape path or vector mask) are italic.
@@ -224,10 +224,13 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 );
                 let renaming = ui.ctx().data(|d| d.get_temp::<PathRename>(rename_id)).filter(|e| e.key == key);
                 if let Some(mut edit) = renaming {
-                    let field = Rect::from_min_max(pos2(r.left() + 43.0, r.center().y - 11.0), pos2(r.right() - 8.0, r.center().y + 11.0));
+                    let fx = crate::direction::after_x(thumbnail, 7.0, 0.0);
+                    let tx = crate::direction::end_x(r, 8.0);
+                    let field = Rect::from_min_max(pos2(fx.min(tx), r.center().y - 11.0), pos2(fx.max(tx), r.center().y + 11.0));
                     let id = rename_id.with("field");
-                    let te =
-                        ui.put(field, egui::TextEdit::singleline(&mut edit.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
+                    let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::proportional(12.0));
+                    let name_edit = crate::widgets::rtl_singleline(&mut edit.text, &mut layouter).id(id).font(egui::FontId::proportional(12.0));
+                    let te = ui.put(field, name_edit).accessible_name(tl!("Name"));
                     let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
                     if !edit.focused {
                         te.request_focus();
@@ -253,7 +256,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 } else {
                     let g = ui.painter().layout_job(job);
-                    ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
+                    ui.painter().galley(pos2(crate::direction::after_x(thumbnail, 10.0, g.size().x), r.center().y - g.size().y / 2.0), g, t.text);
                 }
                 // Ctrl/Cmd-click loads only the thumbnail's path, without changing the panel target.
                 let modifiers = ui.input(|i| i.modifiers);
@@ -285,14 +288,14 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 {
                     ui.ctx().data_mut(|d| d.insert_temp(rename_id, PathRename { key: key.clone(), text, focused: false }));
                 }
-                resp.context_menu(|ui| {
+                crate::menus::context_menu(&resp, |ui| {
                     crate::widgets::menu_scroll(ui, |ui| {
                         ui.set_min_width(190.0);
                         let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
                         let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
                         for (label, cmd, params) in path_context_actions(&entry, &doc, st_layer) {
                             let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
-                            if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
+                            if crate::menu_keys::menu_row(ui, tl!(label), None, false, enabled).clicked() {
                                 if cmd == "path.stroke" {
                                     // Stroke Path… asks for the tool first, as in Photoshop (#2978).
                                     stroke_dialog = Some(params.get("name").and_then(Value::as_str).unwrap_or("work").to_string());
@@ -346,7 +349,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let items = items.map(|(icon, tip, cmd, p)| {
             if cmd == "path.delete" && delete_layer_path { (icon, "Delete vector mask", "layer.vectorMask.delete", json!({})) } else { (icon, tip, cmd, p) }
         });
-        // Laid out from the right, so the last button goes first.
+        // The footer bar lays out from the reading end, so the last button (delete) goes first in both directions.
         let mut buttons = Rect::NOTHING;
         for (icon, tip, cmd, p) in items.into_iter().rev() {
             let icon = if crate::icons::exists(icon) { icon } else { "square" };

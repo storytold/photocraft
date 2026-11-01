@@ -37,7 +37,7 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
     };
     let key = egui::Id::unique(("selc-range", id.0));
     let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("Colors")).color(t.text_dim));
         let opts: Vec<(usize, &str)> = RANGE_LABELS.iter().copied().enumerate().collect();
         if widgets::dropdown(ui, &format!("selc-colors-{}", id.0), tl!("Color"), &mut range, &opts, 150.0) {
@@ -60,7 +60,7 @@ pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: La
     }
     ui.add_space(4.0);
     let mut method = values["method"].as_str().unwrap_or("relative").to_string();
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         for (m, label) in [("relative", tl!("Relative")), ("absolute", tl!("Absolute"))] {
             if ui.radio(method == m, label).clicked() && method != m {
                 method = m.to_string();
@@ -205,7 +205,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         })
     });
     let mut cycling_preview = false;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("3D LUT File")).color(t.text_dim));
         let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), tl!("Color"), &mut sel, &opts, 170.0);
         if !chosen.is_empty() {
@@ -249,7 +249,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     }
     ui.add_space(4.0);
     let mut tet = *tetrahedral;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         for (on, label) in [(false, tl!("Trilinear")), (true, tl!("Tetrahedral"))] {
             if ui.radio(tet == on, label).clicked() && tet != on {
                 tet = on;
@@ -367,5 +367,42 @@ mod lookup_picker_tests {
         app.poll_file_dialog(&egui::Context::default(), None);
         assert_eq!(app.session.active().unwrap().doc.layer(LayerId(layer)).unwrap().content, before);
         assert!(!app.ui.status_error);
+    }
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The Selective Color editor's Colors row mirrors in a right-to-left UI: the label and the
+    /// range dropdown swap ends and keep the same gap.
+    #[test]
+    fn the_colors_row_mirrors_in_a_right_to_left_ui() {
+        let adj = Adjustment::SelectiveColor { relative: true, adjustments: [[0.0; 4]; 9] };
+        let rects = |dir: Dir| {
+            let _d = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(360.0, 300.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        selective_color_editor(app, ui, LayerId(1), &adj);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            (h.get_by_label("Colors").rect(), h.get_by_label("Color").rect())
+        };
+        let (label_l, drop_l) = rects(Dir::Ltr);
+        assert!(label_l.right() <= drop_l.left(), "LTR: the label starts the row: {label_l:?} {drop_l:?}");
+        let (label_r, drop_r) = rects(Dir::Rtl);
+        assert!(drop_r.right() <= label_r.left(), "RTL: the label ends the row: {label_r:?} {drop_r:?}");
+        let gap_ltr = drop_l.left() - label_l.right();
+        let gap_rtl = label_r.left() - drop_r.right();
+        assert!((gap_ltr - gap_rtl).abs() < 1.0, "the gap is direction-independent: {gap_ltr} vs {gap_rtl}");
     }
 }

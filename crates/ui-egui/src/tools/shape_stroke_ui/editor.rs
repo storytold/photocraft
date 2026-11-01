@@ -148,85 +148,8 @@ pub fn button(
             }
             ui.add_space(theme::ROW_GAP);
             ui.separator();
-            // The fork's `Grid` cannot start under a right-to-left cursor, so the geometry rows
-            // run in an LTR scope; `grid_cells` emits each label/editor pair in reading order.
-            crate::direction::ltr_vertical(ui, |ui| {
-                egui::Grid::new("stroke-geometry").num_columns(2).spacing(vec2(12.0, theme::ROW_GAP)).show(ui, |ui| {
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.add_enabled_ui(closed, |ui| {
-                                ui.label(tl!("Alignment"));
-                            });
-                        },
-                        |ui| {
-                            ui.add_enabled_ui(closed, |ui| {
-                                choice(
-                                    ui,
-                                    "Alignment",
-                                    &mut s.align,
-                                    &[(StrokeAlign::Inside, "Inside"), (StrokeAlign::Center, "Center"), (StrokeAlign::Outside, "Outside")],
-                                    &mut children,
-                                )
-                            });
-                        },
-                    );
-                    ui.end_row();
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
-                                ui.label(tl!("Caps"));
-                            });
-                        },
-                        |ui| {
-                            ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
-                                choice(ui, "Caps", &mut s.cap, &[(LineCap::Butt, "Butt / Flat"), (LineCap::Round, "Round"), (LineCap::Square, "Square")], &mut children)
-                            });
-                        },
-                    );
-                    ui.end_row();
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.add_enabled_ui(corners, |ui| {
-                                ui.label(tl!("Corners"));
-                            });
-                        },
-                        |ui| {
-                            ui.add_enabled_ui(corners, |ui| {
-                                choice(ui, "Corners", &mut s.join, &[(LineJoin::Miter, "Miter"), (LineJoin::Round, "Round"), (LineJoin::Bevel, "Bevel")], &mut children)
-                            });
-                        },
-                    );
-                    ui.end_row();
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| {
-                                ui.label(tl!("Miter limit"));
-                            });
-                        },
-                        |ui| {
-                            ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| number(ui, "Miter limit", &mut s.miter_limit, 1.0..=500.0, "×"));
-                        },
-                    );
-                    ui.end_row();
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.label(tl!("Opacity"));
-                        },
-                        |ui| {
-                            let mut opacity = s.opacity * 100.0;
-                            if number(ui, "Opacity", &mut opacity, 0.0..=100.0, "%") {
-                                s.opacity = opacity / 100.0;
-                            }
-                        },
-                    );
-                    ui.end_row();
-                });
-            });
+            geometry_grid(ui, s, closed, corners, &mut children);
+
             if !closed {
                 ui.label(egui::RichText::new(tl!("Open paths use centered strokes")).small());
             }
@@ -298,6 +221,49 @@ pub fn button(
     result
 }
 
+/// The stroke-geometry rows as a direction-aware two-column grid: a plain grid in LTR, hand
+/// rows hugging the reading start in RTL, with one shared label-column width in both.
+fn geometry_grid(ui: &mut egui::Ui, s: &mut StrokeOptions, closed: bool, corners: bool, children: &mut Children) {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label_w = ["Alignment", "Caps", "Corners", "Miter limit", "Opacity"]
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap(tl!(l).to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size().x)
+        .fold(ui.spacing().interact_size.x, f32::max);
+    let text = ui.visuals().text_color();
+    let dim = text.gamma_multiply(ui.visuals().disabled_alpha());
+    // The grid's label cell paints `ui.label(caption)` on an enabled ui, so a disabled row
+    // dims its caption up front, exactly as the painter's disabled opacity would.
+    let caption = |l: &str, enabled: bool| -> egui::WidgetText {
+        if enabled { tl!(l).into() } else { egui::RichText::new(tl!(l)).color(dim).into() }
+    };
+    crate::direction::settings_grid(ui, "stroke-geometry", [12.0, theme::ROW_GAP], label_w, None, |row| {
+        row(caption("Alignment", closed), &mut |ui, _| {
+            ui.add_enabled_ui(closed, |ui| {
+                choice(ui, "Alignment", &mut s.align, &[(StrokeAlign::Inside, "Inside"), (StrokeAlign::Center, "Center"), (StrokeAlign::Outside, "Outside")], &mut *children)
+            });
+        });
+        row(caption("Caps", !closed || !s.dashes.is_empty()), &mut |ui, _| {
+            ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
+                choice(ui, "Caps", &mut s.cap, &[(LineCap::Butt, "Butt / Flat"), (LineCap::Round, "Round"), (LineCap::Square, "Square")], &mut *children)
+            });
+        });
+        row(caption("Corners", corners), &mut |ui, _| {
+            ui.add_enabled_ui(corners, |ui| {
+                choice(ui, "Corners", &mut s.join, &[(LineJoin::Miter, "Miter"), (LineJoin::Round, "Round"), (LineJoin::Bevel, "Bevel")], &mut *children)
+            });
+        });
+        row(caption("Miter limit", corners && s.join == LineJoin::Miter), &mut |ui, _| {
+            ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| number(ui, "Miter limit", &mut s.miter_limit, 1.0..=500.0, "×"));
+        });
+        row(caption("Opacity", true), &mut |ui, _| {
+            let mut opacity = s.opacity * 100.0;
+            if number(ui, "Opacity", &mut opacity, 0.0..=100.0, "%") {
+                s.opacity = opacity / 100.0;
+            }
+        });
+    });
+}
+
 fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, label: &str, value: &mut T, choices: &[(T, &str)], children: &mut Children) {
     let parent_layer = ui.layer_id();
     let (press, close) = crate::press_menu::PressCombo::before(ui, label);
@@ -309,12 +275,16 @@ fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, label: &str, value: &mut T, ch
             // Restored Area order can place a previously used child behind its parent.
             // Both request the top on opening, so explicitly preserve their relationship.
             ui.ctx().set_sublayer(parent_layer, ui.layer_id());
-            for (v, name) in choices {
-                let item = ui.selectable_label(*value == *v, tl!(*name));
-                if press.chosen(ui, &item) {
-                    *value = *v;
+            // The combo's popup body is pinned left-to-right by the fork; the shared body scope
+            // and menu rows mirror it under a right-to-left direction.
+            crate::direction::popup_body(ui, |ui| {
+                for (v, name) in choices {
+                    let item = crate::menu_keys::menu_row(ui, tl!(*name), None, *value == *v, true);
+                    if press.chosen(ui, &item) {
+                        *value = *v;
+                    }
                 }
-            }
+            })
         });
     press.after(&response.response);
     response.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!(label)));
@@ -390,4 +360,57 @@ fn paint_sample(ui: &egui::Ui, rect: Rect, id: egui::Id, options: &StrokeOptions
     });
     ui.painter().image(cache.texture.id(), rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), egui::Color32::WHITE);
     ui.data_mut(|d| d.insert_temp(id, cache));
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{self, Dir};
+
+    fn raw_text_rect(out: &egui::FullOutput, text: &str) -> egui::Rect {
+        fn find(shape: &egui::Shape, text: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => Some(egui::Rect::from_min_size(t.pos + t.galley.rect.min.to_vec2(), t.galley.size())),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+                _ => None,
+            }
+        }
+        out.shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"))
+    }
+
+    /// The stroke-geometry rows mirror only under RTL: the label hugs the reading start and the
+    /// label<->editor gap equals the LTR formula (`label_w - label_width + spacing.x`).
+    #[test]
+    fn stroke_geometry_rows_mirror_only_under_rtl() {
+        let mut gaps = [(Dir::Ltr, 0.0_f32), (Dir::Rtl, 0.0_f32)];
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut draw = |ui: &mut egui::Ui| {
+                ui.set_max_width(272.0);
+                let mut s = StrokeOptions { align: StrokeAlign::Center, ..Default::default() };
+                let mut children = Children::default();
+                geometry_grid(ui, &mut s, false, true, &mut children);
+            };
+            // Repeat frames: the LTR grid's column widths settle from its stored state.
+            let mut out = ctx.run_ui(Default::default(), &mut draw);
+            out.textures_delta.clear();
+            out = ctx.run_ui(Default::default(), &mut draw);
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(Default::default(), &mut draw);
+            let label = raw_text_rect(&out, "Alignment");
+            let editor = raw_text_rect(&out, "Center");
+            let gap = if dir == Dir::Rtl { label.left() - editor.right() } else { editor.left() - label.right() };
+            if dir == Dir::Rtl {
+                assert!(label.left() >= editor.right(), "{dir:?}: the label leads from the right: {label:?} vs {editor:?}");
+            } else {
+                assert!(label.right() <= editor.left(), "{dir:?}: the label leads from the left: {label:?} vs {editor:?}");
+            }
+            gaps.iter_mut().find(|(d, _)| *d == dir).expect("dir").1 = gap;
+            out.textures_delta.clear();
+        }
+        let (ltr, rtl) = (gaps[0].1, gaps[1].1);
+        assert!((ltr - rtl).abs() < 1.0, "label<->editor gap differs: LTR {ltr} vs RTL {rtl}");
+    }
 }

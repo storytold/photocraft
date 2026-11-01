@@ -33,6 +33,7 @@ mod remove_channel_target;
 mod rtl_brush_picker;
 mod rtl_dialogs;
 mod rtl_menu_rows;
+mod rtl_resize_min;
 mod rtl_shell;
 mod rtl_tabs;
 mod system_locale;

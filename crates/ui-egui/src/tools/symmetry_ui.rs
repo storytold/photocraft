@@ -151,7 +151,8 @@ pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn mode_button(ui: &mut egui::Ui, mode: SymmetryMode, checked: bool) -> egui::Response {
     let icon = egui::IdSalt::new((mode.id(), "icon"));
     let name = label(mode);
-    let b = egui::Button::new((Atom::custom(icon, vec2(16.0, 16.0)), name, Atom::grow())).selected(checked).atom_ui(ui);
+    let atoms = crate::menu_keys::mirror_atoms(egui::IntoAtoms::into_atoms((Atom::custom(icon, vec2(16.0, 16.0)), name, Atom::grow())), ui.style().right_to_left);
+    let b = egui::Button::new(atoms).selected(checked).atom_ui(ui);
     let tint = Tokens::get(ui.ctx()).icon;
     if let Some(r) = b.rect(icon) {
         let glyph = match mode {
@@ -169,14 +170,14 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.session.active().and_then(|s| s.symmetry.clone());
     let resp = icons::button_with_icon_size(ui, "painting-symmetry", 24.0, 14.0, current.is_some(), tl!("Set painting symmetry options"));
     let resp = crate::brush_picker::named(resp, "Set painting symmetry options");
-    egui::Popup::menu(&resp).show(|ui| {
+    egui::Popup::menu(&resp).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(220.0);
         widgets::menu_scroll(ui, |ui| {
             let mut run = None;
             if ui
                 .add_enabled(
                     current.is_some() && crate::menus::is_enabled(app, "paint.symmetryDisable"),
-                    egui::Button::selectable(current.is_none(), tl!("Symmetry Off")),
+                    crate::menu_keys::menu_row_button_atom(tl!("Symmetry Off").into(), None, ui.style().right_to_left).selected(current.is_none()),
                 )
                 .clicked()
             {
@@ -204,14 +205,26 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         PathRow::Layer => ("layer".into(), row.name),
                     };
                     let checked = current.as_ref().and_then(PaintingSymmetry::path_source) == Some(name.as_str());
-                    if ui.add_enabled(crate::menus::is_enabled(app, "paint.symmetryFromPath"), egui::Button::selectable(checked, text)).clicked() {
+                    if ui
+                        .add_enabled(
+                            crate::menus::is_enabled(app, "paint.symmetryFromPath"),
+                            crate::menu_keys::menu_row_button_atom(text.into(), None, ui.style().right_to_left).selected(checked),
+                        )
+                        .clicked()
+                    {
                         run = Some(("paint.symmetryFromPath", json!({"name":name})));
                         ui.close();
                     }
                 }
             }
             ui.separator();
-            if ui.add_enabled(can_transform(app), egui::Button::new(tl!("Transform Symmetry"))).clicked() {
+            if ui
+                .add_enabled(
+                    can_transform(app),
+                    crate::menu_keys::menu_row_button_atom(tl!("Transform Symmetry").into(), None, ui.style().right_to_left),
+                )
+                .clicked()
+            {
                 if let Err(e) = crate::menus::invoke(app, ui.ctx(), "ui.symmetryTransform", json!({})) {
                     app.ui.status = e;
                 }
@@ -221,7 +234,7 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let _ = app.run(id, params);
             }
         });
-    });
+    }));
 }
 
 fn rotation_handle(p: PresetSymmetry, size: [f64; 2]) -> [f64; 2] {

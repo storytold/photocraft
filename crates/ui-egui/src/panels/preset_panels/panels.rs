@@ -228,17 +228,17 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Styles panel menu ("…"): Import Styles… / Export Selected Styles… / Export Styles…
 /// (Photoshop layer style libraries, `.asl`).
-fn styles_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn styles_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let any = app.session.presets.styles.iter().any(|g| !g.items.is_empty());
     let selected = app.ui.presets_ui.selected.get("styles").cloned();
     let mut act: Option<&str> = None;
-    if ui.button(tl!("Import Styles…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Import Styles…"), None, false, true).clicked() {
         act = Some("import");
     }
-    if ui.add_enabled(selected.is_some(), egui::Button::new(tl!("Export Selected Styles…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Export Selected Styles…"), None, false, selected.is_some()).clicked() {
         act = Some("selected");
     }
-    if ui.add_enabled(any, egui::Button::new(tl!("Export Styles…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Export Styles…"), None, false, any).clicked() {
         act = Some("all");
     }
     let Some(a) = act else { return };
@@ -365,7 +365,8 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.set_width(232.0);
         crate::menus::popup_body(ui, |ui| egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for g in &groups {
-                ui.label(egui::RichText::new(&g.name).color(t.text_dim).size(11.0));
+                // The group name reads from the row's reading start, like the swatches below it.
+                crate::direction::full_row(ui, |ui| crate::text::direction::body_label(ui, egui::RichText::new(&g.name).color(t.text_dim).size(11.0)));
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
                     for sh in &g.items {
@@ -516,14 +517,16 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 pick = Some(name.clone());
             }
             resp.context_menu(|ui| {
-                if ui.button(tl!("Rename Tool Preset…")).clicked() {
-                    app.ui.presets_ui.renaming = Some(("toolPresets".into(), name.clone(), name.clone()));
-                    ui.close();
-                }
-                if ui.button(tl!("Delete Tool Preset")).clicked() {
-                    action = Some(("tool.presets.edit".into(), json!({"action": "delete", "preset": name})));
-                    ui.close();
-                }
+                crate::menus::popup_body(ui, |ui| {
+                    if crate::menu_keys::menu_row(ui, tl!("Rename Tool Preset…"), None, false, true).clicked() {
+                        app.ui.presets_ui.renaming = Some(("toolPresets".into(), name.clone(), name.clone()));
+                        ui.close();
+                    }
+                    if crate::menu_keys::menu_row(ui, tl!("Delete Tool Preset"), None, false, true).clicked() {
+                        action = Some(("tool.presets.edit".into(), json!({"action": "delete", "preset": name})));
+                        ui.close();
+                    }
+                })
             });
         }
     });
@@ -610,8 +613,7 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rtl = crate::direction::is_rtl();
     // The fork's `Grid` cannot start under a right-to-left cursor, so it runs in an LTR scope;
     // the cells below are emitted in reading order (`rtl`).
-    crate::direction::ltr_vertical(ui, |ui| {
-        egui::Grid::new("clone-src-grid").num_columns(5).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+    crate::direction::ltr_grid(ui, "clone-src-grid", 5, vec2(6.0, 4.0), |ui| {
         if rtl {
             let icon = if slot.linked { "link" } else { "unlink" };
             if crate::icons::button(ui, icon, 22.0, slot.linked, tl!("Maintain aspect ratio")).clicked() {
@@ -699,7 +701,6 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
         }
             ui.end_row();
-        });
     });
     if let Some(p) = action {
         run(app, "cloneSource.set", p);
@@ -802,6 +803,34 @@ mod tests {
         assert!(win_rtl.center().x < canvas.center().x, "RTL: the window opens from the canvas's left edge: {win_rtl:?}");
         assert!(win_rtl.left() >= canvas.left() && win_rtl.right() <= canvas.right(), "RTL: the window stays on the canvas: {win_rtl:?}");
         assert!(close_rtl.right() < win_rtl.center().x && close_rtl.left() - win_rtl.left() < 24.0, "RTL: the close box hugs the header row's left end: {close_rtl:?} in {win_rtl:?}");
+    }
+
+    /// Kittest twin of the clone-source grid: its cells are emitted in reading order, so Flip
+    /// Horizontal reads before Flip Vertical in LTR and after it in RTL.
+    #[test]
+    fn clone_source_grid_emits_cells_in_reading_order() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let open = |rtl: bool| {
+            let dir = if rtl { crate::direction::Dir::Rtl } else { crate::direction::Dir::Ltr };
+            let _scope = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        clone_source_panel(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            (h.get_by_label("Flip Horizontal").rect(), h.get_by_label("Flip Vertical").rect())
+        };
+        let (lh, lv) = open(false);
+        let (rh, rv) = open(true);
+        assert!(lh.right() < lv.left(), "LTR: flip-H reads before flip-V: {lh:?} vs {lv:?}");
+        assert!(rv.right() < rh.left(), "RTL: flip-V reads before flip-H: {rv:?} vs {rh:?}");
     }
 
 }

@@ -115,7 +115,11 @@ fn adjustment_harness(kind: &str, depth: u32, theme: crate::theme::ThemeKind, sc
     );
     PhotocraftApp::setup_context(&h.ctx, theme);
     h.run_steps(4);
-    h.get_by_label(kind).click();
+    let node = h.get_by_label(kind);
+    if std::env::var("W48_PROBE").is_ok() {
+        eprintln!("PROBE_CLICK kind={kind} rect={:?} matches={}", node.rect(), h.query_all_by_label(kind).count());
+    }
+    node.click();
     h.run_steps(4);
     h
 }
@@ -151,6 +155,10 @@ fn adjustment_scope_control_fits_compact_properties_before_scrolling() {
             {
                 let mut h = adjustment_harness(kind, 8, theme, scale, false);
                 let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(250.0, 160.0));
+                if std::env::var("W48_PROBE").is_ok() {
+                    let st = h.state().session.active().unwrap();
+                    eprintln!("PROBE theme={theme:?} scale={scale} kind={kind} dock_tabs={} active={:?} kinds={:?} clip={} clipbox={}", h.state().ui.dock_tabs.properties, st.active_layer, st.doc.layers.iter().map(|l| l.content.kind_name().to_string()).collect::<Vec<_>>(), h.query_all_by_label("Clip to layer below").count(), h.query_all_by_role(egui::accesskit::Role::CheckBox).count());
+                }
                 let rect = h.get_by_label("Clip to layer below").rect();
                 assert!(viewport.contains_rect(rect), "{theme:?}, {scale}x, {kind}: {rect:?}");
                 let editor = scroll_to_adjustment_control(&mut h, editor_control);

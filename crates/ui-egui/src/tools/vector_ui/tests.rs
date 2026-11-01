@@ -1242,9 +1242,9 @@ fn live_rectangle_corner_radius_edit_preserves_other_corners_and_history() {
     assert_eq!(get_radii(&app), [12.0; 4]);
 }
 
-/// #534: using a shape's fill popover, opened from the Properties panel at the right edge of
-/// the window, keeps it in place (it flipped from side to side as its width followed the
-/// colour readouts, which moved it under the pointer).
+/// #534: dragging in a shape's fill picker, opened from the Properties panel at the right edge
+/// of the window, keeps the picker in place (it flipped from side to side as its width
+/// followed the colour readouts, which moved it under the pointer).
 #[test]
 fn shape_colour_picker_stays_put_while_dragging() {
     use egui::{PointerButton, vec2};
@@ -1263,6 +1263,9 @@ fn shape_colour_picker_stays_put_while_dragging() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
     h.run_steps(4);
+    // A recent colour to pick: the popover's swatches are click-to-pick cells, not a drag area.
+    h.state_mut().session.prefs.edit(|p| p.recent_colors.insert(0, "#112233".into()));
+    h.run_steps(2);
     let label = h.query_all(egui_kittest::kittest::by().label("Fill").include_labels()).next().expect("the Fill label").rect();
     // The swatch is right of its label.
     let swatch = egui::pos2(label.right() + 17.0, label.center().y);
@@ -1287,18 +1290,22 @@ fn shape_colour_picker_stays_put_while_dragging() {
         }
     };
     let before = fill(&h);
-    // Opening folders scrolls the list: the popover stays where it opened, inside the window.
-    for label in ["Pure", "Dark"] {
-        h.get_by_label(label).click();
-        h.run_steps(3);
+    // Drag across the picker's colour area.
+    let start = opened.min + vec2(60.0, opened.height() * 0.5);
+    h.hover_at(start);
+    h.step();
+    press(&mut h, start, true);
+    for i in 1..=10 {
+        h.event(egui::Event::PointerMoved(start + vec2(i as f32 * 5.0, i as f32)));
+        h.step();
         let r = popup(&h).expect("the picker stays open");
-        assert_eq!(r.left_top(), opened.left_top(), "{label}: the picker moved from {opened:?} to {r:?}");
-        assert!(h.ctx.content_rect().contains_rect(r), "{label}: {r:?} runs off the window");
+        assert_eq!(r.left_top(), opened.left_top(), "step {i}: the picker moved from {opened:?} to {r:?}");
+        assert!(h.ctx.content_rect().contains_rect(r), "step {i}: {r:?} runs off the window");
     }
-    h.get_by_label("Dark Red").click();
+    press(&mut h, start, false);
+    h.get_by_label("#112233").click();
     h.run_steps(2);
-    assert_eq!(popup(&h).map(|r| r.left_top()), Some(opened.left_top()), "picking keeps the popover open in place");
-    assert_ne!(fill(&h), before, "the swatch picked a colour");
+    assert_ne!(fill(&h), before, "the click picked the recent colour");
 }
 
 /// The options bar edits the selected shape's fill and stroke.
@@ -1480,4 +1487,47 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     drag(&mut h, row, to);
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
+}
+
+/// The painted row name `text` (the row itself is a painted rect, so its text is found in the
+/// output shapes): its galley pos and width.
+fn painted_text(h: &egui_kittest::Harness<'_, PhotocraftApp>, text: &str) -> (Pos2, f32) {
+    fn find<'a>(shape: &'a egui::Shape, text: &str) -> Option<&'a egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.job.text == text => Some(t),
+            egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, text)),
+            _ => None,
+        }
+    }
+    let t = h.output().shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"));
+    (t.pos, t.galley.size().x)
+}
+
+/// Rows mirror under a right-to-left UI: the name hugs the reading-start side of the thumbnail
+/// (the right edge in RTL, the left in LTR), with the LTR geometry unchanged.
+#[test]
+fn path_rows_hug_the_reading_start_edge_in_both_directions() {
+    use crate::i18n::{self, Lang};
+    use crate::text::direction::{self, Dir};
+    use egui_kittest::kittest::Queryable;
+    let _lang = i18n::language_scope(Lang::EN);
+    let path = json!({"subpaths": [{"closed": true, "knots": [
+        {"anchor": [10, 10], "in": [10, 10], "out": [10, 10]},
+        {"anchor": [80, 10], "in": [80, 10], "out": [80, 10]},
+        {"anchor": [80, 80], "in": [80, 80], "out": [80, 80]}
+    ]}]});
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction::direction_scope(dir);
+        let mut app = app();
+        app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app| paths_panel(app, ui), app);
+        h.run_steps(3);
+        let row = h.get_by_label("Path 1").rect();
+        let (pos, w) = painted_text(&h, "Path 1");
+        if dir == Dir::Rtl {
+            assert!((pos.x + w - (row.right() - 46.0)).abs() < 1.0, "RTL: the name ends 46 px from the row's right edge: {pos:?} +{w} in {row:?}");
+        } else {
+            assert!((pos.x - (row.left() + 46.0)).abs() < 1.0, "LTR: the name starts 46 px from the row's left edge: {pos:?} in {row:?}");
+        }
+    }
 }

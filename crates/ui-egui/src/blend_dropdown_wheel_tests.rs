@@ -143,9 +143,15 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.run_steps(2);
 }
 
-/// Where the entry `label` of the open list is (also when it is scrolled out of sight).
+/// Where the entry `label` of the open list is (also when it is scrolled out of sight). The chosen
+/// mode's row carries the check mark in its label.
 fn entry(h: &Harness<'_, PhotocraftApp>, label: &str) -> Rect {
-    h.get_by_label(label).rect()
+    let checked = format!("✔ {label}");
+    h.query_all_by_label(label)
+        .next()
+        .or_else(|| h.query_all_by_label(&checked).next())
+        .unwrap_or_else(|| panic!("no list entry {label}"))
+        .rect()
 }
 
 #[test]
@@ -167,7 +173,8 @@ fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
     let at = dropdown(&h).center();
     click(&mut h, at);
     // Unscrolled, the list shows its first entry at the top and is at most 420 pt tall.
-    let (top, darken) = (entry(&h, "Normal").top(), entry(&h, "Darken").center());
+    // The current mode's row carries the check mark in its label.
+    let (top, darken) = (entry(&h, "✔ Normal").top(), entry(&h, "Darken").center());
     for _ in 0..22 {
         wheel(&mut h, darken, -1.0);
     }

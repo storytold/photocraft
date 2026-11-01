@@ -87,7 +87,8 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let gaps = 2.0 * ui.spacing().item_spacing.y;
     let fill = ui.data(|d| d.get_temp::<f32>(color_field_fill_id())).map(|a| a - gaps);
     let h = color_field_height(fill, w);
-    ui.horizontal(|ui| {
+    // Chips, colour field and hue strip are physical colour-picker content: the row stays LTR.
+    crate::direction::ltr(ui, |ui| ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (chips, _) = ui.allocate_exact_size(vec2(38.0, h), Sense::hover());
         field_chips(app, ui, chips);
@@ -153,9 +154,9 @@ pub(crate) fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             ui.data_mut(|d| d.insert_temp(key, (hsva.h, hsva.s)));
         }
-    });
+    }));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
         if color_readout(ui, ui.scope_id().with(("color-field", bg_active)), &mut c) {
             if bg_active {
@@ -231,7 +232,7 @@ pub(crate) fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4
     let t = Tokens::get(ui.ctx());
     let mut changed = false;
     // Wrapped so the fields fold onto a second line in a narrow dock instead of being clipped.
-    ui.horizontal_wrapped(|ui| {
+    ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
         // Docks zero the item spacing; keep the fields apart.
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.label(RichText::new("#").font(theme::mono(12.0)).color(t.text_faint));

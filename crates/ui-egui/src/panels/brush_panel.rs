@@ -247,24 +247,22 @@ pub(crate) fn full_uv() -> egui::Rect {
 fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSettings) {
     let t = Tokens::get(ui.ctx());
     let rtl = crate::direction::is_rtl();
-    // Advance sign for hand-painted x-math: rows pack from the reading-start edge.
-    let s: f32 = if rtl { -1.0 } else { 1.0 };
-    ui.vertical(|ui| {
-        ui.set_width(150.0);
+    // The list column keeps its 150 px at the panel's full width and shrinks with a narrower
+    // window instead of overflowing into the options column.
+    let list_w = 150.0_f32.min(crate::direction::row_width(ui));
+    // In RTL the column hugs the reading-start edge; LTR this is exactly ui.vertical.
+    ui.with_layout(crate::direction::body_layout(), |ui| {
+        ui.set_width(list_w);
         ui.spacing_mut().item_spacing.y = 1.0;
-        let (br_rect, br_resp) = ui.allocate_exact_size(vec2(150.0, 23.0), Sense::click());
+        let (br_rect, br_resp) = ui.allocate_exact_size(vec2(list_w, 23.0), Sense::click());
         if br_resp.hovered() {
             ui.painter().rect_filled(br_rect, t.radius_sm, t.hover);
         }
-        let icon_rect =
-            egui::Rect::from_center_size(egui::pos2(if rtl { br_rect.right() - 12.0 } else { br_rect.left() + 12.0 }, br_rect.center().y), vec2(13.0, 13.0));
+        let icon_rect = egui::Rect::from_center_size(egui::pos2(crate::direction::start_x(br_rect, 12.0), br_rect.center().y), vec2(13.0, 13.0));
         icons::paint(ui, icon_rect, "brush", 12.0, if br_resp.hovered() { t.text } else { t.icon });
         let galley = ui.painter().layout_no_wrap(tl!("Brushes").to_string(), theme::semibold(12.0), if br_resp.hovered() { t.text } else { t.text_dim });
-        ui.painter().galley(
-            egui::pos2(if rtl { br_rect.right() - 26.0 - galley.size().x } else { br_rect.left() + 26.0 }, br_rect.center().y - galley.size().y / 2.0),
-            galley,
-            t.text,
-        );
+        let gx = crate::direction::start_x(br_rect, 26.0);
+        ui.painter().galley(egui::pos2(if rtl { gx - galley.size().x } else { gx }, br_rect.center().y - galley.size().y / 2.0), galley, t.text);
         if br_resp.clicked() {
             let _ = crate::menus::invoke(app, ui.ctx(), "window.panel.brushes", json!({}));
         }
@@ -278,7 +276,7 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                 ui.add_space(6.0);
             }
             let sel = !toggle_only && app.ui.brush_section == i;
-            let (r, resp) = ui.allocate_exact_size(vec2(150.0, 23.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(list_w, 23.0), Sense::click());
             // Named for accessibility and for tests and agents that look sections up by name.
             if toggle_only {
                 let checked = section_flag(b, i).is_some_and(|flag| *flag);
@@ -291,12 +289,11 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             } else if resp.hovered() {
                 ui.painter().rect_filled(r, t.radius_sm, t.hover);
             }
-            let mut x = if rtl { r.right() - 6.0 } else { r.left() + 6.0 };
             // The lock zone at the row's reading end is part of the row's hit rect too; a click
             // landing there toggles the lock whichever of the two widgets the hit test picks.
-            let on_lock = resp.interact_pointer_pos().is_some_and(|p| if rtl { p.x < r.left() + 22.0 } else { p.x > r.right() - 22.0 });
+            let on_lock = resp.interact_pointer_pos().is_some_and(|p| !crate::direction::start_side(p.x, crate::direction::end_x(r, 22.0)));
             if *has_box && let Some(flag) = section_flag(b, i) {
-                let br = egui::Rect::from_center_size(egui::pos2(x + 6.0 * s, r.center().y), vec2(13.0, 13.0));
+                let br = egui::Rect::from_center_size(egui::pos2(crate::direction::start_x(r, 12.0), r.center().y), vec2(13.0, 13.0));
                 // A checkbox-only row is one accessible checkbox across its whole width. A
                 // controls section keeps its separate enable box and selectable label.
                 let box_resp = (!toggle_only).then(|| {
@@ -316,23 +313,19 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                 } else if !toggle_only && resp.clicked() && !on_lock {
                     *flag = true;
                 }
-                x += 20.0 * s;
-            } else {
-                // No box (Brush Tip Shape): the name still starts in the names' column,
-                // as in Photoshop (#4282).
-                x += 20.0 * s;
             }
+            // After the enable box (or its reserve) the name starts in the names' column,
+            // as in Photoshop (#4282).
+            let x = crate::direction::start_x(r, 26.0);
             let color = if sel { t.text } else { t.text_dim };
             let font = if i == 0 { theme::semibold(12.0) } else { theme::medium(12.0) };
-            let mut job = egui::text::LayoutJob::simple_singleline(tl!(name).to_string(), font, color);
-            job.wrap = egui::text::TextWrapping::truncate_at_width((if rtl { x - (r.left() + 22.0) } else { r.right() - 22.0 - x }).max(0.0));
-            let galley = ui.painter().layout_job(job);
-            let elided = galley.elided;
-            ui.painter().galley(egui::pos2(if rtl { x - galley.size().x } else { x }, r.center().y - galley.size().y / 2.0), galley, color);
+            let max_w = (r.width() - 48.0).max(0.0);
+            let (_, elided) = crate::direction::paint_elided(ui.painter(), x, r.center().y, max_w, tl!(name), font, color)
+                .unwrap_or((r, false));
             let resp = if elided { resp.on_hover_text(tl!(name)) } else { resp };
             let mut lock_clicked = false;
             if let Some(lock) = section_lock(b, i) {
-                let lr = egui::Rect::from_center_size(egui::pos2(if rtl { r.left() + 11.0 } else { r.right() - 11.0 }, r.center().y), vec2(18.0, 18.0));
+                let lr = egui::Rect::from_center_size(egui::pos2(crate::direction::end_x(r, 11.0), r.center().y), vec2(18.0, 18.0));
                 let lresp = ui.interact(lr, ui.scope_id().with(("brush-sec-lock", i)), Sense::click());
                 lresp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), *lock, format!("{}: {}", tl!("Lock"), tl!(*name))));
                 // Like Photoshop: lock icons stay visible on every lockable section row.
@@ -368,19 +361,20 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.brush_section = 0;
     }
     let section = app.ui.brush_section;
-    // The columns follow the direction explicitly: sections lead (right in RTL), options follow.
-    let cols = if crate::direction::is_rtl() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
-    let cols_size = ui.available_size_before_wrap();
-    ui.allocate_ui_with_layout(cols_size, cols, |ui| {
+    // The columns follow the direction: sections lead (right in RTL), options follow. The row
+    // helper mirrors the column order; the widths below derive from what the window actually
+    // offers, so a narrower capture shrinks the options instead of overlapping the list.
+    crate::direction::dialog_row(ui, |ui| {
         section_list(app, ui, &mut b);
         widgets::vline(ui, 482.0);
-        ui.vertical(|ui| {
-            ui.set_width(WIDTH - 190.0);
+        // Same reading-start pinning as the list column; LTR is exactly ui.vertical.
+        ui.with_layout(crate::direction::body_layout(), |ui| {
+            ui.set_width((WIDTH - 190.0).min(crate::direction::row_width(ui)));
             // No title above the options (#3477): the selected row in the list names them, as
             // in Photoshop, and the line is better spent on the options.
             let on = section_flag(&mut b, section).is_none_or(|f| *f);
             egui::ScrollArea::vertical().id_salt(("brush-section", section)).max_height(450.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.set_width(WIDTH - 204.0);
+                ui.set_width((WIDTH - 204.0).min(crate::direction::row_width(ui)));
                 // A section that's off shows its options greyed out (Photoshop). A tip picked in
                 // the grid copies the tip fields only — the dynamics sections stay (Photoshop).
                 // The picked preset is recorded by name (`brush.presets.setCurrent`, identity, so
@@ -397,10 +391,17 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     widgets::hairline(ui);
     ui.add_space(6.0);
+    // The footer row follows the direction: in RTL the preview strip leads from the reading
+    // start and the icon rail ends at the reading end. Under the window's body layout a plain
+    // ui.horizontal mirrors on its own, and it only allocates its contents' height — scoping
+    // the row with with_layout would hand it the body's full height and the window would grow
+    // to the screen's height.
     ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(STRIP.0 as f32, STRIP.1 as f32), Sense::hover());
+        // The strip keeps its size at the panel's full width and shrinks with a narrower window.
+        let strip_w = (STRIP.0 as f32).min(crate::direction::row_width(ui));
+        let (r, _) = ui.allocate_exact_size(vec2(strip_w, STRIP.1 as f32), Sense::hover());
         ui.painter().rect_filled(r, t.radius_sm, t.field);
-        let tex = brush_preview::stroke_texture(ui.ctx(), "settings-strip", &b, STRIP.0, STRIP.1, t.text);
+        let tex = brush_preview::stroke_texture(ui.ctx(), "settings-strip", &b, strip_w.round().max(1.0) as u32, STRIP.1, t.text);
         ui.painter().image(tex.id(), r, full_uv(), Color32::WHITE);
         ui.vertical(|ui| {
             let new = icons::button(ui, "square-plus", 24.0, false, tl!("Create new brush from these settings"));
@@ -479,7 +480,7 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 
 /// The Brush Settings panel menu actions (hamburger menu).
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.button(tl!("New Brush Preset…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("New Brush Preset…"), None, false, true).clicked() {
         let name = new_preset_name(&app.session.tools.presets);
         run_or_status(app, "brush.presets.save", json!({ "name": name }));
         if app.session.tools.presets.iter().any(|p| p.name == name) {
@@ -489,14 +490,14 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.close();
     }
     ui.separator();
-    if ui.button(tl!("Clear Brush Controls")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Clear Brush Controls"), None, false, true).clicked() {
         let before = app.session.tools.brush.clone();
         let cleared = clear_brush_controls(&before);
         commit(app, &before, &cleared);
         ui.close();
     }
     let has_locks = app.session.tools.brush.locks != photocraft_paint::brush::SectionLocks::default();
-    if ui.add_enabled(has_locks, egui::Button::new(tl!("Reset All Locked Settings"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Reset All Locked Settings"), None, false, has_locks).clicked() {
         let before = app.session.tools.brush.clone();
         let mut after = before.clone();
         after.locks = photocraft_paint::brush::SectionLocks::default();
@@ -504,7 +505,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.close();
     }
     let has_texture = app.session.tools.brush.texture.enabled;
-    if ui.add_enabled(has_texture, egui::Button::new(tl!("Copy Texture to Other Tools"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Copy Texture to Other Tools"), None, false, has_texture).clicked() {
         copy_texture_to_other_tools(app);
         ui.close();
     }
@@ -523,11 +524,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .inner_margin(egui::Margin::same(10));
     let canvas = app.last_canvas_rect;
     // First-show position: 30 px inside the canvas's reading-end edge.
-    let x = if crate::direction::is_rtl() {
-        (canvas.left() + 30.0).min(canvas.right() - WIDTH - 8.0).max(canvas.left() + 8.0)
-    } else {
-        (canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0)
-    };
+    let x = crate::direction::float_window_x(canvas, WIDTH, 30.0, 0.0);
     let mut open = true;
     egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::unique("brush-settings"))
@@ -538,6 +535,10 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             crate::direction::window_body(ui, |ui| {
                 ui.set_width(WIDTH);
+                // The tab row reads in order: tabs lead from the reading start, the close
+                // button and menu pin to the reading end. Under the window's body layout a
+                // plain ui.horizontal mirrors on its own and only takes its contents' height,
+                // so the row stays at the top instead of filling the window's full height.
                 ui.horizontal(|ui| {
                     let mut tab = app.ui.brush_tab;
                     for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {
@@ -546,24 +547,29 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         }
                     }
                     app.ui.brush_tab = tab;
-                    ui.with_layout(crate::direction::trailing(), |ui| {
+                    // Top-aligned variant: a center-aligned scope here would fill the row's
+                    // frame height (the fork fills horizontal Align::Center frames).
+                    ui.with_layout(crate::direction::trailing_min(), |ui| {
                         if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                             open = false;
                         }
                         let menu_btn = widgets::panel_menu_button(ui);
                         egui::Popup::menu(&menu_btn).show(|ui| {
-                            widgets::style_spectrum_popup_menu(ui);
-                            ui.set_min_width(180.0);
-                            panel_menu(app, ui);
-                            ui.separator();
-                            if ui.button(tl!("Close")).clicked() {
-                                open = false;
-                                ui.close();
-                            }
-                            if ui.button(tl!("Close Tab Group")).clicked() {
-                                open = false;
-                                ui.close();
-                            }
+                            // The popup body mirrors in RTL; LTR passes through unchanged.
+                            crate::direction::popup_body(ui, |ui| {
+                                widgets::style_spectrum_popup_menu(ui);
+                                ui.set_min_width(180.0);
+                                panel_menu(app, ui);
+                                ui.separator();
+                                if crate::menu_keys::menu_row(ui, tl!("Close"), None, false, true).clicked() {
+                                    open = false;
+                                    ui.close();
+                                }
+                                if crate::menu_keys::menu_row(ui, tl!("Close Tab Group"), None, false, true).clicked() {
+                                    open = false;
+                                    ui.close();
+                                }
+                            });
                         });
                     });
                 });
@@ -584,3 +590,56 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    /// The panel body's width reads (list column, options column, preview strip) go through
+    /// `direction::row_width`: LTR that is exactly `ui.available_width()` (pixel-identical),
+    /// RTL the body's max_rect width, so the computed widths equal the LTR formula in both
+    /// directions and never read the ballooned full-card width under RTL.
+    #[test]
+    fn panel_body_width_reads_equal_ltr_formula_in_both_directions() {
+        fn reads(ui: &mut egui::Ui) -> (f32, f32, f32) {
+            let list_w = 150.0_f32.min(crate::direction::row_width(ui));
+            let opt_w = (WIDTH - 190.0).min(crate::direction::row_width(ui));
+            let strip_w = (STRIP.0 as f32).min(crate::direction::row_width(ui));
+            (list_w, opt_w, strip_w)
+        }
+        let mut ltr_reads = (0.0, 0.0, 0.0);
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut got = (0.0, 0.0, 0.0);
+            let mut avail = 0.0;
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 100.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                        got = reads(ui);
+                        avail = ui.available_width();
+                        if dir == Dir::Ltr {
+                            assert!(
+                                (crate::direction::row_width(ui) - avail).abs() < 1e-4,
+                                "ltr: row_width == available_width ({} vs {avail})",
+                                crate::direction::row_width(ui)
+                            );
+                        }
+                    });
+                },
+            );
+            out.textures_delta.clear();
+            if dir == Dir::Ltr {
+                ltr_reads = got;
+            } else {
+                assert_eq!(got, ltr_reads, "rtl: rerouted reads equal the LTR formula");
+            }
+        }
+    }
+}

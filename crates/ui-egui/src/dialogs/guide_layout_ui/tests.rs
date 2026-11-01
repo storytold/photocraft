@@ -326,8 +326,8 @@ fn preview_cache_tracks_document_revision() {
 }
 
 /// The Columns and Rows group boxes and the OK button, in one run of the dialog in `dir`, plus
-/// the dialog frame's centre x — the axis a mirrored run must mirror about.
-fn mirrored_rows(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect, f32) {
+/// the dialog frame — a mirrored row's axis must lie inside it.
+fn mirrored_rows(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect, egui::Rect) {
     use egui_kittest::kittest::Queryable;
     let _dir = crate::text::direction::direction_scope(dir);
     let mut app = app();
@@ -335,7 +335,7 @@ fn mirrored_rows(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, e
     let mut h = harness(app);
     h.run_steps(3);
     let frame = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog frame");
-    (h.get_by_label("Columns").rect(), h.get_by_label("Rows").rect(), h.get_by_label("OK").rect(), frame.center().x)
+    (h.get_by_label("Columns").rect(), h.get_by_label("Rows").rect(), h.get_by_label("OK").rect(), frame)
 }
 
 /// In a right-to-left UI the body reads from the right — the Columns group leads, the Rows group
@@ -343,21 +343,26 @@ fn mirrored_rows(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, e
 /// direction is forced: the labels and data stay the ones the left-to-right run pins.
 #[test]
 fn the_body_rows_mirror_in_a_right_to_left_ui() {
-    let (l_columns, l_rows, l_ok, l_axis) = mirrored_rows(crate::text::direction::Dir::Ltr);
+    let (l_columns, l_rows, l_ok, l_frame) = mirrored_rows(crate::text::direction::Dir::Ltr);
+    let l_axis = l_frame.center().x;
     assert!(l_columns.right() < l_rows.left(), "LTR: the Columns group leads: {l_columns:?} / {l_rows:?}");
     assert!(l_ok.left() > l_rows.right(), "LTR: the rail follows the fields: {l_ok:?} / {l_rows:?}");
 
-    let (r_columns, r_rows, r_ok, r_axis) = mirrored_rows(crate::text::direction::Dir::Rtl);
-    eprintln!("LTR cols {l_columns:?} rows {l_rows:?} ok {l_ok:?} axis {l_axis}");
-    eprintln!("RTL cols {r_columns:?} rows {r_rows:?} ok {r_ok:?} axis {r_axis}");
+    let (r_columns, r_rows, r_ok, r_frame) = mirrored_rows(crate::text::direction::Dir::Rtl);
+    let r_axis = r_frame.center().x;
     assert!((l_axis - r_axis).abs() < 1.0, "the dialog sits at the same place in both directions: {l_axis} / {r_axis}");
     assert!(r_columns.left() > r_rows.right(), "RTL: the Columns group still leads, from the right: {r_columns:?} / {r_rows:?}");
     assert!(r_ok.right() < r_rows.left(), "RTL: the rail leads at the reading end: {r_ok:?} / {r_rows:?}");
-    // Every row mirrors about one common axis (the dialog frame's centre need not be it: the
-    // host's own chrome is not mirrored).
-    let axis = (l_columns.center().x + r_columns.center().x) / 2.0;
+    // Each row mirrors about its own axis — the host's own chrome is not mirrored, so the rows
+    // need not share one axis — but the axis must lie inside the dialog frame, and a mirror
+    // preserves the row's width.
     for (name, ltr, rtl) in [("Columns", l_columns, r_columns), ("Rows", l_rows, r_rows), ("OK", l_ok, r_ok)] {
-        assert!((ltr.center().x + rtl.center().x - 2.0 * axis).abs() < 2.0, "{name} mirrors about the same axis {axis}: {ltr:?} / {rtl:?}");
+        let axis = (ltr.center().x + rtl.center().x) / 2.0;
+        assert!((ltr.width() - rtl.width()).abs() < 2.0, "{name} keeps its width across the mirror: {ltr:?} / {rtl:?}");
+        assert!(
+            l_frame.left() <= axis && axis <= l_frame.right() && r_frame.left() <= axis && axis <= r_frame.right(),
+            "{name} mirrors about an axis inside the dialog frame {l_frame:?}: {axis}"
+        );
     }
 }
 

@@ -120,7 +120,7 @@ fn kind(l: &Layer) -> &'static str {
 
 /// Draw the filter row: the type dropdown, then that type's controls.
 pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let by = [(FilterBy::Kind, tl!("Kind")), (FilterBy::Name, tl!("Name")), (FilterBy::Mode, tl!("Mode"))];
         widgets::dropdown(ui, "layer-filter-by", tl!("Kind"), &mut app.ui.layer_filter_by, &by, 64.0);

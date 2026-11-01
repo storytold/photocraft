@@ -107,7 +107,7 @@ pub(super) fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // the slider and Zoom In.
     let controls = ui.vertical(|ui| {
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let set = |app: &mut PhotocraftApp, zoom: f32, animate: bool| {
                 let target = crate::zoom_levels::clamp(zoom, v.doc_size);
@@ -221,4 +221,35 @@ pub(crate) fn last_navigator_preview(ctx: &egui::Context) -> Option<Rect> {
 #[cfg(test)]
 pub(crate) fn last_navigator_controls(ctx: &egui::Context) -> Option<Rect> {
     ctx.data(|d| d.get_temp(navigator_controls_rect_id()))
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use serde_json::json;
+
+    /// The zoom row mirrors in a right-to-left UI: the percent field, Zoom Out and Zoom In swap
+    /// ends, keeping the same gaps (the slider itself stays physical).
+    #[test]
+    fn the_zoom_row_mirrors_in_a_right_to_left_ui() {
+        let rects = |dir: Dir| {
+            let _d = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            app.last_canvas_rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 400.0));
+            let mut h = Harness::builder().with_size(vec2(360.0, 300.0)).build_ui_state(|ui, app| navigator(app, ui), app);
+            crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            (h.get_by_label("Zoom").rect(), h.get_by_label("Zoom Out").rect(), h.get_by_label("Zoom In").rect())
+        };
+        let (z_l, out_l, inn_l) = rects(Dir::Ltr);
+        assert!(z_l.right() <= out_l.left() && out_l.right() <= inn_l.left(), "LTR order: {z_l:?} {out_l:?} {inn_l:?}");
+        let (z_r, out_r, inn_r) = rects(Dir::Rtl);
+        assert!(inn_r.right() <= out_r.left() && out_r.right() <= z_r.left(), "RTL order mirrors: {z_r:?} {out_r:?} {inn_r:?}");
+        let gap_ltr = out_l.left() - z_l.right();
+        let gap_rtl = z_r.left() - out_r.right();
+        assert!((gap_ltr - gap_rtl).abs() < 1.0, "the gap is direction-independent: {gap_ltr} vs {gap_rtl}");
+    }
 }

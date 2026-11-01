@@ -1191,3 +1191,41 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
         assert!(app.session.actions.playback_stack.is_empty());
     }
 }
+
+/// The painted action name `text` in the output shapes: its galley pos and width.
+fn painted_text(h: &egui_kittest::Harness<'_, PhotocraftApp>, text: &str) -> (egui::Pos2, f32) {
+    fn find<'a>(shape: &'a egui::Shape, text: &str) -> Option<&'a egui::epaint::TextShape> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.job.text == text => Some(t),
+            egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, text)),
+            _ => None,
+        }
+    }
+    let t = h.output().shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"));
+    (t.pos, t.galley.size().x)
+}
+
+/// Rows mirror under a right-to-left UI: the action name hugs the reading-start edge of the
+/// row (the right edge in RTL, the left in LTR), with the LTR geometry unchanged.
+#[test]
+fn action_rows_hug_the_reading_start_edge_in_both_directions() {
+    use crate::i18n::{self, Lang};
+    use crate::text::direction::{self, Dir};
+    use egui_kittest::kittest::Queryable;
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.session.actions.list.push(Action::new("My Action", vec![("layer.new.layer".into(), json!({}))]));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 260.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(3);
+        let row = h.get_by_label("My Action").rect();
+        let (pos, w) = painted_text(&h, "My Action");
+        if dir == Dir::Rtl {
+            assert!((pos.x + w - (row.right() - 44.0)).abs() < 1.0, "RTL: the name ends 44 px from the row's right edge: {pos:?} +{w} in {row:?}");
+        } else {
+            assert!((pos.x - (row.left() + 44.0)).abs() < 1.0, "LTR: the name starts 44 px from the row's left edge: {pos:?} in {row:?}");
+        }
+    }
+}

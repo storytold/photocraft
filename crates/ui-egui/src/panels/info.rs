@@ -50,7 +50,7 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rgba = pos.and_then(|p| pointer_sample(app, p));
     let mono = theme::mono(11.5);
     let row = |ui: &mut egui::Ui, k: &str, v: String| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.add_sized([18.0, 16.0], egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)));
             ui.label(RichText::new(v).font(mono.clone()).color(t.text));
         });
@@ -99,15 +99,15 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)));
             let num = |v: &Value, i: usize| v.get(i).and_then(Value::as_i64).map_or_else(|| "—".to_string(), |n| n.to_string());
             let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
                 cell(ui, format!("X: {}  Y: {}", fx(at.0), fy(at.1)));
             });
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
                 cell(ui, format!("R:{} G:{} B:{}", num(rgb, 0), num(rgb, 1), num(rgb, 2)));
             });
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
                 cell(ui, format!("C:{}% M:{}% Y:{}% K:{}%", num(cmyk, 0), num(cmyk, 1), num(cmyk, 2), num(cmyk, 3)));
             });

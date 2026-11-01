@@ -437,7 +437,7 @@ fn stop_fields(ui: &mut egui::Ui, fill: &Fill, id: egui::Id, fg: [f32; 4], bg: [
     };
     let picker_key = picker_key(id);
     let mut picker_open = ui.data(|d| d.get_temp::<bool>(picker_key)).unwrap_or(false);
-    ui.horizontal(|ui| match selected {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| match selected {
         Marker::Color(i) => {
             let Some((_, c)) = cs.get(i) else { return };
             label(ui, tl!("Color"));
@@ -454,7 +454,7 @@ fn stop_fields(ui: &mut egui::Ui, fill: &Fill, id: egui::Id, fg: [f32; 4], bg: [
             let Some((_, a)) = os.get(i) else { return };
             label(ui, tl!("Opacity"));
             let mut v = a * 100.0;
-            if crate::widgets::value_field(ui, &mut v, 0.0..=100.0, "%", 52.0).changed() {
+            if crate::widgets::value_field_named(ui, tl!("Opacity"), &mut v, 0.0..=100.0, "%", 52.0).changed() {
                 edit = Some(json!({"action": "opacity", "kind": "opacity", "index": i, "opacity": v}));
             }
         }
@@ -464,17 +464,17 @@ fn stop_fields(ui: &mut egui::Ui, fill: &Fill, id: egui::Id, fg: [f32; 4], bg: [
             }
             label(ui, tl!("Location"));
             let mut v = mids.get(i).copied().unwrap_or(0.5) * 100.0;
-            if crate::widgets::value_field(ui, &mut v, 5.0..=95.0, "%", 52.0).changed() {
+            if crate::widgets::value_field_named(ui, tl!("Location"), &mut v, 5.0..=95.0, "%", 52.0).changed() {
                 edit = Some(json!({"action": "midpoint", "index": i, "location": v / 100.0}));
             }
         }
     });
     if let Some(loc) = locations.get(index).copied() {
         let kind = if matches!(selected, Marker::Opacity(_)) { "opacity" } else { "color" };
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             label(ui, tl!("Location"));
             let mut v = loc * 100.0;
-            if crate::widgets::value_field(ui, &mut v, 0.0..=100.0, "%", 52.0).changed() {
+            if crate::widgets::value_field_named(ui, tl!("Location"), &mut v, 0.0..=100.0, "%", 52.0).changed() {
                 let to = v / 100.0;
                 edit = Some(json!({"action": "move", "kind": kind, "index": index, "location": to}));
                 reselect = Some(match selected {
@@ -519,4 +519,42 @@ fn stop_fields(ui: &mut egui::Ui, fill: &Fill, id: egui::Id, fg: [f32; 4], bg: [
         ui.data_mut(|d| d.insert_temp(selection_key, m));
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui::accesskit::Role;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// The stop fields' rows follow reading order: the Color swatch leads its row and the
+    /// Location field follows it at the reading start — left in LTR, right in RTL.
+    #[test]
+    fn stop_field_rows_follow_reading_order() {
+        let harness = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut fill = Fill::gradient(Vec::new(), 90.0, 1.0, GradientStyle::Linear, false);
+            if let Fill::Gradient { stops, opacity_stops, .. } = &mut fill {
+                *stops = vec![(0.0, photocraft_color::Color::BLACK), (1.0, photocraft_color::Color::WHITE)];
+                *opacity_stops = vec![(0.0, 1.0), (1.0, 1.0)];
+            }
+            let mut h = Harness::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
+                |ui, s: &mut (egui::Id, Fill)| {
+                    ui.data_mut(|d| d.insert_temp(selection_key(s.0), Marker::Color(0)));
+                    stop_fields(ui, &s.1, s.0, [0.0; 4], [1.0; 4]);
+                },
+                (egui::Id::unique("stop-fields"), fill),
+            );
+            h.run_steps(2);
+            h
+        };
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let swatch = |h: &Harness<'_, (egui::Id, Fill)>| h.get_by_role_and_label(Role::ColorWell, "Color").rect();
+        let loc = |h: &Harness<'_, (egui::Id, Fill)>| h.get_all_by_role(Role::SpinButton).next().unwrap().rect();
+        assert!(swatch(&ltr).left() < loc(&ltr).left(), "LTR: the swatch leads: {:?} {:?}", swatch(&ltr), loc(&ltr));
+        assert!(swatch(&rtl).left() > loc(&rtl).left(), "RTL: the swatch leads at the right: {:?} {:?}", swatch(&rtl), loc(&rtl));
+    }
 }

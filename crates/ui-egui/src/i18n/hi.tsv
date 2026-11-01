@@ -512,6 +512,7 @@ cameraRaw	Yellow	पीला
 	Refine Edge…	Refine Edge…
 	Refine Strokes	Refine Strokes
 	Edits	संपादन
+	Search menus	मेनू खोजें
 	Selection	Selection
 	Shift Edge	Shift Edge
 	Smart Radius	Smart Radius
@@ -584,8 +585,110 @@ cameraRaw	Yellow	पीला
 	Refine Hair needs hair detection, which isn't available yet	बाल परिशोधित करने के लिए बालों की पहचान चाहिए, जो अभी उपलब्ध नहीं है
 	Select and Mask was closed: its document is no longer the active one	चयन और मास्क बंद कर दिया गया: उसका दस्तावेज़ अब सक्रिय नहीं है
 	Select and Mask was closed: another layer was selected	चयन और मास्क बंद कर दिया गया: दूसरी लेयर चुनी गई
-# Art History Brush (#213).
-
-# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
-	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+	Amount:	मात्रा:
+	Anchor:	लंगर:
+	Author:	लेखक:
+	Auto-Select:	स्वचालित-चयन:
+	Bend:	झुकाव:
+	Blend If:	मिश्रण यदि:
+	Bottom:	तल:
+	Cache Level:	कैश स्तर:
+	Canvas extension color:	कैनवस विस्तार रंग:
+	Change To:	बदलें:
+	Channel:	चैनल:
+	Choose Stack Mode:	स्टेक मोड चुनें:
+	Color Indicates:	रंग संकेत है:
+	Contents:	सामग्री:
+	Control:	नियंत्रण:
+	Count:	गिनती:
+	Current Layer:	वर्तमान परत:
+	Curve Fit:	वक्र फिट:
+	Custom Pattern:	कस्टम पैटर्न:
+	Density:	घनत्व:
+	Diameter:	व्यास:
+	Dimensions:	आयाम:
+	Expansion:	विस्तार:
+	Exposure:	एक्सपोज़र:
+	Eyedroppers:	आइड्रॉपर:
+	Factor:	कारक:
+	Fill:	भराई:
+	Filter:	फ़िल्टर:
+	Font Size:	फ़ॉन्ट आकार:
+	Font preview:	फ़ॉन्ट पूर्वावलोकन:
+	Frequency:	आवृत्ति:
+	From:	से:
+	Fuzziness:	धुंध:
+	Gamma:	गामा:
+	Grid Size:	ग्रिड आकार:
+	Grid:	ग्रिड:
+	Image Size:	छवि आकार:
+	Input:	इनपुट:
+	Interpolation:	इंटरपोलेशन:
+	Left:	बायाँ:
+	Length:	लंबाई:
+	Level:	स्तर:
+	Limits:	सीमाएँ:
+	Location:	स्थान:
+	Lock:	लॉक:
+	Logical Length:	तार्किक लंबाई:
+	Logical Units:	तार्किक इकाइयाँ:
+	Mean:	माध्य:
+	Median:	माध्यिका:
+	Message:	संदेश:
+	Midtones from:	मिडटोन्स से:
+	Midtones to:	मिडटोन्स तक:
+	Mode:	मोड:
+	Not in Dictionary:	शब्दकोश में नहीं:
+	Output Channel:	आउटपुट चैनल:
+	Output Levels:	आउटपुट स्तर:
+	Output:	आउटपुट:
+	Patch:	पैच:
+	Percentile:	पर्सेंटाइल:
+	Pin Depth:	पिन गहराई:
+	Pixel Length:	पिक्सेल लंबाई:
+	Pixels:	पिक्सेल:
+	Preset:	प्रीसेट:
+	Print Resolution:	प्रिंट रिज़ॉल्यूशन:
+	Protect:	सुरक्षित करें:
+	Radius:	त्रिज्या:
+	Range:	सीमा:
+	Right:	दायाँ:
+	Rotate:	घुमाएँ:
+	Sample Size:	नमूना आकार:
+	Sample:	नमूना:
+	Scale:	पैमाना:
+	Select the crop presets to delete:	हटाने के लिए क्रोप परिसेट चूनें:
+	Select:	चुनें:
+	Selection Preview:	चयन पूर्वावलोकन:
+	Set:	सेट:
+	Shape:	आकार:
+	Show:	दिखाएँ:
+	Sides:	भुजाएँ:
+	Solidity:	ठोसपन:
+	Source:	स्रोत:
+	Split:	विभाजन:
+	Star Ratio:	स्तार अनुपात:
+	Std Dev:	मानक विचलन:
+	Strength:	मज़बूती:
+	Stroke:	स्ट्रोक:
+	Structure:	संरचना:
+	Suggestions:	सुझाव:
+	Target:	लक्ष्य:
+	Text Position:	पाथ स्थिति:
+	Tolerance:	सहिशिनुता:
+	Tone:	टोन:
+	Top:	शीर्ष:
+	Total:	कुल:
+	Type:	प्रकार:
+	Underlying Layer:	तला परत:
+	Use:	उपयोग:
+	Warp:	विकृति:
+	Weight:	वज़न:
+	Top Left Radius:	शीर्ष बायाँ त्रिज्या:
+	Top Right Radius:	शीर्ष दायाँ त्रिज्या:
+	Bottom Left Radius:	तल बायाँ त्रिज्या:
+	Bottom Right Radius:	तल दायाँ त्रिज्या:
+	Highlights from:	हाइलाइट्स से:
+	Shadows up to:	शेडोज़ तक:
+	Channels:	चैनल्स:

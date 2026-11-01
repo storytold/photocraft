@@ -540,22 +540,30 @@ mod tests {
     #[test]
     fn sampling_row_mirrors_item_order_in_rtl() {
         use crate::direction::{Dir, direction_scope};
-        fn label_x(dir: Dir) -> f32 {
+        fn labels(dir: Dir) -> (egui::Rect, egui::Rect) {
             let _scope = direction_scope(dir);
             let ctx = egui::Context::default();
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                crate::direction::dialog_row(ui, |ui| {
-                    let r = ui.label("Color");
-                    ui.label("Indicates");
-                    r.rect.left()
-                })
-                .inner
-            })
-            .inner
+            let mut out = None;
+            let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
+                out = Some(
+                    ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        crate::direction::dialog_row(ui, |ui| {
+                            let a = ui.label("Color");
+                            let b = ui.label("Indicates");
+                            (a.rect, b.rect)
+                        })
+                        .inner
+                    })
+                    .inner,
+                );
+            });
+            full.textures_delta.clear();
+            out.unwrap()
         }
-        let ltr = label_x(Dir::Ltr);
-        let rtl = label_x(Dir::Rtl);
-        assert!(ltr < rtl, "LTR label at left edge ({ltr}), RTL label mirrored right ({rtl})");
+        let (ltr_a, ltr_b) = labels(Dir::Ltr);
+        let (rtl_a, rtl_b) = labels(Dir::Rtl);
+        assert!(ltr_a.left() < ltr_b.left(), "LTR: the Color label leads on the left: {ltr_a:?} then {ltr_b:?}");
+        assert!(rtl_b.left() < rtl_a.left(), "RTL: the Color label leads on the right: {rtl_a:?} then {rtl_b:?}");
     }
 
     /// A layer with a selection, so the workspace opens.

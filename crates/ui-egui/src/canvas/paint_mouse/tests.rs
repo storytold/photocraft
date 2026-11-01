@@ -424,12 +424,13 @@ fn picker_gear_menu_saves_and_names_a_new_preset() {
     // The gear's boxes pick the card parts; the last one on can't be turned off.
     h.get_by_label("Brush Preset Options").click();
     h.run_steps(2);
-    h.get_by_label("Brush Tip").click();
+    // Checked part rows carry the gutter checkmark ("✔ …") in their label; match by containment.
+    h.get_by_label_contains("Brush Tip").click();
     h.run_steps(2);
     assert!(!h.state().ui.brush_picker_list.show_tip);
-    h.get_by_label("Brush Stroke").click();
+    h.get_by_label_contains("Brush Stroke").click();
     h.run_steps(2);
-    h.get_by_label("Brush Name").click();
+    h.get_by_label_contains("Brush Name").click();
     h.run_steps(2);
     assert!(h.state().ui.brush_picker_list.show_name, "the last part on stays on");
     assert!(!h.state().ui.brush_picker_list.show_stroke && !h.state().ui.brush_picker_list.show_tip);

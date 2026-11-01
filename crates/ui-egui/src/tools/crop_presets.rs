@@ -146,29 +146,33 @@ pub fn dropdown(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let combo =
         craft_ui::ComboBox::from_id_salt("crop-ratio").selected_text(label).width(140.0).height(420.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
             crate::press_menu::above_parent_ui(parent_layer, ui);
-            let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
-            for (k, l) in &before {
-                if ui.selectable_label(current_user.is_none() && *k == o.crop_ratio, tl!(l)).clicked() {
-                    chosen = Some(Choice::Builtin(k.clone()));
+            // The combo's popup body is pinned left-to-right by the fork; the shared body scope
+            // and menu rows mirror it under a right-to-left direction.
+            crate::direction::popup_body(ui, |ui| {
+                let (before, after): (Vec<_>, Vec<_>) = builtin.iter().partition(|(k, _)| k != crop_size::FRONT);
+                for (k, l) in &before {
+                    if crate::menu_keys::menu_row(ui, tl!(l), None, current_user.is_none() && *k == o.crop_ratio, true).clicked() {
+                        chosen = Some(Choice::Builtin(k.clone()));
+                    }
                 }
-            }
-            for (name, _) in &users {
-                if ui.selectable_label(current_user.as_deref() == Some(name), name.as_str()).clicked() {
-                    chosen = Some(Choice::User(name.clone()));
+                for (name, _) in &users {
+                    if crate::menu_keys::menu_row(ui, name.as_str(), None, current_user.as_deref() == Some(name), true).clicked() {
+                        chosen = Some(Choice::User(name.clone()));
+                    }
                 }
-            }
-            for (k, l) in &after {
-                if ui.selectable_label(false, tl!(l)).clicked() {
-                    chosen = Some(Choice::Builtin(k.clone()));
+                for (k, l) in &after {
+                    if crate::menu_keys::menu_row(ui, tl!(l), None, false, true).clicked() {
+                        chosen = Some(Choice::Builtin(k.clone()));
+                    }
                 }
-            }
-            ui.separator();
-            if ui.add_enabled(can_new, egui::Button::selectable(false, tl!("New Crop Preset…"))).clicked() {
-                chosen = Some(Choice::New);
-            }
-            if ui.add_enabled(!users.is_empty(), egui::Button::selectable(false, tl!("Delete Crop Preset…"))).clicked() {
-                chosen = Some(Choice::Delete);
-            }
+                ui.separator();
+                if crate::menu_keys::menu_row(ui, tl!("New Crop Preset…"), None, false, can_new).clicked() {
+                    chosen = Some(Choice::New);
+                }
+                if crate::menu_keys::menu_row(ui, tl!("Delete Crop Preset…"), None, false, !users.is_empty()).clicked() {
+                    chosen = Some(Choice::Delete);
+                }
+            })
         });
     let _ = combo.response.accessible_name(tl!("Aspect Ratio"));
     if let Some(c) = chosen {
@@ -283,7 +287,9 @@ fn new_body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let id = ui.scope_id().with("crop-preset-name");
     ui.horizontal(|ui| {
         let name_label = ui.label(tl!("Name:"));
-        let r = ui.add(egui::TextEdit::singleline(&mut name).id(id).char_limit(MAX_NAME).desired_width(260.0)).labelled_by(name_label.id);
+        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+        let edit = crate::widgets::rtl_singleline(&mut name, &mut layouter).id(id).char_limit(MAX_NAME).desired_width(260.0);
+        let r = ui.add(edit).labelled_by(name_label.id);
         // Photoshop focuses the name with all of it selected, so typing replaces it.
         let once = id.with("focused");
         if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {
@@ -309,8 +315,10 @@ fn delete_body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, 
     egui::Frame::NONE.stroke(egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).field_border)).inner_margin(2.0).show(ui, |ui| {
         egui::ScrollArea::vertical().id_salt("crop-preset-delete").max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            // Full-width rows, names on the left.
-            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+            // Full-width rows, hugging the reading-start edge (the right in a right-to-left
+            // UI): the body layout, cross-justified — left-to-right this is exactly
+            // `top_down_justified(Align::Min)`.
+            ui.with_layout(crate::direction::body_layout().with_cross_justify(true), |ui| {
                 for (name, _) in &saved {
                     let on = selected.contains(name);
                     let r = ui.add(egui::Button::selectable(on, name.as_str()).min_size(vec2(0.0, 22.0)));

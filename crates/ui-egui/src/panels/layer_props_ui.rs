@@ -162,7 +162,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
             // Two label+field columns with the link toggle between them, filling the panel.
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
                 if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
@@ -175,7 +175,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
                 }
             });
             ui.add_space(ROW_GAP);
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
                 if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
@@ -228,7 +228,7 @@ fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(S
     if !section(ui, "align", tl!("Align and Distribute")) {
         return;
     }
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (i, kind) in ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"].into_iter().enumerate() {
             if i == 3 {
@@ -252,7 +252,11 @@ fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(S
     // The engine already supports equal-gap distribution in both axes. Make those
     // existing commands discoverable here as well as through Layer > Distribute (#2349).
     // Three or more selected layers are required; the engine remains authoritative.
-    ui.horizontal_wrapped(|ui| {
+    // Bounded-height wrapping row: an unbounded wrap row inside a scroll area sizes its
+    // first frame to the whole remaining content height, pushing later sections off-screen.
+    let wrap_row = crate::direction::row().with_main_wrap(true);
+    let size = egui::vec2(crate::direction::row_width(ui), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, wrap_row, |ui| {
         for (kind, text) in [("horizontally", tl!("Horizontally")), ("vertically", tl!("Vertically"))] {
             let id = format!("layer.distribute.{kind}");
             if ui.add_enabled(app.session.is_enabled(&id), egui::Button::new(text)).clicked() {
@@ -431,5 +435,47 @@ mod tests {
         s.execute("layer.new.layer", json!({})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), u, 800.0), 0.5, "a pixel layer keeps half a pixel");
+    }
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The Transform row mirrors in a right-to-left UI: W and H swap ends around the link
+    /// toggle, keeping the same gap.
+    #[test]
+    fn the_transform_row_mirrors_in_a_right_to_left_ui() {
+        let rects = |dir: Dir| {
+            let _d = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
+            app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+            let mut h = Harness::builder().with_size(vec2(280.0, 900.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().cumulative_pass_nr() == 0 {
+                        PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                        return;
+                    }
+                    let state = app.session.active().unwrap();
+                    let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                    properties(app, ui, &layer);
+                },
+                app,
+            );
+            h.run_steps(3);
+            (h.get_by_label("Width").rect(), h.get_by_label("Height").rect())
+        };
+        let (w_l, h_l) = rects(Dir::Ltr);
+        assert!(w_l.right() <= h_l.left(), "LTR: W starts the row: {w_l:?} {h_l:?}");
+        let (w_r, h_r) = rects(Dir::Rtl);
+        assert!(h_r.right() <= w_r.left(), "RTL: H starts the row: {h_r:?} {w_r:?}");
+        let gap_ltr = h_l.left() - w_l.right();
+        let gap_rtl = w_r.left() - h_r.right();
+        assert!((gap_ltr - gap_rtl).abs() < 1.0, "the gap is direction-independent: {gap_ltr} vs {gap_rtl}");
     }
 }

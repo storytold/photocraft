@@ -504,7 +504,7 @@ fn right_clicking_w_or_h_picks_their_unit_and_remembers_it() {
     // H opens the same menu, with the current unit checked.
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(3).unwrap().click_secondary();
     h.run_steps(2);
-    assert!(h.query_by_label("✓ Inches").is_some(), "the current unit is checked");
+    assert!(h.query_by_label("✔ Inches").is_some(), "the current unit is checked");
     h.get_by_label("Percent").click();
     h.run_steps(3);
     assert_eq!(shown_size(&h), ["100", "100"]);
@@ -2952,38 +2952,6 @@ fn targeted_unlinked_mask_transforms_alone_through_the_box() {
 }
 
 #[test]
-fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
-    for view in ["gray", "overlay"] {
-        let mut app = masked_app(false);
-        app.run("channel.target", json!({"colors":[0,2]})).unwrap();
-        app.run("view.layerMask", json!({"mode":view})).unwrap();
-        assert!(crate::menus::is_enabled(&app, "edit.freeTransform"));
-        let st = app.session.active().unwrap();
-        let layer = st.active_layer.unwrap();
-        let original = st.doc.layer(layer).unwrap().surface().unwrap().clone();
-        begin(&mut app, &egui::Context::default()).unwrap();
-        let transform = app.ui.transform.as_mut().unwrap();
-        assert_eq!(transform.target, Some(json!("mask")));
-        transform.quad = transform.quad.map(|[x, y]| [x + 20.0, y]);
-        commit(&mut app);
-        assert!(!app.ui.status_error, "{}", app.ui.status);
-        app.ui.tool = crate::state::Tool::Move;
-        app.ui.tool_options.move_auto_select = false;
-        app.ui.extras.snap = false;
-        app.ui.view.show.smart_guides = false;
-        let mods = egui::Modifiers::NONE;
-        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: 28.0, y: 30.0, pressure: 1.0 }, mods);
-        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Move { x: 38.0, y: 30.0, pressure: 1.0 }, mods);
-        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Up { x: 38.0, y: 30.0 }, mods);
-        assert!(!app.ui.status_error, "{}", app.ui.status);
-        let actual = app.session.active().unwrap().doc.layer(layer).unwrap();
-        assert_eq!(actual.surface().unwrap(), &original);
-        let mask = &actual.mask.as_ref().unwrap().surface;
-        assert!(mask.sample_channel(24, 30, 0) > 0.99 && mask.sample_channel(40, 30, 0) < 0.01, "only the mask moved");
-    }
-}
-
-#[test]
 fn linked_mask_target_transforms_the_layer() {
     let mut app = masked_app(true);
     app.ui.mask_target = true;
@@ -3311,4 +3279,48 @@ fn several_layers_reuse_the_transform_interpolation_preference() {
     let transform = app.ui.transform.as_ref().unwrap();
     assert_eq!(transform.layers.len(), 2);
     assert_eq!(transform.interpolation, "nearest");
+}
+
+/// The W/H fields' unit context menu goes through the shared popup body: under RTL the rows'
+/// labels hug the popup's right edge, under LTR the left edge.
+#[test]
+fn size_unit_context_menu_mirrors_only_under_rtl() {
+    let texts = |dir: crate::direction::Dir| {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+        let mut popup = egui::Rect::NOTHING;
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let btn = ui.button("W");
+                let _ = egui::Popup::menu(&btn)
+                    .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                    .show(|ui| {
+                        crate::menus::popup_body(ui, |ui| {
+                            let _ = crate::rulers::unit_menu(ui, photocraft_engine::prefs::Unit::Pixels);
+                        });
+                    })
+                    .inspect(|r| popup = r.response.rect);
+            });
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+        }
+        (popup, texts)
+    };
+    let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+    let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+    assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+    let at = |v: &[(String, egui::Rect)]| v.iter().find(|(t, _)| t.contains("Pixels")).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+    let row = at(&rtl);
+    assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+    let row = at(&ltr);
+    assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
 }

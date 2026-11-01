@@ -238,3 +238,39 @@ fn transform_has_commit_and_cancel_buttons_and_its_own_cursors() {
     let done = preset(h.state()).unwrap();
     assert_eq!((done.center, done.rotation), ([120.0, 90.0], 30.0), "commit applies the preview");
 }
+
+/// The symmetry menu's icon+label mode rows mirror only under a right-to-left UI: the mode name
+/// moves from after the icon at the left (LTR) to before the icon at the popup's right edge.
+#[test]
+fn symmetry_menu_rows_mirror_only_under_rtl() {
+    use crate::text::direction::{self, Dir};
+    let label_rect = |dir: Dir| -> Rect {
+        let _scope = direction::direction_scope(dir);
+        let app = app();
+        let mut h = Harness::builder().with_size(vec2(900.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal(|ui| menu(app, ui));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        h.run_steps(4);
+        h.get_by_label("Set painting symmetry options").click();
+        h.run_steps(3);
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) if ts.galley.text() == "Vertical" => Some(ts.visual_bounding_rect()),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| panic!("the mode row is open in {dir:?}"))
+    };
+    let ltr = label_rect(Dir::Ltr);
+    let rtl = label_rect(Dir::Rtl);
+    assert!(rtl.left() - ltr.left() > 30.0 && rtl.right() - ltr.right() > 30.0, "RTL reads from the right edge: {ltr:?} -> {rtl:?}");
+}

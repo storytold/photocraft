@@ -150,53 +150,56 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 pub fn options_button(s: &mut CropShield, ui: &mut egui::Ui) -> bool {
     let mut pick = false;
     let r = crate::icons::button(ui, "settings", 24.0, false, tl!("Set additional Crop options"));
-    egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+    egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(240.0);
         ui.set_max_width(300.0);
         // Photoshop 25.1's order; Classic Mode greys out the other two (Show Cropped Area then
-        // shows as on, which is how it acts there).
-        ui.horizontal(|ui| {
-            crate::widgets::checkbox(ui, &mut s.classic_mode, tl!("Use Classic Mode"));
-            ui.weak(crate::shortcuts::pretty("P"));
-        });
+        // shows as on, which is how it acts there). Rows go through the shared menu row, so they
+        // mirror under a right-to-left direction — the shortcut hint sits at the reading end —
+        // where a plain `ui.checkbox` would stay anchored at the popup's left edge.
+        let toggle = |ui: &mut egui::Ui, on: &mut bool, label: &str, shortcut: Option<&'static str>, enabled: bool| {
+            if crate::menu_keys::menu_row(ui, label, shortcut, *on, enabled).clicked() {
+                *on = !*on;
+            }
+        };
         let classic = s.classic_mode;
+        toggle(ui, &mut s.classic_mode, tl!("Use Classic Mode"), Some("P"), true);
         ui.add_enabled_ui(!classic, |ui| {
-            ui.horizontal(|ui| {
-                if classic {
-                    crate::widgets::checkbox(ui, &mut true, tl!("Show Cropped Area"));
-                } else {
-                    crate::widgets::checkbox(ui, &mut s.show_cropped_area, tl!("Show Cropped Area"));
-                }
-                ui.weak(crate::shortcuts::pretty("H"));
-            });
-            crate::widgets::checkbox(ui, &mut s.auto_center_preview, tl!("Auto Center Preview"));
+            let shown = if classic { true } else { s.show_cropped_area };
+            if crate::menu_keys::menu_row(ui, tl!("Show Cropped Area"), Some("H"), shown, true).clicked() {
+                s.show_cropped_area = !s.show_cropped_area;
+            }
+            toggle(ui, &mut s.auto_center_preview, tl!("Auto Center Preview"), None, true);
         });
         ui.separator();
-        crate::widgets::checkbox(ui, &mut s.enabled, tl!("Enable Crop Shield"));
+        toggle(ui, &mut s.enabled, tl!("Enable Crop Shield"), None, true);
         ui.add_enabled_ui(s.enabled, |ui| {
             ui.indent("crop-shield", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(tl!("Color:"));
-                    ui.radio_value(&mut s.color, ShieldColor::MatchCanvas, tl!("Match Canvas"));
-                    if ui.radio(s.color == ShieldColor::Custom, tl!("Custom…")).clicked() {
-                        s.color = ShieldColor::Custom;
-                        pick = true;
-                    }
-                    if s.color == ShieldColor::Custom {
-                        let [r, g, b] = s.custom_color;
+                if crate::menu_keys::menu_row(ui, tl!("Match Canvas"), None, s.color == ShieldColor::MatchCanvas, true).clicked() {
+                    s.color = ShieldColor::MatchCanvas;
+                }
+                if crate::menu_keys::menu_row(ui, tl!("Custom…"), None, s.color == ShieldColor::Custom, true).clicked() {
+                    s.color = ShieldColor::Custom;
+                    pick = true;
+                }
+                if s.color == ShieldColor::Custom {
+                    let [r, g, b] = s.custom_color;
+                    // In a reading-order row the swatch hugs the reading start (a bare widget
+                    // under the pinned body would stay at the popup's physical left edge).
+                    crate::direction::full_row(ui, |ui| {
                         if crate::widgets::color_swatch_button(ui, Color32::from_rgb(r, g, b), tl!("Crop Shield color")).clicked() {
                             pick = true;
                         }
-                    }
-                });
+                    });
+                }
                 if !s.opacity.is_finite() {
                     s.opacity = DEFAULT_OPACITY;
                 }
-                crate::widgets::slider_row(ui, tl!("Opacity:"), &mut s.opacity, 0.0..=100.0, "%", None);
-                crate::widgets::checkbox(ui, &mut s.auto_adjust, tl!("Auto Adjust Opacity"));
+                crate::direction::full_row(ui, |ui| crate::widgets::slider_row(ui, tl!("Opacity:"), &mut s.opacity, 0.0..=100.0, "%", None));
+                toggle(ui, &mut s.auto_adjust, tl!("Auto Adjust Opacity"), None, true);
             });
         });
-    });
+    }));
     pick
 }
 

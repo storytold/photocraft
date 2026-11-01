@@ -29,7 +29,9 @@ pub fn restore_options(app: &mut PhotocraftApp) {
 
 /// The real menu command dispatcher handles rename's in-place editor and other shell routing.
 pub fn run_menu_command(app: &mut PhotocraftApp, ui: &mut Ui, label: &str, id: &str) {
-    if ui.add_enabled(app.session.is_enabled(id), egui::Button::new(label)).clicked() {
+    // The shared menu row, so the row mirrors under a right-to-left direction — a plain
+    // `egui::Button` keeps its label anchored at the popup's physical left edge.
+    if crate::menu_keys::menu_row(ui, label, None, false, app.session.is_enabled(id)).clicked() {
         let ctx = ui.ctx().clone();
         if let Err(e) = crate::menus::invoke(app, &ctx, id, json!({})) {
             app.ui.status = e;
@@ -262,9 +264,9 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &Context) {
     };
     egui::Modal::new(egui::Id::unique("layers-panel-options-modal")).show(ctx, |ui| {
         ui.set_width(if matches!(dialog, LayersPanelDialog::PanelOptions(_)) { 480.0 } else { 380.0 });
-        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
-        // moves; in RTL the blocks right-align and every nested row mirrors.
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+        // One direction-aware body: LTR runs the Modal's own layout unchanged; RTL re-scopes with
+        // `body_layout()` sized from the cursor, so the blocks right-align and nested rows mirror.
+        crate::direction::dialog_content(ui, |ui| {
             dialog_body(ui, &mut dialog, title, &mut confirmed, &mut cancelled);
         });
     });
@@ -565,12 +567,13 @@ mod tests {
                 ..Default::default()
             };
             let mut out = Vec::new();
-            ctx.run_ui(input, |ui| {
+            let mut full = ctx.run_ui(input, |ui| {
                 crate::direction::dialog_row(ui, |ui| {
                     out.push(ui.label("aaa").rect);
                     out.push(ui.label("b").rect);
                 });
             });
+            full.textures_delta.clear();
             out
         };
         let ltr = rects(Dir::Ltr);
@@ -578,7 +581,40 @@ mod tests {
         assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
         assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
         let ltr_gap = ltr[1].left() - ltr[0].right();
-        let rtl_gap = rtl[1].right() - rtl[0].left();
+        let rtl_gap = rtl[0].left() - rtl[1].right();
         assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
+    }
+
+    /// Twin of the migrated `dialog_content` body: the title and the first body row never share a
+    /// baseline and stay inside the modal box in both directions (LTR unchanged).
+    #[test]
+    fn dialog_content_keeps_title_and_body_apart_in_both_directions() {
+        use crate::direction::{Dir, direction_scope};
+        use egui_kittest::kittest::Queryable;
+
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.layers_panel_dialog = Some(LayersPanelDialog::NewLayer(String::new()));
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        show_dialog(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(5);
+            let modal = h.ctx.memory(|m| m.area_rect(egui::Id::unique("layers-panel-options-modal"))).expect("the modal");
+            (modal, h.get_by_label("New Layer").rect(), h.get_by_label("Name:").rect())
+        };
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let (modal, title, body) = rects(dir);
+            assert!(title.bottom() <= body.top() + 0.5, "{dir:?}: the title and the body never share a baseline: {title:?} vs {body:?}");
+            for r in [title, body] {
+                assert!(r.left() >= modal.left() - 1.0 && r.right() <= modal.right() + 1.0, "{dir:?}: the content stays inside the modal: {r:?} in {modal:?}");
+            }
+        }
     }
 }

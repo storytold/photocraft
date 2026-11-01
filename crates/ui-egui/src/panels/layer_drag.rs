@@ -298,21 +298,7 @@ pub(super) fn fx_drop(ctx: &egui::Context, ui: &egui::Ui, l: &Layer, rect: Rect,
     }
 }
 
-/// +1 left-to-right, −1 right-to-left: the signed x-step for hand-painted row geometry.
-fn step() -> f32 {
-    if crate::direction::is_rtl() { -1.0 } else { 1.0 }
-}
-
-/// The reading-start x for content offset `off` from the row's start edge.
-fn start_x(rect: Rect, off: f32) -> f32 {
-    if crate::direction::is_rtl() { rect.right() - off } else { rect.left() + off }
-}
-
-/// A rect of width `w` whose reading-start edge sits at `x` (it grows against [`step`]).
-fn span(x: f32, w: f32, top: f32, bottom: f32) -> Rect {
-    let d = step();
-    Rect::from_min_max(pos2(x.min(x + d * w), top), pos2(x.max(x + d * w), bottom))
-}
+use crate::direction::{start_span, start_x, step};
 
 /// Photoshop shows a layer's effects as indented sub-rows ("Effects", then each effect). The eye
 /// on "Effects" shows or hides them all, the eye on an effect's row just that one (#1622).
@@ -344,13 +330,13 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         }
         // Nested under the layer's eye column so an effect does not read as its own layer (#4572).
         let cy = rect.center().y;
-        let eye = span(start_x(rect, 36.0), 18.0, cy - 9.0, cy + 9.0);
+        let eye = start_span(start_x(rect, 36.0), 18.0, cy - 9.0, cy + 9.0);
         // A hidden effect's eye box is left empty (still clickable), like a hidden layer's.
         if on {
             icons::paint(ui, eye, "eye", 12.0, t.icon);
         }
         // The whole eye column of the row takes the click, so it never opens the Layer Style dialog.
-        let eye_cell = span(start_x(rect, 30.0), 28.0, rect.top(), rect.bottom()).intersect(rect);
+        let eye_cell = start_span(start_x(rect, 30.0), 28.0, rect.top(), rect.bottom()).intersect(rect);
         if ui.interact(eye_cell, ui.scope_id().with(("fx-eye", l.id.0, i)), Sense::click()).clicked() {
             let mut params = json!({"layer": l.id.0, "visible": !on});
             if let (Some(index), Some(o)) = (i.checked_sub(1), params.as_object_mut()) {
@@ -362,7 +348,7 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         if i == 0 {
             icons::paint(ui, Rect::from_center_size(pos2(x - step() * 12.0, cy), vec2(14.0, 14.0)), "sparkles", 11.0, t.text_dim);
         }
-        crate::layer_row_ui::label(
+        crate::direction::paint_label_span(
             ui.painter(),
             x,
             cy,
@@ -377,8 +363,10 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         }
         // #2846: right-click opens the layer style menu (Create Layer, Copy Layer Style…), as in Photoshop.
         resp.context_menu(|ui| {
-            crate::widgets::style_spectrum_popup_menu(ui);
-            crate::layer_menu_ui::show_effects(app, ui, l, actions);
+            crate::menus::popup_body(ui, |ui| {
+                crate::widgets::style_spectrum_popup_menu(ui);
+                crate::layer_menu_ui::show_effects(app, ui, l, actions);
+            })
         });
     }
 }
@@ -387,10 +375,8 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
 mod tests {
     use egui::{Rect, pos2, vec2};
 
-    use crate::direction::{Dir, direction_scope};
+    use crate::direction::{Dir, direction_scope, start_span, start_x, step};
     use crate::layer_row_ui::pad_edge;
-
-    use super::{span, start_x, step};
 
     fn row() -> Rect {
         Rect::from_min_size(pos2(100.0, 40.0), vec2(300.0, 22.0))
@@ -403,8 +389,8 @@ mod tests {
         assert_eq!(step(), 1.0);
         assert_eq!(start_x(r, 30.0), 130.0);
         assert_eq!(pad_edge(r), 390.0);
-        assert_eq!(span(start_x(r, 36.0), 18.0, 50.0, 68.0), Rect::from_min_max(pos2(136.0, 50.0), pos2(154.0, 68.0)));
-        assert_eq!(span(start_x(r, 30.0), 28.0, 40.0, 62.0).intersect(r), Rect::from_min_max(pos2(130.0, 40.0), pos2(158.0, 62.0)));
+        assert_eq!(start_span(start_x(r, 36.0), 18.0, 50.0, 68.0), Rect::from_min_max(pos2(136.0, 50.0), pos2(154.0, 68.0)));
+        assert_eq!(start_span(start_x(r, 30.0), 28.0, 40.0, 62.0).intersect(r), Rect::from_min_max(pos2(130.0, 40.0), pos2(158.0, 62.0)));
     }
 
     #[test]
@@ -414,8 +400,8 @@ mod tests {
         assert_eq!(step(), -1.0);
         assert_eq!(start_x(r, 30.0), 370.0);
         assert_eq!(pad_edge(r), 110.0);
-        assert_eq!(span(start_x(r, 36.0), 18.0, 50.0, 68.0), Rect::from_min_max(pos2(346.0, 50.0), pos2(364.0, 68.0)));
-        assert_eq!(span(start_x(r, 30.0), 28.0, 40.0, 62.0).intersect(r), Rect::from_min_max(pos2(342.0, 40.0), pos2(370.0, 62.0)));
+        assert_eq!(start_span(start_x(r, 36.0), 18.0, 50.0, 68.0), Rect::from_min_max(pos2(346.0, 50.0), pos2(364.0, 68.0)));
+        assert_eq!(start_span(start_x(r, 30.0), 28.0, 40.0, 62.0).intersect(r), Rect::from_min_max(pos2(342.0, 40.0), pos2(370.0, 62.0)));
     }
 
     /// The effect name hangs from the reading start and is cut at the pad edge, in both
@@ -424,7 +410,7 @@ mod tests {
     fn effect_label_hangs_from_the_reading_start() {
         let ctx = egui::Context::default();
         // egui creates its Fonts on the first full pass; the painters below layout text.
-        let out = ctx.run(egui::RawInput::default(), |_| {});
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         let r = row();
         let indent = 30.0 + 34.0;
@@ -437,7 +423,7 @@ mod tests {
             let _ltr = direction_scope(Dir::Ltr);
             let painter = egui::Painter::new(ctx.clone(), layer, r);
             let x = start_x(r, indent + off);
-            let painted = crate::layer_row_ui::label(&painter, x, r.center().y, pad_edge(r), name, font.clone(), egui::Color32::WHITE)
+            let painted = crate::direction::paint_label_span(&painter, x, r.center().y, pad_edge(r), name, font.clone(), egui::Color32::WHITE)
                 .expect("the effect label is painted");
             assert_eq!(painted.left(), x, "the label hangs from the reading start");
             assert!(painted.right() <= pad_edge(r), "the label is cut at the pad edge: {painted:?}");
@@ -447,7 +433,7 @@ mod tests {
             let painter = egui::Painter::new(ctx.clone(), layer, r);
             let x = start_x(r, indent + off);
             let painted =
-                crate::layer_row_ui::label(&painter, x, r.center().y, pad_edge(r), name, font, egui::Color32::WHITE).expect("the effect label is painted");
+                crate::direction::paint_label_span(&painter, x, r.center().y, pad_edge(r), name, font, egui::Color32::WHITE).expect("the effect label is painted");
             assert_eq!(painted.right(), x, "the label hangs from the reading start");
             assert!(painted.left() >= pad_edge(r), "the label is cut at the pad edge: {painted:?}");
         }

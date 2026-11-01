@@ -89,39 +89,49 @@ pub fn table(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.spacing_mut().interact_size = egui::vec2(14.0, 14.0);
         ui.spacing_mut().item_spacing = egui::vec2(1.0, 1.0);
         // The swatches keep the palette's index order in every direction: an indexed colour
-        // table is data, not a reading row.
-        // The fork's `Grid` cannot start under a right-to-left cursor; the swatch table is data
-        // and keeps its index order, so it runs in an LTR scope in either direction.
-        crate::direction::ltr_vertical(ui, |ui| {
-            egui::Grid::new("web-color-table").spacing(egui::vec2(1.0, 1.0)).show(ui, |ui| {
-                for (i, source) in table.iter().enumerate() {
-                    let mut color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
-                    let response = ui.push_id(i, |ui| crate::widgets::color_edit_button_srgb(ui, &mut color, tl!("Color Picker"))).inner;
-                    response.clone().on_hover_text(format!("Index {i}: {}", web_cmds::rgb_hex(color)));
-                    if response.clicked() {
-                        f.insert("__selectedColor".into(), json!(i));
-                    }
-                    if f.get("__selectedColor").and_then(Value::as_u64) == Some(i as u64) {
-                        let t = Tokens::get(ui.ctx());
-                        ui.painter().rect_stroke(response.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-                    }
-                    if response.changed() {
-                        let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
-                        if let Some(edits) = edits.as_object_mut() {
-                            edits.insert(i.to_string(), json!(web_cmds::rgb_hex(color)));
-                        }
-                    }
-                    if i % 16 == 15 {
-                        ui.end_row();
+        // table is data, not a reading row. The fork's `Grid` cannot start under a
+        // right-to-left cursor, so the grid runs in an LTR scope in either direction; in a
+        // right-to-left UI the scope is anchored at the body's reading-start edge with the
+        // strip's natural width, so the strip itself hugs the right like the mirrored body.
+        let cells = table.len() + usize::from(f.get("__transparentIndex").and_then(Value::as_u64).is_some());
+        let mut draw = |ui: &mut egui::Ui| {
+            for (i, source) in table.iter().enumerate() {
+                let mut color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
+                let response = ui.push_id(i, |ui| crate::widgets::color_edit_button_srgb(ui, &mut color, tl!("Color Picker"))).inner;
+                response.clone().on_hover_text(format!("Index {i}: {}", web_cmds::rgb_hex(color)));
+                if response.clicked() {
+                    f.insert("__selectedColor".into(), json!(i));
+                }
+                if f.get("__selectedColor").and_then(Value::as_u64) == Some(i as u64) {
+                    let t = Tokens::get(ui.ctx());
+                    ui.painter().rect_stroke(response.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                }
+                if response.changed() {
+                    let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
+                    if let Some(edits) = edits.as_object_mut() {
+                        edits.insert(i.to_string(), json!(web_cmds::rgb_hex(color)));
                     }
                 }
-                if f.get("__transparentIndex").and_then(Value::as_u64).is_some() {
-                    let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                    crate::widgets::checker(ui.painter(), rect, 4.0);
-                    response.on_hover_text(tl!("Transparency"));
+                if i % 16 == 15 {
+                    ui.end_row();
                 }
+            }
+            if f.get("__transparentIndex").and_then(Value::as_u64).is_some() {
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                crate::widgets::checker(ui.painter(), rect, 4.0);
+                response.on_hover_text(tl!("Transparency"));
+            }
+        };
+        if crate::direction::is_rtl() {
+            let w = ((cells.clamp(1, 16) as f32) * 15.0 - 1.0).min(ui.max_rect().width());
+            let top = ui.next_widget_position().y;
+            let rect = egui::Rect::from_min_size(egui::pos2(crate::direction::start_x_w(ui.max_rect(), 0.0, w), top), egui::vec2(w, ui.available_height()));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                egui::Grid::new("web-color-table").num_columns(16).spacing(egui::vec2(1.0, 1.0)).show(ui, |ui| draw(ui));
             });
-        });
+        } else {
+            crate::direction::ltr_grid(ui, "web-color-table", 16, egui::vec2(1.0, 1.0), |ui| draw(ui));
+        }
     });
     let footer_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
     ui.allocate_ui_with_layout(footer_size, crate::direction::row(), |ui| {
@@ -390,5 +400,40 @@ mod tests {
         assert!(ltr_count < ltr_reset, "LTR: the count sits left of Reset: {ltr_count} {ltr_reset}");
         let (rtl_count, rtl_reset) = row(crate::direction::Dir::Rtl);
         assert!(rtl_count > rtl_reset, "RTL: the count sits right of Reset: {rtl_count} {rtl_reset}");
+    }
+
+    /// The x of the painted swatch filled with `hex`, in a dialog body drawn in `dir`.
+    fn swatch_x(dir: crate::direction::Dir, hex: &str) -> f32 {
+        let _scope = crate::direction::direction_scope(dir);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(400.0, 300.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, state: &mut Map<String, Value>| {
+                    ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| table(ui, state));
+                },
+                serde_json::from_value::<Map<String, Value>>(json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"})).unwrap(),
+            );
+        h.run_steps(2);
+        let rgb = crate::color_picker_ui::parse_hex(hex).unwrap();
+        let want = egui::Color32::from_rgb((rgb[0] * 255.0).round() as u8, (rgb[1] * 255.0).round() as u8, (rgb[2] * 255.0).round() as u8);
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Rect(r) = &s.shape { Some(r) } else { None })
+            .find(|r| r.fill == want)
+            .map(|r| r.rect.center().x)
+            .unwrap_or(f32::NAN)
+    }
+
+    /// The swatch table is data: index 0 stays the strip's leftmost cell in both directions;
+    /// only the strip's own placement follows the reading start.
+    #[test]
+    fn the_swatch_table_keeps_its_index_order_in_rtl() {
+        let (ltr_red, ltr_blue) = (swatch_x(crate::direction::Dir::Ltr, "#ff0000"), swatch_x(crate::direction::Dir::Ltr, "#0000ff"));
+        assert!(ltr_red < ltr_blue, "LTR: index 0 is the leftmost swatch: {ltr_red} {ltr_blue}");
+        let (rtl_red, rtl_blue) = (swatch_x(crate::direction::Dir::Rtl, "#ff0000"), swatch_x(crate::direction::Dir::Rtl, "#0000ff"));
+        assert!(rtl_red < rtl_blue, "RTL: the index order stays physical left-to-right: {rtl_red} {rtl_blue}");
+        assert!(rtl_red > ltr_red, "RTL: the strip itself hugs the reading start: {ltr_red} {rtl_red}");
     }
 }

@@ -743,7 +743,7 @@ fn eye_column_edges_toggle_visibility_without_selecting_layer() {
 #[test]
 fn the_panel_menu_body_does_not_grow_wider_in_rtl() {
     use crate::direction::{Dir, direction_scope};
-    let menu_width = |dir: Dir| -> f32 {
+    let menu_width = |dir: Dir| -> (f32, f32) {
         let _scope = direction_scope(dir);
         let ctx = egui::Context::default();
         crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
@@ -753,6 +753,7 @@ fn the_panel_menu_body_does_not_grow_wider_in_rtl() {
         session.execute("layer.new.layer", json!({})).unwrap();
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         let mut width = 0.0;
+        let mut gutter = 0.0;
         ctx.run_ui(egui::RawInput::default(), |ui| {
             // The popup's sizing-pass ui: the default area size as max_rect, the menu's
             // justified layout, and sizing_pass on (the fork shrinks justified layouts then).
@@ -763,6 +764,7 @@ fn the_panel_menu_body_does_not_grow_wider_in_rtl() {
                     .sizing_pass(),
                 |ui| {
                     ui.set_min_width(180.0);
+                    gutter = crate::menu_keys::check_gutter(ui);
                     crate::direction::popup_body(ui, |ui| super::panel_menu(&mut app, ui));
                     width = ui.min_rect().width();
                 },
@@ -770,12 +772,13 @@ fn the_panel_menu_body_does_not_grow_wider_in_rtl() {
         })
         .textures_delta
         .clear();
-        width
+        (width, gutter)
     };
-    let ltr = menu_width(Dir::Ltr);
-    let rtl = menu_width(Dir::Rtl);
+    let (ltr, _) = menu_width(Dir::Ltr);
+    let (rtl, gutter) = menu_width(Dir::Rtl);
     assert!(ltr < 600.0, "ltr sanity: the body measured the wide sizing rect ({ltr})");
-    assert!(rtl <= ltr + 0.5, "the menu body grew in RTL: ltr {ltr} vs rtl {rtl}");
+    // RTL rows reserve the checkmark column (#5705), so allow exactly one gutter of growth.
+    assert!(rtl <= ltr + gutter + 0.5, "the menu body grew in RTL: ltr {ltr} vs rtl {rtl} (gutter {gutter})");
 }
 
 #[test]

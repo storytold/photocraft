@@ -56,7 +56,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             continue;
         }
         let on = cmd.is_some_and(|c| enabled(app, resolve(c, snapshot).0));
-        if ui.add_enabled(on, egui::Button::new(crate::i18n::t(label))).clicked() {
+        if crate::menu_keys::menu_row(ui, crate::i18n::t(label), None, false, on).clicked() {
             clicked = cmd;
         }
     }
@@ -77,7 +77,7 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::{NodeT, Queryable};
 
-    fn app() -> PhotocraftApp {
+    pub(super) fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
@@ -200,5 +200,106 @@ mod tests {
             let on = matches!(cmd, Some("window.panel.close" | "history.options"));
             assert_eq!(is_disabled(&h, label), !on, "{label}");
         }
+    }
+}
+
+/// The dock's ☰ popup rows go through `menu_row`: under RTL every row's label hugs the popup's
+/// right edge (the reading start), under LTR the left edge (#793).
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    fn menu_rows(dir: Dir) -> (egui::Rect, Vec<(String, egui::Rect)>) {
+        let _scope = direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut app = super::tests::app();
+        let mut popup = egui::Rect::NOTHING;
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let btn = ui.button("ellipsis");
+                let _ = egui::Popup::menu(&btn)
+                    .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                    .show(|ui| {
+                        crate::menus::popup_body(ui, |ui| {
+                            ui.set_min_width(180.0);
+                            panel_menu(&mut app, ui);
+                        });
+                    })
+                    .inspect(|r| popup = r.response.rect);
+            });
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+        }
+        (popup, texts)
+    }
+
+    #[test]
+    fn panel_menu_rows_mirror_only_under_rtl() {
+        let labels: Vec<&str> = ITEMS.iter().filter(|(l, _)| *l != "---").map(|(l, _)| *l).collect();
+        let (rtl_popup, rtl) = menu_rows(Dir::Rtl);
+        let (ltr_popup, ltr) = menu_rows(Dir::Ltr);
+        assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+        for label in &labels {
+            let at = |v: &[(String, egui::Rect)]| v.iter().find(|(t, _)| t.contains(label)).map(|(_, r)| *r);
+            let row = at(&rtl).unwrap_or_else(|| panic!("rtl row {label}"));
+            assert!(rtl_popup.right() - row.right() < 32.0, "rtl: {label} hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+            let row = at(&ltr).unwrap_or_else(|| panic!("ltr row {label}"));
+            assert!(row.left() - ltr_popup.left() < 32.0, "ltr: {label} hugs the popup's left edge: {row:?} in {ltr_popup:?}");
+        }
+    }
+
+    /// The ☰ popup anchors on the button's reading-start side and stays on screen (#962): the
+    /// fork's `Popup::menu` picks BOTTOM_END under RTL; LTR keeps the stock BOTTOM_START.
+    #[test]
+    fn panel_menu_popup_anchors_on_the_reading_start_side() {
+        let render = |dir: Dir, strip: egui::Rect| -> (egui::Rect, egui::Rect, egui::Rect) {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(260.0, 420.0));
+            let mut app = super::tests::app();
+            let (mut btn, mut popup, mut content) = (egui::Rect::NOTHING, egui::Rect::NOTHING, screen);
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                    content = ui.ctx().content_rect();
+                    let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                    let b = strip_ui.button("ellipsis");
+                    let _ = egui::Popup::menu(&b)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            crate::menus::popup_body(ui, |ui| {
+                                ui.set_min_width(120.0);
+                                panel_menu(&mut app, ui);
+                            });
+                        })
+                        .inspect(|r| {
+                            popup = r.response.rect;
+                            btn = b.rect;
+                        });
+                });
+                out.textures_delta.clear();
+            }
+            (btn, popup, content)
+        };
+        let mid = egui::Rect::from_min_size(egui::pos2(100.0, 16.0), egui::vec2(64.0, 24.0));
+        let edge = egui::Rect::from_min_size(egui::pos2(216.0, 16.0), egui::vec2(44.0, 24.0));
+        let (ltr_btn, ltr_popup, ltr_content) = render(Dir::Ltr, mid);
+        let (rtl_btn, rtl_popup, _) = render(Dir::Rtl, mid);
+        assert!(ltr_popup.is_positive() && rtl_popup.is_positive(), "the popups opened: {ltr_popup:?} {rtl_popup:?}");
+        assert!((ltr_popup.left() - ltr_btn.left()).abs() < 1.0, "ltr: popup hangs off the button's left edge: {ltr_popup:?} vs {ltr_btn:?}");
+        assert!((rtl_popup.right() - rtl_btn.right()).abs() < 1.0, "rtl: popup hangs off the button's right edge: {rtl_popup:?} vs {rtl_btn:?}");
+        let (_, ltr_edge_popup, _) = render(Dir::Ltr, edge);
+        let (_, rtl_edge_popup, rtl_edge_content) = render(Dir::Rtl, edge);
+        assert!(ltr_content.contains_rect(ltr_edge_popup) && rtl_edge_content.contains_rect(rtl_edge_popup), "the popup stays clamped on screen: ltr {ltr_edge_popup:?} rtl {rtl_edge_popup:?}");
     }
 }

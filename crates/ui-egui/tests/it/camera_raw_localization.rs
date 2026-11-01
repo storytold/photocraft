@@ -87,18 +87,24 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         }
         h.get_by_label(tr("Show Vectorscope")).click();
         h.run_steps(3);
-        // The context menu stays open for its dependent scope options.
+        // The context menu stays open for its dependent scope options. A checked row's label
+        // carries the gutter checkmark ("✔ …"), so match by containment, not exact label.
         for label in ["Show Red at 3 o'clock", "Show Skin Tone Indicator"] {
-            assert!(h.query_by_label(tr(label)).is_some(), "{}: scope menu/{label}", lang.code());
+            assert!(h.query_by_label_contains(tr(label)).is_some(), "{}: scope menu/{label}", lang.code());
         }
-        let outside = pos2(100.0, 400.0);
+        // Dismiss the scope menu from the preview's centre: a fixed point near the window's left
+        // edge lands inside the settings panel once an RTL UI mirrors it to that side, and the
+        // click would toggle a section there.
+        let preview = control::inspect(h.state(), &ctx)["cameraRaw"]["previewRect"].clone();
+        let px = (preview[0].as_f64().unwrap() + preview[2].as_f64().unwrap()) as f32 * 0.5;
+        let py = (preview[1].as_f64().unwrap() + preview[3].as_f64().unwrap()) as f32 * 0.5;
+        let outside = pos2(px, py);
         h.event(egui::Event::PointerMoved(outside));
         for pressed in [true, false] {
             h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
         }
         h.run_steps(3);
-        let preview = control::inspect(h.state(), &ctx)["cameraRaw"]["previewRect"].clone();
-        h.hover_at(pos2((preview[0].as_f64().unwrap() + preview[2].as_f64().unwrap()) as f32 * 0.5, 400.0));
+        h.hover_at(outside);
         h.run_steps(3);
         if let Ok(dir) = std::env::var("PHOTOCRAFT_LOCALE_SNAPSHOTS") {
             std::fs::create_dir_all(&dir).unwrap();

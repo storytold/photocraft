@@ -24,6 +24,7 @@ fn section_harness(section: usize, state: SectionState) -> Harness<'static, Sect
     let mut ready = false;
     let mut h = Harness::builder().with_size(vec2(340.0, 1100.0)).build_ui_state(
         move |ui, state: &mut SectionState| {
+            crate::theme::set_direction(ui.ctx(), crate::direction::is_rtl());
             if !ready {
                 crate::PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::ProMedium);
                 ready = true;
@@ -137,16 +138,19 @@ fn rtl_tip_grid_starts_at_the_right() {
     assert_eq!(h.state().picked.as_deref(), Some("First"), "the right-most cell picks the first preset");
 }
 
-/// TEMPORARY PROBE — remove before finishing.
-#[test]
-fn probe_rtl_window_columns() {
-    use egui_kittest::kittest::Queryable;
-    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+/// The whole Brush Settings window in a harness; the direction scope must already be set.
+fn window_harness(section: usize) -> Harness<'static, crate::PhotocraftApp> {
     let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.panels.brush_settings = true;
+    app.ui.brush_tab = 0;
+    app.ui.brush_section = section;
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
         |ui, app: &mut crate::PhotocraftApp| {
             let ctx = ui.ctx().clone();
+            // The real app re-publishes the egui direction flag every frame
+            // (i18n::sync_context -> theme::set_direction); do the same here so the
+            // twins exercise the flag-on path, not just the thread-local scope.
+            crate::theme::set_direction(&ctx, crate::direction::is_rtl());
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -155,19 +159,41 @@ fn probe_rtl_window_columns() {
         app,
     );
     crate::PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    eprintln!("PROBE is_rtl={}", crate::direction::is_rtl());
-    for label in ["Brush Tip Shape", "Scattering", "Size"] {
-        for n in h.query_all(by().label(label).include_labels()) {
-            eprintln!("PROBE {label:?} rect={:?} role={:?}", n.rect(), n.accesskit_node().role());
-        }
+    // Many steps: the runaway height is a per-frame feedback loop, so a few steps never grow it.
+    h.run_steps(60);
+    h
+}
+
+/// The caption label with this text in any harness, not the field it names.
+fn any_caption<T>(h: &Harness<'_, T>, text: &str) -> Rect {
+    h.query_all(by().label(text).include_labels()).find(|n| n.accesskit_node().role() == Role::Label).unwrap_or_else(|| panic!("the `{text}` caption")).rect()
+}
+
+/// Every section's lock stays inside its own list row, in either direction.
+fn locks_bind_to_their_rows(h: &Harness<'_, crate::PhotocraftApp>) {
+    for (name, _) in crate::panels::brush_panel::SECTIONS.iter().skip(1) {
+        let row = h.get_by_label(name).rect();
+        let lock = h.get_by_role_and_label(Role::Button, &format!("Lock: {name}")).rect();
+        assert!(row.contains(lock.center()), "{name}: the lock sits inside its row: {row:?} {lock:?}");
     }
-    for s in &h.output().shapes {
-        let r = s.visual_rect();
-        if r.width() > 400.0 {
-            eprintln!("PROBE wide shape {:?} clip={:?}", r, s.clip_rect);
-        }
-    }
+}
+
+/// Whole-window twins: the section list leads from the reading start (right in RTL, left in
+/// LTR), the options pane follows, and the locks bind to their rows.
+#[test]
+fn window_columns_and_locks_follow_the_direction() {
+    let rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let h = window_harness(0);
+    let sections = h.get_by_label("Brush Tip Shape").rect();
+    let options = any_caption(&h, "Size");
+    assert!(sections.left() > options.left(), "RTL: the sections lead from the right: {sections:?} {options:?}");
+    locks_bind_to_their_rows(&h);
+    drop(rtl);
+    let h = window_harness(0);
+    let sections = h.get_by_label("Brush Tip Shape").rect();
+    let options = any_caption(&h, "Size");
+    assert!(sections.left() < options.left(), "LTR: the sections stay on the left: {sections:?} {options:?}");
+    locks_bind_to_their_rows(&h);
 }
 
 /// The angle and roundness captions hug the reading-start edge of their 72 px block: in a
@@ -184,5 +210,109 @@ fn rtl_angle_captions_hug_their_block() {
         // The block keeps its 72 px reserve and ends one item spacing before the field's box.
         let block_right = field_box(&h, field).left() - spacing;
         assert!((caption.right() - block_right).abs() < 1.5, "the {text} caption ends at its block's right edge: {caption:?}, block right {block_right}");
+    }
+}
+
+/// Shape Dynamics with the size control on Fade, so its Control row shows the steps field.
+fn fade_brush() -> BrushSettings {
+    let mut b = BrushSettings::default();
+    b.shape_dynamics.size = paint::Dynamic { jitter: 0.3, control: Control::Fade, fade_steps: 40, minimum: 0.2, ..Default::default() };
+    b
+}
+
+/// The SpinButton showing this value.
+fn spin(h: &Harness<'_, SectionState>, value: f64) -> Rect {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap_or_else(|| panic!("the {value} field")).rect()
+}
+
+/// The painted 74×24 box around a slider row's SpinButton.
+fn spin_box(h: &Harness<'_, SectionState>, number: Rect) -> Rect {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) => Some(r.rect),
+            _ => None,
+        })
+        .find(|r| (r.width() - 74.0).abs() < 1.0 && (r.height() - 24.0).abs() < 1.0 && r.contains_rect(number))
+        .unwrap_or_else(|| panic!("the slider field's box around {number:?}"))
+}
+
+/// The Control dropdown buttons (not the dim captions that share the label).
+fn control_dropdowns(h: &Harness<'_, SectionState>) -> Vec<Rect> {
+    h.query_all(by().label("Control:").include_labels()).filter(|n| n.accesskit_node().role() != Role::Label).map(|n| n.rect()).collect()
+}
+
+/// RTL twin: the Control row's dropdown group pins to the same trailing edge as the slider
+/// rows' value fields — one shared left edge for every control in the section body. The LTR
+/// twin keeps the natural packing: captions lead, controls follow them.
+#[test]
+fn value_fields_share_one_trailing_edge_in_rtl() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let h = section_harness(1, SectionState { brush: fade_brush(), presets: vec![], picked: None });
+    let slider_field = spin(&h, 30.0);
+    let slider_box = spin_box(&h, slider_field);
+    let steps_field = spin(&h, 40.0);
+    let dropdowns = control_dropdowns(&h);
+    assert!(!dropdowns.is_empty(), "the Control dropdowns render");
+    for d in &dropdowns {
+        assert!((d.left() - slider_box.left()).abs() < 0.5, "the Control dropdown pins to the slider field's edge: {d:?} {slider_box:?}");
+    }
+    assert!(steps_field.left() > slider_box.left(), "the steps field follows its dropdown inside the pinned group: {steps_field:?} {slider_box:?}");
+
+    drop(_rtl);
+    let h = section_harness(1, SectionState { brush: fade_brush(), presets: vec![], picked: None });
+    let slider_field = spin(&h, 30.0);
+    let caption = caption_rect(&h, "Size Jitter");
+    assert!(slider_field.left() > caption.left(), "LTR keeps the slider field right of its caption: {slider_field:?} {caption:?}");
+    let dropdowns = control_dropdowns(&h);
+    for d in &dropdowns {
+        assert!(d.left() > caption_rect(&h, "Control:").left(), "LTR keeps the dropdown after its caption: {d:?}");
+    }
+}
+
+/// The tab button with this label (the window title shares the text but is not a button).
+fn tab_rect(h: &Harness<'_, crate::PhotocraftApp>, label: &str) -> Rect {
+    h.query_all(by().label(label).include_labels()).find(|n| n.accesskit_node().role() == Role::Button).unwrap_or_else(|| panic!("the `{label}` tab")).rect()
+}
+
+/// Window chrome twins: the tabs lead from the reading start and the close button hugs the
+/// reading end, in both directions.
+#[test]
+fn window_chrome_follows_the_direction() {
+    let rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let h = window_harness(0);
+    let settings = tab_rect(&h, "Brush Settings");
+    let brushes = tab_rect(&h, "Brushes");
+    let close = h.get_by_role_and_label(Role::Button, "Close").rect();
+    assert!(settings.left() > brushes.left(), "RTL: the Brush Settings tab leads from the right: {settings:?} {brushes:?}");
+    assert!(close.left() < brushes.left(), "RTL: the close button hugs the left (reading-end) edge: {close:?} {brushes:?}");
+    drop(rtl);
+    let h = window_harness(0);
+    let settings = tab_rect(&h, "Brush Settings");
+    let brushes = tab_rect(&h, "Brushes");
+    let close = h.get_by_role_and_label(Role::Button, "Close").rect();
+    assert!(settings.left() < brushes.left(), "LTR: the tabs lead from the left: {settings:?} {brushes:?}");
+    assert!(close.right() > settings.right(), "LTR: the close button hugs the right edge: {close:?} {settings:?}");
+}
+
+/// The floating window's height stays bounded by its content in both directions. A row scoped
+/// with `with_layout` inside the vertical window body gets the body's full remaining height,
+/// and a center-aligned row fills that height, so the non-resizable window grows toward the
+/// screen height and the tab row (the window's visible title) ends up vertically centered.
+#[test]
+fn window_height_is_bounded_and_the_tab_row_sits_at_the_top() {
+    for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+        let _scope = crate::direction::direction_scope(dir);
+        let h = window_harness(0);
+        // The twin must run the real app path: the egui direction flag set, not just the
+        // thread-local scope (the flag is what makes nested rows mirror and fill).
+        assert_eq!(h.ctx.global_style().right_to_left, dir == crate::direction::Dir::Rtl, "{dir:?}: the egui direction flag follows the scope");
+        let win = h.ctx.memory(|m| m.area_rect(egui::Id::unique("brush-settings"))).expect("the brush window is shown");
+        let tab = tab_rect(&h, "Brush Settings");
+        assert!(win.height() <= 700.0, "{dir:?}: the window height is bounded by its content: {win:?}");
+        assert!(win.width() <= 700.0, "{dir:?}: the window width is bounded by its content: {win:?}");
+        assert!(tab.top() - win.top() < 60.0, "{dir:?}: the tab row (the window title) sits at the top: win {win:?}, tab {tab:?}");
+        assert!(tab.bottom() < win.center().y, "{dir:?}: the tab row is not vertically centered in the window: win {win:?}, tab {tab:?}");
     }
 }

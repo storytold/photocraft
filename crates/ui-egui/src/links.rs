@@ -51,12 +51,21 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
         + 2.0 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
     let mut clicked: Option<&str> = None;
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
         for (i, (label, url)) in links.iter().enumerate() {
             if i > 0 {
-                ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));
+                if crate::direction::is_rtl() {
+                    // In an RTL row egui trims the separator's surrounding whitespace from the
+                    // label rect; allocate the full LTR-width cell instead so the gaps match.
+                    let galley = ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text_faint);
+                    let (rect, _resp) =
+                        ui.allocate_exact_size(egui::vec2(galley.size().x, ui.spacing().interact_size.y), egui::Sense::hover());
+                    ui.painter().galley(rect.left_top(), galley, t.text_faint);
+                } else {
+                    ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));
+                }
             }
             if ui.link(egui::RichText::new(*label).font(font.clone()).color(t.accent)).on_hover_text(*url).clicked() {
                 clicked = Some(url);
@@ -134,5 +143,29 @@ mod tests {
             assert_eq!(r["url"], url);
             assert_eq!(app.ui.status, format!("Opened {url}"));
         }
+    }
+
+    /// The centered links row keeps the add order left to right in a left-to-right UI and mirrors
+    /// it in a right-to-left one, with the same gaps between the links in both.
+    #[test]
+    fn link_row_mirrors_item_order_in_rtl() {
+        use crate::text::direction::{Dir, direction_scope};
+        use egui_kittest::kittest::Queryable;
+        let draw = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(600.0, 200.0))
+                .build_ui_state(|ui, app: &mut PhotocraftApp| link_row(app, ui), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(3);
+            ["PhotoCraft website", "GitHub", "ArtCraft"].map(|l| h.get_by_label(l).rect())
+        };
+        let ltr = draw(Dir::Ltr);
+        assert!(ltr[0].right() <= ltr[1].left() + 1.0 && ltr[1].right() <= ltr[2].left() + 1.0, "ltr keeps the add order: {ltr:?}");
+        let rtl = draw(Dir::Rtl);
+        assert!(rtl[2].right() <= rtl[1].left() + 1.0 && rtl[1].right() <= rtl[0].left() + 1.0, "rtl mirrors the item order: {rtl:?}");
+        let gap = |a: egui::Rect, b: egui::Rect| (b.left() - a.right()).abs();
+        assert!((gap(ltr[0], ltr[1]) - gap(rtl[1], rtl[0])).abs() < 1.0, "equal gaps in both directions");
     }
 }

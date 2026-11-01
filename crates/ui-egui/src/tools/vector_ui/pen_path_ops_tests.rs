@@ -348,3 +348,40 @@ fn freeform_refuses_a_locked_shape_before_starting_a_stroke() {
         assert!(app.drag.is_some(), "{lock}: unlocked stroke can start");
     }
 }
+
+/// The Path Operations popup's icon+label rows mirror only under a right-to-left UI: the label
+/// moves from after the icon at the left (LTR) to before the icon at the popup's right edge.
+#[test]
+fn path_operations_popup_rows_mirror_only_under_rtl() {
+    use crate::text::direction::{self, Dir};
+    let label_rect = |dir: Dir| -> egui::Rect {
+        let _scope = direction::direction_scope(dir);
+        let mut app = app();
+        square(&mut app, 20.0, 20.0, 100.0);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        h.run_steps(4);
+        h.get_by_label("Path operations").click();
+        h.run_steps(3);
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) if ts.galley.text().contains("Exclude Overlapping Shapes") => Some(ts.visual_bounding_rect()),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| panic!("the row is open in {dir:?}"))
+    };
+    let ltr = label_rect(Dir::Ltr);
+    let rtl = label_rect(Dir::Rtl);
+    assert!(rtl.left() - ltr.left() > 16.0 && rtl.right() - ltr.right() > 16.0, "RTL reads from the right edge (past the icon's width): {ltr:?} -> {rtl:?}");
+}

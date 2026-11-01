@@ -1218,3 +1218,101 @@ fn crop_menu_rows_act_like_the_options_bar() {
     choose(&mut app, &ctx, CROP_CANCEL);
     assert!(!crate::crop_ui::pending(&app));
 }
+
+/// Twin: under RTL the canvas tool menu's rows anchor at the popup's right (reading-start)
+/// edge, under LTR at its left. The real style flag is set, as the theme does in production.
+#[test]
+fn canvas_tool_menu_rows_anchor_at_the_reading_start_edge() {
+    use crate::direction::{Dir, direction_scope};
+    let run = |dir: Dir| {
+        let _scope = direction_scope(dir);
+        let ctx = Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut app = app();
+        app.ui.tool = Tool::Lasso;
+        assert!(open(&mut app, &ctx, Tool::Lasso, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        let want = rows(&menu).iter().find_map(|r| r.map(|(l, _)| tl!(l).to_string())).expect("a row");
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        // Two frames: the Area's first frame measures, the second paints the rows.
+        let mut out = ctx.run_ui(raw.clone(), |ui| show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        let mut out = ctx.run_ui(raw, |ui| show(&mut app, ui.ctx()));
+        let area = ctx.memory(|m| m.area_rect(menu_id())).expect("the popup is shown");
+        let rect = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                _ => None,
+            })
+            .find(|(t, _)| *t == want)
+            .map(|(_, r)| r);
+        out.textures_delta.clear();
+        (area, rect.expect("the first row's label is painted"))
+    };
+    // Frame margin plus button padding: the label may sit this far from the popup edge.
+    let slack = 24.0;
+    let (area, rect) = run(Dir::Rtl);
+    assert!(area.right() - rect.right() < slack, "rtl: the label hugs the popup's right edge: {rect:?} in {area:?}");
+    let (area, rect) = run(Dir::Ltr);
+    assert!(rect.left() - area.left() < slack, "ltr: the label hugs the popup's left edge: {rect:?} in {area:?}");
+}
+
+/// The popup-side helper shared by the three canvas anchor popups (tool menu, brush picker,
+/// layer pick): under RTL the area's right edge sits at the anchor and it grows leftward.
+fn popup_pivot_pos(anchor: [f32; 2], size: egui::Vec2, screen: egui::Rect, rtl: bool) -> (egui::Align2, egui::Pos2) {
+    if rtl {
+        (
+            egui::Align2::RIGHT_TOP,
+            egui::pos2(anchor[0].max(screen.left() + size.x).min(screen.right()), anchor[1].min(screen.bottom() - size.y).max(screen.top())),
+        )
+    } else {
+        (
+            egui::Align2::LEFT_TOP,
+            egui::pos2(anchor[0].min(screen.right() - size.x).max(screen.left()), anchor[1].min(screen.bottom() - size.y).max(screen.top())),
+        )
+    }
+}
+
+#[test]
+fn canvas_popup_side_ltr_keeps_rightward_growth() {
+    use crate::direction::{Dir, direction_scope};
+    let _scope = direction_scope(Dir::Ltr);
+    assert!(!crate::direction::is_rtl());
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+    let anchor = [100.0, 100.0];
+    let size = egui::vec2(200.0, 140.0);
+    let (pivot, pos) = popup_pivot_pos(anchor, size, screen, crate::direction::is_rtl());
+    assert_eq!(pivot, egui::Align2::LEFT_TOP);
+    assert_eq!(pos, egui::pos2(100.0, 100.0), "ltr: the popup's top-left corner sits at the anchor");
+}
+
+#[test]
+fn canvas_popup_side_rtl_grows_left_of_the_anchor() {
+    use crate::direction::{Dir, direction_scope};
+    let _scope = direction_scope(Dir::Rtl);
+    assert!(crate::direction::is_rtl());
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+    let anchor = [500.0, 100.0];
+    let size = egui::vec2(200.0, 140.0);
+    let (pivot, pos) = popup_pivot_pos(anchor, size, screen, crate::direction::is_rtl());
+    assert_eq!(pivot, egui::Align2::RIGHT_TOP);
+    assert_eq!(pos.x, anchor[0], "rtl: the area's right edge sits at the anchor x");
+    assert_eq!(pos.y, anchor[1], "y clamp is unchanged by direction");
+    // Mirrored clamp: near the left screen edge the popup is pushed right so it stays on screen.
+    let (pivot, pos) = popup_pivot_pos([50.0, 590.0], size, screen, true);
+    assert_eq!(pivot, egui::Align2::RIGHT_TOP);
+    assert_eq!(pos, egui::pos2(screen.left() + size.x, screen.bottom() - size.y));
+    // Past the right edge the popup is pulled back to the screen's right edge.
+    let (_, pos) = popup_pivot_pos([850.0, 100.0], size, screen, true);
+    assert_eq!(pos, egui::pos2(screen.right(), 100.0));
+    // LTR clamps keep their original bounds for the same anchors.
+    let (_, pos) = popup_pivot_pos([790.0, 590.0], size, screen, false);
+    assert_eq!(pos, egui::pos2(screen.right() - size.x, screen.bottom() - size.y));
+    let (_, pos) = popup_pivot_pos([-10.0, -10.0], size, screen, false);
+    assert_eq!(pos, egui::pos2(screen.left(), screen.top()));
+}

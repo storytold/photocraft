@@ -75,25 +75,8 @@ fn rtl_footer_buttons_hug_the_reading_end() {
     let import = h.get_by_role_and_label(Role::Button, "Import Brushes… (.abr or image)").rect();
     assert!(trash.left() < new.left() && new.left() < import.left(), "first-added outermost: {trash:?}, {new:?}, {import:?}");
     let count_text = format!("{} presets", h.state().session.tools.presets.len());
-    let count = h.query_all_by_label(&count_text).map(|n| n.rect()).find(|r| r.center().y > trash.center().y - 4.0).expect("the preset-count label");
+    let count = h.query_all_by_label(&count_text).map(|n| n.rect()).find(|r| (r.center().y - trash.center().y).abs() < 8.0).expect("the preset-count label");
     assert!(import.right() < count.left(), "the buttons end left of the count: {import:?}, {count:?}");
-}
-
-#[test]
-fn probe_footer_rtl() {
-    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-    let mut h = rtl_tab(brushes_tab_app());
-    h.run_steps(4);
-    let trash = h.get_by_role_and_label(Role::Button, "Delete brush").rect();
-    let n = h.state().session.tools.presets.len();
-    eprintln!("PROBE n={n} trash={trash:?}");
-    for i in 0..(n + 2) {
-        for txt in [format!("{i} presets"), format!("{i} preset")] {
-            for node in h.query_all_by_label(&txt) {
-                eprintln!("PROBE label {txt:?} -> {:?}", node.rect());
-            }
-        }
-    }
 }
 
 /// The grid's columns accumulate from the right: in the first row the first preset sits at the

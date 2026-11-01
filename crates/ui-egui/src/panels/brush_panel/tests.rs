@@ -730,7 +730,10 @@ fn harness(tab: usize, section: usize) -> Harness<'static, PhotocraftApp> {
     app.ui.panels.brush_settings = true;
     app.ui.brush_tab = tab;
     app.ui.brush_section = section;
-    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+    // Tall enough that the whole brush window stays on the harness screen: egui drops
+    // pointer events outside the screen rect, so a row rendered below it could not be
+    // clicked.
+    let mut h = Harness::builder().with_size(vec2(1200.0, 1400.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -1905,15 +1908,8 @@ fn rtl_section_lock_sits_on_the_left_and_toggles() {
     assert!(lock.rect().left() <= row.left() + 22.0);
     assert!(!h.state().session.tools.brush.locks.scattering);
     assert_eq!(h.state().ui.brush_section, 0);
-    {
-        use egui_kittest::kittest::NodeT;
-        eprintln!("DBG is_rtl={} row={row:?} lock={:?}", crate::direction::is_rtl(), lock.rect());
-        for n in h.query_all(egui_kittest::kittest::by().label("Scattering").include_labels()) {
-            eprintln!("DBG scattering node rect={:?} role={:?}", n.rect(), n.accesskit_node().role());
-        }
-    }
-    click_at(&mut h, egui::pos2(row.left() + 11.0, row.center().y));
-    eprintln!("DBG after click locks.scattering={} section={}", h.state().session.tools.brush.locks.scattering, h.state().ui.brush_section);
+    let at = egui::pos2(row.left() + 11.0, row.center().y);
+    click_at(&mut h, at);
     assert!(h.state().session.tools.brush.locks.scattering, "the mirrored lock zone still toggles the lock");
     assert_eq!(h.state().ui.brush_section, 0, "the lock stays a separate target");
 }
@@ -1980,18 +1976,6 @@ fn rtl_columns_swap_sections_right_options_left() {
     let (rtl, h) = rtl_harness(0, 0);
     let sections = h.get_by_label("Brush Tip Shape").rect();
     let options = caption_rect(&h, "Size");
-    eprintln!("DBG cols is_rtl={} sections={sections:?} options={options:?}", crate::direction::is_rtl());
-    {
-        use egui_kittest::kittest::NodeT;
-        let mut v: Vec<_> = h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::Button).include_labels()).collect();
-        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::CheckBox).include_labels()));
-        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::Label).include_labels()));
-        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::SpinButton).include_labels()));
-        v.sort_by_key(|n| (n.rect().min.y as i32, n.rect().min.x as i32));
-        for n in v {
-            eprintln!("DBG node rect={:?} role={:?} label={:?}", n.rect(), n.accesskit_node().role(), n.accesskit_node().label());
-        }
-    }
     assert!(options.left() < sections.left(), "the options pane sits left of the sections in RTL: {options:?} {sections:?}");
 
     drop(rtl);

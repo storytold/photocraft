@@ -561,6 +561,9 @@ mod symmetry_theme_tests {
 mod color_tests;
 
 #[cfg(test)]
+mod menu_rtl_tests;
+
+#[cfg(test)]
 mod info_panel_sampler_tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
