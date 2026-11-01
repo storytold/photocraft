@@ -90,3 +90,25 @@ fn a_job_cancelled_before_its_document_closes_still_returns_its_buffers() {
     s.join_cancelled_jobs();
     assert_eq!(scratch::retained_bytes(), 0);
 }
+
+/// Verifies polling alone releases buffers after a closed document's cancelled worker exits.
+#[test]
+fn a_cancelled_job_of_a_closed_document_is_released_by_polling() {
+    let _q = Quiet::new();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2048, "height": 2048})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
+    let Started::Job(_) = s.start("filter.blur.gaussianBlur", json!({"radius": 60})).unwrap() else {
+        panic!("Gaussian Blur runs as a background job");
+    };
+    s.close(0);
+    // Seed after close so the close path cannot satisfy the assertion.
+    scratch::give(vec![0u8; scratch::MIN_POOLED_BYTES]);
+    assert!(scratch::retained_bytes() > 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while scratch::retained_bytes() > 0 && std::time::Instant::now() < deadline {
+        s.poll_jobs();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(scratch::retained_bytes(), 0);
+}
