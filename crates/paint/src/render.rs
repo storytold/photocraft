@@ -92,6 +92,13 @@ fn map_items<T: Sync, R: Send>(items: &[T], pixels: usize, f: impl Fn(&T) -> R +
     let _ = pixels;
     items.iter().map(&f).collect()
 }
+// Tests: scan every pixel of a sampled dab's square on this thread, as before rows were cut to
+// the tip's run (`BrushContext::rasterize_into`).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FULL_SCAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Computed tips with a smaller radius (in pixels) are rasterised by area, not at pixel centres.
 const SMALL_TIP_RADIUS: f32 = 3.0;
 /// Sub-pixel sample offsets (a 4×4 grid) for the area coverage of small tips.
@@ -256,7 +263,7 @@ impl BrushContext {
             return p.data[y.rem_euclid(p.height as i32) as usize * p.width + x.rem_euclid(p.width as i32) as usize];
         }
         let (fx, fy) = ((x as f32 + 0.5) / s - 0.5, (y as f32 + 0.5) / s - 0.5);
-        let (x0, y0) = (fx.floor(), fy.floor());
+        let (x0, y0) = (crate::tile::fast_floor(fx), crate::tile::fast_floor(fy));
         let (tx, ty) = (fx - x0, fy - y0);
         let a = p.sample_wrap(x0, y0) + (p.sample_wrap(x0 + 1.0, y0) - p.sample_wrap(x0, y0)) * tx;
         let b = p.sample_wrap(x0, y0 + 1.0) + (p.sample_wrap(x0 + 1.0, y0 + 1.0) - p.sample_wrap(x0, y0 + 1.0)) * tx;
@@ -276,7 +283,39 @@ impl BrushContext {
         } else {
             crate::tip_reach(d.radius, hardness).max(d.radius)
         };
-        rect_around(d, reach)
+        let square = rect_around(d, reach);
+        let mips = if dual { self.dual_tip.as_deref() } else { self.tip.as_deref() };
+        match mips.and_then(|m| self.sampled_extent(m, d, dual)) {
+            // The square fits the tip at any angle; the rotated tip's own box is often far smaller
+            // (a long or squashed tip, an angle near a right angle). Every pixel outside it
+            // rasterises to 0, so it only trims the empty part of the square.
+            Some((rx, ry)) => {
+                let (rx, ry) = ((rx.ceil() as i32).saturating_add(2), (ry.ceil() as i32).saturating_add(2));
+                let (cx, cy) = (d.center.x.floor() as i32, d.center.y.floor() as i32);
+                Rect::new(cx.saturating_sub(rx), cy.saturating_sub(ry), cx.saturating_add(rx).saturating_add(1), cy.saturating_add(ry).saturating_add(1))
+                    .intersect(&square)
+            }
+            None => square,
+        }
+    }
+
+    /// Half the width and height of the pixels a sampled dab can paint: the tip's sampled area
+    /// (its texels and one more each side, see `rasterize_into`) rotated and flipped as the dab is.
+    /// `None` with Brush Projection or values that aren't finite (the dab keeps its square).
+    fn sampled_extent(&self, m: &Mips, d: &Dab, dual: bool) -> Option<(f32, f32)> {
+        if !dual && d.proj_scale < 0.999 {
+            return None;
+        }
+        let (w0, h0, _) = &m.levels[0];
+        let (tw, th) = (*w0 as f32, *h0 as f32);
+        let r = d.radius;
+        let ro = d.roundness.max(0.5 / r).min(1.0);
+        let inv_scale = tw.max(th) / (2.0 * r);
+        // |u| and |v| in the dab's pixels (`px`, `py` of `rasterize_into` within [-1, size + 1]).
+        let (u, v) = ((tw / 2.0 + 1.0) / inv_scale, (th / 2.0 + 1.0) * ro / inv_scale);
+        let (sn, cs) = d.angle.sin_cos();
+        let (rx, ry) = (u * cs.abs() + v * sn.abs(), u * sn.abs() + v * cs.abs());
+        (rx.is_finite() && ry.is_finite()).then_some((rx, ry))
     }
 
     /// Rasterise a dab over `rect` into `out` (tip shape × noise × per-tip texture × wet edges × flow).
@@ -360,10 +399,55 @@ impl BrushContext {
             rasterize_round(d, rect, out, profile, aliased);
             return;
         }
+        // A sampled tip covers only part of its dab's square (the square fits any rotation): the
+        // pixels of a row whose tip coordinates can land on the tip. Pixel to tip is affine, so
+        // they are one run, solved from two points of the row. The run is solved for a tip grown
+        // by `SLACK` texels and two more pixels each side (rounding, at any angle), and every
+        // pixel in it still takes the exact per-pixel test below.
+        const SLACK: f64 = 0.05;
+        let sampled_run = |dy: f32| -> (usize, usize) {
+            #[cfg(test)]
+            if FULL_SCAN.with(std::cell::Cell::get) {
+                return (0, w);
+            }
+            if mips.is_none() || (aliased && b.square) {
+                return (0, w);
+            }
+            let at = |dx: f32| {
+                let (u, v) = to_tip(dx, dy);
+                (f64::from(u * inv_scale + tw / 2.0), f64::from(-(v / ro) * inv_scale + th / 2.0))
+            };
+            let ((p0, q0), (p1, q1)) = (at(0.0), at(1.0));
+            let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+            let (min, maxs) = (-1.0 - SLACK, [f64::from(tw) + 1.0 + SLACK, f64::from(th) + 1.0 + SLACK]);
+            for ((a, slope), max) in [(p0, p1 - p0), (q0, q1 - q0)].into_iter().zip(maxs) {
+                if !(a.is_finite() && slope.is_finite()) {
+                    return (0, w);
+                }
+                if slope == 0.0 {
+                    if a < min || a > max {
+                        return (0, 0);
+                    }
+                } else {
+                    let (t0, t1) = ((min - a) / slope, (max - a) / slope);
+                    lo = lo.max(t0.min(t1));
+                    hi = hi.min(t0.max(t1));
+                }
+            }
+            if lo > hi {
+                return (0, 0);
+            }
+            // dx = x + 0.5 − cx with x = rect.x0 + xx.
+            let off = f64::from(cx) - 0.5 - f64::from(rect.x0);
+            let first = (lo + off).floor() - 2.0;
+            let end = (hi + off).ceil() + 3.0;
+            (first.clamp(0.0, w as f64) as usize, end.clamp(0.0, w as f64) as usize)
+        };
         for yy in 0..h {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
-            for xx in 0..w {
+            let (first, end) = sampled_run(dy);
+            for xx in first..end {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
                 let (u, v) = to_tip(dx, dy);
@@ -1035,6 +1119,49 @@ impl StrokeRenderer {
         Some(t)
     }
 
+    /// One step of a live preview that shows the stroke as finishing it now would (see
+    /// [`tail_preview`](Self::tail_preview)): takes back the previous step's tail `old`, composites
+    /// the tiles that changed, then the new tail. Returns the damage and the new tail's rectangle
+    /// (the next step's `old`).
+    ///
+    /// A tile the tail redraws is composited once, by the tail: it starts from `pre` and covers
+    /// at least what the stroke's own composite would write there. And `old` is copied back from
+    /// `pre` only where no tile composite rewrites it anyway. Big brushes' tails span hundreds
+    /// of tiles, so doing both twice cost as much as the rest of the frame.
+    pub fn composite_live(&mut self, old: Rect, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) -> (Rect, Rect) {
+        let mut tail = self.tail_preview();
+        let redrawn_by_tail: HashSet<u64> = tail.as_ref().map(|t| t.cov.tiles.keys().copied().collect()).unwrap_or_default();
+        if !old.is_empty() {
+            self.mark_dirty(old);
+            let bounds = self.bounds();
+            let tail_bounds = tail.as_ref().map_or(Rect::EMPTY, |t| t.bounds());
+            let mut region = Vec::new();
+            for ty in old.y0.div_euclid(COV_TILE)..=(old.y1 - 1).div_euclid(COV_TILE) {
+                for tx in old.x0.div_euclid(COV_TILE)..=(old.x1 - 1).div_euclid(COV_TILE) {
+                    let tile = Rect::new(tx * COV_TILE, ty * COV_TILE, (tx + 1) * COV_TILE, (ty + 1) * COV_TILE);
+                    let part = tile.intersect(&old);
+                    let written = if redrawn_by_tail.contains(&tile_key((tx, ty))) {
+                        tile.intersect(&tail_bounds)
+                    } else if self.cov.tiles.contains_key(&tile_key((tx, ty))) {
+                        tile.intersect(&bounds)
+                    } else {
+                        Rect::EMPTY
+                    };
+                    if part.is_empty() || written.contains_rect(&part) {
+                        continue;
+                    }
+                    pre.read_region_into(part, &mut region);
+                    target.write_region(part, &region);
+                }
+            }
+        }
+        self.cov.dirty.retain(|k| !redrawn_by_tail.contains(&tile_key(*k)));
+        let mut dmg = old.union(&self.composite(pre, target, selection, lock_transparency, false));
+        let tail_rect = tail.as_mut().map_or(Rect::EMPTY, |t| t.composite(pre, target, selection, lock_transparency, false));
+        dmg = dmg.union(&tail_rect);
+        (dmg, tail_rect)
+    }
+
     /// Mark the coverage tiles over `r` for the next `composite` (e.g. to redraw over a preview).
     pub fn mark_dirty(&mut self, r: Rect) {
         if r.is_empty() {
@@ -1176,6 +1303,9 @@ impl StrokeRenderer {
                 }
                 pre.read_region_into(tr, region);
                 let sel = selection.map(|s| (s.channels(), s.read_region(tr)));
+                // The Dual Brush's coverage lies on the same tile grid: one lookup per tile, not
+                // one per pixel (`CoverageMap::get` reads 0 where it has no tile).
+                let dual = self.dual.as_ref().map(|d| d.tiles.get(&tile_key((tx, ty))));
                 // Per-dab colour rewrites the source per pixel, so each tile works on its own copy
                 // that starts from the brush colour. (Before the tiles ran in parallel, one `src`
                 // carried over from tile to tile; a tile without per-dab colour then painted with
@@ -1193,7 +1323,7 @@ impl StrokeRenderer {
                             continue;
                         }
                         let i = (y - tr.y0) as usize * w + (x - tr.x0) as usize;
-                        let m = self.ctx.stroke_mask_wet(c, tile.depth.get(ti).copied(), self.dual.as_ref().map(|d| d.get(x, y)), x, y);
+                        let m = self.ctx.stroke_mask_wet(c, tile.depth.get(ti).copied(), dual.map(|t| t.map_or(0.0, |t| t.cov[ti])), x, y);
                         let s = sel.as_ref().map_or(1.0, |(sc, v)| v[i * sc]);
                         let mut k = (m * opacity * s).min(1.0);
                         if k <= 0.0 {
