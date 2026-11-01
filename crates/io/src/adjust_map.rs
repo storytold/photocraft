@@ -88,10 +88,16 @@ fn parse_curves(d: &[u8]) -> Option<Adjustment> {
 }
 
 fn desc_num(d: &Descriptor, key: &str) -> Option<f32> {
+    desc_f64(d, key).map(|v| v as f32)
+}
+
+/// [`desc_num`] before narrowing, for callers that clamp first (a finite double past `f32::MAX`
+/// would narrow to infinity).
+fn desc_f64(d: &Descriptor, key: &str) -> Option<f64> {
     match d.get(key)? {
-        Value::Integer(v) => Some(*v as f32),
-        Value::Double(v) => Some(*v as f32),
-        Value::UnitFloat { value, .. } => Some(*value as f32),
+        Value::Integer(v) => Some(f64::from(*v)),
+        Value::Double(v) => Some(*v),
+        Value::UnitFloat { value, .. } => Some(*value),
         _ => None,
     }
 }
@@ -347,6 +353,76 @@ pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channe
     }
 }
 
+/// Points an imported `vibA` block at `target`, an [`Adjustment::Vibrance`]: the sliders the
+/// model carries are set in the file's own descriptor (a 0 omitted, as Photoshop writes it), and
+/// every other key is kept. Photoshop (27.11 in #8838) marks its newer Vibrance method with
+/// `useLegacy` false and keeps temperature and tint in the same descriptor; a regenerated block
+/// has no method key, which Photoshop reads as the legacy method, so an edited layer changed its
+/// look on reopening. The result is padded to 4 bytes inside the block, as Photoshop pads it
+/// (anything after the descriptor is that padding: [`parse_vibrance`] reads nothing there).
+/// `false` leaves `data` untouched.
+pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool {
+    let Adjustment::Vibrance { vibrance, saturation } = target else { return false };
+    let Some(mut desc) = versioned(data) else { return false };
+    // Photoshop's key order is `useLegacy`, `vibrance`, `Strt` (27.11, #8838): a slider absent from
+    // the file goes after whichever of the keys before it in that order the file has.
+    let sliders = [("vibrance", *vibrance), ("Strt", *saturation)];
+    for (i, (key, value)) in sliders.iter().enumerate() {
+        let value = i32::from(clamp_i16(value.clamp(-100.0, 100.0)));
+        // A slider stored twice (no writer does) keeps only its first copy, the one read back.
+        let mut seen = false;
+        desc.items.retain(|(k, _)| !k.is(key) || !std::mem::replace(&mut seen, true));
+        let at = desc.items.iter().position(|(k, _)| k.is(key));
+        match (at, value) {
+            (Some(at), 0) => {
+                desc.items.remove(at);
+            }
+            (Some(at), v) => {
+                if let Some(item) = desc.items.get_mut(at) {
+                    item.1 = Value::Integer(v);
+                }
+            }
+            (None, 0) => {}
+            (None, v) => {
+                let before = |k: &photocraft_psd::descriptor::Id| k.is("useLegacy") || sliders.iter().take(i).any(|(p, _)| k.is(p));
+                let at = desc.items.iter().rposition(|(k, _)| before(k)).map_or(0, |p| p + 1);
+                desc.items.insert(at, (photocraft_psd::descriptor::Id::new(key), Value::Integer(v)));
+            }
+        }
+    }
+    let mut out = VersionedDescriptor::new(desc).to_bytes();
+    out.resize(out.len().next_multiple_of(4), 0);
+    *data = out;
+    true
+}
+
+/// `true` when a `vibA` block selects Photoshop's newer Vibrance method (`useLegacy` false). The
+/// layer opens as a Vibrance and keeps the method on save ([`retarget_vibrance`]), but PhotoCraft
+/// previews it with the legacy method. An unreadable block is `false`: it opens unsupported.
+pub(crate) fn is_newer_vibrance(data: &[u8]) -> bool {
+    versioned(data).is_some_and(|d| matches!(d.get("useLegacy"), Some(Value::Boolean(false))))
+}
+
+/// The open note for a layer [`is_newer_vibrance`] holds, so its legacy-method preview is not
+/// mistaken for Photoshop's look (#8838).
+pub(crate) fn newer_vibrance_warning(layer: &str) -> String {
+    format!("layer \"{layer}\": its Vibrance uses Photoshop's newer method, which PhotoCraft previews with the legacy method; the method is kept when saved")
+}
+
+/// `true` for a Vibrance layer whose own `vibA` block (the first, the one it was read from) is in
+/// Photoshop's newer method ([`is_newer_vibrance`]).
+pub(crate) fn layer_has_newer_vibrance(l: &photocraft_doc::Layer) -> bool {
+    matches!(l.content, photocraft_doc::LayerContent::Adjustment(Adjustment::Vibrance { .. }))
+        && l.psd_blocks.iter().find(|(k, _)| k == b"vibA").is_some_and(|(_, d)| is_newer_vibrance(d))
+}
+
+/// The save note for a visible layer [`layer_has_newer_vibrance`] holds when the file carries a
+/// composite image: PhotoCraft renders that image, so it shows the layer with the legacy method
+/// while Photoshop renders the layer itself with the newer one.
+pub(crate) fn newer_vibrance_composite_warning(layer: &str) -> String {
+    format!("layer \"{layer}\": the composite image saved with the file shows its Vibrance with the legacy method; the layer keeps Photoshop's newer method")
+}
+
 /// `true` for a `grdm` block exactly as older PhotoCraft builds wrote it: [`write_gradient_map`]'s
 /// output without the two padding bytes, which makes Photoshop refuse the file (#8070). Blocks
 /// from other writers, whatever their length, are not matched.
@@ -527,11 +603,17 @@ fn versioned(d: &[u8]) -> Option<Descriptor> {
 }
 
 /// `vibA` (Adobe spec, "Vibrance"): a versioned descriptor with `vibrance` and `Strt`
-/// (saturation), both integers in -100..=100. Photoshop omits a key whose value is 0.
+/// (saturation), both integers in -100..=100. Photoshop omits a key whose value is 0. A key that is
+/// present but not a finite number keeps the block unsupported (saved back verbatim) instead of
+/// reading as 0, which an edit would then write into the file's own descriptor
+/// ([`retarget_vibrance`]).
 fn parse_vibrance(d: &[u8]) -> Option<Adjustment> {
     let desc = versioned(d)?;
-    let get = |k: &str| desc_num(&desc, k).unwrap_or(0.0).clamp(-100.0, 100.0);
-    Some(Adjustment::Vibrance { vibrance: get("vibrance"), saturation: get("Strt") })
+    let get = |k: &str| match desc.get(k) {
+        None => Some(0.0),
+        Some(_) => desc_f64(&desc, k).filter(|v| v.is_finite()).map(|v| v.clamp(-100.0, 100.0) as f32),
+    };
+    Some(Adjustment::Vibrance { vibrance: get("vibrance")?, saturation: get("Strt")? })
 }
 
 /// `blnc` (Adobe spec, "Color Balance"): shadows, midtones and highlights as three i16 each

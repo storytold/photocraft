@@ -67,6 +67,7 @@ mod psd_type_bounds;
 mod psd_type_photoshop_bytes;
 mod psd_unknown_adjustment;
 mod psd_vertical_type;
+mod psd_vibrance_method;
 mod raw;
 mod resolution_axes;
 mod roundtrip;
