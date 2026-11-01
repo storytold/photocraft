@@ -4245,3 +4245,8 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper

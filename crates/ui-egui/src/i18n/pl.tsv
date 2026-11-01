@@ -4105,3 +4105,8 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper

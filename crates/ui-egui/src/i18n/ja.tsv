@@ -4164,3 +4164,8 @@ curves	Smooth	スムーズ
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+
+# Print-preview physical dimensions (display only)
+	Scale {scale}%  ·  {width} × {height} {unit}	{width} × {height} {unit}  ·  拡大・縮小 {scale}%
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	用紙より大きい

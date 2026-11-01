@@ -563,3 +563,8 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper

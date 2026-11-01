@@ -191,3 +191,43 @@ fn preview_open_and_viewport_refit_leave_pdf_and_print_parameters_unchanged() {
         assert_eq!(resolved(&app, &f), l);
     }
 }
+
+#[test]
+fn persisted_unknown_units_are_normalized_without_geometry_changes() {
+    let (app, mut f) = fixture();
+    let before = resolved(&app, &f);
+    for value in [json!("future-unit"), json!(null), json!(42), json!("cm"), json!("mm"), json!("in")] {
+        f.insert("units".into(), value.clone());
+        super::super::normalize_print_units(&mut f);
+        let expected = match value.as_str() {
+            Some("mm") => "mm",
+            Some("in") => "in",
+            _ => "cm",
+        };
+        assert_eq!(f["units"], expected);
+        assert_eq!(resolved(&app, &f), before);
+        assert!(super::super::print_preview_footer(before, expected).contains(expected));
+    }
+}
+
+#[test]
+fn footer_catalog_placeholders_can_be_reordered_without_changing_dimensions() {
+    let (app, f) = fixture();
+    let l = resolved(&app, &f);
+    for lang in crate::i18n::Lang::all().filter(|lang| *lang != crate::i18n::Lang::EN) {
+        for source in ["Scale {scale}%  ·  {width} × {height} {unit}", "{summary}  ·  {note}", "larger than the paper"] {
+            assert!(crate::i18n::has(lang, source), "{}: {source}", lang.code());
+        }
+        let translated = crate::i18n::tr(lang, "Scale {scale}%  ·  {width} × {height} {unit}");
+        let text = crate::i18n::fmt(translated, &[("height", "2.00"), ("width", "3.00"), ("unit", "cm"), ("scale", "37.1")]);
+        assert!(!text.contains('{'));
+        for value in ["2.00", "3.00", "cm", "37.1"] {
+            assert!(text.contains(value));
+        }
+    }
+    let footer = super::super::print_preview_footer(l, "cm");
+    assert!(!footer.contains('{'));
+    let mut outside = l;
+    outside.rect.0 = -1.0;
+    assert!(super::super::print_preview_footer(outside, "cm").contains("larger than the paper"));
+}

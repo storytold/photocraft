@@ -62,6 +62,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     ] {
         f.entry(k.to_string()).or_insert(v);
     }
+    normalize_print_units(&mut f);
     refresh_printers(app, &mut f);
     app.ui.open_dialog(DialogKind::Command, f)
 }
@@ -163,17 +164,35 @@ fn unit_pt(units: &str) -> f64 {
     }
 }
 
-/// Display-only conversion of the canonical print-point dimensions, using the same units as
-/// Position and Size. Formatting never writes scale or geometry back into the dialog.
+/// Validate persisted/control-channel display units before passing them to internal helpers.
+/// Unknown values keep the historic centimetre fallback without affecting physical geometry.
+fn normalize_print_units(f: &mut Map<String, Value>) {
+    if !matches!(f.get("units").and_then(Value::as_str), Some("cm" | "mm" | "in")) {
+        f.insert("units".into(), json!("cm"));
+    }
+}
+
+/// Display-only conversion of canonical print points. Callers validate persisted units first;
+/// formatting never writes scale or geometry back into the dialog.
 fn print_preview_footer(l: photocraft_engine::print_cmds::PrintLayout, units: &str) -> String {
+    debug_assert!(matches!(units, "cm" | "mm" | "in"), "print display units must be validated");
     let units = match units {
         "in" => "in",
         "mm" => "mm",
         _ => "cm",
     };
     let fits = l.rect.0 >= 0.0 && l.rect.1 >= 0.0 && l.rect.0 + l.rect.2 <= l.paper.0 && l.rect.1 + l.rect.3 <= l.paper.1;
-    let note = if fits { "" } else { "  ·  larger than the paper" };
-    format!("Scale {:.1}%  ·  {:.2} × {:.2} {units}{note}", l.scale * 100.0, l.rect.2 / unit_pt(units), l.rect.3 / unit_pt(units))
+    let note = if fits { "" } else { tl!("larger than the paper") };
+    let summary = crate::i18n::fmt(
+        tl!("Scale {scale}%  ·  {width} × {height} {unit}"),
+        &[
+            ("scale", &format!("{:.1}", l.scale * 100.0)),
+            ("width", &format!("{:.2}", l.rect.2 / unit_pt(units))),
+            ("height", &format!("{:.2}", l.rect.3 / unit_pt(units))),
+            ("unit", units),
+        ],
+    );
+    if fits { summary } else { crate::i18n::fmt(tl!("{summary}  ·  {note}"), &[("summary", &summary), ("note", note)]) }
 }
 
 /// A number field in `units` for a value kept in points; true when edited.
@@ -339,6 +358,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+    normalize_print_units(f);
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     // PDF exports and previews retain editable paper on Windows too. Only a real native
