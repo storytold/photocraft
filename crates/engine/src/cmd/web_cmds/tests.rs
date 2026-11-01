@@ -180,6 +180,7 @@ fn a_dotted_device_file_name_exports_without_the_device_stem() {
     assert!(std::path::Path::new(html).is_file());
 }
 
+/// A later write failure names its output and warns about earlier files without rolling back.
 #[test]
 fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     let mut s = session(8);
@@ -187,13 +188,64 @@ fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
     s.execute("slice.new", json!({"rect": [8, 8, 24, 24], "name": "logo"})).unwrap();
     let mut attempts = 0;
-    let failed = save_for_web_with_writer(&mut s, &json!({"format": "gif", "dir": "downloads", "html": true}), &mut |_, _| {
+    let mut failed_path = String::new();
+    let failed = save_for_web_with_writer(&mut s, &json!({"format": "gif", "dir": "downloads", "html": true}), &mut |path, _| {
         attempts += 1;
-        if attempts == 2 { Err(other("download failed")) } else { Ok(()) }
+        if attempts == 2 {
+            failed_path = path.to_string();
+            Err(other("download failed"))
+        } else {
+            Ok(())
+        }
     });
-    assert!(failed.unwrap_err().to_string().contains("download failed"));
+    let error = failed.unwrap_err().to_string();
+    assert!(error.contains("download failed") && error.contains(&failed_path) && error.contains("1 earlier output(s) may remain"), "{error}");
     assert_eq!(attempts, 2, "no later slice, spacer or HTML should be written after failure");
     assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+}
+
+/// Check every chosen image before writing, preserving codec boundaries and unchosen slices.
+#[test]
+fn selected_slice_format_limits_are_checked_before_any_write() {
+    for (format, lossless, limit) in [("webp", false, 16_383_u32), ("webp", true, 16_384), ("gif", false, 65_535), ("jpeg", false, 65_535)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": limit + 2, "height": 1})).unwrap();
+        s.execute("slice.new", json!({"rect": [0, 0, 1, 1], "name": "small"})).unwrap();
+        let wide = s.execute("slice.new", json!({"rect": [1, 0, limit + 1, 1], "name": "wide"})).unwrap()["slice"].clone();
+        let mut params = json!({"format": format, "lossless": lossless, "dir": "downloads", "html": false});
+        for mode in ["all", "user", "selected"] {
+            params["slices"] = json!(mode);
+            if mode == "selected" {
+                params["numbers"] = json!([1, 2]);
+            }
+            let mut writes = 0;
+            let result = save_for_web_with_writer(&mut s, &params, &mut |_, _| {
+                writes += 1;
+                Ok(())
+            });
+            assert!(result.is_err(), "{format}/{lossless}/{mode}: the wide slice exceeds its codec limit");
+            assert_eq!(writes, 0, "{format}/{lossless}/{mode}: refuse before writing the small slice");
+            assert!(s.file_menu.last_web.is_none());
+        }
+        params["numbers"] = json!([1]);
+        let mut sizes = Vec::new();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(1, 1)], "unselected oversized slices do not reject a valid export");
+
+        s.execute("slice.set", json!({"slice": wide, "rect": [1, 0, limit, 1]})).unwrap();
+        params["numbers"] = json!([2]);
+        sizes.clear();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(limit, 1)], "{format}/{lossless}: the exact codec boundary remains valid");
+    }
 }
 
 #[test]
