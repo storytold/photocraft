@@ -211,11 +211,8 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             Ok(json!({"dialog": d}))
         }
         "file.open" => {
-            if let Some(path) = params.get("path").and_then(Value::as_str) {
-                open_path(app, path)
-            } else {
-                app.open_dialog_file()
-            }
+            let dds = crate::dds_import_ui::params(params)?;
+            if let Some(path) = params.get("path").and_then(Value::as_str) { open_path_opts(app, path, dds) } else { app.open_dialog_file_opts(dds) }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
@@ -476,8 +473,13 @@ pub(super) fn data_sets_text(bytes: Vec<u8>) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|e| format!("the data set file is not valid UTF-8: {e}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
-    app.open_path(path).map(|w| json!({"warnings": w}))
+    open_path_opts(app, path, None)
+}
+
+fn open_path_opts(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsImport>) -> Result<Value, String> {
+    app.open_path_opts(path, dds).map(|w| json!({"warnings": w}))
 }
 
 fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Option<Result<Value, String>>, String> {

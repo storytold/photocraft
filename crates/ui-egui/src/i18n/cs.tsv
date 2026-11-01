@@ -4260,3 +4260,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Barva zarážky
 	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
+# DDS Import (#8632)
+	DDS Import	Import DDS
+	Load transparency as alpha channel	Načíst průhlednost jako alfa kanál
+	Mipmaps as separate layers	Mipmapy jako samostatné vrstvy
+	Flip vertically	Převrátit svisle
+	Open cancelled	Otevření zrušeno
+	Open failed: {error}	Otevření selhalo: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} mip úroveň|{n} mip úrovně|{n} mip úrovní

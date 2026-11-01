@@ -4434,3 +4434,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+# DDS Import (#8632)
+	DDS Import	DDS importálása
+	Load transparency as alpha channel	Átlátszóság betöltése alfacsatornaként
+	Mipmaps as separate layers	Mipmap-ek külön rétegekként
+	Flip vertically	Függőleges tükrözés
+	Open cancelled	Megnyitás megszakítva
+	Open failed: {error}	A megnyitás sikertelen: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} mip-szint

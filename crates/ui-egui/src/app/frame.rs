@@ -317,6 +317,7 @@ impl PhotocraftApp {
         targa_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
+        crate::dds_import_ui::show(self, &ctx);
         smart_svg_ui::poll(self, &ctx);
         smart_svg_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);

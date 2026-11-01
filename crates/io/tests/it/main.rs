@@ -20,6 +20,7 @@ mod comps_artboards;
 mod corpus;
 mod corpus_regressions;
 mod cylinder_warp;
+mod dds;
 mod deflate_compatibility;
 mod effects_multi;
 mod exif_resolution;

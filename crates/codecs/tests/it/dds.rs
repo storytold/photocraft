@@ -1,5 +1,6 @@
 use photocraft_codecs::{
-    ChannelLayout, CodecError, DecodeOptions, Format, Limits, SampleType, caps, decode, decode_as, decode_as_with, detect, encode, from_extension,
+    ChannelLayout, CodecError, DdsCompression, DecodeOptions, Format, Limits, SampleType, caps, decode, decode_as, decode_as_with, detect, encode,
+    from_extension,
 };
 
 const DDPF_ALPHAPIXELS: u32 = 0x1;
@@ -296,6 +297,56 @@ fn only_the_top_mip_level_is_read() {
     let im = decode(&b).unwrap();
     assert_eq!(im.dimensions(), (4, 4));
     assert!(im.data().chunks(4).all(|p| p == [255, 0, 0, 255]));
+}
+
+#[test]
+fn decode_levels_reads_the_whole_chain() {
+    let mut b = compressed(4, 4, b"DXT1");
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes()); // DDSD_MIPMAPCOUNT
+    b[28..32].copy_from_slice(&3u32.to_le_bytes());
+    b.extend(bc1_block(RED, RED, [0; 4]));
+    b.extend(bc1_block(BLUE, BLUE, [0; 4]));
+    b.extend(bc1_block(GREEN, GREEN, [0; 4]));
+    let levels = photocraft_codecs::decode_dds_levels(&b, &DecodeOptions::default()).unwrap();
+    assert_eq!(levels.len(), 3);
+    assert_eq!(levels[0].dimensions(), (4, 4));
+    assert_eq!(levels[1].dimensions(), (2, 2));
+    assert_eq!(levels[2].dimensions(), (1, 1));
+    assert!(levels[0].data().chunks(4).all(|p| p == [255, 0, 0, 255]));
+    assert!(levels[1].data().chunks(4).all(|p| p == [0, 0, 255, 255]));
+    assert_eq!(levels[2].data(), &[0, 255, 0, 255]);
+}
+
+/// A mip count the header declares is hostile: the chain ends at 1×1, so a file claiming
+/// billions of levels (and padded to tempt the decode) reads the levels that reduce to it.
+#[test]
+fn a_declared_mip_count_is_capped_at_the_chain() {
+    let mut b = compressed(4, 4, b"DXT1");
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes()); // DDSD_MIPMAPCOUNT
+    b[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+    b.extend(bc1_block(RED, RED, [0; 4]));
+    b.extend(bc1_block(BLUE, BLUE, [0; 4]));
+    b.extend(bc1_block(GREEN, GREEN, [0; 4]));
+    b.extend([0x55; 8 * 100]); // trailing blocks a naive reader would decode as more levels
+    let levels = photocraft_codecs::decode_dds_levels(&b, &DecodeOptions::default()).unwrap();
+    assert_eq!(levels.len(), 3, "4×4 → 4×4, 2×2, 1×1");
+    assert_eq!(levels[2].dimensions(), (1, 1));
+    assert_eq!(photocraft_codecs::dds_info(&b).unwrap().levels, 3, "the prompt shows the decodable count");
+}
+
+#[test]
+fn dds_info_reads_the_header_without_decoding() {
+    let mut b = compressed(4, 4, b"DXT1");
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes()); // DDSD_MIPMAPCOUNT
+    b[28..32].copy_from_slice(&3u32.to_le_bytes());
+    let info = photocraft_codecs::dds_info(&b).unwrap();
+    assert_eq!((info.width, info.height, info.levels), (4, 4, 3));
+    assert!(info.alpha, "BC1 can carry 1-bit transparency");
+    assert_eq!(info.compression, Some(DdsCompression::Bc1));
+    let opaque = header(2, 2, DDPF_RGB, b"\0\0\0\0", 32, [0xff_0000, 0xff00, 0xff, 0]);
+    let info = photocraft_codecs::dds_info(&opaque).unwrap();
+    assert!(!info.alpha);
+    assert_eq!(info.compression, Some(DdsCompression::None));
 }
 
 #[test]

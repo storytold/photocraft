@@ -4626,3 +4626,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+# DDS Import (#8632)
+	DDS Import	Importa DDS
+	Load transparency as alpha channel	Carica trasparenza come canale alfa
+	Mipmaps as separate layers	Mipmap come livelli separati
+	Flip vertically	Capovolgi verticalmente
+	Open cancelled	Apertura annullata
+	Open failed: {error}	Apertura non riuscita: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} livello mip|{n} livelli mip

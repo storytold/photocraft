@@ -82,7 +82,7 @@ mod xcf;
 pub mod xml;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
-pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
+pub use photocraft_codecs::{DdsCompression, DdsImport, DdsInfo, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 use photocraft_psd::{PsdError, PsdFile};
 
@@ -351,6 +351,8 @@ pub struct ImportOptions {
     /// PSD layer/mask/merged pixel allowance, including conversion workspace. May lower the
     /// default cap; does not cover metadata or smart-filter caches.
     pub psd_max_pixel_bytes: u64,
+    /// A DDS texture's alpha, mip chain and flip choices (File › Open's DDS prompt answers).
+    pub dds: DdsImport,
 }
 
 impl Default for ImportOptions {
@@ -359,6 +361,7 @@ impl Default for ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
             psd_max_pixel_bytes: DEFAULT_PSD_IMPORT_PIXEL_BYTES,
+            dds: DdsImport::default(),
         }
     }
 }
@@ -547,7 +550,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
         });
     }
-    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    flat::import_flat_with_limit(name, bytes, opts, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

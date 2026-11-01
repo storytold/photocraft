@@ -4225,3 +4225,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+# DDS Import (#8632)
+	DDS Import	Імпорт DDS
+	Load transparency as alpha channel	Завантажити прозорість як альфа-канал
+	Mipmaps as separate layers	Міп-рівні окремими шарами
+	Flip vertically	Відобразити вертикально
+	Open cancelled	Відкриття скасовано
+	Open failed: {error}	Не вдалося відкрити: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} MIP-рівень|{n} MIP-рівня|{n} MIP-рівнів

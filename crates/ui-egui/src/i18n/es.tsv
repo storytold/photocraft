@@ -4426,3 +4426,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+# DDS Import (#8632)
+	DDS Import	Importar DDS
+	Load transparency as alpha channel	Cargar transparencia como canal alfa
+	Mipmaps as separate layers	Mipmaps como capas independientes
+	Flip vertically	Voltear verticalmente
+	Open cancelled	Apertura cancelada
+	Open failed: {error}	Error al abrir: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} nivel mip|{n} niveles mip

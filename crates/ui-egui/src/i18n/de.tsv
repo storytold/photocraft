@@ -3545,3 +3545,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+# DDS Import (#8632)
+	DDS Import	DDS-Import
+	Load transparency as alpha channel	Transparenz als Alphakanal laden
+	Mipmaps as separate layers	Mipmaps als eigene Ebenen
+	Flip vertically	Vertikal spiegeln
+	Open cancelled	Öffnen abgebrochen
+	Open failed: {error}	Öffnen fehlgeschlagen: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} Mip-Level|{n} Mip-Levels

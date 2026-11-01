@@ -267,7 +267,7 @@ impl Reader<'_, '_> {
 /// Krita's merged image as a one-layer stand-in, for documents we can't read layer by layer.
 fn preview(name: &str, zip: &ZipReader<'_>, why: String) -> Result<ImportResult> {
     let png = zip.read_by_name("mergedimage.png", MAX_LAYER_FILE).map_err(|e| invalid(format!("{why}, and the merged image can't be read: {e}")))?;
-    let mut r = crate::flat::import_flat(name, &png)?;
+    let mut r = crate::flat::import_flat(name, &png, &crate::ImportOptions::default())?;
     r.document.name = name.to_string();
     r.warnings.insert(0, format!("{why}; the file opens as Krita's merged image, without its layers"));
     r.source_read_only = true;

@@ -39,7 +39,7 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, dds_import_param, open_bytes_as, open_bytes_as_opts, place_bytes, raw_defaults};
 use open::{close_all, close_others, open_as, place, revert};
 pub(crate) use open::{import, tag_exr_colorspace};
 use paths::is_file;
@@ -250,7 +250,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"ddsAlphaChannel":bool=false (DDS: the texture's alpha opens as an "Alpha 1" channel, not the layer's transparency),"ddsMipmaps":bool=false (DDS: each mip level a layer),"ddsFlip":bool=false (DDS: open the rows bottom-up)}"##,
             native,
             open_as
         ),

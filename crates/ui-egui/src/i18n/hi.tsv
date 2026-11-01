@@ -589,3 +589,12 @@ cameraRaw	Yellow	पीला
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+# DDS Import (#8632)
+	DDS Import	DDS इम्पोर्ट
+	Load transparency as alpha channel	पारदर्शिता को ऐल्फ़ा चैनल के रूप में लोड करें
+	Mipmaps as separate layers	मिपमैप्स को अलग लेयर्स के रूप में
+	Flip vertically	लंबवत पलटें
+	Open cancelled	खोलना रद्द किया गया
+	Open failed: {error}	खोलने में विफल: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} मिप स्तर|{n} मिप स्तर

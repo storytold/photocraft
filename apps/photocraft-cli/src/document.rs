@@ -5,7 +5,7 @@ use photocraft_automation::{Headless, files};
 use serde_json::{Value, json};
 
 use photocraft_engine::type_extra_cmds::missing_font_warnings;
-use photocraft_io::ExportOptions;
+use photocraft_io::{ExportOptions, ImportOptions};
 
 use crate::{
     CliError, Result,
@@ -30,7 +30,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
-    let mut o = files::open(input)?;
+    let mut o = files::open_opts(input, &ImportOptions::from(&a.import))?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
     warn_all(err, &o.warnings);
@@ -86,7 +86,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open(file)?;
+        let o = h.open_opts(file, &ImportOptions::from(&a.import))?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);

@@ -276,3 +276,51 @@ fn without_remember_the_next_file_still_asks() {
     assert_eq!(h.state().ui.dialogs.len(), 1);
     assert!(h.state().session.color.settings.ask_on_mismatch);
 }
+
+/// An uncompressed 4×4 RGBA DDS: enough for the importer, and untagged so its open can ask.
+fn rgba_dds() -> Vec<u8> {
+    let mut b = vec![0u8; 128];
+    b[0..4].copy_from_slice(b"DDS ");
+    let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    put(8, 0x1007 | 0x8); // CAPS | HEIGHT | WIDTH | PIXELFORMAT | PITCH
+    put(12, 4);
+    put(16, 4);
+    put(20, 4 * 4);
+    put(76, 32);
+    put(80, 0x40 | 0x1); // DDPF_RGB | DDPF_ALPHAPIXELS
+    put(88, 32);
+    for (i, m) in [0xffu32, 0xff00, 0xff0000, 0xff000000].into_iter().enumerate() {
+        put(92 + 4 * i, m);
+    }
+    put(108, 0x1000); // DDSCAPS_TEXTURE
+    b.extend([0x40u8, 0x80, 0xc0, 0xff].into_iter().cycle().take(4 * 4 * 4));
+    b
+}
+
+/// A DDS answered from the Import prompt that then waits on the profile prompt keeps the
+/// tab slot its drop asked for: the slot rides the held open and applies when it resolves.
+#[test]
+fn a_dds_open_held_for_its_profile_prompt_keeps_the_drop_slot() {
+    let mut h = harness(false);
+    // Two documents already open, without asking (nothing in an untagged PNG to ask about
+    // until Ask On Missing turns on).
+    for name in ["a.png", "b.png"] {
+        let d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.6, 0.9, 1.0));
+        let png = photocraft_io::export(&d, "t.png", &Default::default()).unwrap().bytes;
+        h.state_mut().open_file(&format!("/pics/{name}"), &png).unwrap();
+    }
+    settle(&mut h);
+    assert_eq!(docs(&h), ["a.png", "b.png"]);
+    h.state_mut().run("edit.colorSettings", serde_json::json!({"askOnMissing": true})).unwrap();
+    // A drop on tab slot 1 parks behind the DDS Import prompt with the slot on it.
+    assert!(crate::dds_import_ui::park_bytes(h.state_mut(), "c.dds".into(), None, &rgba_dds()));
+    h.state_mut().dds_imports.back_mut().unwrap().slot = Some(1);
+    h.run_steps(3);
+    click(&mut h, "OK");
+    assert_eq!(h.state().held_opens.len(), 1, "the untagged DDS waits on its profile prompt");
+    assert_eq!(h.state().held_opens[0].slot, Some(1));
+    crate::open_prompt::answer(h.state_mut(), Some("preserve")).unwrap();
+    settle(&mut h);
+    assert_eq!(docs(&h), ["a.png", "c.dds", "b.png"], "the answered open lands at the drop's slot");
+}

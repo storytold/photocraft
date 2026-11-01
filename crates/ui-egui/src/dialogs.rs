@@ -1126,6 +1126,7 @@ pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
 pub mod credits;
+pub mod dds_import_ui;
 pub mod dds_options_ui;
 pub mod delete_layer_prompt;
 pub mod dialog_alt_reset;

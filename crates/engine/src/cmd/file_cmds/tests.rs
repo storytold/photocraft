@@ -348,6 +348,29 @@ fn dds_params_are_none_until_one_is_given() {
     assert_eq!(dds_param(&json!({"ddsCompression": "bc2"}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::Bc2, mipmaps: false }));
 }
 
+/// `ddsAlphaChannel`/`ddsMipmaps`/`ddsFlip` are `file.openAs`'s answers to the DDS import
+/// prompt; bad values are refused.
+#[test]
+fn open_as_takes_the_dds_import_answers() {
+    let dir = tmp("dds-import");
+    // An opaque 8×8 source saved as a mip-mapped DXT5: four levels, alpha channel.
+    let mut s = session(8, 8, 8);
+    let src = join(&dir, "in.dds");
+    s.execute("file.saveACopy", json!({"path": src, "ddsCompression": "bc3", "ddsMipmaps": true})).unwrap();
+
+    let mut plain = session(1, 1, 8);
+    assert!(matches!(plain.execute("file.openAs", json!({"path": src, "as": "dds", "ddsMipmaps": 3})), Err(EngineError::BadParams { .. })));
+    assert!(matches!(plain.execute("file.openAs", json!({"path": src, "as": "dds", "ddsAlphaChannel": "yes"})), Err(EngineError::BadParams { .. })));
+
+    let mut s = session(1, 1, 8);
+    s.execute("file.openAs", json!({"path": src, "as": "dds", "ddsMipmaps": true})).unwrap();
+    assert_eq!(doc(&s).layers.len(), 4, "8×8 → 4×4, 2×2, 1×1");
+
+    let mut s = session(1, 1, 8);
+    s.execute("file.openAs", json!({"path": src, "as": "dds"})).unwrap();
+    assert_eq!(doc(&s).layers.len(), 1, "default: the top level only");
+}
+
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
 #[test]
 fn bad_targa_bits_are_refused_before_writing() {

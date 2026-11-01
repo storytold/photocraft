@@ -4248,3 +4248,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+# DDS Import (#8632)
+	DDS Import	DDS İçe Aktar
+	Load transparency as alpha channel	Saydamlığı alfa kanalı olarak yükle
+	Mipmaps as separate layers	Mipmap'leri ayrı katmanlar olarak
+	Flip vertically	Dikey çevir
+	Open cancelled	Açma iptal edildi
+	Open failed: {error}	Açma başarısız: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} mip seviyesi

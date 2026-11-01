@@ -3734,3 +3734,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+# DDS Import (#8632)
+	DDS Import	DDS 가져오기
+	Load transparency as alpha channel	투명도를 알파 채널로 불러오기
+	Mipmaps as separate layers	밉맵을 개별 레이어로
+	Flip vertically	세로로 뒤집기
+	Open cancelled	열기 취소됨
+	Open failed: {error}	열기 실패: {error}
+	{name} ({width} × {height})	{name}({width} × {height})
+@plural	{n} mip level|{n} mip levels	밉맵 레벨 {n}개

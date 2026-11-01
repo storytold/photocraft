@@ -3155,3 +3155,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+# DDS Import (#8632)
+	DDS Import	DDS 匯入
+	Load transparency as alpha channel	將透明度載入為 Alpha 通道
+	Mipmaps as separate layers	Mipmap 作為單獨圖層
+	Flip vertically	垂直翻轉
+	Open cancelled	已取消開啟
+	Open failed: {error}	開啟失敗：{error}
+	{name} ({width} × {height})	{name}（{width} × {height}）
+@plural	{n} mip level|{n} mip levels	{n} 個 Mip 層級

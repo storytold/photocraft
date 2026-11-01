@@ -4191,3 +4191,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+# DDS Import (#8632)
+	DDS Import	DDS インポート
+	Load transparency as alpha channel	透明部分をアルファチャンネルとして読み込む
+	Mipmaps as separate layers	ミップマップを個別のレイヤーとして
+	Flip vertically	垂直に反転
+	Open cancelled	開くのをキャンセルしました
+	Open failed: {error}	開くのに失敗しました: {error}
+	{name} ({width} × {height})	{name}（{width} × {height}）
+@plural	{n} mip level|{n} mip levels	{n} MIPレベル

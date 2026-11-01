@@ -4550,3 +4550,12 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+# DDS Import (#8632)
+	DDS Import	Importation DDS
+	Load transparency as alpha channel	Charger la transparence en canal alpha
+	Mipmaps as separate layers	Mipmaps en calques séparés
+	Flip vertically	Retourner verticalement
+	Open cancelled	Ouverture annulée
+	Open failed: {error}	Échec de l'ouverture : {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} niveau mip|{n} niveaux mip
