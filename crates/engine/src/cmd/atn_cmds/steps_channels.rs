@@ -1,0 +1,108 @@
+//! Photoshop's channel and colour steps (#10609): Split Channels, Merge Spot Channel, Trap and
+//! Match Color, with the keys Photoshop records.
+
+use super::descriptors::{desc, get_bool, get_num, px, trimmed};
+use super::events::pixel_target;
+use super::fields::{Mapped, step};
+use super::{D, Descriptor, Value, json};
+
+/// Whether every key of `d` is one of `keys` (codes compare without their space padding).
+fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
+    d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
+fn sets_only(p: &Value, allowed: &[&str]) -> bool {
+    p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
+}
+
+/// Split Channels (`splitChannels`). Its `documentIDs` are the documents the split made when it
+/// was recorded, so they mean nothing on replay: the step splits the active document and closes
+/// it, as Photoshop's does.
+pub(super) fn split_from(d: &Descriptor) -> Mapped {
+    if only_keys(d, &["documentIDs"]) { step("channel.split", json!({})) } else { Mapped::Unsupported { harmless: false } }
+}
+
+/// Written without `documentIDs`, which only a run of the split can know. Keeping the original
+/// open has no Photoshop counterpart.
+pub(super) fn split_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let closes = p.get("closeOriginal").is_none_or(|v| v.is_null() || *v == Value::Bool(true));
+    (sets_only(p, &["closeOriginal"]) && closes).then(|| desc("null"))
+}
+
+/// Merge Spot Channel (`mergeSpotChannel`): an empty step merges the targeted spot channel.
+pub(super) fn merge_spot_from(d: &Descriptor) -> Mapped {
+    if d.items.is_empty() { step("channel.mergeSpot", json!({})) } else { Mapped::Unsupported { harmless: false } }
+}
+
+/// A step naming its channel cannot be written: the event has no key for it.
+pub(super) fn merge_spot_to(_: &str, p: &Value) -> Option<Descriptor> {
+    sets_only(p, &[]).then(|| desc("null"))
+}
+
+/// Trap's widest width: Photoshop clamps larger ones to it.
+const MAX_TRAP: f64 = 32767.0;
+
+/// Trap (`Trap`): `Wdth` in pixels.
+pub(super) fn trap_from(d: &Descriptor) -> Mapped {
+    if !only_keys(d, &["Wdth"]) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    match get_num(d, "Wdth") {
+        Some(w) => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
+        None => step("image.trap", json!({})),
+    }
+}
+
+/// `Wdth` is always written: the command traps 1 px when the step leaves the width out.
+pub(super) fn trap_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !sets_only(p, &["width"]) {
+        return None;
+    }
+    let width = match p.get("width") {
+        None | Some(Value::Null) => 1.0,
+        Some(v) => v.as_f64().filter(|n| n.is_finite())?,
+    };
+    Some(desc("null").with("Wdth", px(width)))
+}
+
+/// Match Color's integer keys in recorded order: (key, param, default).
+const MATCH_COLOR: &[(&str, &str, i32)] = &[("Lght", "luminance", 100), ("ClrR", "intensity", 100), ("Fade", "fade", 0)];
+
+/// Match Color (`matchColor`) without a source, as Photoshop records it (`noReference`). A
+/// step that matches another image (`noReference` false) names no source here, so it keeps
+/// the Photoshop step.
+pub(super) fn match_color_from(d: &Descriptor) -> Mapped {
+    if !only_keys(d, &["Lght", "ClrR", "Fade", "noReference"]) || get_bool(d, "noReference") == Some(false) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let mut p = serde_json::Map::new();
+    for (key, param, default) in MATCH_COLOR {
+        p.insert((*param).into(), get_num(d, key).map_or(Value::from(*default), Value::from));
+    }
+    step("image.adjustments.matchColor", Value::Object(p))
+}
+
+/// Every key in recorded order. A source document or layer, Neutralize or a selection option
+/// has no key in the event, so such a step is refused; the integers refuse a fraction.
+pub(super) fn match_color_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let off = |k: &str| p.get(k).is_none_or(|v| v.is_null() || *v == Value::Bool(false));
+    if !pixel_target(p)
+        || !sets_only(p, &["target", "luminance", "intensity", "fade", "neutralize", "useSelectionInSource", "useSelectionInTarget"])
+        || !["neutralize", "useSelectionInSource", "useSelectionInTarget"].iter().all(|k| off(k))
+    {
+        return None;
+    }
+    let mut d = desc("null");
+    for (key, param, default) in MATCH_COLOR {
+        let n = match p.get(*param) {
+            None | Some(Value::Null) => f64::from(*default),
+            Some(v) => v.as_f64()?,
+        };
+        if n.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n) {
+            return None;
+        }
+        d = d.with(key, D::Integer(n as i32));
+    }
+    Some(d.with("noReference", D::Boolean(true)))
+}

@@ -485,6 +485,10 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("channel.split", json!({})),
+        ("channel.mergeSpot", json!({})),
+        ("image.trap", json!({"width": 3})),
+        ("image.adjustments.matchColor", json!({"luminance": 120, "intensity": 80, "fade": 25})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3174,4 +3178,91 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// Photoshop's Split Channels, Merge Spot Channel, Trap and Match Color steps load as their
+/// commands and save back with the keys Photoshop records (#10609).
+#[test]
+fn channel_and_color_steps_load_and_save_back() {
+    let ids = D::List(vec![D::Integer(182), D::Integer(185), D::Integer(188)]);
+    let matched = desc("null").with("Lght", D::Integer(120)).with("ClrR", D::Integer(80)).with("Fade", D::Integer(25)).with("noReference", D::Boolean(true));
+    let items = vec![
+        item("SplC", "Split Channels", Some(desc("null").with("documentIDs", ids))),
+        item("MSpt", "Merge Spot Channel", Some(desc("null"))),
+        item("Trap", "Trap", Some(desc("null").with("Wdth", px(2.0)))),
+        item("matchColor", "Match Color", Some(matched.clone())),
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Prepress"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Inks"), items: items.clone(), ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    assert_eq!(r["unsupported"], json!([]));
+    assert_eq!(
+        s.actions.list[0].steps,
+        vec![
+            ("channel.split".to_string(), json!({})),
+            ("channel.mergeSpot".to_string(), json!({})),
+            ("image.trap".to_string(), json!({"width": 2})),
+            ("image.adjustments.matchColor".to_string(), json!({"luminance": 120, "intensity": 80, "fade": 25})),
+        ]
+    );
+    let saved = s.execute("actions.save", json!({"action": "Inks"})).unwrap();
+    let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let back = &back.actions[0].items;
+    let events: Vec<String> = back.iter().map(|i| i.event.id()).collect();
+    assert_eq!(events, ["SplC", "MSpt", "Trap", "matchColor"]);
+    // The split's document IDs belong to the run that recorded it, so none are written.
+    assert!(back[0].descriptor.as_ref().unwrap().items.is_empty());
+    for (b, original) in back.iter().zip(&items).skip(1) {
+        assert_eq!(b.descriptor.as_ref().unwrap().items, original.descriptor.as_ref().unwrap().items, "{}", original.event.id());
+    }
+    // Match Color with no reference plays on the image itself.
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    s.actions.list.push(Action::new("Match", vec![s.actions.list[0].steps[3].clone()]));
+    let played = s.execute("actions.play", json!({"action": "Match"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+}
+
+/// Missing Match Color keys take Photoshop's defaults and Trap's width is clamped to its
+/// 32767 px; a step matching another image, or with a key the event lacks, stays a Photoshop
+/// step (#10609).
+#[test]
+fn channel_and_color_steps_default_clamp_and_keep() {
+    let from = |name: &str, d: Descriptor| {
+        let event = if name.len() == 4 { AtnEvent::Code(name.as_bytes().try_into().unwrap()) } else { AtnEvent::name(name) };
+        (events::event_for(&event).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
+    };
+    let params = |m: Mapped| match m {
+        Mapped::Steps(s) => s[0].1.clone(),
+        Mapped::Unsupported { .. } => panic!("kept"),
+    };
+    assert_eq!(params(from("matchColor", desc("null"))), json!({"luminance": 100, "intensity": 100, "fade": 0}));
+    assert_eq!(params(from("Trap", desc("null").with("Wdth", px(99_999.0)))), json!({"width": 32767.0}));
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(from("matchColor", desc("null").with("noReference", D::Boolean(false)))));
+    assert!(kept(from("SplC", desc("null").with("Chnl", D::Integer(1)))));
+    assert!(kept(from("MSpt", desc("null").with("Chnl", D::Integer(1)))));
+    assert!(kept(from("Trap", desc("null").with("Hght", px(2.0)))));
+}
+
+/// Settings the events have no key for refuse the step instead of replaying differently: a
+/// split that keeps the original, a named spot channel, a Match Color source or option, a
+/// fractional luminance (#10609).
+#[test]
+fn channel_and_color_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("channel.split", json!({"closeOriginal": false})),
+        ("channel.mergeSpot", json!({"channel": 1})),
+        ("image.trap", json!({"width": 2, "layer": 3})),
+        ("image.adjustments.matchColor", json!({"source": 0})),
+        ("image.adjustments.matchColor", json!({"neutralize": true})),
+        ("image.adjustments.matchColor", json!({"luminance": 99.5})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    assert!(export_item("image.adjustments.matchColor", &json!({"neutralize": false}), "S").is_some());
 }
