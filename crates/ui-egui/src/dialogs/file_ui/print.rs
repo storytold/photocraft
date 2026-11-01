@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, DialogKind, Map, PhotocraftApp, Tokens, Value, b, check, dropdown_str, json, n, number, params, s};
 
 mod print_frame;
 
@@ -127,6 +127,11 @@ pub(super) fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     };
     f.insert("printerSettings".into(), json!(settings));
     f.insert("paper".into(), json!([w, h]));
+    // The printable area turns with the paper; left portrait, it wouldn't fit the turned sheet.
+    match r.get("printable").filter(|v| v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number))) {
+        Some(area) => f.insert("printable".into(), area.clone()),
+        None => f.remove("printable"),
+    };
     f.insert("orientation".into(), json!("portrait"));
     f.remove("__pageError");
 }

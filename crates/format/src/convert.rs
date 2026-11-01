@@ -11,7 +11,10 @@ use photocraft_doc::{
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
-use crate::manifest::*;
+use crate::manifest::{
+    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
+    SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
+};
 use crate::{FormatError, Result};
 
 /// Deepest group nesting a bundle may hold — the one nesting limit every consumer of the layer
@@ -42,6 +45,8 @@ pub(crate) trait Fetch {
     /// Canonical (little-endian) tile bytes of the given expected length.
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>>;
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
+    /// Fetch an optional display payload without allocating beyond its stricter limit.
+    fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>>;
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -164,6 +169,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
+            vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
             cache: s.cache.as_ref().map(|c| surface_m(c, sink)),
@@ -484,33 +490,52 @@ impl Loader<'_> {
                 density: *density,
                 feather: *feather,
             }),
-            ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
-                LayerContent::Smart(SmartObject {
-                    contents_id: self.contents_id(*contents_id, source),
-                    source: match source {
-                        SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
-                        SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
-                    },
-                    transform: *transform,
-                    smart_filters: smart_filters.clone(),
-                    cache: self.opt_surface(cache)?,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    filters_enabled: *filters_enabled,
-                    filter_mask: match filter_mask {
-                        Some(mm) => Some(LayerMask {
-                            surface: self.surface(&mm.surface)?,
-                            enabled: mm.enabled,
-                            linked: mm.linked,
-                            density: mm.density,
-                            feather: mm.feather,
-                        }),
-                        None => None,
-                    },
-                    warp: warp.clone().filter(|w| w.mesh.as_ref().is_none_or(|m| m.is_valid())),
-                    stack_mode: *stack_mode,
-                    perspective: perspective.filter(|p| p.iter().all(|v| v.is_finite())),
-                })
-            }
+            ContentM::Smart {
+                contents_id,
+                source,
+                vector_preview,
+                transform,
+                smart_filters,
+                cache,
+                psd_raw,
+                filters_enabled,
+                filter_mask,
+                warp,
+                stack_mode,
+                perspective,
+            } => LayerContent::Smart(SmartObject {
+                contents_id: self.contents_id(*contents_id, source),
+                source: match source {
+                    SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
+                    SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
+                },
+                vector_preview: match vector_preview {
+                    // A display-only preview must not prevent recovery of the native source
+                    // and cached pixels if its optional blob is missing or damaged.
+                    Some(preview) => {
+                        self.fetch.blob_bounded(&preview.svg, 16 << 20).ok().map(|svg| photocraft_doc::VectorPreview { source_hash: preview.source_hash, svg })
+                    }
+                    None => None,
+                },
+                transform: *transform,
+                smart_filters: smart_filters.clone(),
+                cache: self.opt_surface(cache)?,
+                psd_raw: self.opt_blob(psd_raw)?,
+                filters_enabled: *filters_enabled,
+                filter_mask: match filter_mask {
+                    Some(mm) => Some(LayerMask {
+                        surface: self.surface(&mm.surface)?,
+                        enabled: mm.enabled,
+                        linked: mm.linked,
+                        density: mm.density,
+                        feather: mm.feather,
+                    }),
+                    None => None,
+                },
+                warp: warp.clone().filter(|w| w.mesh.as_ref().is_none_or(|m| m.is_valid())),
+                stack_mode: *stack_mode,
+                perspective: perspective.filter(|p| p.iter().all(|v| v.is_finite())),
+            }),
         };
         let mask = match &m.mask {
             Some(mm) => {
