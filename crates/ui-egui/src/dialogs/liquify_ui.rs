@@ -345,11 +345,15 @@ impl LiquifyDialog {
         self.last_dab = now;
     }
 
+    /// Continues the stroke to `p`. The point is recorded live, with the milliseconds since the
+    /// previous one, so the brush follows the pointer exactly and the stationary tools work by
+    /// real elapsed time ([`LiquifyField::stroke_segment_live`]); OK replays the same.
     fn extend(&mut self, p: [f64; 3], now: f64) {
         let Some((mut s, last)) = self.cur.take() else { return };
+        let ms = if (now - self.last_dab).is_finite() { (now - self.last_dab).max(0.0) } else { 0.0 };
         let t0 = crate::gpu_canvas::now_ms();
-        let d = self.field.stroke_segment(&s, last, p);
-        s.points.push(p.to_vec());
+        let d = self.field.stroke_segment_live(&s, last, p, ms);
+        s.points.push(vec![p[0], p[1], p[2], ms]);
         self.mark(d, matches!(s.tool, LiquifyTool::Freeze | LiquifyTool::Thaw));
         self.render_dirty();
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
@@ -1306,8 +1310,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 events.push(ToolEvent::Down { x: q[0], y: q[1], pressure: pr });
             } else if resp.dragged() || resp.is_pointer_button_down_on() {
                 let moved = d.cur.as_ref().is_some_and(|(_, l)| l[0] != q[0] || l[1] != q[1]);
-                // Stationary tools keep working while the brush is held still (30 dabs/s).
-                let held = d.opts.tool.is_stationary() && crate::gpu_canvas::now_ms() - d.last_dab > 33.0;
+                // Stationary tools keep working while the brush is held still: a point every
+                // frame, each worth the time since the last, so the speed is the same at any
+                // frame rate and never stalls while the brush creeps.
+                let held = d.opts.tool.is_stationary();
+                if moved {
+                    // Every pointer position the platform reported this frame, not just the
+                    // last, so a quick curved stroke keeps its curve instead of being cut into
+                    // one straight chord per frame.
+                    let path: Vec<Pos2> = ui.input(|i| {
+                        i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect()
+                    });
+                    for p in path.iter().take(path.len().saturating_sub(1)) {
+                        let m = to_doc(d, area, *p);
+                        events.push(ToolEvent::Move { x: m[0], y: m[1], pressure: pr });
+                    }
+                }
                 if moved || held {
                     events.push(ToolEvent::Move { x: q[0], y: q[1], pressure: pr });
                 }
