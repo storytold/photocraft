@@ -1250,3 +1250,18 @@ fn undoing_a_crop_after_esc_brings_the_frame_back() {
     ensure_frame(&mut app);
     assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
 }
+
+#[test]
+fn an_undo_that_keeps_the_canvas_size_leaves_the_frame_hidden() {
+    // Only a size change brings the frame back: undoing an edit that keeps the size doesn't.
+    let mut app = app(SampleType::U8);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert!(app.session.undo());
+    assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+}
