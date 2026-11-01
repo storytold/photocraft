@@ -484,3 +484,28 @@ impl<T> WarmSlot<T> {
         Warm::Absent
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The background build hands the compositor over once, and a failure is remembered: the
+    /// canvas then stays on the CPU compositor instead of building it again on every refresh.
+    #[test]
+    fn the_background_compositor_is_handed_over_once() {
+        let mut slot: WarmSlot<u32> = WarmSlot::building();
+        assert!(matches!(slot.take(), Warm::Building), "the build is still running");
+
+        slot.ready = Some(7);
+        assert!(matches!(slot.take(), Warm::Ready(7)), "the compositor is ready");
+        assert!(matches!(slot.take(), Warm::Absent), "the compositor is taken only once");
+
+        let mut slot: WarmSlot<u32> = WarmSlot::building();
+        slot.failed = Some(photocraft_gpu::Unsupported("no pipelines".into()));
+        assert!(matches!(slot.take(), Warm::Failed(_)), "the build failed");
+        assert!(matches!(slot.take(), Warm::Failed(_)), "the failure is remembered");
+
+        let mut slot: WarmSlot<u32> = WarmSlot { ready: None, failed: None, building: false };
+        assert!(matches!(slot.take(), Warm::Absent), "no build ran: the UI thread builds it");
+    }
+}
