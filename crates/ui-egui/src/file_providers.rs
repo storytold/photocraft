@@ -557,7 +557,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for command in commands {
         match command {
             Command::Result(request, status, resource) => apply_result(app, ctx, &host, &request, &status, resource),
-            Command::Open(opening, bytes) => apply_open(app, &host, opening, bytes),
+            Command::Open(opening, bytes) => apply_open(app, ctx, &host, opening, bytes),
         }
     }
     finish_opens(app, &host);
@@ -643,7 +643,29 @@ fn invalidate_resource_aliases(app: &mut PhotocraftApp, host: &Host, resource: &
     }
 }
 
-fn apply_open(app: &mut PhotocraftApp, host: &Host, opening: Opening, bytes: Vec<u8>) {
+fn open_would_retarget_ui(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    // Delivery runs in logic, before this frame's widgets can commit their input. Reuse the
+    // close-continuation guard for document-owned drafts instead of switching their target.
+    app.file_dialog_open()
+        || app.save_options_open()
+        || app.discard.is_some()
+        || !app.ui.dialogs.is_empty()
+        || app.filter_preview.is_some()
+        || ctx.text_edit_focused()
+        || ctx.input(|input| !input.events.is_empty() || !input.raw.dropped_files.is_empty() || input.pointer.any_down() || !input.keys_down.is_empty())
+        || app.synthetic_batch.is_some()
+        || !app.synthetic.is_empty()
+        || app.session.documents().iter().any(|state| crate::discard_ui::provider_ui_work(app, ctx, state.doc.id))
+}
+
+fn apply_open(app: &mut PhotocraftApp, ctx: &egui::Context, host: &Host, opening: Opening, bytes: Vec<u8>) {
+    if open_would_retarget_ui(app, ctx) {
+        let error = crate::i18n::t("Finish or cancel the current edit before opening a provider file.");
+        app.ui.status = error.into();
+        app.ui.status_error = true;
+        host.state().event(json!({"type":"openFailed","requestId":opening.request,"resourceId":opening.resource,"error":error}), None);
+        return;
+    }
     host.state().opening = Some(opening.clone());
     // The web decoder is synchronous. Keep this identity-correlated path synchronous in native
     // fixtures too; ordinary desktop opens retain their background-job behaviour.

@@ -165,6 +165,12 @@ provider permanently busy.
 Pending reads remain busy for account/disconnection and leave guards, but are not active
 saves: they do not hide an unrelated unsaved-changes prompt or prevent its answer.
 
+A read that arrives while a dialog, focused field draft, live tool preview, held gesture or
+unprocessed input could be retargeted fails with its correlated `openFailed` before decoding
+or admitting a document. The current document, dialog and draft remain in place. Settle or
+cancel that interaction, then start a new `requestOpen` to retry; a failed delivery is terminal
+and does not keep the provider busy. An idle document may remain dirty while another file opens.
+
 ## Trust boundary and limits
 
 The API is a page-local capability for trusted scripts executing in the editor's own origin. The

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::*;
 
 fn host() -> Host {
@@ -36,6 +38,33 @@ fn tick_once(app: &mut PhotocraftApp) {
     let ctx = egui::Context::default();
     tick(app, &ctx);
     crate::discard_ui::finish_provider_save(app, &ctx);
+}
+
+fn request_deferred_open(app: &mut PhotocraftApp, host: &Host) -> (String, Arc<AtomicUsize>) {
+    let document = app.session.active().unwrap().doc.as_ref().clone();
+    let imports = Arc::new(AtomicUsize::new(0));
+    let decoder_calls = imports.clone();
+    app.services.import = Some(Box::new(move |_, _, _| {
+        decoder_calls.fetch_add(1, Ordering::Relaxed);
+        Ok((document.clone(), Vec::new()))
+    }));
+    let request = host.request_open("resource-one").unwrap();
+    host.take_events();
+    (request, imports)
+}
+
+fn assert_deferred_open_rejected(app: &PhotocraftApp, host: &Host, doc: DocId, request: &str) {
+    assert_eq!(app.session.documents().len(), 1, "a rejected delivery must not admit another document");
+    assert_eq!(app.session.active().unwrap().doc.id, doc);
+    assert!(app.ui.status_error);
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "openFailed");
+    assert_eq!(events[0].metadata["requestId"], request);
+    assert_eq!(events[0].metadata["resourceId"], "resource-one");
+    assert_eq!(events[0].metadata["connectionId"], connection(host));
+    assert_eq!(events[0].metadata["namespace"], "account-one");
+    assert!(!host.busy(), "the failed delivery retires only its own read");
 }
 
 #[test]
@@ -518,15 +547,17 @@ fn late_resource_lists_cannot_cross_accounts_or_reconnections() {
 #[test]
 fn provider_open_uses_the_decoder_then_acknowledges_the_admitted_document() {
     let (mut app, host, original) = app();
-    let document = app.session.active().unwrap().doc.as_ref().clone();
-    app.services.import = Some(Box::new(move |_, _, _| Ok((document.clone(), Vec::new()))));
+    let original_snapshot = app.session.active().unwrap().doc.clone();
+    let (request, imports) = request_deferred_open(&mut app, &host);
     app.background_jobs = true;
-    let request = host.request_open("resource-one").unwrap();
-    host.take_events();
+    assert!(app.session.active().unwrap().is_dirty(), "an idle dirty document does not block opening another tab");
     host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
     assert!(host.busy());
     tick_once(&mut app);
     assert!(app.background_jobs, "the provider-only synchronous path restores the platform policy");
+    assert_eq!(imports.load(Ordering::Relaxed), 1);
+    assert_eq!(app.session.documents().len(), 2);
+    assert!(Arc::ptr_eq(&app.session.documents().iter().find(|state| state.doc.id == original).unwrap().doc, &original_snapshot));
     let events = host.take_events();
     let opened = events.iter().find(|e| e.metadata["type"] == "opened").unwrap();
     let state = app.session.active().unwrap();
@@ -537,6 +568,118 @@ fn provider_open_uses_the_decoder_then_acknowledges_the_admitted_document() {
     assert!(state.path.is_none());
     assert!(app.ui.recent_files.is_empty());
     assert!(!host.busy());
+}
+
+#[test]
+fn deferred_provider_open_does_not_retarget_a_live_filter_dialog() {
+    for confirm in [false, true] {
+        let (mut app, host, doc) = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let (request, imports) = request_deferred_open(&mut app, &host);
+        let dialog = crate::dialogs::open_command_dialog(&mut app, "filter.blur.gaussianBlur", "Gaussian Blur");
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("radius".into(), json!(2.0));
+        let dialogs = app.ui.dialogs.clone();
+        let source = app.session.active().unwrap().doc.clone();
+        let checkpoint = app.session.active().unwrap().saved_revision;
+        host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+        tick_once(&mut app);
+        assert_eq!(imports.load(Ordering::Relaxed), 0, "reject before decoding or admitting the incoming file");
+        assert_eq!(app.ui.dialogs, dialogs, "the existing dialog and its edited fields remain intact");
+        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+        assert_eq!(app.session.active().unwrap().saved_revision, checkpoint);
+        assert_deferred_open_rejected(&app, &host, doc, &request);
+        if confirm {
+            crate::dialogs::confirm(&mut app, dialog).unwrap();
+        } else {
+            crate::dialogs::cancel(&mut app, dialog).unwrap();
+            assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source), "cancelling must not edit the original document");
+        }
+        assert_eq!(app.session.documents().len(), 1);
+        assert_eq!(app.session.active().unwrap().doc.id, doc, "the original dialog still targets its own document");
+        assert!(app.ui.dialogs.is_empty());
+    }
+}
+
+#[test]
+fn deferred_provider_open_preserves_a_live_gradient_until_its_user_commits_it() {
+    let (mut app, host, doc) = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let (request, imports) = request_deferred_open(&mut app, &host);
+    app.ui.tool = crate::state::Tool::Gradient;
+    app.ui.tool_options.gradient_classic = false;
+    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, egui::Modifiers::NONE));
+    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE));
+    assert!(crate::gradient_ui::editing(&app));
+    let source = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    assert!(app.ui.dialogs.is_empty(), "this uncommitted tool preview has no modal dialog");
+    host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+    tick_once(&mut app);
+    assert_eq!(imports.load(Ordering::Relaxed), 0);
+    assert!(crate::gradient_ui::editing(&app));
+    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_deferred_open_rejected(&app, &host, doc, &request);
+    assert!(crate::gradient_ui::pointer(&mut app, crate::canvas::ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE));
+    assert!(!crate::gradient_ui::editing(&app));
+    assert_eq!(app.session.active().unwrap().doc.id, doc);
+    assert_ne!(app.session.active().unwrap().revision, revision, "only the user's later commit changes the document");
+}
+
+#[test]
+fn deferred_provider_open_does_not_preempt_type_input_from_the_same_frame() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let (mut app, host, doc) = app();
+    let layer = app.run("type.create", json!({"text":"Before", "size":12})).unwrap()["layer"].as_u64().unwrap();
+    crate::type_tool::edit_active(&mut app).unwrap();
+    let edit = app.ui.text_edit.as_mut().unwrap();
+    edit.anchor = edit.caret;
+    let (request, imports) = request_deferred_open(&mut app, &host);
+    host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+    let raw = egui::RawInput { focused: true, events: vec![egui::Event::Text(" after".into())], ..Default::default() };
+    let mut output = ctx.run_ui(raw, |ui| {
+        tick(&mut app, ui.ctx());
+        assert_eq!(app.session.active().unwrap().doc.id, doc);
+        assert_deferred_open_rejected(&app, &host, doc, &request);
+        assert!(crate::type_tool::handle_keys(&mut app, ui.ctx()));
+        app.finish_type_reset_pass(ui.ctx());
+    });
+    output.textures_delta.clear(); // This input/protocol fixture does not paint.
+    assert_eq!(imports.load(Ordering::Relaxed), 0);
+    let state = app.session.active().unwrap();
+    let photocraft_doc::LayerContent::Text(text) = &state.doc.layer(photocraft_doc::LayerId(layer)).unwrap().content else { panic!("text layer") };
+    assert_eq!(text.text, "Before after");
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(!host.busy());
+}
+
+#[test]
+fn deferred_provider_open_keeps_a_focused_text_field_draft_without_new_input() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let (mut app, host, doc) = app();
+    let (request, imports) = request_deferred_open(&mut app, &host);
+    let field = egui::Id::unique("provider-open-text-draft");
+    let mut draft = "1e-".to_string();
+    ctx.memory_mut(|memory| memory.request_focus(field));
+    let mut output = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+        assert!(ui.add(egui::TextEdit::singleline(&mut draft).id(field)).has_focus());
+    });
+    output.textures_delta.clear();
+    assert!(ctx.text_edit_focused());
+    let source = app.session.active().unwrap().doc.clone();
+    host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+    let mut output = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+        assert!(ui.input(|input| input.events.is_empty()));
+        tick(&mut app, ui.ctx());
+        assert!(ui.add(egui::TextEdit::singleline(&mut draft).id(field)).has_focus());
+    });
+    output.textures_delta.clear();
+    assert_eq!(draft, "1e-");
+    assert_eq!(imports.load(Ordering::Relaxed), 0);
+    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+    assert_deferred_open_rejected(&app, &host, doc, &request);
 }
 
 #[test]

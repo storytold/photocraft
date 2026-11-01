@@ -328,7 +328,7 @@ pub(crate) fn finish_provider_save(app: &mut PhotocraftApp, ctx: &egui::Context)
     saved_document(app, ctx, save.doc);
 }
 
-fn provider_ui_work(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
+pub(crate) fn provider_ui_work(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     let active = app.session.active().map(|state| state.doc.id) == Some(doc);
     let type_edit = app.ui.text_edit.as_ref().is_some_and(|edit| edit.preedit.is_some() && edit.document.map_or(active, |id| id == doc.0));
     type_edit
