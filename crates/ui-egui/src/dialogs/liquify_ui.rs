@@ -1126,13 +1126,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.rect_filled(title, 0.0, t.dock);
         painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if d.zoom > 0.0 { d.zoom * 100.0 } else { 100.0 };
-        painter.text(
-            title.center(),
-            Align2::CENTER_CENTER,
+        let mut job = egui::text::LayoutJob::simple_singleline(
             format!("{} ({}, {:.0}%)", tl!("Liquify…").trim_end_matches('…'), d.layer_name, pct),
             FontId::proportional(13.0),
             t.text,
         );
+        job.direction = crate::direction::text_direction();
+        let galley = painter.layout_job(job);
+        let trect = Align2::CENTER_CENTER.anchor_size(title.center(), galley.size());
+        painter.galley(trect.min, galley, t.text);
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
         // The tool strip hugs the reading-start edge, the properties panel the reading-end edge.
         let strip = draw_tool_strip(ui, &painter, &t, d, body);
@@ -1153,7 +1155,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 widgets::hairline(ui);
                 widgets::section_label(ui, tl!("Brush Reconstruct Options"));
                 widgets::slider_row(ui, tl!("Amount"), &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     if widgets::secondary_button(ui, tl!("Reconstruct"), 110.0).clicked() {
                         let a = f64::from(d.opts.reconstruct_amount);
                         d.global(LiquifyTool::ReconstructAll, Some(a));
@@ -1164,7 +1166,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 });
                 widgets::hairline(ui);
                 widgets::section_label(ui, tl!("Mask Options"));
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     if widgets::secondary_button(ui, tl!("None"), 70.0).clicked() {
                         d.global(LiquifyTool::ThawAll, None);
                     }
@@ -1178,7 +1180,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 widgets::hairline(ui);
                 widgets::section_label(ui, tl!("View Options"));
                 widgets::checkbox(ui, &mut d.opts.show_mesh, tl!("Show Mesh"));
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     ui.label(tl!("Mesh Size"));
                     widgets::dropdown(
                         ui,
@@ -1192,12 +1194,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 widgets::checkbox(ui, &mut d.opts.show_mask, tl!("Show Mask"));
                 widgets::checkbox(ui, &mut d.opts.show_backdrop, tl!("Show Backdrop"));
                 if d.opts.show_backdrop {
-                    ui.horizontal(|ui| {
+                    crate::direction::dialog_row(ui, |ui| {
                         ui.label(tl!("Use"));
                         let names: Vec<(Option<u64>, &str)> = backdrop_layers.iter().map(|(id, n)| (*id, n.as_str())).collect();
                         widgets::dropdown_literal(ui, "liquify-backdrop-use", tl!("Layer"), &mut d.opts.backdrop_layer, &names, 150.0);
                     });
-                    ui.horizontal(|ui| {
+                    crate::direction::dialog_row(ui, |ui| {
                         ui.label(tl!("Mode"));
                         let modes = [(BackdropMode::InFront, tl!("In Front")), (BackdropMode::Behind, tl!("Behind")), (BackdropMode::Blend, tl!("Blend"))];
                         widgets::dropdown(ui, "liquify-backdrop-mode", tl!("Mode"), &mut d.opts.backdrop_mode, &modes, 150.0);
@@ -1489,6 +1491,31 @@ mod rtl_tests {
             assert!(!keeps_direction(tool), "{tool:?}");
             assert_eq!(crate::icons::icon_name(tool_icon(tool)), tool_icon(tool), "{tool:?}");
         }
+    }
+
+    /// The properties rows read in reading order: in a right-to-left UI the first button of
+    /// each row sits at the row's right edge, in a left-to-right UI at its left edge.
+    #[test]
+    fn props_rows_mirror_item_order_in_rtl() {
+        fn first_button_x(dir: Dir) -> f32 {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    let r = widgets::secondary_button(ui, "A", 110.0);
+                    widgets::secondary_button(ui, "B", 110.0);
+                    r.rect.left()
+                })
+                .inner
+            })
+            .inner
+        }
+        let ltr = first_button_x(Dir::Ltr);
+        let rtl = first_button_x(Dir::Rtl);
+        let ctx = egui::Context::default();
+        let width = ctx.run_ui(egui::RawInput::default(), |ui| ui.available_width()).inner;
+        assert!(ltr < rtl, "LTR row starts left ({ltr}), RTL row starts right ({rtl})");
+        assert!(rtl + 110.0 <= width + 1.0, "RTL row hugs the right edge: {rtl} + 110 <= {width}");
     }
 
     /// The tool strip hugs the reading-start edge and the properties panel the reading-end edge.
