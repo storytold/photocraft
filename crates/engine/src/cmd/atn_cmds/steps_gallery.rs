@@ -553,7 +553,8 @@ fn effect_step(d: &Descriptor) -> Option<Mapped> {
 
 /// Every key in recorded order, Photoshop's default (which is the command's) for what the step
 /// leaves out. A setting the event has no key for (the Sketch effects' pinned colours, a mask
-/// target), a fraction in an integer key or a value without a Photoshop code refuses the step.
+/// target), a fraction in an integer key, an integer outside its setting's range or a value
+/// without a Photoshop code refuses the step.
 pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
     let (code, _, keys) = GALLERY.iter().find(|(_, cmd, _)| *cmd == id)?;
     let allowed: Vec<&str> = keys.iter().map(G::param).chain(["target"]).collect();
@@ -564,9 +565,11 @@ pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
     for k in keys.iter() {
         let v = p.get(k.param()).filter(|v| !v.is_null());
         let out = match k {
-            G::Int(_, _, _, _, default) => {
+            G::Int(_, _, min, max, default) => {
                 let n = v.map_or(Some(f64::from(*default)), Value::as_f64)?;
-                if n.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n) {
+                // Outside the setting's range, Photoshop would play it clamped and it would load
+                // back as another value (`edgeWidth` 99 as 14).
+                if n.fract() != 0.0 || !(f64::from(*min)..=f64::from(*max)).contains(&n) {
                     return None;
                 }
                 D::Integer(n as i32)

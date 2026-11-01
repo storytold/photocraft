@@ -3317,6 +3317,29 @@ fn gallery_effect_steps_that_cannot_be_written_are_refused() {
     assert!(export_item("filter.gallery.glass", &json!({"texture": "frosted"}), "S").is_some());
 }
 
+/// An integer outside the setting's range refuses the step rather than saving a value Photoshop
+/// clamps on playback and that loads back as another (`edgeWidth` 99 as 14); each end of a range
+/// still saves (#10592).
+#[test]
+fn gallery_effect_integers_outside_the_settings_range_are_refused() {
+    for (id, params) in [
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 99})),
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 0})),
+        ("filter.gallery.neonGlow", json!({"glowSize": -25, "glowColor": "#336699"})),
+        ("filter.gallery.glass", json!({"scaling": 201})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    for (id, params) in [
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 1})),
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 14})),
+        ("filter.gallery.neonGlow", json!({"glowSize": -24, "glowColor": "#336699"})),
+        ("filter.gallery.glass", json!({"scaling": 200})),
+    ] {
+        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}
+
 /// Each enumeration saves with the type Photoshop's terminology gives it: stroke direction's is
 /// `StrD`, not its key, and texture's is `TxtT`, as Photoshop records Glass (#10592).
 #[test]
