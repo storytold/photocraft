@@ -162,6 +162,45 @@ fn a_feathered_opening_beside_the_ink_still_shows_it() {
     assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
 }
 
+/// #10422 review: a mask below 100 % density hides nothing completely, so it crops nothing: the
+/// whole square is centred, as with no mask.
+#[test]
+fn a_centred_copy_under_a_half_density_mask_centres_the_whole_layer() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.execute("layer.layerMask.edit", json!({"layer": paint.0, "density": 50})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: a group's enabled mask crops what its children show. The group's mask keeps
+/// x ≥ 9 of the child's square (x 4..14), so the visible x 9..14 is centred, as for a layer.
+#[test]
+fn a_centred_group_copy_centres_what_the_groups_mask_shows_of_its_children() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let group = s.execute("layer.groupLayers", json!({"layer": paint.0})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": group})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group], "center": true})).unwrap();
+    let LayerContent::Group(g) = &doc(&s, 1).layer(copied(&r)).unwrap().content else { panic!("a group was copied") };
+    let child = crate::layer_multi_cmds::layer_bounds(&g.children[0]).unwrap();
+    // Visible x 9..14 centred on the 60-wide canvas, as in `a_centred_copy_centres_the_part_its_mask_shows`.
+    assert_eq!(child, Rect::new(23, 20, 33, 30));
+}
+
+/// #10422 review: a mask that hides everything leaves nothing to measure, so the copy is centred
+/// as the source canvas is (40×30 on 60×50: dx 10, dy 10), without a panic.
+#[test]
+fn a_centred_copy_whose_mask_hides_everything_centres_the_source_canvas() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.layerMask.hideAll", json!({"layer": paint.0})).unwrap();
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(paint).unwrap()), None);
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    assert_eq!(r["offset"], json!([10, 10]));
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(14, 16, 24, 26));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
