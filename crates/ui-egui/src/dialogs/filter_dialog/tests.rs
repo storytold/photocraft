@@ -1075,18 +1075,16 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     let k = 4;
     let params = json!({"points": [[0, 20], [90, 150], [255, 230]]});
     let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, k).unwrap();
-    let full = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, 1).unwrap();
-    let photocraft_doc::LayerContent::Smart(full_sm) = &full.layer(layer).unwrap().content else { panic!("a smart object") };
-    let reference = photocraft_algo::resample::resize_surface(full_sm.cache.as_ref().unwrap(), 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic);
     let photocraft_doc::LayerContent::Smart(sm) = &shown.layer(layer).unwrap().content else { panic!("a smart object") };
     assert_eq!(sm.smart_filters.len(), 1, "the preview adds the Curves smart filter");
     assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
     // The 16 px square at (16, 16) is a 4 px square at (4, 4) on the proxy, not 16 px at (16, 16).
-    // Bicubic reduction blends the square's boundary with transparency; compare all alpha
-    // values with a reduced full-size result, and require opacity only in the interior.
+    // The square exactly covers integer-aligned proxy pixels. The warp's bounded prefilter
+    // repeats the source edge, so all covered pixels remain opaque, including the corners.
+    // An unbounded resize of the cached surface would reintroduce the transparent fringe.
     for y in 0..shown.size.height as i32 {
         for x in 0..shown.size.width as i32 {
-            let expected = reference.pixel(x, y).last().copied().unwrap();
+            let expected = if (4..8).contains(&x) && (4..8).contains(&y) { 1.0 } else { 0.0 };
             let actual = alpha(&shown, x, y);
             assert!((actual - expected).abs() <= 1.0 / 255.0, "({x}, {y}): alpha {actual}, expected {expected}");
         }

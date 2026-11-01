@@ -112,7 +112,7 @@ impl Vignette {
                 _ => VignetteStyle::HighlightPriority,
             },
             centre: [cx, cy],
-            axes: [ax, ay],
+            axes: [ax.max(f32::EPSILON), ay.max(f32::EPSILON)],
             power: 2.0 + (-round).max(0.0) * 6.0,
             edges: [inner - feather * 0.5 * inner, inner + feather * 0.5 * (1.4 - inner) + 0.02],
         }
