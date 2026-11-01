@@ -506,6 +506,13 @@ fn exposure_eyedroppers_give_the_measured_photoshop_values() {
     }
 }
 
+/// #9288 review: a black sample is refused by the gray picker as well as the white one (no
+/// exposure brings it up), and is not reported as an unchanged success.
+#[test]
+fn exposure_gray_point_refuses_a_black_sample() {
+    assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::NeutralGray, [0.0; 3], ColorMode::Rgb).is_err());
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
