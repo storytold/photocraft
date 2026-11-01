@@ -427,6 +427,7 @@ pub fn saves_smart_contents(s: &Session, id: &str) -> bool {
     id == "file.save" && s.is_enabled(SAVE_CONTENTS)
 }
 
+/// Run enabled steps from `from`, retaining child results when nested work fails.
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
     let mut ran = 0u64;
     let mut failed = None;
