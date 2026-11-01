@@ -437,7 +437,10 @@ mod tests {
         s.execute("edit.transform", p).unwrap();
         let layer = s.active().unwrap().doc.layer(id).unwrap();
         let LayerContent::Shape(shape) = &layer.content else { panic!("expected shape layer") };
-        assert!(matches!(shape.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })), "proportional Properties resize must preserve live arrow settings");
+        assert!(
+            matches!(shape.live.as_ref(), Some(photocraft_doc::vector::LiveShape::ArrowLine { .. })),
+            "proportional Properties resize must preserve live arrow settings"
+        );
 
         // The next live-property edit must still be accepted after resizing.
         s.execute("shape.edit", json!({"layer": id.0, "arrowConcavity": 60.0})).unwrap();
