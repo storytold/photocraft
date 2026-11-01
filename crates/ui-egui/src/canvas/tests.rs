@@ -3021,18 +3021,24 @@ fn the_layer_menu_stays_anchored_in_a_right_to_left_ui() {
     let at = [500.0f32, 70.0];
     assert!(super::layer_pick_ui::open(&mut app, &ctx, at, 100.0, 100.0), "the menu opens over the layer");
     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), ..Default::default() };
-    let area = |ctx: &egui::Context, app: &mut PhotocraftApp| {
+    let area = |ctx: &egui::Context, app: &mut PhotocraftApp, rtl_style: bool| {
+        // The fork reads the style flag for its own mirroring; set it per direction, not once.
+        ctx.all_styles_mut(|s| s.set_right_to_left(rtl_style));
+        // Two frames: the first measures the menu's real width into memory, the second places it
+        // with that size (a one-frame placement would clamp against the default 200 pt guess).
+        let mut out = ctx.run_ui(input.clone(), |ui| super::layer_pick_ui::show(app, ui.ctx()));
+        out.textures_delta.clear();
         let mut out = ctx.run_ui(input.clone(), |ui| super::layer_pick_ui::show(app, ui.ctx()));
         out.textures_delta.clear();
         ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-layer-menu")))
     };
     let ltr = {
         let _ltr = direction_scope(Dir::Ltr);
-        area(&ctx, &mut app)
+        area(&ctx, &mut app, false)
     };
     let rtl = {
         let _rtl = direction_scope(Dir::Rtl);
-        area(&ctx, &mut app)
+        area(&ctx, &mut app, true)
     };
     let ltr = ltr.expect("the menu area is shown");
     let rtl = rtl.expect("the menu area is shown");
