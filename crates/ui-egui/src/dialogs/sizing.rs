@@ -176,13 +176,12 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
 }
 
 /// Width / height field in the current unit, writing back pixels. Returns true when edited.
-fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str) -> bool {
+fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str, image_size: bool) -> bool {
     let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
-    let image_size = f.get("__command").and_then(Value::as_str) == Some("image.imageSize");
     let shown_px = if image_size && unit == "px" { px.round().max(1.0) } else { px };
     let mut v = to_unit(shown_px, &unit, orig, res, ppi) as f32;
     if image_size {
@@ -239,13 +238,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
-        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w", true)).inner;
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
-        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h", true)).inner;
         unit_dropdown(ui, f, "is-unit-h");
         c
     });
@@ -388,12 +387,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
-        dim_field(ui, f, "width", "__origW", "cs-w");
+        dim_field(ui, f, "width", "__origW", "cs-w", false);
         unit_dropdown(ui, f, "cs-unit-w");
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
-        dim_field(ui, f, "height", "__origH", "cs-h");
+        dim_field(ui, f, "height", "__origH", "cs-h", false);
         unit_dropdown(ui, f, "cs-unit-h");
     });
     ui.horizontal(|ui| {
