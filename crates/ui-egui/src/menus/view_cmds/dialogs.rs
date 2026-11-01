@@ -191,9 +191,16 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {
-                            let opts: Vec<(String, String)> = opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), label(o))).collect();
+                            let action_names = k == "action"
+                                && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
+                            let opts: Vec<(String, String)> =
+                                opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-                            crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            if action_names {
+                                crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            } else {
+                                crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            }
                         }
                         None => {
                             if file_info && matches!(k.as_str(), "description" | "keywords" | "copyright") {
@@ -486,12 +493,12 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let Some(action) = crate::actions::selected_action(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
-            let steps = crate::actions::action_steps(action);
             let name = action.name.clone();
+            let names: Vec<_> = app.session.actions.list.iter().map(|action| action.name.clone()).collect();
             dialog(
                 app,
-                json!({"action": name, "steps": steps, "input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/batch"), "format": "same", "quality": null, "__batchQuality": 8, "naming": "", "startingSerial": 1}),
-                json!({"format": ["same", "png", "jpg", "psd", "tiff", "webp"]}),
+                json!({"action": name, "input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/batch"), "format": "same", "quality": null, "__batchQuality": 8, "naming": "", "startingSerial": 1}),
+                json!({"action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"]}),
             )
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).

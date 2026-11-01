@@ -168,6 +168,81 @@ fn droplets_are_written_and_run() {
     assert!(s.execute("file.automate.createDroplet", json!({"path": path, "steps": [["bogus", {}]]})).is_err());
 }
 
+#[test]
+fn batch_and_droplets_use_the_named_actions_enabled_steps() {
+    let dir = tmp("named-actions");
+    let inputs = images(&dir, 1, 2, 1);
+    let mut s = Session::new();
+    let invert = crate::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]);
+    let mut rotate = crate::actions_cmds::Action::new("Rotate", vec![("image.imageRotation.90cw".into(), json!({})), ("file.close".into(), json!({}))]);
+    rotate.disabled.insert(1);
+    s.actions.list = vec![invert, rotate];
+    for command in ["file.automate.batch", "file.automate.createDroplet"] {
+        for (i, action) in [json!("Rotate"), json!(1)].into_iter().enumerate() {
+            let output = format!("{dir}/{command}-{i}");
+            let p = json!({"action": action, "input": inputs, "output": output, "path": format!("{output}.pcdroplet"), "format": "png", "shim": false});
+            let mut result = s.execute(command, p).unwrap();
+            if command == "file.automate.createDroplet" {
+                let droplet: Value = serde_json::from_slice(&std::fs::read(result["path"].as_str().unwrap()).unwrap()).unwrap();
+                assert_eq!(droplet["action"]["steps"], json!([["image.imageRotation.90cw", {}]]));
+                // A droplet carries its chosen steps into a session with no saved actions.
+                result = Session::new().execute("file.automate.runDroplet", json!({"droplet": result["path"], "input": inputs})).unwrap();
+            }
+            assert_eq!(result["errors"], json!([]), "{command}: {result}");
+            let image = photocraft_codecs::decode(&std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap();
+            assert_eq!(image.dimensions(), (1, 2), "{command}: Rotate runs and the disabled Close does not");
+        }
+    }
+}
+
+#[test]
+fn batch_and_droplets_keep_explicit_steps_and_reject_invalid_sources_before_writing() {
+    let dir = tmp("action-sources");
+    let inputs = images(&dir, 1, 2, 1);
+    let mut s = Session::new();
+    s.actions.list.push(crate::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    for command in ["file.automate.batch", "file.automate.createDroplet"] {
+        for (i, source) in [
+            json!({"steps": [["image.imageRotation.90cw", {}]], "action": "Missing"}),
+            json!({"action": [["image.imageRotation.90cw", {}]]}),
+            json!({"steps": [], "action": "Invert"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let output = format!("{dir}/{command}-inline-{i}");
+            let mut p = json!({"input": inputs, "output": output, "path": format!("{output}.pcdroplet"), "format": "png", "shim": false});
+            p.as_object_mut().unwrap().extend(source.as_object().unwrap().clone());
+            let mut result = s.execute(command, p).unwrap();
+            if command == "file.automate.createDroplet" {
+                result = Session::new().execute("file.automate.runDroplet", json!({"droplet": result["path"], "input": inputs})).unwrap();
+            }
+            assert_eq!(result["errors"], json!([]), "{command}: {result}");
+            let image = photocraft_codecs::decode(&std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap();
+            assert_eq!(image.dimensions(), if i == 2 { (2, 1) } else { (1, 2) });
+        }
+        for (i, source) in [
+            json!({"action": "Deleted"}),
+            json!({"action": 9}),
+            json!({"action": -1}),
+            json!({"steps": null, "action": "Invert"}),
+            json!({"steps": {}, "action": "Invert"}),
+            json!({"steps": [["bogus", {}]], "action": "Invert"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let output = format!("{dir}/{command}-rejected-{i}");
+            let path = format!("{output}.pcdroplet");
+            let mut p = json!({"input": inputs, "output": output, "path": path, "format": "png", "shim": false});
+            p.as_object_mut().unwrap().extend(source.as_object().unwrap().clone());
+            assert!(s.execute(command, p).is_err(), "{command}: {source}");
+            assert!(!std::path::Path::new(&output).exists(), "{command}: no output directory on rejection");
+            assert!(!std::path::Path::new(&path).exists(), "{command}: no droplet on rejection");
+        }
+    }
+}
+
 /// A droplet keeps the action's recorded saves, which mark the result as in Batch, so one made from
 /// an action ending in Save As and Close writes its files instead of failing on every one.
 #[test]

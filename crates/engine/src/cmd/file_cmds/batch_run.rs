@@ -246,8 +246,10 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps =
-        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
+    let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
+        Some(steps) => parse_steps(steps)?,
+        None => crate::automate_cmds::named_action_steps(s, p, cmd)?,
+    };
     // Each result goes to the destination folder, which overrides the action's recorded Save /
     // Save As steps: they only mark the result.
     steps.retain(|(id, _)| batch_keeps_step(id) && id != "file.export.quickExport");

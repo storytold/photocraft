@@ -332,11 +332,20 @@ pub fn document_saved(s: &mut Session, index: usize) -> Option<Value> {
 
 // ---------- Create Droplet ----------
 
+/// Resolve the enabled steps of the saved action chosen for Batch or a droplet.
+pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Vec<(String, Value)>> {
+    let index = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
+    let action = s.actions.list.get(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
+    Ok(action.enabled_steps().map(|(_, step)| step.clone()).collect())
+}
+
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
-    let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
-    let mut steps = parse_steps(steps_v, cmd)?;
+    let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
+        Some(steps) => parse_steps(steps, cmd)?,
+        None => named_action_steps(s, p, cmd)?,
+    };
     // As in batch, the droplet's output folder replaces recorded saves, which are kept to mark the
     // result, and view steps don't apply.
     steps.retain(|(id, _)| crate::file_cmds::batch_keeps_step(id));
@@ -597,7 +606,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…] (the action),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
