@@ -196,7 +196,7 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
             let (x, y) = h.apply(f64::from(p[0]) + ox, f64::from(p[1]) + oy);
             xf.to_screen(x as f32, y as f32)
         });
-        painter.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        crate::canvas::ants::keep_marching(painter.ctx());
     }
     crate::type_transform::draw_box(painter, xf, &t.frame);
 }

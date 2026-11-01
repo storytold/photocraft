@@ -319,7 +319,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             if !(carried && crate::transform_tool::draw_selection(app, input.painter, &input.xf, input.doc.id, segs, time)) {
                 marching_ants_segments(input.painter, &shown, segs, time);
             }
-            input.ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            crate::canvas::ants::keep_marching(input.ctx);
         }
     }
 }

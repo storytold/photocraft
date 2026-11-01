@@ -10,6 +10,13 @@ pub fn builder() -> egui::ViewportBuilder {
     egui::ViewportBuilder::default().with_app_id(APP_ID)
 }
 
+/// Whether PhotoCraft is the app in front: one of its windows (the main window, a document
+/// window, Camera Raw) has the keyboard focus. Coming to the front and going to the back each
+/// send a window a focus event, which draws a frame.
+pub(crate) fn in_front(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.focused || i.raw.viewports.values().any(|v| v.focused == Some(true)))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

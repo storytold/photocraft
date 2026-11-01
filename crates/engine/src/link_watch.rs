@@ -7,9 +7,10 @@
 //! The active document's linked files are compared by size and modification time with what they
 //! were when last seen; the layers of a file whose stamp moved are re-rendered from it, one
 //! Update Modified Content undo step per file. The desktop app takes the stamps every two seconds
-//! and when its window comes back to the front, on a worker thread so a file on a slow network
-//! share never holds up the interface ([`Session::start_link_scan`], [`Session::poll_link_scan`]);
-//! `layer.smartObjects.updateChanged` takes them on the spot (CLI, agents).
+//! while it is in front and as soon as it comes back to the front, on a worker thread so a file on
+//! a slow network share never holds up the interface ([`Session::start_link_scan`],
+//! [`Session::poll_link_scan`]); `layer.smartObjects.updateChanged` takes them on the spot (CLI,
+//! agents).
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
 //! A file seen for the first time is only remembered (one changed while its document was closed
