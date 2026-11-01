@@ -548,9 +548,11 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
             finish_drag(app, d);
         }
         resp.context_menu(|ui| {
-            if let Some(name) = unit_menu(ui, unit) {
-                chosen_unit = Some(name);
-            }
+            crate::menus::popup_body(ui, |ui| {
+                if let Some(name) = unit_menu(ui, unit) {
+                    chosen_unit = Some(name);
+                }
+            })
         });
     }
     if let Some(name) = chosen_unit {
