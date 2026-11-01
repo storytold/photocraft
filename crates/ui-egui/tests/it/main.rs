@@ -20,6 +20,7 @@ mod export_as_scaling;
 mod eyedropper_ring;
 mod full_res_preview;
 mod gpu_device_loss;
+mod gpu_warm_up;
 mod layout_perf;
 mod live_stroke_canvas;
 mod marching_ants_pixels;

@@ -388,3 +388,80 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
 }
+
+/// FXC (the D3D12 shader compiler Windows uses) mis-analyses a function whose `switch` case
+/// returns from inside an `if`: when it inlines the function it concludes that a path can
+/// reach the end of the function without a value and rejects it with X3507 ("not all control
+/// paths return a value"). The pipeline then fails to build, the compositor falls back to the
+/// CPU renderer and redrawing a large document takes seconds. Every function keeps one exit:
+/// the cases assign, and the function returns once at the end.
+#[test]
+fn shader_switch_cases_do_not_return_early() {
+    let module = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+    let mut bad = Vec::new();
+    for (_handle, fun) in module.functions.iter() {
+        let mut risky = Vec::new();
+        early_returns_in_cases(&fun.body, &mut risky);
+        if !risky.is_empty() {
+            bad.push(format!("{}: {risky:?}", fun.name.clone().unwrap_or_default()));
+        }
+    }
+    assert!(bad.is_empty(), "switch cases that return from inside an `if`: {bad:?}");
+}
+
+/// The cases of every switch in `block` that return from inside an `if` or a loop, with the
+/// function's name for the message.
+fn early_returns_in_cases(block: &[wgpu::naga::Statement], out: &mut Vec<String>) {
+    for stmt in block {
+        match stmt {
+            wgpu::naga::Statement::Switch { cases, .. } => {
+                for case in cases {
+                    if returns_in(&case.body).1 > 0 {
+                        out.push(format!("case {:?}", case.value));
+                    }
+                    let mut nested = Vec::new();
+                    early_returns_in_cases(&case.body, &mut nested);
+                    out.append(&mut nested);
+                }
+            }
+            wgpu::naga::Statement::If { accept, reject, .. } => {
+                early_returns_in_cases(accept, out);
+                early_returns_in_cases(reject, out);
+            }
+            wgpu::naga::Statement::Block(body) => early_returns_in_cases(body, out),
+            wgpu::naga::Statement::Loop { body, .. } => early_returns_in_cases(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// The returns a block holds: the ones it returns directly, and the ones nested inside an
+/// `if` or a loop (the ones FXC mis-analyses when it inlines the function).
+fn returns_in(block: &[wgpu::naga::Statement]) -> (usize, usize) {
+    let mut direct = 0;
+    let mut nested = 0;
+    for stmt in block {
+        match stmt {
+            wgpu::naga::Statement::Return { .. } => direct += 1,
+            wgpu::naga::Statement::If { accept, reject, .. } => {
+                for part in [accept, reject] {
+                    let (d, n) = returns_in(part);
+                    direct += d;
+                    nested += n;
+                }
+            }
+            wgpu::naga::Statement::Block(body) => {
+                let (d, n) = returns_in(body);
+                direct += d;
+                nested += n;
+            }
+            wgpu::naga::Statement::Loop { body, .. } => {
+                let (d, n) = returns_in(body);
+                direct += d;
+                nested += n;
+            }
+            _ => {}
+        }
+    }
+    (direct, nested)
+}

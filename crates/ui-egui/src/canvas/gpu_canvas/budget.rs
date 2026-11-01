@@ -45,6 +45,11 @@ pub const REFRESH_OVER_BUDGET: &str = "over-budget";
 /// [`Refresh::kind`] of a CPU refresh left to the caller ([`GpuCanvas::refresh_with`]).
 pub const REFRESH_DEFERRED: &str = "deferred";
 
+/// The GPU compositor is still being built in the background (see [`GpuCanvas::warm_up`]): the
+/// CPU compositor draws until it is ready. It is a transient state, not a fault: the app
+/// redraws on the GPU as soon as the build is done.
+pub const WARMING: &str = "the GPU compositor is still starting up";
+
 /// The smallest CPU refresh (pixels) [`GpuCanvas::refresh_with`] defers: below it, the
 /// synchronous composite takes a fraction of a second even with many layers.
 pub const DEFER_PX: u64 = 1 << 22;

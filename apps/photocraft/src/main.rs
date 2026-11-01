@@ -585,6 +585,10 @@ fn main() -> eframe::Result {
                     && app.session.prefs().performance.effective_rendering_mode() != photocraft_engine::prefs::RenderingMode::Cpu
                 {
                     app.set_wgpu(rs);
+                    // Compile the compositor's pipelines in the background: on DX12, FXC builds
+                    // them one at a time, and doing that on the UI thread froze the app the
+                    // first time a file was opened (#6419, #8733).
+                    app.warm_up_gpu_compositor(&cc.egui_ctx);
                 } else {
                     // The window still draws with wgpu: record its errors instead of panicking,
                     // and notice when the device is lost (#3438).
