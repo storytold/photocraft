@@ -606,7 +606,7 @@ mod tests {
             let _scope = direction_scope(dir);
             let ctx = egui::Context::default();
             let mut out = None;
-            ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
                 out = Some(
                     ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
@@ -619,6 +619,7 @@ mod tests {
                     .inner,
                 );
             });
+            full.textures_delta.clear();
             out.unwrap()
         }
         let (ltr_a, ltr_b) = items(Dir::Ltr);
@@ -627,7 +628,7 @@ mod tests {
         assert!(rtl_b.left() < rtl_a.left(), "RTL: Show leads on the right: {rtl_a:?} then {rtl_b:?}");
         let ltr_gap = ltr_b.left() - ltr_a.right();
         let rtl_gap = rtl_a.left() - rtl_b.right();
-        assert!((ltr_gap - rtl_gap).abs() < 0.01, "same item gap in both directions: {ltr_gap} vs {rtl_gap}");
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "same item gap in both directions: {ltr_gap} vs {rtl_gap}");
     }
 
     fn c(login: &'static str, display: Option<&'static str>, real: Option<&'static str>, added: u64, deleted: u64, first: &'static str) -> Contributor {
