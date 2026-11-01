@@ -269,7 +269,10 @@ pub fn to_params(adj: &Adjustment) -> Value {
             let row = |r: &[f32; 4]| json!(r.map(|x| (x * 1000.0).round() / 10.0));
             let mut v = json!({"red": row(&matrix[0]), "green": row(&matrix[1]), "blue": row(&matrix[2]), "monochrome": monochrome});
             if *monochrome {
+                // Monochrome renders from `matrix[0]` as the gray row; `red` stays the identity row so
+                // turning Monochrome off later doesn't leave the gray mix behind as the red row.
                 v["gray"] = row(&matrix[0]);
+                v["red"] = row(&[1.0, 0.0, 0.0, 0.0]);
             }
             v
         }

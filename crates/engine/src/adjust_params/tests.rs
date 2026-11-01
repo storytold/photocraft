@@ -663,3 +663,22 @@ fn destructive_levels_match_independent_signed_hdr_endpoints() {
         }
     }
 }
+
+/// The review on #6187: a monochrome Channel Mixer's `red` key stays the identity row, so a dialog
+/// that drops `gray` when Monochrome is turned off doesn't leave the gray mix behind as the red row.
+#[test]
+fn monochrome_channel_mixer_keeps_red_as_the_identity_row() {
+    let mode = ColorMode::Rgb;
+    let mono = from_params("channelMixer", &json!({"monochrome": true}), None, mode).unwrap();
+    let mut p = to_params(&mono);
+    assert_eq!(p["gray"], json!([40.0, 40.0, 20.0, 0.0]));
+    assert_eq!(p["red"], json!([100.0, 0.0, 0.0, 0.0]));
+    // The same params still render the gray mix.
+    let back = from_params("channelMixer", &p, None, mode).unwrap();
+    assert!(matches!(back, Adjustment::ChannelMixer { matrix, monochrome: true } if matrix[0] == [0.4, 0.4, 0.2, 0.0]));
+    // Monochrome off with `gray` removed: the red row is the identity, not the gray mix.
+    p["monochrome"] = json!(false);
+    p.as_object_mut().unwrap().remove("gray");
+    let off = from_params("channelMixer", &p, None, mode).unwrap();
+    assert!(matches!(off, Adjustment::ChannelMixer { matrix, monochrome: false } if matrix[0] == [1.0, 0.0, 0.0, 0.0]));
+}
