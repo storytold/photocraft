@@ -40,16 +40,13 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         let Some(d) = app.drag.take() else { return };
         let live = app.live_stroke.take();
         if let Some(l) = live {
-            let (doc, key, steps) = (l.doc, l.key, l.damage.len() as u64);
-            if let EngineStroke::Mixer(mixer) = l.stroke {
-                if l.preview_failed {
-                    let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
-                    p["seed"] = json!(mixer.seed);
-                    drop(mixer);
-                    let _ = app.run("paint.mixerBrush", p);
-                    return;
-                }
-                match mixer.prepare_commit(&mut app.session) {
+            // What the stroke's thread was still painting.
+            let (painted, stroke) = l.paint.finish();
+            let failed = l.preview_failed || painted.iter().any(Result::is_err);
+            let steps = (l.damage.len() + painted.len()) as u64;
+            let (doc, key, seed) = (l.doc, l.key, l.seed);
+            match stroke {
+                Some(EngineStroke::Mixer(mixer)) if !failed => match mixer.prepare_commit(&mut app.session) {
                     Ok(p) => {
                         if app.run("paint.mixerBrush", p).is_ok() {
                             shown_as_document(app, doc, |k| k == 0 || (key..=key + steps).contains(&k));
@@ -59,6 +56,15 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
                         app.ui.status = e.to_string();
                         app.ui.status_error = true;
                     }
+                },
+                // A step failed, or the thread stopped mid-step: render the whole stroke.
+                stroke => {
+                    drop(stroke);
+                    let mut p = stroke_params(app, &d, &app.stylus.stroke_points(&d.points));
+                    if let Some(seed) = seed {
+                        p["seed"] = json!(seed);
+                    }
+                    let _ = app.run("paint.mixerBrush", p);
                 }
             }
         } else {

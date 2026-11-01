@@ -1,5 +1,6 @@
 use super::display::{canvas_display, display_image};
 use super::drag::Drag;
+use super::paint_thread::{PaintThread, Step};
 use super::textures::{canvas_texture_options, shown_as_document};
 use super::view_xform::ViewXform;
 use super::{Color32, DRect, PhotocraftApp, Pos2, Stroke, Tool, json, pos2};
@@ -207,7 +208,7 @@ impl EngineStroke {
             Self::Mixer(s) => s.bounds(),
         }
     }
-    fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
+    pub(super) fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
             Self::Retouch(s) => s.push(pts),
@@ -227,10 +228,13 @@ impl EngineStroke {
 }
 
 /// A stroke shown while it is drawn: the engine renders the real result onto a copy of the
-/// document, and the canvas redraws only what each step changed.
+/// document, on a thread of its own (`PaintThread`), and the canvas redraws only what each step
+/// changed.
 pub(crate) struct LiveStroke {
     pub(super) preview_failed: bool,
-    pub(super) stroke: EngineStroke,
+    pub(super) paint: PaintThread,
+    /// The jitter seed the commit must reuse (`EngineStroke::seed`).
+    pub(super) seed: Option<u64>,
     pub(super) doc: photocraft_doc::DocId,
     revision: u64,
     /// Preview key of the stroke; step `n` displays as `key + n`.
@@ -242,6 +246,21 @@ pub(crate) struct LiveStroke {
 }
 
 impl LiveStroke {
+    /// The document as the stroke last painted it.
+    pub(super) fn doc(&self) -> &std::sync::Arc<photocraft_doc::Document> {
+        &self.paint.shown().doc
+    }
+
+    /// See `EngineStroke::wants_time`.
+    pub(super) fn wants_time(&self) -> bool {
+        self.paint.shown().wants_time
+    }
+
+    /// See `photocraft_engine::brush_cmds::LiveStroke::smoothing_string`.
+    pub(super) fn smoothing_string(&self) -> Option<([f64; 2], [f64; 2])> {
+        self.paint.shown().smoothing_string
+    }
+
     pub(super) fn display_key(&self) -> u64 {
         self.key + self.damage.len() as u64
     }
@@ -397,7 +416,8 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
     Some(LiveStroke {
-        stroke,
+        seed: stroke.seed(),
+        paint: PaintThread::start(stroke),
         doc: st.doc.id,
         revision: st.revision,
         key: (1 << 44) | (n << 20),
@@ -447,35 +467,57 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
             Some(sp)
         })
         .collect();
-    if pts.is_empty() {
-        return;
-    }
     l.fed = d.points.len();
     let started = crate::gpu_canvas::now_ms();
-    match l.stroke.push(&pts) {
-        Ok(r) => l.damage.push(r),
-        Err(e) => {
-            if d.tool == Tool::MixerBrush {
-                // Keep the last valid preview and its document/revision guard. All input
-                // stays in the drag; release replays it without the preview tile budget.
-                l.preview_failed = true;
-                app.ui.status = e.to_string();
-                app.ui.status_error = true;
-            } else {
-                app.live_stroke = None;
+    l.paint.push(pts);
+    let steps = l.paint.catch_up(LIVE_STROKE_WAIT);
+    let tool = d.tool;
+    take_steps(app, tool, steps);
+    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
+}
+
+/// How long a frame waits for the live stroke to paint the points it was just given. A light
+/// brush is done well within it and shows them in the same frame, as when it painted on the UI
+/// thread; a heavy one shows them in a later frame instead of holding this one up. Tests wait for
+/// every step, so they see each one.
+const LIVE_STROKE_WAIT: std::time::Duration = if cfg!(test) { std::time::Duration::MAX } else { std::time::Duration::from_millis(LIVE_STROKE_WAIT_MS) };
+const LIVE_STROKE_WAIT_MS: u64 = 6;
+
+/// Record painted steps on the live stroke. A failed one drops the live stroke (the commit then
+/// renders the stroke itself), except the Mixer Brush's, which keeps its last valid preview.
+fn take_steps(app: &mut PhotocraftApp, tool: Tool, steps: Vec<Step>) {
+    let Some(l) = app.live_stroke.as_mut() else { return };
+    for step in steps {
+        match step {
+            Ok(r) => l.damage.push(r),
+            Err(e) => {
+                if tool == Tool::MixerBrush {
+                    // Keep the last valid preview and its document/revision guard. All input
+                    // stays in the drag; release replays it without the preview tile budget.
+                    l.preview_failed = true;
+                    app.ui.status = e.to_string();
+                    app.ui.status_error = true;
+                } else {
+                    app.live_stroke = None;
+                }
+                return;
             }
         }
     }
-    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
+}
+
+/// Is the live stroke still painting points it was given?
+pub(super) fn live_stroke_busy(app: &PhotocraftApp) -> bool {
+    app.live_stroke.as_ref().is_some_and(|l| l.paint.busy())
 }
 
 /// The points the live retouching stroke has rendered.
 #[cfg(test)]
 pub(crate) fn live_retouch_points(app: &PhotocraftApp) -> Option<Vec<photocraft_engine::paint::StrokePoint>> {
-    match &app.live_stroke.as_ref()?.stroke {
+    app.live_stroke.as_ref()?.paint.peek(|stroke| match stroke {
         EngineStroke::Retouch(l) => Some(l.points().to_vec()),
         _ => None,
-    }
+    })?
 }
 
 /// Offer the Clone Stamp's or History Brush's live stroke, or a Dodge, Burn, Sponge, Blur, Sharpen
@@ -487,7 +529,11 @@ pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &Drag) {
     if !dab && !matches!(d.tool, Tool::CloneStamp | Tool::HistoryBrush) {
         return;
     }
-    let Some(LiveStroke { stroke, fed, .. }) = app.live_stroke.take() else { return };
+    let Some(LiveStroke { paint, fed, .. }) = app.live_stroke.take() else { return };
+    let (steps, Some(stroke)) = paint.finish() else { return };
+    if steps.iter().any(Result::is_err) {
+        return;
+    }
     let rest: Vec<_> = d.points.get(fed..).unwrap_or_default().iter().map(|q| photocraft_engine::paint::StrokePoint::new(q[0], q[1], q[2] as f32)).collect();
     // A refused offer (the brush changed mid-stroke, say) leaves the commit to render the stroke.
     match stroke {
@@ -532,7 +578,7 @@ pub(super) const HOLD_REPEAT_MS: f64 = 16.0;
 /// Is the live stroke one that changes while the pointer is held still (airbrush Build-up, or
 /// smoothing catching up)? Only then does a held pointer repeat its point and keep repainting.
 pub(super) fn stroke_wants_time(app: &PhotocraftApp) -> bool {
-    app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time())
+    app.live_stroke.as_ref().is_some_and(LiveStroke::wants_time)
 }
 
 /// Time of sample `k` of the `n` samples a frame delivered, spread evenly after `base` (the
@@ -625,10 +671,10 @@ pub(super) fn draw_smoothing_string(painter: &egui::Painter, xf: &ViewXform, (br
 pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-    if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
+    if let Some(seed) = live.as_ref().and_then(|l| l.seed) {
         p["seed"] = json!(seed);
     }
-    let Some(mut l) = live else {
+    let Some(l) = live else {
         let _ = app.run(stroke_command(app, d.tool), p);
         return;
     };
@@ -644,17 +690,20 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
             Some(sp)
         })
         .collect();
-    if !rest.is_empty() {
-        match l.stroke.push(&rest) {
-            Ok(r) => l.damage.push(r),
-            // The live stroke can't show these points: the commit renders the stroke itself.
-            Err(_) => {
-                let _ = app.run(stroke_command(app, d.tool), p);
-                return;
-            }
+    // What the live stroke's thread was still painting, then those points.
+    let LiveStroke { paint, doc, key, mut damage, .. } = l;
+    let (steps, stroke) = paint.finish();
+    let painted = stroke.and_then(|mut stroke| {
+        for step in steps.into_iter().chain((!rest.is_empty()).then(|| stroke.push(&rest))) {
+            damage.push(step.ok()?);
         }
-    }
-    let LiveStroke { stroke, doc, key, damage, .. } = l;
+        Some(stroke)
+    });
+    // The live stroke can't show these points: the commit renders the stroke itself.
+    let Some(stroke) = painted else {
+        let _ = app.run(stroke_command(app, d.tool), p);
+        return;
+    };
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     if let EngineStroke::Brush(stroke) = stroke
         && app.session.offer_live_stroke(*stroke).is_err()

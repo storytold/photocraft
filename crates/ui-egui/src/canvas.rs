@@ -33,6 +33,7 @@ mod navigator;
 pub mod outline;
 mod paint;
 pub mod paint_mouse;
+mod paint_thread;
 pub mod patch_preview;
 pub mod pattern_preview;
 pub mod pixel_grid;
@@ -99,7 +100,9 @@ use start_screen::start_screen_drop_hint;
 pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
-use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
+use strokes::{
+    HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, live_stroke_busy, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure,
+};
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
 pub(crate) use tabs::arranged_cells;
@@ -1060,13 +1063,18 @@ fn handle_canvas_tool_stroke(
         }
         app.stylus.clear_selection();
         app.stylus.clock_ms = now_ms;
-        // A held pen keeps the clock running for airbrush build-up and smoothing catch-up.
-        if app.drag.is_some() && stroke_wants_time(app) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
-        }
         app.defer_live_stroke = false;
         // One live-stroke update for the whole frame, not one per recovered sample.
         feed_live_stroke(app);
+        // A held pen keeps the clock running for airbrush build-up and smoothing catch-up (asked
+        // after the feed, which brings in what the stroke's thread last painted).
+        if app.drag.is_some() && stroke_wants_time(app) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(HOLD_REPEAT_MS as u64));
+        }
+        // The stroke is still painting what it was given: show its steps as they finish.
+        if live_stroke_busy(app) {
+            ctx.request_repaint();
+        }
         crate::magnetic_lasso_ui::flush(app);
     }
     if buttons.stopped {
