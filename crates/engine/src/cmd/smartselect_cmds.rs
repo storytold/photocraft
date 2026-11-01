@@ -488,7 +488,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             let (content, mask) = if with_mask {
                 (pixels, Some(LayerMask { surface: reg.clone(), ..LayerMask::reveal_all() }))
             } else {
-                (matting::masked_copy_surface(&pixels, reg), None)
+                (matting::masked_copy_surface(&pixels, reg, reg.content_bounds()), None)
             };
             if output.starts_with("newDocument") {
                 // Same canvas, colour mode, depth and profile, so the pixels need no conversion.

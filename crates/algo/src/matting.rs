@@ -859,7 +859,8 @@ pub fn masked_copy(src: &Surface, alpha: &Region) -> Surface {
 
 /// Copies selected pixels without collecting buffers across the alpha bounds.
 /// `alpha` is a zero-default GRAY8 surface, as returned by [`refine_surface`].
-pub fn masked_copy_surface(src: &Surface, alpha: &Surface) -> Surface {
+/// Explicit `bounds` preserve source colour under zero alpha inside the finite mask extent.
+pub fn masked_copy_surface(src: &Surface, alpha: &Surface, bounds: Rect) -> Surface {
     let fmt = src.format();
     let n = fmt.channels();
     let output_fmt = PixelFormat { alpha: true, ..fmt };
@@ -870,10 +871,9 @@ pub fn masked_copy_surface(src: &Surface, alpha: &Surface) -> Surface {
     }
     let default_tile = out.solid_tile(&default);
     let mut full = std::collections::HashMap::new();
-    let bounds = alpha.content_bounds();
     for (tc, tile) in alpha.tiles() {
         let key = std::sync::Arc::as_ptr(tile) as usize;
-        let opaque = *full.entry(key).or_insert_with(|| tile.bytes().iter().all(|v| *v == 255));
+        let opaque = bounds.contains_rect(&tc.rect()) && *full.entry(key).or_insert_with(|| tile.bytes().iter().all(|v| *v == 255));
         if opaque && fmt.alpha {
             if let Some(t) = src.tile(*tc) {
                 out.put_tiles([(*tc, t.clone())]);
@@ -1110,7 +1110,7 @@ mod tests {
             for (expected, actual) in d.read_region(a.bbox).iter().zip(sparse_d.read_region(a.bbox)) {
                 assert!((expected - actual).abs() < 1e-5, "{sample:?}: decontamination changed");
             }
-            let sparse_c = masked_copy_surface(&d, &sparse_alpha);
+            let sparse_c = masked_copy_surface(&d, &sparse_alpha, a.bbox);
             assert_eq!(sparse_c.to_interleaved(a.bbox), masked_copy(&d, &a).to_interleaved(a.bbox));
             let p = d.pixel(10, 4);
             assert!(p[0] > 0.9 && p[2] < 0.1, "{sample:?}: {p:?}");
