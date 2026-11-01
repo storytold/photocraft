@@ -265,6 +265,9 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
         return super::tga::encode(&img);
     }
     if f == Format::Qoi {
+        // Image validates an exact, interleaved buffer size; rows have no padding.
+        // Public encode plans RGB(A)8 for QOI, so converted() above handles grayscale
+        // and higher-depth sources before this guard.
         let color = match (img.layout(), img.sample_type()) {
             (ChannelLayout::Rgb, SampleType::U8) => image::ColorType::Rgb8,
             (ChannelLayout::Rgba, SampleType::U8) => image::ColorType::Rgba8,
@@ -288,6 +291,32 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
         }
     }
     Ok(cursor.into_inner())
+}
+
+#[cfg(test)]
+mod qoi_tests {
+    use super::*;
+
+    /// Invalid internal plans reach the guard; public encode supplies a supported conversion.
+    #[test]
+    fn unsupported_plans_return_invalid_image() {
+        let src = Image::new(2, 1, ChannelLayout::Rgba, SampleType::U8).unwrap();
+        let opts = EncodeOptions::default();
+        for (layout, sample) in [
+            (ChannelLayout::Gray, SampleType::U8),
+            (ChannelLayout::GrayA, SampleType::U8),
+            (ChannelLayout::Rgb, SampleType::U16),
+            (ChannelLayout::Rgba, SampleType::U16),
+            (ChannelLayout::Rgb, SampleType::F16),
+            (ChannelLayout::Rgba, SampleType::F32),
+        ] {
+            assert!(
+                matches!(encode(Format::Qoi, &src, Plan { layout, sample }, &opts),
+                    Err(CodecError::InvalidImage(message)) if message == "QOI requires RGB8 or RGBA8 pixels"),
+                "{layout:?}/{sample:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
