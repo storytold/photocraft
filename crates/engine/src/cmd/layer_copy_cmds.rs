@@ -8,10 +8,11 @@
 //! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartContentsId};
+use photocraft_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartContentsId, TextStyles};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -122,9 +123,74 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
     // application (24 pt at 72 ppi becomes 5.76 pt at 300 ppi, with no transform). Left at the
     // source's, a copy re-laid out at the destination's resolution on its next edit (#9560).
     crate::canvas_geom::retarget_type_resolution(copies, dest.resolution_dpi);
+    adopt_text_styles(copies, &dest.text_styles)?;
     let new_canvas = copies.bounds() != dest.bounds();
     prepare_shapes(&mut copies.layers, dest, new_canvas);
     Ok(())
+}
+
+/// Points the copies' type at `dest`'s character and paragraph styles, as the reference
+/// application does: a style is matched by name and the destination's definition wins (a copy
+/// whose rewritten size differs from it shows a local override), and a style `dest` lacks comes
+/// along (already scaled by [`crate::canvas_geom::retarget_type_resolution`]) under a fresh id.
+/// Afterwards `copies.text_styles` holds just the styles to add; [`land_text_styles`] adds them.
+fn adopt_text_styles(copies: &mut Document, dest: &TextStyles) -> Result<()> {
+    let src = std::mem::take(&mut copies.text_styles);
+    let mut used = (BTreeSet::new(), BTreeSet::new());
+    crate::image_cmds::for_each_layer(&mut copies.layers, &mut |l| {
+        if let LayerContent::Text(t) = &l.content {
+            used.0.extend(t.runs.iter().filter_map(|r| r.style.style_sheet));
+            used.1.extend(t.paragraphs.iter().filter_map(|p| p.style.style_sheet));
+        }
+    });
+    let full = || EngineError::Other("no free text style id".into());
+    let (mut chars, mut paras) = (HashMap::new(), HashMap::new());
+    let mut next = dest.next_char_id();
+    for id in used.0 {
+        let Some(def) = src.char_style(id) else { continue };
+        let to = match dest.character.iter().find(|d| d.name == def.name) {
+            Some(d) => d.id,
+            None => {
+                let fresh = next.ok_or_else(full)?;
+                next = fresh.checked_add(1);
+                copies.text_styles.character.push(CharacterStyleDef { id: fresh, ..def.clone() });
+                fresh
+            }
+        };
+        chars.insert(id, to);
+    }
+    let mut next = dest.next_para_id();
+    for id in used.1 {
+        // Basic Paragraph (id 0) is implicit; every document has its own.
+        let Some(def) = src.para_style(id).filter(|_| id != 0) else { continue };
+        let to = match dest.paragraph.iter().find(|d| d.name == def.name) {
+            Some(d) => d.id,
+            None => {
+                let fresh = next.ok_or_else(full)?;
+                next = fresh.checked_add(1);
+                copies.text_styles.paragraph.push(ParagraphStyleDef { id: fresh, ..def.clone() });
+                fresh
+            }
+        };
+        paras.insert(id, to);
+    }
+    crate::image_cmds::for_each_layer(&mut copies.layers, &mut |l| {
+        if let LayerContent::Text(t) = &mut l.content {
+            for r in &mut t.runs {
+                r.style.style_sheet = r.style.style_sheet.and_then(|id| chars.get(&id).copied());
+            }
+            for p in &mut t.paragraphs {
+                p.style.style_sheet = p.style.style_sheet.and_then(|id| paras.get(&id).copied());
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Adds the styles [`adopt_text_styles`] left in `styles` to `doc`.
+pub(crate) fn land_text_styles(doc: &mut Document, styles: TextStyles) {
+    doc.text_styles.character.extend(styles.character);
+    doc.text_styles.paragraph.extend(styles.paragraph);
 }
 
 /// Moves every layer of `copies` by whole pixels (content, masks, vectors and smart placement).
@@ -181,6 +247,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     copies.icc_profile = sdoc.icc_profile.clone();
     // Type re-lays out at the source's resolution, so it keeps its size in pixels.
     copies.resolution_dpi = sdoc.resolution_dpi;
+    copies.text_styles.clone_from(&sdoc.text_styles);
     for id in &ids {
         let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
         let mut l = src_layer.duplicate();
@@ -214,10 +281,12 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
     translate_copies(&mut copies, &ddoc, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
+    let styles = std::mem::take(&mut copies.text_styles);
     s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
+        land_text_styles(doc, styles);
         let mut above = *active;
         let mut new = Vec::with_capacity(copies.layers.len());
         // The first copy goes where a new layer would; the rest stack above it.
@@ -271,6 +340,7 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
     nd.icc_profile.clone_from(&sdoc.icc_profile);
     nd.patterns.clone_from(&sdoc.patterns);
     nd.global_light = sdoc.global_light;
+    nd.text_styles.clone_from(&sdoc.text_styles);
     for id in &ids {
         let mut l = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?.duplicate();
         if ids.len() == 1
@@ -291,6 +361,8 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
             sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
         }
     }
+    // The new document gets the styles its type uses.
+    adopt_text_styles(&mut nd, &TextStyles::default())?;
     let new_ids: Vec<LayerId> = nd.layers.iter().map(|l| l.id).collect();
     let index = s.add_document(nd, None);
     crate::layer_multi_cmds::reselect(s, new_ids.clone(), new_ids.last().copied());
