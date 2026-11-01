@@ -715,3 +715,39 @@ fn legacy_brit_without_cged() {
     let a = parse(b"brit", &[0, 10, 0xff, 0xf6, 0, 127, 0], None, Channels::Rgb);
     assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true });
 }
+
+/// Photoshop 27.11 with the issue's F(r,g,b) = (r, 0.25 + 0.5g, 0.125 + 0.25b): BGR data
+/// swaps the output red and blue, RGB table order the input axes (#9126).
+#[test]
+fn color_lookup_data_and_table_order_are_baked_in() {
+    let f = |r: f32, g: f32, b: f32| [r, 0.25 + 0.5 * g, 0.125 + 0.25 * b];
+    let mut cube = String::from("LUT_3D_SIZE 2\n");
+    for i in 0..8 {
+        let [r, g, b] = f((i & 1) as f32, (i >> 1 & 1) as f32, (i >> 2 & 1) as f32);
+        cube.push_str(&format!("{r} {g} {b}\n"));
+    }
+    let en = |t: &str, val: &str| Value::Enumerated { type_id: photocraft_psd::descriptor::Id::new(t), value: photocraft_psd::descriptor::Id::new(val) };
+    // The node at input (1, 0, 0) for each order.
+    let cases = [
+        ("rgbOrder", "bgrOrder", f(1.0, 0.0, 0.0)),
+        ("bgrOrder", "bgrOrder", [0.125, 0.25, 1.0]),
+        ("rgbOrder", "rgbOrder", f(0.0, 0.0, 1.0)),
+        ("bgrOrder", "rgbOrder", [0.375, 0.25, 0.0]),
+    ];
+    for (data, table, want) in cases {
+        let desc = Descriptor::new("null")
+            .with("LUTFormat", en("LUTFormatType", "LUTFormatCUBE"))
+            .with("dataOrder", en("colorLookupOrder", data))
+            .with("tableOrder", en("colorLookupOrder", table))
+            .with("LUT3DFileData", Value::RawData(cube.clone().into_bytes()));
+        let mut block = vec![0, 1];
+        block.extend(VersionedDescriptor::new(desc).to_bytes());
+        let a = parse(b"clrL", &block, None, Channels::Rgb);
+        let Adjustment::ColorLookup { lut: Some(t), size: 2, .. } = &a else { panic!("{a:?}") };
+        assert_eq!(&t[3..6], &want, "data {data}, table {table}");
+        // Saved with the default orders, the baked table reads back unchanged.
+        let back = parse(b"clrL", &write(&a)[0].1, None, Channels::Rgb);
+        let Adjustment::ColorLookup { lut: Some(b), .. } = &back else { panic!("{back:?}") };
+        assert_eq!(b, t, "data {data}, table {table}");
+    }
+}
