@@ -753,7 +753,7 @@ mod rtl_tests {
             let _scope = crate::direction::direction_scope(dir);
             let ctx = egui::Context::default();
             let mut out = None;
-            ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut full = ctx.run_ui(egui::RawInput::default(), |ui| {
                 out = Some(
                     ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.with_layout(crate::direction::row(), |ui| {
@@ -766,6 +766,7 @@ mod rtl_tests {
                     .inner,
                 );
             });
+            full.textures_delta.clear();
             out.unwrap()
         }
         let (ltr_a, ltr_b) = items(crate::direction::Dir::Ltr);
