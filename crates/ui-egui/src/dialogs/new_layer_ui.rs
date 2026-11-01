@@ -84,7 +84,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // The caption hugs its column's field side, so it stays next to the editor.
         ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), crate::direction::trailing(), |ui| ui.label(text)).inner
     };
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let name_label = row_label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
         let field = crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
@@ -98,14 +98,14 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("__nameFocused".into(), json!(true));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.add_space(label_width + ui.spacing().item_spacing.x);
         let mut clip = flag(f, "clipToPrevious");
         if crate::widgets::checkbox(ui, &mut clip, tl!("Use Previous Layer to Create Clipping Mask")).changed() {
             f.insert("clipToPrevious".into(), json!(clip));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         row_label(ui, tl!("Color:"));
         let mut color = f.get("color").and_then(Value::as_str).and_then(LabelColor::from_id).unwrap_or_default();
         let options: Vec<(LabelColor, &str)> = LabelColor::ALL.into_iter().map(|c| (c, crate::layer_menu_ui::color_name(c))).collect();
@@ -114,7 +114,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     let mut m = mode(f);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         row_label(ui, tl!("Mode:"));
         let options: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.into_iter().map(|m| (m, m.label())).collect();
         if crate::widgets::dropdown(ui, "new-layer-mode", tl!("Mode"), &mut m, &options, 140.0) {
@@ -127,7 +127,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("opacity".into(), json!(o.clamp(0.0, 100.0)));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.add_space(label_width + ui.spacing().item_spacing.x);
         let available = neutral_color(m).is_some();
         let mut fill = available && flag(f, "fillNeutral");
