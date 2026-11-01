@@ -199,7 +199,7 @@ pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photo
         let mut v = axis_value(c, axis);
         let mut changed = false;
         ui.push_id(("type-axis", &axis.0), |ui| {
-            ui.horizontal(|ui| {
+            row(ui, |ui| {
                 let axis_name = axis_label(&axis.0);
                 ui.label(egui::RichText::new(&axis_name).color(t.text_dim));
                 ui.with_layout(crate::direction::trailing(), |ui| {
@@ -973,6 +973,42 @@ mod rtl_tests {
             h.run();
             let s = h.state();
             assert_eq!(s.field.center().x > s.label.center().x, !rtl, "{dir:?}: label {:?} vs field {:?}", s.label, s.field);
+        }
+    }
+
+    /// The axis rows use the local `row` helper: under RTL it mirrors item order, under LTR it
+    /// keeps `ui.horizontal`'s order and equal gaps.
+    #[test]
+    fn row_helper_mirrors_item_order() {
+        use super::row;
+        struct Row {
+            a: egui::Rect,
+            b: egui::Rect,
+            c: egui::Rect,
+        }
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let rtl = dir == crate::direction::Dir::Rtl;
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = Harness::builder().with_size(vec2(400.0, 60.0)).build_ui_state(
+                |ui, s: &mut Row| {
+                    row(ui, |ui| {
+                        s.a = ui.button("A").rect;
+                        s.b = ui.button("B").rect;
+                        s.c = ui.button("C").rect;
+                    });
+                },
+                Row { a: egui::Rect::NOTHING, b: egui::Rect::NOTHING, c: egui::Rect::NOTHING },
+            );
+            h.ctx.all_styles_mut(|s| s.set_right_to_left(rtl));
+            h.run();
+            let s = h.state();
+            assert_eq!(s.a.left() < s.b.left(), !rtl, "{dir:?}: A vs B: {:?} {:?}", s.a, s.b);
+            assert_eq!(s.b.left() < s.c.left(), !rtl, "{dir:?}: B vs C: {:?} {:?}", s.b, s.c);
+            if !rtl {
+                let gap_ab = s.b.left() - s.a.right();
+                let gap_bc = s.c.left() - s.b.right();
+                assert!((gap_ab - gap_bc).abs() < 0.01, "LTR gaps equal: {gap_ab} vs {gap_bc}");
+            }
         }
     }
 }
