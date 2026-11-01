@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_clear_all;
 mod actions_duplicate;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;

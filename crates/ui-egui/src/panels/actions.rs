@@ -14,6 +14,8 @@ use crate::PhotocraftApp;
 use crate::icons;
 use crate::theme::Tokens;
 
+pub(crate) mod clear_all;
+
 /// Which row is selected and which rows are expanded. The action list itself is
 /// [`photocraft_engine::Session::actions`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -564,7 +566,7 @@ fn suspended(app: &PhotocraftApp) -> bool {
 /// action could go away or change place). The engine checks these against `recording`, which
 /// is `None` then.
 pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), String> {
-    if matches!(id, "actions.record" | "actions.delete" | "actions.move" | "actions.duplicate") && suspended(app) {
+    if matches!(id, "actions.record" | "actions.delete" | "actions.move" | "actions.duplicate" | "actions.clearAll") && suspended(app) {
         return Err(tl!("Confirm or cancel the open action step dialog first").into());
     }
     Ok(())
@@ -702,6 +704,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         act = Some("stop");
     }
     ui.separator();
+    if ui.add_enabled(any && !recording, egui::Button::new(tl!("Clear All Actions"))).clicked() {
+        act = Some("clearAll");
+    }
     if ui.button(tl!("Load Actions…")).clicked() {
         act = Some("load");
     }
@@ -730,6 +735,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(Value::Null)
         }
         "duplicate" => duplicate_selection(app),
+        "clearAll" => clear_all::open(app),
         "load" => load_dialog(app),
         "stop" => insert_stop_dialog(app),
         _ => save_dialog(app, None),

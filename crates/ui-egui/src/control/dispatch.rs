@@ -1023,6 +1023,7 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A continuation belongs to the dialog that paused it, even when another
         // action has a valid token. Replacing it would resume or cancel that action.
         Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
+        Some(_) if field == crate::actions::clear_all::REVISION => err("the confirmed action revision is read-only"),
         // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {

@@ -142,6 +142,26 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
+/// Clear confirmed definitions and their own shortcut bindings, preserving the document.
+fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.clearAll";
+    not_playing(s, cmd)?;
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before clearing actions"));
+    }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, "clearing all actions requires `confirm`: true"));
+    }
+    let count = s.actions.list.len();
+    if count != 0 {
+        let keys: std::collections::HashSet<_> = s.actions.list.iter().map(|a| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)).collect();
+        s.edit_prefs(|prefs| prefs.shortcuts.retain(|key, _| !keys.contains(key)));
+        s.actions.list.clear();
+        s.actions.touch();
+    }
+    Ok(json!({"cleared": count}))
+}
+
 /// The panel's dialog toggle column. With `step`, switch one step's dialog on or off; without
 /// it, every step (all on unless all already are, like clicking the action's own toggle).
 fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
@@ -314,6 +334,16 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.clearAll",
+            label: "Clear All Actions",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"confirm":true} → {cleared:count}. Removes every action and its function-key binding after explicit confirmation. Stop recording or playback first. Other shortcuts and the document are unchanged."##,
+            enabled: always,
+            run: clear_all,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.duplicate",
             label: "Duplicate",
