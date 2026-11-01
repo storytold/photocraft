@@ -377,6 +377,41 @@ fn box_undo_and_redo_grey_out_when_their_stack_is_empty() {
     assert!(crate::menus::is_enabled(&app, "edit.redo"));
 }
 
+/// A History jump under a drawn frame would resize the document while the frame keeps its
+/// coordinates, so Enter cropped the old ones (#9285): the panel's rows, snapshots and menu
+/// wait for the crop, as they do for Free Transform.
+#[test]
+fn history_jumps_wait_for_a_pending_crop() {
+    let size = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.size.width, st.doc.size.height));
+    let mut app = app(SampleType::U8);
+    app.run("history.newSnapshot", json!({})).unwrap();
+    app.run("image.canvasSize", json!({"width": 300, "height": 200})).unwrap();
+    let snapshot = app.session.active().unwrap().snapshots[0].id;
+    app.ui.crop_rect = Some([220.0, 120.0, 290.0, 190.0]);
+    app.crop.default_frame = false;
+    for (cmd, p) in [
+        ("history.selectState", json!({"state": 0})),
+        ("history.selectSnapshot", json!({"snapshot": snapshot})),
+        ("history.stepBackward", json!({})),
+        ("history.deleteState", json!({})),
+    ] {
+        assert!(app.run(cmd, p).is_err(), "{cmd} waits for the crop");
+        assert_eq!(size(&app), Some((300, 200)), "{cmd} left the document as it was");
+    }
+    assert_eq!(app.ui.crop_rect, Some([220.0, 120.0, 290.0, 190.0]), "the frame stays");
+    // Without a drawn frame (the tool's own frame around the canvas) History works as before.
+    app.crop.default_frame = true;
+    app.run("history.selectState", json!({"state": 0})).unwrap();
+    assert_eq!(size(&app), Some((200, 100)));
+    // Step Forward has a state to redo now; a drawn frame holds it back too.
+    app.crop.default_frame = false;
+    assert!(app.run("history.stepForward", json!({})).is_err(), "history.stepForward waits for the crop");
+    assert_eq!(size(&app), Some((200, 100)));
+    app.crop.default_frame = true;
+    app.run("history.stepForward", json!({})).unwrap();
+    assert_eq!(size(&app), Some((300, 200)));
+}
+
 #[test]
 fn handles_resize_with_shift_and_alt() {
     let mut app = app(SampleType::U8);

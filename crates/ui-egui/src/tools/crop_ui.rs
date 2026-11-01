@@ -495,6 +495,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// Intercept Undo/Redo/Toggle Last State while the Crop tool owns box history, for every caller
 /// (menus, shortcuts, the control channel, MCP) — as `transform_tool::intercept` does.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
+    if holds_history(app, id) {
+        return Some(Err("Commit or cancel the crop first".into()));
+    }
     if app.ui.tool != Tool::Crop || (app.crop.undo.is_empty() && app.crop.redo.is_empty()) {
         return None;
     }
@@ -504,6 +507,13 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
         "edit.toggleLastState" => Some(Err("Commit or cancel the crop first".into())),
         _ => None,
     }
+}
+
+/// A History jump waits for a drawn frame (#9285): it would resize the document under the frame,
+/// which keeps its coordinates. Menus and shortcuts ask [`blocks`]; the History panel, its menu and
+/// the control channel come through `app.run`.
+pub fn holds_history(app: &PhotocraftApp, id: &str) -> bool {
+    pending(app) && matches!(id, "history.selectState" | "history.selectSnapshot" | "history.stepBackward" | "history.stepForward" | "history.deleteState")
 }
 
 /// Undo (or redo) one box step.
