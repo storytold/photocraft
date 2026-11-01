@@ -283,7 +283,7 @@ fn apply(ctx: &Context, field: Id, action: Action) {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Id, Key, Modifiers, OutputCommand, PointerButton, Pos2, pos2, vec2};
+    use egui::{Event, Id, Key, Modifiers, OutputCommand, PointerButton, Pos2, vec2};
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
