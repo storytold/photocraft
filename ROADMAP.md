@@ -124,7 +124,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 |---|---|
 | 2026-10-22 | Print paper sizes: はがき (100 × 148 mm), 往復はがき (148 × 200), JIS B5 (182 × 257), JIS B4 (257 × 364), A6, L判 (89 × 127), 2L判 (127 × 178), KG判 (102 × 152), 六切 (203 × 254) and 四切 (254 × 305) are selectable in the Print dialog and `file.print`, matched by their customary names (`はがき`, `L判`, `JIS B5`…), and the PDF page takes their exact size. Existing papers unchanged. |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
-| 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized to the craftrules standard (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
+| 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
 | 2026-10-09 | Remove tool, Rotate View, crop rotation; OpenRaster and Paint.NET; 39 Affinity documents in the corpus |
 | 2026-10-08 | 0.5.0. Affinity import; Magnetic Lasso, Pattern Stamp, Mixer Brush, Pencil, Patch, Vertical Type on the toolbar |
 | 2026-10-07 | 0.3.0. 10 UI languages; shortcut audit 214 → 0 failures; TIFF decode 10× faster |
@@ -145,4 +145,4 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 | 2026-10-10 | minor | Readiness by audience with hours per tier |
 | 2026-10-10 | minor | Mainstream-practitioner and essentials-user numbers added |
 | 2026-10-10 | minor | Alpha gate result (passes; stays alpha) in the stage explanation |
-| 2026-10-10 | major | First version, per craftrules `standards/progress-docs.md` |
+| 2026-10-10 | major | First version |
