@@ -381,8 +381,9 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 
 **Not recordable:** Edit > Purge (no step is recorded; this version's Purge menu has Clipboard,
 Histories, All and Video Cache, no Undo); File > Export > Export As and Quick Export as PNG (the file
-is written, no step is recorded). Convert Stroke to Fill (`vectorStrokeToFill`) was not available in the measured version, even
-on a shape layer with a stroke and its path component selected, and it is not in the path context menu.
+is written, no step is recorded). `vectorStrokeToFill` (Convert Stroke to Fill) is not a user command: the reference application has
+no menu entry or context-menu item for it, refuses the event even with a stroked path component selected,
+and so never records it. No action can contain it; nothing to map.
 
 ### Batch
 
