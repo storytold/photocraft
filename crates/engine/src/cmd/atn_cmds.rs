@@ -41,6 +41,7 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
+pub(crate) use convert::UniqueNames;
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};

@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_duplicate;
 mod affinity;
 mod artboard_export_names;
 mod atn_crystallize_cell_size;

@@ -560,11 +560,11 @@ fn suspended(app: &PhotocraftApp) -> bool {
 }
 
 /// While a step dialog holds a suspended recording, refuse what would lose its call: a new
-/// recording (the restore would find recording taken) or deleting/moving actions (the recorded
+/// recording (the restore would find recording taken) or deleting/moving/duplicating actions (the recorded
 /// action could go away or change place). The engine checks these against `recording`, which
 /// is `None` then.
 pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), String> {
-    if matches!(id, "actions.record" | "actions.delete" | "actions.move") && suspended(app) {
+    if matches!(id, "actions.record" | "actions.delete" | "actions.move" | "actions.duplicate") && suspended(app) {
         return Err(tl!("Confirm or cancel the open action step dialog first").into());
     }
     Ok(())
@@ -681,6 +681,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(!recording, egui::Button::new(tl!("New Action…"))).clicked() {
         act = Some("new");
     }
+    if ui.add_enabled(can_delete, egui::Button::new(tl!("Duplicate"))).clicked() {
+        act = Some("duplicate");
+    }
     if ui.add_enabled(any, egui::Button::new(tl!("Play"))).clicked() {
         act = Some("play");
     }
@@ -726,6 +729,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             delete_selection(app);
             Ok(Value::Null)
         }
+        "duplicate" => duplicate_selection(app),
         "load" => load_dialog(app),
         "stop" => insert_stop_dialog(app),
         _ => save_dialog(app, None),
@@ -787,6 +791,30 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
             let _ = app.run("actions.assignSet", json!({"action": to, "set": neighbour}));
         }
     }
+}
+
+/// Keep the selection and disclosure rows on the new copy after the engine edits the list.
+fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let action = app.ui.actions.selected.ok_or_else(|| tl!("Select an action first").to_string())?;
+    let step = app.ui.actions.selected_step;
+    let count = app.session.actions.list.len();
+    let expanded = app.ui.actions.expanded.get(action).copied().unwrap_or(false);
+    let result = app.run("actions.duplicate", json!({"action": action, "step": step}))?;
+    let index = result["index"].as_u64().and_then(|i| usize::try_from(i).ok()).ok_or("the copy has no action index")?;
+    app.ui.actions.selected = Some(index);
+    app.ui.actions.selected_step = result.get("step").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    if step.is_none() {
+        app.ui.actions.expanded.resize(count, false);
+        if index <= app.ui.actions.expanded.len() {
+            app.ui.actions.expanded.insert(index, expanded);
+        }
+    } else {
+        app.ui.actions.expanded.resize(count, false);
+        if let Some(expanded) = app.ui.actions.expanded.get_mut(index) {
+            *expanded = true;
+        }
+    }
+    Ok(result)
 }
 
 fn delete_selection(app: &mut PhotocraftApp) {

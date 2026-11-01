@@ -250,18 +250,18 @@ pub fn export(
 /// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
 /// taken list per candidate is cubic when an action file repeats one base name many times, so
 /// membership uses a set and the next suffix to try is cached per base name.
-pub(super) struct UniqueNames {
+pub(crate) struct UniqueNames {
     taken: std::collections::HashSet<String>,
     next_suffix: std::collections::HashMap<String, u32>,
 }
 
 impl UniqueNames {
-    pub(super) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
+    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
         UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
     }
 
     /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(super) fn claim(&mut self, name: &str) -> String {
+    pub(crate) fn claim(&mut self, name: &str) -> String {
         if self.taken.insert(name.to_string()) {
             return name.to_string();
         }
