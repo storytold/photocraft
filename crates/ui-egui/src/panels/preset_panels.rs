@@ -24,6 +24,7 @@ pub use panels::{
     clone_sample_point, clone_source_panel, finish_custom_shape, gradients_panel, patterns_panel, select_tool_preset, shape_picker, shapes_panel, styles_panel,
     tool_presets_panel, windows,
 };
+#[cfg(test)]
 pub(crate) use panels::styles_menu;
 #[cfg(test)]
 use panels::{new_tool_preset_params, tool_id};
