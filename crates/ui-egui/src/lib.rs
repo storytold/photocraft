@@ -152,6 +152,7 @@ pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
 pub use dialogs::gallery_ui;
 pub use dialogs::guide_layout_ui;
+pub use dialogs::hdr_flatten_prompt;
 pub use dialogs::history_options_ui;
 pub use dialogs::jpeg_options_ui;
 pub use dialogs::layer_picker;

@@ -71,6 +71,11 @@ fn cas_plan(s: &Session, p: &Value) -> Result<CasPlan> {
 /// The scaled pixels: `img` (`w`×`h`, `fmt`) seam-carved to `nw`×`nh` where the protection
 /// (`protect`, one value per pixel, and the skin tones when asked) steers the seams, blended with
 /// a plain resample by `amount` (0..1). Checks `ctx` for cancellation before every seam.
+///
+/// `mask` (one value per pixel: the layer's linked mask over the same area, #10572) rides along
+/// as one more channel, so the same seams are removed from or added to it and it stays on the
+/// pixels it masked; its edges count as content, so a seam doesn't cut through the mask's shape.
+/// Returned beside the pixels, at the new size.
 #[allow(clippy::too_many_arguments)]
 fn cas_pixels(
     ctx: &crate::jobs::JobCtx,
@@ -82,7 +87,8 @@ fn cas_pixels(
     skin_tones: bool,
     (nw, nh): (usize, usize),
     amount: f32,
-) -> Result<Vec<f32>> {
+    mask: Option<&[f32]>,
+) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
     use photocraft_algo::seam::{carve_with, resize_bilinear, skin_mask};
     let n = fmt.channels();
     if skin_tones {
@@ -94,17 +100,49 @@ fn cas_pixels(
         });
     }
     ctx.check()?;
+    // The mask interleaved behind each pixel's channels; a mask of the wrong size is left alone.
+    let mask = mask.filter(|m| m.len() == w.saturating_mul(h) && img.len() >= w.saturating_mul(h).saturating_mul(n));
+    let (img, ch): (Vec<f32>, usize) = match mask {
+        Some(m) => {
+            // One more value per pixel than `img` already holds.
+            let mut v = Vec::with_capacity(w.saturating_mul(h).saturating_mul(n + 1));
+            for (px, k) in img.chunks_exact(n).zip(m) {
+                v.extend_from_slice(px);
+                v.push(*k);
+            }
+            (v, n + 1)
+        }
+        None => (img.to_vec(), n),
+    };
+    let img = img.as_slice();
     let carved = if amount > 0.0 {
-        ctx.stage(0.05, 0.95, label, |ctl| carve_with(w, h, n, img, protect.as_deref(), nw, nh, ctl)).map_err(|_| EngineError::Cancelled)?
+        ctx.stage(0.05, 0.95, label, |ctl| carve_with(w, h, ch, img, protect.as_deref(), nw, nh, ctl)).map_err(|_| EngineError::Cancelled)?
     } else {
         Vec::new()
     };
-    let plain = if amount < 1.0 { resize_bilinear(w, h, n, img, nw, nh) } else { Vec::new() };
-    Ok(match (carved.is_empty(), plain.is_empty()) {
+    let plain = if amount < 1.0 { resize_bilinear(w, h, ch, img, nw, nh) } else { Vec::new() };
+    let out = match (carved.is_empty(), plain.is_empty()) {
         (false, true) => carved,
         (true, false) => plain,
         _ => carved.iter().zip(&plain).map(|(c, l)| l + (c - l) * amount).collect::<Vec<f32>>(),
-    })
+    };
+    if mask.is_none() {
+        return Ok((out, None));
+    }
+    // Split the mask channel off again.
+    let mut px = Vec::with_capacity(nw.saturating_mul(nh).saturating_mul(n));
+    let mut m = Vec::with_capacity(nw.saturating_mul(nh));
+    for q in out.chunks_exact(ch) {
+        let (p, v) = q.split_at(n);
+        px.extend_from_slice(p);
+        m.extend_from_slice(v);
+    }
+    Ok((px, Some(m)))
+}
+
+/// The layer's mask when it is linked (it follows the pixels), one channel wide.
+fn linked_mask(layer: &photocraft_doc::Layer) -> Option<&Surface> {
+    layer.mask.as_ref().filter(|m| m.linked && m.surface.format().channels() == 1).map(|m| &m.surface)
 }
 
 pub(super) fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
@@ -120,18 +158,32 @@ pub(super) fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.0, label);
-            let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
+            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            let surf = layer.surface().ok_or(EngineError::NoLayer(id))?;
             let img = surf.read_region(region);
             let protect: Option<Vec<f32>> =
                 protect_mask.map(|m| (0..w * h).map(|i| m.sample_channel(region.x0 + (i % w) as i32, region.y0 + (i / w) as i32, 0)).collect());
-            cas_pixels(ctx, label, &img, (w, h), surf.format(), protect, skin_tones, (nw, nh), amount)
+            // A linked layer mask scales with the pixels, over the same area (#10572); an unlinked
+            // one stays, as in Photoshop.
+            let mask: Option<Vec<f32>> = linked_mask(layer).map(|m| m.read_region(region));
+            cas_pixels(ctx, label, &img, (w, h), surf.format(), protect, skin_tones, (nw, nh), amount, mask.as_deref())
         },
-        move |s, out| {
+        move |s, (out, mask_out)| {
             s.edit(label, |doc, _| {
                 let surf = writable_surface(doc, id)?;
                 crate::pixels::try_clear_surface(surf, region, None)?;
                 surf.write_region(dst, &out);
                 surf.prune();
+                if let Some(mask_out) = mask_out
+                    && let Some(m) = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).filter(|m| m.linked && m.surface.format().channels() == 1)
+                {
+                    // The area the pixels left reads as the mask's default again (where the pixels
+                    // moved from there are no pixels left to mask), then the scaled mask goes on top.
+                    let default = m.surface.default_pixel().first().copied().unwrap_or(1.0);
+                    m.surface.fill_rect(region, &[default]);
+                    m.surface.write_region(dst, &mask_out);
+                    m.surface.prune();
+                }
                 Ok(())
             })?;
             Ok(json!({"from": [w, h], "to": [nw, nh], "bounds": [dst.x0, dst.y0, nw, nh]}))
@@ -178,7 +230,8 @@ impl ContentAwareScalePreview {
     /// surface with its corner at the origin. Checks `ctx` for cancellation before every seam.
     pub fn run(&self, ctx: &crate::jobs::JobCtx) -> Result<Surface> {
         let CasPlan { doc, layer, region, dst: _, amount, protect, skin_tones } = &self.plan;
-        let surf = doc.layer(*layer).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(*layer))?;
+        let l = doc.layer(*layer).ok_or(EngineError::NoLayer(*layer))?;
+        let surf = l.surface().ok_or(EngineError::NoLayer(*layer))?;
         let fmt = surf.format();
         let n = fmt.channels();
         let (w, h) = (region.width(), region.height());
@@ -196,7 +249,9 @@ impl ContentAwareScalePreview {
             }
         }
         let protect = protect.as_ref().map(|m| (0..pw * ph).map(|i| m.sample_channel(src_x[i % pw], src_y(i / pw), 0)).collect());
-        let out = cas_pixels(ctx, "Content-Aware Scale", &img, (pw, ph), fmt, protect, *skin_tones, (pnw, pnh), *amount)?;
+        // The linked mask steers the seams of the commit, so it steers the preview's the same way.
+        let mask: Option<Vec<f32>> = linked_mask(l).map(|m| (0..pw * ph).map(|i| m.sample_channel(src_x[i % pw], src_y(i / pw), 0)).collect());
+        let (out, _) = cas_pixels(ctx, "Content-Aware Scale", &img, (pw, ph), fmt, protect, *skin_tones, (pnw, pnh), *amount, mask.as_deref())?;
         let mut s = Surface::new(fmt);
         s.write_region(Rect::from_xywh(0, 0, pnw as u32, pnh as u32), &out);
         Ok(s)

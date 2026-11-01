@@ -536,6 +536,11 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     if command == LENS_BLUR {
         lens_blur_channels(app, &mut fields);
     }
+    // HDR Toning flattens the image it runs on: however it opens (menu, control channel, action
+    // playback), the dialog is bound to the active document (#10329).
+    if command == crate::hdr_flatten_prompt::COMMAND {
+        crate::hdr_flatten_prompt::bind(app, &mut fields);
+    }
     if parse_spec(spec.params).iter().any(|p| p.kind == Kind::Document) {
         // The document picker lists every open document (params refer to them by index).
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();

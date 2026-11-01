@@ -98,9 +98,19 @@ pub struct ListLayout {
 /// The Brushes tab's list.
 pub const PANEL_LIST: ListLayout = ListLayout { id: "brush-presets", max_height: 400.0, cell: 52.0, indent: 20.0, cards: false };
 
+/// The height of what the Brushes tab draws under its list: the hairline and the row with the
+/// preset count and the Delete / New / Import buttons.
+const LIST_FOOTER: f32 = 40.0;
+
+/// The height the Brushes tab's list may grow to: the panel's remaining height above its footer,
+/// with no upper cap, so a tall dock column shows more presets instead of an empty strip under the
+/// footer (#10574, #10340); 180 px is the minimum.
+pub(crate) fn list_max_height(available: f32) -> f32 {
+    (available - LIST_FOOTER).max(180.0)
+}
+
 fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
-    let height = ui.available_height().clamp(180.0, 640.0);
-    ListLayout { max_height: height, ..PANEL_LIST }
+    ListLayout { max_height: list_max_height(ui.available_height()), ..PANEL_LIST }
 }
 
 /// The group key (`BrushPreset::group`) behind a panel label: ungrouped presets show as

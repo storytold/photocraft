@@ -576,6 +576,81 @@ fn content_aware_scale_enlarges_a_one_pixel_line() {
     }
 }
 
+/// #10572: the transform box's live preview carves on the same seams as the commit, mask and
+/// all: at full size (no reduction) the preview's pixels are the committed pixels.
+#[test]
+fn content_aware_scale_preview_follows_the_linked_mask() {
+    let mut s = session(8);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("paint", |doc, active| {
+        let l = doc.layer_mut(active.unwrap()).unwrap();
+        let surf = l.surface_mut().unwrap();
+        for x in 0..64 {
+            let v = x as f32 / 63.0;
+            surf.fill_rect(Rect::new(x, 0, x + 1, 48), &[v, 1.0 - v, 0.5, 1.0]);
+        }
+        let mut m = photocraft_doc::LayerMask::hide_all();
+        m.surface.fill_rect(Rect::new(0, 0, 32, 48), &[1.0]);
+        l.mask = Some(m);
+        Ok(())
+    })
+    .unwrap();
+    let p = json!({"width": 40});
+    let preview = super::ContentAwareScalePreview::new(&s, &p, 64).unwrap();
+    assert_eq!(preview.size(), [40, 48], "64 px fits the side limit: no reduction");
+    let shown = preview.run(&crate::jobs::JobCtx::new()).unwrap().read_region(Rect::new(0, 0, 40, 48));
+    s.execute("edit.contentAwareScale", p).unwrap();
+    let committed = active(&s).surface().unwrap().read_region(Rect::new(0, 0, 40, 48));
+    assert_eq!(shown, committed);
+}
+
+/// #10572: a linked layer mask scales with the pixels (over the same area, on the same seams); an
+/// unlinked one stays where it is, as in Photoshop. Undo brings the mask back.
+#[test]
+fn content_aware_scale_carries_a_linked_mask() {
+    for depth in [8, 16, 32] {
+        for linked in [true, false] {
+            let mut s = session(depth);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.edit("paint", |doc, active| {
+                let l = doc.layer_mut(active.unwrap()).unwrap();
+                l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 64, 48), &[0.5, 0.5, 0.5, 1.0]);
+                // Hide all, reveal the left half.
+                let mut m = photocraft_doc::LayerMask::hide_all();
+                m.surface.fill_rect(Rect::new(0, 0, 32, 48), &[1.0]);
+                m.linked = linked;
+                l.mask = Some(m);
+                Ok(())
+            })
+            .unwrap();
+            let mask = |s: &Session| active(s).mask.clone().unwrap();
+            // Amount 0 is a plain resample: the revealed half lands exactly on the left half of the result.
+            let r = s.execute("edit.contentAwareScale", json!({"width": 40, "amount": 0})).unwrap();
+            assert_eq!(r["to"], json!([40, 48]));
+            let m = mask(&s);
+            if linked {
+                assert!(m.value(10, 10) > 0.9 && m.value(30, 10) < 0.1, "depth {depth}: the mask scaled with the pixels");
+                let b = m.surface.content_bounds();
+                assert!(b.x0 == 0 && (20..=21).contains(&b.x1) && b.height() == 48, "depth {depth}: {b:?}");
+            } else {
+                assert_eq!(m.surface.content_bounds(), Rect::new(0, 0, 32, 48), "depth {depth}: an unlinked mask stays");
+            }
+            s.undo();
+            assert_eq!(mask(&s).surface.content_bounds(), Rect::new(0, 0, 32, 48), "depth {depth}: undo restores the mask");
+            // Seam carving: the mask follows the same seams, so it stays within the result and keeps both of its values.
+            s.execute("edit.contentAwareScale", json!({"width": 40})).unwrap();
+            let m = mask(&s);
+            if linked {
+                let b = m.surface.content_bounds();
+                assert!(b.x0 == 0 && b.x1 <= 40 && b.height() == 48, "depth {depth}: {b:?}");
+                assert!(m.value(0, 10) > 0.9 && m.value(39, 10) < 0.1, "depth {depth}: the mask's two halves survive");
+            } else {
+                assert_eq!(m.surface.content_bounds(), Rect::new(0, 0, 32, 48), "depth {depth}");
+            }
+        }
+    }
+}
+
 fn square_path(x: f64, y: f64, w: f64) -> Path {
     Path::new(vec![Subpath::polygon(&[(x, y), (x + w, y), (x + w, y + w), (x, y + w)])])
 }
