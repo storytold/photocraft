@@ -1,5 +1,7 @@
 use super::*;
 
+mod held_history;
+
 #[test]
 fn the_brush_outline_follows_the_pointer_except_while_resizing() {
     let (hover, anchor) = (pos2(30.0, 40.0), pos2(10.0, 20.0));
