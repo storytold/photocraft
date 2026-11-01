@@ -1052,3 +1052,48 @@ fn escape_mid_resize_restores_the_brush_and_keeps_the_workspace() {
     assert_eq!(w.quick_size, 30.0, "the rest of the drag doesn't resize");
     assert!(w.strokes.is_empty() && w.edits.len() == 1, "nor select");
 }
+
+/// The brush circles drawn last frame (the black outline's centre and radius).
+fn brush_circles(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<(egui::Pos2, f32)> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Circle(s) if s.stroke == Stroke::new(1.5, Color32::BLACK) => Some((s.center, s.radius)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// While the brush is resized its circle stays where the drag began, at the new size, and the
+/// Diameter/Hardness readout follows the pointer, as on the main canvas (FredApps on #10559).
+#[test]
+fn the_resize_circle_stays_put_while_the_readout_follows_the_pointer() {
+    use egui::PointerButton;
+    let (mut h, over) = resize_harness("brush");
+    let zoom = h.state().distort.select_mask.as_ref().unwrap().zoom;
+    let readout = || egui::Id::unique("select-mask-brush-resize-readout");
+    h.event(egui::Event::PointerMoved(over));
+    h.run_steps(2);
+    assert_eq!(brush_circles(&h), [(over, 15.0 * zoom)], "hovering, the circle is at the pointer");
+    pointer_down(&mut h, over, PointerButton::Secondary, Modifiers::ALT);
+    for by in [vec2(40.0, -60.0), vec2(60.0, -60.0)] {
+        pointer_move(&mut h, over, by);
+        // The cursor is drawn before the frame's input, so it shows the new size a frame later.
+        h.run_steps(1);
+        let at = over + by;
+        let w = h.state().distort.select_mask.as_ref().unwrap();
+        let (size, hardness) = (w.brush_size, w.hardness);
+        assert_eq!(brush_circles(&h), [(over, size as f32 * 0.5 * zoom)], "the circle stays at the anchor at the new size ({by:?})");
+        let rect = h.ctx.memory(|m| m.area_rect(readout())).expect("the readout shows");
+        assert_eq!(rect.min, at + vec2(16.0, 18.0), "the readout is beside the pointer");
+        assert!(h.query_by_label(&format!("{} px", size.round() as i64)).is_some(), "it shows the diameter");
+        assert!(h.query_by_label(&format!("{}%", hardness.round() as i64)).is_some(), "and the hardness");
+    }
+    h.event(egui::Event::PointerButton { pos: over + vec2(60.0, -60.0), button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::ALT });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let size = h.state().distort.select_mask.as_ref().unwrap().brush_size;
+    assert_eq!(brush_circles(&h), [(over + vec2(60.0, -60.0), size as f32 * 0.5 * zoom)], "after the drag the circle follows the pointer again");
+    assert!(h.query_by_label("Diameter:").is_none(), "and the readout is gone");
+}
