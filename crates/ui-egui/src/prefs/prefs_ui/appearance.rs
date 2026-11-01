@@ -274,23 +274,31 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
     }
 }
 
-/// A grid row of theme swatches, marked Active when the appearance mode shows this family.
-fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, favorites: &mut Vec<SavedTheme>, options: &[(&str, ThemeKind)]) {
-    let t = Tokens::get(ui.ctx());
-    // Grid columns always advance left to right, so emit them in reading order.
-    crate::direction::grid_cells(
-        ui,
-        |ui| {
-            ui.label(RichText::new(tl!(title)).color(t.text_dim));
-        },
-        |ui| {
+/// A settings-grid row of theme swatches, marked Active when the appearance mode shows this
+/// family. Emitted through the grid's `row` closure, so the label column leads the row at the
+/// reading start in both directions.
+fn theme_row(
+    ctx: &egui::Context,
+    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+    title: &str,
+    active: bool,
+    selected: &mut String,
+    favorites: &mut Vec<SavedTheme>,
+    options: &[(&str, ThemeKind)],
+) {
+    let t = Tokens::get(ctx);
+    let caption: egui::WidgetText = RichText::new(tl!(title)).color(t.text_dim).into();
+    row(caption, &mut |ui: &mut egui::Ui, _cap| {
+        // The strip stays physical left-to-right in both directions; only the emission
+        // order below mirrors, so the first option ends up at the reading start.
+        crate::direction::ltr(ui, |ui| {
             ui.horizontal(|ui| {
                 // Room for the favourite star badges on the swatch corners.
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let rtl = crate::direction::is_rtl();
-                // A Grid cell's row stays physical, so under RTL the strip is emitted in
-                // reverse: the Active marker goes first (the reading end) and the first option
-                // ends up the rightmost one. The swatch paint itself never mirrors.
+                // Under RTL the strip is emitted in reverse: the Active marker goes first
+                // (the reading end) and the first option ends up the rightmost one.
+                // The swatch paint itself never mirrors.
                 if rtl && active {
                     ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
                     ui.add_space(6.0);
@@ -304,9 +312,8 @@ fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String
                     ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
                 }
             });
-        },
-    );
-    ui.end_row();
+        });
+    });
 }
 
 /// Which of the Appearance rows drawn by `appearance_rows` a search shows.
@@ -329,24 +336,24 @@ impl AppearanceRows {
     }
 }
 
-/// Appearance Mode and the light and dark Color Theme swatches, as rows of the Appearance grid.
-pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Option<egui::Theme>, rows: AppearanceRows) {
-    let t = Tokens::get(ui.ctx());
+/// Appearance Mode and the light and dark Color Theme swatches, as rows of the Appearance
+/// settings grid, emitted through its `row` closure like `field_rows`.
+pub(super) fn appearance_rows(
+    ctx: &egui::Context,
+    obj: &mut Map<String, Value>,
+    system: Option<egui::Theme>,
+    rows: AppearanceRows,
+    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+) {
+    let t = Tokens::get(ctx);
     let mut mode = obj.get("appearanceMode").and_then(Value::as_str).unwrap_or("auto").to_string();
     if rows.mode {
         let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
         let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
-        // Grid columns always advance left to right, so emit them in reading order.
-        crate::direction::grid_cells(
-            ui,
-            |ui| {
-                ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
-            },
-            |ui| {
-                crate::widgets::dropdown(ui, "appearance-mode", tl!("Appearance Mode"), &mut mode, &pairs, 220.0);
-            },
-        );
-        ui.end_row();
+        let caption: egui::WidgetText = RichText::new(tl!("Appearance Mode")).color(t.text_dim).into();
+        row(caption, &mut |ui: &mut egui::Ui, _cap| {
+            crate::widgets::dropdown(ui, "appearance-mode", tl!("Appearance Mode"), &mut mode, &pairs, 220.0);
+        });
     }
     let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
     obj.insert("appearanceMode".into(), json!(mode));
@@ -354,10 +361,10 @@ pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, s
     let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
     let mut favorites: Vec<SavedTheme> = obj.get("favoriteThemes").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     if rows.light {
-        theme_row(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS);
+        theme_row(ctx, row, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS);
     }
     if rows.dark {
-        theme_row(ui, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS);
+        theme_row(ctx, row, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS);
     }
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));
@@ -372,19 +379,19 @@ mod tests {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    /// The Appearance grid as the preferences page draws it: two columns, the rows of
-    /// `appearance_rows`, under the body's own direction.
+    /// The Appearance settings grid as the preferences page draws it: the rows of
+    /// `appearance_rows` under the body's own direction. LTR runs a plain Grid; RTL hand-rows
+    /// via `settings_row`.
     fn appearance_harness() -> Harness<'static, Map<String, Value>> {
         let fields = Map::new();
         // The app sets the direction flag with the style before its first frame; the widgets
         // mirror on it, and a Grid's first sizing pass would otherwise cache LTR column widths.
         Harness::builder().with_size(vec2(520.0, 480.0)).with_context_setup(|ctx| crate::theme::set_direction(ctx, crate::direction::is_rtl())).build_ui_state(
             |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
+                let ctx = ui.ctx().clone();
                 ui.with_layout(body_layout(), |ui| {
-                    super::super::fields::grid_scope(ui, |ui| {
-                        egui::Grid::new("appearance-grid").num_columns(2).show(ui, |ui| {
-                            appearance_rows(ui, f, Some(egui::Theme::Dark), AppearanceRows::matching(""));
-                        });
+                    crate::text::direction::settings_grid(ui, "appearance-grid", [14.0, 7.0], 150.0, Some(150.0), |row| {
+                        appearance_rows(&ctx, f, Some(egui::Theme::Dark), AppearanceRows::matching(""), row);
                     });
                 });
             },
@@ -441,5 +448,32 @@ mod tests {
         let first = swatch(&h, 0);
         let last = swatch(&h, LIGHT_THEME_OPTIONS.len() - 1);
         assert!(first.left() < last.left(), "the first swatch keeps its place: {first:?} {last:?}");
+    }
+
+    /// Twin across directions for the Appearance rows' geometry: the label column leads its
+    /// row at the reading start in both directions (left in LTR, right in RTL) and the first
+    /// theme swatch is the reading-start-most one.
+    #[test]
+    fn appearance_rows_geometry_twin() {
+        let measure = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let mut h = appearance_harness();
+            h.run_steps(3);
+            let label = h.query_all_by_role_and_label(Role::Label, "Appearance Mode").next().expect("the Appearance Mode label").rect();
+            let editor = h.query_all_by_role_and_label(Role::ComboBox, "Appearance Mode").next().expect("the Appearance Mode dropdown").rect();
+            let first = swatch(&h, 0);
+            let last = swatch(&h, LIGHT_THEME_OPTIONS.len() - 1);
+            (label, editor, first, last)
+        };
+        let (ltr_label, ltr_editor, ltr_first, ltr_last) = measure(Dir::Ltr);
+        let (rtl_label, rtl_editor, rtl_first, rtl_last) = measure(Dir::Rtl);
+        assert!(ltr_label.right() < ltr_editor.left(), "LTR: the label column leads: {ltr_label:?} {ltr_editor:?}");
+        assert!(rtl_label.left() > rtl_editor.right(), "RTL: the label column leads at the right: {rtl_label:?} {rtl_editor:?}");
+        assert!(ltr_first.left() < ltr_last.left(), "LTR: the first swatch leads: {ltr_first:?} {ltr_last:?}");
+        assert!(rtl_first.left() > rtl_last.left(), "RTL: the first swatch is the rightmost: {rtl_first:?} {rtl_last:?}");
+        let ltr_gap = ltr_editor.left() - ltr_label.right();
+        let rtl_gap = rtl_label.left() - rtl_editor.right();
+        assert!(rtl_gap >= 0.0, "RTL: the label and editor do not overlap: {rtl_label:?} {rtl_editor:?}");
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the label<->editor gap equals the LTR one: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }

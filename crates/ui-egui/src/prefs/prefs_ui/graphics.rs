@@ -34,7 +34,7 @@ pub(super) fn gpu_status_rows(ui: &mut egui::Ui, info: Option<&Value>, adapters:
     ui.add_space(4.0);
     ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_faint));
     ui.collapsing(tl!("Advanced"), |ui| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("GPU Backend"));
             let mut current = obj.get("gpuBackend").and_then(Value::as_str).unwrap_or("auto").to_string();
             let options = prefs::choices("performance.gpuBackend").unwrap_or(&[]);
@@ -66,7 +66,7 @@ fn graphics_adapter_row(ui: &mut egui::Ui, adapters: Option<&Value>, obj: &mut M
     let labels: Vec<String> = names.iter().map(|n| if missing && *n == current { format!("⚠ {n}") } else { n.clone() }).collect();
     let mut pairs: Vec<(String, &str)> = vec![(String::new(), automatic)];
     pairs.extend(names.iter().cloned().zip(labels.iter().map(String::as_str)));
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(tl!("GPU adapter"));
         crate::widgets::dropdown_literal(ui, "graphics-adapter", tl!("GPU adapter"), &mut current, &pairs, 320.0);
     });
@@ -77,7 +77,7 @@ fn graphics_adapter_row(ui: &mut egui::Ui, adapters: Option<&Value>, obj: &mut M
 /// One user-facing choice; legacy flags remain compatible with older settings.
 pub(super) fn rendering_mode_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
     let mut current = rendering_mode_value(obj);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(tl!("Rendering Mode"));
         let pairs =
             vec![("auto".to_string(), tl!("Automatic (recommended)")), ("gpu".to_string(), tl!("GPU")), ("cpu".to_string(), tl!("CPU / Compatibility"))];
@@ -111,7 +111,7 @@ pub(super) fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) 
     ui.group(|ui| {
         ui.label(RichText::new(tl!("Memory Usage")).strong());
         let mut mb = obj.get("memoryUsageMb").and_then(Value::as_u64).unwrap_or(8192);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let limit_label = ui.label(tl!("Per-document RAM limit (MB)"));
             if ui.add(egui::DragValue::new(&mut mb).range(256..=1_048_576).suffix(" MB")).labelled_by(limit_label.id).changed() {
                 obj.insert("memoryUsageMb".into(), json!(mb));
@@ -137,5 +137,41 @@ pub(super) fn read_at_launch(path: &str) -> bool {
         // The desktop app decides on the control server before its window opens.
         "integrations.allowAgentControl" | "integrations.controlPort" => cfg!(not(target_arch = "wasm32")),
         _ => false,
+    }
+}
+
+/// Twin of the migrated `dialog_row` rows (backend, adapter, rendering mode, RAM limit):
+/// item order mirrors only under RTL, and the item gap is identical in both directions.
+#[cfg(test)]
+mod rtl_tests {
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn migrated_dialog_row_mirrors_item_order_only_under_rtl() {
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            let mut full = ctx.run_ui(input, |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    out.push(ui.label("aaa").rect);
+                    out.push(ui.label("b").rect);
+                });
+            });
+            full.textures_delta.clear();
+            out
+        };
+        let ltr = rects(Dir::Ltr);
+        let rtl = rects(Dir::Rtl);
+        assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
+        assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
+        let ltr_gap = ltr[1].left() - ltr[0].right();
+        let rtl_gap = rtl[0].left() - rtl[1].right();
+        assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
     }
 }
