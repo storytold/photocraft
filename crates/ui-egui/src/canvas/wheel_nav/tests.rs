@@ -1072,3 +1072,29 @@ fn enable_gestures_off_keeps_the_trackpad_pinch() {
     let zoom = touch_zoom(frames, false);
     assert!((zoom - 1.25).abs() < 1e-4, "fingers resting: {zoom}");
 }
+
+#[test]
+fn alt_gesture_is_per_platform_modifier_shape() {
+    let alt = Modifiers::ALT;
+    // Windows / Linux: a held Ctrl arrives as ctrl + command, `mac_cmd` never set.
+    assert!(alt_gesture(&Modifiers { ctrl: true, command: true, ..alt }), "Ctrl + Alt zooms");
+    assert!(alt_gesture(&alt), "Alt zooms");
+    // macOS: ⌘ is command + mac_cmd, ⌃ is ctrl alone.
+    assert!(!alt_gesture(&Modifiers { mac_cmd: true, command: true, ..alt }), "⌘ + ⌥ keeps its meaning");
+    assert!(!alt_gesture(&Modifiers { mac_cmd: true, command: true, ctrl: true, ..alt }), "⌘ + ⌃ + ⌥ is not the zoom gesture");
+    assert!(alt_gesture(&Modifiers { ctrl: true, ..alt }), "macOS ⌃ + ⌥ (command unset) still counts as Alt");
+    // AltGr: winit reports neither alt nor ctrl for it (Windows `get_agnostic_mods` filters both
+    // out on layouts with an AltGr key; X11/Wayland deliver ISO_Level3_Shift), so it is NONE here.
+    assert!(!alt_gesture(&Modifiers::NONE), "AltGr alone is no modifier egui sees");
+    assert!(!alt_gesture(&Modifiers::CTRL), "Ctrl alone is not Alt");
+}
+
+#[test]
+fn mac_cmd_alt_wheel_does_not_zoom() {
+    let notch = Vec2::new(0.0, 1.0);
+    let cmd_alt = Modifiers { mac_cmd: true, command: true, ctrl: true, alt: true, ..Modifiers::NONE };
+    let (_, zoom, _) = gesture(vec![vec![wheel(notch, cmd_alt)]], false, false);
+    assert!((zoom - 1.0).abs() < 1e-6, "⌘ + ⌃ + ⌥ + wheel must not zoom: {zoom}");
+    let (_, zoom, _) = gesture(vec![vec![wheel(notch, Modifiers { ctrl: true, command: true, alt: true, ..Modifiers::NONE })]], false, false);
+    assert!(zoom > 1.0, "Ctrl + Alt + wheel zooms on Windows/Linux: {zoom}");
+}

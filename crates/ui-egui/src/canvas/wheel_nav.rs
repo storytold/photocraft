@@ -349,12 +349,16 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zo
 ///
 /// winit reports a held Ctrl on Windows (and Linux) as BOTH `ctrl` and `command`, so a plain
 /// `!command` test excluded Ctrl + Alt + wheel there and left it doing nothing. `command` is only
-/// forgiven together with `ctrl`, which keeps macOS ⌘ + ⌥ (`command` set, `ctrl` not) out of the
-/// zoom gesture and leaves it to egui's own scroll handling. On egui 0.37 that is not a sideways
+/// forgiven together with `ctrl` AND without `mac_cmd`. On macOS egui-winit sets `command` and
+/// `mac_cmd` from the Command key and `ctrl` from Control, so ⌘ + ⌥ and ⌘ + ⌃ + ⌥ both stay out of
+/// the zoom gesture and are left to egui's own scroll handling; on Windows and Linux `mac_cmd` is
+/// never set. AltGr cannot be told apart here and does not need to be: on Windows, winit
+/// (`get_agnostic_mods`) removes ctrl and alt from `ModifiersChanged` while AltGr is down on a
+/// layout that has one, and on X11/Wayland AltGr is `ISO_Level3_Shift` (Mod5), which is neither. On egui 0.37 that is not a sideways
 /// fold either: with Alt held, both the horizontal (`⇧ | ⌘`) and the vertical (`⌥`) scroll patterns
 /// match, so `wheel_state` folds nothing and the delta stays vertical.
 fn alt_gesture(m: &Modifiers) -> bool {
-    m.alt && (!m.command || m.ctrl)
+    m.alt && (!m.command || (m.ctrl && !m.mac_cmd))
 }
 
 /// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
