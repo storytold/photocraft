@@ -587,6 +587,37 @@ fn custom_apply_and_ok_with_nothing_painted_show_the_translated_hint_not_an_erro
     assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
 }
 
+/// Custom's hint follows the fill area as well as the strokes: a lasso or Expand that covers
+/// everything painted brings it back, and one that uncovers a stroke (Contract, or undoing the
+/// lasso) takes it away, without anything being painted again.
+#[test]
+fn custom_hint_follows_fill_area_changes_under_the_strokes() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let hint = |d: &Value| d["previewHint"] == json!(CUSTOM_HINT);
+    // A stroke inside the fill area (90..110) samples nothing; Contract uncovers it.
+    let d = control(&mut app, &json!({"stroke": {"points": [[92.0, 76.0], [92.0, 84.0]], "size": 2}})).unwrap();
+    assert!(hint(&d), "{d}");
+    let d = control(&mut app, &json!({"contract": 5})).unwrap();
+    assert!(!hint(&d) && d["error"].is_null(), "contracted off the stroke: {d}");
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert!(hint(&d), "the fill area covers the stroke again: {d}");
+    // A stroke just right of it samples; a lasso over it covers it, Expand too.
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert_eq!(d["strokes"].as_u64(), Some(0), "{d}");
+    let d = control(&mut app, &json!({"stroke": {"points": [[112.0, 76.0], [112.0, 84.0]], "size": 2}})).unwrap();
+    assert!(!hint(&d), "{d}");
+    let d = control(&mut app, &json!({"lasso": {"op": "add", "points": [[105.0, 70.0], [125.0, 70.0], [125.0, 90.0], [105.0, 90.0]]}})).unwrap();
+    assert!(hint(&d) && d["error"].is_null(), "the lasso covers the stroke: {d}");
+    assert_eq!(d["strokes"].as_u64(), Some(1), "the stroke is kept: {d}");
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert!(!hint(&d), "undoing the lasso uncovers it: {d}");
+    let d = control(&mut app, &json!({"expand": 4})).unwrap();
+    assert!(hint(&d) && d["error"].is_null(), "Expand covers the stroke: {d}");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+}
+
 /// Picking Custom shows the image unfilled straight away, even while the preview of the
 /// previous state is still winding down: its fill (or error) isn't left on view until the
 /// superseded worker exits.
