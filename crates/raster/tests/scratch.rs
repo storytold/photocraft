@@ -19,8 +19,24 @@ impl Drop for NoFloor {
         set_miss_floor(DEFAULT_MISS_FLOOR);
     }
 }
-fn serial() -> std::sync::MutexGuard<'static, ()> {
+fn lock_serial() -> std::sync::MutexGuard<'static, ()> {
     SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs a test alone with idle release off, so the idle thread can't empty the pool between a
+/// `give` and the checks after it; idle release comes back on when dropped.
+struct Serial {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+impl Drop for Serial {
+    fn drop(&mut self) {
+        set_idle_release(true);
+    }
+}
+fn serial() -> Serial {
+    let _lock = lock_serial();
+    set_idle_release(false);
+    Serial { _lock }
 }
 
 #[test]
@@ -247,7 +263,8 @@ fn eviction_walks_oldest_first_through_mixed_types_and_capacities() {
 
 #[test]
 fn idle_pool_is_released_by_the_background_thread() {
-    let _g = serial();
+    // Idle release stays on here: it is what this test checks.
+    let _g = lock_serial();
     release();
     give(vec![0u8; MIN_POOLED_BYTES]);
     assert_eq!(retained_bytes(), MIN_POOLED_BYTES);

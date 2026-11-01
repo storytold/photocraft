@@ -277,6 +277,16 @@ impl Running {
     }
 }
 
+/// A cancelled job's worker that may still be unwinding.
+#[cfg(not(target_arch = "wasm32"))]
+struct Draining {
+    handle: std::thread::JoinHandle<()>,
+    doc: Option<DocId>,
+    /// Its document closed: the worker still holds that document's snapshot, so the scratch
+    /// pool is released again once it exits (the release at close came too early, #10479).
+    release: bool,
+}
+
 /// The session's job table (see the module docs).
 #[derive(Default)]
 pub struct Jobs {
@@ -292,11 +302,7 @@ pub struct Jobs {
     recent: Vec<JobInfo>,
     /// Workers of cancelled jobs that may still be unwinding (native).
     #[cfg(not(target_arch = "wasm32"))]
-    draining: Vec<std::thread::JoinHandle<()>>,
-    /// A closed document's cancelled workers still hold its snapshot: release the scratch pool
-    /// as they exit, since the release at close came too early for their buffers (#10479).
-    #[cfg(not(target_arch = "wasm32"))]
-    release_on_drain: bool,
+    draining: Vec<Draining>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
 }
@@ -677,11 +683,14 @@ impl Session {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let before = self.jobs.draining.len();
-            self.jobs.draining.retain(|h| !h.is_finished());
-            if self.jobs.release_on_drain && self.jobs.draining.len() < before {
+            let mut release = false;
+            self.jobs.draining.retain(|d| {
+                let done = d.handle.is_finished();
+                release |= done && d.release;
+                !done
+            });
+            if release {
                 photocraft_raster::scratch::release();
-                self.jobs.release_on_drain = !self.jobs.draining.is_empty();
             }
         }
         std::mem::take(&mut self.jobs.events)
@@ -716,8 +725,8 @@ impl Session {
         job.ctx.cancel();
         self.end_job(&job, JobOutcome::Cancelled);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(h) = job.handle {
-            self.jobs.draining.push(h);
+        if let Some(handle) = job.handle {
+            self.jobs.draining.push(Draining { handle, doc: job.doc, release: false });
         }
         true
     }
@@ -765,10 +774,12 @@ impl Session {
     pub fn join_cancelled_jobs(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            for h in self.jobs.draining.drain(..) {
-                let _ = h.join();
+            let mut release = false;
+            for d in self.jobs.draining.drain(..) {
+                let _ = d.handle.join();
+                release |= d.release;
             }
-            if std::mem::take(&mut self.jobs.release_on_drain) {
+            if release {
                 photocraft_raster::scratch::release();
             }
         }
@@ -787,12 +798,12 @@ impl Session {
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) {
         let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
         for id in ids {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                self.jobs.release_on_drain |= self.cancel_job(id);
-            }
-            #[cfg(target_arch = "wasm32")]
             self.cancel_job(id);
+        }
+        // Workers cancelled now, or earlier and still unwinding, hold the closing document.
+        #[cfg(not(target_arch = "wasm32"))]
+        for d in self.jobs.draining.iter_mut().filter(|d| d.doc == Some(doc)) {
+            d.release = true;
         }
     }
 

@@ -49,8 +49,14 @@ fn start_idle_release() {
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(IDLE_RELEASE_SECS));
                     let now = uses();
-                    if now == seen && retained_bytes() > 0 && IDLE_RELEASE.load(Ordering::Relaxed) {
-                        release();
+                    if now == seen {
+                        // Decided under the lock, so `set_idle_release(false)` can't return
+                        // while a release it should have stopped is about to start.
+                        let old = {
+                            let mut pool = lock();
+                            (retained_bytes() > 0 && IDLE_RELEASE.load(Ordering::Relaxed)).then(|| empty(&mut pool))
+                        };
+                        drop(old);
                     }
                     seen = now;
                 }
@@ -270,14 +276,18 @@ pub fn try_take_exact<T: Pooled>(len: usize, fill: T) -> Option<Vec<T>> {
 pub fn give<T: Pooled>(v: Vec<T>) {
     USES.fetch_add(1, Ordering::Relaxed);
     let bytes = bytes_of(&v);
-    let budget = BUDGET.load(Ordering::Relaxed);
-    if bytes < MIN_POOLED_BYTES || bytes > budget {
+    if bytes < MIN_POOLED_BYTES {
         return;
     }
-    start_idle_release();
     let mut evicted = Vec::new();
     {
         let mut pool = lock();
+        // Read under the lock, which `set_budget` also takes, so no insert uses a stale budget.
+        let budget = BUDGET.load(Ordering::Relaxed);
+        if bytes > budget {
+            return;
+        }
+        start_idle_release();
         while RETAINED.load(Ordering::Relaxed).saturating_add(bytes) > budget {
             match pool.evict_oldest() {
                 Some(e) => evicted.push(e),
@@ -297,6 +307,7 @@ pub fn give<T: Pooled>(v: Vec<T>) {
 
 /// Set the cap on retained bytes (existing entries beyond it go on the next [`give`]).
 pub fn set_budget(bytes: usize) {
+    let _pool = lock();
     BUDGET.store(bytes, Ordering::Relaxed);
 }
 
@@ -308,6 +319,8 @@ pub fn set_miss_floor(bytes: usize) {
 /// Let the idle thread release the pool (the default) or not. Tests that check
 /// [`retained_bytes`] turn it off, so a slow runner can't have the pool emptied under them.
 pub fn set_idle_release(on: bool) {
+    // Under the lock: once this returns, the idle thread can't be midway into a release.
+    let _pool = lock();
     IDLE_RELEASE.store(on, Ordering::Relaxed);
 }
 
@@ -323,19 +336,16 @@ pub fn uses() -> u64 {
 
 /// Drop every pooled buffer, handing the memory back to the OS.
 pub fn release() {
-    let old = {
-        let mut pool = lock();
-        RETAINED.store(0, Ordering::Relaxed);
-        (
-            std::mem::take(&mut pool.order),
-            std::mem::take(&mut pool.u8s),
-            std::mem::take(&mut pool.u16s),
-            std::mem::take(&mut pool.f32s),
-            std::mem::take(&mut pool.px4),
-        )
-    };
+    let old = empty(&mut lock());
     // Freed outside the lock.
     drop(old);
+}
+
+/// Everything `pool` holds, swapped out of it (to be freed once the lock is dropped).
+fn empty(pool: &mut Pool) -> Pool {
+    RETAINED.store(0, Ordering::Relaxed);
+    let seq = pool.seq;
+    std::mem::replace(pool, Pool { seq, order: BTreeMap::new(), u8s: BTreeMap::new(), u16s: BTreeMap::new(), f32s: BTreeMap::new(), px4: BTreeMap::new() })
 }
 
 /// A pooled buffer that derefs to a slice and returns itself to the pool on drop.
