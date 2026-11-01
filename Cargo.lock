@@ -1391,7 +1391,7 @@ dependencies = [
 [[package]]
 name = "craft-pcraft-format"
 version = "0.1.0"
-source = "git+https://github.com/dotCooCoo/craft-libs?rev=df7f094eedf38f2670c21adb1c23f9704d854d45#df7f094eedf38f2670c21adb1c23f9704d854d45"
+source = "git+https://github.com/storytold/craft-libs?rev=df7f094eedf38f2670c21adb1c23f9704d854d45#df7f094eedf38f2670c21adb1c23f9704d854d45"
 dependencies = [
  "serde",
  "serde_json",
