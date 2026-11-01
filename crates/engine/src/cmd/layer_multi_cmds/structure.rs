@@ -3,6 +3,7 @@ use super::{Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Re
 
 // ---------- structural commands ----------
 
+/// Set an explicit link state idempotently, or toggle when omitted, with singleton cleanup and Undo.
 pub(super) fn link_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let requested = match p.get("linked") {
         None => None,

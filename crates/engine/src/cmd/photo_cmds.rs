@@ -874,6 +874,7 @@ fn mask_unselected(sel: &Surface, area: Rect, w: usize, h: usize, rgba: &mut [[f
     true
 }
 
+/// Validate the selected layer, then open cropped scan photos without editing the source document.
 fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
     crop_ready(s)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;

@@ -179,6 +179,7 @@ fn clipping_to(_: &str, p: &Value) -> Option<Descriptor> {
 // current-layer target. Save must retain that distinction; native behavior is identical.
 const NO_TARGET: &str = "_atnNoTarget";
 
+/// Accept only bare or current-layer targets, retaining their key-presence distinction for save.
 fn target_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
     if d.items.is_empty() {
@@ -189,6 +190,7 @@ fn target_params(d: &Descriptor) -> Option<Map<String, Value>> {
     Some(p)
 }
 
+/// Restore the bare or explicit current-layer descriptor selected by the private transport bit.
 fn target_descriptor(p: &Value) -> Option<Descriptor> {
     match p.get(NO_TARGET) {
         None => Some(desc("null").with("null", target_ref("Lyr "))),
@@ -198,14 +200,17 @@ fn target_descriptor(p: &Value) -> Option<Descriptor> {
 }
 
 // Native-parameter allowlist adapted from #10628; refuse unrepresented options on export.
+/// Refuse native options that the selected Photoshop form cannot represent.
 fn params(p: &Value, allowed: &[&str]) -> bool {
     p.as_object().is_some_and(|p| p.keys().all(|key| allowed.contains(&key.as_str())))
 }
 
+/// Import a target-only event, refusing other targets and extra descriptor settings.
 fn target_only_from(d: &Descriptor, id: &str) -> Mapped {
     target_params(d).map_or(Mapped::Unsupported { harmless: false }, |p| step(id, Value::Object(p)))
 }
 
+/// Export a current-target native step only when no unrepresented options are present.
 fn target_only_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !params(p, &[NO_TARGET]) {
         return None;
@@ -215,6 +220,7 @@ fn target_only_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 const SHAPE_BLUR: &[F] = &[F("Rds ", "radius", Kind::Px)];
 
+/// Map the radius-only Shape Blur form; keep custom assets or extra keys unsupported.
 fn shape_blur_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(p) = fields_from(d, SHAPE_BLUR) else { return unsupported };
@@ -222,6 +228,7 @@ fn shape_blur_from(d: &Descriptor) -> Mapped {
     if shape_blur_to("filter.blur.shapeBlur", &p).is_some_and(|expected| d.items == expected.items) { step("filter.blur.shapeBlur", p) } else { unsupported }
 }
 
+/// Write an optional finite 5–1000 pixel radius, refusing explicit shapes and other options.
 fn shape_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !params(p, &["radius"]) {
         return None;
@@ -237,12 +244,14 @@ fn shape_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 // Recorded Link and Unlink need explicit state: replaying the UI toggle can
 // perform the opposite operation. Target matching follows #10628's adapter.
+/// Import Link or Unlink as an explicit operation rather than the state-dependent UI toggle.
 fn link_from(d: &Descriptor, linked: bool) -> Mapped {
     let Some(mut p) = target_params(d) else { return Mapped::Unsupported { harmless: false } };
     p.insert("linked".into(), Value::Bool(linked));
     step("layer.linkLayers", Value::Object(p))
 }
 
+/// Export only the matching explicit link state and supported current-layer target form.
 fn link_to(p: &Value, linked: bool) -> Option<Descriptor> {
     if !params(p, &["linked", NO_TARGET]) || p.get("linked") != Some(&Value::Bool(linked)) {
         return None;
@@ -250,6 +259,7 @@ fn link_to(p: &Value, linked: bool) -> Option<Descriptor> {
     target_descriptor(p)
 }
 
+/// Map canonical Smart Object file descriptors, refusing unrepresented paths, targets or keys.
 fn smart_path_from(d: &Descriptor, id: &str) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let key = if id == "layer.smartObjects.convertToLinked" { "Usng" } else { "null" };
@@ -269,6 +279,7 @@ fn smart_path_from(d: &Descriptor, id: &str) -> Mapped {
     if d.items == expected.items { step(id, p) } else { unsupported }
 }
 
+/// Export path-only native parameters using the existing Open/Place path encoding.
 fn smart_path_to(id: &str, p: &Value) -> Option<Descriptor> {
     let p = p.as_object()?;
     let path = p.get("path")?.as_str()?;

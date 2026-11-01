@@ -206,7 +206,7 @@ run. This covers the parent event, not complete recordings with generated helper
 
 ## Known gaps in mapped events
 
-A mapped event can still lose a setting. Every mapped event was checked on 2026-11-01: the 5 296 steps of
+A mapped event can still lose a setting. The original 117-event mapping was checked on 2026-11-01: the 5 296 steps of
 the `.atn` corpus (sets the reference application recorded) and factory descriptors measured in the
 reference application went through `actions.load` and `actions.save`, and each saved descriptor was compared
 with the original. Then every step PhotoCraft saves for the cases in
@@ -642,12 +642,13 @@ and class `null` that version 16 files use for code events; nested classes get t
 keeps writing version 16. Version 7 files (a different layout with 8-bit strings) and sets wrapped in
 MacBinary stay rejected.
 
-## Event reference: events not mapped yet
+## Event reference: original unmapped events
 
-Each entry below is an event the reference application records that PhotoCraft does not map yet: its
+Each entry below describes an event that was unmapped in the original reference survey: its
 4-character code and string ID, the PhotoCraft command it should map to, and every key the step carries,
 in the order it is recorded, with type, unit, factory default and allowed values. When an event is
-implemented, move it to the table above in the same change.
+implemented, add it to the supported table while retaining the measured reference.
+Current support and limits are described under [Newer event mapping boundaries](#newer-event-mapping-boundaries).
 
 ### How these values were measured
 

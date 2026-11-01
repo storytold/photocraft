@@ -143,6 +143,7 @@ fn type_shape_descriptor() -> Descriptor {
     desc("null").with("null", class_ref("contentLayer")).with("Usng", target_ref("textLayer"))
 }
 
+/// Map supported Make forms, including the exact target-text-to-content-layer references.
 pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if d.items == type_shape_descriptor().items {
         return none("type.convertToShape");
@@ -230,6 +231,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Build supported Make descriptors; Type to Shape exports only without native options.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "type.convertToShape" {
         return p.as_object().filter(|p| p.is_empty()).map(|_| type_shape_descriptor());
