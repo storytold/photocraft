@@ -315,5 +315,15 @@ pub(crate) fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
+/// The transform choices supported by the options bar, using its remembered choice or the general default.
+pub(crate) fn default_interpolation(app: &PhotocraftApp) -> &'static str {
+    use photocraft_engine::prefs::Interpolation;
+    match app.ui.tool_options.transform_interpolation.unwrap_or(app.session.prefs().general.image_interpolation) {
+        Interpolation::Nearest => "nearest",
+        Interpolation::Bilinear => "bilinear",
+        _ => "bicubic",
+    }
+}
+
 #[cfg(test)]
 mod tests;
