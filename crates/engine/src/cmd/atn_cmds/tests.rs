@@ -567,6 +567,8 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.analysis.recordMeasurements", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
+        ("layer.new.artboardFromGroup", json!({})),
+        ("layer.new.artboardFromGroup", json!({"background":"white","color":[1,1,1],"preset":"","guideIDs":[],"changeBackground":true})),
         ("layer.new.layerViaCopy", json!({})),
         ("layer.newFillLayer.solidColor", json!({"color": "#336699"})),
         ("layer.newAdjustmentLayer.hueSaturation", json!({})),

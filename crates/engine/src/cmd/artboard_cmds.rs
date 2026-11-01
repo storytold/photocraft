@@ -301,18 +301,35 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
+/// Convert a plain group without resizing its content bounds; refuse unresolved recorded guide associations before editing.
 fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "layer.new.artboardFromGroup";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = p.get("layer").and_then(Value::as_u64).map(LayerId).or(d.active_layer).ok_or(EngineError::Other("no active layer".into()))?;
+    let preset = match p.get("preset") {
+        None => String::new(),
+        Some(value) => value.as_str().ok_or_else(|| bad(cmd, "preset must be text"))?.to_string(),
+    };
+    if p.get("changeBackground").is_some_and(|value| value != &Value::Bool(true)) {
+        return Err(bad(cmd, "only an explicit true background-change flag is supported"));
+    }
+    if let Some(guides) = p.get("guideIDs") {
+        if !guides.as_array().is_some_and(Vec::is_empty) {
+            return Err(bad(cmd, "recorded guide associations are not supported"));
+        }
+        if !d.doc.guides.horizontal.is_empty() || !d.doc.guides.vertical.is_empty() {
+            return Err(bad(cmd, "an explicit empty guide association requires a document without guides"));
+        }
+    }
     let canvas = d.doc.bounds();
-    let background = background_param(p, "layer.new.artboardFromGroup")?.unwrap_or_default();
+    let background = background_param(p, cmd)?.unwrap_or_default();
     let rect = s.edit("Artboard from Group", |doc, active| {
         if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
-        set_artboard(l, Artboard { rect, background, preset: String::new() });
+        set_artboard(l, Artboard { rect, background, preset });
         fit_canvas(doc);
         *active = Some(id);
         Ok(rect)
@@ -703,7 +720,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromGroup",
             "Artboard from Group…",
             &["Layer", "New"],
-            r##"{"layer":id? (a top-level group; default active),"background":…?} → {layer, rect}"##,
+            r##"{"layer":id? (a top-level group; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[]? (recorded empty association; requires no document guides),"changeBackground":true? (recorded apply flag; other values refused)} → {layer, rect}"##,
             has_plain_group,
             artboard_from_group
         ),

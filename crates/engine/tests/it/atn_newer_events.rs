@@ -422,6 +422,128 @@ fn crop_parent_runs_once_and_the_kept_helper_stops_the_duplicate_crop_tail() {
     assert_eq!(s.documents()[0].doc, source);
 }
 
+/// Two sparse marks leave a transparent gap where the converted board's background is observable.
+fn artboard_fixture() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 12, "height": 10, "background": "transparent"})).unwrap();
+    let st = s.active_mut().unwrap();
+    let doc = Arc::make_mut(&mut st.doc);
+    let mut child = Layer::raster("Pixels", doc.pixel_format());
+    let surface = child.surface_mut().unwrap();
+    for rect in [photocraft_doc::Rect::new(2, 2, 3, 3), photocraft_doc::Rect::new(5, 5, 6, 6)] {
+        surface.fill_rect(rect, &[1.0, 0.0, 0.0, 1.0]);
+    }
+    let group = Layer::group("Group", vec![child]);
+    let id = group.id;
+    doc.layers = vec![group];
+    s.restore_layer_selection(Some(id), &[id], Some(id)).unwrap();
+    s
+}
+
+/// The reference's ordered settings keys, with fractional RGB that must not be rounded to hex.
+fn artboard_descriptor(background: i32, guides: Vec<D>, flag: D) -> Descriptor {
+    let color = Descriptor::new("RGBC").with("Rd  ", D::Double(63.75)).with("Grn ", D::Double(127.5)).with("Bl  ", D::Double(191.25));
+    let board = Descriptor::new("artboard")
+        .with("guideIDs", D::List(guides))
+        .with("artboardPresetName", D::Text(UnicodeString::new_nul("iPhone 14")))
+        .with("Clr ", D::Descriptor(color))
+        .with("artboardBackgroundType", D::Integer(background));
+    Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(board)).with("changeBackground", flag)
+}
+
+/// Conversion preserves the group's geometry/content while applying every admitted setting and Undo.
+#[test]
+fn artboard_empty_guide_settings_roundtrip_apply_background_and_preset_without_resizing() {
+    for (background, expected) in [(1, [1.0, 1.0, 1.0, 1.0]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
+        let mut s = artboard_fixture();
+        let before = s.active().unwrap().doc.clone();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let d = artboard_descriptor(background, vec![], D::Integer(1));
+        assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
+        assert_eq!(s.actions.list[0].steps[0].0, "layer.new.artboardFromGroup");
+        assert_eq!(s.actions.list[0].steps[0].1["color"], json!([0.25, 0.5, 0.75]));
+        assert_eq!(saved_item(&mut s).descriptor, Some(d));
+        play(&mut s);
+        let doc = &s.active().unwrap().doc;
+        let board = doc.layer(id).unwrap().artboard().unwrap();
+        assert_eq!(board.rect, photocraft_doc::Rect::new(2, 2, 6, 6), "preset is a tag, not a request to resize the group");
+        assert_eq!(board.preset, "iPhone 14");
+        assert_eq!(doc.size, before.size);
+        assert_eq!(doc.layer(id).unwrap().children(), before.layer(id).unwrap().children());
+        let pixel = photocraft_compose::render(doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
+        for (actual, expected) in pixel.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.005, "background {background}: {pixel:?}");
+        }
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+/// The target-only call uses the existing menu behavior without synthesizing settings.
+#[test]
+fn artboard_target_only_form_keeps_existing_native_group_behavior() {
+    let mut s = artboard_fixture();
+    let before = s.active().unwrap().doc.clone();
+    let d = Descriptor::new("null").with("null", target());
+    assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
+    assert_eq!(s.actions.list[0].steps, [("layer.new.artboardFromGroup".into(), json!({}))]);
+    assert_eq!(saved_item(&mut s).descriptor, Some(d));
+    play(&mut s);
+    assert!(s.active().unwrap().doc.layers[0].artboard().is_some());
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+/// Unproved settings remain byte-preserving kept steps and cannot partially edit the document.
+#[test]
+fn artboard_unproven_associations_flags_and_extra_settings_stay_whole() {
+    for d in [
+        artboard_descriptor(1, vec![D::Integer(7)], D::Integer(1)),
+        artboard_descriptor(1, vec![], D::Integer(0)),
+        artboard_descriptor(1, vec![], D::Integer(2)),
+        artboard_descriptor(1, vec![], D::Boolean(true)),
+        artboard_descriptor(5, vec![], D::Integer(1)),
+        artboard_descriptor(1, vec![], D::Integer(1)).with("extra", D::Boolean(true)),
+        Descriptor::new("null"),
+    ] {
+        let mut s = artboard_fixture();
+        assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"].as_array().unwrap().len(), 1);
+        assert_eq!(saved_item(&mut s).descriptor, Some(d));
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        let report = s.execute("actions.play", json!({"action":"A","set":"Links"})).unwrap();
+        assert_eq!(report["ran"], 0, "{report}");
+        assert_eq!(report["failed"]["id"], "actions.photoshopStep");
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    for p in [json!({"layer":1}), json!({"preset":"iPhone 14"}), json!({"guideIDs":[]}), json!({"changeBackground":false})] {
+        let action = Action::new("A", vec![("layer.new.artboardFromGroup".into(), p)]);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
+    }
+}
+
+/// An explicit empty association cannot silently acquire the document's spatially inferred guides.
+#[test]
+fn artboard_empty_association_refuses_existing_guides_before_editing() {
+    let mut s = artboard_fixture();
+    Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", artboard_descriptor(4, vec![], D::Integer(1))))["unsupported"], json!([]));
+    let report = s.execute("actions.play", json!({"action":"A","set":"Links"})).unwrap();
+    assert_eq!(report["ran"], 0, "{report}");
+    assert_eq!(report["failed"]["id"], "layer.new.artboardFromGroup");
+    assert!(report["failed"]["error"].as_str().unwrap().contains("without guides"));
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    for p in [json!({"guideIDs":[7]}), json!({"guideIDs":false}), json!({"changeBackground":false}), json!({"preset":7})] {
+        assert!(s.execute("layer.new.artboardFromGroup", p).is_err());
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
 #[test]
 fn reverse_linked_selection_and_clear_style_events_do_their_edits() {
     for explicit in [false, true] {

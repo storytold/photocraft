@@ -18,7 +18,7 @@ layers and documents, newer and older events and files, and a measured reference
 map yet, with everything needed to implement them without
 the reference application.
 
-## Supported events (138)
+## Supported events (139)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
@@ -160,13 +160,23 @@ the reference application.
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
 | (string ID only) | placedLayerReplaceContents | Replace Contents | `layer.smartObjects.replaceContents` |
 | (string ID only) | shapeBlur | Shape Blur (radius-only form) | `filter.blur.shapeBlur` |
+| (string ID only) | artboardFromLayerGroupEvent | Artboard from Group (limited forms below) | `layer.new.artboardFromGroup` |
 
 ### Newer event mapping boundaries
 
-The two **Measured** tables under [Newer events](#newer-events-string-id-only)
-now map except for `artboardFromLayerGroupEvent`. Its `guideIDs` association and
-`changeBackground` behavior are not established by the reference, so the whole
-step remains kept. No guide IDs are discarded or guessed.
+Twenty-two of the 23 requested forms in the two **Measured** tables under
+[Newer events](#newer-events-string-id-only) are fully mapped. Artboard from Group
+has an intermediate mapping for the canonical current-layer target alone, or a
+complete settings object with empty `guideIDs` and integer `changeBackground: 1`.
+The latter requires a document without guides, so the existing spatial guide
+export cannot manufacture an association. The preset is retained as a tag without
+resizing the group; RGB background channels retain fractional values. Only forms
+that reconstruct exactly are admitted. Unrepresented native options refuse export.
+
+Nonempty guide associations and other flag values remain complete kept steps.
+The Artboard row is still unfinished: [Adobe documents guide IDs as object identities](https://developer.adobe.com/photoshop/uxp/2022/ps-reference/classes/guide),
+separate from list positions, and the current native model has no corresponding
+identity/ownership binding. No guide ID is discarded or treated as an array index.
 
 The sixteen target-only events accept an empty descriptor or the current-layer
 `null` reference (`Lyr `/`Ordn.Trgt`). Save retains which form was imported.
