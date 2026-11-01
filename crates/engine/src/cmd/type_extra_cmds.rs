@@ -1,6 +1,7 @@
 //! The Type menu: anti-aliasing, orientation, point ⇄ paragraph conversion, Create Work Path,
-//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles, Paste Lorem Ipsum, Update All
-//! Text Layers, missing-font replacement and the default type styles.
+//! Convert to Shape, Rasterize, Warp Text, the OpenType toggles (with the 20 Stylistic Sets),
+//! Paste Lorem Ipsum, Update All Text Layers, missing-font replacement and the default type
+//! styles.
 //!
 //! Everything edits the typed [`TextLayer`] model and re-renders through `type_cmds::refresh`,
 //! so the PSD `TySh` data (and with it warp, anti-aliasing and the OpenType flags) is regenerated
@@ -502,6 +503,12 @@ fn warp_text(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- OpenType toggles ----------
 
+/// The OpenType tags of Type › OpenType › Stylistic Sets: `STYLISTIC_SET_TAGS[n - 1]` is Set n.
+pub const STYLISTIC_SET_TAGS: [&str; 20] = [
+    "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09", "ss10", "ss11", "ss12", "ss13", "ss14", "ss15", "ss16", "ss17", "ss18", "ss19",
+    "ss20",
+];
+
 /// Is the OpenType toggle `tag` on for a character style? (`liga`/`dlig` have dedicated fields.)
 pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
     match tag {
@@ -509,6 +516,18 @@ pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
         "dlig" => st.discretionary_ligatures,
         _ => st.features.iter().any(|f| f.tag == tag && f.value > 0),
     }
+}
+
+/// Is the OpenType toggle `tag` on at character `ci` of `t`? Past the end it reads the last run.
+pub fn feature_on_at(t: &TextLayer, ci: usize, tag: &str) -> bool {
+    let at = byte_index(&t.text, ci);
+    let runs = t.char_runs();
+    let mut end = 0usize;
+    let run = runs.iter().find(|r| {
+        end = end.saturating_add(r.len);
+        at < end
+    });
+    run.or(runs.last()).is_some_and(|r| feature_on(&r.style, tag))
 }
 
 fn set_feature(st: &mut photocraft_doc::text::CharStyle, tag: &str, on: bool) {
@@ -528,9 +547,18 @@ fn toggle_opentype(s: &mut Session, p: &Value, tag: &'static str) -> Result<Valu
     let ids = format_targets(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let representative = st.active_layer.filter(|id| ids.contains(id)).or_else(|| ids.first().copied());
-    let cur = representative
-        .and_then(|id| st.doc.layer(id))
-        .is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if t.char_runs().first().is_some_and(|r| feature_on(&r.style, tag))));
+    // The toggle direction follows the style where the edit starts: the range start on a single
+    // layer, else the first character.
+    let start_char = if p.get("layers").is_none() || p.get("layer").is_some() {
+        p.get("range").and_then(Value::as_array).filter(|r| r.len() == 2).map_or(0, |r| {
+            let a = r.first().and_then(Value::as_u64).unwrap_or(0);
+            let b = r.get(1).and_then(Value::as_u64).unwrap_or(a);
+            usize::try_from(a.min(b)).unwrap_or(usize::MAX)
+        })
+    } else {
+        0
+    };
+    let cur = representative.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if feature_on_at(t, start_char, tag)));
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(!cur);
     with_text_targets(s, p, "Change OpenType Feature", |t, (a, b)| {
         style_range(t, a.min(b), a.max(b), &|st| set_feature(st, tag, on));
@@ -742,7 +770,14 @@ pub fn specs() -> Vec<CommandSpec> {
     const LP: &str = r##"{"layer":id?}"##;
     const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
     const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
-    vec![
+    // One toggle per stylistic set; a run fn can't capture, so each indexes the tag table itself.
+    macro_rules! stylistic_sets {
+        ($($n:literal),* $(,)?) => {
+            [$(spec!(concat!("type.openType.stylisticSets.set", $n), concat!("Set ", $n), &["Type", "OpenType", "Stylistic Sets"], OT, has_format_target, |s, p| toggle_opentype(s, p, STYLISTIC_SET_TAGS[$n - 1]))),*]
+        };
+    }
+    let sets = stylistic_sets![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+    let mut all = vec![
         spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::None)),
         spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Sharp)),
         spec!("type.antiAlias.crisp", "Crisp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Crisp)),
@@ -823,7 +858,9 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| save_defaults(s)
         ),
         spec!("type.loadDefaultTypeStyles", "Load Default Type Styles", &["Type"], FP, has_defaults, load_defaults),
-    ]
+    ];
+    all.extend(sets);
+    all
 }
 
 #[cfg(test)]
