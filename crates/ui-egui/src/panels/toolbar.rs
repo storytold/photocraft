@@ -638,6 +638,20 @@ mod alt_click_tests {
         assert_eq!(h.state().ui.tool, Tool::Crop);
     }
 
+    /// A tool hidden in Edit › Toolbar is not in its slot's flyout, so ⌥-click skips it too
+    /// (Crop → Slice → Slice Select → Crop with Perspective Crop hidden).
+    #[test]
+    fn alt_click_skips_a_hidden_tool() {
+        let mut h = harness(Tool::Crop);
+        h.state_mut().session.edit_prefs(|p| p.toolbar.hidden = vec![format!("{:?}", Tool::PerspectiveCrop)]);
+        h.run_steps(3);
+        for want in [Tool::Slice, Tool::SliceSelect, Tool::Crop] {
+            let shown = h.state().ui.tool;
+            alt_click(&mut h, shown);
+            assert_eq!(h.state().ui.tool, want, "⌥-click on {shown:?}");
+        }
+    }
+
     #[test]
     fn next_in_slot_wraps_and_ignores_strangers() {
         let slot = [Tool::Crop, Tool::PerspectiveCrop];
