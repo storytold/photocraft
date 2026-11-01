@@ -1105,7 +1105,11 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         } else {
             // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
             let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
-            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
+            var gray = sum / 100.0;
+            if (all(v == round(v))) {
+                // Float division can undershoot an integer before floor, e.g. 9700 / 100.
+                gray = f32((u32(sum) + 49u) / 100u);
+            }
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
