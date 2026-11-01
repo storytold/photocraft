@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod profile_dither;
+
 // ------------------------------------------------------------------ state
 
 /// View › Proof Setup settings.
@@ -1033,6 +1035,7 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
     let flatten = profile_option(p, "flatten")?;
     let rasterize = profile_option(p, "rasterizePlaced")?;
+    let dither = profile_option(p, "dither")?;
     s.edit("Convert to Profile", |doc, active| {
         if flatten {
             // Flatten consumes the displayed image; discarded hidden objects need no source read.
@@ -1040,7 +1043,7 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
         } else if rasterize {
             prepare_profile_smart_layers(doc, true)?;
         }
-        convert_document(doc, &dst, intent, bpc)
+        if dither { profile_dither::convert(doc, &dst, intent, bpc) } else { convert_document(doc, &dst, intent, bpc) }
     })?;
     let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
     Ok(json!({ "profile": dst.description, "mode": format!("{:?}", d.mode), "intent": intent.id(), "bpc": bpc }))
@@ -1250,7 +1253,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.convertToProfile",
             "Convert to Profile…",
             ["Edit"],
-            r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"flatten":bool=false (flatten in the source profile before conversion),"rasterizePlaced":bool=false (freeze displayed Smart Object pixels; flatten takes precedence)}"##,
+            r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"dither":bool=false (deterministic color quantization for 8-bit profile changes),"flatten":bool=false (flatten in the source profile before conversion),"rasterizePlaced":bool=false (freeze displayed Smart Object pixels; flatten takes precedence)}"##,
             has_doc,
             convert_to_profile,
             true

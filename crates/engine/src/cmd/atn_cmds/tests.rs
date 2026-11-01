@@ -590,7 +590,10 @@ fn every_mapped_command_exports_and_imports_back() {
         ("edit.paste", json!({})),
         ("edit.purge.histories", json!({})),
         ("tools.defaultColors", json!({})),
-        ("edit.convertToProfile", json!({"profile": "display-p3", "intent": "perceptual", "bpc": false})),
+        (
+            "edit.convertToProfile",
+            json!({"profile": "display-p3", "intent": "perceptual", "bpc": false, "dither": false, "flatten": false, "rasterizePlaced": false}),
+        ),
         ("edit.assignProfile", json!({"profile": "srgb"})),
         ("file.close", json!({})),
         ("file.save", json!({})),

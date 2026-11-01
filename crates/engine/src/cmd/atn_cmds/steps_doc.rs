@@ -528,11 +528,24 @@ pub(super) fn reset_to(_: &str, _: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("Clrs") }])))
 }
 
+/// Import represented RGB targets and strict profile flags; keep other destination modes intact.
 pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     let name = get_text(d, "T   ").or_else(|| get_text(d, "profile"));
     let Some(profile) = name.as_deref().and_then(|n| lookup(PROFILES, n)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"profile": profile});
     if id == "edit.convertToProfile" {
+        // All mapped PROFILES are RGB. Other radio values need their own target mapping.
+        if !matches!(d.get("sdwM"), None | Some(D::Integer(2))) {
+            return Mapped::Unsupported { harmless: false };
+        }
+        for (key, param) in [("Dthr", "dither"), ("Fltt", "flatten"), ("rasterizePlaced", "rasterizePlaced")] {
+            let value = match d.get(key) {
+                None => false,
+                Some(D::Boolean(value)) => *value,
+                Some(_) => return Mapped::Unsupported { harmless: false },
+            };
+            p[param] = json!(value);
+        }
         if let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) {
             p["intent"] = json!(i);
         }
@@ -543,14 +556,27 @@ pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     step(id, p)
 }
 
+/// Export effective native flags explicitly, deriving the RGB radio value from the mapped target.
 pub(super) fn profile_to(id: &str, p: &Value) -> Option<Descriptor> {
     let name = lookup_back(PROFILES, jstr(p, "profile")?)?;
     let mut d = desc("null").with("null", target_ref("Dcmn"));
     if id == "edit.convertToProfile" {
+        if p.get("sdwM").is_some() {
+            return None;
+        }
         d = d
             .with("T   ", text(name))
             .with("Inte", enm("Inte", lookup_back(INTENT, jstr(p, "intent").unwrap_or("relative"))?))
-            .with("MpBl", D::Boolean(jbool(p, "bpc").unwrap_or(true)));
+            .with("MpBl", D::Boolean(jbool(p, "bpc").unwrap_or(true)))
+            .with("sdwM", D::Integer(2));
+        for (key, param) in [("Dthr", "dither"), ("Fltt", "flatten"), ("rasterizePlaced", "rasterizePlaced")] {
+            let value = match p.get(param) {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(value)) => *value,
+                Some(_) => return None,
+            };
+            d = d.with(key, D::Boolean(value));
+        }
     } else {
         d = d.with("profile", text(name));
     }
