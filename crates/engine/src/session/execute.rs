@@ -297,8 +297,10 @@ impl Session {
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
     /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
-    /// it (or bound a change `step_damage` can't). In debug and test builds, a hint that misses a
-    /// tile the edit changed is counted in [`Session::damage_misses`] and logged; it never panics.
+    /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
+    /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
+    /// dab's soft ring and shadow. In debug and test builds, a hint that misses a tile the edit
+    /// changed is counted in [`Session::damage_misses`] and logged; it never panics.
     pub fn hint_damage(&mut self, rect: photocraft_geom::Rect) {
         #[cfg(any(test, debug_assertions))]
         if let Some(before) = self.hint_before.take()
@@ -313,6 +315,7 @@ impl Session {
             }
         }
         let Some(st) = self.active_mut() else { return };
+        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
     }
 }

@@ -479,9 +479,8 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             }
             match (x.children(), y.children()) {
                 (Some(xc), Some(yc)) => {
-                    let reach = |l: &Layer| if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
                     let inner = Around {
-                        reach: around.reach.saturating_add(reach(x).max(reach(y))),
+                        reach: around.reach.saturating_add(effects_reach(x).max(effects_reach(y))),
                         spans_frame: around.spans_frame || photocraft_compose::effects::spans_frame(x) || photocraft_compose::effects::spans_frame(y),
                     };
                     if !walk(xc, yc, (Some((xs, xk)), Some((ys, yk))), inner, a, b, out) {
@@ -512,9 +511,54 @@ pub(crate) fn hint_misses(before: &Document, after: &Document, hint: Rect) -> us
     misses
 }
 
+/// `hint`, a command's own rect for pixels it changed in one of `doc`'s layers, grown as far as
+/// [`step_damage`] grows a change there ([`grow_in_layer`], then by the effects of the groups
+/// around the layer), for whichever layer that was: the hint doesn't say. A brush dab on a
+/// feathered mask changes a soft ring around the dab; cut to the bare dab, the ring stayed stale.
+/// Layers the compositor doesn't draw are skipped as it skips them (a hidden layer, a clipped
+/// layer over a hidden base, and everything inside a hidden group): a change there shows nowhere,
+/// and growing by a hidden layer's effects widened every dab elsewhere.
+pub(crate) fn grow_hint(doc: &Document, hint: Rect) -> Rect {
+    fn walk(layers: &[Layer], reach: i32, hint: Rect, out: &mut Rect) {
+        let mut base_visible = true;
+        for l in layers {
+            if !l.clipped {
+                base_visible = l.visible;
+            }
+            if !l.visible || !base_visible {
+                continue;
+            }
+            let feather = l.mask.as_ref().map_or(0.0, |m| m.feather);
+            *out = out.union(&grow_in_layer(l, hint, feather).inflate(reach));
+            if let Some(children) = l.children() {
+                walk(children, reach.saturating_add(effects_reach(l)), hint, out);
+            }
+        }
+    }
+    let mut out = hint;
+    if !hint.is_empty() {
+        walk(&doc.layers, 0, hint, &mut out);
+    }
+    out
+}
+
+/// How far layer `l`'s own effects carry a change to its pixels: 0 without effects.
+fn effects_reach(l: &Layer) -> i32 {
+    if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 }
+}
+
+/// `r`, changed pixels of a surface layer `l` draws from, grown as far as the change can show in
+/// `l`'s own render: by the `feather` (in pixels) the compositor blurs the surface by, then by
+/// `l`'s effects.
+fn grow_in_layer(l: &Layer, r: Rect, feather: f32) -> Rect {
+    let r = if feather > 0.0 { photocraft_vector::feather::grow(r, photocraft_vector::feather::feather_sigma(feather)) } else { r };
+    let margin = effects_reach(l);
+    if r.is_empty() || margin == 0 { r } else { r.inflate(margin) }
+}
+
 /// The pixels a change from layer `a` to layer `b` (the same layer on either side of a step) can
 /// have changed when only the pixels of its surfaces changed: the tiles that differ
-/// ([`surface_damage`]), a mask's grown by its feather, all grown by the layer's own effects.
+/// ([`surface_damage`]), grown as far as each shows in the layer's render ([`grow_in_layer`]).
 /// Empty when the layers render identically. `None` when anything else changed (a property, the
 /// content kind, a surface's format or default pixel): the caller then takes the layer's whole
 /// extents. Children of groups are not compared (the caller walks them).
@@ -522,16 +566,11 @@ fn tile_damage(a: &Layer, b: &Layer) -> Option<Rect> {
     let mut tiles = Rect::EMPTY;
     let only_pixels = layer_pixels_cmp(a, b, &mut |x, y, feather| {
         let Some(r) = surface_damage(x, y) else { return false };
-        let r = if feather > 0.0 { photocraft_vector::feather::grow(r, photocraft_vector::feather::feather_sigma(feather)) } else { r };
-        tiles = tiles.union(&r);
+        // Effects are equal on both sides here (they are compared before any surface).
+        tiles = tiles.union(&grow_in_layer(b, r, feather));
         true
     });
-    if !only_pixels {
-        return None;
-    }
-    // Effects are equal on both sides here (they are compared before any surface).
-    let margin = if photocraft_compose::effects::has_effects(b) { photocraft_compose::effects::margin(b) } else { 0 };
-    Some(if tiles.is_empty() || margin == 0 { tiles } else { tiles.inflate(margin) })
+    only_pixels.then_some(tiles)
 }
 
 /// The pixels adding or removing `layers[k]` can change, when that is bounded: its change bounds
