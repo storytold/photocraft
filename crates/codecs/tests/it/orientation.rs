@@ -205,7 +205,7 @@ fn png_opens_upright_for_every_orientation() {
         assert_eq!(img.data(), &up[..], "o={o}");
         assert_eq!(exif_orientation(img.meta.exif.as_deref().unwrap()), 1, "o={o}: metadata says upright");
         // Decoded in steps and finished by `finish_png_decode`, it is the same image.
-        let stepped = PngRows::new(file.as_slice(), &Limits::default()).unwrap().step(&mut || true).unwrap().unwrap();
+        let stepped = PngDecodeRows::new(file.as_slice(), &Limits::default()).unwrap().step(&mut || true).unwrap().unwrap();
         assert_eq!(finish_png_decode(stepped, &DecodeOptions::default()).unwrap(), img, "o={o}: stepped");
         // Opting out keeps the stored pixels and the tag.
         let raw = decode_with(&file, &DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
