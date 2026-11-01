@@ -238,6 +238,7 @@ fn droplet_folder_follows_the_document_or_uses_a_safe_fallback() {
     assert_eq!(droplet_default_dir(&app), "/tmp/photocraft");
 }
 
+/// The droplet contains the form's chosen action; cancelling writes nothing.
 #[test]
 fn create_droplet_uses_the_action_selected_in_the_form() {
     let (mut app, ctx) = app();

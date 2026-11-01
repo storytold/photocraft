@@ -168,6 +168,7 @@ fn droplets_are_written_and_run() {
     assert!(s.execute("file.automate.createDroplet", json!({"path": path, "steps": [["bogus", {}]]})).is_err());
 }
 
+/// Names and indices choose the same action and omit its disabled steps.
 #[test]
 fn batch_and_droplets_use_the_named_actions_enabled_steps() {
     let dir = tmp("named-actions");
@@ -195,6 +196,7 @@ fn batch_and_droplets_use_the_named_actions_enabled_steps() {
     }
 }
 
+/// Explicit steps retain precedence, and invalid choices fail before any output is written.
 #[test]
 fn batch_and_droplets_keep_explicit_steps_and_reject_invalid_sources_before_writing() {
     let dir = tmp("action-sources");

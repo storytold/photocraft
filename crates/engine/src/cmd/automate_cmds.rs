@@ -339,6 +339,7 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
     Ok(action.enabled_steps().map(|(_, step)| step.clone()).collect())
 }
 
+/// Save the chosen action's enabled steps and dependencies as a runnable droplet.
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;

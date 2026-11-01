@@ -244,6 +244,7 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Run explicit steps or a saved action on each input using the requested output settings.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {

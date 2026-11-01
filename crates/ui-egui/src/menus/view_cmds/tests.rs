@@ -269,6 +269,7 @@ fn batch_menu_requires_a_recorded_action() {
     assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
 }
 
+/// Choosing a different action changes the output; cancelled or deleted choices write nothing.
 #[test]
 fn batch_menu_runs_the_action_chosen_in_the_form() {
     use egui_kittest::{Harness, kittest::Queryable};
