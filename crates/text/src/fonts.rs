@@ -1128,6 +1128,42 @@ mod tests {
         assert_eq!(files, expected);
     }
 
+    /// A font collection file (TTC) registers each of its faces once (#9624). fontique 0.11
+    /// registered a k-face collection k²(k+1)/2 times, so a large one took minutes and gigabytes
+    /// to load, and opening a PSD waited on it.
+    #[test]
+    fn a_font_collection_registers_each_face_once() {
+        use super::{Collection, CollectionOptions};
+        // A TTC of `n` faces, all pointing at one copy of Inter's tables.
+        let n = 30u32;
+        let ttf = super::INTER_REGULAR.as_slice();
+        let tables = u16::from_be_bytes([ttf[4], ttf[5]]) as usize;
+        let head = 12 + 4 * n;
+        let mut font = ttf.to_vec();
+        for i in 0..tables {
+            let at = 12 + 16 * i + 8;
+            let offset = u32::from_be_bytes(font[at..at + 4].try_into().unwrap());
+            font[at..at + 4].copy_from_slice(&(offset + head).to_be_bytes());
+        }
+        let mut ttc = b"ttcf".to_vec();
+        ttc.extend_from_slice(&[0, 1, 0, 0]);
+        ttc.extend_from_slice(&n.to_be_bytes());
+        for _ in 0..n {
+            ttc.extend_from_slice(&head.to_be_bytes());
+        }
+        ttc.extend_from_slice(&font);
+        let path = std::env::temp_dir().join(format!("photocraft-collection-{}.ttc", std::process::id()));
+        std::fs::write(&path, &ttc).unwrap();
+        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+        // As `load_system_fonts` loads each file.
+        collection.load_fonts_from_paths([&path]);
+        let _ = std::fs::remove_file(&path);
+        // Each face once: the indexes 0..n, none twice and none missing.
+        let mut indexes: Vec<u32> = collection.family_by_name("Inter").map_or_else(Vec::new, |f| f.fonts().iter().map(|font| font.index()).collect());
+        indexes.sort_unstable();
+        assert_eq!(indexes, (0..n).collect::<Vec<_>>());
+    }
+
     /// Core Text lists the system's font files, all readable, none of the reserved UI fonts.
     #[test]
     #[cfg(target_os = "macos")]

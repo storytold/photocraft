@@ -199,7 +199,8 @@ pub(super) fn first_ascent(line: &parley::Line<'_, RunBrush>) -> Option<f32> {
         let Ok(font) = skrifa::FontRef::from_index(fd.data.as_ref(), fd.index) else {
             continue;
         };
-        let coords: Vec<skrifa::instance::NormalizedCoord> = run.normalized_coords().iter().map(|&c| skrifa::instance::NormalizedCoord::from_bits(c)).collect();
+        let coords: Vec<skrifa::instance::NormalizedCoord> =
+            run.normalized_coords().iter().map(|c| skrifa::instance::NormalizedCoord::from_bits(c.to_bits())).collect();
         let loc = skrifa::instance::LocationRef::new(&coords);
         let size = skrifa::instance::Size::new(run.font_size());
         let h = font.charmap().map('d').and_then(|g| font.glyph_metrics(size, loc).bounds(g)).map(|b| b.y_max).or_else(|| {

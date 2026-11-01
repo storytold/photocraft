@@ -17,7 +17,7 @@ photocraft-doc = { workspace = true }
 photocraft-psd = { workspace = true }
 # No `system` feature: fontique's system backend links fontconfig on Linux. We scan font
 # directories ourselves (native) and always register the bundled fonts (native + web).
-parley = { version = "0.11", default-features = false, features = ["std"] }
+parley = { version = "0.12", default-features = false, features = ["std"] }
 skrifa = "0.44"
 flate2 = { workspace = true }
 
@@ -27,7 +27,7 @@ flate2 = { workspace = true }
 # to the generic Unicode rules for those scripts.
 # Native only: the glyph rasteriser composites and converts its pixel buffers on all cores.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
+parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts"] }
 rayon = { workspace = true }
 
 # macOS only: the `system` feature adds fontique's Core Text backend, which lists every font the
@@ -36,7 +36,7 @@ rayon = { workspace = true }
 # like the folder scan's, so our own collection keeps its behaviour (generic families, merging
 # installed faces into the bundled families). It uses no fontconfig, unlike `system` on Linux.
 [target.'cfg(target_os = "macos")'.dependencies]
-parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts", "system"] }
+parley = { version = "0.12", default-features = false, features = ["std", "complex-scripts", "system"] }
 
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
