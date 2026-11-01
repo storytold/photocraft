@@ -209,6 +209,19 @@ mod tests {
     }
 
     #[test]
+    fn the_hdr_preview_never_shows_on_another_document() {
+        let mut app = app_with(1);
+        let id = choose(&mut app, json!({}));
+        app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("__preview".into(), json!(true));
+        let ctx = egui::Context::default();
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 0, &ctx).is_some(), "its own document previews");
+        app.session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+        assert!(crate::canvas::ensure_filter_preview(&mut app, 1, &ctx).is_none(), "another document never previews HDR Toning");
+        assert!(app.filter_preview.is_none());
+    }
+
+    #[test]
     fn a_lone_background_opens_the_dialog_directly() {
         let mut app = app_with(1);
         assert!(!needed(&app));
