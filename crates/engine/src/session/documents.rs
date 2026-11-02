@@ -54,12 +54,23 @@ impl Session {
     }
 
     pub fn set_active(&mut self, index: usize) -> bool {
+        self.set_active_with_events(index, true)
+    }
+
+    /// Temporarily target a document for an indexed automation call. It updates the active
+    /// generation and tool target, while leaving the user-visible event log unchanged.
+    pub fn set_active_silent(&mut self, index: usize) -> bool {
+        self.set_active_with_events(index, false)
+    }
+
+    fn set_active_with_events(&mut self, index: usize, publish_event: bool) -> bool {
         if index < self.docs.len() {
             let previous = self.active;
             self.active = Some(index);
             self.note_active_change();
             self.sync_tools_mask_target();
-            if previous != Some(index)
+            if publish_event
+                && previous != Some(index)
                 && let Some(st) = self.docs.get(index)
             {
                 self.events.push("document.activated", Some(st.doc.id.0), Some("ui"), serde_json::json!({"index": index, "name": st.doc.name}));
@@ -173,6 +184,7 @@ impl Session {
         if index >= self.docs.len() {
             return None;
         }
+        let previous = self.active().map(|st| st.doc.id);
         smart_cmds::on_close(self, index);
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
@@ -197,6 +209,10 @@ impl Session {
             })
         };
         self.note_active_change();
+        let activated = self.active().filter(|st| Some(st.doc.id) != previous).map(|st| (st.doc.id.0, st.doc.name.clone()));
+        if let Some((id, name)) = activated {
+            self.events.push("document.activated", Some(id), Some("ui"), serde_json::json!({"index": self.active, "name": name}));
+        }
         Some(d)
     }
 }

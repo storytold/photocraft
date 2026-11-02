@@ -562,6 +562,10 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let source_path = match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        };
         let opts = import_options(self.prefs());
         self.start_job(
             OPEN_JOB,
@@ -609,7 +613,7 @@ impl Session {
                     let held = s.hold_open(r.document, r.source_read_only);
                     return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
                 }
-                let (index, color) = s.open_document(r.document, None);
+                let (index, color) = s.open_document(r.document, source_path);
                 // Persisted IDs can collide: report the identity the session actually admitted.
                 let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                 if let Some(st) = s.active_mut() {
@@ -1088,6 +1092,15 @@ impl Session {
             self.note_active_change();
         }
         r
+    }
+
+    /// Run a capability-scoped edit whose bytes were already read by the caller, and emit the
+    /// same document events as command dispatch. Failed edits leave the event cursor unchanged.
+    pub fn run_edit_with_events<T>(&mut self, command: &str, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let before = crate::events::Snapshot::of(self.active());
+        let value = edit(self)?;
+        self.emit_events(command, &before);
+        Ok(value)
     }
 
     /// Log only the changes produced by a successful command.

@@ -135,6 +135,21 @@ async fn events_poll_follows_edits_and_saves() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn indexed_headless_save_does_not_log_temporary_activations() {
+    let dir = tmp("events-indexed-query");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 8, "height": 8, "name": "First"})).await;
+    call(&client, "doc_new", json!({"width": 8, "height": 8, "name": "Second"})).await;
+    let cursor = json_of(&call(&client, "events_poll", json!({})).await)["next"].as_u64().unwrap();
+    let result = call(&client, "doc_save", json!({"index": 0, "path": dir.join("first.pcraft").to_string_lossy()})).await;
+    assert_ne!(result.is_error, Some(true), "{}", text(&result));
+    let events = json_of(&call(&client, "events_poll", json!({"since": cursor, "events": ["document.activated"]})).await);
+    assert_eq!(events["events"], json!([]), "{events}");
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn headless_edit_render_save_roundtrip() {
     let dir = tmp("edit");
     let client = connect(headless_in(&dir)).await;
@@ -711,8 +726,11 @@ async fn doc_place_is_capability_scoped() {
     let client = connect(headless_in(&root)).await;
 
     json_of(&call(&client, "doc_new", json!({"width": 40, "height": 30})).await);
+    let before_place = json_of(&call(&client, "events_poll", json!({})).await)["next"].as_u64().unwrap();
     let placed = call(&client, "doc_place", json!({"path": "inside.png", "center": [10, 10]})).await;
     assert_ne!(placed.is_error, Some(true), "{}", text(&placed));
+    let events = json_of(&call(&client, "events_poll", json!({"since": before_place, "events": ["document.changed"]})).await);
+    assert_eq!(events["events"].as_array().map(Vec::len), Some(1), "{events}");
     let layers = json_of(&call(&client, "doc_inspect", json!({})).await)["layers"].as_array().unwrap().len();
     assert_eq!(layers, 2, "the placed layer is in the document");
     // An absolute path beneath the root is the same file (#2176), so it places too; outside it,
@@ -752,8 +770,11 @@ async fn doc_replace_smart_object_is_capability_scoped() {
     json_of(&call(&client, "doc_new", json!({"width": 40, "height": 30})).await);
     let placed = json_of(&call(&client, "doc_place", json!({"path": "inside.png"})).await);
     let layer = placed["layer"].clone();
+    let before_replace = json_of(&call(&client, "events_poll", json!({})).await)["next"].as_u64().unwrap();
     let replaced = call(&client, "doc_replace_smart_object", json!({"path": "inside.png", "layer": layer})).await;
     assert_ne!(replaced.is_error, Some(true), "{}", text(&replaced));
+    let events = json_of(&call(&client, "events_poll", json!({"since": before_replace, "events": ["document.changed"]})).await);
+    assert_eq!(events["events"].as_array().map(Vec::len), Some(1), "{events}");
     let refused = call(&client, "doc_replace_smart_object", json!({"path": outside.join("outside.png").to_string_lossy(), "layer": layer})).await;
     assert_eq!(refused.is_error, Some(true));
     assert!(text(&refused).contains("must be inside the automation root"), "{}", text(&refused));

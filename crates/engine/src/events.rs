@@ -197,6 +197,7 @@ pub struct Snapshot {
     pub revision: u64,
     pub saved_revision: u64,
     pub history: usize,
+    pub history_id: Option<u64>,
     pub active_layer: Option<u64>,
     pub selected: Vec<u64>,
     pub layers: Vec<u64>,
@@ -221,6 +222,7 @@ impl Snapshot {
             revision: st.revision,
             saved_revision: st.saved_revision,
             history: st.history.past_len(),
+            history_id: st.history.row_id(st.history.past_len()),
             active_layer: st.active_layer.map(|l| l.0),
             selected: st.selected_layers().iter().map(|l| l.0).collect(),
             layers: st.doc.walk().iter().map(|(_, _, l)| l.id.0).collect(),
@@ -265,12 +267,13 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
         log.push("layers.selected", Some(doc), src, json!({"active": active, "selected": selected}));
     }
     let history = st.history.past_len();
-    if history != before.history || matches!(id, "edit.undo" | "edit.redo") {
+    let history_id = st.history.row_id(history);
+    if history != before.history || history_id != before.history_id || matches!(id, "edit.undo" | "edit.redo") {
         let action = match id {
             "edit.undo" => "undo",
             "edit.redo" => "redo",
             _ if history == 0 && before.history > 0 => "clear",
-            _ if history > before.history => "step",
+            _ if history > before.history || (history_id != before.history_id && st.revision != before.revision) => "step",
             _ => "trim",
         };
         log.push(
@@ -307,6 +310,29 @@ mod tests {
 
     fn kinds(s: &Session, since: u64) -> Vec<(&'static str, Value)> {
         s.events.since(since, &Filter::default(), 1000).events.into_iter().map(|e| (e.event, e.data)).collect()
+    }
+
+    #[test]
+    fn history_change_is_logged_when_the_oldest_state_is_replaced() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        s.active_mut().unwrap().history.max_states = 1;
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        let cursor = s.events.last();
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        assert!(kinds(&s, cursor).iter().any(|(kind, _)| *kind == "history.changed"), "{:?}", kinds(&s, cursor));
+    }
+
+    #[test]
+    fn closing_the_active_document_activates_the_next_one() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "name": "First"})).unwrap();
+        s.execute("file.new", json!({"width": 8, "height": 8, "name": "Second"})).unwrap();
+        let cursor = s.events.last();
+        s.close(1).unwrap();
+        let events = kinds(&s, cursor);
+        assert_eq!(events.iter().map(|(event, _)| *event).collect::<Vec<_>>(), ["document.closed", "document.activated"]);
+        assert_eq!(events[1].1["name"], "First");
     }
 
     #[test]

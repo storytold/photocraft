@@ -78,12 +78,12 @@ impl Headless {
     fn on_doc<T>(&mut self, index: Option<usize>, body: impl FnOnce(&mut Self) -> Result<T, AutomationError>) -> Result<T, AutomationError> {
         let i = self.doc_index(index)?;
         let previously_active = self.session.active_index();
-        if previously_active != Some(i) && !self.session.set_active(i) {
+        if previously_active != Some(i) && !self.session.set_active_silent(i) {
             return Err(AutomationError::BadRequest(format!("no document at index {i}")));
         }
         let result = body(self);
         if let Some(active) = previously_active.filter(|&active| self.session.active_index() != Some(active)) {
-            self.session.set_active(active);
+            self.session.set_active_silent(active);
         }
         result
     }
@@ -148,7 +148,7 @@ impl Headless {
             this.sync_jobs();
             // The bytes are already in memory and the path resolved beneath the root capability, so
             // placing them needs no filesystem check of its own (`place_bytes` is the command body).
-            Ok(file_cmds::place_bytes(&mut this.session, name, bytes, None, &Value::Object(opts))?)
+            Ok(this.session.run_edit_with_events("file.placeEmbedded", |session| file_cmds::place_bytes(session, name, bytes, None, &Value::Object(opts)))?)
         })
     }
 
@@ -170,7 +170,9 @@ impl Headless {
             };
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path);
             this.sync_jobs();
-            Ok(photocraft_engine::smart_cmds::replace_contents_from_bytes(&mut this.session, &Value::Object(opts), name, bytes)?)
+            Ok(this.session.run_edit_with_events("layer.smartObjects.replaceContents", |session| {
+                photocraft_engine::smart_cmds::replace_contents_from_bytes(session, &Value::Object(opts), name, bytes)
+            })?)
         })
     }
 

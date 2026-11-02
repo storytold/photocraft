@@ -235,7 +235,9 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
                         loop {
                             let (req, rrx) = ControlRequest::new(method.clone(), p.clone());
                             let Some(r) = ask(&tx, &ctx, req, rrx, deadline) else { break 'conn };
-                            let empty = r.get("ok").and_then(Value::as_bool) == Some(true) && r["result"]["events"].as_array().is_some_and(Vec::is_empty);
+                            let empty = r.get("ok").and_then(Value::as_bool) == Some(true)
+                                && r["result"]["events"].as_array().is_some_and(Vec::is_empty)
+                                && r["result"]["gap"].as_bool() != Some(true);
                             if !empty || Instant::now() >= until {
                                 break r;
                             }
@@ -373,8 +375,10 @@ mod tests {
                         polls += 1;
                         assert!(req.params.get("waitMs").is_none(), "the wait stays in the transport");
                         // Empty twice, then an event: the transport keeps asking meanwhile.
-                        let events = if req.params.get("since").is_none() || polls < 3 { json!([]) } else { json!([{"seq": 9, "event": "tool.changed"}]) };
-                        req.reply.send(json!({"ok": true, "result": {"events": events, "next": 9, "gap": false}})).unwrap();
+                        let gap = req.params.get("since") == Some(&json!(1000));
+                        let events =
+                            if gap || req.params.get("since").is_none() || polls < 3 { json!([]) } else { json!([{"seq": 9, "event": "tool.changed"}]) };
+                        req.reply.send(json!({"ok": true, "result": {"events": events, "next": 9, "gap": gap}})).unwrap();
                     }
                     "events.unsubscribe" => {
                         req.reply.send(json!({"ok": true, "result": {"subscribed": false}})).unwrap();
@@ -419,6 +423,11 @@ mod tests {
         let r = read(&mut reader);
         assert_eq!(r["result"]["events"], json!([]));
         assert!(t.elapsed() < Duration::from_millis(400), "cursorless poll waited {:?}", t.elapsed());
+        let t = Instant::now();
+        writeln!(stream, "{}", json!({"id": 7, "method": "events.poll", "params": {"since": 1000, "waitMs": 700}})).unwrap();
+        let r = read(&mut reader);
+        assert_eq!(r["result"]["gap"], true);
+        assert!(t.elapsed() < Duration::from_millis(400), "gap reply waited {:?}", t.elapsed());
         writeln!(stream, "{}", json!({"id": 5, "method": "events.unsubscribe"})).unwrap();
         assert_eq!(read(&mut reader)["result"]["subscribed"], false);
         writeln!(stream, "{}", json!({"id": 6, "method": "test.after"})).unwrap();
@@ -426,7 +435,7 @@ mod tests {
         drop(stream);
         drop(reader);
         server.join().unwrap();
-        assert_eq!(handler.join().unwrap(), 4, "two empty polls, an event, then one cursorless poll");
+        assert_eq!(handler.join().unwrap(), 5, "two empty polls, an event, one cursorless poll and one gap poll");
     }
 
     /// #5154: pushes continue while a subscribed client sends one request in pieces.

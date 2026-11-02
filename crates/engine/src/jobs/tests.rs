@@ -543,6 +543,21 @@ fn open_runs_as_a_job_and_cancel_adds_nothing() {
     assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Failed(_)));
 }
 
+#[test]
+fn path_open_event_contains_the_opened_path() {
+    let source = session(8, 6);
+    let bytes = photocraft_io::export(&source.active().unwrap().doc, "source.png", &Default::default()).unwrap().bytes;
+    let path = std::env::temp_dir().join(format!("photocraft-open-event-{}.png", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let mut s = Session::new();
+    let id = job(s.start_open("source.png", OpenSource::Path(path.clone())).unwrap());
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+    let opened = s.events.since(0, &crate::events::Filter::default(), 10).events;
+    let event = opened.iter().find(|event| event.event == "document.opened").unwrap();
+    assert_eq!(event.data["path"], path);
+}
+
 /// Ask When Opening: a file whose profile doesn't match is decoded but not added; the shell takes
 /// it once the prompt is answered. Without Ask it opens as usual.
 #[test]
