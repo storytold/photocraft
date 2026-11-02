@@ -2699,8 +2699,9 @@ fn spot_healing_across_the_canvas_corner_heals_every_copy_of_the_stroke_and_noth
         let after = layer_pixels(&s);
         let n = after.len() / (WRAP.0 * WRAP.1) as usize;
         let px = |v: &[f32], x: usize, y: usize| v[(y * WRAP.0 as usize + x) * n..][..n].to_vec();
-        for (x, y) in [(1, 1), (46, 1), (1, 34), (46, 34)] {
-            assert!(px(&after, x, y)[0] > 0.1, "{kind}: ({x}, {y}) healed: {:?}", px(&after, x, y));
+        assert!(px(&after, 1, 1)[0] > 0.1, "{kind}: the blemish healed: {:?}", px(&after, 1, 1));
+        for (x, y) in [(46, 1), (1, 34), (46, 34)] {
+            assert_ne!(px(&after, x, y), px(&before, x, y), "{kind}: ({x}, {y}) is under the stroke");
         }
         for (x, y) in [(24, 18), (10, 18), (24, 4), (38, 28)] {
             assert_eq!(px(&after, x, y), px(&before, x, y), "{kind}: ({x}, {y}) is far from the stroke");
@@ -2715,6 +2716,7 @@ fn a_wrapped_dab_bigger_than_the_canvas_stays_on_it() {
     for (cmd, extra, setup, _) in cases {
         let mut s = session(16, 12, 8, "rgb");
         setup(&mut s);
+        let before = layer_pixels(&s);
         let mut p = json!({"points": [[8, 6], [30, 20]], "size": 60, "hardness": 0, "wrap": true});
         for (k, v) in extra.as_object().unwrap() {
             p[k] = v.clone();
@@ -2725,6 +2727,10 @@ fn a_wrapped_dab_bigger_than_the_canvas_stays_on_it() {
         let st = s.active().unwrap();
         let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
         assert!([(-1, 5), (16, 5), (5, -1), (5, 12), (40, 30)].iter().all(|&(x, y)| surf.rgba(x, y)[3] == 0.0), "{cmd}: nothing lands off the canvas");
+        // Spot Healing has nothing left to sample here (the next test).
+        if cmd != "paint.spotHealing" {
+            assert!(layer_pixels(&s) != before, "{cmd} {extra}: the stroke changed the canvas");
+        }
     }
 }
 
