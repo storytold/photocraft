@@ -901,6 +901,10 @@ fn opening_an_adjustment_layers_settings_shows_a_closed_properties_panel() {
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
     app.ui.docking = Some(Workspace::new(legacy(&app)));
+    // CodeRabbit on #10312: another tab in front first, so the reopened Properties is brought
+    // to the front, not merely left there.
+    app.run("window.panel.adjustments", json!({"show": true})).unwrap();
+    assert!(panel_active(lay(&app), "adjustments"), "{:?}", lay(&app));
     app.run("window.panel.close", json!({"panel": "properties"})).unwrap();
     assert!(!lay(&app).contains(&"properties".to_string()), "closed");
     crate::menus::invoke(&mut app, &egui::Context::default(), "layer.layerContentOptions", json!({})).unwrap();
