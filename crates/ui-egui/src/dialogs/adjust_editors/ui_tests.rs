@@ -532,6 +532,71 @@ fn gradient_map_handle_drag_previews_and_commits_once_after_crossing_stops() {
     }
 }
 
+/// #10742: a stop dragged off the strip goes as the Gradient tool's does, with a live preview, and
+/// comes back if the drag returns. Two stops always stay.
+#[test]
+fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
+    for depth in [8, 16, 32] {
+        let mut h = app_harness("gradientMap", "rgb", depth);
+        let (id, _) = layer(&h);
+        let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
+        h.state_mut().run("layer.setAdjustment", four).unwrap();
+        h.run_steps(3);
+        let before = layer(&h).1;
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let start = map_handle(&h, 0.25);
+        let away = start + vec2(0.0, 90.0);
+        h.hover_at(start);
+        h.run_steps(1);
+        h.drag_at(start);
+        h.run_steps(1);
+        h.hover_at(away);
+        h.run_steps(1);
+        assert!(h.state().live_adjust.is_some(), "{depth}: live preview");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{depth}: dragging records no history");
+        h.drop_at(away);
+        h.run_steps(3);
+        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: the stop is gone");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: one history step");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(layer(&h).1, before, "{depth}: undo brings it back");
+
+        // Off the strip and back: the stop stays, with its colour, where the drag ends.
+        let back = map_handle(&h, 0.4);
+        h.hover_at(start);
+        h.run_steps(1);
+        h.drag_at(start);
+        h.run_steps(1);
+        h.hover_at(away);
+        h.run_steps(1);
+        h.hover_at(back);
+        h.run_steps(1);
+        h.drop_at(back);
+        h.run_steps(3);
+        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.4, [255, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: kept");
+    }
+}
+
+#[test]
+fn gradient_map_last_two_stops_cant_be_dragged_off_the_strip() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [1, "#ffffff"]]})).unwrap();
+    h.run_steps(3);
+    let start = map_handle(&h, 0.0);
+    let away = start + vec2(0.0, 90.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(away);
+    h.run_steps(1);
+    h.drop_at(away);
+    h.run_steps(3);
+    assert_eq!(map_stops(&layer(&h).1).len(), 2);
+}
+
 #[test]
 fn gradient_map_strip_adds_selects_and_removes_stops_without_deleting_the_last_pair() {
     let mut h = app_harness("gradientMap", "rgb", 8);
