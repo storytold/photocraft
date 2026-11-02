@@ -391,6 +391,11 @@ fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography) -> R
     while let Some((l, sel)) = stack.pop() {
         match &l.content {
             LayerContent::Group(g) => stack.extend(g.children.iter().map(|c| (c, None))),
+            LayerContent::Text(t) if keeps_pixels(t) => {
+                if let Some(c) = &t.cache {
+                    check_budget(c.content_bounds(), h, &format!("layer \"{}\"", l.name), c.format())?;
+                }
+            }
             LayerContent::Text(_) | LayerContent::Shape(_) => {}
             LayerContent::Smart(sm) => {
                 if let Some(c) = &sm.cache {
@@ -486,6 +491,14 @@ fn apply_transform(
                 return Err(EngineError::Other("Distort and Perspective need rasterized type (Type › Rasterize Type Layer)".into()));
             };
             t.transform = a.mul(&t.transform);
+            // Without its font, a type layer keeps its look: Photoshop transforms the pixels it has
+            // (warning they may look fuzzy) instead of setting the text in a substitute (#7278).
+            if keeps_pixels(t)
+                && let Some(c) = &mut t.cache
+            {
+                let src = c.content_bounds();
+                *c = warp_surface_with(c, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+            }
         }
         LayerContent::Shape(sh) => match affine {
             Some(a) => crate::vector_cmds::transform_shape(sh, &a),
@@ -591,8 +604,15 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
     Ok((lifted, rest))
 }
 
+/// A type layer whose fonts are missing is transformed as the pixels it shows (#7278).
+fn keeps_pixels(t: &photocraft_doc::TextLayer) -> bool {
+    t.cache.is_some() && !crate::type_extra_cmds::missing_fonts_in_layer(t).is_empty()
+}
+
 pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) {
     match &mut l.content {
+        // Its pixels were transformed with it: only the saved type record follows.
+        LayerContent::Text(t) if keeps_pixels(t) => crate::type_cmds::refresh_record(doc, t),
         LayerContent::Text(t) => crate::type_cmds::refresh(doc, t),
         LayerContent::Shape(sh) => crate::vector_cmds::refresh_shape(doc, sh),
         LayerContent::Smart(_) => {
