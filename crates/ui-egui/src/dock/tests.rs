@@ -902,3 +902,89 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
     let docking = &app.session.prefs().panel_layout["docking"];
     assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
 }
+
+#[test]
+fn unreadable_workspace_payload_survives_restore_persist_and_explicit_save() {
+    for version in [json!(2), json!(99), Value::Null] {
+        let (mut app, _, _) = app_with_layers();
+        app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+        let mut saved = snapshot(&app);
+        saved["docking"] = json!({"version": version, "layout": {"kind":"unsupported-tree"}, "opaque": {"keep":[1,2,3]}});
+        saved["dockingReturns"] = json!({"future-return": {"unknown":true}});
+        saved["dockingCollapsed"] = json!(["future-panel"]);
+        saved["panelPresentation"] = json!({"future":"preserve"});
+        saved["toolbarFloating"] = json!({"future-position":42});
+        app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+        restore(&mut app);
+        assert!(app.ui.docking.is_none());
+        assert!(app.ui.docking_kept.is_some(), "version={version}");
+        let ctx = egui::Context::default();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        let written = snapshot(&app);
+        for key in ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"] {
+            assert_eq!(app.session.prefs().panel_layout.get(key), saved.get(key), "persist {key}, version={version}");
+            assert_eq!(written.get(key), saved.get(key), "snapshot {key}, version={version}");
+        }
+        let notice = app.ui.status.clone();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(app.ui.status, notice, "idle frames do not repeat the restore warning");
+        app.run("window.panel.close", json!({"panel":"layers"})).unwrap();
+        ctx.run_ui(Default::default(), |ui| persist(&mut app, ui.ctx())).textures_delta.clear();
+        assert!(app.ui.docking_kept.is_none());
+        assert!(crate::panel_docking::load(&app.session.prefs().panel_layout).is_some(), "explicit edit replaces the unreadable payload");
+    }
+}
+
+#[test]
+fn obsolete_bare_layout_and_absent_workspace_do_not_become_retained_payloads() {
+    for docking in [Value::Null, json!({"root":null,"floating":[]})] {
+        let (mut app, _, _) = app_with_layers();
+        let mut saved = snapshot(&app);
+        saved["docking"] = docking;
+        apply(&mut app, &saved);
+        assert!(app.ui.docking.is_none());
+        assert!(app.ui.docking_kept.is_none());
+    }
+}
+
+#[test]
+fn readable_workspace_is_loaded_without_retaining_fallback_data() {
+    let (mut app, _, _) = app_with_layers();
+    app.run("window.panel.float", json!({"panel":"info"})).unwrap();
+    let saved = snapshot(&app);
+    let before = app.ui.docking.clone();
+    apply(&mut app, &saved);
+    assert_eq!(app.ui.docking, before);
+    assert!(app.ui.docking_kept.is_none());
+}
+
+#[test]
+fn future_workspace_envelope_without_layout_keeps_existing_forward_compatibility() {
+    let (mut app, _, _) = app_with_layers();
+    let mut saved = snapshot(&app);
+    saved["docking"] = json!({"version":99,"future-envelope":{"keep":true}});
+    apply(&mut app, &saved);
+    assert!(app.ui.docking.is_none());
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+}
+
+#[test]
+fn unreadable_workspace_survives_fallback_rendering_with_restore_notice() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut saved = snapshot(&app);
+        saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+        apply(&mut app, &saved);
+        app
+    });
+    h.run_steps(8);
+    assert!(h.state().ui.docking.is_none());
+    assert!(h.state().ui.status.contains("has been preserved"));
+    assert_eq!(snapshot(h.state())["docking"]["layout"]["kind"], "unreadable");
+    let image = h.render().unwrap();
+    if let Some(path) = std::env::var_os("PHOTOCRAFT_WORKSPACE_RECOVERY_CAPTURE") {
+        image.save(path).unwrap();
+    }
+}

@@ -344,8 +344,7 @@ pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
     layout
 }
 
-/// A saved layout's workspace from a newer version stays as saved while the default layout
-/// shows in its place (craft-ui: keep it on disk, don't overwrite it).
+/// An unreadable saved workspace stays as saved while the default layout shows in its place.
 pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
     if let (None, Some(kept), Some(layout)) = (&app.ui.docking, &app.ui.docking_kept, layout.as_object_mut()) {
         layout.extend(kept.clone());
@@ -409,15 +408,16 @@ pub fn restore(app: &mut PhotocraftApp) {
 ///
 /// `craft_ui::docking::DockArea` keeps only transient drag/focus data in `ctx.data`; the
 /// split/tab arrangement is the app's own `craft_ui::docking::Layout` JSON stored here. If a
-/// layout saved by a different craft-ui revision no longer deserializes, it is dropped and the
-/// legacy layout is rebuilt (the split/tab arrangement resets). Panel widths are a separate
-/// `egui::PanelState` migration and still carry over.
+/// saved workspace cannot be loaded, retain its payload while showing the native default.
+/// Explicit layout changes replace that payload. Panel widths still carry over separately.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
-    app.ui.docking_kept = (app.ui.docking.is_none() && crate::panel_docking::newer(v))
-        .then(|| ["docking", "dockingReturns", "dockingCollapsed"].into_iter().filter_map(|key| Some((key.to_owned(), v.get(key)?.clone()))).collect());
+    app.ui.docking_kept = app.ui.docking.is_none().then(|| crate::panel_docking::retained_payload(v)).flatten();
+    if app.ui.docking_kept.is_some() {
+        app.ui.status = tl!("The saved panel layout could not be restored. It has been preserved; reset the workspace to replace it.").to_string();
+    }
     // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.
     app.ui.docking_collapsed = match app.ui.docking {
         Some(_) => v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),

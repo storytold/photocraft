@@ -152,9 +152,20 @@ pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
     valid_workspace(&workspace).then_some((workspace, returns))
 }
 
-/// The saved `docking` workspace is from a newer version than craft-ui reads.
-pub(crate) fn newer(saved: &Value) -> bool {
-    saved.get("docking").and_then(|docking| docking.get("version")).and_then(Value::as_u64).is_some_and(|version| version > u64::from(Workspace::VERSION))
+/// Keep unreadable Workspace payloads; obsolete bare layouts fall back to the native default.
+/// Called only when `load` failed. Companion view metadata must survive the same fallback.
+pub(crate) fn retained_payload(saved: &Value) -> Option<Map<String, Value>> {
+    let docking = saved.get("docking")?;
+    let newer = docking.get("version").and_then(Value::as_u64).is_some_and(|v| v > u64::from(Workspace::VERSION));
+    if docking.get("layout").is_none() && !newer {
+        return None;
+    }
+    Some(
+        ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"]
+            .into_iter()
+            .filter_map(|key| Some((key.to_owned(), saved.get(key)?.clone())))
+            .collect(),
+    )
 }
 
 fn legacy(app: &PhotocraftApp) -> Layout<String> {
