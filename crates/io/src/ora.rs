@@ -261,8 +261,9 @@ fn props(node: roxmltree::Node<'_, '_>, layer: &mut Layer, index: usize, warning
 fn uses_explicit_group_isolation(version: Option<&str>) -> bool {
     let Some(core) = version.and_then(|v| v.trim().split(['-', '+']).next()) else { return false };
     let mut parts = core.split('.');
-    let number = |part: Option<&str>| part.and_then(|s| s.parse::<u32>().ok());
-    match (number(parts.next()), number(parts.next()), number(parts.next()), parts.next()) {
+    let mut number = || parts.next().map_or(Some(0), |s| s.parse::<u32>().ok());
+    let (major, minor, patch) = (number(), number(), number());
+    match (major, minor, patch, parts.next()) {
         (Some(major), Some(minor), Some(patch), None) => [major, minor, patch] >= [0, 0, 6],
         _ => false,
     }
