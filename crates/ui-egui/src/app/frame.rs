@@ -84,7 +84,7 @@ impl PhotocraftApp {
         crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
-        let splash_active = self.splash.as_ref().is_some_and(|s| s.is_active(now));
+        let splash_active = self.synthetic.is_empty() && self.synthetic_batch.is_none() && self.splash.as_ref().is_some_and(|s| s.is_active(now));
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
