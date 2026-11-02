@@ -4203,6 +4203,71 @@ fn one_colour_areas_reduce_like_composited_ones() {
     }
 }
 
+/// Stored but disabled masks and effects have the same reduction eligibility as absent ones.
+fn reduction_decoration(layer: &mut Layer, kind: usize, enabled: bool) {
+    match kind {
+        0 | 1 => {
+            let mut mask = LayerMask::reveal_all();
+            mask.enabled = enabled;
+            mask.feather = if kind == 0 { 0.0 } else { 3.0 };
+            // Every tile has different values; a disabled mask must not enter uniformity scans.
+            for y in 0..512 {
+                mask.surface.fill_rect(Rect::new(0, y, 768, y + 1), &[if y % 2 == 0 { 0.0 } else { 1.0 }]);
+            }
+            layer.mask = Some(mask);
+        }
+        2 => {
+            use photocraft_doc::vector::{Path, Subpath, VectorMask};
+            let mut mask = VectorMask::new(Path::new(vec![Subpath::polygon(&[(200.0, 100.0), (500.0, 100.0), (500.0, 400.0)])]));
+            mask.enabled = enabled;
+            layer.vector_mask = Some(mask);
+        }
+        _ => {
+            let mut effect = stroke(2.0, StrokePosition::Outside);
+            effect.set_enabled(enabled);
+            layer.effects.items.push(effect);
+        }
+    }
+}
+
+#[test]
+fn disabled_decorations_keep_sparse_reduction_and_damage_pixels() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut base = Document::with_background("sparse", Size::new(768, 512), ColorMode::Rgb, depth, Color::WHITE);
+        let mut paint = Layer::raster("paint", PixelFormat::RGBA8.with_sample(depth));
+        paint.surface_mut().unwrap().fill_rect(Rect::new(260, 120, 276, 136), &[1.0, 0.0, 0.0, 1.0]);
+        base.layers.push(paint);
+        let mut absent_stats = ReducedStats::default();
+        let absent = render_reduced_with(&base, base.bounds(), 51, 37, None, 256, true, &mut absent_stats);
+        assert!(absent_stats.uniform);
+        assert!(absent_stats.composited < base.size.area() / 2);
+        for kind in 0..4 {
+            let mut decorated = base.clone();
+            reduction_decoration(&mut decorated.layers[1], kind, false);
+            let mut stats = ReducedStats::default();
+            let all = render_reduced_with(&decorated, decorated.bounds(), 51, 37, None, 256, true, &mut stats);
+            assert!(stats.uniform, "{depth:?}, decoration {kind}: {stats:?}");
+            assert_eq!(stats.composited, absent_stats.composited, "disabled data must not add source-resolution work");
+            assert_eq!(all.px, absent.px, "{depth:?}, decoration {kind}");
+            let reference = render_reduced_with(&decorated, decorated.bounds(), 51, 37, None, 256, false, &mut ReducedStats::default());
+            assert_eq!(all.to_rgba8().pixels, reference.to_rgba8().pixels, "production quantization: {depth:?}, decoration {kind}");
+            let damage = Rect::new(250, 110, 288, 144);
+            let part = render_reduced_with(&decorated, decorated.bounds(), 51, 37, Some(damage), 256, true, &mut ReducedStats::default());
+            for y in part.rect.y0..part.rect.y1 {
+                for x in part.rect.x0..part.rect.x1 {
+                    assert_eq!(part.get(x, y), all.get(x, y), "partial reduction: {depth:?}, decoration {kind}");
+                }
+            }
+            // Re-enabled nonlocal decorations still disqualify the shortcut.
+            if kind != 0 {
+                let mut active = base.clone();
+                reduction_decoration(&mut active.layers[1], kind, true);
+                assert!(uniform::UniformAreas::new(&active).is_none(), "active decoration {kind}");
+            }
+        }
+    }
+}
+
 #[test]
 fn layers_that_read_other_pixels_are_composited_pixel_by_pixel() {
     let base = sparse_doc(300, 300);
