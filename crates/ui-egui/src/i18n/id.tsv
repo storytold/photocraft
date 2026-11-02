@@ -3537,3 +3537,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Edit AI…
+@id	edit.ai.codex	Edit AI…
+	Describe your edit	Jelaskan pengeditan
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Kanvas yang terlihat dan instruksi akan dikirim ke Codex menggunakan login ChatGPT Anda. Hasilnya disesuaikan dengan kanvas dan ditambahkan sebagai lapisan baru.
+	Codex account has not been checked	Akun Codex belum diperiksa
+	Checking Codex connection…	Memeriksa koneksi Codex…
+	Complete ChatGPT sign-in in your browser	Selesaikan login ChatGPT di peramban
+	Connected to ChatGPT	Terhubung ke ChatGPT
+	ChatGPT plan	Paket ChatGPT
+	ChatGPT sign-in is required	Login ChatGPT diperlukan
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex menggunakan metode login lain. Masuk dengan ChatGPT untuk menggunakan langganan Anda.
+	Cancelling sign-in…	Membatalkan login…
+	Sign-in cancelled	Login dibatalkan
+	Could not verify the account. Check your connection or sign in again.	Akun tidak dapat diverifikasi. Periksa koneksi atau masuk kembali.
+	Connection details	Detail koneksi
+	Sign in with ChatGPT	Masuk dengan ChatGPT
+	Open sign-in page	Buka halaman login
+	Check connection	Periksa koneksi
+	Cancel sign-in	Batalkan login
+	Copy sign-in link	Salin tautan login
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Peramban tidak dapat dibuka. Coba lagi atau tempel tautan login ke peramban Anda.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Login dikelola oleh instalasi Codex dan dibagikan dengan Codex. PhotoCraft tidak menyimpan token.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex tidak ditemukan. Instal dan buka aplikasi desktop Codex, lalu periksa koneksi kembali.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Gunakan instalasi Codex yang lengkap; menyalin codex.exe saja dapat melewatkan komponen pengeditan gambar.
+	AI Edit	Pengeditan AI
+	Codex Account	Akun Codex
+# Image API and related UI (original translations).
+	Image service	Layanan gambar
+	Codex (ChatGPT subscription)	Codex (langganan ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Kanvas yang terlihat dan instruksi dikirim ke layanan yang dikonfigurasi. Penyedia layanan dapat mengenakan biaya penggunaan.
+	Model ID	ID model
+	API address and protocol	Alamat dan protokol API
+	API address	Alamat API
+	API protocol	Protokol API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Layanan kustom harus mendukung protokol pengeditan gambar yang dipilih. Mengubah alamat memerlukan kunci untuk alamat tersebut.
+	API key	Kunci API
+	API key configured — leave empty to keep it	Kunci API sudah diatur — kosongkan untuk mempertahankannya
+	Remember API key in system credential store	Simpan kunci API di penyimpanan kredensial sistem
+	The API key is available for this session only.	Kunci API hanya tersedia selama sesi ini.
+	Save API settings	Simpan pengaturan API
+	Remove API key	Hapus kunci API
+	API configured. Saving settings does not generate an image.	API sudah dikonfigurasi. Menyimpan pengaturan tidak menghasilkan gambar.
+	Save your API settings before editing.	Simpan pengaturan API sebelum mengedit.
+	API settings saved	Pengaturan API disimpan
+	Enter a valid API key without whitespace	Masukkan kunci API yang valid tanpa spasi
+	API key removed	Kunci API dihapus
+	Could not load API settings	Pengaturan API tidak dapat dimuat
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Hasilnya disesuaikan dengan kanvas dan ditambahkan sebagai lapisan baru. Lapisan yang ada tetap dipertahankan.
+	AI Edit via API	Pengeditan AI melalui API
+	AI Provider Settings	Pengaturan penyedia AI
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Pengeditan AI tidak lolos peninjauan konten layanan
+	The image service's content review is unavailable	Peninjauan konten layanan gambar tidak tersedia
+	Your editing instruction did not pass the service's content review.	Instruksi pengeditan Anda tidak lolos peninjauan konten layanan.
+	Your reference image did not pass the service's content review.	Gambar referensi Anda tidak lolos peninjauan konten layanan.
+	The generated image did not pass the service's content review.	Gambar yang dihasilkan tidak lolos peninjauan konten layanan.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Instruksi Anda memicu aturan konten layanan, yang dapat mencakup pembatasan hak cipta.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Gambar referensi Anda memicu aturan konten layanan, yang dapat mencakup pembatasan hak cipta.
+	Your reference image did not pass the service's privacy review.	Gambar referensi Anda tidak lolos peninjauan privasi layanan.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Gambar yang dihasilkan memicu aturan konten layanan, yang dapat mencakup pembatasan hak cipta.
+	The generated image triggered the service's impersonation restrictions.	Gambar yang dihasilkan memicu pembatasan layanan terhadap penyamaran identitas.
+	The service rejected this edit without identifying the content-review stage.	Layanan menolak pengeditan ini tanpa menyebut tahap peninjauan konten.
+	The service's content review failed, so this edit could not be completed.	Peninjauan konten layanan gagal sehingga pengeditan ini tidak dapat diselesaikan.
+	Revise the instruction and try again manually.	Ubah instruksi lalu coba lagi secara manual.
+	Choose a reference image that meets the service's requirements.	Pilih gambar referensi yang memenuhi persyaratan layanan.
+	Adjust the editing request or contact the service provider for details.	Sesuaikan permintaan pengeditan atau hubungi penyedia layanan untuk perinciannya.
+	Check that your editing request meets the service's content requirements.	Pastikan permintaan pengeditan memenuhi persyaratan konten layanan.
+	Check your editing content or ask the service provider for details.	Periksa konten pengeditan atau tanyakan perinciannya kepada penyedia layanan.
+	Try again manually later. Contact the service provider if the problem continues.	Coba lagi secara manual nanti. Jika masalah berlanjut, hubungi penyedia layanan.
+	This edit did not change existing layers or add a new layer.	Pengeditan ini tidak mengubah lapisan yang ada atau menambahkan lapisan baru.
+	Error code: {code}	Kode kesalahan: {code}
+	API settings	Pengaturan API

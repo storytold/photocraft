@@ -4769,3 +4769,77 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+# Codex image editing and account controls (original translations).
+	AI Edit…	KI-redigering…
+@id	edit.ai.codex	KI-redigering…
+	Describe your edit	Beskriv redigeringen
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Det synlige lerretet og instruksjonen sendes til Codex med ChatGPT-påloggingen din. Resultatet tilpasses lerretet og legges til som et nytt lag.
+	Codex account has not been checked	Codex-kontoen er ikke kontrollert
+	Checking Codex connection…	Kontrollerer tilkoblingen til Codex…
+	Complete ChatGPT sign-in in your browser	Fullfør ChatGPT-påloggingen i nettleseren
+	Connected to ChatGPT	Koblet til ChatGPT
+	ChatGPT plan	ChatGPT-abonnement
+	ChatGPT sign-in is required	ChatGPT-pålogging kreves
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex bruker en annen påloggingsmetode. Logg på med ChatGPT for å bruke abonnementet ditt.
+	Cancelling sign-in…	Avbryter pålogging…
+	Sign-in cancelled	Pålogging avbrutt
+	Could not verify the account. Check your connection or sign in again.	Kontoen kunne ikke bekreftes. Kontroller tilkoblingen, eller logg på igjen.
+	Connection details	Tilkoblingsdetaljer
+	Sign in with ChatGPT	Logg på med ChatGPT
+	Open sign-in page	Åpne påloggingssiden
+	Check connection	Kontroller tilkobling
+	Cancel sign-in	Avbryt pålogging
+	Copy sign-in link	Kopier påloggingslenken
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Nettleseren kunne ikke åpnes. Prøv igjen, eller lim inn påloggingslenken i nettleseren.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Påloggingen styres av det installerte Codex-kjøremiljøet og deles med Codex. PhotoCraft lagrer ikke tokener.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex ble ikke funnet. Installer og åpne Codex-skrivebordsappen, og kontroller tilkoblingen på nytt.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Bruk hele Codex-installasjonen; kopiering av bare codex.exe kan utelate bilderedigeringskomponenter.
+	AI Edit	KI-redigering
+	Codex Account	Codex-konto
+# Image API and related UI (original translations).
+	Image service	Bildetjeneste
+	Codex (ChatGPT subscription)	Codex (ChatGPT-abonnement)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Det synlige lerretet og instruksjonen sendes til den konfigurerte tjenesten. Leverandøren kan kreve betaling for bruken.
+	Model ID	Modell-ID
+	API address and protocol	API-adresse og protokoll
+	API address	API-adresse
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Egne tjenester må støtte den valgte bilderedigeringsprotokollen. Endring av adressen krever en nøkkel for den adressen.
+	API key	API-nøkkel
+	API key configured — leave empty to keep it	API-nøkkel konfigurert — la feltet stå tomt for å beholde den
+	Remember API key in system credential store	Lagre API-nøkkelen i systemets legitimasjonslager
+	The API key is available for this session only.	API-nøkkelen er bare tilgjengelig i denne økten.
+	Save API settings	Lagre API-innstillinger
+	Remove API key	Fjern API-nøkkel
+	API configured. Saving settings does not generate an image.	API er konfigurert. Lagring av innstillinger genererer ikke et bilde.
+	Save your API settings before editing.	Lagre API-innstillingene før redigering.
+	API settings saved	API-innstillinger lagret
+	Enter a valid API key without whitespace	Skriv inn en gyldig API-nøkkel uten blanktegn
+	API key removed	API-nøkkel fjernet
+	Could not load API settings	API-innstillingene kunne ikke lastes inn
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Resultatet tilpasses lerretet og legges til som et nytt lag. Eksisterende lag bevares.
+	AI Edit via API	KI-redigering via API
+	AI Provider Settings	Innstillinger for KI-leverandør
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	KI-redigeringen besto ikke tjenestens innholdskontroll
+	The image service's content review is unavailable	Bildetjenestens innholdskontroll er utilgjengelig
+	Your editing instruction did not pass the service's content review.	Redigeringsinstruksjonen besto ikke tjenestens innholdskontroll.
+	Your reference image did not pass the service's content review.	Referansebildet besto ikke tjenestens innholdskontroll.
+	The generated image did not pass the service's content review.	Det genererte bildet besto ikke tjenestens innholdskontroll.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Instruksjonen utløste tjenestens innholdsregler, som kan omfatte opphavsrettslige begrensninger.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Referansebildet utløste tjenestens innholdsregler, som kan omfatte opphavsrettslige begrensninger.
+	Your reference image did not pass the service's privacy review.	Referansebildet besto ikke tjenestens personvernkontroll.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Det genererte bildet utløste tjenestens innholdsregler, som kan omfatte opphavsrettslige begrensninger.
+	The generated image triggered the service's impersonation restrictions.	Det genererte bildet utløste tjenestens begrensninger mot identitetsetterligning.
+	The service rejected this edit without identifying the content-review stage.	Tjenesten avviste redigeringen uten å oppgi trinnet i innholdskontrollen.
+	The service's content review failed, so this edit could not be completed.	Tjenestens innholdskontroll mislyktes, så redigeringen kunne ikke fullføres.
+	Revise the instruction and try again manually.	Endre instruksjonen og prøv igjen manuelt.
+	Choose a reference image that meets the service's requirements.	Velg et referansebilde som oppfyller tjenestens krav.
+	Adjust the editing request or contact the service provider for details.	Tilpass redigeringsforespørselen, eller spør tjenesteleverandøren om detaljer.
+	Check that your editing request meets the service's content requirements.	Kontroller at redigeringsforespørselen oppfyller tjenestens innholdskrav.
+	Check your editing content or ask the service provider for details.	Kontroller innholdet i redigeringen, eller spør tjenesteleverandøren om detaljer.
+	Try again manually later. Contact the service provider if the problem continues.	Prøv igjen manuelt senere. Kontakt tjenesteleverandøren hvis problemet vedvarer.
+	This edit did not change existing layers or add a new layer.	Denne redigeringen endret ingen eksisterende lag og la ikke til et nytt lag.
+	Error code: {code}	Feilkode: {code}
+	API settings	API-innstillinger

@@ -10,6 +10,10 @@ next to them.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `docs/ai-ux-images/*.png` | AI review and disclosure QA screenshots | PhotoCraft AI contributors; AI contributor: OpenAI Codex | Locally rendered PhotoCraft UI, synthetic canvases and loopback review fixtures | MIT OR Apache-2.0, [`LICENSE.txt`](docs/ai-ux-images/LICENSE.txt); existing UI asset licenses retained |
+| `docs/api-images/*.png` | API provider configuration QA screenshots | PhotoCraft AI contributors; AI contributor: OpenAI Codex | Locally rendered PhotoCraft UI, synthetic canvases and session-only dummy keys | MIT OR Apache-2.0, [`LICENSE.txt`](docs/api-images/LICENSE.txt); existing UI asset licenses retained |
+| `docs/codex-images/*.png` | Codex integration QA screenshots | PhotoCraft AI contributors; AI contributor: OpenAI Codex | Locally rendered PhotoCraft UI, synthetic canvases and account fixtures | MIT OR Apache-2.0, [`LICENSE.txt`](docs/codex-images/LICENSE.txt); existing UI asset licenses retained |
+| `crates/ui-egui/src/i18n/*.tsv` (AI editing, account, API, review and disclosure entries) | AI feature UI translations | PhotoCraft AI contributors; AI contributor: OpenAI Codex | Original translations of PhotoCraft English source strings | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
 | `crates/codecs/src/codecs/xpm/x11_colors.rs` | X11 `rgb.txt` color-name lookup table (normalized X.Org RGB values) | X.Org Foundation and X11 contributors | <https://cgit.freedesktop.org/xorg/app/rgb/tree/rgb.txt> | MIT (X.Org app/rgb) |
 | `crates/ui-egui/src/i18n/el.tsv` | Greek UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
 | `crates/ui-egui/src/i18n/de.tsv` | German UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |

@@ -1097,3 +1097,64 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+#[test]
+fn codex_job_labels_follow_the_current_language() {
+    use photocraft_engine::jobs::{JobEvent, JobOutcome};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width":16,"height":16})).unwrap();
+    for lang in crate::i18n::Lang::all() {
+        crate::i18n::with_language(lang, || {
+            let label = crate::i18n::tr(lang, "AI Edit");
+            for outcome in [JobOutcome::Done(json!({})), JobOutcome::Cancelled] {
+                let expected = if matches!(outcome, JobOutcome::Done(_)) {
+                    label.to_owned()
+                } else {
+                    crate::i18n::fmt(crate::i18n::tr(lang, "Cancelled {label}"), &[("label", label)])
+                };
+                super::on_event(
+                    &mut app,
+                    &egui::Context::default(),
+                    JobEvent { id: JobId(901), command: "edit.ai.codex".into(), label: "AI Edit".into(), document: None, outcome },
+                );
+                assert_eq!(app.ui.status, expected, "{}", lang.code());
+            }
+        });
+    }
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1);
+}
+
+#[test]
+fn ai_review_failure_uses_localized_notice_and_preserves_document_history() {
+    use photocraft_engine::jobs::{JobEvent, JobOutcome};
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":16,"height":16})).unwrap();
+    session.execute("layer.new.layer", json!({"name":"Existing edit"})).unwrap();
+    let mut app = PhotocraftApp::new(session, Default::default());
+    let doc_id = app.session.active().unwrap().doc.id;
+    let error = "Image API HTTP 400. InputTextSensitiveContentDetected.PolicyViolation. PRIVATE_PROMPT";
+    crate::i18n::with_language(crate::i18n::Lang::from_code("zh-hans").unwrap(), || {
+        super::on_event(
+            &mut app,
+            &egui::Context::default(),
+            JobEvent {
+                id: JobId(900),
+                command: "edit.ai.api".into(),
+                label: "AI Edit".into(),
+                document: Some(doc_id),
+                outcome: JobOutcome::Failed(error.into()),
+            },
+        );
+        let notice = app.ui.notices.last().unwrap();
+        assert_eq!(notice.text(&notice.title), "AI 编辑未通过服务商审核");
+        assert!(notice.lines.iter().any(|line| notice.text(line).contains("可能包含版权")));
+        assert!(notice.lines.iter().any(|line| notice.text(line).contains("InputTextSensitiveContentDetected.PolicyViolation")));
+        assert!(app.ui.status.contains("编辑指令"));
+    });
+    assert!(!serde_json::to_string(&app.ui.notices).unwrap().contains("PRIVATE"));
+    assert!(app.ui.status_error);
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
+    app.session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "the error added no history step");
+    app.session.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
+}

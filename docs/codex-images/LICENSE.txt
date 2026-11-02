@@ -1,0 +1,11 @@
+Original PhotoCraft Codex integration QA screenshots and synthetic canvases.
+Authors: PhotoCraft AI contributors, with OpenAI Codex as an AI contributor.
+
+Licensed under MIT OR Apache-2.0, at your option. Full texts: ../../LICENSE-MIT and
+../../LICENSE-APACHE. These images were rendered locally from the repository with
+synthetic blank documents and simulated account states; no personal photographs,
+real account details or generated-image service results are included.
+
+Displayed UI assets retain their existing licenses in ../../ATTRIBUTION.md.
+This notice grants no additional trademark rights and does not supersede any
+existing brand notices. The screenshots document a proposed upstream change.

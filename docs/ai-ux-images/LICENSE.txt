@@ -1,0 +1,5 @@
+Original PhotoCraft AI QA screenshots, rendered locally with synthetic white canvases
+and session-only dummy keys/account states. No real credentials, personal photos or
+paid image-service results are included. PhotoCraft AI contributors, with OpenAI Codex.
+MIT OR Apache-2.0; see ../../LICENSE-MIT and ../../LICENSE-APACHE. Displayed UI assets
+retain the licenses in ../../ATTRIBUTION.md; no additional trademark rights are granted.

@@ -4767,3 +4767,77 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI-redigering…
+@id	edit.ai.codex	AI-redigering…
+	Describe your edit	Beskriv redigeringen
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Den synliga arbetsytan och instruktionen skickas till Codex med din ChatGPT-inloggning. Resultatet anpassas till arbetsytan och läggs till som ett nytt lager.
+	Codex account has not been checked	Codex-kontot har inte kontrollerats
+	Checking Codex connection…	Kontrollerar anslutningen till Codex…
+	Complete ChatGPT sign-in in your browser	Slutför ChatGPT-inloggningen i webbläsaren
+	Connected to ChatGPT	Ansluten till ChatGPT
+	ChatGPT plan	ChatGPT-abonnemang
+	ChatGPT sign-in is required	Inloggning med ChatGPT krävs
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex använder en annan inloggningsmetod. Logga in med ChatGPT för att använda ditt abonnemang.
+	Cancelling sign-in…	Avbryter inloggningen…
+	Sign-in cancelled	Inloggningen avbröts
+	Could not verify the account. Check your connection or sign in again.	Kontot kunde inte verifieras. Kontrollera anslutningen eller logga in igen.
+	Connection details	Anslutningsinformation
+	Sign in with ChatGPT	Logga in med ChatGPT
+	Open sign-in page	Öppna inloggningssidan
+	Check connection	Kontrollera anslutningen
+	Cancel sign-in	Avbryt inloggningen
+	Copy sign-in link	Kopiera inloggningslänken
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Webbläsaren kunde inte öppnas. Försök igen eller klistra in inloggningslänken i webbläsaren.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Inloggningen hanteras av den installerade Codex-miljön och delas med Codex. PhotoCraft lagrar inga token.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex hittades inte. Installera och öppna skrivbordsappen Codex och kontrollera sedan anslutningen igen.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Använd hela Codex-installationen; om bara codex.exe kopieras kan komponenter för bildredigering saknas.
+	AI Edit	AI-redigering
+	Codex Account	Codex-konto
+# Image API and related UI (original translations).
+	Image service	Bildtjänst
+	Codex (ChatGPT subscription)	Codex (ChatGPT-abonnemang)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Den synliga arbetsytan och instruktionen skickas till den inställda tjänsten. Tjänsteleverantören kan ta ut användningsavgifter.
+	Model ID	Modell-ID
+	API address and protocol	API-adress och protokoll
+	API address	API-adress
+	API protocol	API-protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Egna tjänster måste stödja det valda protokollet för bildredigering. Om adressen ändras krävs en nyckel för den adressen.
+	API key	API-nyckel
+	API key configured — leave empty to keep it	API-nyckel inställd — lämna tomt för att behålla den
+	Remember API key in system credential store	Spara API-nyckeln i systemets lagring för autentiseringsuppgifter
+	The API key is available for this session only.	API-nyckeln är endast tillgänglig under den här sessionen.
+	Save API settings	Spara API-inställningar
+	Remove API key	Ta bort API-nyckeln
+	API configured. Saving settings does not generate an image.	API är inställt. Att spara inställningarna skapar ingen bild.
+	Save your API settings before editing.	Spara API-inställningarna innan du redigerar.
+	API settings saved	API-inställningarna har sparats
+	Enter a valid API key without whitespace	Ange en giltig API-nyckel utan blanksteg
+	API key removed	API-nyckeln har tagits bort
+	Could not load API settings	API-inställningarna kunde inte läsas in
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Resultatet anpassas till arbetsytan och läggs till som ett nytt lager. Befintliga lager bevaras.
+	AI Edit via API	AI-redigering via API
+	AI Provider Settings	Inställningar för AI-leverantör
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	AI-redigeringen godkändes inte av tjänstens innehållsgranskning
+	The image service's content review is unavailable	Bildtjänstens innehållsgranskning är inte tillgänglig
+	Your editing instruction did not pass the service's content review.	Din redigeringsinstruktion godkändes inte av tjänstens innehållsgranskning.
+	Your reference image did not pass the service's content review.	Din referensbild godkändes inte av tjänstens innehållsgranskning.
+	The generated image did not pass the service's content review.	Den genererade bilden godkändes inte av tjänstens innehållsgranskning.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Din instruktion utlöste tjänstens innehållsregler, som kan omfatta upphovsrättsliga begränsningar.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Din referensbild utlöste tjänstens innehållsregler, som kan omfatta upphovsrättsliga begränsningar.
+	Your reference image did not pass the service's privacy review.	Din referensbild godkändes inte av tjänstens integritetsgranskning.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Den genererade bilden utlöste tjänstens innehållsregler, som kan omfatta upphovsrättsliga begränsningar.
+	The generated image triggered the service's impersonation restrictions.	Den genererade bilden utlöste tjänstens begränsningar mot identitetsimitation.
+	The service rejected this edit without identifying the content-review stage.	Tjänsten avvisade redigeringen utan att ange vilket steg i innehållsgranskningen det gällde.
+	The service's content review failed, so this edit could not be completed.	Tjänstens innehållsgranskning misslyckades, så redigeringen kunde inte slutföras.
+	Revise the instruction and try again manually.	Ändra instruktionen och försök igen manuellt.
+	Choose a reference image that meets the service's requirements.	Välj en referensbild som uppfyller tjänstens krav.
+	Adjust the editing request or contact the service provider for details.	Anpassa redigeringsbegäran eller kontakta tjänsteleverantören för mer information.
+	Check that your editing request meets the service's content requirements.	Kontrollera att redigeringsbegäran uppfyller tjänstens innehållskrav.
+	Check your editing content or ask the service provider for details.	Kontrollera redigeringsinnehållet eller fråga tjänsteleverantören om detaljer.
+	Try again manually later. Contact the service provider if the problem continues.	Försök igen manuellt senare. Kontakta tjänsteleverantören om problemet kvarstår.
+	This edit did not change existing layers or add a new layer.	Den här redigeringen har inte ändrat befintliga lager eller lagt till något nytt lager.
+	Error code: {code}	Felkod: {code}
+	API settings	API-inställningar

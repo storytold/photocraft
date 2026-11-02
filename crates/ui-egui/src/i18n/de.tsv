@@ -3545,3 +3545,77 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+# Codex image editing and account controls (original translations).
+	AI Edit…	KI-Bearbeitung…
+@id	edit.ai.codex	KI-Bearbeitung…
+	Describe your edit	Beschreiben Sie die Bearbeitung
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Die sichtbare Leinwand und die Anweisung werden mit Ihrer ChatGPT-Anmeldung an Codex gesendet. Das Ergebnis wird an die Leinwand angepasst und als neue Ebene hinzugefügt.
+	Codex account has not been checked	Das Codex-Konto wurde noch nicht geprüft
+	Checking Codex connection…	Codex-Verbindung wird geprüft…
+	Complete ChatGPT sign-in in your browser	Schließen Sie die ChatGPT-Anmeldung im Browser ab
+	Connected to ChatGPT	Mit ChatGPT verbunden
+	ChatGPT plan	ChatGPT-Abonnement
+	ChatGPT sign-in is required	ChatGPT-Anmeldung erforderlich
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex verwendet eine andere Anmeldemethode. Melden Sie sich mit ChatGPT an, um Ihr Abonnement zu nutzen.
+	Cancelling sign-in…	Anmeldung wird abgebrochen…
+	Sign-in cancelled	Anmeldung abgebrochen
+	Could not verify the account. Check your connection or sign in again.	Das Konto konnte nicht geprüft werden. Prüfen Sie die Verbindung oder melden Sie sich erneut an.
+	Connection details	Verbindungsdetails
+	Sign in with ChatGPT	Mit ChatGPT anmelden
+	Open sign-in page	Anmeldeseite öffnen
+	Check connection	Verbindung prüfen
+	Cancel sign-in	Anmeldung abbrechen
+	Copy sign-in link	Anmeldelink kopieren
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Der Browser konnte nicht geöffnet werden. Versuchen Sie es erneut oder fügen Sie den Anmeldelink im Browser ein.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Die Anmeldung wird von der installierten Codex-Laufzeit verwaltet und mit Codex geteilt. PhotoCraft speichert keine Tokens.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex wurde nicht gefunden. Installieren und öffnen Sie die Codex-Desktop-App und prüfen Sie dann die Verbindung erneut.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Verwenden Sie die vollständige Codex-Installation. Beim alleinigen Kopieren von codex.exe können Bildbearbeitungskomponenten fehlen.
+	AI Edit	KI-Bearbeitung
+	Codex Account	Codex-Konto
+# Image API and related UI (original translations).
+	Image service	Bilddienst
+	Codex (ChatGPT subscription)	Codex (ChatGPT-Abonnement)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Die sichtbare Leinwand und die Anweisung werden an den konfigurierten Dienst gesendet. Der Dienstanbieter kann dafür Nutzungsgebühren berechnen.
+	Model ID	Modell-ID
+	API address and protocol	API-Adresse und Protokoll
+	API address	API-Adresse
+	API protocol	API-Protokoll
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Eigene Dienste müssen das gewählte Bildbearbeitungsprotokoll unterstützen. Eine geänderte Adresse benötigt einen Schlüssel für diese Adresse.
+	API key	API-Schlüssel
+	API key configured — leave empty to keep it	API-Schlüssel eingerichtet — zum Beibehalten leer lassen
+	Remember API key in system credential store	API-Schlüssel in der Anmeldeinformationsverwaltung des Systems speichern
+	The API key is available for this session only.	Der API-Schlüssel ist nur in dieser Sitzung verfügbar.
+	Save API settings	API-Einstellungen speichern
+	Remove API key	API-Schlüssel entfernen
+	API configured. Saving settings does not generate an image.	API eingerichtet. Das Speichern der Einstellungen erzeugt kein Bild.
+	Save your API settings before editing.	Speichern Sie vor der Bearbeitung die API-Einstellungen.
+	API settings saved	API-Einstellungen gespeichert
+	Enter a valid API key without whitespace	Geben Sie einen gültigen API-Schlüssel ohne Leerzeichen ein
+	API key removed	API-Schlüssel entfernt
+	Could not load API settings	API-Einstellungen konnten nicht geladen werden
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Das Ergebnis wird an die Leinwand angepasst und als neue Ebene hinzugefügt. Vorhandene Ebenen bleiben erhalten.
+	AI Edit via API	KI-Bearbeitung über API
+	AI Provider Settings	KI-Anbietereinstellungen
+# Image API and related UI (original translations).
+	AI edit did not pass the service's content review	Die KI-Bearbeitung wurde von der Inhaltsprüfung des Dienstes abgelehnt
+	The image service's content review is unavailable	Die Inhaltsprüfung des Bilddienstes ist nicht verfügbar
+	Your editing instruction did not pass the service's content review.	Ihre Bearbeitungsanweisung hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	Your reference image did not pass the service's content review.	Ihr Referenzbild hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	The generated image did not pass the service's content review.	Das erzeugte Bild hat die Inhaltsprüfung des Dienstes nicht bestanden.
+	Your instruction triggered the service's content rules, which may include copyright restrictions.	Ihre Anweisung hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	Your reference image triggered the service's content rules, which may include copyright restrictions.	Ihr Referenzbild hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	Your reference image did not pass the service's privacy review.	Ihr Referenzbild hat die Datenschutzprüfung des Dienstes nicht bestanden.
+	The generated image triggered the service's content rules, which may include copyright restrictions.	Das erzeugte Bild hat die Inhaltsregeln des Dienstes ausgelöst, die auch urheberrechtliche Einschränkungen umfassen können.
+	The generated image triggered the service's impersonation restrictions.	Das erzeugte Bild hat die Regeln des Dienstes gegen Identitätsvortäuschung ausgelöst.
+	The service rejected this edit without identifying the content-review stage.	Der Dienst hat diese Bearbeitung abgelehnt, ohne die betroffene Prüfungsphase zu nennen.
+	The service's content review failed, so this edit could not be completed.	Die Inhaltsprüfung des Dienstes ist fehlgeschlagen. Diese Bearbeitung konnte daher nicht abgeschlossen werden.
+	Revise the instruction and try again manually.	Ändern Sie die Anweisung und versuchen Sie es erneut manuell.
+	Choose a reference image that meets the service's requirements.	Wählen Sie ein Referenzbild, das den Anforderungen des Dienstes entspricht.
+	Adjust the editing request or contact the service provider for details.	Passen Sie die Bearbeitungsanfrage an oder fragen Sie den Dienstanbieter nach Einzelheiten.
+	Check that your editing request meets the service's content requirements.	Prüfen Sie, ob Ihre Bearbeitungsanfrage den Inhaltsanforderungen des Dienstes entspricht.
+	Check your editing content or ask the service provider for details.	Prüfen Sie den Bearbeitungsinhalt oder fragen Sie den Dienstanbieter nach Einzelheiten.
+	Try again manually later. Contact the service provider if the problem continues.	Versuchen Sie es später erneut manuell. Wenden Sie sich bei anhaltenden Problemen an den Dienstanbieter.
+	This edit did not change existing layers or add a new layer.	Diese Bearbeitung hat vorhandene Ebenen nicht verändert und keine neue Ebene hinzugefügt.
+	Error code: {code}	Fehlercode: {code}
+	API settings	API-Einstellungen

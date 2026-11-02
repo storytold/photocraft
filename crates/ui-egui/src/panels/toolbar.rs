@@ -102,6 +102,21 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.panels.toolbar_double = !double;
             }
             ui.add_space(4.0);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // A pinned command shortcut, separate from the scrollable painting tools.
+                let enabled = crate::menus::is_enabled(app, "edit.ai.codex");
+                let response = ui.add_enabled_ui(enabled, |ui| {
+                    icons::button_with_size_tip(ui, "sparkles", vec2(bx, bx - 4.0), toolbar_icon_size(bx, t.pro), false, "AI Edit…", true)
+                });
+                if response.inner.clicked()
+                    && let Err(error) = crate::menus::invoke(app, ui.ctx(), "edit.ai.codex", json!({}))
+                {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
+                ui.add_space(4.0);
+            }
             // Subtle violet wash at the bottom of the toolbar.
             let full = ui.max_rect();
             if !t.bevel && !t.pro && t.dark() {
@@ -575,5 +590,58 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
 fn chip_command(app: &mut PhotocraftApp, id: &str) {
     if app.run(id, json!({})).is_ok() {
         crate::type_tool::foreground_changed(app);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod ai_shortcut_tests {
+    use super::*;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    fn harness(document: bool, double: bool, theme: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        if document {
+            assert!(app.run("file.new", json!({"width": 16, "height": 16})).is_ok());
+        }
+        app.ui.panels.toolbar_double = double;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    toolbar(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.run_steps(2);
+        h
+    }
+
+    #[test]
+    fn ai_shortcut_opens_form_in_every_theme_and_toolbar_width() {
+        for theme in crate::theme::ThemeKind::ALL {
+            for double in [false, true] {
+                let mut h = harness(true, double, theme);
+                let tool = h.state().ui.tool;
+                let button = h.get_by_label("AI Edit…");
+                assert!(!button.accesskit_node().is_disabled(), "{theme:?}, double={double}");
+                assert!(button.rect().top() < 80.0, "shortcut stays above the scrolling tools");
+                button.click();
+                h.run_steps(2);
+                let app = h.state();
+                assert_eq!(app.ui.dialogs.len(), 1);
+                assert_eq!(app.ui.dialogs[0].fields["__command"], "edit.ai.codex");
+                assert_eq!(app.ui.dialogs[0].fields["prompt"], "");
+                assert_eq!(app.ui.tool, tool, "opening a command form doesn't select a painting tool");
+                assert_eq!(app.session.active().unwrap().doc.layers.len(), 1, "no generation starts when opening the form");
+            }
+        }
+    }
+
+    #[test]
+    fn ai_shortcut_without_document_is_disabled() {
+        let h = harness(false, false, crate::theme::ThemeKind::Pro);
+        assert!(h.get_by_label("AI Edit…").accesskit_node().is_disabled());
+        assert!(h.state().ui.dialogs.is_empty());
     }
 }
