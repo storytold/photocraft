@@ -17,7 +17,10 @@ const MAX_GIF_FRAME_PIXELS: u64 = 64 << 20;
 /// Largest total an animated GIF render keeps staged before encoding: one index byte per pixel plus
 /// a 768-byte palette for every frame, the same 2 GiB bound as imported footage ([`MAX_FOOTAGE_BYTES`]).
 /// The per-frame cap alone lets `frames × pixels` reach terabytes (a 4000 × 4000 canvas over a
-/// 1,000,000-frame timeline). 1920 × 1080 holds about 1,000 frames and 4096 × 2160 about 240.
+/// 1,000,000-frame timeline). 1920 × 1080 holds about 2,145 frames and 4096 × 2160 about 242.
+/// This bounds the staged frames only (indices and palettes). It does not bound the encoder's output
+/// buffer (LZW data, roughly 1.3-1.5 times the raw size, growing by doubling) or the per-frame
+/// transients (RGBA f32, 16 bytes per pixel), so it is not a bound on peak memory.
 const MAX_GIF_STAGED_BYTES: u64 = MAX_FOOTAGE_BYTES;
 /// The GIF format stores each side as 16 bits.
 const MAX_GIF_SIDE: u64 = 65_535;
@@ -34,7 +37,10 @@ fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), Stri
     };
     let per_frame = pixels + 768;
     if frames.checked_mul(per_frame).is_none_or(|total| total > MAX_GIF_STAGED_BYTES) {
-        return Err(format!("{frames} frames of {w} × {h} are too large to render as an animated GIF (limit {} MiB staged in total); shorten the timeline or reduce the canvas", MAX_GIF_STAGED_BYTES >> 20));
+        return Err(format!(
+            "{frames} frames of {w} × {h} are too large to render as an animated GIF (limit {} MiB staged in total); shorten the timeline or reduce the canvas",
+            MAX_GIF_STAGED_BYTES >> 20
+        ));
     }
     Ok(())
 }
