@@ -129,6 +129,9 @@ fn split_takes_hair_from_the_matte_around_each_subject() {
     assert_eq!(r["edges"], "refine", "{r}");
     let r = s.execute(SPLIT, json!({"layers": 2, "edges": "hair"})).unwrap();
     assert_eq!(r["edges"], "hair", "{r}");
+    let subject = LayerId(r["layers"][1].as_u64().unwrap());
+    assert_eq!(alpha_at(&s, subject, 5, 5), 1.0, "hair only adds strands: the subject stays whole");
+    assert!(alpha_at(&s, subject, 34, 5) > 0.9, "and keeps the matte's edge");
     assert!(
         fake.state().runs.iter().any(|r| r.request["task"] == "segment" && r.request["prompt"] == "hair" && r.request["params"]["maxDetections"].is_number()),
         "the detector asked for hair"

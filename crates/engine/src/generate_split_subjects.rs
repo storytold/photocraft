@@ -43,9 +43,9 @@ pub(super) enum Edges {
     Soft(f32),
     /// `refine`: the detector's hard mask, edge refined from the pixels (Select Subject's).
     Refine,
-    /// `hair`: as `refine`, with the Refine Edge Brush painted along the subject's edge where
-    /// the detector finds hair (Photoshop's Refine Hair): the strands' coverage comes from the
-    /// colours there.
+    /// `hair`: as `auto`, plus the strands past the edge where the detector finds hair: the
+    /// Refine Edge Brush painted along that edge (Photoshop's Refine Hair) estimates their
+    /// coverage from the colours, and only what it adds outside the subject's mask is kept.
     Hair,
     /// `hard`: the detector's hard mask as it is.
     Hard,
@@ -153,53 +153,59 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             // Subject does (or as `edges` asks).
             let backend = Arc::clone(&job.backend);
             let matted = match (&matte, edges) {
-                (Some(m), Edges::Auto | Edges::Matte) => {
+                (Some(m), Edges::Auto | Edges::Matte | Edges::Hair) => {
                     ctx.progress(0.05, "Matting edges");
                     matte_alphas(backend.as_ref(), m, &picture, (w, h), &instances, &name, ctx)?
                 }
                 _ => None,
             };
             ctx.check()?;
-            let used = match (&matted, edges) {
+            let edge_base = match (&matted, edges) {
                 (Some(_), _) => Edges::Matte,
-                (None, Edges::Auto | Edges::Matte) => Edges::Refine,
+                (None, Edges::Auto | Edges::Matte | Edges::Hair) => Edges::Refine,
                 (None, e) => e,
             };
-            let alphas: Vec<Vec<f32>> = match matted {
+            let mut alphas: Vec<Vec<f32>> = match matted {
                 Some(a) => a,
-                None if used == Edges::Refine => {
+                None if edge_base == Edges::Refine => {
                     ctx.progress(0.3, "Refining edges");
                     instances.iter().map(|(cov, _, _)| crate::select_ml_cmds::refine_coverage(doc, *active, true, cov.clone(), area)).collect()
                 }
-                None if used == Edges::Hair => {
-                    ctx.progress(0.2, "Finding hair");
-                    let hair = match &hair_finder {
-                        Some(f) => match f.instances(doc, *active, true, ctx) {
-                            Ok((found, _)) => {
-                                let mut u = vec![0.0f32; w as usize * h as usize];
-                                for (cov, _, _) in &found {
-                                    for (d, c) in u.iter_mut().zip(cov) {
-                                        *d = d.max(*c);
-                                    }
-                                }
-                                Some(u)
-                            }
-                            Err(e) if ctx.cancelled() => return Err(e),
-                            Err(_) => None,
-                        },
-                        None => None,
-                    };
-                    ctx.progress(0.3, "Refining hair");
-                    instances
-                        .iter()
-                        .map(|(cov, bounds, _)| {
-                            let brush = hair.as_deref().and_then(|hair| hair_brush(cov, hair, area, *bounds));
-                            crate::select_ml_cmds::refine_coverage_brushed(doc, *active, true, cov.clone(), area, brush.as_ref())
-                        })
-                        .collect()
-                }
                 None => instances.iter().map(|(cov, _, _)| cov.clone()).collect(),
             };
+            // Refine Hair: strands past the edge, added to what the edge already has (painting
+            // the brush over the hair itself let the colour estimate punch holes in it and eat
+            // the jaw beside it, measured in the app 2026-11-02).
+            let mut used = edge_base;
+            if let Some(f) = &hair_finder {
+                ctx.progress(0.32, "Finding hair");
+                let hair = match f.instances(doc, *active, true, ctx) {
+                    Ok((found, _)) => {
+                        let mut u = vec![0.0f32; w as usize * h as usize];
+                        for (cov, _, _) in &found {
+                            for (d, c) in u.iter_mut().zip(cov) {
+                                *d = d.max(*c);
+                            }
+                        }
+                        Some(u)
+                    }
+                    Err(e) if ctx.cancelled() => return Err(e),
+                    Err(_) => None,
+                };
+                if let Some(hair) = hair {
+                    ctx.progress(0.34, "Refining hair");
+                    for ((cov, bounds, _), alpha) in instances.iter().zip(alphas.iter_mut()) {
+                        let Some((brush, near)) = hair_brush(cov, &hair, area, *bounds) else { continue };
+                        let strands = crate::select_ml_cmds::refine_coverage_brushed(doc, *active, true, cov.clone(), area, Some(&brush));
+                        for (((a, s), n), c) in alpha.iter_mut().zip(&strands).zip(&near).zip(cov) {
+                            if *n && *c < 0.5 {
+                                *a = a.max(*s);
+                            }
+                        }
+                    }
+                    used = Edges::Hair;
+                }
+            }
             let template_id = job.template_id.clone();
             let below = *active;
             ctx.progress(0.35, "Filling the background");
@@ -388,9 +394,10 @@ const MAX_STRAY: f64 = 0.2;
 const HAIR_PROMPT: &str = "hair";
 
 /// The Refine Edge Brush Photoshop's Refine Hair paints: dabs along the subject's edge where it
-/// meets hair, wide enough to reach the strands beyond it (a fraction of the subject's size).
-/// `None` when the subject has no edge in hair.
-fn hair_brush(subject: &[f32], hair: &[f32], area: Rect, bounds: Rect) -> Option<photocraft_algo::matting::EdgeBrush> {
+/// meets hair, wide enough to reach the strands beyond it (a fraction of the subject's size),
+/// and where the strands it finds may count (near the hair). `None` when the subject has no
+/// edge in hair.
+fn hair_brush(subject: &[f32], hair: &[f32], area: Rect, bounds: Rect) -> Option<(photocraft_algo::matting::EdgeBrush, Vec<bool>)> {
     let (w, h) = (area.width() as usize, area.height() as usize);
     if subject.len() != w * h || hair.len() != w * h {
         return None;
@@ -429,7 +436,9 @@ fn hair_brush(subject: &[f32], hair: &[f32], area: Rect, bounds: Rect) -> Option
     if strokes.is_empty() {
         return None;
     }
-    photocraft_algo::matting::EdgeBrush::new(&strokes, area)
+    // Where strands may be added: within the reach of the detector's hair.
+    let near = to_hair.iter().map(|d| *d <= reach).collect();
+    Some((photocraft_algo::matting::EdgeBrush::new(&strokes, area)?, near))
 }
 
 /// The hair band's half-width, as a fraction of the subject's larger side...
