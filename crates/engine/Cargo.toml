@@ -31,6 +31,7 @@ photocraft-io = { workspace = true }
 photocraft-psd = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
+base64 = "0.22"
 # Generative provider interface (Generative Expand). The trait only: no HTTP client in the engine.
 photocraft-ml = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
