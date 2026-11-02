@@ -187,6 +187,7 @@ impl PhotocraftApp {
             ctx.request_repaint();
         }
         if let Some(splash) = &mut self.splash {
+            splash.ensure_started(now);
             // Closes immediately when ready and never waits for an artificial timer.
             // In the web build or whenever notices arrive (e.g. preset warnings), dismiss immediately so failures are never hidden.
             let has_failures_or_notices = !self.ui.notices.is_empty();

@@ -45,6 +45,13 @@ impl SplashState {
         }
     }
 
+    /// Ensures that `start_time` is initialized to the current time on the first tick before checks.
+    pub fn ensure_started(&mut self, now: f64) {
+        if self.start_time <= 0.0 {
+            self.start_time = now;
+        }
+    }
+
     /// Returns whether the splash screen is currently active and within safety timeout limits.
     pub fn is_active(&self, now: f64) -> bool {
         if self.dismissed {
@@ -78,9 +85,7 @@ impl SplashState {
     /// Renders the startup splash screen card, brand mark, and animated progress bar.
     pub fn show(&mut self, ctx: &egui::Context, ui: &mut Ui) {
         let now = ctx.input(|i| i.time);
-        if self.start_time <= 0.0 {
-            self.start_time = now;
-        }
+        self.ensure_started(now);
 
         let elapsed = (now - self.start_time).max(0.0);
 
@@ -248,6 +253,27 @@ mod tests {
         splash.dismiss();
         assert!(!splash.is_active(1.2));
         assert!(!splash.should_render(1.2));
+    }
+
+    /// Verifies that `ensure_started` initializes `start_time` and allows `should_render` to work without `show`.
+    #[test]
+    fn splash_ensure_started_enables_render_and_timeout() {
+        let mut splash = SplashState::new();
+        assert_eq!(splash.start_time, 0.0);
+        assert!(!splash.should_render(1.0));
+
+        // First tick calls ensure_started(1.0)
+        splash.ensure_started(1.0);
+        assert_eq!(splash.start_time, 1.0);
+
+        // Before appear delay: should not render
+        assert!(!splash.should_render(1.05));
+
+        // After appear delay: should render
+        assert!(splash.should_render(1.0 + SPLASH_APPEAR_DELAY + 0.05));
+
+        // After safety timeout: is_active becomes false
+        assert!(!splash.is_active(1.0 + SPLASH_SAFETY_TIMEOUT + 0.1));
     }
 
     /// Verifies that [`SplashState::default`] initializes state identically to [`SplashState::new`].
