@@ -704,22 +704,26 @@ fn deferred_provider_open_preserves_waiting_remove_strokes_until_explicit_cancel
 
     assert!(crate::retouch_ui::remove_pending_cancel(&mut app));
     assert!(app.remove_pending.is_empty() && app.remove_pending_target.is_none() && app.remove_trail.is_none());
+    let active = assert_provider_open_after_remove_cancel(&mut app, &host, &request, &imports);
+    assert_ne!(active, doc);
+    let original = app.session.documents().iter().find(|state| state.doc.id == doc).unwrap();
+    assert!(Arc::ptr_eq(&original.doc, &source));
+    assert_eq!(original.revision, revision);
+}
+
+fn assert_provider_open_after_remove_cancel(app: &mut PhotocraftApp, host: &Host, prior_request: &str, imports: &AtomicUsize) -> DocId {
     let next = host.request_open("resource-one").unwrap();
-    assert_ne!(next, request);
+    assert_ne!(next, prior_request);
     let events = host.take_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].metadata["type"], "openRequest");
     assert_eq!(events[0].metadata["requestId"], next);
     host.open(next.clone(), "loaded.png".into(), vec![1]).unwrap();
-    tick_once(&mut app);
+    tick_once(app);
     assert_eq!(imports.load(Ordering::Relaxed), 1);
     assert_eq!(app.session.documents().len(), 2);
     let active = app.session.active().unwrap().doc.id;
-    assert_ne!(active, doc);
     assert!(host.bound(active));
-    let original = app.session.documents().iter().find(|state| state.doc.id == doc).unwrap();
-    assert!(Arc::ptr_eq(&original.doc, &source));
-    assert_eq!(original.revision, revision);
     let events = host.take_events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].metadata["type"], "opened");
@@ -727,6 +731,7 @@ fn deferred_provider_open_preserves_waiting_remove_strokes_until_explicit_cancel
     assert_eq!(events[0].metadata["resourceId"], "resource-one");
     assert_eq!(events[0].metadata["documentId"], active.0.to_string());
     assert!(!host.busy());
+    active
 }
 
 #[test]
