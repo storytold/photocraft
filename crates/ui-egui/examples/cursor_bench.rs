@@ -41,7 +41,7 @@ struct BenchmarkRun {
     baseline_painted_us_samples: Vec<f64>,
     baseline_painted_p50_us: f64,
     baseline_painted_p95_us: f64,
-    speedup_vs_baseline_p50: f64,
+    preparation_speedup_vs_baseline_p50: f64,
     warm_moves_total: usize,
     cache_hits: usize,
     warm_rasterizations: usize,
@@ -99,17 +99,39 @@ fn save_cursor_artifact(output_dir: &Path, variant_name: &str, scale: f32, image
     Ok(())
 }
 
+// Execute one event-loop frame. Timings cover cursor preparation only, not GPU or
+// presentation latency. Each frame drains output so painted geometry cannot accumulate.
+fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, painted: bool) -> (f64, Option<egui::CustomCursorImage>) {
+    let mut elapsed_us = 0.0;
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, 512.0))),
+        events: vec![egui::Event::PointerMoved(at)],
+        ..Default::default()
+    };
+    let output = ctx.run(input, |ctx| {
+        ctx.set_cursor_image(None);
+        let start = Instant::now();
+        if painted {
+            icons::cursor(ctx, variant.icon_name(), at, variant.hotspot_in_box() / 24.0, 22.0);
+        } else if let Some(icon) = pen(ctx, tool) {
+            ctx.set_cursor_icon(icon);
+        }
+        elapsed_us = start.elapsed().as_secs_f64() * 1_000_000.0;
+    });
+    (elapsed_us, output.platform_output.cursor_image)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let moves: usize = arg_value(&args, "--moves").and_then(|v| v.parse().ok()).unwrap_or(1000);
     let reps: usize = arg_value(&args, "--reps").or_else(|| arg_value(&args, "--pairs")).and_then(|v| v.parse().ok()).unwrap_or(5);
     let save_dir = arg_value(&args, "--save-artifacts");
 
-    if moves == 0 {
-        return Err("moves count must be > 0".into());
+    if moves == 0 || moves > 100_000 {
+        return Err("moves count must be in 1..=100000".into());
     }
-    if reps == 0 {
-        return Err("reps count must be > 0".into());
+    if reps == 0 || reps > 100 {
+        return Err("reps count must be in 1..=100".into());
     }
 
     // Check for --json flag and optional path argument
@@ -138,8 +160,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for &scale in &scales {
             // Context setup with native scale applied on all platforms
             let ctx = Context::default();
-            ctx.set_pixels_per_point(scale);
+            egui_extras::install_image_loaders(&ctx);
             ctx.set_zoom_factor(scale);
+            let at = pos2(100.0, 100.0);
+            // Apply pending zoom during begin_pass before reading effective scale.
+            let _ = cursor_frame(&ctx, tool, variant, at, false);
             let measured_scale = native_scale(&ctx);
             if (measured_scale - scale).abs() > 1e-4 {
                 return Err(format!("Context scale mismatch for {scale}: measured {measured_scale}").into());
@@ -171,59 +196,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 2. Warm movement / cache lookup measurement
-            reset_pen_rasterization_count();
-            let initial_icon = pen(&ctx, tool).ok_or_else(|| format!("pen cursor unavailable for {variant:?} at {scale}"))?;
-            if initial_icon != egui::CursorIcon::None {
-                return Err(format!("expected CursorIcon::None from pen(), got {initial_icon:?}").into());
+            // Prime both paths, with actual frames and drained platform/paint output.
+            let (_, initial_image) = cursor_frame(&ctx, tool, variant, at, false);
+            let initial_image = initial_image.ok_or("missing native cursor in warmup frame")?;
+            if initial_image.size != img.size {
+                return Err("warm native bitmap does not match requested scale".into());
             }
-            let initial_image = ctx.output(|o| o.cursor_image.clone()).ok_or("missing cursor_image in platform output")?;
-            let rasterizations_before_moves = pen_rasterization_count();
-
-            let total_moves = moves * reps;
+            let _ = cursor_frame(&ctx, tool, variant, at, true);
+            reset_pen_rasterization_count();
+            let total_moves = moves.checked_mul(reps).ok_or("move count overflow")?;
             let mut warm_samples = Vec::with_capacity(total_moves);
+            let mut baseline_samples = Vec::with_capacity(total_moves);
             let mut cache_hits = 0;
-            let mut missing_outputs = 0;
-
-            for step in 0..total_moves {
-                let start_move = Instant::now();
-                let icon = pen(&ctx, tool);
-                let move_us = start_move.elapsed().as_secs_f64() * 1_000_000.0;
-                warm_samples.push(move_us);
-
-                if icon != Some(egui::CursorIcon::None) {
-                    return Err(format!("step {step}: pen returned unexpected icon {icon:?}").into());
-                }
-
-                let cur_img = ctx.output(|o| o.cursor_image.clone());
-                match cur_img {
-                    Some(ref cur) => {
-                        if Arc::ptr_eq(&cur.rgba, &initial_image.rgba) {
-                            cache_hits += 1;
+            // Alternate execution order by repetition; coordinates match for both paths.
+            for rep in 0..reps {
+                for step in 0..moves {
+                    let p = pos2(100.0 + (step % 800) as f32 * 0.25, 100.0 + (step as f32 * 0.05).sin() * 40.0);
+                    let mut native_image = None;
+                    for painted in if rep % 2 == 0 { [false, true] } else { [true, false] } {
+                        let (elapsed, image) = cursor_frame(&ctx, tool, variant, p, painted);
+                        if painted {
+                            baseline_samples.push(elapsed);
+                        } else {
+                            warm_samples.push(elapsed);
+                            native_image = image;
                         }
                     }
-                    None => {
-                        missing_outputs += 1;
+                    let current = native_image.ok_or("native cursor missing from frame output")?;
+                    if Arc::ptr_eq(&current.rgba, &initial_image.rgba) {
+                        cache_hits += 1;
                     }
                 }
             }
-
-            if missing_outputs > 0 {
-                return Err(format!("{missing_outputs} pointer moves had missing cursor_image platform output").into());
-            }
-
-            let rasterizations_after_moves = pen_rasterization_count();
-            let warm_rasterizations = rasterizations_after_moves.saturating_sub(rasterizations_before_moves);
-
-            // 3. Baseline: painted fallback measurement using identical movement coordinates
-            let mut baseline_samples = Vec::with_capacity(total_moves);
-            let hot = variant.hotspot_in_box() / 24.0;
-            for step in 0..total_moves {
-                let p = pos2(100.0 + (step as f32) * 0.25, 100.0 + ((step as f32) * 0.05).sin() * 40.0);
-                let start_base = Instant::now();
-                icons::cursor(&ctx, variant.icon_name(), p, hot, 22.0);
-                let base_us = start_base.elapsed().as_secs_f64() * 1_000_000.0;
-                baseline_samples.push(base_us);
-            }
+            let warm_rasterizations = pen_rasterization_count();
 
             let mut sorted_cold = cold_samples.clone();
             sorted_cold.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -273,7 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 baseline_painted_us_samples: baseline_samples,
                 baseline_painted_p50_us: base_p50,
                 baseline_painted_p95_us: base_p95,
-                speedup_vs_baseline_p50: speedup,
+                preparation_speedup_vs_baseline_p50: speedup,
                 warm_moves_total: total_moves,
                 cache_hits,
                 warm_rasterizations,
@@ -329,7 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 r.warm_move_p50_us,
                 r.warm_move_p95_us,
                 r.baseline_painted_p50_us,
-                r.speedup_vs_baseline_p50,
+                r.preparation_speedup_vs_baseline_p50,
                 gate_str
             );
         }

@@ -37,7 +37,6 @@ enum Shape {
     Hand { closed: bool },
     Zoom { out: bool },
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
-    Pen(PenVariant),
 }
 
 /// Single-entry cache for non-Pen shapes, keeping memory bounded to one bitmap.
@@ -288,19 +287,22 @@ pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
 fn cached_pen_image(ctx: &egui::Context, variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
     let id = egui::Id::unique("photocraft-pen-cursor-cache");
     let idx = variant as usize;
-    if let Some(cache) = ctx.data(|d| d.get_temp::<PenCache>(id)) {
-        if let Some(Some((cached_scale, ref image))) = cache.entries.get(idx) {
-            if (*cached_scale - scale).abs() < 1e-4 {
-                return Some(image.clone());
-            }
-        }
+    if let Some(image) = ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<PenCache>(id)
+            .entries
+            .get(idx)
+            .and_then(Option::as_ref)
+            .filter(|(cached_scale, _)| *cached_scale == scale)
+            .map(|(_, image)| image.clone())
+    }) {
+        return Some(image);
     }
     let image = pen::rasterize(variant, scale)?;
-    let mut cache = ctx.data(|d| d.get_temp::<PenCache>(id)).unwrap_or_default();
-    if let Some(slot) = cache.entries.get_mut(idx) {
-        *slot = Some((scale, image.clone()));
-    }
-    ctx.data_mut(|d| d.insert_temp(id, cache));
+    ctx.data_mut(|d| {
+        if let Some(slot) = d.get_temp_mut_or_default::<PenCache>(id).entries.get_mut(idx) {
+            *slot = Some((scale, image.clone()));
+        }
+    });
     Some(image)
 }
 
@@ -323,14 +325,12 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
 }
 
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
-    if let Shape::Pen(variant) = shape {
-        return cached_pen_image(ctx, *variant, scale);
-    }
     let id = egui::Id::unique("photocraft-tool-cursor");
-    if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id)) {
-        if cached.shape == *shape && (cached.scale - scale).abs() < 1e-4 {
-            return Some(cached.image);
-        }
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
+        && cached.shape == *shape
+        && cached.scale == scale
+    {
+        return Some(cached.image);
     }
     let image = rasterize(shape, scale)?;
     ctx.data_mut(|d| d.insert_temp(id, Cached { shape: shape.clone(), scale, image: image.clone() }));
@@ -363,7 +363,7 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
                 }
             }
             // Only ever a bitmap: without one the OS draws its own grab cursors, or fallback paints.
-            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pen(_) => {}
+            Shape::Hand { .. } | Shape::Zoom { .. } => {}
         }
     }
 }
@@ -411,7 +411,6 @@ fn extent(shape: &Shape) -> Option<f32> {
         }
         Shape::Hand { .. } => hand::HALF,
         Shape::Zoom { .. } => zoom::HALF,
-        Shape::Pen(_) => 12.0,
     })
 }
 
@@ -455,7 +454,6 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             let (lx, ly) = (dx / scale, dy / scale);
             silhouette(zoom::shape(lx, ly), zoom::glyph(*out, lx, ly), 0.75, scale)
         }
-        Shape::Pen(_) => (0.0, 0.0),
     }
 }
 
@@ -531,9 +529,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    if let Shape::Pen(variant) = shape {
-        return pen::rasterize(*variant, scale);
-    }
     let extent = extent(shape)?;
     let half = ((extent + 1.5) * scale + 1.0).ceil();
     if !half.is_finite() || half > f32::from((MAX_SIDE - 1) / 2) {
@@ -597,12 +592,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         }
     }
     Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] })
-}
-
-#[cfg(test)]
-pub(crate) fn pen_bitmap(tool: Tool, scale: f32) -> Option<CustomCursorImage> {
-    let variant = PenVariant::from_tool(tool)?;
-    pen::rasterize(variant, scale)
 }
 
 #[cfg(test)]

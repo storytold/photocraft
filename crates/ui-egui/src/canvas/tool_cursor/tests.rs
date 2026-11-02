@@ -677,19 +677,19 @@ fn hostile_scales_get_no_pen_bitmap() {
 #[test]
 fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
     let ctx = egui::Context::default();
-    let shape_a = super::Shape::Pen(super::PenVariant::Standard);
-    let a1 = super::cached_image(&ctx, &shape_a, 1.0).unwrap();
-    let a2 = super::cached_image(&ctx, &shape_a, 1.0).unwrap();
+    let shape_a = super::PenVariant::Standard;
+    let a1 = super::cached_pen_image(&ctx, shape_a, 1.0).unwrap();
+    let a2 = super::cached_pen_image(&ctx, shape_a, 1.0).unwrap();
     assert!(Arc::ptr_eq(&a1.rgba, &a2.rgba), "pointer movement reuses cached bitmap");
 
     // All six variants can be cached concurrently without thrashing
     let mut images = Vec::new();
     for v in super::PenVariant::all() {
-        let img = super::cached_image(&ctx, &super::Shape::Pen(v), 1.0).unwrap();
+        let img = super::cached_pen_image(&ctx, v, 1.0).unwrap();
         images.push(img);
     }
     for (i, v) in super::PenVariant::all().into_iter().enumerate() {
-        let lookup = super::cached_image(&ctx, &super::Shape::Pen(v), 1.0).unwrap();
+        let lookup = super::cached_pen_image(&ctx, v, 1.0).unwrap();
         assert!(Arc::ptr_eq(&lookup.rgba, &images[i].rgba), "switching tools retains cached image");
     }
 
