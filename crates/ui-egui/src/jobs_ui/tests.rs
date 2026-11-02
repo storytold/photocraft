@@ -979,6 +979,22 @@ fn splash_active_blocks_escape_job_cancellation() {
     let _ = h.state_mut().session.cancel_job(job);
 }
 
+#[test]
+fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
+    let mut h = app_harness();
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = 1.0;
+    h.state_mut().splash = Some(splash);
+
+    // If a notice arrives (e.g. web preset loading failure), the splash must not hide it
+    crate::notices::post(h.state_mut(), String::from("Preset warning"), vec!["Failed to load brush".into()], true, None);
+    assert!(!h.state().ui.notices.is_empty());
+
+    // Step frame: frame logic checks for notices and dismisses splash immediately
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must be dismissed so failure notices are not hidden");
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();

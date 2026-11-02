@@ -36,6 +36,10 @@ impl PhotocraftApp {
             self.fonts_ready = true;
         }
         self.frame += 1;
+        // After the first frame has rendered, warm CJK fallback fonts lazily without holding up startup.
+        if self.frame == 2 {
+            let _ = crate::cjk_fonts::preload_cjk(ctx);
+        }
         let now = ctx.input(|i| i.time);
         let dt = (now - self.last_frame_time) as f32;
         if dt > 0.0 {
@@ -183,13 +187,21 @@ impl PhotocraftApp {
             ctx.request_repaint();
         }
         if let Some(splash) = &mut self.splash {
-            if splash.is_active(now) {
-                splash.show(&ctx, ui);
-                self.automation_input = false;
-                return;
-            } else {
+            // Closes immediately when ready and never waits for an artificial timer.
+            // In the web build or whenever notices arrive (e.g. preset warnings), dismiss immediately so failures are never hidden.
+            let has_failures_or_notices = !self.ui.notices.is_empty();
+            let system_ready = self.fonts_ready && photocraft_text::try_shared().is_some();
+            if has_failures_or_notices || system_ready || !splash.is_active(now) {
+                splash.dismiss();
                 self.splash = None;
                 ctx.request_repaint();
+            } else if splash.should_render(now) {
+                splash.show(&ctx, ui);
+                if !self.ui.notices.is_empty() {
+                    notices::show(self, &ctx);
+                }
+                self.automation_input = false;
+                return;
             }
         }
         let t0 = gpu_canvas::now_ms();
