@@ -59,6 +59,38 @@ fn distinct_tiles(s: &Surface) -> usize {
     seen.len()
 }
 
+/// Uniform tiles written pixel by pixel end up as one shared tile per value, across
+/// surfaces, with every pixel unchanged; editing one splits it off.
+#[test]
+fn uniform_tiles_are_shared() {
+    let mut interner = TileInterner::default();
+    let r = Rect::new(0, 0, 1024, 600);
+    let mut bytes = Vec::new();
+    for y in 0..600 {
+        for x in 0..1024 {
+            // White, except a gradient in the tiles of column 3.
+            bytes.extend(if x >= 768 { [x as u8, y as u8, 0, 255] } else { [255, 255, 255, 255] });
+        }
+    }
+    let mut a = Surface::from_interleaved(PixelFormat::RGBA8, r, &bytes);
+    let mut b = Surface::from_interleaved(PixelFormat::RGBA8, r, &bytes);
+    let before = a.to_interleaved(r);
+    assert_eq!(distinct_tiles(&a), 12);
+    // Rows 512..600 cover only part of their tiles: the rest is the default pixel, so those
+    // tiles are not uniform.
+    let saved = a.share_uniform_tiles(&mut interner);
+    assert_eq!(distinct_tiles(&a), 1 + 3 + 3);
+    assert_eq!(saved, 5 * TILE_SIZE as usize * TILE_SIZE as usize * 4);
+    b.share_uniform_tiles(&mut interner);
+    assert_eq!(interner.len(), 1);
+    assert!(Arc::ptr_eq(a.tile(TileCoord { tx: 0, ty: 0 }).unwrap(), b.tile(TileCoord { tx: 2, ty: 1 }).unwrap()));
+    assert_eq!(a.to_interleaved(r), before);
+    a.write_pixel(5, 5, &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(b.pixel(5, 5), vec![1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(a.pixel(5, 5), vec![0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(a.pixel(300, 5), vec![1.0, 1.0, 1.0, 1.0]);
+}
+
 /// Converting or tone-mapping a surface keeps a shared tile shared (#4531) and gives the
 /// same pixels as converting each pixel: a filled background is one tile across the grid,
 /// plus some distinct tiles.
@@ -304,6 +336,30 @@ fn fallible_region_write_rejects_bad_input_without_mutating_surface() {
     let before = surface.clone();
     assert_eq!(surface.try_write_region(Rect::new(0, 0, 2, 2), &[1.0]), Err(AllocationError::SizeOverflow));
     assert_eq!(surface, before);
+}
+
+#[test]
+fn fallible_interleaved_write_matches_the_infallible_one_and_rejects_bad_lengths() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        // Across tile edges, at a negative origin.
+        let r = Rect::new(-3, 250, 300, 517);
+        let bytes: Vec<u8> = (0..r.width() as usize * r.height() as usize * fmt.bytes_per_pixel()).map(|i| (i * 31 % 251) as u8).collect();
+        let mut a = Surface::new(fmt);
+        a.write_interleaved(r, &bytes);
+        let mut b = Surface::new(fmt);
+        b.try_write_interleaved(r, &bytes).unwrap();
+        assert_eq!(a, b);
+        let before = b.clone();
+        let got = bytes.len() - 1;
+        assert_eq!(b.try_write_interleaved(r, &bytes[1..]), Err(AllocationError::LengthMismatch { expected: bytes.len(), got }));
+        assert_eq!(b, before);
+        // Tiles an undo snapshot shares are copied, not written through.
+        let again: Vec<u8> = bytes.iter().map(|v| v ^ 0x5a).collect();
+        b.try_write_interleaved(r, &again).unwrap();
+        a.write_interleaved(r, &again);
+        assert_eq!(a, b);
+        assert_eq!(before.to_interleaved(r), bytes);
+    }
 }
 
 #[test]
@@ -777,4 +833,23 @@ fn content_bounds_with_tile_skipping() {
     s.fill_rect(Rect::new(0, 0, 2000, 1500), &[1.0]);
     s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
     assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
+}
+
+#[test]
+fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let format = PixelFormat::new(ColorMode::Rgb, sample, true);
+        let rect = Rect::new(-2, -1, 3, 2);
+        let bytes: Vec<u8> = (0..rect.width() as usize * rect.height() as usize * format.bytes_per_pixel()).map(|i| (i % 251) as u8).collect();
+        let mut surface = Surface::new(format);
+        assert!(surface.try_write_interleaved(rect, &bytes[..bytes.len() - 1]).is_err());
+        assert!(surface.tiles.is_empty());
+        surface.try_write_interleaved(rect, &bytes).unwrap();
+        assert_eq!(surface.to_interleaved(rect), bytes);
+        let mut shared = surface.clone();
+        let replacement = vec![0; bytes.len()];
+        shared.try_write_interleaved(rect, &replacement).unwrap();
+        assert_eq!(surface.to_interleaved(rect), bytes);
+        assert_eq!(shared.to_interleaved(rect), replacement);
+    }
 }
