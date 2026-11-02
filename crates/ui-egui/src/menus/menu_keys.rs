@@ -379,8 +379,10 @@ impl Keys {
             }
         };
         let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        // Alt+letter opens that menu, open or not (an open one switches), as on Windows.
-        let alt_letter = events.iter().find_map(|e| match e {
+        // Alt+letter opens that menu, open or not (an open one switches), as on Windows. Not with
+        // the window switcher's Alt, still reported after the focus came back with no Alt key
+        // event of this window's own: that press is an ordinary key (#9763, CodeRabbit on #10383).
+        let alt_letter = events.iter().filter(|_| !self.alt_at_focus).find_map(|e| match e {
             Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => key_char(*key).map(|c| (*key, c)),
             _ => None,
         });
