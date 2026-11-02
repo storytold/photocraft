@@ -3,7 +3,11 @@ use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> PhotocraftApp {
-    PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    // These tests exercise the native groups without the optional replacement launcher.
+    // The launcher's real-panel migration and gestures have their own presentation tests.
+    app.ui.panels.rail = false;
+    app
 }
 
 fn lay(app: &PhotocraftApp) -> &Layout<String> {
@@ -231,7 +235,7 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
     assert!(tab_rect(&h, "layers").expand(4.0).contains(target), "the tab stays under the pointer");
 
     let source = tab_rect(&h, "layers").center();
-    let destination = tab_rect(&h, "properties").center();
+    let destination = tab_rect(&h, "properties").right_center();
     drag(&mut h, source, destination);
     let layout = lay(h.state());
     let mut members = group_members(layout, "layers");
@@ -256,7 +260,7 @@ fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group
     assert!(tab_rect(&h, "brushes").bottom() <= canvas_body.top(), "brushes is above the canvas");
 
     let source = tab_rect(&h, "brushes").center();
-    let destination = tab_rect(&h, "layers").center();
+    let destination = tab_rect(&h, "layers").right_center();
     drag(&mut h, source, destination);
     let layout = lay(h.state());
     assert!(in_dock_column(layout, "brushes"));
@@ -510,7 +514,7 @@ fn populated_canvas_keeps_a_real_opacity_edit_after_floating_and_redocking() {
         h.render().unwrap().save(directory.join("photocraft-populated-opacity-floating.png")).unwrap();
     }
     let from = tab_rect(&h, "properties").center();
-    let to = tab_rect(&h, "layers").center();
+    let to = tab_rect(&h, "layers").right_center();
     drag(&mut h, from, to);
     assert!(lay(h.state()).floating.iter().all(|group| !group.contains(&"properties".to_string())));
     assert_eq!(h.state().session.active().unwrap().doc.layer(layer).unwrap().opacity, opacity);
@@ -694,6 +698,7 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 #[test]
 fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     let mut app = app();
+    app.ui.panels.rail = true;
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);
@@ -807,7 +812,7 @@ fn floating_group_grip_redocks_all_tabs_as_one_atomic_move() {
     app.run("window.panel.move", json!({"panel":"patterns","anchor":"swatches"})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     let from = hit_rect(&h, craft_ui::docking::Hit::DragBar("swatches".into())).center();
-    let to = tab_rect(&h, "layers").center();
+    let to = tab_rect(&h, "layers").right_center();
     drag(&mut h, from, to);
     let layout = lay(h.state());
     assert!(layout.floating.iter().all(|group| !group.contains(&"swatches".to_string()) && !group.contains(&"patterns".to_string())));

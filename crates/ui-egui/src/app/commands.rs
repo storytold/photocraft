@@ -70,6 +70,9 @@ impl PhotocraftApp {
             }
         }
         actions::suspended_guard(self, id)?;
+        if matches!(id, "window.tools.float" | "window.tools.dock") {
+            return crate::toolbar_docking::command(self, id, &params);
+        }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }

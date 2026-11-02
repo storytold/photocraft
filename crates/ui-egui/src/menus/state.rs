@@ -51,7 +51,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     }
     match id {
         "window.panel.activate" | "window.panel.layout" | "ui.dock" => true,
-        "window.panel.group"
+        "window.tools.float"
+        | "window.tools.dock"
+        | "window.panel.edge"
+        | "window.panel.group"
         | "window.panel.move"
         | "window.panel.float"
         | "window.panel.window"

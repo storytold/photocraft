@@ -1,0 +1,412 @@
+{
+  "panelLayout": {
+    "dock": {
+      "collapsed": [],
+      "heights": {},
+      "hidden_tabs": {
+        "character": [
+          "Character",
+          "Paragraph"
+        ],
+        "color": [
+          "Swatches",
+          "Gradients",
+          "Patterns"
+        ],
+        "history": [
+          "Layer Comps"
+        ],
+        "layers": [
+          "Paths"
+        ],
+        "navigator": [
+          "Histogram",
+          "Info"
+        ],
+        "properties": [
+          "Adjustments",
+          "Properties"
+        ]
+      },
+      "order": [],
+      "tabOrder": {}
+    },
+    "dockTabs": {
+      "brushes": 0,
+      "character": 0,
+      "color": 0,
+      "history": 1,
+      "layers": 1,
+      "navigator": 0,
+      "properties": 0
+    },
+    "docking": {
+      "hidden": [
+        [
+          "adjustments",
+          {
+            "anchor": null,
+            "floating": [
+              866.4124755859375,
+              283.20001220703125,
+              220.0,
+              108.0
+            ],
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "character",
+          {
+            "anchor": "paragraph",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": "paragraph"
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "gradients",
+          {
+            "anchor": "color",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": "patterns"
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "histogram",
+          {
+            "anchor": "navigator",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": "info"
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "info",
+          {
+            "anchor": "navigator",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "layerComps",
+          {
+            "anchor": "history",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "paragraph",
+          {
+            "anchor": "character",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "paths",
+          {
+            "anchor": "layers",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "patterns",
+          {
+            "anchor": "layers",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "properties",
+          {
+            "anchor": null,
+            "floating": [
+              231.19998168945312,
+              326.20001220703125,
+              359.20001220703125,
+              732.0
+            ],
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": null
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ],
+        [
+          "swatches",
+          {
+            "anchor": "color",
+            "floating": null,
+            "group": null,
+            "placement": {
+              "Tab": {
+                "before": "gradients"
+              }
+            },
+            "sibling": [],
+            "size": null,
+            "stack": null
+          }
+        ]
+      ],
+      "layout": {
+        "floating": [
+          {
+            "active": 0,
+            "id": 3614821227238838566,
+            "panels": [
+              "color"
+            ],
+            "rect": [
+              388.8000183105469,
+              183.1999969482422,
+              270.3999938964844,
+              403.99993896484375
+            ]
+          }
+        ],
+        "root": {
+          "Split": {
+            "axis": "Horizontal",
+            "first": {
+              "Tabs": {
+                "active": 0,
+                "panels": [
+                  "canvas"
+                ]
+              }
+            },
+            "second": {
+              "Dock": {
+                "columns": [
+                  {
+                    "groups": [
+                      {
+                        "active": 0,
+                        "height": 300.0,
+                        "minimized": false,
+                        "panels": [
+                          "history"
+                        ]
+                      },
+                      {
+                        "active": 0,
+                        "height": 300.0,
+                        "minimized": false,
+                        "panels": [
+                          "brushes"
+                        ]
+                      }
+                    ],
+                    "iconic": true,
+                    "iconic_width": 44.0,
+                    "width": 220.0
+                  },
+                  {
+                    "groups": [
+                      {
+                        "active": 0,
+                        "height": 435.0820007324219,
+                        "minimized": false,
+                        "panels": [
+                          "layers"
+                        ]
+                      }
+                    ],
+                    "iconic": false,
+                    "iconic_width": 44.0,
+                    "width": 295.9998779296875
+                  },
+                  {
+                    "groups": [
+                      {
+                        "active": 0,
+                        "height": 600.0,
+                        "minimized": false,
+                        "panels": [
+                          "actions"
+                        ]
+                      },
+                      {
+                        "active": 0,
+                        "height": null,
+                        "minimized": false,
+                        "panels": [
+                          "channels"
+                        ]
+                      },
+                      {
+                        "active": 0,
+                        "height": null,
+                        "minimized": false,
+                        "panels": [
+                          "navigator"
+                        ]
+                      }
+                    ],
+                    "iconic": true,
+                    "iconic_width": 44.0,
+                    "width": 220.0
+                  }
+                ],
+                "side": "End"
+              }
+            },
+            "size": {
+              "FixedSecond": 290.0
+            }
+          }
+        }
+      },
+      "locked": false,
+      "saved": null,
+      "version": 2
+    },
+    "dockingCollapsed": [
+      "brushes",
+      "history",
+      "patterns",
+      "color"
+    ],
+    "dockingReturns": {},
+    "panelPresentation": {
+      "compact": [
+        "actions",
+        "brushes",
+        "channels",
+        "color",
+        "history",
+        "navigator",
+        "patterns"
+      ],
+      "flyouts": {},
+      "heights": {},
+      "migrated": true,
+      "widths": {
+        "actions": 49.60009765625,
+        "brushes": 44.0,
+        "channels": 49.60009765625,
+        "color": 44.0,
+        "history": 44.0,
+        "navigator": 44.0,
+        "properties": 44.0
+      }
+    },
+    "panels": {
+      "brush_settings": false,
+      "brushes": true,
+      "character": false,
+      "color": true,
+      "dock": true,
+      "gradient_editor": false,
+      "history": true,
+      "layers": true,
+      "menu_bar": true,
+      "navigator": true,
+      "options_bar": true,
+      "properties": false,
+      "rail": true,
+      "status_bar": true,
+      "toolbar": true,
+      "toolbar_double": false
+    },
+    "timelineOpen": false,
+    "toolbarFloating": null,
+    "workspace": "Essentials"
+  },
+  "workspace": {
+    "autoCollapseIconPanels": false,
+    "autoShowHiddenPanels": true,
+    "enableFloatingDocumentWindowDocking": true,
+    "enableNarrowOptionsBar": false,
+    "largeTabs": false,
+    "openDocumentsAsTabs": true,
+    "rememberWorkspaceChanges": true
+  },
+  "workspaceLocked": false,
+  "interface": {
+    "uiScale": "auto",
+    "language": "ru",
+    "enableAnimations": true
+  }
+}

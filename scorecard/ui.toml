@@ -36,9 +36,9 @@ note = "See the prefs audit and BUG-204-*"
 [[item]]
 id = "UI-217-5"
 target = "Panel groups can float (menu + drag out of the dock) and are restored at launch"
-status = "missing"
+status = "partial"
 issue = 217
-note = "No floating groups in dock.rs/panels.rs"
+note = "2026-10-29, PhotoCraft 0.17.0: current craft-ui Workspace retains native windows; compact/expanded columns, adjacent flyouts, insertion, resizing and fork migration in panels/panel_docking. Focused mouse/restore tests and offscreen 100/125/150/200% captures; physical mixed-DPI/monitor-disconnect verification remains open."
 
 [[item]]
 id = "UI-217-6"

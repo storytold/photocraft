@@ -31,7 +31,10 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
 
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.drop_canvas_rect = None;
-    app.tab_strip = None;
+    let external_tabs = header_state(ui.ctx()).is_some_and(|(_, external)| external);
+    if !external_tabs {
+        app.tab_strip = None;
+    }
     retain_gpu_documents(app);
     crate::transform_tool::track_steps(app, ui.ctx());
     crate::cas_transform::tick(app, ui.ctx());
@@ -56,16 +59,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         paint_dots(ui, ui.available_rect_before_wrap(), app.session.prefs().interface.show_canvas_dots);
         return;
     }
-    if !app.ui.view.hides_tabs() || opening {
-        // Flat Spectrum tabs sit directly against the canvas. The parent's default vertical
-        // item spacing would otherwise leave a visible gap below the tab strip (#2188).
-        let spacing = ui.spacing().item_spacing.y;
-        if crate::theme::Tokens::get(ui.ctx()).pro {
-            ui.spacing_mut().item_spacing.y = 0.0;
-        }
-        app.tab_strip = Some(tabs(app, ui));
-        ui.spacing_mut().item_spacing.y = spacing;
-        drop_slot_line(app, ui);
+    if (!app.ui.view.hides_tabs() || opening) && !external_tabs {
+        paint_document_header(app, ui, false);
     }
     if let Some(job) = app.jobs.focus.or_else(|| (n == 0).then(|| app.jobs.opens.last().map(|o| o.job)).flatten()) {
         crate::jobs_ui::open_card(app, ui, job);
@@ -105,6 +100,77 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
+}
+
+fn header_key(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique("photocraft-document-header").with(ctx.viewport_id())
+}
+
+fn header_state(ctx: &egui::Context) -> Option<(Rect, bool)> {
+    let key = header_key(ctx);
+    let (frame, rect, external) = ctx.data(|d| d.get_temp::<(u64, Rect, bool)>(key))?;
+    (frame == ctx.cumulative_pass_nr()).then_some((rect, external))
+}
+
+#[test]
+fn document_header_record_expires_when_a_layout_pass_is_discarded() {
+    let ctx = egui::Context::default();
+    let mut passes = 0;
+    ctx.run_pass(Default::default(), |ctx| {
+        if passes == 0 {
+            let key = header_key(ctx);
+            let pass = ctx.cumulative_pass_nr();
+            ctx.data_mut(|d| d.insert_temp(key, (pass, Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 26.0)), true)));
+            assert!(header_state(ctx).is_some());
+            ctx.request_discard("document header visibility changed");
+        } else {
+            assert!(header_state(ctx).is_none());
+        }
+        passes += 1;
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(passes, 2);
+}
+
+pub(crate) fn document_header_rect(ctx: &egui::Context) -> Option<Rect> {
+    header_state(ctx).map(|(rect, _)| rect)
+}
+
+/// Height of the same tab row, whether it is in the canvas or a protected workspace surface.
+pub(crate) fn document_header_height(app: &PhotocraftApp) -> f32 {
+    let n = app.session.documents().len();
+    let opening = !app.jobs.opens.is_empty();
+    if !opening
+        && (app.ui.chrome.clone().shows_home(n, app.session.prefs().general.auto_show_home_screen)
+            || n == 0
+            || docked_document_indices(app).is_empty()
+            || app.ui.view.hides_tabs())
+    {
+        return 0.0;
+    }
+    if app.session.prefs().workspace.large_tabs { 34.0 } else { 26.0 }
+}
+
+pub(crate) fn show_document_header(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if document_header_height(app) > 0.0 {
+        paint_document_header(app, ui, true);
+    }
+}
+
+fn paint_document_header(app: &mut PhotocraftApp, ui: &mut egui::Ui, external: bool) {
+    // Flat Spectrum tabs sit directly against the canvas (#2188).
+    let spacing = ui.spacing().item_spacing.y;
+    if crate::theme::Tokens::get(ui.ctx()).pro {
+        ui.spacing_mut().item_spacing.y = 0.0;
+    }
+    let strip = tabs(app, ui);
+    let ctx = ui.ctx();
+    let frame = ctx.cumulative_pass_nr();
+    let key = header_key(ctx);
+    ctx.data_mut(|d| d.insert_temp(key, (frame, strip.rect, external)));
+    app.tab_strip = Some(strip);
+    ui.spacing_mut().item_spacing.y = spacing;
+    drop_slot_line(app, ui);
 }
 
 /// The tab strip; returns where its document tabs are.
