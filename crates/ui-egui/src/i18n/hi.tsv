@@ -589,3 +589,30 @@ cameraRaw	Yellow	पीला
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI संपादन…
+@id	edit.ai.codex	AI संपादन…
+	Describe your edit	अपना संपादन बताएँ
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	दिखाई दे रहा कैनवस और निर्देश आपके ChatGPT साइन-इन से Codex को भेजे जाएँगे। परिणाम कैनवस के आकार में ढालकर नई परत के रूप में जोड़ा जाएगा।
+	Codex account has not been checked	Codex खाते की जाँच नहीं हुई है
+	Checking Codex connection…	Codex कनेक्शन की जाँच हो रही है…
+	Complete ChatGPT sign-in in your browser	अपने ब्राउज़र में ChatGPT साइन-इन पूरा करें
+	Connected to ChatGPT	ChatGPT से जुड़ा है
+	ChatGPT plan	ChatGPT सदस्यता
+	ChatGPT sign-in is required	ChatGPT में साइन इन करना आवश्यक है
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex किसी अन्य साइन-इन विधि का उपयोग कर रहा है। अपनी सदस्यता का उपयोग करने के लिए ChatGPT से साइन इन करें।
+	Cancelling sign-in…	साइन-इन रद्द किया जा रहा है…
+	Sign-in cancelled	साइन-इन रद्द हुआ
+	Could not verify the account. Check your connection or sign in again.	खाता सत्यापित नहीं हो सका। कनेक्शन जाँचें या फिर से साइन इन करें।
+	Connection details	कनेक्शन विवरण
+	Sign in with ChatGPT	ChatGPT से साइन इन करें
+	Open sign-in page	साइन-इन पेज खोलें
+	Check connection	कनेक्शन जाँचें
+	Cancel sign-in	साइन-इन रद्द करें
+	Copy sign-in link	साइन-इन लिंक कॉपी करें
+	Could not open your browser. Try again or copy the sign-in link into your browser.	ब्राउज़र नहीं खुल सका। फिर से कोशिश करें या साइन-इन लिंक अपने ब्राउज़र में पेस्ट करें।
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	साइन-इन का प्रबंधन इंस्टॉल किया गया Codex करता है और उसे Codex के साथ साझा करता है। PhotoCraft टोकन नहीं सहेजता।
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex नहीं मिला। Codex डेस्कटॉप ऐप इंस्टॉल करके खोलें, फिर कनेक्शन दोबारा जाँचें।
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex की पूरी स्थापना का उपयोग करें; केवल codex.exe कॉपी करने से चित्र-संपादन घटक छूट सकते हैं।
+	AI Edit	AI संपादन
+	Codex Account	Codex खाता

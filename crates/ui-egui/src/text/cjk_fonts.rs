@@ -35,7 +35,8 @@
 //! collection (TTC) once however many faces it selects; a face that cannot be retained is
 //! returned transiently for the current request, so a later Fontconfig candidate is never
 //! skipped merely because earlier characters read other fonts.
-//! Without craft-fonts (and on the web, which never embeds them) nothing changes.
+//! Native builds without craft-fonts use the same provider for installed system fonts.
+//! The web retains its served-font and lazy fallback path.
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{FallbackRequest, FontData, FontFamily, FontId, FontProvider, Shape};
@@ -991,9 +992,9 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
     {
         ctx.add_plugin(CjkFontPlugin(fallback));
     }
-    // The provider resolves a craft face for each missing character in the first frame, before the
-    // lazy loader's next-pass system fallback. Without it a headless frame panics on CJK text.
-    if sources.eager_craft_fonts && !craft_fonts::CRAFT_FONTS.is_empty() {
+    // Resolve missing characters in the first frame, including system faces when no optional
+    // craft fonts are embedded. The lazy loader cannot repair a strict first-frame glyph error.
+    if sources.eager_craft_fonts {
         let provider = std::sync::Arc::new(CraftFontProvider::new(&sources, crate::theme::ui_font_scale(ctx)));
         let as_provider: std::sync::Arc<dyn FontProvider> = provider.clone();
         ctx.data_mut(|d| d.insert_temp(craft_provider_id(), provider));

@@ -3155,3 +3155,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI 編輯…
+@id	edit.ai.codex	AI 編輯…
+	Describe your edit	描述你想進行的編輯
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	可見畫布和編輯指令將透過你的 ChatGPT 登入傳送給 Codex，結果將配合畫布尺寸並新增為圖層。
+	Codex account has not been checked	尚未檢查 Codex 帳戶
+	Checking Codex connection…	正在檢查 Codex 連線…
+	Complete ChatGPT sign-in in your browser	請在瀏覽器中完成 ChatGPT 登入
+	Connected to ChatGPT	已連線 ChatGPT
+	ChatGPT plan	ChatGPT 訂閱
+	ChatGPT sign-in is required	需要登入 ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex 目前使用其他登入方式，請使用 ChatGPT 登入以使用訂閱。
+	Cancelling sign-in…	正在取消登入…
+	Sign-in cancelled	已取消登入
+	Could not verify the account. Check your connection or sign in again.	無法驗證帳戶，請檢查網路連線或重新登入。
+	Connection details	連線詳情
+	Sign in with ChatGPT	使用 ChatGPT 登入
+	Open sign-in page	開啟登入頁面
+	Check connection	檢查連線
+	Cancel sign-in	取消登入
+	Copy sign-in link	複製登入連結
+	Could not open your browser. Try again or copy the sign-in link into your browser.	無法開啟瀏覽器，請重試或將登入連結複製到瀏覽器中開啟。
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	登入由本機 Codex 管理，登入狀態與 Codex 共用。PhotoCraft 不儲存權杖。
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	找不到 Codex。請安裝並開啟 Codex 桌面應用程式，再按「檢查連線」。
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	請保留完整的 Codex 安裝目錄，單獨複製 codex.exe 可能缺少圖片編輯元件。
+	AI Edit	AI 編輯
+	Codex Account	Codex 帳戶

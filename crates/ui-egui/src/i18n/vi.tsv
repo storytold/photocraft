@@ -4021,3 +4021,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Chỉnh sửa bằng AI…
+@id	edit.ai.codex	Chỉnh sửa bằng AI…
+	Describe your edit	Mô tả chỉnh sửa
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Khung vẽ đang hiển thị và chỉ dẫn sẽ được gửi tới Codex qua phiên đăng nhập ChatGPT của bạn. Kết quả được khớp với khung vẽ và thêm thành lớp mới.
+	Codex account has not been checked	Chưa kiểm tra tài khoản Codex
+	Checking Codex connection…	Đang kiểm tra kết nối Codex…
+	Complete ChatGPT sign-in in your browser	Hoàn tất đăng nhập ChatGPT trong trình duyệt
+	Connected to ChatGPT	Đã kết nối với ChatGPT
+	ChatGPT plan	Gói ChatGPT
+	ChatGPT sign-in is required	Cần đăng nhập ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex đang dùng cách đăng nhập khác. Hãy đăng nhập bằng ChatGPT để sử dụng gói đăng ký của bạn.
+	Cancelling sign-in…	Đang hủy đăng nhập…
+	Sign-in cancelled	Đã hủy đăng nhập
+	Could not verify the account. Check your connection or sign in again.	Không thể xác minh tài khoản. Hãy kiểm tra kết nối hoặc đăng nhập lại.
+	Connection details	Chi tiết kết nối
+	Sign in with ChatGPT	Đăng nhập bằng ChatGPT
+	Open sign-in page	Mở trang đăng nhập
+	Check connection	Kiểm tra kết nối
+	Cancel sign-in	Hủy đăng nhập
+	Copy sign-in link	Sao chép liên kết đăng nhập
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Không thể mở trình duyệt. Hãy thử lại hoặc dán liên kết đăng nhập vào trình duyệt.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Phiên đăng nhập do bản cài đặt Codex quản lý và được chia sẻ với Codex. PhotoCraft không lưu mã thông báo.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Không tìm thấy Codex. Hãy cài đặt và mở ứng dụng Codex cho máy tính, rồi kiểm tra kết nối lại.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Hãy dùng bản cài đặt Codex đầy đủ; chỉ sao chép codex.exe có thể thiếu thành phần chỉnh sửa hình ảnh.
+	AI Edit	Chỉnh sửa bằng AI
+	Codex Account	Tài khoản Codex

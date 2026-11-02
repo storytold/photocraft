@@ -4767,3 +4767,30 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI-redigering…
+@id	edit.ai.codex	AI-redigering…
+	Describe your edit	Beskriv redigeringen
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Den synliga arbetsytan och instruktionen skickas till Codex med din ChatGPT-inloggning. Resultatet anpassas till arbetsytan och läggs till som ett nytt lager.
+	Codex account has not been checked	Codex-kontot har inte kontrollerats
+	Checking Codex connection…	Kontrollerar anslutningen till Codex…
+	Complete ChatGPT sign-in in your browser	Slutför ChatGPT-inloggningen i webbläsaren
+	Connected to ChatGPT	Ansluten till ChatGPT
+	ChatGPT plan	ChatGPT-abonnemang
+	ChatGPT sign-in is required	Inloggning med ChatGPT krävs
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex använder en annan inloggningsmetod. Logga in med ChatGPT för att använda ditt abonnemang.
+	Cancelling sign-in…	Avbryter inloggningen…
+	Sign-in cancelled	Inloggningen avbröts
+	Could not verify the account. Check your connection or sign in again.	Kontot kunde inte verifieras. Kontrollera anslutningen eller logga in igen.
+	Connection details	Anslutningsinformation
+	Sign in with ChatGPT	Logga in med ChatGPT
+	Open sign-in page	Öppna inloggningssidan
+	Check connection	Kontrollera anslutningen
+	Cancel sign-in	Avbryt inloggningen
+	Copy sign-in link	Kopiera inloggningslänken
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Webbläsaren kunde inte öppnas. Försök igen eller klistra in inloggningslänken i webbläsaren.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Inloggningen hanteras av den installerade Codex-miljön och delas med Codex. PhotoCraft lagrar inga token.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex hittades inte. Installera och öppna skrivbordsappen Codex och kontrollera sedan anslutningen igen.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Använd hela Codex-installationen; om bara codex.exe kopieras kan komponenter för bildredigering saknas.
+	AI Edit	AI-redigering
+	Codex Account	Codex-konto

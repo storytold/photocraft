@@ -58,6 +58,12 @@ fn open_exr_parts_dialog(app: &mut PhotocraftApp) -> Option<Result<Value, String
 }
 
 pub(super) fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choices: Value) -> u64 {
+    if command == "edit.ai.codex" {
+        if let Some(dialog) = app.ui.dialogs.iter().find(|dialog| crate::ai_account_ui::owns(&dialog.fields)) {
+            return dialog.id;
+        }
+        crate::ai_account_ui::opened(app);
+    }
     let mut f = Map::new();
     f.insert("__command".into(), json!(command));
     f.insert("__label".into(), json!(label));
@@ -132,6 +138,18 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
 
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if f.get("__command").and_then(Value::as_str) == Some("edit.ai.codex") {
+        ui.label(crate::i18n::t(
+            "The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.",
+        ));
+        let mut prompt = f.get("prompt").and_then(Value::as_str).unwrap_or_default().to_string();
+        let response = ui.add(egui::TextEdit::multiline(&mut prompt).desired_rows(5).desired_width(400.0).hint_text(crate::i18n::t("Describe your edit")));
+        if response.has_focus() {
+            ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        }
+        f.insert("prompt".into(), json!(prompt));
+        return;
+    }
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
@@ -294,6 +312,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     let dialog = |app: &mut PhotocraftApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
+        "edit.ai.codex" => dialog(app, json!({"prompt":""}), json!({})),
         "file.openAs" => Some(app.open_dialog_file()),
         "file.openExrParts" => open_exr_parts_dialog(app),
         "file.saveACopy" => Some(save_a_copy(app)),

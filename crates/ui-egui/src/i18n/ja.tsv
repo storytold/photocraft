@@ -4191,3 +4191,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI 編集…
+@id	edit.ai.codex	AI 編集…
+	Describe your edit	編集内容を入力
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	表示中のキャンバスと指示は、ChatGPT のログインを使用して Codex に送信されます。結果はキャンバスに合わせ、新しいレイヤーとして追加されます。
+	Codex account has not been checked	Codex アカウントは未確認です
+	Checking Codex connection…	Codex への接続を確認中…
+	Complete ChatGPT sign-in in your browser	ブラウザーで ChatGPT へのログインを完了してください
+	Connected to ChatGPT	ChatGPT に接続済み
+	ChatGPT plan	ChatGPT プラン
+	ChatGPT sign-in is required	ChatGPT へのログインが必要です
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex は別の方法でログインしています。サブスクリプションを使用するには ChatGPT にログインしてください。
+	Cancelling sign-in…	ログインをキャンセル中…
+	Sign-in cancelled	ログインをキャンセルしました
+	Could not verify the account. Check your connection or sign in again.	アカウントを確認できませんでした。接続を確認するか、再度ログインしてください。
+	Connection details	接続の詳細
+	Sign in with ChatGPT	ChatGPT にログイン
+	Open sign-in page	ログインページを開く
+	Check connection	接続を確認
+	Cancel sign-in	ログインをキャンセル
+	Copy sign-in link	ログインリンクをコピー
+	Could not open your browser. Try again or copy the sign-in link into your browser.	ブラウザーを開けませんでした。再試行するか、ログインリンクをブラウザーに貼り付けてください。
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	ログインはインストール済みの Codex が管理し、Codex と共有されます。PhotoCraft はトークンを保存しません。
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex が見つかりません。Codex デスクトップアプリをインストールして起動し、再度接続を確認してください。
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex のインストール全体を使用してください。codex.exe のみをコピーすると、画像編集コンポーネントが不足する場合があります。
+	AI Edit	AI 編集
+	Codex Account	Codex アカウント

@@ -23,5 +23,8 @@ fn native_first_launch_follows_os_ui_preferences() {
     h.run_steps(4);
     assert_eq!(h.state().session.prefs().interface.language, "auto");
     assert_eq!(i18n::current(), expected, "native language preferences: {tags:?}");
-    assert!(h.query_by_label(i18n::tr(expected, "File")).is_some(), "the first-launch menu must use the OS UI language");
+    // Translations without a Latin access key display a suffix, e.g. File -> 文件(F).
+    let (titles, _) = photocraft_ui_egui::menus::menu_keys::localized(&[i18n::tr(expected, "File").to_string()], &["File"], &[Some('F')]);
+    let title = titles.first().expect("one localized File menu");
+    assert!(h.query_by_label(title).is_some(), "the first-launch menu must use the OS UI language");
 }

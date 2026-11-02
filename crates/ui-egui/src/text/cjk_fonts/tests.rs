@@ -1918,3 +1918,30 @@ fn system_fonts_cover_cjk_samples() {
     let all: String = samples.iter().filter(|(_, s)| available(*s)).map(|(t, _)| *t).collect::<Vec<_>>().join(" ");
     assert!(render(&ctx, &all), "{all}");
 }
+/// System-only builds must resolve a missing glyph before the strict first frame finishes.
+#[test]
+fn system_only_provider_draws_the_first_strict_frame() {
+    let ctx = egui::Context::default();
+    ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
+    crate::theme::install_fonts_with(
+        &ctx,
+        Sources {
+            locale: || Some("zh-hant".into()),
+            files: |_| vec![fake("hant.ttf")],
+            last_resort: Vec::new,
+            pending: || false,
+            scripts: no_script_files,
+            covers: scripts::covering_face,
+            embedded: no_embedded,
+            eager_craft_fonts: true,
+        },
+    );
+    ctx.run_ui(Default::default(), |ui| {
+        ui.label("龍");
+        ui.monospace("龍");
+    })
+    .textures_delta
+    .clear();
+    let discovered = ctx.fonts(|fonts| fonts.discovered_fonts().to_vec());
+    assert!(discovered.iter().any(|font| font.name.starts_with("craft-system-")));
+}

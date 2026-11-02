@@ -4593,3 +4593,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI uređivanje…
+@id	edit.ai.codex	AI uređivanje…
+	Describe your edit	Opišite izmenu
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Vidljivo platno i uputstvo biće poslati Codexu putem prijave na ChatGPT. Rezultat se prilagođava platnu i dodaje kao novi sloj.
+	Codex account has not been checked	Codex nalog još nije proveren
+	Checking Codex connection…	Provera veze sa Codexom…
+	Complete ChatGPT sign-in in your browser	Dovršite prijavu na ChatGPT u pregledaču
+	Connected to ChatGPT	Povezano sa ChatGPT-om
+	ChatGPT plan	ChatGPT paket
+	ChatGPT sign-in is required	Potrebna je prijava na ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex koristi drugi način prijave. Prijavite se putem ChatGPT-a da biste koristili pretplatu.
+	Cancelling sign-in…	Otkazivanje prijave…
+	Sign-in cancelled	Prijava je otkazana
+	Could not verify the account. Check your connection or sign in again.	Nalog nije moguće proveriti. Proverite vezu ili se ponovo prijavite.
+	Connection details	Detalji veze
+	Sign in with ChatGPT	Prijavite se putem ChatGPT-a
+	Open sign-in page	Otvori stranicu za prijavu
+	Check connection	Proveri vezu
+	Cancel sign-in	Otkaži prijavu
+	Copy sign-in link	Kopiraj vezu za prijavu
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Pregledač nije moguće otvoriti. Pokušajte ponovo ili nalepite vezu za prijavu u pregledač.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Prijavom upravlja instalirano Codex okruženje i deli je sa Codexom. PhotoCraft ne čuva tokene.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex nije pronađen. Instalirajte i otvorite Codex aplikaciju za računar, pa ponovo proverite vezu.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Koristite celu Codex instalaciju; kopiranje samo datoteke codex.exe može izostaviti komponente za uređivanje slika.
+	AI Edit	AI uređivanje
+	Codex Account	Codex nalog

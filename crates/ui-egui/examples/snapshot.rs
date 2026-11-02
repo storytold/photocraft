@@ -13,6 +13,8 @@
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--codex-account-fixture connected|signedOut|unsupported|failed|cancelled` supplies a visual-only
+//! account state without authentication I/O (cannot be combined with `--background-jobs`).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -70,6 +72,10 @@ fn main() {
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
     let background_jobs = args.iter().any(|a| a == "--background-jobs");
+    if background_jobs && args.iter().any(|a| a == "--codex-account-fixture") {
+        eprintln!("--codex-account-fixture cannot be combined with --background-jobs");
+        std::process::exit(2);
+    }
     let custom_titlebar = args.iter().any(|a| a == "--custom-titlebar");
     // `--settle-ms N`: keep rendering frames for N ms before the capture (e.g. mid-job).
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -159,6 +165,28 @@ fn main() {
         if timing {
             eprintln!("{:>8.1} ms  {label}", t0.elapsed().as_secs_f64() * 1000.0);
         }
+    }
+    if let Some(state) = arg(&args, "--codex-account-fixture") {
+        use photocraft_engine::cmd::ai_account_cmds::{Snapshot, State};
+        let state = match state.as_str() {
+            "connected" => State::Connected,
+            "signedOut" => State::SignedOut,
+            "unsupported" => State::Unsupported,
+            "failed" => State::Failed,
+            "cancelled" => State::Cancelled,
+            _ => {
+                eprintln!("unsupported account fixture");
+                std::process::exit(2);
+            }
+        };
+        let status = Snapshot {
+            plan: (state == State::Connected).then(|| "plus".into()),
+            message: (state == State::Failed).then(|| "Synthetic connection error".into()),
+            state,
+        };
+        harness.state_mut().session.ai_account.snapshot = status.clone();
+        harness.state_mut().ui.ai_account.status = status;
+        harness.run_steps(4);
     }
     for (flag, button) in [("--click-at", egui::PointerButton::Primary), ("--right-click-at", egui::PointerButton::Secondary)] {
         let Some((x, y)) = arg(&args, flag).and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) else {

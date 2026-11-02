@@ -66,6 +66,7 @@ impl PhotocraftApp {
         shape_stroke_ui::sync_editor(self, ctx);
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
+        crate::ai_account_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);

@@ -495,4 +495,7 @@ pub fn trn(lang: Lang, n: u64, one: &str, other: &str) -> String {
 mod tests;
 
 #[cfg(test)]
+mod ai_tests;
+
+#[cfg(test)]
 mod live_tests;

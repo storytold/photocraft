@@ -1097,3 +1097,28 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+#[test]
+fn codex_job_labels_follow_the_current_language() {
+    use photocraft_engine::jobs::{JobEvent, JobOutcome};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width":16,"height":16})).unwrap();
+    for lang in crate::i18n::Lang::all() {
+        crate::i18n::with_language(lang, || {
+            let label = crate::i18n::tr(lang, "AI Edit");
+            for outcome in [JobOutcome::Done(json!({})), JobOutcome::Cancelled] {
+                let expected = if matches!(outcome, JobOutcome::Done(_)) {
+                    label.to_owned()
+                } else {
+                    crate::i18n::fmt(crate::i18n::tr(lang, "Cancelled {label}"), &[("label", label)])
+                };
+                super::on_event(
+                    &mut app,
+                    &egui::Context::default(),
+                    JobEvent { id: JobId(901), command: "edit.ai.codex".into(), label: "AI Edit".into(), document: None, outcome },
+                );
+                assert_eq!(app.ui.status, expected, "{}", lang.code());
+            }
+        });
+    }
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), 1);
+}

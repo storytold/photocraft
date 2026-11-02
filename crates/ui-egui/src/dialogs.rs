@@ -332,6 +332,12 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::ai_account_ui::owns(fields) => {
+            let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
+            egui::ScrollArea::vertical().id_salt(id.with("ai-body")).max_height(room).show(ui, |ui| {
+                crate::ai_account_ui::body(app, ui, fields);
+            });
+        }
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
@@ -448,7 +454,8 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok =
+            crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && crate::ai_account_ui::can_confirm(app, fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -963,6 +970,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
 /// that touches files itself, and a valid guide layout.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id)
+        && !crate::ai_account_ui::can_confirm(app, &d.fields)
+    {
+        return Err("sign in with ChatGPT and enter a prompt first".into());
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -1056,6 +1068,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if crate::ai_account_ui::owns(&closed.fields) {
+        crate::ai_account_ui::closed(app);
+    }
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
