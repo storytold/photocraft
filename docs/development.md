@@ -612,8 +612,8 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads and writes Photoshop Actions files (`atn`, version 16: Photoshop 6 and
-later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
+`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+(Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
@@ -631,8 +631,8 @@ PhotoCraft equivalent.
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
 
-`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against four small,
-independently encoded fixtures in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
+`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
+encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
 its README): `cargo test -p photocraft-psd --test it atn_contract::`.
 
 ## Remove Tool quality
