@@ -792,7 +792,7 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
 
 /// The relative form (`scaleX`, `scaleY` in percent, `rotate` in degrees clockwise, `dx`, `dy`
 /// in pixels), as Photoshop records a Free Transform: scale and rotate about the frame's
-/// centre, then move. `None` when none of them is given.
+/// named reference point (the centre by default), then move. `None` when none of them is given.
 fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
     let num = |k: &str| -> Result<Option<f64>> {
         match p.get(k) {
@@ -808,7 +808,7 @@ fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
     if sx.abs() < 1e-6 || sy.abs() < 1e-6 {
         return Err(bad("`scaleX` and `scaleY` must not be 0"));
     }
-    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    let [cx, cy] = crate::select_extra_cmds::reference_point("edit.transform", p, rect)?;
     let (sin, cos) = rot.unwrap_or(0.0).to_radians().sin_cos();
     // (x, y) → translate(-c) → scale → rotate → translate(c + d).
     let (a, b, c, d) = (sx * cos, sx * sin, -sy * sin, sy * cos);
@@ -1044,7 +1044,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
+        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers except Background),"rect":[x0,y0,x1,y1]? (source frame; default = target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
