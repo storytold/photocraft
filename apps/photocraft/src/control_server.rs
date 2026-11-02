@@ -120,25 +120,35 @@ impl PushWriter {
         let _ = self.ready.send(());
     }
 
-    fn stop(self) {
+    /// True when the writer stopped without closing the connection.
+    fn stop(self) -> bool {
         let _ = self.stop.send(());
         // Also release a writer that has not yet sent its subscribe reply.
         let _ = self.ready.send(());
         // A healthy subscriber keeps its connection for the unsubscribe reply. Only close a
         // stalled writer's socket after its normal receive interval has had time to finish.
-        if self.done.recv_timeout(PUSH_STEP * 2).is_err() {
+        let healthy = self.done.recv_timeout(PUSH_STEP * 2).is_ok();
+        if !healthy {
             let _ = self.interrupt.shutdown(std::net::Shutdown::Both);
+            // Windows can leave an in-flight write blocked until its socket timeout even after
+            // shutdown. The connection is dead; do not hold its reader waiting for that writer.
+            if self.done.recv_timeout(PUSH_STEP * 2).is_err() {
+                drop(self.handle);
+                return false;
+            }
         }
         if self.handle.join().is_err() {
             eprintln!("photocraft: event writer stopped unexpectedly");
         }
+        healthy
     }
 }
 
-fn stop_push_writer(push: &mut Option<PushWriter>) {
+fn stop_push_writer(push: &mut Option<PushWriter>) -> bool {
     if let Some(writer) = push.take() {
-        writer.stop();
+        return writer.stop();
     }
+    true
 }
 
 fn send_reply(out: &Mutex<TcpStream>, reply: &Value) -> bool {
@@ -208,7 +218,9 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
                         req.push = Some(ptx);
                         let Some(mut r) = ask(&tx, &ctx, req, rrx, deadline) else { break };
                         if r.get("ok").and_then(Value::as_bool) == Some(true) {
-                            stop_push_writer(&mut push);
+                            if !stop_push_writer(&mut push) {
+                                break 'conn;
+                            }
                             if reader.get_mut().subscription_idle(false).is_err() {
                                 break 'conn;
                             }
@@ -222,7 +234,9 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
                     "events.unsubscribe" => {
                         // Dropping the receiver ends the app's subscription. The reader has
                         // retained its normal timeout, so there is no socket reset to undo.
-                        stop_push_writer(&mut push);
+                        if !stop_push_writer(&mut push) {
+                            break 'conn;
+                        }
                         if reader.get_mut().subscription_idle(false).is_err() {
                             break 'conn;
                         }
@@ -270,20 +284,20 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
         };
         if !send_reply(&out, &reply) {
             if let Some(writer) = pending_push {
-                writer.stop();
+                let _ = writer.stop();
             }
             break;
         }
         if let Some(writer) = pending_push {
             if reader.get_mut().subscription_idle(true).is_err() {
-                writer.stop();
+                let _ = writer.stop();
                 break;
             }
             writer.begin();
             push = Some(writer);
         }
     }
-    stop_push_writer(&mut push);
+    let _ = stop_push_writer(&mut push);
 }
 
 #[cfg(test)]
