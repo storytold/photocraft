@@ -160,6 +160,38 @@ While the menu is open, Up/Down applies the previous/next matching family and sc
 view; Enter accepts the selection and closes the menu. Escape closes it, keeping already
 applied changes (Edit › Undo restores text-layer font changes).
 
+In a Chinese (Simplified or Traditional), Japanese or Korean interface the menu follows
+Photoshop's: a font of that writing system shows that language's sample in place of `AaBbCc`
+("字体样式", "字體樣式", "あア亜", "가나다"; a font that cannot draw it keeps `AaBbCc`), each
+family is listed under the name its font gives itself in that language
+("未来荧黑", "未来熒黑", "ヒカリ角ゴ", "맑은 고딕"; a name kept only in a legacy CJK encoding — Mac
+GB2312, Big5, Shift-JIS or EUC-KR records, Windows encodings 2–5 — is decoded too; a font without
+one shows its first non-English name), the interface language's own fonts come first, and both
+groups are sorted the way that
+writing system orders names — pinyin (GB2312 order) for Simplified Chinese, stroke order
+(Big5) for Traditional, gojūon (JIS X 0208) for Japanese, Hangul/Hanja (KS X 1001) for Korean,
+with Latin names ahead of Han ones and full-width or capital letters folded. A font belongs to
+a writing system by its OS/2 code page bits (as Photoshop groups), else by the languages it
+names itself in, else by characters only that system's standard set has. Searching matches
+every name a font has, in any language, whatever the menu shows. `photocraft_text::font_menu`
+reads these names and the grouping from each family's representative face while the font scan
+runs, so drawing the menu never reads a font file; `photocraft_text::collate` holds the sort
+orders, whose tables `crates/text/build.rs` generates from `encoding_rs`'s character sets. On the
+web build, where fonts are served on demand, a family joins its writing system's group from the
+manifest's `scripts` before its file arrives.
+A family with a single face is listed as "family + style" — "Aa厚底黑 常规", "寒蝉宽黑体
+Medium", "SimSun-ExtB Regular" — as Photoshop lists such a family; a family with several faces
+keeps its family name and its ">" expands to a style menu. The style menus (options bar,
+Character panel, Glyphs panel) label each style with the subfamily the font writes in the
+interface's language where it has one ("常规"), else the name as the font writes it ("Wide
+ExtraLight", never translated word by word, which mixed languages as "Wide 极细"); the name the
+document keeps is always the font's own (`fontStyle`).
+Preferences › Type › Show Font Names in English overrides the names (an explicit choice, which
+a line in the dialog can reset to following the interface language). English and other
+non-CJK interfaces list English names alphabetically, as before, unless that preference is
+turned off, which then lists the fonts' own names. Documents, PSD files and commands always
+keep the English family name and the PostScript name.
+
 ## Preferences
 
 Preferences has **Apply**, **OK** and **Cancel**. Apply saves the edited sections and keeps the

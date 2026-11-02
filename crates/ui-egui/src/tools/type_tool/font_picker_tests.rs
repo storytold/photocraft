@@ -915,11 +915,11 @@ fn the_preview_size_preference_resizes_or_removes_the_samples() {
     assert!((off - 28.0).abs() < 0.5, "off keeps the plain row height: {off}");
 }
 
-/// Preferences ▸ Type ▸ Show Font Names in English off: the menu lists a family by its localized
-/// name, finds it by either name, and picking it still applies the English family.
+/// Names in their own language label the menu, search finds them by either name, and picking one
+/// still applies the English family (Preferences ▸ Type ▸ Show Font Names in English off, or a
+/// Chinese, Japanese or Korean interface).
 #[test]
 fn localized_font_names_label_the_menu_but_pick_the_family() {
-    use std::collections::HashMap;
     use std::sync::Arc;
     let state = State {
         current: "Arial".into(),
@@ -929,22 +929,30 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
         preview: FontPreview::Medium,
         recents: Vec::new(),
     };
-    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
-        |ui, s: &mut State| {
-            s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
-            let fams = s.families.clone();
-            let recents = s.recents.clone();
-            font_picker_in(ui, &mut s.current, 170.0, &fams, s.preview, &recents);
-        },
-        state,
-    );
+    // Without craft-fonts the test stack has no Japanese face, and the harness panics on a glyph
+    // no font can draw: this test is about the labels, so missing glyphs may be tofu.
+    let mut h = Harness::builder()
+        .with_size(vec2(600.0, 900.0))
+        .with_max_steps(SETTLE_STEPS)
+        .allow_missing_glyphs()
+        .build_ui_state(
+            |ui, s: &mut State| {
+                s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
+                let fams = s.families.clone();
+                let recents = s.recents.clone();
+                font_picker_in(ui, &mut s.current, 170.0, &fams, s.preview, &recents);
+            },
+            state,
+        );
     // The localized menu lists Japanese names, so install the app's bundled theme fonts
     // (including the craft-fonts Japanese faces) before the first pass shapes text.
     crate::theme::install_fonts(&h.ctx);
-    // Show Font Names in English on: no localized labels.
+    // The menu's labels come from the frame's model (`sync_font_names`): give it one, as a
+    // Chinese, Japanese or Korean interface would get.
     crate::type_tool::sync_font_names(&h.ctx, true);
-    let labels: HashMap<String, String> = [("MS Gothic".to_string(), "ＭＳ ゴシック".to_string())].into();
-    h.ctx.data_mut(|d| d.insert_temp(super::font_labels_id(), Arc::new(labels.clone())));
+    let mut model = super::FontMenuModel::default();
+    model.labels.insert("MS Gothic".to_string(), "ＭＳ ゴシック".to_string());
+    h.ctx.data_mut(|d| d.insert_temp(super::font_menu_id(), Arc::new(model)));
     h.run();
     open(&mut h);
     assert!(h.query_by_label("ＭＳ ゴシック").is_some(), "the localized name labels the family");
@@ -957,7 +965,7 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
     h.get_by_label("ＭＳ ゴシック").click();
     h.run();
     assert_eq!(h.state().current, "MS Gothic", "the document keeps the English family");
-    // Turning the preference back on drops the labels.
+    // Turning the preference back on (an English interface with English names) drops the labels.
     crate::type_tool::sync_font_names(&h.ctx, true);
     h.run();
     open(&mut h);
@@ -965,22 +973,142 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
     assert!(h.query_by_label("ＭＳ ゴシック").is_none());
 }
 
+/// A family with a single face shows "family + style" ("Aa厚底黑 常规"), as Photoshop lists it in
+/// a Chinese menu, and the rows sort by that label; searching still finds the family by its
+/// English name.
+#[test]
+fn a_single_face_family_shows_its_style_in_the_menu() {
+    // Scrambled on purpose: the rows sort by the label they show.
+    let families: Vec<String> = ["Inter", "Aa HouDiHei"].iter().map(|s| s.to_string()).collect();
+    let mut model = super::FontMenuModel::default();
+    model.single.insert("Aa HouDiHei".into(), "Aa厚底黑 常规".into());
+    let labels = |query: &str| -> Vec<String> {
+        super::font_menu_rows(&families, Some(&model), query, &[]).0.into_iter().map(|(_, label)| label.to_string()).collect()
+    };
+    assert_eq!(labels(""), ["Aa厚底黑 常规", "Inter"], "family + style, and the rows sort by it");
+    assert_eq!(labels("houdihei"), ["Aa厚底黑 常规"], "the English family name still finds it");
+}
+
+/// On a machine with the Aa HouDiHei font installed: its one style is labelled "常规", the name
+/// the font writes in Chinese (Photoshop's style menu shows it too), while the style the document
+/// keeps stays "Regular". Run with
+/// `cargo test -p photocraft-ui-egui --lib installed_chinese_style -- --ignored --nocapture`.
+#[test]
+#[ignore = "requires the installed AaHouDiHei font; no font files are distributed"]
+fn installed_chinese_fonts_label_their_style_in_chinese() {
+    let previous = crate::i18n::current();
+    crate::i18n::set_current(crate::i18n::Lang::from_code("zh-hans").expect("a bundled catalog"));
+    let options = super::style_options("AaHouDiHei");
+    println!("AaHouDiHei styles: {options:?}");
+    assert_eq!(options, [("Regular".to_string(), "常规".to_string())], "the label is the font's own, the key stays Regular");
+    crate::i18n::set_current(previous);
+}
+
+/// An English menu keeps its English labels and order, but a search still finds a font by any
+/// name its font gives itself ("未来" for Glow Sans SC), and Enter accepts that exact name.
+#[test]
+fn an_english_menu_finds_fonts_by_their_other_names() {
+    let families: Vec<String> = ["Glow Sans SC", "Inter"].iter().map(|s| s.to_string()).collect();
+    let mut model = super::FontMenuModel::default();
+    model.names.insert("Glow Sans SC".into(), vec!["Glow Sans SC".into(), "未来荧黑".into()]);
+    let rows = |q: &str| -> Vec<(String, String)> {
+        super::font_menu_rows(&families, Some(&model), q, &[]).0.into_iter().map(|(f, l)| (f.clone(), l.to_string())).collect()
+    };
+    assert_eq!(rows(""), [("Glow Sans SC".into(), "Glow Sans SC".into()), ("Inter".into(), "Inter".into())], "English labels, the order as before");
+    assert_eq!(rows("未来"), [("Glow Sans SC".into(), "Glow Sans SC".into())], "by the font's own name");
+    let listed = [(&families[0], "Glow Sans SC"), (&families[1], "Inter")];
+    assert_eq!(super::accept_row(&listed, "未来荧黑", None, Some(&model)), Some(0), "Enter takes the font whose own name was typed");
+    assert_eq!(super::accept_row(&listed, "Glow Sans", None, Some(&model)), Some(0), "a shorter query keeps the first row");
+}
+
+/// A style shows the subfamily the font writes in the interface's language, else its own name as
+/// written: never a word-by-word translation, which mixed languages ("Wide 极细").
+#[test]
+fn style_labels_show_the_fonts_own_names() {
+    use photocraft_text::FaceInfo;
+    let face = |style: &str, localized: &[(&str, &str)]| FaceInfo {
+        family: "Aa".into(),
+        style: style.into(),
+        localized_styles: localized.iter().map(|(lang, name)| (lang.to_string(), name.to_string())).collect(),
+        postscript_name: None,
+        weight: 400.0,
+        italic: false,
+        axes: Vec::new(),
+    };
+    let faces = [
+        face("Wide ExtraLight", &[("en-US", "Wide ExtraLight"), ("zh-Hans", "宽 极细")]),
+        face("Regular", &[("en-US", "Regular")]),
+        // Japanese only: a Chinese menu keeps the font's own "Bold" rather than borrowing it.
+        face("Bold", &[("en-US", "Bold"), ("ja-JP", "ボールド")]),
+    ];
+    let options = |script| {
+        crate::type_tool::fonts::style_labels(vec!["Regular".into(), "Wide ExtraLight".into(), "Bold".into()], &faces, script)
+    };
+    let hans = Some(photocraft_text::cjk::CjkScript::SimplifiedChinese);
+    assert_eq!(
+        options(hans),
+        [("Regular".into(), "Regular".into()), ("Wide ExtraLight".into(), "宽 极细".into()), ("Bold".into(), "Bold".into())]
+    );
+    let ja = Some(photocraft_text::cjk::CjkScript::Japanese);
+    assert_eq!(options(ja).last().cloned(), Some(("Bold".into(), "ボールド".into())), "a Japanese menu does show it");
+    assert_eq!(
+        options(None),
+        [("Regular".into(), "Regular".into()), ("Wide ExtraLight".into(), "Wide ExtraLight".into()), ("Bold".into(), "Bold".into())],
+        "an English interface shows the font's own words"
+    );
+}
+
+/// The rows show each family's label, are sorted by it, and a query matches the English name, the
+/// label or any other name the font gives itself ("未来" finds 未来荧黑, "Glow" too).
 #[test]
 fn font_menu_rows_search_both_names_and_sort_by_label() {
-    use std::collections::HashMap;
-    let families: Vec<String> = ["Arial", "Microsoft YaHei", "MS Gothic"].iter().map(|s| s.to_string()).collect();
-    let labels: HashMap<String, String> =
-        [("MS Gothic", "ＭＳ ゴシック"), ("Microsoft YaHei", "微软雅黑")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
-    let rows = |labels: Option<&HashMap<String, String>>, q: &str| -> Vec<(String, String)> {
-        super::font_menu_rows(&families, labels, q, &[]).0.into_iter().map(|(f, l)| (f.clone(), l.to_string())).collect()
+    let families: Vec<String> = ["Arial", "Microsoft YaHei", "Glow Sans SC", "MS Gothic"].iter().map(|s| s.to_string()).collect();
+    let mut model = super::FontMenuModel::default();
+    for (family, label) in [("MS Gothic", "ＭＳ ゴシック"), ("Microsoft YaHei", "微软雅黑"), ("Glow Sans SC", "未来荧黑")] {
+        model.labels.insert(family.to_string(), label.to_string());
+        model.names.insert(family.to_string(), vec![family.to_string(), label.to_string()]);
+    }
+    let rows = |model: Option<&super::FontMenuModel>, q: &str| -> Vec<(String, String)> {
+        super::font_menu_rows(&families, model, q, &[]).0.into_iter().map(|(f, l)| (f.clone(), l.to_string())).collect()
     };
     let english = rows(None, "");
-    assert!(english.iter().all(|(f, l)| f == l));
-    let local = rows(Some(&labels), "");
-    assert_eq!(local.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>(), ["Arial", "微软雅黑", "ＭＳ ゴシック"]);
-    assert_eq!(rows(Some(&labels), "yahei"), [("Microsoft YaHei".to_string(), "微软雅黑".to_string())]);
-    assert_eq!(rows(Some(&labels), "雅黑"), [("Microsoft YaHei".to_string(), "微软雅黑".to_string())]);
-    assert!(rows(Some(&labels), "nothing").is_empty());
+    assert!(english.iter().all(|(f, l)| f == l), "no model: the English names, as they always were");
+    let labels = |q: &str| -> Vec<String> { rows(Some(&model), q).into_iter().map(|(_, l)| l).collect() };
+    assert_eq!(labels(""), ["Arial", "微软雅黑", "未来荧黑", "ＭＳ ゴシック"], "sorted by label, as before");
+    assert_eq!(rows(Some(&model), "yahei"), [("Microsoft YaHei".to_string(), "微软雅黑".to_string())], "by English name");
+    assert_eq!(rows(Some(&model), "雅黑"), [("Microsoft YaHei".to_string(), "微软雅黑".to_string())], "by label");
+    assert_eq!(rows(Some(&model), "未来"), [("Glow Sans SC".to_string(), "未来荧黑".to_string())], "by a name the label doesn't show");
+    assert!(rows(Some(&model), "nothing").is_empty());
+}
+
+/// A Chinese (or Japanese, Korean) menu lists the interface's own fonts first, in the writing
+/// system's order — pinyin for Chinese — with the other families after them.
+#[test]
+fn the_interface_languages_fonts_head_the_menu_in_pinyin_order() {
+    let families: Vec<String> = ["Arial", "Glow Sans SC", "Alibaba PuHuiTi", "Microsoft YaHei", "Zeta Sans"].iter().map(|s| s.to_string()).collect();
+    let mut model = super::FontMenuModel { script: Some(photocraft_text::cjk::CjkScript::SimplifiedChinese), ..super::FontMenuModel::default() };
+    for (family, label) in [("Glow Sans SC", "未来荧黑"), ("Alibaba PuHuiTi", "阿里巴巴普惠体"), ("Microsoft YaHei", "微软雅黑")] {
+        model.labels.insert(family.to_string(), label.to_string());
+        model.native.insert(family.to_string());
+    }
+    let (rows, n_recent, n_native) = super::font_menu_rows(&families, Some(&model), "", &[]);
+    let order: Vec<&str> = rows.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!((n_recent, n_native), (0, 3), "the first three rows are the Chinese group");
+    assert_eq!(&order[..3], ["Alibaba PuHuiTi", "Microsoft YaHei", "Glow Sans SC"], "拼音序：阿里巴巴(a) 微软(w) 未来(w)");
+    assert_eq!(&order[3..], ["Arial", "Zeta Sans"], "the rest after them, alphabetically");
+    // A query keeps the grouping: a Chinese family alone is still the interface's group.
+    let (rows, n_recent, n_native) = super::font_menu_rows(&families, Some(&model), "雅黑", &[]);
+    assert_eq!((n_recent, n_native), (0, 1), "one match, in the Chinese group");
+    assert_eq!(rows.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["Microsoft YaHei"]);
+    let (rows, _, _) = super::font_menu_rows(&families, Some(&model), "zeta", &[]);
+    assert_eq!(rows.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), ["Zeta Sans"]);
+    // Recent families head the list, then the Chinese group, then the rest.
+    let recents = vec!["Zeta Sans".to_string()];
+    let (rows, n_recent, n_native) = super::font_menu_rows(&families, Some(&model), "", &recents);
+    let order: Vec<&str> = rows.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!((n_recent, n_native), (1, 3));
+    assert_eq!(order[0], "Zeta Sans", "the recent group");
+    assert_eq!(&order[1..4], ["Alibaba PuHuiTi", "Microsoft YaHei", "Glow Sans SC"]);
 }
 
 /// Preferences ▸ Type ▸ Recent Fonts: as in Photoshop, recently used families head the menu in
@@ -991,7 +1119,7 @@ fn recent_fonts_head_the_menu_and_keep_their_place() {
     let families: Vec<String> = ["Arial", "Baskerville", "Courier", "Zeta Sans"].iter().map(|s| s.to_string()).collect();
     let recents: Vec<String> = vec!["Zeta Sans".into(), "Courier".into(), "Gone".into()];
     let rows = |q: &str| -> (Vec<String>, usize) {
-        let (rows, n) = super::font_menu_rows(&families, None, q, &recents);
+        let (rows, n, _) = super::font_menu_rows(&families, None, q, &recents);
         (rows.into_iter().map(|(f, _)| f.clone()).collect(), n)
     };
     assert_eq!(

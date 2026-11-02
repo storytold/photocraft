@@ -420,7 +420,7 @@ fn commit_shortcut_resolves_a_pending_query_like_enter() {
     // the first row would apply a family the menu never highlighted.
     let query = "n";
     let all = super::families();
-    let (rows, _) = super::font_menu_rows(&all, None, query, &[]);
+    let (rows, _, _) = super::font_menu_rows(&all, None, query, &[]);
     assert!(rows.first().is_some_and(|(f, _)| f.as_str() != FONTS[1]), "the test needs a first row other than the current family");
     assert!(rows.iter().any(|(f, _)| f.as_str() == FONTS[1]));
     for accept in ["enter", "shortcut"] {

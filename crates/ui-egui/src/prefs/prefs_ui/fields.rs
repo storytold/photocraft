@@ -371,7 +371,8 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
     (query.is_empty() || preference_matches(section, k, query))
         && !drawn_elsewhere
         && !prefs::is_hidden(&path)
-        && obj.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Object(_)))
+        // A three-state choice: unset (null) still draws its checkbox, showing the default.
+        && (path == "type.showFontNamesInEnglish" || obj.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Object(_))))
 }
 
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
@@ -410,6 +411,12 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         let v = obj.get(&k).cloned().unwrap_or(Value::Null);
         let human = humanize(&k);
         let label = tl!(&human).to_string();
+        // Unset until chosen, and the default depends on the interface language: a checkbox of
+        // its own, with a way back to following the language.
+        if path == "type.showFontNamesInEnglish" {
+            font_names_row(ui, obj, &k, &label);
+            continue;
+        }
         match &v {
             Value::Bool(b) => {
                 ui.label("");
@@ -517,4 +524,31 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         }
         ui.end_row();
     }
+}
+
+/// Preferences ▸ Type ▸ Show Font Names in English, whose default follows the interface language
+/// (a Chinese, Japanese or Korean interface lists a font by its own name, as Photoshop's
+/// editions do). The checkbox shows the choice in force; clicking it makes the choice explicit,
+/// so a later interface-language switch no longer changes it. While it is unset, a line says the
+/// choice follows the language and a button puts it back to doing so.
+fn font_names_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>, key: &str, label: &str) {
+    let choice = obj.get(key).and_then(Value::as_bool);
+    let localized_ui = photocraft_text::cjk::locale_script(Some(crate::i18n::current().code())).is_some();
+    let mut on = choice.unwrap_or(!localized_ui);
+    let before = on;
+    ui.label("");
+    crate::widgets::checkbox(ui, &mut on, label);
+    // Only a click stores a choice: drawing the default must not turn it into one.
+    if on != before {
+        obj.insert(key.to_string(), json!(on));
+    }
+    ui.end_row();
+    ui.label("");
+    let t = Tokens::get(ui.ctx());
+    if choice.is_none() {
+        ui.label(RichText::new(tl!("Follows the interface language.")).color(t.text_dim));
+    } else if ui.small_button(tl!("Follow the interface language")).clicked() {
+        obj.insert(key.to_string(), Value::Null);
+    }
+    ui.end_row();
 }
