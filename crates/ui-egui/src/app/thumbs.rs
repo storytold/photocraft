@@ -271,7 +271,13 @@ impl PhotocraftApp {
             let fmt = doc.pixel_format();
             let colors = fmt.mode.color_channels();
             let mut texs = vec![make(&|p| egui::Color32::from_rgb(p[0], p[1], p[2]), "composite")];
-            let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| ink_thumbnail(src, w, h));
+            let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| match &proxy {
+                Some(proxy) => ink_thumbnail(proxy, w, h),
+                None => match ink_proxy(&doc, 56) {
+                    Some(proxy) => ink_thumbnail(&proxy, w, h),
+                    None => ink_thumbnail(&doc, w, h),
+                },
+            });
             if colors > 1 {
                 for k in 0..colors {
                     let mut px = vec![egui::Color32::TRANSPARENT; side * side];
@@ -336,6 +342,17 @@ fn ink_thumbnail(src: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
     let xs: Vec<i32> = (0..w).map(|x| ((x as f32 + 0.5) * sw / w as f32) as i32).collect();
     let ys: Vec<i32> = (0..h).map(|y| ((y as f32 + 0.5) * sh / h as f32) as i32).collect();
     crate::canvas::channel_view::ink_samples(src, &xs, &ys)
+}
+
+/// A proxy the ink thumbnails can sample when the composite thumbnail has none: up to
+/// `PROXY_THUMBNAIL_PIXELS` the composite reduces the document itself, which its one-colour
+/// areas keep cheap, but compositing the inks of the whole document in bands costs ~170 ms at
+/// 16 MP on every refresh. `None` when the proxy wouldn't composite the same (layer effects,
+/// vector masks) or the document is too small to need one.
+fn ink_proxy(doc: &Document, max_side: u32) -> Option<Document> {
+    let b = doc.bounds();
+    let k = b.width().max(b.height()).max(1) / max_side.max(1).saturating_mul(2);
+    (k >= 2 && photocraft_compose::proxy::proxy_faithful(doc)).then(|| photocraft_compose::proxy::proxy_document(doc, k))
 }
 
 /// Whether `new` differs from `old` at most in its selection, so every composite and channel
@@ -407,6 +424,27 @@ mod ink_thumbnail_tests {
         let inks = ink_thumbnail(doc, w as usize, h as usize);
         assert_eq!(inks.len(), (w * h) as usize);
         assert!(inks.iter().all(|p| p.iter().zip([1.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01)), "{:?}", inks[0]);
+    }
+
+    /// Below `PROXY_THUMBNAIL_PIXELS` the inks still come from a proxy when it composites the
+    /// same, and give the same inks as the full document; with a layer effect they don't.
+    #[test]
+    fn mid_size_cmyk_ink_thumbnails_use_a_proxy_only_when_faithful() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2400, "height": 1600, "mode": "cmyk"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1200, "height": 1600})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        assert!(photocraft_compose::thumbnail_proxy(&doc, 56).is_none(), "3.8 MP: the composite reduces the document");
+        let proxy = super::ink_proxy(&doc, 56).expect("plain layers: the inks sample a proxy");
+        let (w, h) = photocraft_compose::thumbnail_size(&doc, 56);
+        let (w, h) = (w as usize, h as usize);
+        assert_eq!(ink_thumbnail(&proxy, w, h), ink_thumbnail(&doc, w, h));
+        s.execute("layer.layerStyle.dropShadow", json!({})).unwrap();
+        assert!(super::ink_proxy(&s.active().unwrap().doc, 56).is_none(), "a layer effect: no proxy");
     }
 
     /// Above `PROXY_THUMBNAIL_PIXELS` the inks come from the thumbnail's proxy and still land on
