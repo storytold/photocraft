@@ -22,4 +22,4 @@ PhotoCraft is one of the Crafting Apps from the ArtCraft team, next to VectorCra
 
 ## Get help
 
-Ask in [Discord](https://discord.gg/artcraft) or open an issue in the [issue tracker](https://github.com/storytold/photocraft/issues). In PhotoCraft, **Help › Report an Issue…** opens the same issue tracker.
+Open an issue in the [issue tracker](https://github.com/CodyChuGit/comfy-photocraft/issues). In PhotoCraft, **Help › Report an Issue…** opens the same issue tracker.
