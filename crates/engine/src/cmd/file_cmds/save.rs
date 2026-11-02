@@ -21,6 +21,8 @@ pub(crate) struct SaveOpts {
     /// Targa: 24 or 32 bits per pixel (`"tgaBits"`); unset, 32 with an alpha channel or
     /// transparency, else 24.
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    /// BMP: 24 or 32 bits per pixel (`"bmpBits"`); unset, 32 with transparency, else 24.
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
     /// DPX: 8, 10, 12 or 16 bits per sample (`"dpxBits"`); unset, 8 for an 8-bit document, else 16.
     pub dpx_bits: Option<photocraft_io::DpxBits>,
     /// TIFF: the image compression (`"tiffCompression": "none" | "lzw" | "zip"`); unset, none.
@@ -42,6 +44,7 @@ impl Default for SaveOpts {
             jpeg_format: None,
             tiff_layers: false,
             tga_bits: None,
+            bmp_bits: None,
             dpx_bits: None,
             tiff_compression: None,
             dds: photocraft_io::DdsOptions::default(),
@@ -52,11 +55,11 @@ impl Default for SaveOpts {
 }
 
 impl SaveOpts {
-    /// `quality`, `jpegFormat`, `tiffLayers` and `tgaBits` from command `cmd`'s params (a
-    /// `jpegFormat` it doesn't name or a `tgaBits` other than 24 or 32 is an error); the image
-    /// previews and the PSD merged image from the session's File Handling preferences (Ask When
-    /// Saving has no dialog here, so it saves them, as Photoshop's Save As checkbox and its
-    /// Maximize Compatibility checkbox both start on).
+    /// `quality`, `jpegFormat`, `tiffLayers`, `tgaBits` and `bmpBits` from command `cmd`'s params
+    /// (a `jpegFormat` it doesn't name or a `tgaBits` or `bmpBits` other than 24 or 32 is an
+    /// error); the image previews and the PSD merged image from the session's File Handling
+    /// preferences (Ask When Saving has no dialog here, so it saves them, as Photoshop's Save As
+    /// checkbox and its Maximize Compatibility checkbox both start on).
     pub(crate) fn from_params(s: &Session, p: &Value, cmd: &str) -> Result<Self> {
         let file_handling = &s.prefs().file_handling;
         Ok(SaveOpts {
@@ -64,6 +67,7 @@ impl SaveOpts {
             jpeg_format: jpeg_format_param(p, cmd)?,
             tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
             tga_bits: tga_bits_param(p, cmd)?,
+            bmp_bits: bmp_bits_param(p, cmd)?,
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
             dds: dds_param(p, cmd)?.unwrap_or_default(),
@@ -95,6 +99,19 @@ pub fn tga_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::TgaB
             .and_then(photocraft_io::TgaBits::from_bits)
             .map(Some)
             .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`tgaBits` must be 24 or 32, got {v}") }),
+    }
+}
+
+/// The BMP bits per pixel in `p` (`"bmpBits": 24 | 32`; absent or null: the automatic choice).
+/// Anything else is a bad parameter of command `cmd`.
+pub fn bmp_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::BmpBits>> {
+    match p.get("bmpBits") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_u64()
+            .and_then(photocraft_io::BmpBits::from_bits)
+            .map(Some)
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`bmpBits` must be 24 or 32, got {v}") }),
     }
 }
 
@@ -176,6 +193,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tga_bits: save.tga_bits,
+        bmp_bits: save.bmp_bits,
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
         // Linked files a PSD embeds are resolved against the document being worked on.

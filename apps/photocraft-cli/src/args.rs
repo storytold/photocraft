@@ -16,7 +16,7 @@ use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use photocraft_automation::args::{AutomationArgs, ControlArgs, blank_env_is_unset, conflict, control_port, name_env_vars};
 use photocraft_codecs::{JpegFormat, TiffCompression};
-use photocraft_io::{DdsCompression, DpxBits, TgaBits};
+use photocraft_io::{BmpBits, DdsCompression, DpxBits, TgaBits};
 use serde_json::Value;
 
 /// photocraft-cli: headless PhotoCraft
@@ -59,6 +59,10 @@ pub(crate) struct ExportArgs {
     /// alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24
     #[arg(long, value_name = "24|32", value_parser = tga_bits)]
     pub(crate) tga_bits: Option<TgaBits>,
+    /// A BMP's bits per pixel: 24 composites the transparency over white, 32 keeps it as the
+    /// alpha. Without it: 32 with transparency, else 24
+    #[arg(long, value_name = "24|32", value_parser = bmp_bits)]
+    pub(crate) bmp_bits: Option<BmpBits>,
     /// A DPX's bits per sample. Without it: 8 for an 8-bit document, else 16
     #[arg(long, value_name = "8|10|12|16", value_parser = dpx_bits)]
     pub(crate) dpx_bits: Option<DpxBits>,
@@ -244,6 +248,8 @@ pub(crate) struct ServeArgs {
 enum ValueError {
     #[error("expected 24 or 32")]
     TgaBits,
+    #[error("expected 24 or 32")]
+    BmpBits,
     #[error("expected 8, 10, 12 or 16")]
     DpxBits,
     #[error("expected none, bc1, bc2 or bc3")]
@@ -287,6 +293,10 @@ impl ServerOptionError {
 
 fn tga_bits(s: &str) -> Result<TgaBits, ValueError> {
     s.parse().ok().and_then(TgaBits::from_bits).ok_or(ValueError::TgaBits)
+}
+
+fn bmp_bits(s: &str) -> Result<BmpBits, ValueError> {
+    s.parse().ok().and_then(BmpBits::from_bits).ok_or(ValueError::BmpBits)
 }
 
 fn dpx_bits(s: &str) -> Result<DpxBits, ValueError> {

@@ -123,6 +123,7 @@ pub use dialogs::adjust_editors;
 pub use dialogs::adjust_preview;
 pub(crate) use dialogs::bitmap_dialog;
 pub use dialogs::blur_pins;
+pub use dialogs::bmp_options_ui;
 pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
 use dialogs::camera_raw_detail_ui;
@@ -680,6 +681,8 @@ pub struct PhotocraftApp {
     pub(crate) disk_stamps: HashMap<photocraft_doc::DocId, (String, FileStamp)>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
+    /// A save to an RGB BMP parked behind the BMP Options prompt (see `bmp_options_ui`).
+    pub(crate) bmp_options: Option<bmp_options_ui::Prompt>,
     /// A save to a JPEG parked behind the JPEG Options prompt (see `jpeg_options_ui`).
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).

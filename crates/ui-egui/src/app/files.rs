@@ -1,5 +1,5 @@
 use super::{
-    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, jobs_ui,
+    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, bmp_options_ui, camera_raw_ui, dds_options_ui, file_open, jobs_ui,
     jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
 };
 
@@ -153,8 +153,9 @@ impl PhotocraftApp {
     }
 
     /// [`Self::save_as`] with the format choices already made, which skip their prompts:
-    /// `file.save` and `file.saveAs` with `tgaBits` (no Targa Options), `ddsCompression` or
-    /// `ddsMipmaps` (no DDS Options), or `quality` or `jpegFormat` (no JPEG Options).
+    /// `file.save` and `file.saveAs` with `tgaBits` (no Targa Options), `bmpBits` (no BMP
+    /// Options), `ddsCompression` or `ddsMipmaps` (no DDS Options), or `quality` or `jpegFormat`
+    /// (no JPEG Options).
     pub fn save_as_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
         self.save_dialog_flow(path, choices, false)
     }
@@ -238,6 +239,11 @@ impl PhotocraftApp {
             targa_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
+        if choices.bmp_bits.is_none() && bmp_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            bmp_options_ui::park(self, path.clone(), copy, "file.saveAs", None)?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
         if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
             let copy = self.saves_copy(&path, None)?;
             dds_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
@@ -293,6 +299,7 @@ impl PhotocraftApp {
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
+            self.bmp_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.jpeg_options.as_mut().map(|p| (&p.path, &mut p.record)),
         ];
@@ -306,7 +313,7 @@ impl PhotocraftApp {
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
             && let Some(step) = last.1.as_object()
-            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
+            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "bmpBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
         {
             let mut step = step.clone();
             step.remove("path");
@@ -376,7 +383,7 @@ impl PhotocraftApp {
 
     /// Whether saving the active document to `path` writes a copy. `tiff_layers` is the TIFF
     /// Options answer: `Some(false)` discards the layers and saves a copy.
-    fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
+    pub(crate) fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
         // A flat file that can't hold the document (its layers, or the layered file it lives in)
         // is written as a copy, as in Photoshop: the document keeps its file, so Save still
         // writes the layered original and the edits stay unsaved (#2550).
@@ -547,12 +554,12 @@ impl PhotocraftApp {
         own == path && self.services.file_stamp.as_ref().and_then(|stamp| stamp(path)).is_some_and(|now| now != *then)
     }
 
-    /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
+    /// TIFF, Targa, BMP, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.bmp_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
     }
 
-    /// Writes a save that waited on a format prompt (Targa, DDS or JPEG Options) once answered:
+    /// Writes a save that waited on a format prompt (Targa, BMP, DDS or JPEG Options) once answered:
     /// journals `step` as its command (`file.saveAs` for Save As, `file.saveACopy` for Save a
     /// Copy, `file.save` for a plain Save), so an action being recorded keeps it with this answer
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on

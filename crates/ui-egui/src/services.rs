@@ -1,18 +1,19 @@
 use super::{
-    CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
+    CaptionStyle, Document, FileDialogFn, OsEvent, Value, bmp_options_ui, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
     targa_options_ui,
 };
 
 /// The error a save gets while another save waits on its format prompt.
-pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG Options before starting another save";
+pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, BMP, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`) and JPEG Options (`"quality"` 0–12,
-/// `"jpegFormat"`). `None` asks in Save As and takes the default in automation saves, which never
-/// prompt.
+/// the BMP bits per pixel (`"bmpBits"`), the DDS options (`"ddsCompression"`, `"ddsMipmaps"`)
+/// and JPEG Options (`"quality"` 0–12, `"jpegFormat"`). `None` asks in Save As and takes the
+/// default in automation saves, which never prompt.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
     pub dds: Option<photocraft_io::DdsOptions>,
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
 }
@@ -22,6 +23,7 @@ impl FormatChoices {
     pub fn from_params(params: &Value, cmd: &str) -> Result<Self, String> {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            bmp_bits: bmp_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
         })
@@ -32,6 +34,7 @@ impl FormatChoices {
     pub(crate) fn from_step(params: &Value, cmd: &str) -> Result<Self, String> {
         Ok(FormatChoices {
             tga_bits: targa_options_ui::bits_param(params, cmd)?,
+            bmp_bits: bmp_options_ui::bits_param(params, cmd)?,
             dds: dds_options_ui::options_param(params, cmd)?,
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
         })
@@ -39,7 +42,12 @@ impl FormatChoices {
 
     /// The export settings with these answers applied.
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
-        let settings = ExportSettings { tga_bits: self.tga_bits.or(settings.tga_bits), dds: self.dds.unwrap_or(settings.dds), ..settings };
+        let settings = ExportSettings {
+            tga_bits: self.tga_bits.or(settings.tga_bits),
+            bmp_bits: self.bmp_bits.or(settings.bmp_bits),
+            dds: self.dds.unwrap_or(settings.dds),
+            ..settings
+        };
         match self.jpeg {
             Some(j) => j.apply(settings),
             None => settings,
@@ -50,6 +58,9 @@ impl FormatChoices {
     pub(crate) fn record(self, step: &mut Value) {
         if let Some(bits) = self.tga_bits {
             step["tgaBits"] = bits.bits().into();
+        }
+        if let Some(bits) = self.bmp_bits {
+            step["bmpBits"] = bits.bits().into();
         }
         if let Some(dds) = self.dds {
             dds_options_ui::record(dds, step);
@@ -83,6 +94,8 @@ pub struct ExportSettings {
     /// Targa: bits per pixel from Targa Options or Export As (`None`: 32 with an alpha channel or
     /// transparency, else 24).
     pub tga_bits: Option<photocraft_io::TgaBits>,
+    /// BMP: bits per pixel from BMP Options (`None`: 32 with transparency, else 24).
+    pub bmp_bits: Option<photocraft_io::BmpBits>,
     /// DDS: the compression and mip chain from DDS Options (uncompressed without mipmaps unless
     /// chosen).
     pub dds: photocraft_io::DdsOptions,
@@ -118,6 +131,7 @@ impl Default for ExportSettings {
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
+            bmp_bits: None,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
@@ -148,6 +162,7 @@ impl ExportSettings {
         opts.tiff_layers = self.tiff_layers;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
+        opts.bmp_bits = self.bmp_bits;
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;

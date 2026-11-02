@@ -1113,6 +1113,7 @@ pub mod adjust_editors;
 pub mod adjust_preview;
 pub(crate) mod bitmap_dialog;
 pub mod blur_pins;
+pub mod bmp_options_ui;
 pub mod brush_preset_dialog;
 pub mod caf_ui;
 pub(super) mod camera_raw_detail_ui;
