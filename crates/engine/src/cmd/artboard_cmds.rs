@@ -332,6 +332,7 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         *active = Some(id);
         Ok(rect)
     })?;
+    crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 

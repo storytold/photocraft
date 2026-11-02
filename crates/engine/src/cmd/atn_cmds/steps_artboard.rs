@@ -20,8 +20,12 @@ fn settings_from(board: &Descriptor, preset_key: &str) -> Option<Value> {
     };
     let Some(D::List(guides)) = board.get("guideIDs") else { return None };
     let guides: Vec<i32> = guides.iter().map(|v| if let D::Integer(n) = v { Some(*n) } else { None }).collect::<Option<_>>()?;
-    let rgb: Vec<f64> = ["Rd  ", "Grn ", "Bl  "].iter().map(|key| get_num(color, key).map(|n| n / 255.0)).collect::<Option<_>>()?;
+    let recorded: Vec<f64> = ["Rd  ", "Grn ", "Bl  "].iter().map(|key| get_num(color, key)).collect::<Option<_>>()?;
+    let rgb: Vec<f64> = recorded.iter().map(|n| n / 255.0).collect();
     let mut p = json!({"background": background, "color": rgb, "guideIDs": guides});
+    if recorded.iter().zip(&rgb).any(|(recorded, native)| *recorded != native * 255.0) {
+        p["recordedColor"] = json!(recorded);
+    }
     p[preset_key] = preset.into();
     if board.get("artboardBackgroundType").is_none() {
         p["backgroundTypeOmitted"] = true.into();
@@ -48,7 +52,17 @@ fn settings_to(p: &Value, preset_key: &str) -> Option<Descriptor> {
     if !rgb.iter().all(|n| n.is_finite() && (0.0..=1.0).contains(n)) {
         return None;
     }
-    let color = ["Rd  ", "Grn ", "Bl  "].into_iter().zip(rgb).fold(desc("RGBC"), |d, (key, n)| d.with(key, D::Double(n * 255.0)));
+    let recorded = match p.get("recordedColor") {
+        None => rgb.iter().map(|n| n * 255.0).collect(),
+        Some(value) => {
+            let values = value.as_array()?.iter().map(Value::as_f64).collect::<Option<Vec<_>>>()?;
+            if values.len() != 3 || values.iter().zip(&rgb).any(|(wire, native)| !(0.0..=255.0).contains(wire) || wire / 255.0 != *native) {
+                return None;
+            }
+            values
+        }
+    };
+    let color = ["Rd  ", "Grn ", "Bl  "].into_iter().zip(recorded).fold(desc("RGBC"), |d, (key, n)| d.with(key, D::Double(n)));
     let board = desc("artboard").with("guideIDs", D::List(guides)).with("artboardPresetName", text(preset)).with("Clr ", D::Descriptor(color));
     match p.get("backgroundTypeOmitted") {
         None => Some(board.with("artboardBackgroundType", D::Integer(background))),
@@ -72,17 +86,25 @@ pub(super) fn artboard_from(d: &Descriptor) -> Mapped {
     if artboard_to(FROM_GROUP, &p).is_some_and(|expected| expected.items == d.items) { step(FROM_GROUP, p) } else { unsupported }
 }
 
-/// Save complete recorded conversion settings; unknown native options must not disappear.
+/// Fill behavior-neutral metadata for native settings; unknown options must not disappear.
 pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
     let fields = p.as_object()?;
     let d = desc("null").with("null", target_ref("Lyr "));
     if fields.is_empty() {
         return Some(d);
     }
-    if fields.keys().any(|k| !["background", "color", "preset", "guideIDs", "changeBackground", "backgroundTypeOmitted"].contains(&k.as_str())) {
+    if fields.keys().any(|k| !["background", "color", "recordedColor", "preset", "guideIDs", "changeBackground", "backgroundTypeOmitted"].contains(&k.as_str()))
+    {
         return None;
     }
-    let d = d.with("artboard", D::Descriptor(settings_to(p, "preset")?));
+    let mut settings = p.clone();
+    let fields = settings.as_object_mut()?;
+    let background = if fields.contains_key("color") { "custom" } else { "white" };
+    // Native custom-without-color means white. Other types ignore this last-used color.
+    for (key, value) in [("background", json!(background)), ("color", json!([1.0, 1.0, 1.0])), ("preset", json!("")), ("guideIDs", json!([]))] {
+        fields.entry(key).or_insert(value);
+    }
+    let d = d.with("artboard", D::Descriptor(settings_to(&settings, "preset")?));
     match p.get("changeBackground") {
         None => Some(d),
         // Older native action files used true for the recorded integer 1.
@@ -108,7 +130,8 @@ pub(super) fn artboard_edit_from(d: &Descriptor) -> Mapped {
 pub(super) fn artboard_edit_to(_: &str, p: &Value) -> Option<Descriptor> {
     let fields = p.as_object()?;
     if fields.keys().any(|k| {
-        !["background", "color", "recordedPreset", "guideIDs", "recordedRect", "changeSizes", "changeBackground", "backgroundTypeOmitted"].contains(&k.as_str())
+        !["background", "color", "recordedColor", "recordedPreset", "guideIDs", "recordedRect", "changeSizes", "changeBackground", "backgroundTypeOmitted"]
+            .contains(&k.as_str())
     }) || p.get("changeSizes")?.as_i64()? != 8
         || p.get("changeBackground")?.as_i64()? != 1
     {

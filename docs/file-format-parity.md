@@ -148,8 +148,8 @@ Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCr
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-01 | minor | `.atn`: 22 newer measured forms mapped, including explicit Link/Unlink, Smart Object file operations, Make Type to Shape, radius-only Shape Blur and the Crop Photos parent; 138 supported event names. Artboard from Group and generated Crop helper steps remain kept. |
-| 2026-11-01 | minor | `.atn`: event reference [atn.md](atn.md): the 117 supported events, and measured keys, defaults, ranges and enum values for 101 events not mapped yet |
+| 2026-11-01 | minor | `.atn`: 23 newer measured forms mapped, including explicit Link/Unlink, Smart Object file operations, Make Type to Shape, radius-only Shape Blur, Artboard from Group and the Crop Photos parent; 139 supported event names. Artboard forms with unmeasured settings and generated Crop helper steps remain kept. |
+| 2026-11-01 | minor | `.atn`: event reference [atn.md](atn.md): the 139 supported events, and measured keys, defaults, ranges and enum values for 101 events not mapped yet |
 | 2026-10-26 | minor | Embedded AI/PDF/EPS save-back retains native format and a separate source-bound display preview; original sources remain undoable. Native Adobe interoperability and standalone EPS/DCS remain unverified; no corpus floor or percentage changed. |
 | 2026-10-22 | minor | Embedded PSD vectors gain explicit bounded SVG editor/save-back; standalone EPS/DCS and native-format fidelity remain open. |
 | 2026-10-22 | minor | TIFF: flat pages up to 300,000 px a side open (was 2^30 px, about 32,768²): `codecs::TiffBands` decodes a group of rows at a time into the layer's tiles. The 117,504 × 22,464 px banner from #8456 opens in 3.3 s at 11.45 GB peak for a 10.56 GB layer; 30,000² 6.8 s / 6.43 GB → 1.1 s / 3.86 GB; 36 MP 220 → 52 ms. Layered TIFFs still decode whole (#8169) |

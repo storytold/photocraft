@@ -130,6 +130,26 @@ fn unlink_cleans_singletons_preserves_other_groups_and_undoes() {
     assert!(!one.is_enabled("layer.linkLayers"), "the UI toggle still requires two unlinked layers");
 }
 
+/// Explicit Link cleans an orphan without touching a real group's unselected member.
+#[test]
+fn explicit_link_cleans_a_singleton_but_preserves_a_linked_pair() {
+    for initial in [vec![Some(77)], vec![Some(77), None], vec![Some(77), Some(77)]] {
+        let mut s = fixture(&initial, &[0]);
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        let linked = initial == [Some(77), Some(77)];
+        assert_eq!(s.execute("layer.linkLayers", json!({"linked": true})).unwrap()["linked"], linked);
+        if linked {
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        } else {
+            assert!(groups(&s).iter().all(Option::is_none));
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
 #[test]
 fn invalid_link_state_fails_without_editing() {
     let mut s = fixture(&[None, None], &[0, 1]);
@@ -511,6 +531,55 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
     assert_eq!(s.active().unwrap().doc, before);
 }
 
+/// A conversion selects its result, so a following Delete cannot remove another selected layer.
+#[test]
+fn artboard_from_group_replaces_the_previous_layer_selection() {
+    let mut s = artboard_fixture();
+    let group = s.active().unwrap().active_layer.unwrap();
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let other = Layer::raster("Other", doc.pixel_format());
+    let id = other.id;
+    doc.layers.push(other);
+    s.restore_layer_selection(Some(group), &[id, group], Some(id)).unwrap();
+    load(&mut s, &file("artboardFromLayerGroupEvent", Descriptor::new("null").with("null", target())));
+    play(&mut s);
+    assert_eq!(s.active().unwrap().selected_layers(), vec![group]);
+    s.execute("layer.delete", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.layer(id).is_some());
+    assert!(s.active().unwrap().doc.layer(group).is_none());
+}
+
+/// Preserve fractional wire values exactly while playback uses normalized native RGB.
+#[test]
+fn artboard_fractional_colors_survive_import_save_and_playback() {
+    let rgb = [7.97, 31.88, 127.6];
+    for event in ["artboardFromLayerGroupEvent", "editArtboardEvent"] {
+        let mut s = artboard_fixture();
+        let mut d = if event == "editArtboardEvent" {
+            s.execute("layer.new.artboardFromGroup", json!({})).unwrap();
+            artboard_edit_descriptor(4, 8)
+        } else {
+            artboard_descriptor(4, vec![], D::Integer(1))
+        };
+        let D::Descriptor(board) = &mut d.items.iter_mut().find(|(key, _)| key.is("artboard")).unwrap().1 else { unreachable!() };
+        board.items.iter_mut().find(|(key, _)| key.is("Clr ")).unwrap().1 =
+            D::Descriptor(["Rd  ", "Grn ", "Bl  "].into_iter().zip(rgb).fold(Descriptor::new("RGBC"), |color, (key, n)| color.with(key, D::Double(n))));
+        assert_eq!(load(&mut s, &file(event, d.clone()))["unsupported"], json!([]));
+        assert_eq!(saved_item(&mut s).descriptor, Some(d));
+        let (id, mut changed) = s.actions.list[0].steps[0].clone();
+        changed["color"][0] = 0.5.into();
+        assert!(atn_cmds::export("Links", &[&Action::new("Changed", vec![(id, changed)])], &[], false).is_err());
+        let before = s.active().unwrap().doc.clone();
+        play(&mut s);
+        let pixel = photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
+        for (actual, expected) in pixel.into_iter().zip(rgb.map(|n| n as f32 / 255.0)) {
+            assert!((actual - expected).abs() < 0.005, "{event}: {pixel:?}");
+        }
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
 /// Unproved settings remain byte-preserving kept steps and cannot partially edit the document.
 #[test]
 fn artboard_unmeasured_types_and_extra_settings_stay_whole() {
@@ -532,7 +601,7 @@ fn artboard_unmeasured_types_and_extra_settings_stay_whole() {
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
-    for p in [json!({"layer":1}), json!({"preset":"iPhone 14"}), json!({"guideIDs":[]}), json!({"changeBackground":false})] {
+    for p in [json!({"layer":1}), json!({"preset":7}), json!({"guideIDs":[7.5]}), json!({"changeBackground":false})] {
         let action = Action::new("A", vec![("layer.new.artboardFromGroup".into(), p)]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }

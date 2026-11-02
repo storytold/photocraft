@@ -440,6 +440,9 @@ commands record).
   makes a white artboard (type 1, `Clr ` 255/255/255), and the step's result then has no `changeBackground` key.
   `artboardBackgroundType` absent with `changeBackground` 1 gives type 1 (white).
 - The artboard takes the group's bounds; `Clr ` is stored on the artboard as given even when the type is 1..3.
+- PhotoCraft preserves fractional recorded RGB values exactly. Native actions with partial settings export an empty preset and guide list when absent.
+  An absent native color exports as white: it matches the native custom-color fallback and is visually ignored for white, black and transparent backgrounds.
+  This is canonical export metadata, not a claim about the reference application's remembered color. Imported steps retain their recorded color instead.
 
 ## Measured through dialogs and recordings
 

@@ -737,6 +737,13 @@ fn every_mapped_command_exports_and_imports_back() {
             Mapped::Unsupported { .. } => panic!("{id} does not import back"),
         }
     }
+    // Partial native backgrounds need no recorded preset, guide IDs or last-used color.
+    for background in ["white", "black", "transparent", "custom"] {
+        let item = export_item("layer.new.artboardFromGroup", &json!({"background":background}), "S").unwrap();
+        let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("Artboard did not import") };
+        assert_eq!(steps, [("layer.new.artboardFromGroup".into(), json!({"background":background,"color":[1.0,1.0,1.0],"preset":"","guideIDs":[]}))]);
+        assert_eq!(export_item(&steps[0].0, &steps[0].1, "S").unwrap().descriptor, item.descriptor);
+    }
     // Every command the table claims to export has a case above.
     let covered: std::collections::BTreeSet<&str> = cases.iter().map(|(id, _)| *id).collect();
     let mut missing: Vec<&str> = EVENTS.iter().flat_map(|e| e.ids.iter().copied()).filter(|id| !covered.contains(id)).collect();
