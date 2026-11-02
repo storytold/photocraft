@@ -558,7 +558,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 path: None,
                 bytes: None,
                 developed_with: Default::default(),
-                demosaic: Default::default()
+                demosaic: Default::default(),
+                crop: None
             }
         )
         .is_err()
@@ -798,6 +799,47 @@ fn a_rating_only_sidecar_is_left_alone() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 10}, "commit": true}})).unwrap().unwrap();
     assert!(written.lock().unwrap().is_empty(), "nor with a change");
     assert_eq!(std::fs::read_to_string(sidecar_path(&raw_path)).unwrap(), bridge);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #9985: the crop of a Lightroom sidecar crops the opened raw (with the dialog's Open and
+/// without the dialog), and neither its edges nor the raw's file name are named as unsupported.
+/// A straightened crop isn't applied and is named. PhotoCraft's own sidecar keeps the crop.
+#[test]
+fn a_sidecar_crop_crops_the_opened_raw() {
+    let lightroom = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Adobe XMP Core 7.0"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:RawFileName="IMG_0100.cr2" crs:HasCrop="True" crs:CropTop="0.25" crs:CropLeft="0.125" crs:CropBottom="0.75" crs:CropRight="0.625" crs:CropAngle="0"/></rdf:RDF></x:xmpmeta>"#;
+    let (mut app, dng, dir, raw_path, written) = raw_with_sidecar("crop", Some(lightroom));
+    let ctx = egui::Context::default();
+    let size = |app: &PhotocraftApp| app.session.active().map(|st| (st.doc.size.width, st.doc.size.height));
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    assert!(app.ui.status.contains("IMG_0100.xmp") && !app.ui.status.contains("not supported"), "{}", app.ui.status);
+    assert_eq!(size(&app), Some((48, 32)), "the dialog previews the whole frame");
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((24, 16)), "Open crops the 48x32 frame to x 6..30, y 8..24");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.saved_revision, st.revision, "the crop is part of opening: unmodified");
+    assert!(written.lock().unwrap().is_empty(), "Lightroom's sidecar is kept");
+    app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": false})).unwrap();
+    app.open_file(&raw_path, &dng).unwrap();
+    assert_eq!(size(&app), Some((24, 16)), "without the dialog too");
+    app.run("prefs.set", json!({"path": "rawDefaults.openInCameraRaw", "value": true})).unwrap();
+    // Straightened: the rectangle is measured on the turned frame, so nothing is cropped.
+    std::fs::write(sidecar_path(&raw_path), lightroom.replace(r#"crs:CropAngle="0""#, r#"crs:CropAngle="1.38""#)).unwrap();
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    assert!(app.ui.status.contains("CropAngle") && !app.ui.status.contains("RawFileName"), "{}", app.ui.status);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((48, 32)));
+    // PhotoCraft's own sidecar: a changed setting rewrites it, with the crop it was opened with.
+    let crop = photocraft_io::camera_raw_xmp::Crop { top: 0.25, left: 0.125, bottom: 0.75, right: 0.625 };
+    std::fs::write(sidecar_path(&raw_path), photocraft_io::camera_raw_xmp::save_with_crop(&CameraRaw::default(), Some(crop))).unwrap();
+    open_dialog_at(&mut app, &ctx, &dng, &raw_path);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 15}, "commit": true}})).unwrap().unwrap();
+    assert_eq!(size(&app), Some((24, 16)));
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.len(), 1);
+    let mut back = CameraRaw::default();
+    let r = photocraft_io::camera_raw_xmp::load(&mut back, &w[0].1).unwrap();
+    assert_eq!((back.contrast, r.crop), (15.0, Some(crop)));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

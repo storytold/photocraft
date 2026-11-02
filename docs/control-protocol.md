@@ -560,7 +560,10 @@ Open also applies the other Camera Raw Defaults (Sharpen For as part of the Came
 colour space, bit depth and Open as Smart Object, so the step works on the pixels the dialog
 previewed; Apply auto tone fills the dialog), reported as `defaults` in the commit's reply; the
 resolution is set when the file opens. With "Open in Camera Raw" off the sidecar and the defaults
-apply without the dialog.
+apply without the dialog. A sidecar's crop (`crs:HasCrop="True"` with `CropTop` / `CropLeft` /
+`CropBottom` / `CropRight`, fractions of the raw as stored, before its Orientation) crops the
+document as Open re-develops it, before the Camera Raw step; the dialog previews the whole frame.
+A straightened crop (`CropAngle` not 0) is named as not supported and not applied.
 
 **Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
 command line) of a camera raw developed from its sensor data shows this dialog first, titled
