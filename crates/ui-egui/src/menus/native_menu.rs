@@ -183,7 +183,7 @@ pub fn from_items(tops: &[&str], items: &[MenuItem]) -> MenuBar {
         let mut shown: Vec<&str> = Vec::new();
         for it in rows {
             if it.path.len() == depth {
-                if it.label == "---" {
+                if it.is_separator() {
                     out.push(Node::Separator);
                 } else {
                     out.push(Node::Item(Item {

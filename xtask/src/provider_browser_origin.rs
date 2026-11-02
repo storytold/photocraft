@@ -132,7 +132,7 @@ mod support {
         let server = thread::Builder::new()
             .name("photocraft-origin-relay".into())
             .spawn(move || {
-                let result = serve(listener, &token, &server_state, &server_stop, deadline);
+                let result = serve(listener, &token, &server_state, &server_stop, deadline, Duration::from_secs(10));
                 if let Err(error) = &result {
                     locked(&server_state).error.get_or_insert(error.clone());
                 }
@@ -435,22 +435,44 @@ mod support {
         origin: Option<String>,
     }
 
-    fn request(socket: &mut TcpStream, stop: &AtomicBool, deadline: Instant) -> Result<Request, String> {
+    /// An empty close or read timeout is an idle browser connection, not a malformed request.
+    fn request_header(socket: &mut TcpStream, stop: &AtomicBool, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
         let mut header = Vec::new();
         loop {
             if stop.load(Ordering::SeqCst) || Instant::now() >= deadline {
                 return Err("request stopped".into());
             }
             let mut byte = [0_u8; 1];
-            socket.read_exact(&mut byte).map_err(|e| e.to_string())?;
+            match socket.read_exact(&mut byte) {
+                Ok(()) => {}
+                Err(error)
+                    if header.is_empty()
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                        ) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
             header.push(byte[0]);
             if header.ends_with(b"\r\n\r\n") {
-                break;
+                return Ok(Some(header));
             }
             if header.len() >= MAX_HEADER {
                 return Err("request header too large".into());
             }
         }
+    }
+
+    /// `None` explicitly retires only a connection that supplied no header bytes.
+    fn request(socket: &mut TcpStream, stop: &AtomicBool, deadline: Instant) -> Result<Option<Request>, String> {
+        let Some(header) = request_header(socket, stop, deadline)? else { return Ok(None) };
         let text = std::str::from_utf8(&header).map_err(|_| "non-UTF8 request header")?;
         let mut lines = text.split("\r\n");
         let mut first = lines.next().ok_or("missing request line")?.split(' ');
@@ -471,7 +493,7 @@ mod support {
                 return Err("request body is not permitted".into());
             }
         }
-        Ok(Request { target, origin })
+        Ok(Some(Request { target, origin }))
     }
 
     /// Accepted sockets can inherit the listener's nonblocking mode on Unix; request reads must wait within the existing timeout.
@@ -481,7 +503,7 @@ mod support {
         socket.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())
     }
 
-    fn serve(listener: TcpListener, token: &str, state: &Mutex<State>, stop: &AtomicBool, deadline: Instant) -> Result<(), String> {
+    fn serve(listener: TcpListener, token: &str, state: &Mutex<State>, stop: &AtomicBool, deadline: Instant, socket_timeout: Duration) -> Result<(), String> {
         let mut count = 0;
         while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
             match listener.accept() {
@@ -490,7 +512,7 @@ mod support {
                     if !peer.ip().is_loopback() || count > MAX_CONNECTIONS {
                         return Err("relay connection bound exceeded".into());
                     }
-                    configure_accepted_socket(&socket, Duration::from_secs(10))?;
+                    configure_accepted_socket(&socket, socket_timeout)?;
                     if let Err(error) = handle(&mut socket, token, state, stop, deadline) {
                         let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                         // Unauthorised browser favicon requests do not invalidate a genuine run.
@@ -507,7 +529,7 @@ mod support {
     }
 
     fn handle(socket: &mut TcpStream, token: &str, state: &Mutex<State>, stop: &AtomicBool, deadline: Instant) -> Result<(), String> {
-        let req = request(socket, stop, deadline)?;
+        let Some(req) = request(socket, stop, deadline)? else { return Ok(()) };
         let path = artifact_path(&req.target, token)?;
         if req.origin.as_deref() != Some("null") && !(path == "/" && req.origin.is_none()) {
             return Err("only opaque-origin assets and the initial iframe navigation are permitted".into());
@@ -777,15 +799,15 @@ mod support {
     #[cfg(test)]
     mod tests {
         use super::{
-            Digest, MAX_HEADER, State, artifact_path, config, configure_accepted_socket, configure_runner_http, observe, request, response_headers, unchunk,
-            valid_proof,
+            Digest, MAX_HEADER, State, artifact_path, config, configure_accepted_socket, configure_runner_http, observe, request, response_headers, serve,
+            unchunk, valid_proof,
         };
         use std::ffi::OsStr;
         use std::io::{Read, Write};
         use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
         use std::path::{Path, PathBuf};
         use std::process::Command;
-        use std::sync::{atomic::AtomicBool, mpsc};
+        use std::sync::{Mutex, atomic::AtomicBool, mpsc};
         use std::thread;
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -796,6 +818,98 @@ mod support {
             fn drop(&mut self) {
                 let _ = std::fs::remove_dir_all(&self.0);
             }
+        }
+
+        struct RelayExchange {
+            first: Vec<u8>,
+            following: Vec<u8>,
+            error: Option<String>,
+        }
+
+        /// Send only bounded fixture bytes to the owned loopback listener, with a finite read.
+        fn relay_exchange(address: SocketAddr, payload: &[u8], close_write: bool) -> Result<Vec<u8>, String> {
+            let timeout = Duration::from_secs(2);
+            let mut client = TcpStream::connect_timeout(&address, timeout).map_err(|e| e.to_string())?;
+            client.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+            client.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+            client.write_all(payload).map_err(|e| e.to_string())?;
+            if close_write {
+                client.shutdown(Shutdown::Write).map_err(|e| e.to_string())?;
+            }
+            let mut response = Vec::new();
+            client.take(MAX_HEADER as u64 + 1).read_to_end(&mut response).map_err(|e| e.to_string())?;
+            if response.len() > MAX_HEADER {
+                return Err("fixture relay response exceeded its bound".into());
+            }
+            Ok(response)
+        }
+
+        /// Drive the production serve loop; only this fixture uses a shorter socket timeout.
+        fn serve_exchange(payload: &[u8], close_write: bool) -> Result<RelayExchange, String> {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+            listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+            let address = listener.local_addr().map_err(|e| e.to_string())?;
+            let state = Mutex::new(State::default());
+            let stop = AtomicBool::new(false);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut exchange = thread::scope(|scope| -> Result<RelayExchange, String> {
+                let server = scope.spawn(|| serve(listener, "fixture", &state, &stop, deadline, Duration::from_millis(100)));
+                let result = (|| -> Result<RelayExchange, String> {
+                    let first = relay_exchange(address, payload, close_write)?;
+                    // A later ordinary browser request must still reach this same listener.
+                    let following = relay_exchange(address, b"GET /unowned/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", true)?;
+                    Ok(RelayExchange { first, following, error: None })
+                })();
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                let served = server.join().map_err(|_| "fixture relay thread panicked".to_string())?;
+                let exchange = result?;
+                served?;
+                Ok(exchange)
+            })?;
+            exchange.error = super::locked(&state).error.clone();
+            Ok(exchange)
+        }
+
+        /// Both an immediate empty close and an idle read timeout leave later requests usable.
+        #[test]
+        fn empty_connections_close_or_timeout_without_poisoning_the_live_relay() -> Result<(), String> {
+            for close_write in [true, false] {
+                let exchange = serve_exchange(b"", close_write)?;
+                assert!(exchange.first.is_empty(), "an idle connection has no HTTP request to reject");
+                assert!(exchange.error.is_none(), "idle connection poisoned the relay: {:?}", exchange.error);
+                assert!(exchange.following.starts_with(b"HTTP/1.1 403 Forbidden\r\n"), "the next request did not reach the actual relay");
+            }
+            Ok(())
+        }
+
+        /// The same transport endings after even one header byte remain fatal.
+        #[test]
+        fn partial_requests_close_or_timeout_with_a_fatal_relay_error() -> Result<(), String> {
+            for close_write in [true, false] {
+                let exchange = serve_exchange(b"GET /", close_write)?;
+                assert!(exchange.first.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+                assert!(exchange.error.is_some(), "a partial request must never be classified as idle");
+                assert!(exchange.following.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+            }
+            Ok(())
+        }
+
+        /// HTTP syntax, duplicate-origin and body restrictions still reach the fatal serve path.
+        #[test]
+        fn malformed_requests_still_fail_the_live_relay() -> Result<(), String> {
+            for payload in [
+                b"POST /fixture/ HTTP/1.1\r\n\r\n".as_slice(),
+                b"GET /fixture/ HTTP/1.1\r\nbroken\r\n\r\n".as_slice(),
+                b"GET /fixture/ HTTP/1.1\r\nContent-Length: 1\r\n\r\n".as_slice(),
+                b"GET /fixture/ HTTP/1.1\r\nOrigin: null\r\nOrigin: null\r\n\r\n".as_slice(),
+                b"\xff\r\n\r\n".as_slice(),
+            ] {
+                let exchange = serve_exchange(payload, true)?;
+                assert!(exchange.first.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+                assert!(exchange.error.is_some(), "a malformed request must remain fatal");
+                assert!(exchange.following.starts_with(b"HTTP/1.1 403 Forbidden\r\n"));
+            }
+            Ok(())
         }
 
         /// Exercise actual argument resolution without changing process CWD or creating evidence in it.
@@ -863,7 +977,8 @@ mod support {
                 let received = result_rx.recv_timeout(timeout).map_err(|e| e.to_string())?;
                 reader.join().map_err(|_| "request reader panicked".to_string())??;
                 received
-            })?;
+            })?
+            .ok_or("fixture request was unexpectedly idle")?;
             assert_eq!(received.target, "/fixture/");
             assert_eq!(received.origin.as_deref(), Some("null"));
             Ok(())
@@ -883,7 +998,7 @@ mod support {
                 assert!(peer.ip().is_loopback());
                 configure_accepted_socket(&server, timeout)?;
                 client.write_all(b"GET /fixture/ HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\n\r\n").map_err(|e| e.to_string())?;
-                let received = request(&mut server, &AtomicBool::new(false), Instant::now() + timeout)?;
+                let received = request(&mut server, &AtomicBool::new(false), Instant::now() + timeout)?.ok_or("fixture request was unexpectedly idle")?;
                 assert_eq!(received.target, "/fixture/");
                 assert_eq!(received.origin.as_deref(), Some("null"));
                 // Exercise the production writer shared by generated HTML, module and WASM responses.

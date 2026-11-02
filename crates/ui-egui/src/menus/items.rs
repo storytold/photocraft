@@ -16,6 +16,13 @@ pub struct MenuItem {
     pub color: Option<String>,
 }
 
+impl MenuItem {
+    /// Separator identity is reserved; provider and document labels may themselves be `---`.
+    pub(crate) fn is_separator(&self) -> bool {
+        self.id == "---"
+    }
+}
+
 /// Is `id` implemented by the engine or the shell (a live menu item)? Shared by the menus and
 /// the parity report ([`crate::parity`]).
 pub fn is_live(id: &str) -> bool {

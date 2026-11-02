@@ -1013,6 +1013,61 @@ fn delivery_failure_uses_reserved_capacity_beside_a_full_real_command_inbox() {
     assert_eq!(host.take_events().iter().filter(|event| event.metadata["type"] == "saveFailed").count(), 1);
 }
 
+/// Real accepted opens fill the inbox without consuming the pending save or its checkpoint.
+#[test]
+fn full_result_inbox_retains_the_capture_and_allows_a_later_exact_ack() {
+    let (mut app, host, doc) = app();
+    let request = begin(&host, doc, false);
+    for n in 0..MAX_PENDING {
+        let read = host.request_open(&format!("read-{n}")).unwrap();
+        host.open(read, "bad.png".into(), vec![1]).unwrap();
+    }
+    assert_eq!(host.state().commands.len(), MAX_PENDING);
+    assert_eq!(
+        host.result(request.clone(), "saved".into(), "resource-one".into()).unwrap_err(),
+        "the file provider command queue is full; retry the save result"
+    );
+    assert_eq!(host.result("unknown".into(), "failed".into(), String::new()).unwrap_err(), "unknown or already completed file provider save request");
+    assert_eq!(host.state().commands.len(), MAX_PENDING);
+    assert!(host.state().queued_results.is_empty());
+    assert_eq!(host.state().pending.get(&request).unwrap().revision, 7);
+    assert!(host.pending_for(doc) && app.saving());
+    assert!(host.disconnect().is_err());
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+
+    tick_once(&mut app);
+    assert!(host.state().commands.is_empty());
+    assert!(host.pending_for(doc), "draining unrelated reads is not a save acknowledgement");
+    host.result(request.clone(), "saved".into(), "resource-one".into()).unwrap();
+    app.session.active_mut().unwrap().revision = 8;
+    tick_once(&mut app);
+    let saved = app.session.active().unwrap();
+    assert_eq!((saved.revision, saved.saved_revision), (8, 7));
+    assert!(saved.is_dirty() && host.bound(doc));
+    assert!(!host.pending_for(doc));
+    assert_eq!(host.result(request, "saved".into(), "resource-one".into()).unwrap_err(), "unknown or already completed file provider save request");
+}
+
+/// A queued terminal keeps its duplicate classification even when unrelated reads fill the inbox.
+#[test]
+fn full_result_inbox_does_not_turn_an_accepted_reply_into_a_retry() {
+    let (mut app, host, doc) = app();
+    let request = begin(&host, doc, false);
+    host.result(request.clone(), "saved".into(), "resource-one".into()).unwrap();
+    for n in 1..MAX_PENDING {
+        let read = host.request_open(&format!("read-{n}")).unwrap();
+        host.open(read, "bad.png".into(), vec![1]).unwrap();
+    }
+    assert_eq!(host.state().commands.len(), MAX_PENDING);
+    assert_eq!(host.result(request.clone(), "failed".into(), String::new()).unwrap_err(), "the file provider save result is already queued");
+    assert_eq!(host.state().commands.len(), MAX_PENDING);
+    assert!(host.state().queued_results.contains(&request));
+    tick_once(&mut app);
+    assert_eq!(app.session.active().unwrap().saved_revision, 7);
+    assert!(host.bound(doc) && !host.pending_for(doc));
+    assert_eq!(host.result(request, "failed".into(), String::new()).unwrap_err(), "unknown or already completed file provider save request");
+}
+
 #[test]
 fn failed_open_dispatch_tombstones_its_read_before_full_queue_terminal_delivery() {
     let host = host();

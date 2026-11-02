@@ -99,7 +99,7 @@ fn recent_hits(recents: &[String], menus: &[crate::menus::MenuItem], lang: crate
 fn menu_hits(menus: Vec<crate::menus::MenuItem>, q: &str, lang: crate::i18n::Lang) -> Vec<(i32, String, String, Option<String>, bool)> {
     menus
         .into_iter()
-        .filter(|m| m.label != "---")
+        .filter(|m| !m.is_separator())
         .filter_map(|m| {
             let path_en = m.path.join(" › ");
             let path = m.path.iter().map(|p| crate::i18n::tr(lang, p)).collect::<Vec<_>>().join(" › ");

@@ -423,6 +423,7 @@ impl Host {
     }
 
     /// The request owns its document and revision. A reply cannot select a different checkpoint.
+    /// Inbox backpressure leaves it retryable; an already queued or completed reply does not.
     pub fn result(&self, request: String, status: String, resource: String) -> Result<(), String> {
         if !matches!(status.as_str(), "saved" | "failed" | "download" | "cancel")
             || (status == "saved" && !valid_id(&resource))
@@ -431,7 +432,7 @@ impl Host {
             return Err("invalid file provider save result".into());
         }
         let mut s = self.state();
-        if s.provider.is_none() || !s.pending.contains_key(&request) || s.commands.len() >= MAX_PENDING {
+        if s.provider.is_none() || !s.pending.contains_key(&request) {
             return Err("unknown or already completed file provider save request".into());
         }
         if s.queued_results.contains(&request) || s.failed_deliveries.contains(&request) {
@@ -442,6 +443,9 @@ impl Host {
         }
         if status == "download" && !s.pending.get(&request).is_some_and(|p| p.destination == "device") {
             return Err("a provider save cannot be reported as a device download".into());
+        }
+        if s.commands.len() >= MAX_PENDING {
+            return Err("the file provider command queue is full; retry the save result".into());
         }
         s.queued_results.insert(request.clone());
         s.commands.push(Command::Result(request, status, resource));
