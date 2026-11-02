@@ -523,3 +523,37 @@ fn split_can_reach_patch_limit_and_still_edit_other_axis() {
     assert!(mesh.split_u(0.5 / 63.0));
     assert!(mesh.is_valid());
 }
+
+#[test]
+fn pulling_with_non_finite_coordinates_preserves_mesh() {
+    let before = BezierMesh::identity(B, 2, 2);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for (s, t) in [(bad, 0.5), (0.5, bad)] {
+            let mut mesh = before.clone();
+            mesh.pull(&before.points, s, t, [5.0, -3.0]);
+            assert!(mesh.is_valid(), "coordinates ({s}, {t}) corrupted the mesh");
+            assert_eq!(mesh, before);
+        }
+    }
+}
+
+#[test]
+fn dragging_with_non_finite_base_points_preserves_mesh() {
+    let before = BezierMesh::identity(B, 2, 2);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for component in 0..2 {
+            let mut base = before.points.clone();
+            base[0][component] = bad;
+            for surface in [false, true] {
+                let mut mesh = before.clone();
+                if surface {
+                    mesh.pull(&base, 0.5, 0.5, [5.0, -3.0]);
+                } else {
+                    mesh.drag_point(&base, 0, [5.0, -3.0]);
+                }
+                assert!(mesh.is_valid(), "base {bad}, component {component}, surface {surface} corrupted the mesh");
+                assert_eq!(mesh, before);
+            }
+        }
+    }
+}
