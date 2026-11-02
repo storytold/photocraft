@@ -1,6 +1,6 @@
 //! Tests for the headless GPU backend, capability isolation, cache mutation, and CPU/GPU parity.
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
 mod tests {
     use std::fs;
 
@@ -76,7 +76,12 @@ mod tests {
         let img1_initial = decode(&png1_initial).expect("decode initial");
 
         // 2. Mutate Doc 1 in place (change top layer opacity to 0.1)
-        h.session.documents_mut()[0].doc.layers[1].opacity = 0.1;
+        h.session
+            .edit("Change layer opacity", |doc, _| {
+                doc.layers[1].opacity = 0.1;
+                Ok(())
+            })
+            .expect("edit opacity");
         let png1_mutated = h.render_png(Some(0), 0).expect("mutated render");
         let img1_mutated = decode(&png1_mutated).expect("decode mutated");
 
@@ -201,7 +206,7 @@ mod tests {
         assert!(matches!(cancel_res, Err(photocraft_io::RenderError::Cancelled)), "cancellation must be preserved: {cancel_res:?}");
 
         // 2. Sink I/O error preservation
-        let sink_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Write("simulated sink error".into())));
+        let sink_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Read("simulated sink error".into())));
         assert!(matches!(sink_res, Err(photocraft_io::RenderError::Sink(_))), "sink error must be preserved as RenderError::Sink: {sink_res:?}");
     }
 

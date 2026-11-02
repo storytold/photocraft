@@ -79,13 +79,13 @@ impl Headless {
         self.renderer.as_mut().map_or_else(Vec::new, |r| r.drain_diagnostics())
     }
 
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
     /// Enable the native GPU renderer backend with lazy device initialization.
     pub fn enable_gpu(&mut self) {
         self.renderer = Some(Box::new(crate::gpu::GpuRenderer::lazy()));
     }
 
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
     /// Builder method to enable the native GPU renderer backend.
     pub fn with_gpu(mut self) -> Self {
         self.enable_gpu();

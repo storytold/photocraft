@@ -31,9 +31,9 @@ pub use headless::Headless;
 pub use server::{Backend, PhotocraftMcp};
 pub use workspace::AuthorizedWorkspace;
 
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
 pub mod gpu;
-#[cfg(feature = "gpu")]
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
 pub use gpu::GpuRenderer;
 
 #[derive(Debug, thiserror::Error)]
