@@ -92,6 +92,6 @@ pub struct CpuRenderer;
 
 impl BandRenderer for CpuRenderer {
     fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
-        photocraft_compose::render_bands(doc, rect, band_rows, |buf| sink(RenderBand { rect: buf.rect, pixels: buf.px })).map_err(RenderError::sink)
+        photocraft_compose::render_bands(doc, rect, band_rows, |buf| sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })).map_err(RenderError::sink)
     }
 }

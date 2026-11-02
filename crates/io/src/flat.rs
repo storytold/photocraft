@@ -763,7 +763,7 @@ impl<'a> FlatSource<'a> {
         if let Some(r) = renderer {
             r.render_bands(doc, doc.bounds(), self.rows, &mut |band| render_one_band(band.rect, band.pixels))?;
         } else {
-            photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.px))?;
+            photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.into_px()))?;
         }
         if expected_y != h as i32 {
             return Err(IoError::Render(RenderError::Execution(format!("incomplete bands: covered up to y={expected_y}, expected canvas height {h}"))));
