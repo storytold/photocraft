@@ -21,6 +21,10 @@
 //! So every test that builds a GPU harness (or its own wgpu device) holds [`gpu_lock`] for its
 //! whole run, harness included. Under nextest each test is its own process and the lock costs
 //! nothing; `.config/nextest.toml` caps how many of those run at once instead.
+//!
+//! The lock alone left a segfault in libvulkan about once in 20 runs of a large test binary: the
+//! last wgpu instance going away tears Vulkan down, and the next one can find it half gone.
+//! [`gpu_lock`] keeps one instance for the rest of the process, so that never happens.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -30,12 +34,44 @@ static GPU_LOCK: Mutex<()> = Mutex::new(());
 /// line (`let _gpu = gpu_lock();`) so it is released last. A test that failed while holding it
 /// doesn't block the rest.
 pub fn gpu_lock() -> MutexGuard<'static, ()> {
-    GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+    let guard = GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    #[cfg(target_os = "linux")]
+    keep_vulkan();
+    guard
+}
+
+/// Creates the Vulkan instance that stays for the rest of the process.
+#[cfg(target_os = "linux")]
+fn keep_vulkan() {
+    use wgpu::{Backends, Instance, InstanceDescriptor};
+    static KEPT: std::sync::OnceLock<Instance> = std::sync::OnceLock::new();
+    KEPT.get_or_init(|| Instance::new(InstanceDescriptor { backends: Backends::VULKAN, ..InstanceDescriptor::new_without_display_handle() }));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without the kept instance, creating and dropping instances on several threads segfaults in
+    /// libvulkan within a second, an abort no test can catch.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn instances_can_come_and_go_on_several_threads() {
+        use wgpu::{Backends, Instance, InstanceDescriptor};
+        drop(gpu_lock());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..10 {
+                        drop(Instance::new(InstanceDescriptor { backends: Backends::VULKAN, ..InstanceDescriptor::new_without_display_handle() }));
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            assert!(t.join().is_ok());
+        }
+    }
 
     #[test]
     fn a_panicked_holder_does_not_block_the_next_test() {
