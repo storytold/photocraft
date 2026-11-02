@@ -145,7 +145,14 @@ fn batch_recovers_renderer_after_failed_item_and_preserves_gpu_policy() {
     let valid_png = in_dir.join("02_valid.png");
     write_png(&valid_png, 32, 32);
 
-    let o = bin().args(["batch", "--gpu", "--in", in_dir.to_str().unwrap(), "--out", out_dir.to_str().unwrap()]).output().unwrap();
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, serde_json::json!([{"command": "layer.new.layer", "params": {"name": "Batch"}}]).to_string()).unwrap();
+    let o = bin()
+        .args(["batch", "--gpu", "--actions"])
+        .arg(&actions)
+        .args(["--in", in_dir.to_str().unwrap(), "--out", out_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
 
     // Exit code 1 because 1 file failed
     assert_eq!(o.status.code(), Some(1));
@@ -207,7 +214,7 @@ fn serve_gpu_preserves_clean_protocol_stdout_and_drains_diagnostics_to_stderr() 
     assert_eq!(v2["ok"], false, "{v2}");
 
     // 3. Subsequent valid command still succeeds (proves session & renderer recovery)
-    writeln!(stdin, "{}", serde_json::json!({"id": 3, "method": "doc.info"})).unwrap();
+    writeln!(stdin, "{}", serde_json::json!({"id": 3, "method": "doc.inspect"})).unwrap();
     stdin.flush().unwrap();
 
     let mut line3 = String::new();
