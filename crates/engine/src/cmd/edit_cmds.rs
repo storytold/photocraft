@@ -848,12 +848,16 @@ fn guide_position(s: &Session, p: &Value, vertical: bool) -> Result<Option<f64>>
     let px = match (v.as_f64(), v.as_str()) {
         (Some(n), _) => n,
         (None, Some(text)) => {
-            let (n, unit) = crate::prefs::Unit::parse_length(text).ok_or_else(|| {
-                EngineError::Other(format!("`position` {text:?} is not a length: give a number of pixels, or a number with px, in, cm, mm, pt, pc or %"))
-            })?;
             let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
             let extent = if vertical { doc.size.width } else { doc.size.height };
-            unit.unwrap_or(crate::prefs::Unit::Pixels).to_px(n, doc.resolution_dpi as f64, extent as f64, s.prefs().units_and_rulers.point_size.per_inch())
+            let per_inch = s.prefs().units_and_rulers.point_size.per_inch();
+            // A length, or arithmetic on lengths as Photoshop's field takes ("100% / 3", #10440).
+            let to_px = |n: f64, unit: crate::prefs::Unit| unit.to_px(n, doc.resolution_dpi as f64, extent as f64, per_inch);
+            crate::prefs::Unit::eval_length(text, crate::prefs::Unit::Pixels, to_px).ok_or_else(|| {
+                EngineError::Other(format!(
+                    "`position` {text:?} is not a length: give a number of pixels, a number with px, in, cm, mm, pt, pc or %, or arithmetic on them (+ - * /)"
+                ))
+            })?
         }
         _ => return Err(EngineError::Other("`position` must be a number of pixels or text with a unit".into())),
     };

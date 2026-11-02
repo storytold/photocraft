@@ -142,3 +142,29 @@ fn the_last_position_reopens_in_whatever_the_ruler_unit_is_now() {
         crate::dialogs::cancel(&mut app, d).unwrap();
     }
 }
+
+/// #10440: a leading bare number gets the ruler unit after a Unicode minus (U+2212) as after "-",
+/// so "5.08 − 2.54" with centimetre rulers is 2.54 cm, not 2.54 px.
+#[test]
+fn the_ruler_unit_goes_on_a_bare_number_before_a_unicode_minus() {
+    let (mut app, ctx) = app("cm");
+    let d = open(&mut app, &ctx);
+    set(&mut app, d, "vertical", "5.08 − 2.54");
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let (_, vertical) = guides(&app);
+    assert!(vertical.len() == 1 && (vertical[0] - 100.0).abs() < 1e-6, "{vertical:?}");
+}
+
+/// #10440: a leading bare number that multiplies or divides a length is a plain factor, so it
+/// doesn't take the ruler unit (CodeRabbit: "2 / 2 * 50 px" became "2 cm / 2 * 50 px").
+#[test]
+fn a_leading_factor_of_a_length_is_a_plain_number() {
+    let (mut app, ctx) = app("cm");
+    for (typed, px) in [("2 * 50 px", 100.0), ("2 / 2 * 1in", 100.0), ("2 * 2.54 - 2.54", 100.0)] {
+        let d = open(&mut app, &ctx);
+        set(&mut app, d, "vertical", typed);
+        crate::dialogs::confirm(&mut app, d).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        let landed = *guides(&app).1.last().unwrap();
+        assert!((landed - px).abs() < 1e-6, "{typed}: {landed}");
+    }
+}
