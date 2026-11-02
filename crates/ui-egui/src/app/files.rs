@@ -3,6 +3,13 @@ use super::{
     jobs_ui, jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
 };
 
+/// Whether the file at `path` keeps all of `doc`: a layered format that holds it, or a TIFF, which
+/// keeps layers and alpha channels.
+fn file_holds(doc: &photocraft_doc::Document, path: &str) -> bool {
+    let tiff = matches!(photocraft_engine::file_cmds::extension(path).as_deref(), Some("tif" | "tiff"));
+    photocraft_engine::file_cmds::holds_at(doc, path) || (tiff && flat_file_keeps_extras(doc, path))
+}
+
 impl PhotocraftApp {
     /// Record `path` as the most-recently-opened file (File › Open Recent): de-duplicated, newest
     /// first, capped at Preferences › File Handling › Recent File List Contains. The list lives in
@@ -513,7 +520,7 @@ impl PhotocraftApp {
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
         // Nor is a document with more than a flat file keeps marked saved after losing it.
         let extras = flat_file_keeps_extras(&st.doc, path);
-        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || (tiff(path) && extras);
+        let holds = file_holds(&st.doc, path);
         let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
         Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered || !extras)))
     }
@@ -529,7 +536,7 @@ impl PhotocraftApp {
     /// such a copy, and it has no file of its own that holds it.
     pub(crate) fn only_saved_flat(&self, doc: DocId) -> bool {
         let st = self.session.documents().iter().find(|st| st.doc.id == doc);
-        self.flat_copy_docs.contains(&doc) && !st.is_some_and(|st| st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p)))
+        self.flat_copy_docs.contains(&doc) && !st.is_some_and(|st| st.path.as_deref().is_some_and(|p| file_holds(&st.doc, p)))
     }
 
     /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:

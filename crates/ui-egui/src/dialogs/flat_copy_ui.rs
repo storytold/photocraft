@@ -80,6 +80,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.journal_as_plain_save(&path, from);
         }
         if let Err(e) = written {
+            app.flat_copy_confirmed = None;
             app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
             app.ui.status_error = true;
         }
@@ -287,6 +288,46 @@ mod tests {
         let revision = h.state().session.active().unwrap().revision;
         h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
         assert!(!h.state().flat_copy_docs.contains(&doc));
+    }
+
+    /// A script's flat save goes through the same record, by the route it really takes.
+    #[test]
+    fn a_scripted_flat_save_counts_as_a_flat_copy() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().services.automation_write = Some(Box::new(|_, _| Ok(())));
+        let doc = h.state().active_doc_id().unwrap();
+        h.state_mut().save_automation_with(Some("flat.png".into()), FormatChoices::default()).unwrap();
+        assert!(h.state().only_saved_flat(doc));
+    }
+
+    /// A TIFF keeps layers and alpha channels, so a flat copy beside one loses nothing.
+    #[test]
+    fn a_flat_copy_of_a_document_in_a_tiff_is_not_the_only_copy() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+        let doc = h.state().active_doc_id().unwrap();
+        h.state_mut().flat_copy_docs.insert(doc);
+        assert!(h.state().only_saved_flat(doc), "no file of its own yet");
+        h.state_mut().session.active_mut().unwrap().path = Some("art.tif".into());
+        assert!(!h.state().only_saved_flat(doc));
+        h.state_mut().run("path.set", json!({"name": "Path 1", "path": {"subpaths": []}})).unwrap();
+        assert!(h.state().only_saved_flat(doc), "a saved path isn't in the TIFF");
+    }
+
+    /// A confirmation doesn't outlive a save that never ran.
+    #[test]
+    fn a_failed_confirmed_save_drops_its_confirmation() {
+        let (mut h, _) = harness("flat.png");
+        h.state_mut().save_as(None).unwrap();
+        h.run_steps(3);
+        h.state_mut().flat_copy.as_mut().unwrap().doc = photocraft_doc::DocId(u64::MAX);
+        h.get_by_label("OK").click();
+        // The frame the answer lands in: the next one would clear it anyway.
+        while h.state().flat_copy.is_some() {
+            h.step();
+        }
+        assert_eq!(h.state().flat_copy_confirmed, None);
+        assert!(h.state().ui.status_error);
     }
 
     /// The document's own OpenRaster file counts only if it holds the document.
