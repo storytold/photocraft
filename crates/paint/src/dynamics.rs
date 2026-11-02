@@ -209,6 +209,77 @@ pub fn smooth_points(cfg: &Smoothing, zoom: f32, pts: &[StrokePoint]) -> Vec<Str
     out
 }
 
+/// Longest straight piece, in pixels, a [`CornerCurve`] arc is split into.
+const CURVE_STEP_PX: f64 = 2.0;
+/// Most pieces one [`CornerCurve`] arc is split into.
+const MAX_CURVE_STEPS: usize = 64;
+/// How far past its chord a [`CornerCurve`] arc ends heading, as a fraction of the turn it just
+/// made. 1 would draw steady curves as circle arcs, but after a sharp corner the overshoot would
+/// swing from side to side forever; at ½ it halves with every segment.
+const CURVE_LEAD: f64 = 0.5;
+
+/// Rounds the corners of the smoothed path (#2138). Pointer samples arrive far apart on a fast
+/// stroke, and joining them with straight lines turns a quick curve into a polygon. This joins
+/// them with cubic arcs instead: each leaves its start point in the direction the path arrived
+/// there, so the direction of travel never jumps, and reaches the new point already turning on a
+/// little past the chord ([`CURVE_LEAD`]), so a steady curve bends evenly along each arc rather
+/// than all at its start. Straight input stays straight.
+///
+/// Nothing waits for a later point: every arc ends at the newest point, so the live stroke, which
+/// tools that run each dab themselves can't redraw, shows the same path as the committed one.
+/// The less the path turns, the more the arc keeps its start direction; a full reversal stays a
+/// corner rather than overshooting into a loop.
+#[derive(Clone, Debug, Default)]
+struct CornerCurve {
+    last: Option<StrokePoint>,
+    /// Unit direction the path arrived at `last` heading in.
+    dir: Option<(f64, f64)>,
+}
+
+impl CornerCurve {
+    /// Feed one point; appends the path points up to and including it.
+    fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
+        let Some(a) = self.last.replace(p) else {
+            out.push(p);
+            return;
+        };
+        let (dx, dy) = (p.x - a.x, p.y - a.y);
+        let len = (dx * dx + dy * dy).sqrt();
+        if !(len > 1e-9 && len.is_finite()) {
+            out.push(p);
+            return;
+        }
+        let u = (dx / len, dy / len);
+        let Some(t) = self.dir else {
+            self.dir = Some(u);
+            out.push(p);
+            return;
+        };
+        // The end direction: the chord's, turned on by CURVE_LEAD of the turn from `t` (its
+        // length is at least 1 - CURVE_LEAD, so the division is safe).
+        let (ex, ey) = (u.0 + CURVE_LEAD * (u.0 - t.0), u.1 + CURVE_LEAD * (u.1 - t.1));
+        let e_len = (ex * ex + ey * ey).sqrt();
+        let e = (ex / e_len, ey / e_len);
+        self.dir = Some(e);
+        // Bézier handles a third of the chord long; the start handle shrinks as the turn grows.
+        let reach = len / 3.0 * (1.0 + t.0 * u.0 + t.1 * u.1) / 2.0;
+        let bend = ((t.0 * u.1 - t.1 * u.0).abs() * reach).max((e.0 * u.1 - e.1 * u.0).abs() * len / 3.0);
+        if bend <= 0.05 {
+            out.push(p);
+            return;
+        }
+        let c1 = StrokePoint { x: a.x + t.0 * reach, y: a.y + t.1 * reach, ..a };
+        let c2 = StrokePoint { x: p.x - e.0 * len / 3.0, y: p.y - e.1 * len / 3.0, ..p };
+        let n = (((len + bend) / CURVE_STEP_PX).ceil() as usize).clamp(1, MAX_CURVE_STEPS);
+        for i in 1..n {
+            let f = i as f64 / n as f64;
+            let (ab, bc, cd) = (lerp_pt(&a, &c1, f), lerp_pt(&c1, &c2, f), lerp_pt(&c2, &p, f));
+            out.push(lerp_pt(&lerp_pt(&ab, &bc, f), &lerp_pt(&bc, &cd, f), f));
+        }
+        out.push(p);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Path walking
 // ---------------------------------------------------------------------------
@@ -763,6 +834,8 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
     smoother: Smoother,
+    /// Rounds the smoothed path's corners while Smoothing is on (see [`CornerCurve`]).
+    curve: Option<CornerCurve>,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
     builder: DabBuilder,
@@ -793,6 +866,7 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
+            curve: (brush.smoothing.enabled && brush.smoothing.amount > 0.0).then(CornerCurve::default),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),
@@ -822,6 +896,16 @@ impl DabGenerator {
         }
     }
 
+    /// The smoothed points `sm` with their corners rounded (unchanged without a curve).
+    fn curved(&mut self, sm: Vec<StrokePoint>) -> Vec<StrokePoint> {
+        let Some(curve) = self.curve.as_mut() else { return sm };
+        let mut out = Vec::with_capacity(sm.len() * 2);
+        for p in &sm {
+            curve.push(*p, &mut out);
+        }
+        out
+    }
+
     /// Feed input points; appends the new primary and dual dabs.
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = std::mem::take(&mut self.scratch);
@@ -829,6 +913,7 @@ impl DabGenerator {
         for p in pts {
             self.smoother.push(*p, &mut sm);
         }
+        let sm = self.curved(sm);
         self.walk(&sm, dabs, dual);
         self.scratch = sm;
     }
@@ -837,6 +922,7 @@ impl DabGenerator {
     pub fn finish(&mut self, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = Vec::new();
         self.smoother.finish(&mut sm);
+        let sm = self.curved(sm);
         self.walk(&sm, dabs, dual);
         let mut steps = Vec::new();
         self.walker.finish(&mut |s| steps.push(s));
