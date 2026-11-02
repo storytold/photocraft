@@ -1017,3 +1017,94 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
+
+// #10847: inspect actual CPU texture uploads, without a renderer or graphics device.
+fn managed_preview_texture(path: &str) {
+    use photocraft_cms::Builtin;
+    for profile in [Builtin::Srgb, Builtin::ProPhotoCompat, Builtin::LinearSrgb] {
+        for depth in [8, 16, 32] {
+            for alpha in [1.0, 0.37, 0.01, 0.0] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.session.execute("file.new", json!({"width":120,"height":80,"depth":depth,"background":"transparent"})).unwrap();
+                app.sync_views();
+                app.session
+                    .edit("fixture", |doc, active| {
+                        let id = active.unwrap();
+                        doc.layers.retain(|layer| layer.id == id);
+                        doc.icc_profile = Some(profile.profile().to_bytes());
+                        let bounds = doc.bounds();
+                        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.55, 0.35, 0.25, alpha]);
+                        Ok(())
+                    })
+                    .unwrap();
+                app.session.color.settings.monitor_profile = "srgb".into();
+                let st = app.session.active().unwrap();
+                let before = st.doc.clone();
+                let steps = st.history.past_len();
+                let display = app.session.color.canvas_display(&st.doc).unwrap();
+                let buf = photocraft_compose::flatten(&st.doc);
+                let image = display.to_rgba8(&buf);
+                let expected = Color32::from_rgba_unmultiplied(image.pixels[0], image.pixels[1], image.pixels[2], image.pixels[3]);
+                if profile == Builtin::ProPhotoCompat && alpha == 1.0 {
+                    let raw = buf.to_rgba8();
+                    assert!((0..3).any(|k| raw.pixels[k].abs_diff(image.pixels[k]) >= 4), "fixture must expose missing CMS");
+                }
+                let ctx = egui::Context::default();
+                open(&mut app, &ctx).unwrap();
+                let texture = match path {
+                    "proxy" => app.distort.liquify.as_ref().unwrap().tex.as_ref().unwrap().id(),
+                    "detail" => {
+                        let d = app.distort.liquify.as_mut().unwrap();
+                        d.zoom = 2.0;
+                        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+                        d.view_tex.as_ref().unwrap().id()
+                    }
+                    _ => load_backdrop(&app, &ctx, None, before.bounds()).unwrap().id(),
+                };
+                let check = |partial| {
+                    let mut delta = ctx.tex_manager().write().take_delta();
+                    let updates = delta.set.get(&texture).expect("preview texture upload");
+                    assert_eq!(updates[0].pos.is_some(), partial);
+                    let egui::ImageData::Color(image) = &updates[0].image;
+                    assert!(
+                        image.pixels.iter().all(|p| p.to_array().iter().zip(expected.to_array()).all(|(a, b)| a.abs_diff(b) <= 2)),
+                        "{path} {profile:?}@{depth} alpha={alpha}: {:?} != {expected:?}",
+                        image.pixels[0]
+                    );
+                    delta.clear();
+                };
+                check(false);
+                if path != "backdrop" {
+                    let d = app.distort.liquify.as_mut().unwrap();
+                    d.mark(Rect::new(50, 35, 55, 40), false);
+                    d.render_dirty();
+                    if path == "proxy" {
+                        d.upload(&ctx);
+                    } else {
+                        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+                    }
+                    check(true);
+                }
+                cancel(&mut app);
+                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+                assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+                open(&mut app, &ctx).unwrap();
+                commit(&mut app).unwrap();
+                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+            }
+        }
+    }
+}
+
+#[test]
+fn managed_preview_proxy_texture_matches_canvas() {
+    managed_preview_texture("proxy");
+}
+#[test]
+fn managed_preview_detail_texture_matches_canvas() {
+    managed_preview_texture("detail");
+}
+#[test]
+fn managed_preview_backdrop_texture_matches_canvas() {
+    managed_preview_texture("backdrop");
+}
