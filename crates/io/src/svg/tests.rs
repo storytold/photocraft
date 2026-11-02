@@ -935,7 +935,7 @@ fn a_huge_filtered_group_is_dropped_not_allocated() {
 fn a_huge_pattern_tile_is_refused_not_allocated() {
     let svg = drawing(100, 100, "<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/>").replace("TILE", "100000");
     let err = rasterize(svg.as_bytes(), 1.0).unwrap_err().to_string();
-    assert!(err.contains("MiB limit"), "{err}");
+    assert!(err.contains("can't rasterise"), "{err}");
     let r = import_svg("hostile", svg.as_bytes()).unwrap();
     assert_eq!(pixel_layers(&r), 0);
     assert!(r.warnings.iter().any(|w| w.contains("too much memory")), "{:?}", r.warnings);
@@ -948,7 +948,7 @@ fn a_pattern_tile_scaled_up_past_the_limit_is_refused() {
     let svg = drawing(20, 20, "<rect width=\"20\" height=\"20\" fill=\"url(#p)\"/>").replace("TILE", "1000");
     assert!(rasterize(svg.as_bytes(), 1.0).is_ok());
     let err = rasterize(svg.as_bytes(), 64.0).unwrap_err().to_string();
-    assert!(err.contains("MiB limit"), "{err}");
+    assert!(err.contains("can't rasterise"), "{err}");
 }
 
 /// Ordinary filtered groups and patterns, including a large canvas, still rasterise.
@@ -969,7 +969,7 @@ fn tile_svg(tile: &str, body: &str) -> String {
 
 fn too_big(svg: &str) {
     let err = rasterize(svg.as_bytes(), 1.0).unwrap_err().to_string();
-    assert!(err.contains("MiB limit"), "{err}");
+    assert!(err.contains("can't rasterise"), "{err}");
 }
 
 /// The filter region is not clamped by resvg: a flood fills all of it.
@@ -994,7 +994,7 @@ fn a_huge_element_with_a_region_sized_primitive_is_refused() {
 fn a_hostile_pattern_inside_fe_image_is_refused() {
     let svg = tile_svg(
         "100000",
-        "<g id=\"g\"><rect width=\"100\" height=\"100\" fill=\"url(#p)\"/></g><filter id=\"i\" x=\"0\" y=\"0\" width=\"200\" height=\"200\" filterUnits=\"userSpaceOnUse\"><feImage href=\"#g\"/></filter><rect width=\"10\" height=\"10\" filter=\"url(#i)\"/>",
+        "<defs><g id=\"g\"><rect width=\"100\" height=\"100\" fill=\"url(#p)\"/></g></defs><filter id=\"i\" x=\"0\" y=\"0\" width=\"200\" height=\"200\" filterUnits=\"userSpaceOnUse\"><feImage href=\"#g\"/></filter><rect width=\"10\" height=\"10\" filter=\"url(#i)\"/>",
     );
     too_big(&svg);
 }
@@ -1039,9 +1039,8 @@ fn a_very_deep_drawing_is_refused_by_the_estimate() {
 
 #[test]
 fn an_unknown_size_counts_as_unbounded() {
-    assert_eq!(px(f64::NAN), f64::INFINITY);
-    assert_eq!(most(f64::NAN, 1.0), f64::INFINITY);
-    assert_eq!(most(2.0, 1.0), 2.0);
+    assert_eq!(limits::px(f64::NAN), f64::INFINITY);
+    assert_eq!(limits::px(2.0), 2.0);
 }
 
 /// Clips, masks, filters and patterns of ordinary size still draw.
@@ -1051,4 +1050,70 @@ fn ordinary_clips_masks_and_filters_still_rasterise() {
     let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
     assert!(buf.px[10 * 200 + 10][3] > 0.99);
     assert!(buf.px[150 * 200 + 150][3] < 0.01);
+}
+
+fn parsed(svg: &str) -> usvg::Tree {
+    parse(svg.as_bytes()).unwrap().tree
+}
+
+/// The limits check alone, for drawings too big to render in a test.
+fn check_only(svg: &str, w: u32, h: u32) -> Result<(), limits::Refusal> {
+    limits::check(parsed(svg).root().children(), tiny_skia::Transform::identity(), w, h, 0)
+}
+
+/// resvg keeps every primitive's result: a flood and 20 offsets over a 15,000 px region is about 19 GB.
+#[test]
+fn many_primitives_over_a_huge_region_are_refused() {
+    let offsets = "<feOffset dx=\"1\"/>".repeat(20);
+    let svg = tile_svg(
+        "4",
+        &format!(
+            "<filter id=\"r\" x=\"0\" y=\"0\" width=\"15000\" height=\"15000\" filterUnits=\"userSpaceOnUse\"><feFlood/>{offsets}</filter><rect width=\"10\" height=\"10\" filter=\"url(#r)\"/>"
+        ),
+    );
+    too_big(&svg);
+}
+
+/// A 100-link chain of `use` elements each carrying a clip-path, inside a clipPath.
+#[test]
+fn a_chain_of_uses_with_clip_paths_inside_a_clip_path_is_refused() {
+    let mut defs = String::from("<clipPath id=\"k\"><rect width=\"6000\" height=\"4000\"/></clipPath><rect id=\"u0\" width=\"6000\" height=\"4000\"/>");
+    for i in 1..100 {
+        defs.push_str(&format!("<use id=\"u{i}\" href=\"#u{}\" clip-path=\"url(#k)\"/>", i - 1));
+    }
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"6000\" height=\"4000\"><defs>{defs}<clipPath id=\"c\"><use href=\"#u99\"/></clipPath></defs><rect width=\"6000\" height=\"4000\" clip-path=\"url(#c)\"/></svg>"
+    );
+    let err = check_only(&svg, 6000, 4000).unwrap_err();
+    assert!(!err.complex && err.message.contains("deeply"), "{err:?}");
+}
+
+/// Thousands of paths sharing one pattern and one clip are walked once, not once per use.
+#[test]
+fn many_paths_sharing_a_pattern_are_accepted() {
+    let tile: String = (0..300).map(|i| format!("<rect x=\"{i}\" width=\"1\" height=\"1\"/>")).collect();
+    let paths: String = (0..3000).map(|i| format!("<rect x=\"{}\" width=\"2\" height=\"2\" fill=\"url(#q)\" clip-path=\"url(#c)\"/>", i % 400)).collect();
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"500\" height=\"500\"><defs><pattern id=\"q\" patternUnits=\"userSpaceOnUse\" width=\"300\" height=\"2\">{tile}</pattern><clipPath id=\"c\"><rect width=\"500\" height=\"500\"/></clipPath></defs>{paths}</svg>"
+    );
+    check_only(&svg, 500, 500).unwrap();
+}
+
+/// What realistic documents on a 24 MP canvas cost, against the 1.5 GiB limit: all accepted.
+#[test]
+fn realistic_effects_on_a_24_megapixel_canvas_are_accepted() {
+    let drawing = |defs: &str, body: &str| format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"6000\" height=\"4000\"><defs>{defs}</defs>{body}</svg>");
+    let shadow = "<filter id=\"s\" x=\"-0.1\" y=\"-0.1\" width=\"1.2\" height=\"1.2\"><feFlood flood-color=\"#000\" result=\"a\"/><feComposite in=\"a\" in2=\"SourceGraphic\" operator=\"in\" result=\"b\"/><feGaussianBlur in=\"b\" stdDeviation=\"6\" result=\"c\"/><feOffset dx=\"5\" dy=\"5\" result=\"d\"/><feComposite in=\"SourceGraphic\" in2=\"d\" operator=\"over\"/></filter>";
+    let full = "<rect width=\"6000\" height=\"4000\"/>";
+    // An Inkscape-style drop shadow on a group covering the whole canvas.
+    check_only(&drawing(shadow, &format!("<g filter=\"url(#s)\">{full}</g>")), 6000, 4000).unwrap();
+    // Two nested shadow groups.
+    check_only(&drawing(shadow, &format!("<g filter=\"url(#s)\"><g filter=\"url(#s)\">{full}</g></g>")), 6000, 4000).unwrap();
+    // A CSS blur on the whole canvas.
+    check_only(&drawing("", &format!("<g filter=\"blur(8)\">{full}</g>")), 6000, 4000).unwrap();
+    // A shadow plus a clip and a mask on the same group.
+    let defs = format!(
+        "{shadow}<clipPath id=\"c\"><rect width=\"5000\" height=\"3000\"/></clipPath><mask id=\"m\"><rect width=\"6000\" height=\"4000\" fill=\"#fff\"/></mask>"
+    );
+    check_only(&drawing(&defs, &format!("<g filter=\"url(#s)\" clip-path=\"url(#c)\" mask=\"url(#m)\">{full}</g>")), 6000, 4000).unwrap();
 }

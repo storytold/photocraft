@@ -24,6 +24,8 @@ use resvg::usvg;
 
 use crate::{ImportResult, IoError};
 
+mod limits;
+
 /// Largest canvas side an SVG opens at; a larger drawing is scaled down to fit.
 pub const MAX_SIDE: u32 = 16_384;
 /// A rasterised fallback layer or a smart-object render never exceeds this many pixels.
@@ -1124,18 +1126,9 @@ fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     Ok(pixmap)
 }
 
-/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would need more than
-/// [`MAX_PEAK_PIXEL_BYTES`] of buffers (see [`Scratch`]).
+/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would break a [`limits`] cap.
 fn check_render_memory(tree: &usvg::Tree, ts: tiny_skia::Transform, w: u32, h: u32) -> Result<(), IoError> {
-    let bytes = render_bytes(tree.root().children(), ts, w, h);
-    if bytes > MAX_PEAK_PIXEL_BYTES {
-        return Err(IoError::Svg(format!(
-            "the drawing needs about {} MiB of layers to rasterise at {w} × {h} px, over the {} MiB limit (huge groups, filters, masks or pattern tiles)",
-            bytes >> 20,
-            MAX_PEAK_PIXEL_BYTES >> 20
-        )));
-    }
-    Ok(())
+    limits::check(tree.root().children(), ts, w, h, 0).map_err(|r| IoError::Svg(format!("can't rasterise this drawing: {}", r.message)))
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -1144,214 +1137,6 @@ fn pixmap(w: u32, h: u32) -> Option<tiny_skia::Pixmap> {
         return None;
     }
     tiny_skia::Pixmap::new(w, h)
-}
-
-/// Worst-case pixels of scratch buffers resvg holds at once while it draws a subtree onto a
-/// `w × h` pixmap, found by walking the tree without allocating. [`MAX_RASTER_PIXELS`] bounds the
-/// target pixmap only, but resvg also allocates (a failed allocation aborts the process):
-/// - a layer for every isolated group (opacity, blend mode, clip, mask, filter), clamped to 5 × 5
-///   times the target, plus one per link of a clip-path or mask-on-mask chain;
-/// - for a filter, copies of that layer and one result per primitive. Most primitives (flood,
-///   blend, composite, merge, tile, image, displacement, turbulence, lighting) are sized by the
-///   filter region, which is NOT clamped, so `x/y/width/height` from the file set the size;
-/// - a pattern tile of `width × height × scale`, and for an embedded SVG image or `feImage` a
-///   pixmap of the current layer or region with its own nested drawing.
-///
-/// Layers nest while their children are drawn, siblings one after another, so a level costs its
-/// own buffers plus its most expensive child. The estimate is conservative (a few layers are
-/// charged generously, shared defs are re-walked per use). The walk gives up, as over budget,
-/// after [`SCRATCH_MAX_STEPS`] nodes or [`SCRATCH_MAX_DEPTH`] levels, so it cannot be made slow or
-/// deep itself. NaN counts as infinite.
-struct Scratch {
-    steps: std::cell::Cell<u32>,
-}
-
-/// Nodes the estimate visits before it reports the drawing as over budget.
-const SCRATCH_MAX_STEPS: u32 = 500_000;
-/// Nested layers (isolated groups, patterns, embedded images) the estimate follows before it reports
-/// the drawing as over budget.
-const SCRATCH_MAX_DEPTH: usize = 200;
-
-/// Pixels of the pixmap being drawn on, and of the largest layer resvg may make in it.
-#[derive(Clone, Copy)]
-struct Cx {
-    layer: f64,
-    cap: f64,
-    depth: usize,
-}
-
-/// A pixel count that is never NaN: unknown sizes count as unbounded.
-fn px(v: f64) -> f64 {
-    if v.is_nan() { f64::INFINITY } else { v }
-}
-
-fn most(a: f64, b: f64) -> f64 {
-    px(a).max(px(b))
-}
-
-impl Scratch {
-    fn new() -> Self {
-        Self { steps: std::cell::Cell::new(0) }
-    }
-
-    /// The nodes drawn on a `w × h` pixmap.
-    fn root(&self, nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32) -> f64 {
-        let target = f64::from(w) * f64::from(h);
-        self.nodes(nodes, ts, Cx { layer: target, cap: 25.0 * target, depth: 0 })
-    }
-
-    fn step(&self, cx: Cx) -> bool {
-        self.steps.set(self.steps.get().saturating_add(1));
-        self.steps.get() <= SCRATCH_MAX_STEPS && cx.depth <= SCRATCH_MAX_DEPTH
-    }
-
-    fn nodes(&self, nodes: &[usvg::Node], ts: tiny_skia::Transform, cx: Cx) -> f64 {
-        nodes.iter().map(|n| self.node(n, ts, cx)).fold(0.0, most)
-    }
-
-    fn node(&self, node: &usvg::Node, ts: tiny_skia::Transform, cx: Cx) -> f64 {
-        if !self.step(cx) {
-            return f64::INFINITY;
-        }
-        match node {
-            usvg::Node::Group(g) => self.group(g, ts, cx),
-            usvg::Node::Text(t) => self.group(t.flattened(), ts, cx),
-            usvg::Node::Path(p) if p.is_visible() => {
-                let paint = |paint: &usvg::Paint| match paint {
-                    usvg::Paint::Pattern(pattern) => self.pattern(pattern, ts, cx),
-                    _ => 0.0,
-                };
-                most(p.fill().map_or(0.0, |f| paint(f.paint())), p.stroke().map_or(0.0, |s| paint(s.paint())))
-            }
-            usvg::Node::Path(_) => 0.0,
-            // resvg draws an embedded SVG on a pixmap the size of the current one, with its own
-            // 5 × 5 clamp.
-            usvg::Node::Image(image) => match image.kind() {
-                usvg::ImageKind::SVG(tree) => {
-                    let nested = Cx { layer: cx.layer, cap: 25.0 * cx.layer, depth: cx.depth + 1 };
-                    cx.layer + self.nodes(tree.root().children(), ts, nested)
-                }
-                _ => 0.0,
-            },
-        }
-    }
-
-    fn group(&self, g: &usvg::Group, ts: tiny_skia::Transform, cx: Cx) -> f64 {
-        let ts = ts.pre_concat(g.transform());
-        // Plain groups are no layers and nest at most as deep as the XML ([`MAX_XML_DEPTH`]).
-        if !g.should_isolate() {
-            return self.nodes(g.children(), ts, cx);
-        }
-        let deeper = Cx { depth: cx.depth + 1, ..cx };
-        let Some(bb) = g.layer_bounding_box().transform(ts) else { return 0.0 };
-        let own = px((f64::from(bb.width()).ceil() + 4.0) * (f64::from(bb.height()).ceil() + 4.0)).min(cx.cap);
-        let inner_cx = Cx { layer: own, ..deeper };
-        let mut inner = self.nodes(g.children(), ts, inner_cx);
-        let mut total = own;
-        if let Some(clip) = g.clip_path() {
-            total += self.clip(clip, ts, inner_cx);
-        }
-        if let Some(mask) = g.mask() {
-            let (own_cost, nested) = self.mask(mask, ts, inner_cx);
-            total += own_cost;
-            inner = most(inner, nested);
-        }
-        // Filters are applied one after another, each on its own copies.
-        let filters = g.filters().iter().map(|f| self.filter(f, ts, inner_cx, &mut inner)).fold(0.0, most);
-        total + filters + inner
-    }
-
-    /// A clip-path chain: one layer per link, and one more for each clip child with its own clip.
-    fn clip(&self, clip: &usvg::ClipPath, ts: tiny_skia::Transform, cx: Cx) -> f64 {
-        if !self.step(cx) {
-            return f64::INFINITY;
-        }
-        let deeper = Cx { depth: cx.depth + 1, ..cx };
-        let ts_clip = ts.pre_concat(clip.transform());
-        let mut children = 0.0;
-        let mut stack: Vec<&usvg::Group> = vec![clip.root()];
-        while let Some(group) = stack.pop() {
-            if !self.step(cx) {
-                return f64::INFINITY;
-            }
-            for child in group.children() {
-                match child {
-                    usvg::Node::Group(g) => {
-                        if let Some(inner) = g.clip_path() {
-                            children = most(children, self.clip(inner, ts_clip, deeper));
-                        }
-                        stack.push(g);
-                    }
-                    usvg::Node::Text(t) => stack.push(t.flattened()),
-                    _ => {}
-                }
-            }
-        }
-        let next = clip.clip_path().map_or(0.0, |c| self.clip(c, ts, deeper));
-        cx.layer + children + next
-    }
-
-    /// A mask chain: the cost of this mask's own layers and the cost of drawing its content.
-    fn mask(&self, mask: &usvg::Mask, ts: tiny_skia::Transform, cx: Cx) -> (f64, f64) {
-        if !self.step(cx) {
-            return (f64::INFINITY, f64::INFINITY);
-        }
-        let deeper = Cx { depth: cx.depth + 1, ..cx };
-        let content = self.nodes(mask.root().children(), ts, deeper);
-        let (next, next_content) = mask.mask().map_or((0.0, 0.0), |m| self.mask(m, ts, deeper));
-        (cx.layer + next, most(content, next_content))
-    }
-
-    /// A filter: copies of the source layer, one result per primitive (sized by the unclamped filter
-    /// region for most kinds), and what an `feImage` draws, which goes into `inner`.
-    fn filter(&self, f: &usvg::filter::Filter, ts: tiny_skia::Transform, cx: Cx, inner: &mut f64) -> f64 {
-        use usvg::filter::Kind;
-        let region = f.rect().transform(ts).map_or(0.0, |r| px(f64::from(r.width()).ceil() * f64::from(r.height()).ceil()));
-        let mut total = 3.0 * cx.layer;
-        for primitive in f.primitives() {
-            if !self.step(cx) {
-                return f64::INFINITY;
-            }
-            total += match primitive.kind() {
-                Kind::Blend(_)
-                | Kind::Composite(_)
-                | Kind::Merge(_)
-                | Kind::Tile(_)
-                | Kind::Flood(_)
-                | Kind::DisplacementMap(_)
-                | Kind::Turbulence(_)
-                | Kind::DiffuseLighting(_)
-                | Kind::SpecularLighting(_) => region,
-                Kind::Image(fe) => {
-                    let nested = Cx { layer: region, cap: 25.0 * region, depth: cx.depth + 1 };
-                    *inner = most(*inner, self.nodes(fe.root().children(), ts, nested));
-                    region
-                }
-                _ => cx.layer,
-            };
-        }
-        total
-    }
-
-    fn pattern(&self, pattern: &usvg::Pattern, ts: tiny_skia::Transform, cx: Cx) -> f64 {
-        let (sx, sy) = ts.pre_concat(pattern.transform()).get_scale();
-        let rect = pattern.rect();
-        let (tw, th) = (f64::from(rect.width() * sx).round(), f64::from(rect.height() * sy).round());
-        // resvg draws no tile smaller than a pixel (or not a number).
-        if !(tw >= 1.0 && th >= 1.0) {
-            return 0.0;
-        }
-        let tile = tw * th;
-        let nested = Cx { layer: tile, depth: cx.depth + 1, ..cx };
-        tile + self.nodes(pattern.root().children(), tiny_skia::Transform::from_scale(sx, sy), nested)
-    }
-}
-
-/// Bytes of RGBA8 buffers resvg needs to draw `nodes` at `ts` onto a `w × h` pixmap: the pixmap
-/// itself plus its scratch layers ([`Scratch`]). Saturates instead of overflowing.
-fn render_bytes(nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32) -> u64 {
-    let pixels = f64::from(w) * f64::from(h) + Scratch::new().root(nodes, ts, w, h);
-    (pixels * 4.0).min(u64::MAX as f64) as u64
 }
 
 fn rgba(c: tiny_skia::ColorU8) -> [f32; 4] {
@@ -1724,13 +1509,11 @@ impl Conv {
         };
         let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
         let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
-        // resvg's own layers for this element (nested groups, masks, filters, pattern tiles) come on
-        // top of the pixmap and the layers already kept.
-        if self.retained_pixel_bytes.saturating_add(render_bytes(std::slice::from_ref(node), ts, w, h)) > MAX_PEAK_PIXEL_BYTES {
-            self.note(
-                "raster-scratch",
-                "SVG: an element needing too much memory to rasterise (huge groups, filters, masks or pattern tiles) was dropped".to_string(),
-            );
+        // resvg's own buffers for this element (nested layers, filters, clips, pattern tiles) come on
+        // top of the layers already kept.
+        if let Err(refusal) = limits::check(std::slice::from_ref(node), ts, w, h, self.retained_pixel_bytes) {
+            let why = if refusal.complex { "is too complex to check" } else { "needs too much memory to rasterise" };
+            self.note("raster-scratch", format!("SVG: an element was dropped because it {why}: {}", refusal.message));
             return None;
         }
         // resvg renders the node in its parent's space after shifting its absolute bounding box
