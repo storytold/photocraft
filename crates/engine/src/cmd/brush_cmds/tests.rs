@@ -1474,3 +1474,18 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
 }
+
+/// The review on #9644: a soft 1024 px stroke from (0, 0) to (7000, 7000) passes the point estimate
+/// (8032 x 8032 px) but its dab rectangles cover ~8771 x 8771 px, which `apply_dab_stroke` would read
+/// and clone whole. Color Replacement and the Background Eraser refuse it up front, document untouched.
+#[test]
+fn color_replacement_and_background_eraser_refuse_a_stroke_whose_dabs_render_too_large() {
+    let mut s = session(64, 64);
+    let steps = s.active().unwrap().history.past_len();
+    for cmd in ["paint.colorReplacement", "paint.backgroundEraser"] {
+        let params = json!({"points": [[0, 0], [7000, 7000]], "size": 1024, "hardness": 0});
+        let err = s.execute(cmd, params).unwrap_err().to_string();
+        assert!(err.contains("stroke too large"), "{cmd}: {err}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd} leaves History alone");
+    }
+}

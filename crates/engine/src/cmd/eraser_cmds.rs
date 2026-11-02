@@ -154,7 +154,12 @@ fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSet
     if d.doc.effective_locks(id).transparency && !d.doc.is_background(id) && crate::color_channels::target(s, p)?.is_none() {
         return Err(EngineError::Other(format!("Could not use the Background Eraser because the transparency of layer \"{}\" is locked", l.name)));
     }
-    Ok((Stroke { brush, points: pts }, bs, id))
+    let stroke = Stroke { brush, points: pts };
+    // The working copy is dense over the stroke's bounds (#8666).
+    crate::retouch_cmds::reject_huge_stroke(CMD, &stroke)?;
+    // `apply_dab_stroke` reads the full rendered dab rectangle, which the point estimate undercounts.
+    crate::retouch_cmds::reject_huge_extent(CMD, &stroke, 0, crate::retouch_cmds::MAX_STROKE_PIXELS)?;
+    Ok((stroke, bs, id))
 }
 
 /// `paint.backgroundEraser`: a stroke erasing colours similar to the sampled one.
