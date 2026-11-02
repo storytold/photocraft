@@ -551,6 +551,10 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.focusArea", json!({})),
         ("select.sky", json!({"sampleAllLayers": false})),
         ("layer.removeBackground", json!({})),
+        ("channel.split", json!({})),
+        ("channel.mergeSpot", json!({})),
+        ("image.trap", json!({"width": 3})),
+        ("image.adjustments.matchColor", json!({"luminance": 120, "intensity": 80, "fade": 25})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3635,6 +3639,248 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// Photoshop's Split Channels, Merge Spot Channel, Trap and Match Color steps load as their
+/// commands and save back with the keys Photoshop records (#10609).
+#[test]
+fn channel_and_color_steps_load_and_save_back() {
+    let ids = D::List(vec![D::Integer(182), D::Integer(185), D::Integer(188)]);
+    let matched = desc("null").with("Lght", D::Integer(120)).with("ClrR", D::Integer(80)).with("Fade", D::Integer(25)).with("noReference", D::Boolean(true));
+    let items = vec![
+        item("SplC", "Split Channels", Some(desc("null").with("documentIDs", ids))),
+        item("MSpt", "Merge Spot Channel", Some(desc("null"))),
+        item("Trap", "Trap", Some(desc("null").with("Wdth", px(2.0)))),
+        item("matchColor", "Match Color", Some(matched.clone())),
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Prepress"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Inks"), items: items.clone(), ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    assert_eq!(r["unsupported"], json!([]));
+    assert_eq!(
+        s.actions.list[0].steps,
+        vec![
+            ("channel.split".to_string(), json!({})),
+            ("channel.mergeSpot".to_string(), json!({})),
+            ("image.trap".to_string(), json!({"width": 2})),
+            ("image.adjustments.matchColor".to_string(), json!({"luminance": 120, "intensity": 80, "fade": 25})),
+        ]
+    );
+    let saved = s.execute("actions.save", json!({"action": "Inks"})).unwrap();
+    let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let back = &back.actions[0].items;
+    let events: Vec<String> = back.iter().map(|i| i.event.id()).collect();
+    assert_eq!(events, ["SplC", "MSpt", "Trap", "matchColor"]);
+    // The split's document IDs belong to the run that recorded it, so none are written.
+    assert!(back[0].descriptor.as_ref().unwrap().items.is_empty());
+    for (b, original) in back.iter().zip(&items).skip(1) {
+        assert_eq!(b.descriptor.as_ref().unwrap().items, original.descriptor.as_ref().unwrap().items, "{}", original.event.id());
+    }
+    // Match Color with no reference plays on the image itself.
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    s.actions.list.push(Action::new("Match", vec![s.actions.list[0].steps[3].clone()]));
+    let played = s.execute("actions.play", json!({"action": "Match"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+}
+
+/// Missing Match Color keys take Photoshop's defaults and Trap's width is clamped to its
+/// 32767 px; a step matching another image, or with a key the event lacks, stays a Photoshop
+/// step (#10609).
+#[test]
+fn channel_and_color_steps_default_clamp_and_keep() {
+    let from = |name: &str, d: Descriptor| {
+        let event = if name.len() == 4 { AtnEvent::Code(name.as_bytes().try_into().unwrap()) } else { AtnEvent::name(name) };
+        (events::event_for(&event).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
+    };
+    let params = |m: Mapped| match m {
+        Mapped::Steps(s) => s[0].1.clone(),
+        Mapped::Unsupported { .. } => panic!("kept"),
+    };
+    assert_eq!(params(from("matchColor", desc("null"))), json!({"luminance": 100, "intensity": 100, "fade": 0}));
+    assert_eq!(params(from("Trap", desc("null").with("Wdth", px(99_999.0)))), json!({"width": 32767.0}));
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(from("matchColor", desc("null").with("noReference", D::Boolean(false)))));
+    assert!(kept(from("SplC", desc("null").with("Chnl", D::Integer(1)))));
+    assert!(kept(from("MSpt", desc("null").with("Chnl", D::Integer(1)))));
+    assert!(kept(from("Trap", desc("null").with("Hght", px(2.0)))));
+}
+
+/// Settings the events have no key for refuse the step instead of replaying differently: a
+/// split that keeps the original, a named spot channel, a Match Color source or option, a
+/// fractional luminance (#10609).
+#[test]
+fn channel_and_color_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("channel.split", json!({"closeOriginal": false})),
+        ("channel.mergeSpot", json!({"channel": 1})),
+        ("image.trap", json!({"width": 2, "layer": 3})),
+        ("image.adjustments.matchColor", json!({"source": 0})),
+        ("image.adjustments.matchColor", json!({"neutralize": true})),
+        ("image.adjustments.matchColor", json!({"luminance": 99.5})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    assert!(export_item("image.adjustments.matchColor", &json!({"neutralize": false}), "S").is_some());
+}
+
+/// A Trap width above the 32767 px the import clamps to refuses the step instead of writing a
+/// `Wdth` Photoshop doesn't take (#10609).
+#[test]
+fn trap_wider_than_photoshop_takes_is_refused() {
+    assert!(export_item("image.trap", &json!({"width": 32768}), "S").is_none());
+    let d = export_item("image.trap", &json!({"width": 32767}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(d.items, desc("null").with("Wdth", px(32767.0)).items);
+}
+
+/// The channel or colour step `d` of the Photoshop event `name`, as PhotoCraft loads it.
+fn channel_step(name: &str, d: Descriptor) -> Mapped {
+    let event = if name.len() == 4 { AtnEvent::Code(name.as_bytes().try_into().unwrap()) } else { AtnEvent::name(name) };
+    (events::event_for(&event).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
+}
+
+/// A `noReference` that isn't a Boolean doesn't say the step has no source, so the step stays
+/// a Photoshop step instead of playing as a source-less Match Color (#10609).
+#[test]
+fn match_color_with_a_non_boolean_no_reference_is_kept() {
+    for v in [D::Integer(1), text("true"), enm("Ordn", "Trgt")] {
+        let m = channel_step("matchColor", desc("null").with("noReference", v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "noReference {v:?} was mapped");
+    }
+}
+
+/// A recorded Match Color or Trap setting that isn't a number is the step's own setting, not a
+/// missing one: the step stays a Photoshop step instead of playing with the default (#10609).
+#[test]
+fn channel_and_color_steps_with_a_non_numeric_setting_are_kept() {
+    for (name, key, v) in [
+        ("matchColor", "Lght", text("120")),
+        ("matchColor", "ClrR", D::Boolean(true)),
+        ("matchColor", "Fade", enm("Ordn", "Trgt")),
+        ("matchColor", "Lght", D::Double(f64::NAN)),
+        ("Trap", "Wdth", text("2")),
+        ("Trap", "Wdth", D::Boolean(true)),
+    ] {
+        let m = channel_step(name, desc("null").with(key, v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{name} with {key} = {v:?} was mapped");
+    }
+}
+
+/// Trap saves its width as `#Pxl`, so a width in another unit, or without one, stays a
+/// Photoshop step instead of loading as that many pixels and saving back as pixels (#10609).
+#[test]
+fn trap_width_not_in_pixels_is_kept() {
+    for v in [
+        D::UnitFloat { unit: *b"#Pnt", value: 2.0 },
+        D::UnitFloat { unit: *b"#Mlm", value: 2.0 },
+        D::UnitFloat { unit: *b"#Prc", value: 2.0 },
+        D::Double(2.0),
+        D::Integer(2),
+    ] {
+        let m = channel_step("Trap", desc("null").with("Wdth", v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "Wdth {v:?} was mapped");
+    }
+    assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(2.5))), Mapped::Steps(_)));
+}
+
+/// Match Color saves its settings as integers, so a recorded value it couldn't save back as
+/// the same integer stays a Photoshop step instead of loading and then failing to save (#10609).
+#[test]
+fn match_color_setting_that_cannot_be_saved_back_is_kept() {
+    for (key, v) in [
+        ("Lght", D::Double(99.5)),
+        ("Lght", D::Double(100.0)),
+        ("ClrR", D::LargeInteger(1 << 40)),
+        ("ClrR", D::LargeInteger(80)),
+        ("Fade", D::UnitFloat { unit: *b"#Prc", value: 25.0 }),
+    ] {
+        let m = channel_step("matchColor", desc("null").with(key, v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{key} = {v:?} was mapped");
+    }
+}
+
+/// Photoshop's narrowest Trap width wasn't measured, so a recorded width below the command's
+/// 1 px isn't clamped up to it: the step stays a Photoshop step, and a PhotoCraft step that
+/// narrow is refused on export instead of written as a width the command doesn't trap (#10609).
+#[test]
+fn trap_width_below_one_pixel_is_kept() {
+    for w in [0.25, 0.0, -2.0] {
+        let m = channel_step("Trap", desc("null").with("Wdth", px(w)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "Wdth {w} was mapped");
+        assert!(export_item("image.trap", &json!({"width": w}), "S").is_none(), "width {w} exported");
+    }
+    let d = export_item("image.trap", &json!({"width": 1}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(d.items, desc("null").with("Wdth", px(1.0)).items);
+    assert!(matches!(channel_step("Trap", desc("null").with("Wdth", px(1.0))), Mapped::Steps(_)));
+}
+
+/// Match Color's Luminance and Color Intensity take 1..200 and Fade 0..100, and Photoshop's
+/// handling of a recorded value outside them wasn't measured: such a step stays a Photoshop
+/// step rather than being clamped, and a PhotoCraft step outside them is refused on export
+/// instead of written as a value the command plays clamped (#10609).
+#[test]
+fn match_color_setting_outside_its_range_is_kept() {
+    for (key, n) in [("Lght", 0), ("Lght", 201), ("ClrR", 0), ("ClrR", 201), ("Fade", -1), ("Fade", 101)] {
+        let m = channel_step("matchColor", desc("null").with(key, D::Integer(n)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "{key} = {n} was mapped");
+    }
+    let edges = desc("null").with("Lght", D::Integer(1)).with("ClrR", D::Integer(200)).with("Fade", D::Integer(100));
+    assert!(matches!(channel_step("matchColor", edges), Mapped::Steps(_)));
+    for p in [json!({"luminance": 0}), json!({"luminance": 201}), json!({"intensity": 0}), json!({"fade": -1}), json!({"fade": 101})] {
+        assert!(export_item("image.adjustments.matchColor", &p, "S").is_none(), "{p} exported");
+    }
+    assert!(export_item("image.adjustments.matchColor", &json!({"luminance": 1, "intensity": 200, "fade": 100}), "S").is_some());
+}
+
+/// A Match Color step that names its source (`Srce`, a document by name, or the name as text)
+/// matches another image the command isn't given, so it stays a Photoshop step even when it
+/// also says `noReference` (#10609).
+#[test]
+fn match_color_with_a_source_is_kept() {
+    let from = |d: Descriptor| (events::event_for(&AtnEvent::name("matchColor")).unwrap().from)(&d);
+    let document = D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Reference.psd") }]);
+    for source in [document, text("Reference.psd")] {
+        for d in [desc("null").with("Srce", source.clone()), desc("null").with("Srce", source.clone()).with("noReference", D::Boolean(true))] {
+            assert!(matches!(from(d.clone()), Mapped::Unsupported { harmless: false }), "{:?} was mapped", d.items);
+        }
+    }
+}
+
+/// A Trap step recorded without `Wdth` plays the command's 1 px and saves back as `Wdth` 1 px,
+/// so it must load as that width too: load, save and load give the same step.
+#[test]
+fn trap_step_without_a_width_saves_back_the_same() {
+    let file = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("T"), items: vec![item("Trap", "Trap", Some(desc("null")))], ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    let loaded = s.actions.list.clone();
+    assert_eq!(loaded[0].steps, vec![("image.trap".to_string(), json!({"width": 1}))]);
+    let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
+    let mut t = Session::new();
+    t.execute("actions.load", json!({"data": saved["data"].as_str().unwrap()})).unwrap();
+    assert_eq!(t.actions.list, loaded);
+}
+
+/// The Match Color dialog records Source "None" as `"source": -1`, which the command plays
+/// without a source: such a step saves, while a real source document is still refused.
+#[test]
+fn match_color_recorded_with_source_none_saves() {
+    let none = json!({"source": -1, "luminance": 100.0, "intensity": 100.0, "fade": 0.0, "neutralize": false, "useSelectionInSource": false, "useSelectionInTarget": false});
+    let d = export_item("image.adjustments.matchColor", &none, "S").unwrap().descriptor.unwrap();
+    let expected = desc("null").with("Lght", D::Integer(100)).with("ClrR", D::Integer(100)).with("Fade", D::Integer(0)).with("noReference", D::Boolean(true));
+    assert_eq!(d.items, expected.items);
+    assert!(export_item("image.adjustments.matchColor", &json!({"source": -1, "sourceLayer": 4}), "S").is_some());
+    for source in [json!({"source": 0}), json!({"source": 0, "sourceLayer": 4}), json!({"source": "x"}), json!({"source": -1, "neutralize": true})] {
+        assert!(export_item("image.adjustments.matchColor", &source, "S").is_none(), "{source} exported");
+    }
 }
 
 /// Native component references import, select the same target as the command and export again.
