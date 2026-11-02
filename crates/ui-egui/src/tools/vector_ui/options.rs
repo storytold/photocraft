@@ -299,10 +299,19 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             photocraft_doc::vector::LiveShape::Rect { rect, .. }
             | photocraft_doc::vector::LiveShape::Ellipse { rect }
             | photocraft_doc::vector::LiveShape::Polygon { rect, .. } => {
+                // A typed percentage (`50%`) is of the shape's size, as in Photoshop (#10784).
+                let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+                let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
+                let units = crate::widgets::FieldUnits { unit: photocraft_engine::prefs::Unit::Pixels, dpi, ppi };
+                let sized = |ui: &mut egui::Ui, label: &str, v: &mut f32| -> bool {
+                    ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim).size(12.0));
+                    let extent = f64::from(*v);
+                    crate::widgets::value_field_sized(ui, v, 1.0..=300000.0, "px", 64.0, units, extent).accessible_name(tl!(&label)).changed()
+                };
                 ui.horizontal(|ui| {
                     let (mut w, mut h) = (rect[2] as f32, rect[3] as f32);
-                    let cw = num(ui, "W", &mut w, 1.0..=300000.0, "px");
-                    let ch = num(ui, "H", &mut h, 1.0..=300000.0, "px");
+                    let cw = sized(ui, "W", &mut w);
+                    let ch = sized(ui, "H", &mut h);
                     if cw || ch {
                         edit = Some(json!({"rect": [rect[0], rect[1], w.round(), h.round()], "coalesce": key("wh")}));
                     }

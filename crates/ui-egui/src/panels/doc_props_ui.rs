@@ -101,7 +101,8 @@ fn committed_field(ui: &mut egui::Ui, id: &str, name: &str, current: f32, u: cra
     // Shown in the ruler unit (cm when the rulers are in centimeters); 100% is the current size.
     let extent = f64::from(current);
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(extent, extent));
-    let r = widgets::value_field(ui, &mut v, 0.0..=300_000.0, u.unit.suffix(), 74.0).accessible_name(tl!(name));
+    // A typed percentage (`50%`) is of the current size too, whatever unit the field shows (#10784).
+    let r = widgets::value_field_sized(ui, &mut v, 0.0..=300_000.0, u.unit.suffix(), 74.0, u.field_units(), extent).accessible_name(tl!(name));
     if r.dragged() || r.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;

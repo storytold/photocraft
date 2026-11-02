@@ -63,6 +63,37 @@ pub fn value_field_extent(
     value_field_in(ui, value, range, suffix, width, 0.0, opts, None).0
 }
 
+/// A [`value_field`] in `units` whose 100 % is a length of `extent` px, with the decimals the field
+/// picks itself (Properties' Transform and Shape W/H, Canvas W/H): a percentage typed into it is
+/// that share of `extent` in the field's unit (`50%` halves it, `150%` grows it), and a length
+/// typed into a percent field is that share of `extent` (#10784). The field keeps its own unit.
+///
+/// `extent` is the size when the field took focus, held until the edit is over: a field whose
+/// digits apply as they are typed, or the text read again as the focus goes, would otherwise take
+/// `50%` of a size the edit already changed.
+pub fn value_field_sized(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    width: f32,
+    units: FieldUnits,
+    extent: f64,
+) -> Response {
+    let key = ui.next_auto_id().with("pc-sized-extent");
+    let held = ui.data(|d| d.get_temp::<f64>(key));
+    let extent = held.unwrap_or(extent);
+    let resp = value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { units: Some(units), extent: Some(extent), ..Default::default() }, None).0;
+    if resp.has_focus() || resp.lost_focus() || ui.memory(|m| m.had_focus_last_frame(resp.id)) {
+        if held.is_none() {
+            ui.data_mut(|d| d.insert_temp(key, extent));
+        }
+    } else if held.is_some() {
+        ui.data_mut(|d| d.remove::<f64>(key));
+    }
+    resp
+}
+
 pub(super) fn field_resolution_id() -> egui::Id {
     egui::Id::unique("pc-field-resolution")
 }

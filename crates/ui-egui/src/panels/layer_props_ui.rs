@@ -52,14 +52,24 @@ fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
 /// A number field that reports a value once committed (drag released, Enter, focus lost). `label` is its own
 /// label and the one stacked with it in the same column ("W" over "X"), which share a centre.
 /// `len` is the unit shown and its 100% extent (for percent); `name` is the field's accessible name.
+/// A `sized` field (W, H) takes a typed percentage of the current size, as Photoshop's does: `50%`
+/// halves it in whatever unit the field shows (#10784).
 // The explicit accessible name accompanies the existing numeric-field parameters.
 #[expect(clippy::too_many_arguments)]
-fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
+fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32, sized: bool) -> Option<f32> {
     let (u, extent) = len;
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
-    let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
+    let (range, suffix) = (-300_000.0..=300_000.0, u.unit.suffix());
+    let resp = if sized {
+        // A percent field's own 100 % is `extent`, so a typed length converts against that.
+        let typed = if u.unit == photocraft_engine::prefs::Unit::Percent { extent } else { f64::from(current) };
+        widgets::value_field_sized(ui, &mut v, range, suffix, width, u.field_units(), typed)
+    } else {
+        widgets::value_field(ui, &mut v, range, suffix, width)
+    }
+    .accessible_name(tl!(name));
     if resp.dragged() || resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
@@ -90,6 +100,10 @@ impl LenUnit {
     /// `px` shown in the unit (`extent` is 100% for percent).
     pub(crate) fn shown(&self, px: f64, extent: f64) -> f32 {
         self.unit.from_px(px, self.dpi, extent, self.ppi) as f32
+    }
+    /// The unit and resolution a field showing it converts typed units at.
+    pub(crate) fn field_units(&self) -> widgets::FieldUnits {
+        widgets::FieldUnits { unit: self.unit, dpi: self.dpi, ppi: self.ppi }
     }
     /// A value typed in the unit, in document px.
     pub(crate) fn px(&self, v: f32, extent: f64) -> f64 {
@@ -167,24 +181,24 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
+                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw, true) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
                 if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th) {
+                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th, true) {
                     run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
             ui.add_space(ROW_GAP);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
+                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5, false) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
+                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5, false) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
                 }
             });
@@ -495,5 +509,91 @@ mod tests {
         s.execute("layer.new.layer", json!({})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), u, 800.0), 0.5, "a pixel layer keeps half a pixel");
+    }
+
+    /// An 800 × 600 px document at `dpi` with the rulers in `unit` and a 400 × 300 px rectangle
+    /// shape, whose Properties field named `name` gets `text` typed and Enter (#10784). Returns
+    /// the shape path's width and height.
+    fn type_into_shape_field(unit: photocraft_engine::prefs::Unit, dpi: f32, name: &str, text: &str) -> (f64, f64) {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
+        app.session
+            .edit("resolution", |doc, _| {
+                doc.resolution_dpi = dpi;
+                Ok(())
+            })
+            .unwrap();
+        app.session.prefs.edit(|p| p.units_and_rulers.rulers = unit);
+        app.run("shape.create", json!({"kind": "rect", "rect": [200, 150, 400, 300], "fill": "#3366cc"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 1400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_all_by_label(name).find(|n| n.accesskit_node().role() == egui::accesskit::Role::SpinButton).expect("the field").click();
+        h.run();
+        for c in text.chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let st = h.state().session.active().unwrap();
+        let LayerContent::Shape(sh) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still a shape") };
+        let c = sh.path.control_bounds().unwrap();
+        (c.2 - c.0, c.3 - c.1)
+    }
+
+    /// #10784: a percentage typed into the Transform W or H of a shape is of its current size, in
+    /// whatever unit the rulers show, as in Photoshop; arithmetic and plain numbers still work.
+    #[test]
+    fn shape_transform_size_takes_a_typed_percentage() {
+        use photocraft_engine::prefs::Unit;
+        let near = |(w, h): (f64, f64), want: (f64, f64)| (w - want.0).abs() < 0.01 && (h - want.1).abs() < 0.01;
+        for (unit, dpi) in [(Unit::Pixels, 72.0), (Unit::Centimeters, 72.0), (Unit::Inches, 300.0), (Unit::Millimeters, 150.0), (Unit::Points, 300.0)] {
+            // Linked: half the width halves the height too.
+            let got = type_into_shape_field(unit, dpi, "Width", "50%");
+            assert!(near(got, (200.0, 150.0)), "{unit:?} W 50%: {got:?}");
+            let got = type_into_shape_field(unit, dpi, "Height", "150%");
+            assert!(near(got, (600.0, 450.0)), "{unit:?} H 150%: {got:?}");
+            // A percentage inside arithmetic is a length like any other.
+            let got = type_into_shape_field(unit, dpi, "Width", "50%+25%");
+            assert!(near(got, (300.0, 225.0)), "{unit:?} W 50%+25%: {got:?}");
+        }
+        // Arithmetic and plain numbers are still in the field's unit.
+        assert!(near(type_into_shape_field(Unit::Pixels, 72.0, "Width", "100*2"), (200.0, 150.0)));
+        assert!(near(type_into_shape_field(Unit::Pixels, 72.0, "Width", "600"), (600.0, 450.0)));
+        let one_inch = type_into_shape_field(Unit::Inches, 300.0, "Width", "1");
+        assert!(near(one_inch, (300.0, 225.0)), "1 in at 300 ppi: {one_inch:?}");
+        let got = type_into_shape_field(Unit::Centimeters, 72.0, "Width", "1in+100px");
+        assert!(near(got, (172.0, 129.0)), "units still convert: {got:?}");
+        // With the rulers in percent, the fields stay a share of the document, as before.
+        let got = type_into_shape_field(Unit::Percent, 72.0, "Width", "25");
+        assert!(near(got, (200.0, 150.0)), "25 % of the 800 px document: {got:?}");
+        let got = type_into_shape_field(Unit::Percent, 72.0, "Width", "100px");
+        assert!(near(got, (100.0, 75.0)), "a length typed into a percent field: {got:?}");
+    }
+
+    /// #10784: the Shape section's W and H take a percentage of the size the shape had when the
+    /// field was focused, though typed digits resize the shape as they go.
+    #[test]
+    fn live_shape_size_takes_a_typed_percentage() {
+        use photocraft_engine::prefs::Unit;
+        let near = |(w, h): (f64, f64), want: (f64, f64)| (w - want.0).abs() < 0.01 && (h - want.1).abs() < 0.01;
+        let got = type_into_shape_field(Unit::Pixels, 72.0, "W", "50%");
+        assert!(near(got, (200.0, 300.0)), "W 50%: {got:?}");
+        let got = type_into_shape_field(Unit::Centimeters, 72.0, "H", "150%");
+        assert!(near(got, (400.0, 450.0)), "H 150%: {got:?}");
+        assert!(near(type_into_shape_field(Unit::Pixels, 72.0, "W", "120*2"), (240.0, 300.0)));
+        assert!(near(type_into_shape_field(Unit::Pixels, 72.0, "W", "250"), (250.0, 300.0)));
     }
 }
