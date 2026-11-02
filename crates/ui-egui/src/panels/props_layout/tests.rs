@@ -389,6 +389,7 @@ fn shape_header_paints_18px_icon() {
 
     for (kind, id) in layers {
         let layer = layer_of(&app, id);
+        let icon = kind_icon(&layer.content);
         let mut ready = false;
         let mut h = Harness::new_ui(move |ui| {
             if !ready {
@@ -415,24 +416,22 @@ fn shape_header_paints_18px_icon() {
 
         assert_eq!(icon_sizes, vec![vec2(expected, expected)], "{kind}: Properties header icon size");
 
-        if kind == "shape" {
-            let expected_texture = h
-                .ctx
-                .try_load_texture(
-                    "bytes://icons/vector-shape.svg",
-                    Default::default(),
-                    egui::load::SizeHint::Size { width: 18, height: 18, maintain_aspect_ratio: false },
-                )
-                .unwrap()
-                .texture_id()
-                .expect("vector-shape texture loaded");
+        let expected_texture = h
+            .ctx
+            .try_load_texture(
+                &format!("bytes://icons/{icon}.svg"),
+                Default::default(),
+                egui::load::SizeHint::Size { width: expected as u32, height: expected as u32, maintain_aspect_ratio: false },
+            )
+            .unwrap()
+            .texture_id()
+            .expect("icon texture loaded");
 
-            let painted_texture = h.output().shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Rect(rect) => rect.brush.as_ref().map(|brush| brush.fill_texture_id),
-                _ => None,
-            });
+        let painted_texture = h.output().shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) => rect.brush.as_ref().map(|brush| brush.fill_texture_id),
+            _ => None,
+        });
 
-            assert_eq!(painted_texture, Some(expected_texture), "Shape header must paint vector-shape");
-        }
+        assert_eq!(painted_texture, Some(expected_texture), "{kind}: Properties header must paint {icon}");
     }
 }
