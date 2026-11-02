@@ -8,6 +8,9 @@ use crate::i18n::{self, Lang};
 use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::json;
 
+/// `dir_for_code` classifies locale tags by script direction independent of which languages are
+/// registered; `Lang::dir` additionally confirms the two registered right-to-left catalogs
+/// (Arabic, Farsi) report `Rtl` and every other registered language reports `Ltr`.
 #[test]
 fn right_to_left_scripts_by_language_code() {
     for code in ["ar", "AR", "ar-eg", "fa", "fa_IR", "he", "ur", "ckb", "ps", "yi"] {
@@ -17,9 +20,10 @@ fn right_to_left_scripts_by_language_code() {
     for code in ["en", "ja", "zh-hans", "pt-br", "ku", "arn", ""] {
         assert_eq!(i18n::dir_for_code(code), Dir::Ltr, "{code}");
     }
-    // Arabic is the one right-to-left catalog; every other registered language stays left to right.
+    // Arabic and Farsi are the right-to-left catalogs; every other registered language stays
+    // left to right.
     for lang in Lang::all() {
-        let want = if lang.code() == "ar" { Dir::Rtl } else { Dir::Ltr };
+        let want = if matches!(lang.code(), "ar" | "fa") { Dir::Rtl } else { Dir::Ltr };
         assert_eq!(lang.dir(), want, "{}", lang.code());
     }
 }
