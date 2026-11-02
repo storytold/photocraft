@@ -3258,12 +3258,20 @@ fn distort_filter_steps_load_clamp_play_and_save_back() {
     assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
 }
 
-/// Photoshop clamps Wave's number of generators to 1..999 when it plays, so a recorded count far
-/// above it loads as 999, as the existing 0 loads as 1 (#10605).
+/// PhotoCraft's renderer draws at most `MAX_WAVE_GENERATORS` (64) generators, so a Wave step
+/// recorded with more keeps the Photoshop step on import and is refused on export, as the PSD
+/// smart-filter mapper does, rather than mapping a step that plays differently (#10605).
 #[test]
-fn wave_generators_above_photoshops_limit_load_clamped() {
-    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(1_000_000)))).1;
-    assert_eq!(p["generators"], 999, "{p}");
+fn wave_generators_past_what_photocraft_draws_keep_the_step() {
+    assert_eq!(photocraft_algo::MAX_WAVE_GENERATORS, 64);
+    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(64)))).1;
+    assert_eq!(p["generators"], 64, "{p}");
+    for n in [65, 999, 1_000_000] {
+        let m = distort("Wave", desc("null").with("NmbG", D::Integer(n)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "NmbG {n}");
+    }
+    assert!(export_item("filter.distort.wave", &json!({"generators": 65}), "S").is_none());
+    assert!(export_item("filter.distort.wave", &json!({"generators": 64}), "S").is_some());
 }
 
 /// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
@@ -3341,7 +3349,7 @@ fn distort_filter_steps_outside_photoshops_range_are_refused() {
         ("filter.distort.pinch", json!({"amount": -100})),
         ("filter.distort.twirl", json!({"angle": 999})),
         ("filter.distort.zigZag", json!({"ridges": 0})),
-        ("filter.distort.wave", json!({"generators": 999, "wavelengthMin": 1})),
+        ("filter.distort.wave", json!({"generators": 64, "wavelengthMin": 1})),
     ] {
         assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
     }
