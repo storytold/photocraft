@@ -1,7 +1,5 @@
 //! Native platform services: file dialogs (rfd), filesystem, codecs.
 
-mod protected_write;
-
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
@@ -686,9 +684,6 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
-        write_protected: Some(Box::new(|path, bytes, source| {
-            protected_write::write(Path::new(path), bytes, Path::new(source)).map_err(|error| error.to_string())
-        })),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.
             let meta = std::fs::metadata(path).ok()?;

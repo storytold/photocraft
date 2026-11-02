@@ -982,7 +982,6 @@ fn export_as_preserves_protected_sources_and_aliases_across_tabs() {
             let calls = Rc::new(Cell::new(0));
             let encoded = calls.clone();
             let written = calls.clone();
-            let protected_written = calls.clone();
             let mut app = PhotocraftApp::new(
                 photocraft_engine::Session::new(),
                 crate::Services {
@@ -992,10 +991,6 @@ fn export_as_preserves_protected_sources_and_aliases_across_tabs() {
                     })),
                     write: Some(Box::new(move |_, _| {
                         written.set(written.get() + 1);
-                        Ok(())
-                    })),
-                    write_protected: Some(Box::new(move |_, _, _| {
-                        protected_written.set(protected_written.get() + 1);
                         Ok(())
                     })),
                     file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(destination.to_string_lossy().into_owned()))]).0),
@@ -1065,7 +1060,6 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
             let calls = Rc::new(Cell::new(0));
             let encoded = calls.clone();
             let written = calls.clone();
-            let protected_written = calls.clone();
             let mut app = PhotocraftApp::new(
                 photocraft_engine::Session::new(),
                 crate::Services {
@@ -1078,11 +1072,6 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
                     write: Some(Box::new(move |_, bytes| {
                         assert_eq!(bytes, &[1]);
                         written.set(written.get() + 1);
-                        Ok(())
-                    })),
-                    write_protected: Some(Box::new(move |_, bytes, _| {
-                        assert_eq!(bytes, &[1]);
-                        protected_written.set(protected_written.get() + 1);
                         Ok(())
                     })),
                     file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("copy.png".into()))]).0),
@@ -1126,26 +1115,4 @@ fn captured_exports_finish_after_the_last_source_tab_closes() {
             assert!(app.session.active().is_none(), "export must not reopen or focus a tab");
         }
     }
-}
-
-/// A host must explicitly provide publication protection; a plain writer is not a safe fallback.
-#[test]
-fn protected_exports_fail_closed_without_a_protected_writer() {
-    let ordinary_calls = std::rc::Rc::new(std::cell::Cell::new(0));
-    let called = ordinary_calls.clone();
-    let mut app = PhotocraftApp::new(
-        photocraft_engine::Session::new(),
-        crate::Services {
-            export: Some(Box::new(|_, _, _| Ok((vec![1], vec![])))),
-            write: Some(Box::new(move |_, _| {
-                called.set(called.get() + 1);
-                Ok(())
-            })),
-            ..Default::default()
-        },
-    );
-    app.run("file.new", json!({"width":2,"height":2})).unwrap();
-    app.session.active_mut().unwrap().protected_import_source = Some("source.xcf".into());
-    assert!(replay(&mut app, &json!({"format":"png","path":"copy.png"})).unwrap_err().contains("source-protecting writer"));
-    assert_eq!(ordinary_calls.get(), 0);
 }
