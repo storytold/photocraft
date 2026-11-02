@@ -27,12 +27,22 @@ pub struct CommandSpec {
     pub journal: bool,
 }
 
+/// Whole-canvas edits currently transform one raster projection, not every stored cel frame.
+/// Refuse animated sprites before changing samplers, pixels or history; detach a copy first.
+pub(crate) fn check_sprite_canvas_geometry(doc: &Document) -> Result<()> {
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.frames.len() > 1) {
+        return Err(EngineError::Other("canvas geometry changes require a single-frame sprite; detach a copy of the selected frame first".into()));
+    }
+    Ok(())
+}
+
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.has_slices())) {
         return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before turning the canvas".into()));
     }
     if let Some(d) = s.active() {
+        check_sprite_canvas_geometry(&d.doc)?;
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
         // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).

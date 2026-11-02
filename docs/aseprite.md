@@ -75,8 +75,11 @@ coordinates and z-order; they still allow opacity edits. Palette changes are fra
 color-table edits rather than painting on the active layer. Explicit tilemap rasterization
 unlocks its own display cache, but requires unlocked parent groups. Frame insertion/deletion is
 refused when retained slice keys would become stale; changing tag definitions is refused when existing
-tag user properties would be reassigned. Canvas changes with retained slice coordinates are
-also refused. These errors preserve the original document and explain the affected metadata.
+tag user properties would be reassigned. Deleting frame zero is also refused when its
+palette user data would otherwise attach to the surviving frame's palette. Whole-canvas geometry operations (resize, crop, trim, flips and rotations) are refused on
+multi-frame sprites until they can transform all cels consistently. Detach a copy to transform
+only the selected frame; resolution-only edits remain available. Canvas changes with retained
+slice coordinates are also refused. These errors preserve the original document and explain the affected metadata.
 
 ## Save and metadata preservation
 

@@ -225,6 +225,9 @@ impl Session {
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
+        if doc.size != before.size {
+            crate::cmd::check_sprite_canvas_geometry(&doc)?;
+        }
         if doc.size != before.size && doc.sprite.as_ref().is_some_and(|s| s.has_slices()) {
             return Err(crate::EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before changing the canvas".into()));
         }

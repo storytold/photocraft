@@ -554,3 +554,29 @@ fn omitted_embedded_svg_depth_is_reported_without_losing_valid_siblings() {
     assert!(px(&result.document, 4, 4)[3] > 0.99);
     assert!(!result.warnings.iter().any(|w| w.contains("omitted")));
 }
+
+/// Corrupt compressed and malformed markup images warn once per cause, without hiding valid art.
+#[test]
+fn embedded_svg_decode_and_parse_omissions_are_both_reported() {
+    let bad_gzip = base64_data_url("image/svg+xml", &[0x1f, 0x8b, 1, 2, 3]);
+    let bad_xml = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bad_gzip, &bad_xml, &bad_gzip].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = import("omitted.svg", xml.as_bytes()).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("inflated")).count(), 1, "{:?}", result.warnings);
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("parsed")).count(), 1, "{:?}", result.warnings);
+}
+
+/// Bounded non-strict imports report separate omission causes while deduplicating repeated ones.
+#[test]
+fn bounded_svg_reports_each_distinct_image_omission() {
+    let bmp = base64_data_url("image/bmp", b"BM");
+    let malformed_svg = base64_data_url("image/svg+xml", b"<svg>");
+    let images = [&bmp, &malformed_svg, &bmp].iter().map(|url| format!("<image width=\"8\" height=\"8\" href=\"{url}\"/>")).collect::<String>();
+    let xml = format!("<svg {NS} width=\"8\" height=\"8\">{images}<rect width=\"8\" height=\"8\" fill=\"blue\"/></svg>");
+    let result = svg::import_svg_bounded("omitted", xml.as_bytes(), 64).unwrap();
+    assert!(close(px(&result.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 2, "{:?}", result.warnings);
+    assert!(svg::import_svg_preview_with_work("strict", xml.as_bytes(), 64).is_err());
+}

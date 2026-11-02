@@ -41,6 +41,17 @@ fn session() -> Session {
     add_to_session(doc)
 }
 
+/// A single-frame control distinguishes metadata guards from the animated-canvas refusal.
+fn single_frame_session() -> Session {
+    let mut doc = (*session().active().unwrap().doc).clone();
+    doc.sprite.as_mut().unwrap().frames.truncate(1);
+    if let Some(timeline) = &mut doc.timeline {
+        timeline.duration = 1;
+        timeline.work_end = 1;
+    }
+    add_to_session(doc)
+}
+
 fn in_group(mut doc: Document, all: bool, position: bool) -> Document {
     let children = std::mem::take(&mut doc.layers);
     let mut group = Layer::group("Parent", children);
@@ -306,7 +317,7 @@ fn shrinking_an_indexed_palette_cannot_leave_locked_reference_cels_out_of_range(
 #[test]
 fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
-    let mut s = session();
+    let mut s = single_frame_session();
     s.edit("Slice", |doc, _| {
         Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
             kind: 0x2022,
@@ -320,7 +331,7 @@ fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
     {
         assert_refused_unchanged(&mut s, command, json!({}));
     }
-    let mut ordinary = session();
+    let mut ordinary = single_frame_session();
     ordinary.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap();
     assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
     ordinary.execute("edit.undo", json!({})).unwrap();
@@ -330,7 +341,7 @@ fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
 #[test]
 fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_size() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
-    let mut s = session();
+    let mut s = single_frame_session();
     s.edit("Slice", |doc, _| {
         Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
             kind: 0x2022,
@@ -344,7 +355,7 @@ fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_siz
         assert_refused_unchanged(&mut s, "image.crop", json!({"x":x,"y":y,"width":2,"height":1}));
     }
     assert_refused_unchanged(&mut s, "image.crop", json!({"x":0,"y":0,"width":2,"height":1,"angle":180}));
-    let mut ordinary = session();
+    let mut ordinary = single_frame_session();
     ordinary.execute("image.crop", json!({"x":1,"y":0,"width":2,"height":1})).unwrap();
     assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
     ordinary.execute("edit.undo", json!({})).unwrap();
@@ -354,7 +365,7 @@ fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_siz
 #[test]
 fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unchanged() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
-    let mut s = session();
+    let mut s = single_frame_session();
     s.edit("Slice", |doc, _| {
         Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
             kind: 0x2022,
@@ -370,7 +381,7 @@ fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unch
         assert_refused_unchanged(&mut s, "image.crop", params);
     }
     s.execute("image.crop", json!({"x":0,"y":0,"width":2,"height":1,"targetWidth":2,"targetHeight":1})).unwrap();
-    let mut ordinary = session();
+    let mut ordinary = single_frame_session();
     let before = ordinary.active().unwrap().doc.clone();
     ordinary.execute("image.crop", json!({"x":0,"y":0,"width":1,"height":1,"targetWidth":2,"targetHeight":1})).unwrap();
     assert_eq!(ordinary.active().unwrap().doc.size, before.size);
@@ -383,7 +394,7 @@ fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unch
 #[test]
 fn arbitrary_canvas_rotation_refuses_slices_for_same_size_turns_and_allows_a_noop() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
-    let mut doc = (*session().active().unwrap().doc).clone();
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
     doc.size = Size::new(2, 2);
     Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
         kind: 0x2022,
@@ -400,7 +411,7 @@ fn arbitrary_canvas_rotation_refuses_slices_for_same_size_turns_and_allows_a_noo
     s.execute("image.rotation.arbitrary", json!({"angle":360})).unwrap();
     assert_eq!(s.active().unwrap().doc, before);
     assert_eq!(s.active().unwrap().history.past_len(), history);
-    let mut ordinary = session();
+    let mut ordinary = single_frame_session();
     ordinary.execute("image.rotation.arbitrary", json!({"angle":180})).unwrap();
     assert_eq!(ordinary.active().unwrap().history.past_len(), 1);
     ordinary.execute("edit.undo", json!({})).unwrap();
@@ -424,5 +435,115 @@ fn rgb_and_gray_layer_from_background_stays_unlocked_after_aseprite_export() {
         assert!(!back.layers[0].locks.position);
         s.execute("edit.undo", json!({})).unwrap();
         assert!(s.active().unwrap().doc.background().is_some());
+    }
+}
+
+/// Whole-canvas transforms refuse multi-frame data before changing pixels, geometry or history.
+#[test]
+fn animated_canvas_geometry_refuses_without_changing_any_frame() {
+    let commands = [
+        ("image.canvasSize", json!({"width":4,"height":3})),
+        ("image.imageSize", json!({"width":4,"height":2})),
+        ("image.crop", json!({"x":1,"y":0,"width":2,"height":1})),
+        ("image.crop", json!({"x":0,"y":0,"width":1,"height":1,"targetWidth":2,"targetHeight":1})),
+        ("image.crop", json!({"x":0,"y":0,"width":2,"height":1,"angle":180})),
+        ("image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1})),
+        ("image.imageRotation.flipCanvasHorizontal", json!({})),
+        ("image.imageRotation.flipCanvasVertical", json!({})),
+        ("image.imageRotation.180", json!({})),
+        ("image.imageRotation.90cw", json!({})),
+        ("image.rotation.arbitrary", json!({"angle":180})),
+        ("image.trim", json!({})),
+    ];
+    for (command, params) in commands {
+        let mut s = session();
+        let error = s.execute(command, params.clone()).unwrap_err();
+        assert!(error.to_string().contains("single-frame sprite"), "{command}: {error}");
+        assert_refused_unchanged(&mut s, command, params);
+        // Navigation still reveals the exact original frame, not a partially transformed cel.
+        let before = s.active().unwrap().doc.sprite.clone();
+        s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+        let after = s.active().unwrap().doc.sprite.as_ref().unwrap();
+        assert_eq!(after.frames, before.as_ref().unwrap().frames, "{command}");
+    }
+    let mut s = session();
+    s.execute("image.imageSize", json!({"resample":"none","resolution":144})).unwrap();
+    assert_eq!(s.active().unwrap().doc.resolution_dpi, 144.0);
+}
+
+/// Same-size perspective warps cannot invalidate slices, and off-playhead slices are protected.
+#[test]
+fn perspective_crop_and_turns_refuse_retained_slices_on_any_frame() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+        kind: Sprite::SLICE_CHUNK,
+        target: MetadataTarget::Frame,
+        bytes: Arc::new(vec![]),
+    });
+    let mut s = add_to_session(doc);
+    assert_refused_unchanged(&mut s, "image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1}));
+    let mut doc = (*session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[1]).metadata.push(SpriteChunk {
+        kind: Sprite::SLICE_CHUNK,
+        target: MetadataTarget::Frame,
+        bytes: Arc::new(vec![]),
+    });
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("retained slice"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}
+
+/// Frame-zero palette user data must never be silently reassigned to a surviving palette.
+#[test]
+fn deleting_frame_zero_refuses_palette_user_data_but_other_frames_remain_deletable() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*session().active().unwrap().doc).clone();
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(SpriteChunk {
+        kind: 0x2020,
+        target: MetadataTarget::Palette,
+        bytes: Arc::new(vec![0, 0, 0, 0]),
+    });
+    let mut s = add_to_session(doc);
+    assert_refused_unchanged(&mut s, "sprite.deleteFrame", json!({}));
+    s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames.len(), 1);
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[0].metadata[0].target, MetadataTarget::Palette);
+}
+
+/// Lock All on reference pixels still permits a global opacity edit through the normal command.
+#[test]
+fn locked_reference_opacity_roundtrips_through_commands_history_and_export() {
+    for present in [false, true] {
+        let mut doc = (*session().active().unwrap().doc).clone();
+        let id = doc.layers[0].id;
+        let sprite = doc.sprite.as_mut().unwrap();
+        sprite.layers[0].flags |= 64;
+        sprite.layers[0].opacity = 200;
+        Arc::make_mut(Arc::make_mut(&mut sprite.frames[1]).cels.get_mut(&id).unwrap()).linked_frame = None;
+        if present {
+            Arc::make_mut(Arc::make_mut(&mut sprite.frames[0]).cels.get_mut(&id).unwrap()).opacity = 128;
+        } else {
+            Arc::make_mut(&mut sprite.frames[0]).cels.remove(&id);
+        }
+        doc.layers[0].locks.all = true;
+        doc.restore_sprite_frame().unwrap();
+        let mut s = add_to_session(doc);
+        let before = s.active().unwrap().doc.clone();
+        s.execute("layer.setProps", json!({"layer":id.0,"opacity":0.75})).unwrap();
+        let edited = s.active().unwrap().doc.clone();
+        assert!((edited.layers[0].opacity - 0.75).abs() < 0.005);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, edited);
+        s.execute("timeline.setFrame", json!({"frame":1})).unwrap();
+        s.execute("timeline.setFrame", json!({"frame":0})).unwrap();
+        let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+        let reopened = photocraft_io::import("reference.aseprite", &out.bytes).unwrap().document;
+        assert!((reopened.layers[0].opacity - 0.75).abs() < 0.005);
+        assert!(reopened.layers[0].locks.all);
     }
 }

@@ -235,3 +235,33 @@ fn retained_slices_are_detected_outside_the_selected_frame() {
     Arc::make_mut(&mut sprite.frames[1]).metadata.push(SpriteChunk { kind: Sprite::SLICE_CHUNK, target: MetadataTarget::Frame, bytes: Arc::new(vec![]) });
     assert!(sprite.has_slices());
 }
+
+/// Reference display opacity remains editable without replacing original pixels or precise bounds.
+#[test]
+fn reference_opacity_persists_with_absent_translucent_and_zero_opacity_cels() {
+    for present in [false, true] {
+        for cel_opacity in [0, 128, 255] {
+            let mut doc = indexed();
+            let id = doc.layers[0].id;
+            let sprite = doc.sprite.as_mut().unwrap();
+            sprite.layers[0].flags |= 64;
+            sprite.layers[0].opacity = 200;
+            Arc::make_mut(Arc::make_mut(&mut sprite.frames[1]).cels.get_mut(&id).unwrap()).linked_frame = None;
+            if present {
+                Arc::make_mut(Arc::make_mut(&mut sprite.frames[0]).cels.get_mut(&id).unwrap()).opacity = cel_opacity;
+            } else {
+                Arc::make_mut(&mut sprite.frames[0]).cels.remove(&id);
+            }
+            doc.layers[0].locks.all = true;
+            doc.restore_sprite_frame().unwrap();
+            let pixels = doc.sprite.as_ref().unwrap().frames[0].cels.get(&id).map(|c| c.pixels.clone());
+            doc.layers[0].opacity = 0.75;
+            doc.capture_sprite_frame().unwrap();
+            assert!((doc.layers[0].opacity - 0.75).abs() < 0.005);
+            assert_eq!(doc.sprite.as_ref().unwrap().frames[0].cels.get(&id).map(|c| c.pixels.clone()), pixels);
+            doc.select_sprite_frame(1).unwrap();
+            doc.select_sprite_frame(0).unwrap();
+            assert!((doc.layers[0].opacity - 0.75).abs() < 0.005, "present={present}, alpha={cel_opacity}");
+        }
+    }
+}

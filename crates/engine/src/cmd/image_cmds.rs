@@ -235,6 +235,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     // Each side may reach 300000 px, but resampling writes real pixels: refuse a canvas whose
     // raster alone would pass the budget, before allocating any of it (#1544).
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+        crate::cmd::check_sprite_canvas_geometry(&d.doc)?;
         check_resample_budget("image.imageSize", &d.doc, nw, nh, ", or turn Resample off to change only the resolution")?;
     }
     let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
@@ -364,6 +365,10 @@ pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> 
     if dx == 0 && dy == 0 {
         return Ok(());
     }
+    crate::cmd::check_sprite_canvas_geometry(doc)?;
+    if doc.sprite.as_ref().is_some_and(|sprite| sprite.has_slices()) {
+        return Err(bad(cmd, "this sprite has retained slice coordinates; detach a copy before moving the canvas origin"));
+    }
     let fits = |r: Rect| {
         r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
     };
@@ -412,6 +417,10 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
 /// A frame that extends past the canvas fills the Background's new area with `extension` (the
 /// background colour, as Photoshop's Crop tool does); other layers get transparent pixels there.
 pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extension: [f32; 4]) -> Result<()> {
+    crate::cmd::check_sprite_canvas_geometry(doc)?;
+    if r != doc.bounds() && doc.sprite.as_ref().is_some_and(|sprite| sprite.has_slices()) {
+        return Err(bad(cmd, "this sprite has retained slice coordinates; detach a copy before cropping the canvas"));
+    }
     // The origin moves to (0, 0); `-i32::MIN` has no i32 value (#959).
     let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
         return Err(bad(cmd, format!("the crop origin ({}, {}) can't be moved to (0, 0) within the 32-bit coordinate range", r.x0, r.y0)));
@@ -530,6 +539,9 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let h = p.get("height").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { oh });
     let (nw, nh) = if relative { (ow + w, oh + h) } else { (w, h) };
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
+    if (nw, nh) != (ow as u32, oh as u32) {
+        crate::cmd::check_sprite_canvas_geometry(&d.doc)?;
+    }
     let (ax, ay) = anchor_factors("image.canvasSize", p.get("anchor").and_then(Value::as_str).unwrap_or("center"))?;
     let dx = ((nw as f64 - ow) * ax).round() as i32;
     let dy = ((nh as f64 - oh) * ay).round() as i32;
@@ -571,6 +583,7 @@ const MAX_CROP_SIDE: i32 = 300_000;
 
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::cmd::check_sprite_canvas_geometry(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
     // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
     let content_aware = match p.get("contentAware") {
@@ -864,6 +877,7 @@ fn turned_crop_source(old: Size, new: Size, angle: f64, target: Rect) -> Rect {
 /// Image → Trim.
 fn trim(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    crate::cmd::check_sprite_canvas_geometry(&d.doc)?;
     let canvas = d.doc.bounds();
     let buf = flatten_whole(&d.doc, "image.trim")?;
     let based = p.get("basedOn").and_then(Value::as_str).unwrap_or("transparent");

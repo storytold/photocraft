@@ -296,11 +296,21 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize, warnings: Arc
         // resvg (which allocates the full intrinsic image before any destination scaling) ever
         // sees them. Formats without a cheap header probe fall through unchanged; their decode
         // path is bounded elsewhere or accepted as-is, matching the previous behavior.
+        let warn = |message: &str| {
+            let mut warnings = warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !warnings.iter().any(|warning| warning == message) {
+                warnings.push(message.into());
+            }
+        };
         let probed = embedded_image_dimensions(mime, &data);
         if let Some(probed) = probed {
-            let (w, h) = probed?;
+            let Some((w, h)) = probed else {
+                warn("SVG: an embedded raster image had invalid dimensions and was omitted");
+                return None;
+            };
             let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4);
             if decoded > MAX_EMBEDDED_IMAGE_BYTES {
+                warn("SVG: an embedded raster image exceeded the decoded pixel limit and was omitted");
                 return None;
             }
         }
@@ -315,18 +325,26 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize, warnings: Arc
             let (mime, xml) = match inflate(&data) {
                 Ok(std::borrow::Cow::Borrowed(_)) => (mime, Arc::clone(&data)),
                 Ok(std::borrow::Cow::Owned(xml)) if !xml.starts_with(&[0x1f, 0x8b]) => ("image/svg+xml", Arc::new(xml)),
-                _ => return None,
+                _ => {
+                    warn("SVG: an embedded SVG image could not be inflated and was omitted");
+                    return None;
+                }
             };
             if nesting_depth(&xml, depth_left) > depth_left {
-                let mut warnings = warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if warnings.is_empty() {
-                    warnings.push("SVG: an embedded SVG image exceeded the shared nesting limit and was omitted".into());
-                }
+                warn("SVG: an embedded SVG image exceeded the shared nesting limit and was omitted");
                 return None;
             }
-            return default_resolver(mime, xml, opts);
+            let image = default_resolver(mime, xml, opts);
+            if image.is_none() {
+                warn("SVG: an embedded SVG image could not be parsed and was omitted");
+            }
+            return image;
         }
-        default_resolver(mime, data, opts)
+        let image = default_resolver(mime, data, opts);
+        if image.is_none() {
+            warn("SVG: an embedded raster image could not be decoded and was omitted");
+        }
+        image
     });
     usvg::Options {
         resources_dir: None,
@@ -405,8 +423,11 @@ fn unreadable_image(budget: &Mutex<ImageBudget>, error: &str) -> Option<usvg::Im
     let mut budget = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if budget.strict {
         budget.error.get_or_insert_with(|| error.to_owned());
-    } else if budget.warnings.is_empty() {
-        budget.warnings.push(format!("SVG: an embedded image was omitted: {error}"));
+    } else {
+        let warning = format!("SVG: an embedded image was omitted: {error}");
+        if !budget.warnings.contains(&warning) {
+            budget.warnings.push(warning);
+        }
     }
     None
 }

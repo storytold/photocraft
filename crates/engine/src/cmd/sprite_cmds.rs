@@ -262,6 +262,9 @@ fn remove_frame(s: &mut Session) -> Result<Value> {
             return Err(bad("slice keys or tag properties depend on frame ranges; remove that metadata from a copy before deleting frames"));
         }
         let at = sprite.current;
+        if at == 0 && sprite.frames.first().is_some_and(|frame| frame.metadata.iter().any(|chunk| chunk.target == MetadataTarget::Palette)) {
+            return Err(bad("palette user data belongs to frame zero; remove that metadata from a copy before deleting frame zero"));
+        }
         let removed = sprite.frames.remove(at);
         for frame in &mut sprite.frames {
             for cel in Arc::make_mut(frame).cels.values_mut() {

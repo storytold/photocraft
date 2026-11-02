@@ -61,6 +61,22 @@ fn project(layers: &mut [Layer], sprite: &Sprite, frame: usize, fmt: PixelFormat
     Ok(())
 }
 
+/// Persist projected layer opacity for ordinary/reference layers, retaining source cel opacity
+/// unless the requested value cannot be represented with it (including a zero-opacity cel).
+fn capture_opacity(opacity: f32, layer: &mut SpriteLayer, cel: Option<&mut SpriteCel>) {
+    let Some(cel) = cel else {
+        layer.opacity = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        return;
+    };
+    let expected = f32::from(layer.opacity) / 255.0 * f32::from(cel.opacity) / 255.0;
+    if (opacity - expected).abs() > 1e-6 {
+        if cel.opacity == 0 || opacity > f32::from(cel.opacity) / 255.0 {
+            cel.opacity = 255;
+        }
+        layer.opacity = (opacity.clamp(0.0, 1.0) * 255.0 * 255.0 / f32::from(cel.opacity.max(1))).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
 impl Document {
     /// Capture displayed edits before navigating/saving. Stage the sprite and its projection
     /// so a failed bounds/palette check leaves the authoritative state and display intact.
@@ -145,11 +161,8 @@ impl Document {
                 continue;
             }
             // A reference layer's surface is a scaled display cache, not its source image.
-            if base.flags & 64 != 0 {
-                if !layer.locks.all {
-                    return Err("reference layers retain their original image and precise bounds; detach a copy before unlocking or painting them".into());
-                }
-                continue;
+            if base.flags & 64 != 0 && !layer.locks.all {
+                return Err("reference layers retain their original image and precise bounds; detach a copy before unlocking or painting them".into());
             }
             let LayerContent::Raster(surface) = &layer.content else { continue };
             let source = frame.cels.get(&layer.id);
@@ -166,20 +179,16 @@ impl Document {
                 precise: None,
             });
             if source.is_none() && surface.tile_count() == 0 {
-                // An absent cel projects the layer opacity alone, so retain a global edit.
-                if (layer.opacity - f32::from(base.opacity) / 255.0).abs() > 1e-6 {
-                    base.opacity = (layer.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-                }
+                capture_opacity(layer.opacity, base, None);
                 continue;
             }
-            let expected = f32::from(base.opacity) / 255.0 * f32::from(cel.opacity) / 255.0;
-            if (layer.opacity - expected).abs() > 1e-6 {
-                // A layer Opacity edit changes the layer globally. Values outside the cel's
-                // current range can be represented by opening that cel to full opacity.
-                if cel.opacity == 0 || layer.opacity > f32::from(cel.opacity) / 255.0 {
-                    cel.opacity = 255;
+            capture_opacity(layer.opacity, base, Some(&mut cel));
+            if base.flags & 64 != 0 {
+                // Reference geometry/samples remain original; only the projected opacity changes.
+                if source.is_some_and(|old| **old != cel) {
+                    Arc::make_mut(sprite.frames.get_mut(current).ok_or("sprite frame is missing")?).cels.insert(layer.id, Arc::new(cel));
                 }
-                base.opacity = (layer.opacity.clamp(0.0, 1.0) * 255.0 * 255.0 / f32::from(cel.opacity.max(1))).round().clamp(0.0, 255.0) as u8;
+                continue;
             }
             let changed = source.is_none() || cel.pixels != *surface;
             if changed {
