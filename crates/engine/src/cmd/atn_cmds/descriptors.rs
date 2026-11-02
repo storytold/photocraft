@@ -117,7 +117,7 @@ pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
             m.insert("layer".into(), json!(n));
         }
         Target::Property(p) if p == "Bckg" => {
-            m.insert("layer".into(), json!("Background"));
+            m.insert("layer".into(), json!({"background": true}));
         }
         _ => return None,
     }
@@ -201,6 +201,7 @@ pub(super) fn layer_ref(p: &Value) -> Option<D> {
     match p.get("layer") {
         None | Some(Value::Null) => Some(target_ref("Lyr ")),
         Some(Value::String(n)) => Some(name_ref("Lyr ", n)),
+        Some(v) if *v == json!({"background": true}) => Some(D::Reference(vec![ReferenceItem::Property { class: class("Lyr "), key: code("Bckg") }])),
         _ => None,
     }
 }
@@ -245,6 +246,22 @@ pub(super) fn jstr<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 }
 
 // ------------------------------------------------------------------ colours and enums
+
+/// A recorded D50 Lab colour converted through the CMS to sRGB `#rrggbb`.
+pub(super) fn lab_color_hex(c: &Descriptor) -> Option<String> {
+    use photocraft_cms::{Builtin, TransformOptions};
+    if !c.class_id.is("LbCl") {
+        return None;
+    }
+    let (l, a, b) = (get_num(c, "Lmnc")?, get_num(c, "A   ")?, get_num(c, "B   ")?);
+    let transform = photocraft_cms::cached(Builtin::LabD50.profile(), Builtin::Srgb.profile(), TransformOptions { bpc: false, ..Default::default() }).ok()?;
+    // ICC v4 Lab device values are normalized, unlike the recorded L*, a*, b*.
+    let input = [(l / 100.0) as f32, ((a + 128.0) / 255.0) as f32, ((b + 128.0) / 255.0) as f32];
+    let mut rgb = [0.0; 3];
+    transform.convert_f32(&input, 3, &mut rgb, 3, false);
+    let [r, g, b] = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
 
 /// A Photoshop colour object as `#rrggbb`: `RGBC` (0..255), `HSBC`, `Grsc`.
 pub(super) fn color_hex(c: &Descriptor) -> Option<String> {

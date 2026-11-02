@@ -102,19 +102,29 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
 }
 
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
-/// Photoshop action refers to it), or `"merged"` (default). An unknown name is an error.
+/// Photoshop action refers to it), `{"name":"merged"}` for a literal name, `{"background":true}`,
+/// or `"merged"` (default).
+/// An unknown name or a missing requested Background is an error.
 fn source_layer(doc: &Document, p: &Value, cmd: &str) -> Result<Option<LayerId>> {
-    match p.get("layer") {
-        Some(Value::Number(n)) => Ok(n.as_u64().map(LayerId)),
-        Some(Value::String(name)) if !name.is_empty() && name != "merged" => doc
-            .walk()
-            .into_iter()
-            .rev()
-            .find(|(_, _, l)| l.name == *name)
-            .map(|(_, _, l)| Some(l.id))
-            .ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\""))),
-        _ => Ok(None),
-    }
+    let name = match p.get("layer") {
+        Some(Value::Number(n)) => return Ok(n.as_u64().map(LayerId)),
+        Some(v) if *v == serde_json::json!({"background": true}) => {
+            return doc.background().map(|l| Some(l.id)).ok_or_else(|| bad(cmd, "the source document has no Background layer"));
+        }
+        Some(Value::Object(selector)) => selector
+            .get("name")
+            .filter(|_| selector.len() == 1)
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad(cmd, "a source layer selector must be {\"background\":true} or {\"name\":\"layer name\"}"))?,
+        Some(Value::String(name)) if !name.is_empty() && name != "merged" => name,
+        _ => return Ok(None),
+    };
+    doc.walk()
+        .into_iter()
+        .rev()
+        .find(|(_, _, l)| l.name == name)
+        .map(|(_, _, l)| Some(l.id))
+        .ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\"")))
 }
 
 /// Planes of channel `r` from document `doc` (`layer` = None: merged). A composite gives one

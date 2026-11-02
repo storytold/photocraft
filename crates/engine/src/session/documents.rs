@@ -102,15 +102,13 @@ impl Session {
 
     /// Resolve a Photoshop action's offset in opening order, returning its current tab index.
     /// Tab dragging changes `docs`, but must not change which document an imported action edits.
+    /// Offsets wrap at either end; native zero keeps the active document.
     pub(crate) fn document_at_offset(&self, offset: i64) -> Result<usize> {
         let id = self.active().ok_or(EngineError::NoDocument)?.doc.id;
         let active = self.open_document_order.iter().position(|&open| open == id).ok_or(EngineError::NoDocument)?;
-        let len = self.open_document_order.len();
-        let target = i64::try_from(active).ok().and_then(|a| a.checked_add(offset)).and_then(|i| usize::try_from(i).ok());
-        let Some(id) = target.and_then(|i| self.open_document_order.get(i)) else {
-            let side = if offset < 0 { "before" } else { "after" };
-            return Err(EngineError::Other(format!("no document {} {side} the active one, which is {} of {len}", offset.unsigned_abs(), active + 1)));
-        };
+        // Widen before addition so even extreme signed offsets wrap without overflow.
+        let target = (active as i128 + i128::from(offset)).rem_euclid(self.open_document_order.len() as i128) as usize;
+        let id = self.open_document_order.get(target).ok_or(EngineError::NoDocument)?;
         self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
     }
 
