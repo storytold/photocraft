@@ -3548,3 +3548,15 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	التخطيط:
+	Open Files	الملفات المفتوحة
+	Cylindrical	أسطواني
+	Spherical	كروي
+	Collage	مجمّعة
+	Reposition	إعادة الموضع
+	Blend Images Together	مزج الصور معًا
+	Vignette Removal	إزالة التظليل الطرفي
+	Geometric Distortion Correction	تصحيح التشوه الهندسي
+	Content Aware Fill Transparent Areas	تعبئة المناطق الشفافة مع مراعاة المحتوى

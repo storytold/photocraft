@@ -3203,3 +3203,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	版面:
+	Open Files	打开的文件
+	Cylindrical	圆柱
+	Spherical	球面
+	Collage	拼贴
+	Reposition	仅调整位置
+	Blend Images Together	混合图像
+	Vignette Removal	晕影去除
+	Geometric Distortion Correction	几何扭曲校正
+	Content Aware Fill Transparent Areas	内容识别填充透明区域

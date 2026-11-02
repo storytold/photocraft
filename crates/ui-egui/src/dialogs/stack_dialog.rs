@@ -72,7 +72,13 @@ fn open_for(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
     f.insert("use".into(), json!("files"));
     f.insert("files".into(), json!([]));
     f.insert("folder".into(), json!(""));
-    if command == PHOTOMERGE {
+    reset(&mut f);
+    app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// Alt+Cancel → Reset: the options back to their defaults; the source files stay.
+pub fn reset(f: &mut Map<String, Value>) {
+    if photomerge(f) {
         f.insert("layout".into(), json!("auto"));
         for (key, _, on) in PHOTOMERGE_OPTIONS {
             f.insert(key.into(), json!(on));
@@ -81,10 +87,9 @@ fn open_for(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
         f.insert("align".into(), json!(false));
         f.insert("smartObject".into(), json!(false));
     }
-    if command == STATISTICS {
+    if statistics(f) {
         f.insert("mode".into(), json!("median"));
     }
-    app.ui.open_dialog(DialogKind::Command, f)
 }
 
 fn folder_mode(f: &Map<String, Value>) -> bool {
@@ -102,6 +107,31 @@ fn files(f: &Map<String, Value>) -> Vec<String> {
 
 fn folder(f: &Map<String, Value>) -> &str {
     f.get("folder").and_then(Value::as_str).unwrap_or("")
+}
+
+/// How often (seconds) the chosen folder is listed again, for files added or removed meanwhile.
+const RELIST_SECS: f64 = 1.0;
+
+/// The images in the chosen folder at time `now` (seconds), listed when the folder changes and
+/// then at most every `RELIST_SECS` (not every frame: a folder can be large or on a slow share),
+/// kept in the fields for `can_confirm`.
+fn folder_images(f: &mut Map<String, Value>, now: f64) -> Vec<String> {
+    let dir = folder(f).to_string();
+    let listed_at = f.get("__listedAt").and_then(Value::as_f64);
+    let stale = listed_at.is_none_or(|t| (now - t).abs() >= RELIST_SECS);
+    if stale || f.get("__listed").and_then(Value::as_str) != Some(dir.as_str()) {
+        let images = if dir.is_empty() { Vec::new() } else { photocraft_engine::file_cmds::list_images(&dir).unwrap_or_default() };
+        f.insert("__images".into(), json!(images));
+        f.insert("__listed".into(), json!(dir));
+        f.insert("__listedAt".into(), json!(now));
+    }
+    f.get("__images").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
+/// How many images `folder_images` found in the chosen folder (0 until it has listed it).
+fn folder_image_count(f: &Map<String, Value>) -> usize {
+    let listed = f.get("__listed").and_then(Value::as_str) == Some(folder(f));
+    if listed { f.get("__images").and_then(Value::as_array).map_or(0, Vec::len) } else { 0 }
 }
 
 fn selected(f: &Map<String, Value>) -> Option<usize> {
@@ -136,7 +166,7 @@ pub fn can_confirm(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
         || if open_mode(f) {
             app.session.documents().len() >= least
         } else if folder_mode(f) {
-            !folder(f).is_empty() && (!photomerge(f) || photocraft_engine::file_cmds::list_images(folder(f)).is_ok_and(|v| v.len() >= least))
+            !folder(f).is_empty() && (!photomerge(f) || folder_image_count(f) >= least)
         } else {
             files(f).len() >= least
         }
@@ -149,6 +179,8 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
         app.ask_folder(move |app, path| {
             let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
             d.fields.insert("folder".into(), json!(path));
+            // Choosing a folder again lists it again.
+            d.fields.remove("__listed");
             Ok(Value::Null)
         })
     } else {
@@ -215,7 +247,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         let shown: Vec<String> = if open_mode {
             app.session.documents().iter().map(|d| d.doc.name.clone()).collect()
         } else if folder_mode {
-            if folder(f).is_empty() { Vec::new() } else { photocraft_engine::file_cmds::list_images(folder(f)).unwrap_or_default() }
+            folder_images(f, ui.input(|i| i.time))
         } else {
             files(f)
         };
@@ -229,7 +261,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         ui.label(RichText::new(folder(f)).color(t.text_dim));
                     }
                     for (i, p) in shown.iter().enumerate() {
-                        let row = ui.add(egui::Button::selectable(!fixed && sel == Some(i), file_name(p))).on_hover_text(p.as_str());
+                        // Document names are shown as they are (one may contain a slash).
+                        let name = if open_mode { p.as_str() } else { file_name(p) };
+                        let row = ui.add(egui::Button::selectable(!fixed && sel == Some(i), name)).on_hover_text(p.as_str());
                         if row.clicked() && !fixed {
                             f.insert("selected".into(), json!(i));
                         }
@@ -323,6 +357,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         for (key, _, default) in PHOTOMERGE_OPTIONS {
             p[key] = json!(flag(f, key, default));
         }
+        // Content Aware Fill is greyed out without Blend Images Together: don't send it then.
+        p["contentAwareFill"] = json!(flag(f, "contentAwareFill", false) && flag(f, "blend", true));
         app.run(PHOTOMERGE, p)
     } else if statistics(f) {
         let mode = f.get("mode").and_then(Value::as_str).unwrap_or("median");

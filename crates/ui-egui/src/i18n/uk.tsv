@@ -4229,3 +4229,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Макет:
+	Open Files	Відкриті файли
+	Cylindrical	Циліндрична
+	Spherical	Сферична
+	Collage	Колаж
+	Reposition	Переміщення
+	Blend Images Together	Змішати зображення
+	Vignette Removal	Усунення віньєтування
+	Geometric Distortion Correction	Корекція геометричних спотворень
+	Content Aware Fill Transparent Areas	Заливка прозорих областей з урахуванням вмісту

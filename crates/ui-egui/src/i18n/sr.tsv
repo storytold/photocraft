@@ -4597,3 +4597,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Raspored:
+	Open Files	Otvorene datoteke
+	Cylindrical	Cilindrično
+	Spherical	Sferno
+	Collage	Kolaž
+	Reposition	Premeštanje
+	Blend Images Together	Stopi slike zajedno
+	Vignette Removal	Uklanjanje vinjetiranja
+	Geometric Distortion Correction	Ispravka geometrijske distorzije
+	Content Aware Fill Transparent Areas	Popuni providne oblasti prema sadržaju

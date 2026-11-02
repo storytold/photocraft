@@ -3738,3 +3738,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	레이아웃:
+	Open Files	열린 파일
+	Cylindrical	원통형
+	Spherical	구형
+	Collage	콜라주
+	Reposition	위치 변경
+	Blend Images Together	이미지 함께 혼합
+	Vignette Removal	비네팅 제거
+	Geometric Distortion Correction	기하학적 왜곡 보정
+	Content Aware Fill Transparent Areas	투명 영역 내용 인식 채우기

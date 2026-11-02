@@ -4772,3 +4772,15 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Layout:
+	Open Files	Åbne filer
+	Cylindrical	Cylindrisk
+	Spherical	Sfærisk
+	Collage	Collage
+	Reposition	Omplacer
+	Blend Images Together	Bland billeder sammen
+	Vignette Removal	Fjernelse af vignettering
+	Geometric Distortion Correction	Korrektion af geometrisk forvrængning
+	Content Aware Fill Transparent Areas	Indholdsbevidst udfyldning af gennemsigtige områder

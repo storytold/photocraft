@@ -4218,3 +4218,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Διάταξη:
+	Open Files	Ανοιχτά αρχεία
+	Cylindrical	Κυλινδρική
+	Spherical	Σφαιρική
+	Collage	Κολάζ
+	Reposition	Επανατοποθέτηση
+	Blend Images Together	Ανάμειξη εικόνων μεταξύ τους
+	Vignette Removal	Αφαίρεση βινιεταρίσματος
+	Geometric Distortion Correction	Διόρθωση γεωμετρικής παραμόρφωσης
+	Content Aware Fill Transparent Areas	Γέμισμα διαφανών περιοχών με επίγνωση περιεχομένου

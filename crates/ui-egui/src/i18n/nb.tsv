@@ -4772,3 +4772,15 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Oppsett:
+	Open Files	Åpne filer
+	Cylindrical	Sylindrisk
+	Spherical	Sfærisk
+	Collage	Collage
+	Reposition	Flytt
+	Blend Images Together	Bland bildene sammen
+	Vignette Removal	Fjerning av vignettering
+	Geometric Distortion Correction	Korrigering av geometrisk forvrengning
+	Content Aware Fill Transparent Areas	Innholdsbasert fyll av gjennomsiktige områder

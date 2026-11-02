@@ -4025,3 +4025,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Bố cục:
+	Open Files	Các tệp đang mở
+	Cylindrical	Hình trụ
+	Spherical	Hình cầu
+	Collage	Cắt ghép
+	Reposition	Đặt lại vị trí
+	Blend Images Together	Hòa trộn các ảnh
+	Vignette Removal	Loại bỏ viền tối
+	Geometric Distortion Correction	Hiệu chỉnh méo hình học
+	Content Aware Fill Transparent Areas	Tô vùng trong suốt theo nhận biết nội dung

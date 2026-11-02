@@ -597,3 +597,15 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	लेआउट:
+	Open Files	खुली फ़ाइलें
+	Cylindrical	बेलनाकार
+	Spherical	गोलाकार
+	Collage	कोलाज
+	Reposition	स्थान बदलें
+	Blend Images Together	छवियों को एक साथ मिलाएँ
+	Vignette Removal	विग्नेट हटाना
+	Geometric Distortion Correction	ज्यामितीय विकृति सुधार
+	Content Aware Fill Transparent Areas	पारदर्शी क्षेत्रों को सामग्री के अनुसार भरें

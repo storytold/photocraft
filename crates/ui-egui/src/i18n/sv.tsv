@@ -4770,3 +4770,15 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Layout:
+	Open Files	Öppna filer
+	Cylindrical	Cylindrisk
+	Spherical	Sfärisk
+	Collage	Collage
+	Reposition	Flytta
+	Blend Images Together	Blanda bilderna
+	Vignette Removal	Borttagning av vinjettering
+	Geometric Distortion Correction	Korrigering av geometrisk förvrängning
+	Content Aware Fill Transparent Areas	Innehållsmedveten fyllning av genomskinliga områden

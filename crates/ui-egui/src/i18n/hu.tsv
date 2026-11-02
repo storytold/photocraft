@@ -4438,3 +4438,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Elrendezés:
+	Open Files	Megnyitott fájlok
+	Cylindrical	Hengeres
+	Spherical	Gömbi
+	Collage	Kollázs
+	Reposition	Áthelyezés
+	Blend Images Together	Képek összemosása
+	Vignette Removal	Vignettálás eltávolítása
+	Geometric Distortion Correction	Geometriai torzítás javítása
+	Content Aware Fill Transparent Areas	Átlátszó területek tartalomérzékeny kitöltése

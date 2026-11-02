@@ -4773,3 +4773,15 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Asettelu:
+	Open Files	Avoimet tiedostot
+	Cylindrical	Sylinterimäinen
+	Spherical	Pallomainen
+	Collage	Kollaasi
+	Reposition	Sijoita uudelleen
+	Blend Images Together	Sulauta kuvat yhteen
+	Vignette Removal	Vinjetoinnin poisto
+	Geometric Distortion Correction	Geometrisen vääristymän korjaus
+	Content Aware Fill Transparent Areas	Täytä läpinäkyvät alueet sisältötietoisesti

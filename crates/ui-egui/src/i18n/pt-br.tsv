@@ -4445,3 +4445,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Layout:
+	Open Files	Arquivos abertos
+	Cylindrical	Cilíndrico
+	Spherical	Esférico
+	Collage	Colagem
+	Reposition	Reposicionar
+	Blend Images Together	Mesclar imagens
+	Vignette Removal	Remoção de vinheta
+	Geometric Distortion Correction	Correção de distorção geométrica
+	Content Aware Fill Transparent Areas	Preencher áreas transparentes com base no conteúdo

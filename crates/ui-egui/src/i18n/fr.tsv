@@ -4554,3 +4554,15 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Disposition :
+	Open Files	Fichiers ouverts
+	Cylindrical	Cylindrique
+	Spherical	Sphérique
+	Collage	Collage
+	Reposition	Repositionnement
+	Blend Images Together	Fusionner les images
+	Vignette Removal	Suppression du vignettage
+	Geometric Distortion Correction	Correction de la distorsion géométrique
+	Content Aware Fill Transparent Areas	Remplir les zones transparentes d'après le contenu

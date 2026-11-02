@@ -4252,3 +4252,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Düzen:
+	Open Files	Açık Dosyalar
+	Cylindrical	Silindirik
+	Spherical	Küresel
+	Collage	Kolaj
+	Reposition	Yeniden Konumlandır
+	Blend Images Together	Görüntüleri Birlikte Karıştır
+	Vignette Removal	Vinyet Giderme
+	Geometric Distortion Correction	Geometrik Bozulma Düzeltme
+	Content Aware Fill Transparent Areas	Saydam Alanları İçeriğe Duyarlı Doldur

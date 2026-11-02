@@ -3541,3 +3541,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Tata Letak:
+	Open Files	File Terbuka
+	Cylindrical	Silindris
+	Spherical	Sferis
+	Collage	Kolase
+	Reposition	Ubah Posisi
+	Blend Images Together	Padukan Gambar
+	Vignette Removal	Penghapusan Vignet
+	Geometric Distortion Correction	Koreksi Distorsi Geometris
+	Content Aware Fill Transparent Areas	Isi Area Transparan dengan Content-Aware

@@ -3549,3 +3549,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Layout:
+	Open Files	Geöffnete Dateien
+	Cylindrical	Zylindrisch
+	Spherical	Kugelförmig
+	Collage	Collage
+	Reposition	Repositionieren
+	Blend Images Together	Bilder zusammen überblenden
+	Vignette Removal	Vignettierung entfernen
+	Geometric Distortion Correction	Geometrische Verzerrung korrigieren
+	Content Aware Fill Transparent Areas	Transparente Bereiche inhaltsbasiert füllen

@@ -335,20 +335,40 @@ fn photomerge_params(h: &Harness<'_, PhotocraftApp>) -> Value {
     h.state().session.journal.iter().rev().find(|(id, _)| id == PHOTOMERGE).map(|(_, p)| p.clone()).unwrap()
 }
 
-/// Use: Folder enables OK only for a folder with two images or more, as the engine needs.
+/// Use: Folder enables OK only for a folder with two images or more, as the engine needs; the
+/// folder is listed once, not every frame.
 #[test]
 fn photomerge_folder_needs_two_images() {
     let (one, _) = pngs("photomerge-one", &["only.png"]);
     let (two, _) = panorama_pngs("folder-count");
-    let (mut h, _) = harness(vec![]);
+    let (mut h, _) = harness(vec![Some(FileDialogAnswer::FolderTo(two.clone()))]);
     let id = open_photomerge(h.state_mut());
     for (dir, ok) in [("", false), (one.as_str(), false), (two.as_str(), true)] {
         let d = h.state_mut().ui.dialog_mut(id).unwrap();
         d.fields.insert("use".into(), json!("folder"));
         d.fields.insert("folder".into(), json!(dir));
-        let f = d.fields.clone();
-        assert_eq!(can_confirm(h.state(), &f), ok, "{dir:?}");
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("OK").accesskit_node().is_disabled(), !ok, "{dir:?}");
     }
+    // A third image added while the dialog is open: the listing just made is kept (no listing
+    // every frame), then it shows once the listing is RELIST_SECS old, or at once with Browse….
+    let listed_now = |h: &mut Harness<'_, PhotocraftApp>| {
+        let now = h.ctx.input(|i| i.time);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__listedAt".into(), json!(now));
+    };
+    let extra = std::path::Path::new(&two).join("extra.png");
+    std::fs::copy(std::path::Path::new(&two).join("left.png"), &extra).unwrap();
+    listed_now(&mut h);
+    h.run_steps(1);
+    assert!(h.query_by_label("extra.png").is_none(), "the listing is kept between frames");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("__listedAt".into(), json!(-RELIST_SECS));
+    h.run_steps(1);
+    assert!(h.query_by_label("extra.png").is_some(), "listed again after RELIST_SECS");
+    std::fs::remove_file(&extra).unwrap();
+    listed_now(&mut h);
+    h.get_by_label("Browse…").click();
+    h.run_steps(3); // the answer lands a frame later; still under RELIST_SECS (0.25 s a step)
+    assert!(h.query_by_label("extra.png").is_none(), "Browse… lists the folder again at once");
 }
 
 /// Use: Open Files merges every open document, unsaved ones included.
@@ -357,9 +377,12 @@ fn photomerge_merges_the_open_documents() {
     let (_, paths) = panorama_pngs("open");
     let (mut h, _) = harness(vec![]);
     h.state_mut().background_jobs = false;
-    // left.png open from its file; right.png as an unsaved document.
+    // left.png open from its file; right.png as an unsaved document whose name has a slash.
     for (p, saved) in paths.iter().zip([true, false]) {
-        let doc = photocraft_io::import(file_name(p), &std::fs::read(p).unwrap()).unwrap().document;
+        let mut doc = photocraft_io::import(file_name(p), &std::fs::read(p).unwrap()).unwrap().document;
+        if !saved {
+            doc.name = "shot 1/2".into();
+        }
         h.state_mut().session.add_document(doc, saved.then(|| p.clone()));
     }
     let id = open_photomerge(h.state_mut());
@@ -367,7 +390,7 @@ fn photomerge_merges_the_open_documents() {
     assert_eq!(open_files(h.state()).len(), 1, "Add Open Files skips the unsaved document");
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("use".into(), json!("open"));
     h.run_steps(3);
-    assert!(h.query_by_label("left.png").is_some() && h.query_by_label("right.png").is_some(), "the open documents are listed");
+    assert!(h.query_by_label("left.png").is_some() && h.query_by_label("shot 1/2").is_some(), "the open documents are listed by name");
     assert!(h.get_by_label("Browse…").accesskit_node().is_disabled() && h.get_by_label("Add Open Files").accesskit_node().is_disabled());
     assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
     let r = crate::dialogs::confirm(h.state_mut(), id).unwrap();
@@ -398,4 +421,42 @@ fn photomerge_options_reach_the_engine() {
     }
     let d = &h.state().session.active().unwrap().doc;
     assert!(d.layers.iter().any(|l| l.name == "Content-Aware Fill"), "the fill layer");
+}
+
+/// Content Aware Fill is greyed out without Blend Images Together, and is not sent then.
+#[test]
+fn photomerge_does_not_fill_without_blend() {
+    let (_, paths) = panorama_pngs("no-blend-fill");
+    let (mut h, _) = harness(vec![]);
+    h.state_mut().background_jobs = false;
+    let id = open_photomerge(h.state_mut());
+    let d = h.state_mut().ui.dialog_mut(id).unwrap();
+    d.fields.insert("files".into(), json!(paths));
+    d.fields.insert("contentAwareFill".into(), json!(true));
+    d.fields.insert("blend".into(), json!(false));
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let p = photomerge_params(&h);
+    assert_eq!((&p["blend"], &p["contentAwareFill"]), (&json!(false), &json!(false)), "{p}");
+}
+
+/// Alt+Cancel → Reset puts Layout and the options back to their defaults and keeps the files.
+#[test]
+fn photomerge_alt_reset_restores_the_options() {
+    let (mut h, _) = harness(vec![]);
+    let id = open_photomerge(h.state_mut());
+    let mut f = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    let fresh = f.clone();
+    f.insert("files".into(), json!(["a.png", "b.png"]));
+    f.insert("layout".into(), json!("cylindrical"));
+    for (key, _, on) in PHOTOMERGE_OPTIONS {
+        f.insert(key.into(), json!(!on));
+    }
+    assert!(crate::dialog_alt_reset::supported(&f));
+    let ctx = h.ctx.clone();
+    crate::dialog_alt_reset::apply(h.state_mut(), &ctx, &mut f);
+    for key in ["layout", "blend", "vignetteRemoval", "geometricCorrection", "contentAwareFill"] {
+        assert_eq!(f[key], fresh[key], "{key}");
+    }
+    assert_eq!(f["files"], json!(["a.png", "b.png"]), "the source files stay");
 }

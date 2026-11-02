@@ -4715,3 +4715,15 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# Photomerge dialog (Layout, Use: Open Files, options)
+	Layout:	Макет:
+	Open Files	Открытые файлы
+	Cylindrical	Цилиндрическая
+	Spherical	Сферическая
+	Collage	Коллаж
+	Reposition	Перемещение
+	Blend Images Together	Смешать изображения
+	Vignette Removal	Удаление виньетирования
+	Geometric Distortion Correction	Коррекция геометрических искажений
+	Content Aware Fill Transparent Areas	Заливка прозрачных областей с учётом содержимого
