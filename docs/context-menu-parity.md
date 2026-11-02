@@ -1,6 +1,6 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-24 · **Change:** minor (selection tools' no-selection menu from a dated Photoshop 2025 capture: layer rows, Free Transform, Color Range…, Load Selection…, Reselect, #9152; Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
@@ -21,7 +21,7 @@ The “PhotoCraft at branch point” column records behavior before this PR. Pic
 | Tool(s) in PhotoCraft | Photoshop / desired contextual action | PhotoCraft at branch point | Priority, evidence |
 |---|---|---|---|
 | Move | Choose a layer at the point; an auto-select choice also exists in the options bar | Layers | P0; [Adobe layer movement](https://helpx.adobe.com/photoshop/using/moving-stacking-locking-layers.html); exact pop-up layout requires capture |
-| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: making a selection | Quick Selection: Picker (a brush tool, as in Photoshop); the other six: the selection menu below (#614, #738) | P1; no-selection variant still needs a dated capture |
+| Rectangular/Elliptical Marquee, Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Quick Selection, Object Selection | Active selection: the 2026 selection menu (see *Selection canvas reference* below); no selection: the captured no-selection menu (same section) | Quick Selection: Picker (a brush tool, as in Photoshop); the other six: the selection menu below (#614, #738) | P1; no-selection variant captured 2026-10-24 over a pixel layer (#9152); other layer kinds (Background, type, shape) not captured yet |
 | Crop | During crop: ratio/preset, overlay, clear/reset, commit/cancel **(inferred context placement)** | On a pending crop (canvas_tool_menu.rs `crop_rows`, #6561): the options bar's preset dropdown in its order (Ratio, W x H x Resolution, the ratios, the size presets, saved crop presets, Front Image), Clear, New/Delete Crop Preset…, the six overlays and Auto/Always/Never Show Overlay (checked as in the bar), Cancel and Crop; also outside the image while a crop is pending. The untouched default frame has no menu. Esc closes only the menu. Reset remains open (no reset of frame, rotation and ratio yet, nor the options bar's ↺). Photoshop's menu also lists Reset Crop and Rotate Crop Box ([Kost](https://jkost.com/blog/2017/05/essential-tips-for-cropping-in-photoshop-cc.html)); both missing | P1; pending crop target; item list still needs a dated Photoshop capture |
 | Eyedropper | Sample-size/source choices **(inferred)** | No tool menu | P2; [Adobe illustration uses Eyedropper](https://helpx.adobe.com/photoshop/using/panels-menus.html), but does not publish item text |
 | Ruler, Note, Count | Unit / measurement, note edit/delete, count-group operations **(inferred)** | No tool menu | P2 |
@@ -70,7 +70,7 @@ Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selecti
 | Filter | Last Filter | `filter.lastFilter` |
 | Fade | Fade… | `edit.fade` |
 
-Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
+Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected (`NO_SELECTION_MENU`), Photoshop 2025 (26.2, captured 2026-10-24 over a pixel layer with the Rectangular Marquee) shows Blending Options… · Duplicate Layer…, Delete Layer, Group from Layers… · Convert to Smart Object, Convert to Layers · Rasterize Layer, Rasterize Layer Style · Free Transform · Color Range…, Load Selection…, Reselect, and PhotoCraft now matches it (#9152; rows that don't apply grey out). No Select All row. The menu over a Background, type or shape layer was not captured.
 
 ## Panel and workspace matrix
 
@@ -100,6 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Selection tools with nothing selected: the menu now has Photoshop 2025's rows (layer rows, Free Transform, Color Range…, Load Selection…, Reselect) from a dated capture, instead of the inferred Select All / Reselect / Color Range… / Load Selection… (#9152) |
 | 2026-10-21 | minor | Crop tool menu on a pending crop (#6561) |
 | 2026-10-20 | trivial | Zoom tool menu order (#6005) |
 | 2026-10-18 | minor | Type tool menu over committed type (#7324) |
