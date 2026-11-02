@@ -255,3 +255,24 @@ fn a_style_chosen_at_a_caret_becomes_the_default() {
     assert_eq!(text(&app, id).char_runs(), before, "existing letters are unchanged");
     assert_eq!(app.ui.tool_options.type_style, "Bold");
 }
+
+/// A picked text colour expires with the foreground colour it was picked over: going back to
+/// that foreground later does not bring the pick back.
+#[test]
+fn a_picked_text_color_does_not_return_with_its_foreground() {
+    let mut app = new_app();
+    let id = selected_layer(&mut app, json!({}));
+    let original = super::hex(app.session.tools.foreground);
+    let dialog = super::open_color_picker(&mut app, [0.0; 3]);
+    app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#336699"));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(text(&app, id).char_runs()[0].style.color.to_rgba8(), [51, 102, 153, 255]);
+    super::expire_text_color(&mut app);
+    assert_eq!(super::default_style_params(&app)["color"], "#336699", "an unchanged foreground keeps the pick");
+    app.run("tools.setColors", json!({"foreground": "#ff8800"})).unwrap();
+    super::expire_text_color(&mut app);
+    app.run("tools.setColors", json!({"foreground": original})).unwrap();
+    super::expire_text_color(&mut app);
+    assert_eq!(super::default_style_params(&app)["color"], json!(original));
+    assert_eq!(app.ui.tool_options.type_color, None);
+}

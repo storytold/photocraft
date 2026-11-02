@@ -123,6 +123,14 @@ pub(super) fn default_color(app: &PhotocraftApp) -> String {
     }
 }
 
+/// Once a frame: a picked text colour expires when the foreground colour moves off the one it
+/// was picked over, so returning to that foreground does not bring the pick back.
+pub(crate) fn expire_text_color(app: &mut PhotocraftApp) {
+    if app.ui.tool_options.type_color.as_ref().is_some_and(|(_, over)| *over != hex(app.session.tools.foreground)) {
+        app.ui.tool_options.type_color = None;
+    }
+}
+
 /// OK in the Type tool's Color Picker (`color_picker_ui::TEXT_COLOR`): the colour is also the
 /// next layer's, as in Photoshop (#9938), until the foreground colour changes.
 pub fn text_color_chosen(app: &mut PhotocraftApp, color: &str) {
