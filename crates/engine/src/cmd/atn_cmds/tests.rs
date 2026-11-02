@@ -3390,3 +3390,85 @@ fn gallery_neon_glow_without_a_colour_loads_photoshops_blue() {
     let back = (events::event_for(&event).unwrap().from)(&d);
     assert_eq!(gallery_params(back), (id, p));
 }
+
+/// An effect recorded under its own event by string ID (`cutout`, as newer versions record it)
+/// maps like its 4-char code; only the effect's string IDs count as names (#10592).
+#[test]
+fn gallery_effects_recorded_by_string_id_map_like_their_codes() {
+    for (code, name, effect) in [("Ct  ", "cutout", "Ct"), ("HlfS", "halftoneScreen", "HlfS"), ("Grn ", "grain", "Grn")] {
+        let d = desc("null").with("GEfk", enm("GEft", effect));
+        let by_name = (events::event_for(&AtnEvent::name(name)).unwrap_or_else(|| panic!("{name} by name")).from)(&d);
+        let by_code = (events::event_for(&AtnEvent::Code(code.as_bytes().try_into().unwrap())).unwrap().from)(&d);
+        assert_eq!(gallery_params(by_name), gallery_params(by_code), "{name}");
+    }
+    assert!(events::event_for(&AtnEvent::name("Ct  ")).is_none());
+    assert!(events::event_for(&AtnEvent::Code(*b"MscT")).is_some());
+}
+
+/// A step recorded as the effect's own event (by code or string ID) loads, plays and saves back
+/// as that event with its panel name and descriptor unchanged; a `GEfc` step stays `GEfc`
+/// (#10592).
+#[test]
+fn gallery_effect_steps_save_back_as_the_event_they_were_recorded_as() {
+    let edges = desc("null").with("GEfk", enm("GEft", "AccE")).with("EdgW", D::Integer(2)).with("EdgB", D::Integer(38)).with("Smth", D::Integer(5));
+    let cutout = desc("null").with("GEfk", enm("GEft", "Ct")).with("NmbL", D::Integer(6)).with("EdgS", D::Integer(4)).with("EdgF", D::Integer(2));
+    let gallery = desc("null").with("GEfk", enm("GEft", "AccE")).with("EdgW", D::Integer(3)).with("EdgB", D::Integer(20)).with("Smth", D::Integer(7));
+    let source = vec![item("AccE", "Accented Edges", Some(edges)), item("cutout", "Cutout", Some(cutout)), item("GEfc", "Filter Gallery", Some(gallery))];
+    let data = set_of("S", vec![("A", source.clone())]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, ["filter.gallery.accentedEdges", "filter.gallery.cutout", "filter.gallery.accentedEdges"]);
+
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 3, "{played}");
+    // The remembered event is for Save Actions only: playback strips it, so the journal (Last
+    // Filter) and the smart filters (`.pcraft` saves) never carry it.
+    let gallery: Vec<&Value> = s.journal.iter().filter(|(id, _)| id.starts_with("filter.gallery.")).map(|(_, p)| p).collect();
+    assert_eq!(gallery.len(), 3, "{:?}", s.journal);
+    assert!(gallery.iter().all(|p| p.get("_atnEvent").is_none()), "{gallery:?}");
+    let d = s.active().unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not smart") };
+    assert_eq!(sm.smart_filters.len(), 3);
+    assert!(sm.smart_filters.iter().all(|f| f.params.get("_atnEvent").is_none()), "{:?}", sm.smart_filters);
+
+    let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let file = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let got: Vec<_> = file.actions[0].items.iter().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone())).collect();
+    let want: Vec<_> = source.iter().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone())).collect();
+    assert_eq!(got, want);
+
+    // A step made in PhotoCraft keeps saving as `GEfc`, and so does a forged event param.
+    assert_eq!(export_item("filter.gallery.cutout", &json!({}), "S").unwrap().event, AtnEvent::Code(*b"GEfc"));
+    let forged = json!({"_atnEvent": {"event": "GsnB", "eventKind": "code", "name": "Gaussian Blur"}});
+    assert_eq!(export_item("filter.gallery.cutout", &forged, "S").unwrap().event, AtnEvent::Code(*b"GEfc"));
+    // Another effect's event (stale or forged) does not relabel the step either.
+    for (event, kind) in [("AccE", "code"), ("accentedEdges", "name")] {
+        let other = json!({"_atnEvent": {"event": event, "eventKind": kind, "name": "Accented Edges"}});
+        let item = export_item("filter.gallery.cutout", &other, "S").unwrap();
+        assert_eq!((item.event, item.dictionary), (AtnEvent::Code(*b"GEfc"), b"Filter Gallery".to_vec()), "{event}");
+    }
+    let own = json!({"_atnEvent": {"event": "cutout", "eventKind": "name", "name": "Cutout"}});
+    assert_eq!(export_item("filter.gallery.cutout", &own, "S").unwrap().event, AtnEvent::name("cutout"));
+}
+
+/// Only a missing key takes Photoshop's default: a key there with the wrong type or a non-finite
+/// number keeps the Photoshop step instead of playing a default (#10592).
+#[test]
+fn gallery_effect_keys_with_the_wrong_type_keep_the_step() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(gallery_step("GEfc", "Txtz", desc("null").with("InvT", D::Integer(1)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", D::Double(f64::NAN)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", D::Double(f64::INFINITY)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", text("9")))));
+    assert!(kept(gallery_step("GEfc", "BsRl", desc("null").with("LghD", D::Integer(3)))));
+    assert!(kept(gallery_step("GEfc", "NGlw", desc("null").with("Clr ", D::Integer(3)))));
+    // Missing keys still take the defaults.
+    assert_eq!(gallery_params(gallery_step("GEfc", "Txtz", desc("null"))).1["invert"], false);
+    assert_eq!(gallery_params(gallery_step("GEfc", "AccE", desc("null").with("EdgB", D::Integer(9)))).1["edgeWidth"], 2);
+}

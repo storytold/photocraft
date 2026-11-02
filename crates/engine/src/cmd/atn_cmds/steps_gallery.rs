@@ -3,11 +3,11 @@
 //! the keys, limits and defaults Photoshop measures (`docs/atn.md`, Group A); a stack of several
 //! effects stays a Photoshop step.
 
-use super::descriptors::{color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, trimmed};
+use super::descriptors::{color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, jstr, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
-use super::{D, Descriptor, Map, Value};
+use super::{AtnEvent, AtnItem, D, Descriptor, Map, Value, json};
 use photocraft_algo::{GalleryEffect, GalleryFilter};
 
 /// One key of an effect, in recorded order.
@@ -523,10 +523,108 @@ pub(super) const GALLERY_IDS: &[&str] = &[
     "filter.gallery.grain",
 ];
 
-/// Whether `code` is a Filter Gallery effect's id. The reference has each effect recorded as
-/// its own event too (Filter › Artistic › Cutout…), carrying the same `GEfk` and settings.
-pub(super) fn is_effect(code: &str) -> bool {
-    GALLERY.iter().any(|(c, _, _)| *c == code.trim_end())
+/// Each effect's own event by string ID, the form newer Photoshop versions record it in
+/// (`docs/atn.md`, Group A). Mosaic Tiles (`MscT`) has none.
+const EVENT_NAMES: &[(&str, &str)] = &[
+    ("AccE", "accentedEdges"),
+    ("AngS", "angledStrokes"),
+    ("BsRl", "basRelief"),
+    ("ChlC", "chalkCharcoal"),
+    ("Chrc", "charcoal"),
+    ("Chrm", "chrome"),
+    ("ClrP", "coloredPencil"),
+    ("CntC", "conteCrayon"),
+    ("Crql", "craquelure"),
+    ("Crsh", "crosshatch"),
+    ("Ct", "cutout"),
+    ("DrkS", "darkStrokes"),
+    ("DfsG", "diffuseGlow"),
+    ("DryB", "dryBrush"),
+    ("FlmG", "filmGrain"),
+    ("Frsc", "fresco"),
+    ("Gls", "glass"),
+    ("GlwE", "glowingEdges"),
+    ("GraP", "graphicPen"),
+    ("HlfS", "halftoneScreen"),
+    ("InkO", "inkOutlines"),
+    ("NGlw", "neonGlow"),
+    ("NtPr", "notePaper"),
+    ("OcnR", "oceanRipple"),
+    ("PntD", "paintDaubs"),
+    ("PltK", "paletteKnife"),
+    ("Ptch", "patchwork"),
+    ("Phtc", "photocopy"),
+    ("Plst", "plaster"),
+    ("PlsW", "plasticWrap"),
+    ("PstE", "posterEdges"),
+    ("Rtcl", "reticulation"),
+    ("RghP", "roughPastels"),
+    ("SmdS", "smudgeStick"),
+    ("Spt", "spatter"),
+    ("Spng", "sponge"),
+    ("SprS", "sprayedStrokes"),
+    ("StnG", "stainedGlass"),
+    ("Stmp", "stamp"),
+    ("Smie", "sumie"),
+    ("Txtz", "texturizer"),
+    ("TrnE", "tornEdges"),
+    ("Undr", "underpainting"),
+    ("WtrP", "waterPaper"),
+    ("Wtrc", "watercolor"),
+    ("Grn", "grain"),
+];
+
+/// Whether `event` is a Filter Gallery effect's own event: its 4-char code, or its string ID.
+/// The reference has each effect recorded as its own event too (Filter › Artistic › Cutout…),
+/// carrying the same `GEfk` and settings.
+pub(super) fn is_effect(event: &AtnEvent) -> bool {
+    effect_command(event).is_some()
+}
+
+/// The command of the effect whose own event `event` is (`AccE` or `accentedEdges` →
+/// `filter.gallery.accentedEdges`).
+fn effect_command(event: &AtnEvent) -> Option<&'static str> {
+    let id = event.id();
+    let code = match event {
+        AtnEvent::Code(_) => GALLERY.iter().map(|(c, _, _)| *c).find(|c| *c == id.trim_end()),
+        AtnEvent::Name(_) => EVENT_NAMES.iter().find(|(_, n)| *n == id).map(|(c, _)| *c),
+    }?;
+    GALLERY.iter().find(|(c, _, _)| *c == code).map(|(_, cmd, _)| *cmd)
+}
+
+/// The hidden param a step loaded from an effect's own event carries, so it saves back as that
+/// event (and panel name) rather than as a `GEfc` Filter Gallery step. Playback strips it
+/// (`actions_cmds::playback_params`), so the command, the journal and smart filters never see it.
+pub(crate) const RECORDED_EVENT: &str = "_atnEvent";
+
+/// Remember the event of a step loaded from an effect's own event (`AccE`, `accentedEdges`).
+/// A `GEfc` step carries nothing and saves as `GEfc`, as does a step made in PhotoCraft.
+pub(super) fn remember_event(item: &AtnItem, steps: &mut [(String, Value)]) {
+    if !is_effect(&item.event) {
+        return;
+    }
+    let [(id, Value::Object(p))] = steps else { return };
+    if effect_command(&item.event) != Some(id.as_str()) {
+        return;
+    }
+    let kind = match item.event {
+        AtnEvent::Code(_) => "code",
+        AtnEvent::Name(_) => "name",
+    };
+    p.insert(RECORDED_EVENT.into(), json!({"event": item.event.id(), "eventKind": kind, "name": item.dictionary()}));
+}
+
+/// The event and panel name a step of command `id` remembered by [`remember_event`] saves as;
+/// `None` (save as `GEfc`) when it has none or it is not the own event of `id`'s effect.
+pub(super) fn recorded_event(id: &str, params: &Value) -> Option<(AtnEvent, String)> {
+    let r = params.get(RECORDED_EVENT)?;
+    let event = jstr(r, "event")?;
+    let event = match jstr(r, "eventKind")? {
+        "code" => AtnEvent::Code(event.as_bytes().try_into().ok()?),
+        "name" => AtnEvent::name(event),
+        _ => return None,
+    };
+    (effect_command(&event) == Some(id)).then(|| (event, jstr(r, "name").unwrap_or("").to_string()))
 }
 
 /// A Filter Gallery step: the effect `GEfk` names, every key clamped or looked up, Photoshop's
@@ -544,14 +642,22 @@ fn effect_step(d: &Descriptor) -> Option<Mapped> {
     }
     let mut p = Map::new();
     for k in keys.iter() {
+        // Only a missing key takes Photoshop's default: a key that is there with the wrong type
+        // or a non-finite number keeps the step (`docs/atn.md`) rather than playing a default.
+        let present = d.get(k.key()).is_some();
         let v = match k {
-            G::Int(key, _, min, max, default) => Value::from(get_num(d, key).map_or(*default, |n| n.round().clamp(f64::from(*min), f64::from(*max)) as i32)),
-            G::Enum(key, _, table, default) => Value::from(lookup(table, &get_enum(d, key).unwrap_or_else(|| (*default).to_string()))?),
-            G::Bool(key, _, default) => Value::from(get_bool(d, key).unwrap_or(*default)),
-            G::Color(key, _, default) => match get_obj(d, key) {
-                Some(c) => Value::from(color_hex(c)?),
-                None => Value::from(*default),
-            },
+            G::Int(key, _, min, max, default) => {
+                Value::from(if present { get_num(d, key)?.round().clamp(f64::from(*min), f64::from(*max)) as i32 } else { *default })
+            }
+            G::Enum(key, _, table, default) => Value::from(lookup(table, &if present { get_enum(d, key)? } else { (*default).to_string() })?),
+            G::Bool(key, _, default) => Value::from(if present { get_bool(d, key)? } else { *default }),
+            G::Color(key, _, default) => {
+                if present {
+                    Value::from(color_hex(get_obj(d, key)?)?)
+                } else {
+                    Value::from(*default)
+                }
+            }
         };
         p.insert(k.param().into(), v);
     }
@@ -573,7 +679,7 @@ fn default_color(id: &str) -> Option<Descriptor> {
 /// without a Photoshop code refuses the step.
 pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
     let (code, _, keys) = GALLERY.iter().find(|(_, cmd, _)| *cmd == id)?;
-    let allowed: Vec<&str> = keys.iter().map(G::param).chain(["target"]).collect();
+    let allowed: Vec<&str> = keys.iter().map(G::param).chain(["target", RECORDED_EVENT]).collect();
     if !pixel_target(p) || !p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str()))) {
         return None;
     }

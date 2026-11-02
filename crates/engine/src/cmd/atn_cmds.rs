@@ -57,6 +57,7 @@ use fields::Mapped;
 use files::{load, save};
 #[cfg(test)]
 use steps_doc::crop_from;
+pub(crate) use steps_gallery::RECORDED_EVENT;
 #[cfg(test)]
 use steps_image::{apply_image_from, transform_to};
 #[cfg(test)]
