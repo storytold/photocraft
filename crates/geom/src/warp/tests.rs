@@ -612,3 +612,42 @@ fn splitting_extreme_finite_control_points_keeps_mesh_valid_and_shape() {
         }
     }
 }
+
+#[test]
+fn removing_split_with_unrepresentable_handles_preserves_mesh() {
+    for vertical in [false, true] {
+        let mut mesh = BezierMesh::identity(B, 2, 2);
+        let nx = mesh.nx();
+        for j in 0..mesh.ny() {
+            for i in 0..nx {
+                let k = if vertical { j } else { i };
+                mesh.points[j * nx + i][usize::from(vertical)] = match k {
+                    0 => f64::MAX,
+                    1 => -f64::MAX,
+                    _ => 0.0,
+                };
+            }
+        }
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.remove_split_v(1) } else { mesh.remove_split_u(1) };
+        assert!(!accepted, "axis {vertical} accepted non-finite extrapolated handles");
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn removing_tiny_split_preserves_mesh_when_extrapolation_overflows() {
+    for vertical in [false, true] {
+        let mut mesh = if vertical { BezierMesh::identity(B, 1, 3) } else { BezierMesh::identity(B, 3, 1) };
+        let knots = if vertical { &mut mesh.vs } else { &mut mesh.us };
+        *knots = vec![0.0, f64::MIN_POSITIVE / 16.0, 0.5, 1.0];
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.remove_split_v(1) } else { mesh.remove_split_u(1) };
+        assert!(!accepted);
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
