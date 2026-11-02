@@ -2114,22 +2114,29 @@ fn layer_effects_move_with_a_layer_overhanging_the_canvas() {
     // (#761): its pixels overhang the edge, yet each move reuses the maps instead of rebuilding
     // them, and the result still matches the CPU.
     let Some(mut g) = gpu() else { return };
-    let mut d = fx_doc(160, 120, SampleType::U8);
-    let mut l = noise_layer("full", PixelFormat::RGBA8, Rect::new(-6, -4, 166, 124), 3, 0.6);
-    l.surface_mut().unwrap().fill_rect(Rect::new(40, 30, 90, 70), &[0.0, 0.0, 0.0, 0.0]);
-    l.effects.items = vec![
-        Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 120.0, 6.0, 5.0, 0.0)),
-        Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
-    ];
-    d.layers.push(l);
-    let first = fx_check(&mut g, &d, "initial");
-    assert!(first.fx_programs > 0);
-    for (dx, dy) in [(3, 2), (5, -4), (-9, 7)] {
-        let s = d.layers[1].surface().unwrap();
-        let moved = s.translated(dx, dy, s.content_bounds());
-        *d.layers[1].surface_mut().unwrap() = moved;
-        let s = fx_check(&mut g, &d, &format!("moved by ({dx}, {dy})"));
-        assert_eq!(s.fx_programs, 0, "moved by ({dx}, {dy}): {s:?}");
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = fx_doc(160, 300, depth);
+        let mut l = noise_layer("full", d.pixel_format(), Rect::new(-6, -4, 166, 304), 3, 0.6);
+        l.surface_mut().unwrap().fill_rect(Rect::new(40, 30, 90, 70), &[0.0, 0.0, 0.0, 0.0]);
+        l.effects.items = vec![
+            Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 120.0, 6.0, 5.0, 0.0)),
+            Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+        ];
+        d.layers.push(l);
+        let first = fx_check(&mut g, &d, "initial");
+        assert!(first.fx_programs > 0);
+        for (dx, dy) in [(3, 2), (5, -4), (-9, 7)] {
+            let s = d.layers[1].surface().unwrap();
+            let moved = s.translated(dx, dy, s.content_bounds());
+            *d.layers[1].surface_mut().unwrap() = moved;
+            let s = fx_check(&mut g, &d, &format!("moved by ({dx}, {dy})"));
+            assert_eq!(s.fx_programs, 0, "moved by ({dx}, {dy}): {s:?}");
+        }
+        let original = d.layers[1].clone();
+        d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(45, 250, 50, 255), &[0.1, 0.2, 0.3, 0.1]);
+        fx_check(&mut g, &d, "edit after move");
+        d.layers[1] = original;
+        fx_check(&mut g, &d, "restore moved pixels");
     }
 }
 
@@ -3415,4 +3422,51 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
+}
+
+/// Cached text/Smart Object effect coverage follows moved, edited and restored display pixels.
+#[test]
+fn cached_layer_effects_follow_display_cache_changes() {
+    use photocraft_doc::{SmartObject, SmartSource};
+    let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut g) = gpu() else { return };
+    for depth in SampleType::ALL {
+        for text in [true, false] {
+            let mut d = fx_doc(160, 300, depth);
+            let src = noise_layer("cached", d.pixel_format(), Rect::new(-6, -4, 166, 304), 3, 0.6);
+            let content = if text {
+                LayerContent::Text(photocraft_doc::TextLayer { cache: src.surface().cloned(), ..Default::default() })
+            } else {
+                LayerContent::Smart(SmartObject::new(
+                    SmartSource::Embedded { file_name: "synthetic.png".into(), bytes: std::sync::Arc::new(Vec::new()) },
+                    photocraft_geom::Affine::IDENTITY,
+                    src.surface().cloned(),
+                ))
+            };
+            let mut layer = Layer::new("cached", content);
+            layer.effects.items = vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 120.0, 6.0, 5.0, 0.0))];
+            d.layers.push(layer);
+            fx_check(&mut g, &d, "initial cache");
+            let original = d.layers[1].content.clone();
+            let s = d.layers[1].surface().unwrap();
+            let moved = s.translated(5, -3, s.content_bounds());
+            match &mut d.layers[1].content {
+                LayerContent::Text(t) => t.cache = Some(moved),
+                LayerContent::Smart(s) => s.cache = Some(moved),
+                _ => unreachable!(),
+            }
+            let stats = fx_check(&mut g, &d, "pure cache translation");
+            assert_eq!((stats.fx_shapes, stats.fx_programs), (0, 0), "{depth:?} text={text}: {stats:?}");
+            let edited = match &mut d.layers[1].content {
+                LayerContent::Text(t) => t.cache.as_mut().unwrap(),
+                LayerContent::Smart(s) => s.cache.as_mut().unwrap(),
+                _ => unreachable!(),
+            };
+            edited.fill_rect(Rect::new(50, 180, 55, 190), &[0.2, 0.3, 0.4, 0.05]);
+            let stats = fx_check(&mut g, &d, "edited cache");
+            assert!(stats.fx_shapes > 0, "a cache edit must update coverage: {stats:?}");
+            d.layers[1].content = original;
+            fx_check(&mut g, &d, "restored cache");
+        }
+    }
 }
