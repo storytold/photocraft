@@ -470,3 +470,42 @@ fn empty_comp_list_index_is_noop() {
         assert!(s.execute("layerComp.apply", params).is_err());
     }
 }
+
+/// A group-end index names no layer, so a command acting on a layer fails and changes nothing
+/// rather than falling back to the selected layers.
+#[test]
+fn group_end_index_never_targets_the_selection() {
+    let mut s = scene(true);
+    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
+    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let doc = s.active().unwrap().doc.clone();
+    assert!(s.execute("layer.translate", json!({"layer":{"index":3},"dx":1,"dy":0})).is_err());
+    let offset = Descriptor::new("Ofst").with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: 1.0 }).with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: 0.0 });
+    let action =
+        imported(AtnEvent::Code(*b"move"), Descriptor::new("null").with("null", D::Reference(vec![index("Lyr ", 3)])).with("T   ", D::Descriptor(offset)));
+    s.actions.list = vec![action];
+    let result = s.execute("actions.play", json!({"action":"Select"})).unwrap();
+    assert!(result.get("failed").is_some(), "{result}");
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+    assert_eq!(s.active().unwrap().doc, doc);
+}
+
+/// A relative ordinal is resolved once: the precondition checked on the named layer sees that
+/// layer, not the one past it (here a type layer that would refuse a colour-channel edit).
+#[test]
+fn forward_ordinal_precondition_checks_the_resolved_layer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4,"background":"transparent"})).unwrap();
+    s.execute("layer.renameLayer", json!({"name":"A"})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"B"})).unwrap();
+    s.execute("edit.fill", json!({"contents":"color","color":"#000000"})).unwrap();
+    s.execute("type.create", json!({"text":"C","size":2})).unwrap();
+    s.execute("layer.renameLayer", json!({"name":"C"})).unwrap();
+    s.execute("layer.select", json!({"layer":layer(&s,"A")})).unwrap();
+    s.execute("channel.target", json!({"colors":[0]})).unwrap();
+    let b = photocraft_doc::LayerId(layer(&s, "B"));
+    let before = s.active().unwrap().doc.layer(b).cloned();
+    s.execute("edit.clear", json!({"layer":{"ordinal":"Frwr"}})).unwrap();
+    assert_ne!(s.active().unwrap().doc.layer(b).cloned(), before);
+}

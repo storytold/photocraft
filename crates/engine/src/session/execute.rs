@@ -189,7 +189,13 @@ impl Session {
         let d = self.active_mut()?;
         d.doc.layer(target)?;
         let active = d.active_layer.replace(target);
-        let r = self.precondition(spec, params);
+        // The checks see the resolved id: a relative ordinal (`Frwr`, `Bckw`) would otherwise
+        // resolve again from the swapped-in active layer and land one layer further.
+        let mut resolved = params.clone();
+        if let Some(fields) = resolved.as_object_mut() {
+            fields.insert("layer".into(), Value::from(target.0));
+        }
+        let r = self.precondition(spec, &resolved);
         if let Some(d) = self.active_mut() {
             d.active_layer = active;
         }

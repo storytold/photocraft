@@ -21,7 +21,10 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
                 .map(|(_, _, l)| Some(l.id))
                 .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
         }
-        Some(v @ Value::Object(fields)) if fields.contains_key("index") || fields.contains_key("ordinal") => super::recorded_layer(s, v),
+        // A group end is no layer: fail rather than fall back to the selection.
+        Some(v @ Value::Object(fields)) if fields.contains_key("index") || fields.contains_key("ordinal") => {
+            super::recorded_layer(s, v)?.map(Some).ok_or_else(|| EngineError::Other("a group end is not a layer".into()))
+        }
         Some(Value::Null) | None => Ok(None),
         Some(other) => Err(EngineError::Other(format!("`layer` must be an id or a name, not {other}"))),
     }
@@ -52,7 +55,6 @@ pub(crate) fn layer_listing(doc: &Document) -> String {
 pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
     match explicit_layer(s, p)? {
         Some(id) => Ok(id),
-        None if p.get("layer").is_some_and(Value::is_object) => Err(EngineError::Other("a group end is not a layer".into())),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
     }
 }
