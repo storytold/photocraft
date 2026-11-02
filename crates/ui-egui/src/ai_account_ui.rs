@@ -36,7 +36,7 @@ pub fn opened(app: &mut PhotocraftApp) {
     // deterministic account service; the actual desktop uses background_jobs.
     if app.background_jobs || app.session.ai_account.configured() {
         if app.session.ai_account.pending() {
-            app.ui.ai_account.refresh_requested = true;
+            app.ui.ai_account.refresh_requested = app.session.ai_account.snapshot.state == State::Cancelling;
             action(app, "status");
         } else {
             action(app, "refresh");

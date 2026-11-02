@@ -956,6 +956,12 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 /// that touches files itself, and a valid guide layout.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id)
+        && crate::ai_account_ui::owns(&d.fields)
+        && d.fields.get("prompt").and_then(Value::as_str).is_some_and(|prompt| prompt.len() > 16_000)
+    {
+        return Err("prompt must contain 1–16000 bytes of text".into());
+    }
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id)
         && !crate::ai_account_ui::can_confirm(app, &d.fields)
     {
         return Err("sign in with ChatGPT and enter a prompt first".into());

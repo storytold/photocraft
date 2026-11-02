@@ -36,12 +36,14 @@ fn live_codex_canvas_returns_an_undoable_layer() {
     assert!(yellow[0] > 0.6 && yellow[1] > 0.6 && yellow[2] < 0.4, "left square should be yellow: {yellow:?}");
     assert!(blue[0] < 0.4 && blue[1] < 0.4 && blue[2] > 0.6, "right square should remain blue: {blue:?}");
     let output = photocraft_io::export(doc, "png", &Default::default()).unwrap();
+    let generated_id = doc.layers.last().unwrap().id;
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ai-codex-live-result.png");
     write_evidence(&path, &output.bytes);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), original.layers.len());
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), original.layers.len() + 1);
+    assert_eq!(s.active().unwrap().doc.layers.last().unwrap().id, generated_id);
     println!("Live canvas -> Codex -> layer -> undo/redo passed: {result}; image: {}", path.display());
 }
 

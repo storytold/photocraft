@@ -27,9 +27,28 @@
 //! `--hover-at X,Y` leaves the pointer there without a click, for what a tool shows under it (the
 //! brush outline, the Clone Source overlay).
 
+use photocraft_engine::cmd::ai_account_cmds::State;
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::Value;
+
+/// Reject invalid fixture options before opening documents or executing scripts with side effects.
+fn account_fixture(args: &[String]) -> Result<Option<State>, &'static str> {
+    if !args.iter().any(|a| a == "--codex-account-fixture") {
+        return Ok(None);
+    }
+    if args.iter().any(|a| a == "--background-jobs") {
+        return Err("--codex-account-fixture cannot be combined with --background-jobs");
+    }
+    match arg(args, "--codex-account-fixture").as_deref() {
+        Some("connected") => Ok(Some(State::Connected)),
+        Some("signedOut") => Ok(Some(State::SignedOut)),
+        Some("unsupported") => Ok(Some(State::Unsupported)),
+        Some("failed") => Ok(Some(State::Failed)),
+        Some("cancelled") => Ok(Some(State::Cancelled)),
+        _ => Err("unsupported account fixture"),
+    }
+}
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -37,6 +56,13 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let fixture = match account_fixture(&args) {
+        Ok(state) => state,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
     let out = arg(&args, "--out").unwrap_or_else(|| "snapshot.png".into());
     let (w, h) = arg(&args, "--size")
         .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
@@ -72,10 +98,6 @@ fn main() {
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
     let background_jobs = args.iter().any(|a| a == "--background-jobs");
-    if background_jobs && args.iter().any(|a| a == "--codex-account-fixture") {
-        eprintln!("--codex-account-fixture cannot be combined with --background-jobs");
-        std::process::exit(2);
-    }
     let custom_titlebar = args.iter().any(|a| a == "--custom-titlebar");
     // `--settle-ms N`: keep rendering frames for N ms before the capture (e.g. mid-job).
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -166,19 +188,8 @@ fn main() {
             eprintln!("{:>8.1} ms  {label}", t0.elapsed().as_secs_f64() * 1000.0);
         }
     }
-    if let Some(state) = arg(&args, "--codex-account-fixture") {
-        use photocraft_engine::cmd::ai_account_cmds::{Snapshot, State};
-        let state = match state.as_str() {
-            "connected" => State::Connected,
-            "signedOut" => State::SignedOut,
-            "unsupported" => State::Unsupported,
-            "failed" => State::Failed,
-            "cancelled" => State::Cancelled,
-            _ => {
-                eprintln!("unsupported account fixture");
-                std::process::exit(2);
-            }
-        };
+    if let Some(state) = fixture {
+        use photocraft_engine::cmd::ai_account_cmds::Snapshot;
         let status = Snapshot {
             plan: (state == State::Connected).then(|| "plus".into()),
             message: (state == State::Failed).then(|| "Synthetic connection error".into()),
