@@ -244,6 +244,17 @@ mod tests {
                 assert_eq!(round_index(v, n), want, "round_index({v:e}, {n})");
             }
         }
+        // Every value one and two steps either side of an integer the LIC coordinates can reach,
+        // and the same either side of each half-way point: `round` breaks ties away from zero, and
+        // a fast round built as `(v + 0.5).floor()` gets those wrong.
+        for k in -40i32..=2100 {
+            let f = k as f32;
+            let half = f + 0.5;
+            for v in [f.next_down().next_down(), f.next_down(), f, f.next_up(), half.next_down(), half, half.next_up()] {
+                assert_eq!(round_i32(v), v.round() as i32, "round_i32({v}) near {k}");
+                assert_eq!(round_i32(-v), (-v).round() as i32, "round_i32({}) near {k}", -v);
+            }
+        }
         assert_eq!(round_i32(f32::NAN), f32::NAN.round() as i32);
         for n in [1usize, 8] {
             assert_eq!(round_index(f32::NEG_INFINITY, n), (f32::NEG_INFINITY.clamp(0.0, (n - 1) as f32)) as usize);
