@@ -45,11 +45,6 @@ impl PhotocraftApp {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
-        // A gradient pending on a layer mask is painted before a command that edits the document,
-        // as Photoshop applies it first (#10703).
-        if self.run_depth == 1 {
-            crate::gradient_ui::mask::before_command(self, id);
-        }
         if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
             self.ui.symmetry_transform = None;
         }
@@ -58,6 +53,12 @@ impl PhotocraftApp {
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
             authorize(id, &params)?;
+        }
+        // A gradient pending on a layer mask is painted before a command that edits the document,
+        // as Photoshop applies it first (#10703) — after the automation gate, so a command that
+        // is refused there changes nothing at all (#10703 review).
+        if self.run_depth == 1 {
+            crate::gradient_ui::mask::before_command(self, id);
         }
         // A new layer while Free Transform is open applies the transform first, as Photoshop does
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a

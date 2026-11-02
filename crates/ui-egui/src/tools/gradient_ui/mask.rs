@@ -193,9 +193,15 @@ pub(crate) fn cancel(app: &mut PhotocraftApp) {
     app.gradient.mask.preview = None;
 }
 
+/// Undo and Redo step the history instead of editing on top of it: painting the pending gradient
+/// first would put it in the step being undone, and the undo would swallow it (#10703 review).
+const STEPPING: [&str; 2] = ["edit.undo", "edit.redo"];
+
 /// Before command `id` runs: paints a pending gradient first when the command edits the document.
+/// Recursion is not a worry — [`commit`] runs `paint.gradient` one level down, where the caller
+/// no longer asks — so the Classic Gradient commits the pending one before laying its own.
 pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str) {
-    if app.gradient.mask.pending.is_some() && id != "paint.gradient" && COMMITTING.iter().any(|p| id.starts_with(p)) {
+    if app.gradient.mask.pending.is_some() && !STEPPING.contains(&id) && COMMITTING.iter().any(|p| id.starts_with(p)) {
         commit(app);
     }
 }

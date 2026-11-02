@@ -527,3 +527,42 @@ fn the_classic_gradient_paints_a_mask_on_release() {
     assert_eq!(mask::pending(&app), None);
     assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05);
 }
+
+/// #10703 review: three things must not paint the pending gradient. Undo and Redo step the
+/// history, so painting first would put it in the step being undone; a command the automation
+/// gate refuses changes nothing at all; and the Classic Gradient lays its own only after the
+/// pending one is down.
+#[test]
+fn undo_an_authorization_refusal_and_classic_treat_the_pending_gradient_right() {
+    // Undo through the app (not the session) leaves the pending gradient alone and does not
+    // paint it into the step it is undoing.
+    let (mut app, layer) = app_on_mask();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    let filled = app.session.active().unwrap().revision;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.active().unwrap().revision != filled, "the undo happened");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient still waits, unpainted");
+
+    // A command the automation gate refuses paints nothing either.
+    let (mut app, layer2) = app_on_mask();
+    app.services.automation_command =
+        Some(Box::new(|id: &str, _: &serde_json::Value| if id == "layer.new.layer" { Err("not allowed".to_string()) } else { Ok(()) }));
+    app.automation_input = true;
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    assert!(app.run("layer.new.layer", json!({})).is_err(), "the gate refuses it");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "nothing was painted for a refused command");
+    assert_eq!(app.session.active().unwrap().revision, before);
+    app.automation_input = false;
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer2, 150), 1.0, "the mask is untouched");
+
+    // The Classic Gradient paints the pending one first, then its own.
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    app.run("paint.gradient", json!({"from": [150, 60], "to": [190, 60], "target": "mask"})).unwrap();
+    assert_eq!(mask::pending(&app), None, "the pending one went down first");
+    assert_eq!(app.session.active().unwrap().revision, before + 2, "two steps: the pending gradient, then this one");
+    let _ = layer;
+}
