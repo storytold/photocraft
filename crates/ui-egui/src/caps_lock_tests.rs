@@ -172,7 +172,8 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         let precise = fp(&h);
         assert_ne!(standard, precise, "{tool:?}: Standard and Precise differ");
         assert_eq!(precise.icon, CursorIcon::Crosshair, "{tool:?}: Precise cursor is crosshair");
-        assert!(precise.image.is_none(), "{tool:?}: Precise cursor has no native bitmap");
+        assert!(precise.image.is_some(), "{tool:?}: Precise cursor uses the native crosshair bitmap");
+        assert_ne!(precise.image, standard.image, "{tool:?}: Precise bitmap differs from the standard tool icon");
 
         caps(&mut h, true);
         assert_eq!(fp(&h), standard, "{tool:?}: caps lock turns the precise crosshair back into the icon");
