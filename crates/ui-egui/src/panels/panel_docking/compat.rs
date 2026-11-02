@@ -92,7 +92,6 @@ pub(super) fn compact(layout: &Layout<String>, settings: &PanelPresentation, pan
         .map_or_else(|| members(layout, panel).iter().all(|id| settings.compact.contains(id)), |(_, c)| c.iconic)
 }
 
-/// One-time migration of the previous default, preserving all nondefault personal sizes.
 fn finite(params: &Value, key: &str, fallback: f32) -> Result<f32, String> {
     match params.get(key) {
         None => Ok(fallback),
