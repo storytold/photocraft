@@ -4646,3 +4646,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Move Up	Sposta su
 	Move Down	Sposta giù
 	No matching fonts	Nessun font corrispondente
+
+# Line arrowheads and the preset group prompt on import (2026-11)
+	Arrowheads	Punte di freccia
+	Arrowhead options	Opzioni punte di freccia
+	Start	Inizio
+	End	Fine
+	Concavity	Concavità
+	Set as default	Imposta come predefinito
+	Use these settings for new arrows	Usa queste impostazioni per le nuove frecce
+	Import as New Group	Importa come nuovo gruppo
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	Importa come nuovo gruppo mantiene “{group}” e aggiunge il file come nuovo gruppo accanto.
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Sostituisci elimina prima tutto il contenuto di “{group}”, compresi i predefiniti che hai modificato o spostato lì. L'operazione non può essere annullata.
+	Answer the open import question first, then import this file again.	Rispondi prima alla domanda sull'importazione in corso, poi importa di nuovo questo file.
+	No import is waiting. Import the file again.	Nessuna importazione in attesa. Importa di nuovo il file.
+	{message} into “{group}”	{message} in “{group}”
