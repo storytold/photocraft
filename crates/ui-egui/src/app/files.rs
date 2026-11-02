@@ -248,13 +248,14 @@ impl PhotocraftApp {
             jpeg_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        // A layered TIFF asks about its layers first (Preferences › File Handling); the save
+        // A TIFF asks for TIFF Options (compression, pyramid, transparency, layers); the save
         // continues from the prompt, which records the step once answered.
-        if tiff_options_ui::wants_prompt(self, &path) {
-            tiff_options_ui::park(self, path.clone())?;
+        if choices.tiff.is_none() && tiff_options_ui::wants_prompt(self, &path) {
+            tiff_options_ui::park(self, path.clone(), false, "file.saveAs")?;
             return Ok(serde_json::json!({"path": path, "warnings": []}));
         }
-        self.save_as_step(path, None, choices)
+        let tiff_layers = choices.tiff.and_then(|t| t.layers);
+        self.save_as_step(path, tiff_layers, choices)
     }
 
     /// File › Save back to the document's own file, recorded as a `file.save` step with the

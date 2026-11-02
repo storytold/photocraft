@@ -80,6 +80,7 @@ mod tiff_banded_import;
 mod tiff_corpus;
 mod tiff_layers;
 mod tiff_pages;
+mod tiff_save_options;
 mod tiff_type_geometry;
 mod vector;
 mod xcf;
