@@ -308,6 +308,43 @@ mod tests {
         s.execute("paint.stroke", json!({"points": [[10, 10], [20, 20]], "target": {"channel": 0}})).unwrap();
     }
 
+    /// #10476 review: the refusal is about the one layer, not the document. With a hidden layer
+    /// and a visible one side by side and a selection active, every gated command is refused on
+    /// the hidden one and goes through on the visible one, in the same session.
+    #[test]
+    fn a_visible_layer_still_takes_every_command_the_hidden_one_refuses() {
+        let (mut s, hidden) = session();
+        let shown = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": shown, "mode": "replace"})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.0, 1.0, 0.0]})).unwrap();
+        s.execute("layer.setProps", json!({"layer": hidden, "visible": false})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        let cmds = [
+            ("filter.blur.gaussianBlur", json!({"radius": 2})),
+            ("edit.cut", json!({})),
+            ("edit.copy", json!({})),
+            ("edit.clear", json!({})),
+            ("edit.fill", json!({"color": [1.0, 0.0, 0.0]})),
+        ];
+        // On the hidden layer: refused, every one of them.
+        s.execute("layer.select", json!({"layer": hidden, "mode": "replace"})).unwrap();
+        let steps = s.active().unwrap().history.entries().len();
+        for (cmd, p) in &cmds {
+            let e = s.execute(cmd, p.clone()).unwrap_err().to_string();
+            assert!(e.contains(HIDDEN), "hidden {cmd}: {e}");
+        }
+        assert_eq!(s.active().unwrap().history.entries().len(), steps, "the hidden layer is untouched");
+        // On the visible one, in the same document: each goes through. Pixels and selection are
+        // restored before each, since Cut takes both away.
+        s.execute("layer.select", json!({"layer": shown, "mode": "replace"})).unwrap();
+        for (cmd, p) in &cmds {
+            s.execute("select.all", json!({})).unwrap();
+            s.execute("edit.fill", json!({"color": [0.0, 1.0, 0.0]})).unwrap();
+            s.execute(cmd, p.clone()).unwrap_or_else(|e| panic!("visible {cmd}: {e}"));
+        }
+        assert!(s.is_enabled("filter.blur.gaussianBlur"), "and the filter is not greyed out for it");
+    }
+
     #[test]
     fn named_destinations_cannot_bypass_hidden_layer_protection() {
         let (mut s, hidden) = session();
