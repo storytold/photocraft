@@ -195,15 +195,19 @@ pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<
     ui.separator();
 }
 
-/// Rejects invalid or duplicate names and save dialogs whose parent filter no longer exists.
+/// Rejects invalid or duplicate names, full preset collections, and dialogs whose parent filter no longer exists.
 pub(super) fn validate_new(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
     let name = fields.get("name").and_then(Value::as_str).unwrap_or_default().trim();
     if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
         return Err(tl!("Enter a preset name (1–64 characters).").into());
     }
     let id = fields.get("id").and_then(Value::as_str).ok_or("missing plug-in id")?;
-    if app.session.prefs().dialogs.get(&format!("plugin.presets.{id}")).and_then(|v| v.get(name)).is_some() {
+    let presets = app.session.prefs().dialogs.get(&format!("plugin.presets.{id}")).and_then(Value::as_object);
+    if presets.is_some_and(|p| p.contains_key(name)) {
         return Err(tl!("A preset with this name already exists.").into());
+    }
+    if presets.is_some_and(|p| p.len() >= 64) {
+        return Err(tl!("At most 64 presets per plug-in.").into());
     }
     let parent = fields.get("__parent").and_then(Value::as_u64).ok_or("missing preset dialog")?;
     if !app.ui.dialogs.iter().any(|d| {

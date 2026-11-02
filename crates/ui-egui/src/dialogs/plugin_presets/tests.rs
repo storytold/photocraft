@@ -169,6 +169,31 @@ fn duplicate_names_and_orphaned_save_dialogs_do_not_overwrite_presets() {
 }
 
 #[test]
+fn preset_limit_keeps_the_draft_open_and_allows_retry_after_deletion() {
+    let mut h = harness(egui::vec2(1280.0, 800.0), crate::theme::ThemeKind::ALL[0]);
+    let key = format!("plugin.presets.{ID}");
+    for i in 0..64 {
+        h.state_mut().run("plugin.preset.save", json!({"id":ID,"name":format!("Preset {i}"),"params":{"fine":13}})).unwrap();
+    }
+    let presets = h.state().session.prefs().dialogs[&key].clone();
+    h.get_by_label("New…").click();
+    h.run_steps(12);
+    h.event(egui::Event::Text(" New portrait ".into()));
+    h.run_steps(3);
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    assert!(super::super::confirm(h.state_mut(), id).is_err());
+    assert_eq!(h.state().ui.dialogs.len(), 2, "the preset limit must be checked before closing the editor");
+    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["name"], " New portrait ", "keep the user's input intact");
+    assert_eq!(h.state().session.prefs().dialogs[&key], presets, "a failed save leaves existing presets untouched");
+    h.get_by_label("At most 64 presets per plug-in.");
+    h.state_mut().run("plugin.preset.remove", json!({"id":ID,"name":"Preset 0"})).unwrap();
+    super::super::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(h.state().ui.dialogs.len(), 1);
+    assert_eq!(h.state().ui.dialogs[0].fields["__pluginPreset"], "saved:New portrait");
+    assert_eq!(h.state().session.prefs().dialogs[&key].as_object().unwrap().len(), 64);
+}
+
+#[test]
 fn missing_saved_selection_falls_back_and_saved_selection_keeps_independent_skin_only() {
     let mut app = app();
     app.run("plugin.preset.save", json!({"id":ID,"name":"Natural","params":{"fine":17,"skinOnly":true}})).unwrap();
