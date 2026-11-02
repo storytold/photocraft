@@ -2202,6 +2202,30 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
     }
 }
 
+/// An open line (no fill) with Outside strokes: the stroke fills the rest of the line's edge
+/// pixels beneath it, as on the CPU (#9659).
+#[test]
+fn outside_strokes_under_the_edge_of_an_unfilled_line() {
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for opacity in [1.0, 0.5] {
+            let mut d = fx_doc(90, 70, depth);
+            let path = Path::new(vec![Subpath::polyline(&[(8.0, 20.3), (45.0, 38.7), (82.0, 24.1)])]);
+            let line = ShapeStroke { width: 6.0, align: StrokeAlign::Center, opacity, paint: Fill::Solid(Color::rgb(0.9, 0.1, 0.1)), ..ShapeStroke::default() };
+            let mut sh = ShapeLayer { path, fill: None, stroke: Some(line), live: None, cache: None, psd_raw: None, ..ShapeLayer::default() };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("line", LayerContent::Shape(sh));
+            l.effects.items = vec![
+                Effect::Stroke(stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+                Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.1, 0.0, 0.0)))),
+            ];
+            d.layers.push(l);
+            fx_check(&mut g, &d, &format!("{depth:?} unfilled line at {opacity}"));
+        }
+    }
+}
+
 /// Blend If on the GPU matches `compose::apply_blend_if` (#4395): this-layer and underlying
 /// ranges, hard and split points, per channel, on raster, masked, adjustment and clipped layers,
 /// with channel restrictions, and in grayscale. Hard points are compared on 8-bit documents only:

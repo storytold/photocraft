@@ -1296,22 +1296,32 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
     var cover = 0.0;
     var lay_a = 0.0;
     let vector = (op.flags & F_VECTOR) != 0u;
-    if (!first || outline || !vector) {
-        let cv = textureLoad(tex_c, p, 0);
-        cover = cv.r;
-        lay_a = cv.g;
-    }
+    let cv = textureLoad(tex_c, p, 0);
+    cover = cv.r;
+    lay_a = cv.g;
     var k = map_value(d, 0.0);
     if (outline) {
         k = k * outline_share(a, lay_a);
     } else if (a > INSIDE_EPS) {
         // Pixel layers: the stroke shows beneath only through the part the shape leaves
         // (`effects.rs`): (1 - a) / (1 - layer alpha), none beneath a fully covered pixel.
+        // Shape layers without an outline: the same, with the edge pixel's coverage estimated as
+        // its alpha relative to the largest around it (`effects::local_coverage`).
+        var edge = a;
         if (vector) {
-            k = 0.0;
-        } else {
-            k = k * outline_share(a, lay_a);
+            let dims = vec2<i32>(textureDimensions(tex_b));
+            var mx = a;
+            for (var dy = -1; dy <= 1; dy++) {
+                for (var dx = -1; dx <= 1; dx++) {
+                    let q = p + vec2<i32>(dx, dy);
+                    if (q.x >= 0 && q.y >= 0 && q.x < dims.x && q.y < dims.y) {
+                        mx = max(mx, textureLoad(tex_b, q, 0).a);
+                    }
+                }
+            }
+            edge = min(a / mx, 1.0);
         }
+        k = k * outline_share(edge, lay_a);
     }
     var cov = k * op.opacity;
     if (op.mode == M_DISSOLVE) {
