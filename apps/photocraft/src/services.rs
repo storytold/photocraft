@@ -36,39 +36,40 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 }
 
 /// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
-/// of mixed files can be narrowed to one kind (#6337). Together they cover every extension of
+/// of mixed files can be narrowed to one kind (#6337). The document formats, the rest by name as in
+/// [`SAVE_FILTERS`], then the app's own resources. Together they cover every extension of
 /// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("PhotoCraft", &["pcraft"]),
     ("Photoshop", &["psd", "psb", "psdt"]),
+    ("PhotoCraft", &["pcraft"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
-    ("Krita", &["kra", "krz"]),
+    ("Amiga IFF", &["iff", "lbm", "ilbm"]),
+    ("BMP", &["bmp", "dib"]),
+    ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
+    ("DDS", &["dds"]),
+    ("DICOM", &["dcm", "dicom", "dc3"]),
+    ("DPX and Cineon", &["dpx", "cin"]),
+    ("FITS", &["fits", "fit", "fts"]),
+    ("GIF", &["gif"]),
     ("GIMP", &["xcf", "xcfgz", "gz"]),
+    ("HEIF", &["heic", "heif", "hif"]),
+    ("ICO", &["ico"]),
+    ("JPEG", &["jpg", "jpeg"]),
+    ("Krita", &["kra", "krz"]),
+    ("OpenEXR", &["exr"]),
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),
-    ("SVG", SVG_EXTS),
+    ("PCX", &["pcx"]),
     ("PNG", &["png"]),
-    ("JPEG", &["jpg", "jpeg"]),
-    ("HEIF", &["heic", "heif", "hif"]),
+    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
+    ("QOI", &["qoi"]),
+    ("Radiance HDR", &["hdr"]),
+    ("SVG", SVG_EXTS),
+    ("Targa", &["tga"]),
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
-    ("GIF", &["gif"]),
-    ("BMP", &["bmp", "dib"]),
-    ("Targa", &["tga"]),
-    ("ICO", &["ico"]),
-    ("QOI", &["qoi"]),
-    ("PCX", &["pcx"]),
-    ("DDS", &["dds"]),
     ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
-    ("OpenEXR", &["exr"]),
-    ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit", "fts"]),
-    ("DPX and Cineon", &["dpx", "cin"]),
-    ("Amiga IFF", &["iff", "lbm", "ilbm"]),
-    ("DICOM", &["dcm", "dicom", "dc3"]),
-    ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
     ("Brushes", &["abr"]),
     ("Gradients", &["grd"]),
     ("Styles", &["asl"]),
@@ -82,35 +83,38 @@ fn open_filters() -> Vec<(&'static str, Vec<String>)> {
         .collect()
 }
 
-/// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
-/// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
-/// keeps defaulting to PSD.
+/// File › Save As formats: (filter name, extensions). PSD, PSB and PhotoCraft's own format, which
+/// keep the most of a document, then the rest by name, so a long list stays easy to search. The
+/// filter matching the suggested name's extension comes first, so a .pcraft document saves as
+/// .pcraft by default and everything else keeps defaulting to PSD.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("PSD Document", &["psd", "psb"]),
-    ("PDF", &["pdf"]),
+    ("PSD Document", &["psd"]),
+    ("PSB Large Document", &["psb"]),
     ("PhotoCraft", &["pcraft"]),
-    ("OpenRaster", &["ora"]),
-    ("PNG", &["png"]),
+    ("Amiga IFF", &["iff"]),
+    ("BMP", &["bmp", "dib"]),
+    ("Cineon", &["cin"]),
+    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
+    ("DDS", &["dds"]),
+    ("DPX", &["dpx"]),
+    ("FITS", &["fits", "fit"]),
+    ("GIF", &["gif"]),
+    // BMP and GIF are also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to
+    // 256×256, with alpha.
+    ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
     ("JPEG XL", &["jxl"]),
-    ("WebP", &["webp"]),
-    ("TIFF", &["tif", "tiff"]),
-    ("Targa", &["tga"]),
-    // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
-    ("BMP", &["bmp", "dib"]),
-    ("GIF", &["gif"]),
-    ("ICO", &["ico"]),
-    ("OpenEXR", &["exr"]),
     // The encoder picks P5, P6, P7 or PFM from the image, not from the name, so only the neutral
     // .pnm is offered: a .pbm or .pgm name would hold pixmap data (CodeRabbit on #9775).
     ("Netpbm", &["pnm"]),
+    ("OpenEXR", &["exr"]),
+    ("OpenRaster", &["ora"]),
+    ("PDF", &["pdf"]),
+    ("PNG", &["png"]),
     ("Radiance HDR", &["hdr"]),
-    ("FITS", &["fits", "fit"]),
-    ("DPX", &["dpx"]),
-    // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
-    ("DDS", &["dds"]),
-    ("Cineon", &["cin"]),
-    ("Amiga IFF", &["iff"]),
+    ("Targa", &["tga"]),
+    ("TIFF", &["tif", "tiff"]),
+    ("WebP", &["webp"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
@@ -156,7 +160,7 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or none gets the type's
 /// extension, as PolyMeilex/rfd#341 does. An extension the user typed that PhotoCraft saves
 /// (`art.png` with the PSD type untouched, the way to save a PNG before this) is theirs and stays,
-/// and so does one of the type's own (`.psb` for PSD). One PhotoCraft doesn't save (`scan.2024`)
+/// and so does one of the type's own. One PhotoCraft doesn't save (`scan.2024`)
 /// is part of the name, and the type's extension is added after it.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {

@@ -967,3 +967,33 @@ fn tiff_options_reach_the_written_file() {
     assert_eq!(info.pages.iter().map(|p| (p.width, p.compression)).collect::<Vec<_>>(), [(200, 5), (100, 5), (50, 5)]);
     assert!(!photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha());
 }
+
+/// PSB is a save type of its own: it shows in the list, and the type gives a typed name its
+/// extension. As an extension of the PSD type it was hidden, and KDE's dialog, which adds the
+/// type's first extension, turned `art.psb` into `art.psb.psd`.
+#[test]
+fn psb_is_its_own_save_type() {
+    let filters = save_filters("Untitled-1.psd");
+    let (psd, psb) = (&filters[0], &filters[1]);
+    assert_eq!(psd.1, vec!["psd".to_string()], "{psd:?}");
+    assert_eq!(psb.1, vec!["psb".to_string()], "{psb:?}");
+    assert_eq!(save_filters("big.psb")[0].1, vec!["psb".to_string()], "a .psb starts on its own type");
+    let chosen = |f: &(String, Vec<String>)| with_chosen_type(Path::new("/pics/art"), Some("art.psd"), &f.1);
+    assert_eq!(chosen(psd), PathBuf::from("/pics/art.psd"));
+    assert_eq!(chosen(psb), PathBuf::from("/pics/art.psb"));
+    let opened = Some("Untitled-1");
+    assert_eq!(with_chosen_type(Path::new("/pics/art.psb"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "a typed .psb stays");
+}
+
+/// The document formats, then the rest by name, so a long list stays easy to search.
+#[test]
+fn save_types_list_the_document_formats_then_the_rest_by_name() {
+    let names: Vec<&str> = SAVE_FILTERS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names[..3], ["PSD Document", "PSB Large Document", "PhotoCraft"]);
+    let key = |name: &&str| name.to_ascii_lowercase();
+    assert!(names[3..].is_sorted_by_key(key), "{:?}", &names[3..]);
+    let names: Vec<&str> = OPEN_FILTERS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names[..2], ["Photoshop", "PhotoCraft"]);
+    let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
+    assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
+}
