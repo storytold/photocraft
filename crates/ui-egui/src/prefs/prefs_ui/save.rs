@@ -253,10 +253,11 @@ fn autosave(app: &mut PhotocraftApp) {
         }
     }
     let now = crate::gpu_canvas::now_ms();
-    // Saved or closed documents drop their recovery data.
+    // Saved or closed documents drop their recovery data, and so does turning Autosave off: the
+    // copies already kept (on the web, in the browser's storage) are removed, not left behind.
     let live: HashMap<DocId, bool> = app.session.documents().iter().map(|d| (d.doc.id, d.is_dirty())).collect();
-    let mut stale: Vec<DocId> = app.prefs_rt.autosaved.keys().filter(|id| live.get(id) != Some(&true)).copied().collect();
-    stale.extend(app.prefs_rt.autosave_pending.keys().filter(|id| live.get(*id) != Some(&true) && !app.prefs_rt.autosaved.contains_key(*id)).copied());
+    let mut stale: Vec<DocId> = app.prefs_rt.autosaved.keys().filter(|id| !on || live.get(id) != Some(&true)).copied().collect();
+    stale.extend(app.prefs_rt.autosave_pending.keys().filter(|id| (!on || live.get(*id) != Some(&true)) && !app.prefs_rt.autosaved.contains_key(*id)).copied());
     for id in stale {
         app.prefs_rt.autosaved.remove(&id);
         app.prefs_rt.autosave_pending.remove(&id);
@@ -307,6 +308,14 @@ fn autosave(app: &mut PhotocraftApp) {
 /// Force the autosave timer to fire on the next tick (tests, `prefs` changes).
 pub fn autosave_now(app: &mut PhotocraftApp) {
     app.prefs_rt.next_autosave_ms = f64::MIN_POSITIVE;
+}
+
+/// Autosave unsaved documents right now, outside the frame loop (the web build, when the page is
+/// hidden and no frames run). Honors the Autosave preference; documents already saved at their
+/// current revision are skipped.
+pub fn autosave_dirty_now(app: &mut PhotocraftApp) {
+    autosave_now(app);
+    autosave(app);
 }
 
 /// History Log preference: append executed commands to a text file.

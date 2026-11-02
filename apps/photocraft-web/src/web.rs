@@ -74,8 +74,17 @@ pub fn start() {
                 (None, bridge, Vec::new())
             }
         };
+        let (recovery_db, recovery) = match crate::indexed_recovery::load().await {
+            Ok((db, recovery)) => (Some(db), recovery),
+            Err(e) => {
+                log::warn!("Crash recovery unavailable: {e}");
+                (None, crate::recovery_bridge::Recovery::new(String::new()))
+            }
+        };
         let pen_target = canvas.clone();
-        let result = eframe::WebRunner::new()
+        let runner = Rc::new(eframe::WebRunner::new());
+        save_when_hidden(runner.clone());
+        let result = runner
             .start(
                 canvas,
                 options,
@@ -89,7 +98,13 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let mut services = services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag));
+                    // Crash recovery (#6615): the UI's autosave timer and launch recovery, over IndexedDB.
+                    let stored = crate::indexed_recovery::services(recovery_db, recovery);
+                    (services.autosave, services.autosave_results, services.flush_autosaves) =
+                        (stored.autosave, stored.autosave_results, stored.flush_autosaves);
+                    (services.discard_autosave, services.recover, services.adopt_autosave) = (stored.discard_autosave, stored.recover, stored.adopt_autosave);
+                    let mut app = PhotocraftApp::new(session, services);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -176,6 +191,32 @@ fn drag_pos_service(canvas: web_sys::HtmlCanvasElement, pos: DragPos) -> photocr
         let zoom = ctx.zoom_factor();
         (zoom.is_finite() && zoom > 0.0).then(|| egui::pos2((x - rect.left() as f32) / zoom, (y - rect.top() as f32) / zoom))
     })
+}
+
+/// Becoming hidden (tab switch, minimise, mobile app switch) is the last dependable moment to
+/// save: browsers discard background tabs without a `beforeunload`. A hidden page paints no
+/// frames, so the UI's frame-driven autosave timer cannot run then; this saves unsaved
+/// documents directly. `pagehide` does the same, though a write may not finish there.
+fn save_when_hidden(runner: Rc<eframe::WebRunner>) {
+    use wasm_bindgen::closure::Closure;
+    let Some(window) = web_sys::window() else { return };
+    let Some(document) = window.document() else { return };
+    let targets = [(web_sys::EventTarget::from(document.clone()), "visibilitychange"), (web_sys::EventTarget::from(window.clone()), "pagehide")];
+    for (target, event) in targets {
+        let (runner, document) = (runner.clone(), document.clone());
+        let cb = Closure::<dyn FnMut()>::new(move || {
+            if event == "visibilitychange" && document.visibility_state() != web_sys::VisibilityState::Hidden {
+                return;
+            }
+            // `None` while a frame is running: the frame's own autosave covers it.
+            if let Some(mut shell) = runner.app_mut::<WebShell>() {
+                photocraft_ui_egui::prefs_ui::autosave_dirty_now(&mut shell.app);
+            }
+        });
+        if target.add_event_listener_with_callback(event, cb.as_ref().unchecked_ref()).is_ok() {
+            cb.forget();
+        }
+    }
 }
 
 /// Closing or reloading the tab while a document has unsaved changes asks first, as closing the
@@ -336,6 +377,10 @@ impl WebShell {
 }
 
 impl eframe::App for WebShell {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // A tap reaches eframe as Pointer Events and Touch Events: keep one press per tap, or the
         // twin press closes the menu the first one opened (#2095).
