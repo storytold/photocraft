@@ -3,7 +3,7 @@
      Installed to /usr/share/mime/packages/ (update-mime-database runs on install). -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-photocraft">
-    <comment>PhotoCraft document</comment>
+    <comment>LumaFoundry document</comment>
     <icon name="ai.storyteller.photocraft"/>
     <glob pattern="*.pcraft"/>
   </mime-type>

@@ -255,7 +255,7 @@ fn other_files_without_alpha_identifiers_use_photoshop_polarity() {
         ("psd-tools", Some(version_info(UnicodeString::new("psd-tools 1.10.0"), UnicodeString::new("psd-tools 1.10.0"), true))),
         ("no 1057", None),
         ("CS6 without a NUL", Some(version_info(UnicodeString::new("Adobe Photoshop"), UnicodeString::new("Adobe Photoshop CS6"), true))),
-        ("bytes after PhotoCraft's 1057", Some(trailing)),
+        ("bytes after LumaFoundry's 1057", Some(trailing)),
     ];
     for (what, info) in cases {
         // Photoshop's polarity, as this version writes it, without 1053.

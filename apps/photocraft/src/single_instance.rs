@@ -352,7 +352,7 @@ pub fn claim_in(dir: &Path, paths: &[String], timing: Timing, transport: &Transp
             }
         }
         if Instant::now() >= deadline {
-            return Launch::Standalone(format!("the running PhotoCraft didn't take the files ({last})"));
+            return Launch::Standalone(format!("the running LumaFoundry didn't take the files ({last})"));
         }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -275,7 +275,7 @@ fn escape(s: &str) -> String {
 }
 
 /// The XMP toolkit [`save`] names on `x:xmpmeta`.
-const TOOLKIT: &str = "PhotoCraft";
+const TOOLKIT: &str = "LumaFoundry";
 const META_NS: &str = "adobe:ns:meta/";
 
 /// Did [`save`] write this file? True when its `x:xmpmeta` names PhotoCraft as the toolkit
@@ -298,7 +298,7 @@ pub fn save(params: &CameraRaw) -> String {
     let mut p = params.clone();
     let wb = if p.temperature != 0.0 || p.tint != 0.0 { "Custom" } else { "As Shot" };
     let mut out = String::from(
-        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"PhotoCraft\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n",
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"LumaFoundry\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n  <rdf:Description rdf:about=\"\"\n    xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"\n",
     );
     out.push_str("   crs:Version=\"18.4\"\n   crs:ProcessVersion=\"15.4\"\n");
     out.push_str(&format!("   crs:WhiteBalance=\"{wb}\"\n"));
@@ -471,9 +471,9 @@ mod tests {
             &b""[..],
             b"<x:xmpmeta",
             b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>",
-            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmptk=\"PhotoCraft\"/>",
-            b"<x:xmpmeta xmlns:x=\"other:ns/\" x:xmptk=\"PhotoCraft\"/>",
-            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"PhotoCraft 2\"/>",
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" xmptk=\"LumaFoundry\"/>",
+            b"<x:xmpmeta xmlns:x=\"other:ns/\" x:xmptk=\"LumaFoundry\"/>",
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"LumaFoundry 2\"/>",
             b"\xff\xfe",
         ] {
             assert!(!is_photocraft_xmp(other), "{}", String::from_utf8_lossy(other));

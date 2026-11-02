@@ -14,7 +14,7 @@ use crate::{EngineError, Result, Session};
 pub const MIN_SCORE: f32 = 0.5;
 
 /// Why there are no faces in the browser build (see [`photocraft_algo::faces`]).
-const UNAVAILABLE: &str = "face detection isn't available in the browser version of PhotoCraft; use the desktop app";
+const UNAVAILABLE: &str = "face detection isn't available in the browser version of LumaFoundry; use the desktop app";
 
 /// The faces in `px` (`w × h` straight RGBA), as [`faces::detect`] finds them.
 pub fn detect(px: &[[f32; 4]], w: usize, h: usize, min_score: f32) -> Result<Vec<Face>> {

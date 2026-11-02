@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::prefs::{Preferences, alternate_keys, normalize_shortcut};
 
 /// The built-in set's name: the default bindings.
-pub const DEFAULTS_NAME: &str = "PhotoCraft Defaults";
+pub const DEFAULTS_NAME: &str = "LumaFoundry Defaults";
 /// Saved sets are small; the cap keeps a hostile settings file or call bounded.
 pub const MAX_SETS: usize = 64;
 /// Longest set name, in characters.
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn bad_names_sets_and_params_are_errors() {
         let mut p = prefs();
-        for name in ["", "   ", "PhotoCraft defaults", "a\u{7}b", &"x".repeat(65)] {
+        for name in ["", "   ", "LumaFoundry defaults", "a\u{7}b", &"x".repeat(65)] {
             assert!(store(&mut p, &json!({"saveSet": name})).is_err(), "{name:?}");
         }
         assert!(load(&mut p, &json!({"useSet": "Nope"})).is_err());
@@ -404,7 +404,7 @@ mod tests {
         assert!(modified(&p), "activeSet names the set; it doesn't load it");
         load(&mut p, &json!({"useSet": "A"})).unwrap();
         assert!(!modified(&p));
-        store(&mut p, &json!({"activeSet": "PhotoCraft Defaults"})).unwrap();
+        store(&mut p, &json!({"activeSet": "LumaFoundry Defaults"})).unwrap();
         assert_eq!(p.shortcut_set, "");
     }
 

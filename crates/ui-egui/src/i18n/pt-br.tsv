@@ -12,7 +12,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Brazilian Portuguese computing vocabulary (camada, desfoque, seleção, demarcador ...). No
 # proprietary localisation resource, string table or product UI was consulted or copied; add
-# entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
+# entries the same way. Product and technology names (LumaFoundry, ArtCraft, OpenType, CMYK, Lab ...)
 # stay as they are; the trailing "…" of dialog commands is kept.
 
 # Layer Mask Display Options (the layer mask rubylith's colour and opacity)
@@ -78,7 +78,7 @@
 # Batch / Image Processor
 
 # Native Windows printing qualification
-# PhotoCraft release checks.
+# LumaFoundry release checks.
 # History panel › History Brush source (#2966)
 # Bevel & Emboss shading controls.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
@@ -876,9 +876,9 @@
 	Timeline	Linha do tempo
 	Tool Presets	Predefinições de ferramentas
 	Tools	Ferramentas
-	About PhotoCraft	Sobre o PhotoCraft
-	PhotoCraft Website	Site do PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft no GitHub
+	About LumaFoundry	Sobre o LumaFoundry
+	LumaFoundry Website	Site do LumaFoundry
+	LumaFoundry on GitHub	LumaFoundry no GitHub
 	ArtCraft Website	Site do ArtCraft
 	Join the ArtCraft Discord…	Participe do Discord do ArtCraft…
 	Report an Issue…	Relatar um problema…
@@ -935,7 +935,7 @@
 	All Caps	Tudo em maiúsculas
 	All Slices	Todas as fatias
 	All User Slices	Todas as fatias do usuário
-	All shortcuts reset to PhotoCraft defaults.	Todos os atalhos foram redefinidos para os padrões do PhotoCraft.
+	All shortcuts reset to LumaFoundry defaults.	Todos os atalhos foram redefinidos para os padrões do LumaFoundry.
 	Alt	Alt
 	Always use pressure for opacity	Sempre usar a pressão para a opacidade
 	Always use pressure for size	Sempre usar a pressão para o tamanho
@@ -1432,9 +1432,9 @@
 	Perspective Warp is not active	A distorção de perspectiva não está ativa
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Distorção de perspectiva: desenhe planos seguindo a perspectiva da imagem e depois mude para Deformar
 	Photo Filter	Filtro de fotos
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	O PhotoCraft gerencia as cores
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — um editor de imagens nativo e de código aberto escrito em Rust.
+	LumaFoundry	LumaFoundry
+	LumaFoundry Manages Colors	O LumaFoundry gerencia as cores
+	LumaFoundry — an open-source, native image editor written in Rust.	LumaFoundry — um editor de imagens nativo e de código aberto escrito em Rust.
 	Pin Depth:	Profundidade do alfinete:
 	Pixel Length:	Comprimento em pixels:
 	Pixels/Centimeter	Pixels/centímetro
@@ -1510,11 +1510,11 @@
 	Import Shortcuts…	Importar atalhos…
 	Load a keyboard shortcut set saved as .kys	Carregar um conjunto de atalhos de teclado salvo como .kys
 	Imported {n} shortcuts from {file}. Click OK to keep them.	{n} atalhos importados de {file}. Clique em OK para mantê-los.
-	{n} commands are not in PhotoCraft.	{n} comandos não existem no PhotoCraft.
+	{n} commands are not in LumaFoundry.	{n} comandos não existem no LumaFoundry.
 	Keyboard shortcuts imported	Atalhos de teclado importados
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	Seu conjunto de atalhos de teclado {set} está em uso aqui: {n} atalhos diferem dos padrões. Editar › Atalhos de teclado os mostra; Redefinir tudo para os padrões desfaz isso.
 	Import keyboard shortcuts?	Importar atalhos de teclado?
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	O PhotoCraft encontrou neste computador seu conjunto de atalhos de teclado {set} de outro editor de imagens: {n} de seus atalhos diferem dos do PhotoCraft. Importá-lo?
+	LumaFoundry found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from LumaFoundry's. Import it?	O LumaFoundry encontrou neste computador seu conjunto de atalhos de teclado {set} de outro editor de imagens: {n} de seus atalhos diferem dos do LumaFoundry. Importá-lo?
 	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Editar › Atalhos de teclado › Redefinir tudo para os padrões desfaz uma importação.
 	Don't Import	Não importar
 	The keyboard shortcut set was not imported: {error}	O conjunto de atalhos de teclado não foi importado: {error}
@@ -1736,7 +1736,7 @@
 	Current Tool	Ferramenta atual
 	Custom Shape Tool	Ferramenta Forma personalizada
 	Cyans	Cianos
-	Default PhotoCraft Size	Tamanho padrão do PhotoCraft
+	Default LumaFoundry Size	Tamanho padrão do LumaFoundry
 	Delete Workspace	Excluir espaço de trabalho
 	Diamond	Diamante
 	Dimensions:	Dimensões:
@@ -1847,7 +1847,7 @@
 	Pen Tool	Ferramenta Caneta
 	Convert Point Tool	Ferramenta Converter ponto
 	Photo	Foto
-	PhotoCraft website	Site do PhotoCraft
+	LumaFoundry website	Site do LumaFoundry
 	Picas	Paicas
 	Pillow Emboss	Entalhe almofadado
 	Pixel Replacement	Substituição de pixels
@@ -2175,7 +2175,7 @@
 	System Info	Informações do sistema
 	More panels	Mais painéis
 	More documents	Mais documentos
-	These settings aren't available in PhotoCraft yet.	Estas configurações ainda não estão disponíveis no PhotoCraft.
+	These settings aren't available in LumaFoundry yet.	Estas configurações ainda não estão disponíveis no LumaFoundry.
 	Graphics	Gráficos
 	Reset GPU Backend	Redefinir backend da GPU
 	Applies at next launch.	Aplica-se na próxima inicialização.
@@ -2766,8 +2766,8 @@
 	Overprint	Superimposição
 	Native file drag-and-drop is unavailable	Arrastar e soltar arquivos não está disponível
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	O recurso nativo de arrastar e soltar arquivos ainda não funciona no Wayland. Use Arquivo › Abrir ou copie a imagem no gerenciador de arquivos e cole-a com {paste}.
-	To drop files, start PhotoCraft under XWayland: `{command}`	Para soltar arquivos, execute o PhotoCraft no XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Ou defina Preferências › Desempenho › Servidor de exibição Linux como X11: o PhotoCraft passa a iniciar sempre no XWayland.
+	To drop files, start LumaFoundry under XWayland: `{command}`	Para soltar arquivos, execute o LumaFoundry no XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: LumaFoundry then always starts under XWayland.	Ou defina Preferências › Desempenho › Servidor de exibição Linux como X11: o LumaFoundry passa a iniciar sempre no XWayland.
 	Edit › Paste	Editar › Colar
 	Use File › Open, or paste a copied image with {paste}.	Use Arquivo › Abrir ou cole uma imagem copiada com {paste}.
 	Mixer Brush Tool	Ferramenta Pincel misturador
@@ -2783,7 +2783,7 @@
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	O modo automático usa a aceleração por GPU quando disponível e volta para a renderização por CPU em caso de erros.
 	Switched to CPU rendering	Renderização alterada para CPU
 	GPU acceleration could not continue. Your documents are unchanged.	A aceleração por GPU não pôde continuar. Seus documentos não foram alterados.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	O PhotoCraft está usando o compositor de imagens da CPU. A janela ainda pode usar seu adaptador gráfico.
+	LumaFoundry is using the CPU image compositor. The window may still use your graphics adapter.	O LumaFoundry está usando o compositor de imagens da CPU. A janela ainda pode usar seu adaptador gráfico.
 	Retry GPU requires a restart. Save your work first.	Tentar a GPU novamente exige reiniciar. Salve seu trabalho primeiro.
 	Retry GPU tries the graphics processor again now.	Tentar a GPU novamente tenta o processador gráfico de novo agora.
 	GPU acceleration resumed.	Aceleração por GPU retomada.
@@ -3015,7 +3015,7 @@ fontWeight	Italic	Itálico
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
-	PhotoCraft — Screen Color Picker	PhotoCraft — Seletor de cor da tela
+	LumaFoundry — Screen Color Picker	LumaFoundry — Seletor de cor da tela
 	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desativa este limite; grupos SVG aninhados em mais de 100 níveis são sempre rasterizados.
 	Rule of Thirds	Regra dos terços
@@ -3394,7 +3394,7 @@ layerLabel	No Color	Sem cor
 	Restart Required	Reinicialização necessária
 	Restart	Reiniciar
 	Quit	Sair
-	Quit PhotoCraft	Sair do PhotoCraft
+	Quit LumaFoundry	Sair do LumaFoundry
 	Close Window	Fechar janela
 	New Window	Nova janela
 	Open Image	Abrir imagem
@@ -3898,7 +3898,7 @@ layerLabel	No Color	Sem cor
 	Mezzotint	Meia-tinta
 	Mosaic	Mosaico
 	Motion Blur	Desfoque de movimento
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Arrastar e soltar arquivos nativamente ainda não é suportado no Wayland. Use Arquivo › Abrir ou execute o PhotoCraft sob XWayland com `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run LumaFoundry under XWayland with `WAYLAND_DISPLAY= photocraft`.	Arrastar e soltar arquivos nativamente ainda não é suportado no Wayland. Use Arquivo › Abrir ou execute o LumaFoundry sob XWayland com `WAYLAND_DISPLAY= photocraft`.
 	Neon Glow	Brilho neon
 	New Guide Layout	Novo layout de guias
 	New Video Layer from File	Nova camada de vídeo a partir de arquivo
@@ -4063,7 +4063,7 @@ layerLabel	No Color	Sem cor
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{n} ação carregada de {file}|{n} ações carregadas de {file}
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} etapa ainda não tem equivalente no PhotoCraft|{n} etapas ainda não têm equivalente no PhotoCraft
+@plural	{n} step has no LumaFoundry equivalent yet|{n} steps have no LumaFoundry equivalent yet	{n} etapa ainda não tem equivalente no LumaFoundry|{n} etapas ainda não têm equivalente no LumaFoundry
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} ação salva em {file}|{n} ações salvas em {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} etapa sem equivalente no Photoshop foi omitida|{n} etapas sem equivalente no Photoshop foram omitidas
 @plural	{n} action file loaded|{n} action files loaded	{n} arquivo de ações carregado|{n} arquivos de ações carregados
@@ -4157,12 +4157,12 @@ layerLabel	No Color	Sem cor
 	Bicubic Smoother	Bicúbica mais suave
 	Bicubic Sharper	Bicúbica mais nítida
 	Pasting from other apps is unavailable	Colar de outros aplicativos não está disponível
-	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	O PhotoCraft não consegue acessar a área de transferência do sistema nesta sessão. No Wayland, a sandbox do Flatpak oculta o protocolo pelo qual as imagens de outros aplicativos são lidas.
-	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Para colar de outros aplicativos, execute o PhotoCraft no XWayland: `{command}`
-	Nothing to paste: PhotoCraft can't read the system clipboard here	Nada para colar: o PhotoCraft não consegue ler a área de transferência do sistema aqui
+	LumaFoundry can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	O LumaFoundry não consegue acessar a área de transferência do sistema nesta sessão. No Wayland, a sandbox do Flatpak oculta o protocolo pelo qual as imagens de outros aplicativos são lidas.
+	To paste from other apps, start LumaFoundry under XWayland: `{command}`	Para colar de outros aplicativos, execute o LumaFoundry no XWayland: `{command}`
+	Nothing to paste: LumaFoundry can't read the system clipboard here	Nada para colar: o LumaFoundry não consegue ler a área de transferência do sistema aqui
 	Delete this set	Excluir este conjunto
 	New Set…	Novo conjunto…
-	PhotoCraft Defaults	Padrões do PhotoCraft
+	LumaFoundry Defaults	Padrões do LumaFoundry
 	Save a list of these shortcuts as a web page	Salvar uma lista destes atalhos como página da web
 	Save the changes to this set	Salvar as alterações neste conjunto
 	Save these shortcuts as a .kys file	Salvar estes atalhos como arquivo .kys
@@ -4309,7 +4309,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This session: {reason}	Nesta sessão: {reason}
 	Platform: {os} {arch}	Plataforma: {os} {arch}
 	GPU retry scheduled	Nova tentativa da GPU agendada
-	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	Salve seu trabalho e reinicie o PhotoCraft para tentar a aceleração por GPU novamente. A renderização pela CPU continua ativa nesta sessão.
+	Save your work and restart LumaFoundry to retry GPU acceleration. CPU rendering remains active for this session.	Salve seu trabalho e reinicie o LumaFoundry para tentar a aceleração por GPU novamente. A renderização pela CPU continua ativa nesta sessão.
 	GPU device was lost; using the CPU renderer.	O dispositivo da GPU foi perdido; usando o renderizador da CPU.
 	GPU error; using the CPU renderer.	Erro da GPU; usando o renderizador da CPU.
 	Monitor profile: {profile}	Perfil do monitor: {profile}
@@ -4328,7 +4328,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Preferences were reset: {error}	As preferências foram redefinidas: {error}
 	Couldn't save preferences: {error}. Retrying…	Não foi possível salvar as preferências: {error}. Tentando novamente…
 	Preferences can't be saved	Não é possível salvar as preferências
-	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	O PhotoCraft continua tentando; até que um salvamento dê certo, as alterações nas preferências serão perdidas ao fechar.
+	LumaFoundry keeps retrying; until a save succeeds, preference changes are lost when it closes.	O LumaFoundry continua tentando; até que um salvamento dê certo, as alterações nas preferências serão perdidas ao fechar.
 	Invalid panel layout; restored the default dock	Layout de painéis inválido; a disposição padrão dos painéis foi restaurada
 	Recovered {name}	Recuperado: {name}
 	Autosave failed: {error}	Falha ao salvar automaticamente: {error}

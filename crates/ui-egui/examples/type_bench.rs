@@ -25,7 +25,7 @@ fn median(mut v: Vec<f64>) -> f64 {
 /// layer: the edit command (re-layout and re-render), the Type tool's overlay layout and the CPU
 /// canvas refresh, as the Type tool does it for each character.
 fn typing(app: &mut PhotocraftApp, steps: usize) {
-    let text: Vec<char> = "縦書きのテキストは、「右から左へ」進みます。PhotoCraft 2026年ー".chars().collect();
+    let text: Vec<char> = "縦書きのテキストは、「右から左へ」進みます。LumaFoundry 2026年ー".chars().collect();
     for orient in ["horizontal", "vertical"] {
         let r = app.run("type.create", json!({"x": 3000, "y": 200, "text": "", "size": 48, "font": "Hiragino Sans"})).expect("type.create");
         let id = r["layer"].as_u64().unwrap_or(0);

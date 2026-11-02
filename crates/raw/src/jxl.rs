@@ -19,7 +19,7 @@ use crate::error::{RawError, Result};
 /// The browser build has no JPEG XL decoder (see the module docs).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn decode(_src: &[u8], _w: usize, _h: usize, _samples: usize, _bits: u32, _float_scale: Option<f32>, _limits: &Limits) -> Result<Vec<u16>> {
-    Err(RawError::unsupported("JPEG XL-compressed DNG (DNG 1.7) can't be opened in the browser version of PhotoCraft; open it in the desktop app"))
+    Err(RawError::unsupported("JPEG XL-compressed DNG (DNG 1.7) can't be opened in the browser version of LumaFoundry; open it in the desktop app"))
 }
 
 /// Decodes one segment into `w * h * samples` interleaved samples at `bits` per sample (the

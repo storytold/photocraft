@@ -1,6 +1,6 @@
 [package]
 name = "photocraft-automation"
-description = "MCP server (rmcp) over the PhotoCraft engine, plus a bridge to a running GUI"
+description = "MCP server (rmcp) over the LumaFoundry engine, plus a bridge to a running GUI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

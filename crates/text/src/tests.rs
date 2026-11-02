@@ -1839,7 +1839,7 @@ fn legacy_origin_uses_the_rendering_engines_registered_face() {
     let mut style = CharStyle { font_family: "JetBrains Mono".into(), font_style: "Regular".into(), size_pt: 100.0, ..Default::default() };
     // This exact-face alias exists only in this engine, like a user-registered font.
     engine.fonts.select_named_face(&mut style);
-    assert!(style.font_family.starts_with(".PhotoCraft-face-"));
+    assert!(style.font_family.starts_with(".LumaFoundry-face-"));
     let source = with_para(styled("Name", style), ParagraphStyle { align: TextAlign::Right, ..Default::default() });
     let raw = legacy_tysh(&source, Affine::translate(-8000.0, -8000.0), [8100.0, 8200.0], &mut engine);
     let mut imported = crate::psd::text_layer_from_tysh(&raw, 72.0).unwrap();

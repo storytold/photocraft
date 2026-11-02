@@ -104,7 +104,7 @@ fn repair_invalid(app: &mut PhotocraftApp, invalid: &[prefs::InvalidPref]) {
     let paths = invalid.iter().map(prefs::InvalidPref::path).collect::<Vec<_>>().join(", ");
     let (title, line) = (
         "Some preferences were reset",
-        "The preferences file held values PhotoCraft can't read for {paths}. Those settings are back to their defaults; the rest of your preferences loaded.",
+        "The preferences file held values LumaFoundry can't read for {paths}. Those settings are back to their defaults; the rest of your preferences loaded.",
     );
     // Notices keep their English source and are translated when drawn.
     let id = crate::notices::post(app, title, vec![line.into()], false, None);

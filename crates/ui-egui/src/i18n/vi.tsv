@@ -15,7 +15,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Vietnamese computing and image-editing vocabulary. No proprietary localisation resource, string
 # table or product UI was consulted or copied; add entries the same way. Product and technology
-# names (PhotoCraft, ArtCraft, OpenType, RGB, CMYK, Lab, PSD, PNG, JPEG, WebP, OpenEXR, AVIF …)
+# names (LumaFoundry, ArtCraft, OpenType, RGB, CMYK, Lab, PSD, PNG, JPEG, WebP, OpenEXR, AVIF …)
 # stay as they are; the trailing "…" of dialog commands is kept. Plural rule: one form
 # (`plural_none` in i18n/mod.rs).
 
@@ -780,7 +780,7 @@
 	3-up Vertical	3 cửa sổ dọc
 	4-up	4 cửa sổ
 	6-up	6 cửa sổ
-	About PhotoCraft	Giới thiệu PhotoCraft
+	About LumaFoundry	Giới thiệu LumaFoundry
 	Actions	Thao tác
 	ArtCraft Website	Trang web ArtCraft
 	Brush Settings	Thiết lập cọ
@@ -822,8 +822,8 @@
 	Paragraph Styles	Kiểu đoạn văn
 	Paths	Đường dẫn
 	Patterns	Họa tiết
-	PhotoCraft on GitHub	PhotoCraft trên GitHub
-	PhotoCraft Website	Trang web PhotoCraft
+	LumaFoundry on GitHub	LumaFoundry trên GitHub
+	LumaFoundry Website	Trang web LumaFoundry
 	Photography	Nhiếp ảnh
 	Pixel Art	Pixel Art
 	Pro Medium Gray Theme	Chủ đề Pro xám vừa
@@ -1643,7 +1643,7 @@ cameraRaw	Shadows	Vùng tối
 	Subdivisions	Phân chia
 	System title bar	Thanh tiêu đề hệ thống
 	Text file	Tệp văn bản
-	These settings aren't available in PhotoCraft yet.	Các thiết lập này chưa có trong PhotoCraft.
+	These settings aren't available in LumaFoundry yet.	Các thiết lập này chưa có trong LumaFoundry.
 	Tiny	Rất nhỏ
 	Traditional (72.27 points/inch)	Truyền thống (72,27 point/inch)
 	Transparency & Gamut	Độ trong suốt & gam màu
@@ -1669,7 +1669,7 @@ cameraRaw	Shadows	Vùng tối
 	About	Giới thiệu
 	Contributors	Người đóng góp
 	Models	Mô hình
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — trình chỉnh sửa ảnh gốc mã nguồn mở viết bằng Rust.
+	LumaFoundry — an open-source, native image editor written in Rust.	LumaFoundry — trình chỉnh sửa ảnh gốc mã nguồn mở viết bằng Rust.
 	Version {version}	Phiên bản {version}
 	Unsaved changes	Thay đổi chưa lưu
 	Answer the unsaved-changes prompt first	Hãy trả lời hộp thoại thay đổi chưa lưu trước
@@ -1707,10 +1707,10 @@ cameraRaw	Shadows	Vùng tối
 	Leave as is (don't color manage)	Giữ nguyên (không quản lý màu)
 	Discard the embedded profile (don't color manage)	Bỏ hồ sơ nhúng (không quản lý màu)
 	Native file drag-and-drop is unavailable	Kéo thả tệp gốc không khả dụng
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Kéo thả tệp gốc chưa được hỗ trợ trên Wayland. Dùng Tệp › Mở, hoặc chạy PhotoCraft dưới XWayland với `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run LumaFoundry under XWayland with `WAYLAND_DISPLAY= photocraft`.	Kéo thả tệp gốc chưa được hỗ trợ trên Wayland. Dùng Tệp › Mở, hoặc chạy LumaFoundry dưới XWayland với `WAYLAND_DISPLAY= photocraft`.
 	Switched to CPU rendering	Đã chuyển sang kết xuất CPU
 	GPU acceleration could not continue. Your documents are unchanged.	Không thể tiếp tục tăng tốc GPU. Tài liệu của bạn không đổi.
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft đang dùng bộ kết hợp ảnh CPU. Cửa sổ vẫn có thể dùng bộ điều hợp đồ họa của bạn.
+	LumaFoundry is using the CPU image compositor. The window may still use your graphics adapter.	LumaFoundry đang dùng bộ kết hợp ảnh CPU. Cửa sổ vẫn có thể dùng bộ điều hợp đồ họa của bạn.
 	Retry GPU	Thử lại GPU
 	Retry GPU requires a restart. Save your work first.	Thử lại GPU cần khởi động lại. Hãy lưu công việc trước.
 	Retry GPU tries the graphics processor again now.	Thử lại GPU sẽ thử lại bộ xử lý đồ họa ngay bây giờ.
@@ -2065,7 +2065,7 @@ colorRange	Invert	Đảo ngược
 	Tool	Công cụ
 	New document…	Tài liệu mới…
 	Join us on Discord	Tham gia Discord
-	PhotoCraft website	Trang web PhotoCraft
+	LumaFoundry website	Trang web LumaFoundry
 	Anchor:	Neo:
 	Canvas extension color:	Màu mở rộng canvas:
 layers	Fill	Độ tô
@@ -2220,7 +2220,7 @@ layers	Fill:	Độ tô:
 	A save to {name} is still running; try again when it finishes	Đang lưu {name}; thử lại khi hoàn tất
 	Adwaita Dark Theme	Chủ đề Adwaita tối
 	Adwaita Light Theme	Chủ đề Adwaita sáng
-	All shortcuts reset to PhotoCraft defaults.	Đã đặt lại mọi phím tắt về mặc định PhotoCraft.
+	All shortcuts reset to LumaFoundry defaults.	Đã đặt lại mọi phím tắt về mặc định LumaFoundry.
 	Appearance Mode	Chế độ giao diện
 	Auto Hide	Tự động ẩn
 	Click to add a point, right-click to remove	Nhấp để thêm điểm, nhấp chuột phải để xóa
@@ -2302,7 +2302,7 @@ layers	Fill:	Độ tô:
 	Vector Mask from Current Path	Mặt nạ vector từ đường dẫn hiện tại
 	{label} is writing the file and can no longer be cancelled	{label} đang ghi tệp và không thể hủy nữa
 	{name} options	Tùy chọn {name}
-	{n} commands are not in PhotoCraft.	{n} lệnh không có trong PhotoCraft.
+	{n} commands are not in LumaFoundry.	{n} lệnh không có trong LumaFoundry.
 	{size} (was {old})	{size} (trước là {old})
 	{w} px x {h} px ({ppi} ppi)	{w} px x {h} px ({ppi} ppi)
 	…and {n} more	…và {n} nữa
@@ -2315,7 +2315,7 @@ layers	Fill:	Độ tô:
 	Corner Crop Marks	Dấu cắt góc
 	Default printer	Máy in mặc định
 	No Color Management	Không quản lý màu
-	PhotoCraft Manages Colors	PhotoCraft quản lý màu
+	LumaFoundry Manages Colors	LumaFoundry quản lý màu
 	Printer	Máy in
 	Printer Manages Colors	Máy in quản lý màu
 	Printer Setup	Thiết lập máy in
@@ -2431,14 +2431,14 @@ shape	Appearance	Diện mạo
 	Inverse	Đảo vùng chọn
 	Lighten	Làm sáng
 	Missing delete command	Thiếu lệnh xóa
-	PhotoCraft	PhotoCraft
+	LumaFoundry	LumaFoundry
 	Reset	Đặt lại
 	Tetrahedral	Tetrahedral
 	Top	Trên
 	Trilinear	Trilinear
 	Show channels in color	Hiện kênh bằng màu
 	Import keyboard shortcuts?	Nhập phím tắt?
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft tìm thấy bộ phím tắt {set} từ trình chỉnh sửa ảnh khác trên máy này: {n} phím tắt khác với PhotoCraft. Nhập vào?
+	LumaFoundry found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from LumaFoundry's. Import it?	LumaFoundry tìm thấy bộ phím tắt {set} từ trình chỉnh sửa ảnh khác trên máy này: {n} phím tắt khác với LumaFoundry. Nhập vào?
 	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Chỉnh sửa › Phím tắt › Đặt lại tất cả về mặc định sẽ hoàn tác lần nhập.
 	Don't Import	Không nhập
 	The keyboard shortcut set was not imported: {error}	Không nhập được bộ phím tắt: {error}
@@ -2449,7 +2449,7 @@ shape	Appearance	Diện mạo
 	Next Document	Tài liệu tiếp theo
 	Open EXR Parts…	Mở các phần EXR…
 	Pencil	Bút chì
-	PhotoCraft — Screen Color Picker	PhotoCraft — Bộ chọn màu màn hình
+	LumaFoundry — Screen Color Picker	LumaFoundry — Bộ chọn màu màn hình
 	Previous Document	Tài liệu trước
 	Refine	Tinh chỉnh
 	Remove from Recent	Xóa khỏi Gần đây
@@ -2640,8 +2640,8 @@ shape	Appearance	Diện mạo
 	Basic	Cơ bản
 	Brush Preset picker	Bộ chọn cài đặt cọ
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Chưa hỗ trợ kéo-thả tệp gốc trên Wayland. Hãy dùng Tệp › Mở, hoặc sao chép ảnh trong trình quản lý tệp và dán bằng {paste}.
-	To drop files, start PhotoCraft under XWayland: `{command}`	Để thả tệp, hãy khởi chạy PhotoCraft dưới XWayland: `{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Hoặc đặt Tùy chọn › Hiệu năng › Máy chủ hiển thị Linux thành X11: PhotoCraft sẽ luôn khởi chạy dưới XWayland.
+	To drop files, start LumaFoundry under XWayland: `{command}`	Để thả tệp, hãy khởi chạy LumaFoundry dưới XWayland: `{command}`
+	Or set Preferences › Performance › Linux display server to X11: LumaFoundry then always starts under XWayland.	Hoặc đặt Tùy chọn › Hiệu năng › Máy chủ hiển thị Linux thành X11: LumaFoundry sẽ luôn khởi chạy dưới XWayland.
 	Kerning	Điều chỉnh khoảng cách chữ
 	Layout	Bố cục
 	Metrics	Số đo
@@ -2670,7 +2670,7 @@ shape	Appearance	Diện mạo
 	Could not use Puppet Warp: the layer is empty	Không thể dùng Uốn búp bê: lớp rỗng
 	Crosswise	Ngang
 	Current Tool	Công cụ hiện tại
-	Default PhotoCraft Size	Kích thước mặc định của PhotoCraft
+	Default LumaFoundry Size	Kích thước mặc định của LumaFoundry
 	Delete Workspace	Xoá không gian làm việc
 	Document Dimensions	Kích thước tài liệu
 	Document Profile	Hồ sơ tài liệu
@@ -3722,7 +3722,7 @@ curves	Smooth	Làm mượt
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	Đã nạp {n} hành động từ {file}
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} bước chưa có chức năng tương ứng trong PhotoCraft
+@plural	{n} step has no LumaFoundry equivalent yet|{n} steps have no LumaFoundry equivalent yet	{n} bước chưa có chức năng tương ứng trong LumaFoundry
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Đã lưu {n} hành động vào {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Đã bỏ qua {n} bước không có chức năng tương ứng trong Photoshop
 @plural	{n} action file loaded|{n} action files loaded	Đã nạp {n} tệp hành động
@@ -3826,12 +3826,12 @@ curves	Smooth	Làm mượt
 	Bicubic Smoother	Bicubic mượt hơn
 	Bicubic Sharper	Bicubic sắc hơn
 	Pasting from other apps is unavailable	Không thể dán từ ứng dụng khác
-	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft không truy cập được bộ nhớ tạm của hệ thống trong phiên này. Trên Wayland, sandbox của Flatpak ẩn giao thức dùng để đọc hình ảnh từ ứng dụng khác.
-	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Để dán từ ứng dụng khác, hãy khởi động PhotoCraft dưới XWayland: `{command}`
-	Nothing to paste: PhotoCraft can't read the system clipboard here	Không có gì để dán: PhotoCraft không thể đọc bộ nhớ tạm của hệ thống ở đây
+	LumaFoundry can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	LumaFoundry không truy cập được bộ nhớ tạm của hệ thống trong phiên này. Trên Wayland, sandbox của Flatpak ẩn giao thức dùng để đọc hình ảnh từ ứng dụng khác.
+	To paste from other apps, start LumaFoundry under XWayland: `{command}`	Để dán từ ứng dụng khác, hãy khởi động LumaFoundry dưới XWayland: `{command}`
+	Nothing to paste: LumaFoundry can't read the system clipboard here	Không có gì để dán: LumaFoundry không thể đọc bộ nhớ tạm của hệ thống ở đây
 	Delete this set	Xóa bộ này
 	New Set…	Bộ mới…
-	PhotoCraft Defaults	Mặc định của PhotoCraft
+	LumaFoundry Defaults	Mặc định của LumaFoundry
 	Save a list of these shortcuts as a web page	Lưu danh sách các phím tắt này thành trang web
 	Save the changes to this set	Lưu thay đổi vào bộ này
 	Save these shortcuts as a .kys file	Lưu các phím tắt này thành tệp .kys
@@ -3938,9 +3938,9 @@ smartSvg	Choose executable…	Chọn tệp thực thi…
 smartSvg	Choose the application used to edit this SVG:	Chọn ứng dụng dùng để chỉnh sửa SVG này:
 smartSvg	Edit SVG Smart Object	Chỉnh sửa Đối tượng thông minh SVG
 smartSvg	Other application	Ứng dụng khác
-smartSvg	PhotoCraft (internal editor)	PhotoCraft (trình chỉnh sửa nội bộ)
+smartSvg	LumaFoundry (internal editor)	LumaFoundry (trình chỉnh sửa nội bộ)
 smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	Đã mở trình chỉnh sửa SVG. Lưu SVG để cập nhật Đối tượng thông minh này.
-smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Lưu vào tệp SVG đã mở. Mỗi lần lưu thay đổi tạo một bước hoàn tác trong PhotoCraft.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in LumaFoundry.	Lưu vào tệp SVG đã mở. Mỗi lần lưu thay đổi tạo một bước hoàn tác trong LumaFoundry.
 smartSvg	Stop syncing this Smart Object	Dừng đồng bộ Đối tượng thông minh này
 smartSvg	Updates wait while another document or an editing dialog is active.	Các cập nhật sẽ chờ khi tài liệu khác hoặc hộp thoại chỉnh sửa đang hoạt động.
 smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Nội dung AI/PDF/EPS sẽ được chỉnh sửa dưới dạng SVG. Lưu sẽ thay thế nguồn nhúng; các tính năng riêng của định dạng có thể thay đổi.

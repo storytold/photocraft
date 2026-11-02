@@ -623,7 +623,7 @@ fn a_sidecar_fills_the_dialog_and_open_writes_it_back() {
     assert_eq!(sidecar_path("/a/b.c/noext"), "/a/b.c/noext.xmp");
     std::fs::write(
         sidecar_path(&raw_path),
-        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"PhotoCraft\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\" crs:Exposure2012=\"+1.50\" crs:ShadowTint=\"20\" crs:Temperature=\"5500\"/></rdf:RDF></x:xmpmeta>",
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"LumaFoundry\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\" crs:Exposure2012=\"+1.50\" crs:ShadowTint=\"20\" crs:Temperature=\"5500\"/></rdf:RDF></x:xmpmeta>",
     )
     .unwrap();
     type Written = Arc<Mutex<Vec<(String, Vec<u8>)>>>;

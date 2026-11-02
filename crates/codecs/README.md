@@ -163,7 +163,7 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   and develops them, and `photocraft-io` routes them there.
 
 * **HEIF/HEIC (read-only, feature `heif`).** Decoding lives in the optional `photocraft-heif` crate
-  behind the non-default `heif` feature (official PhotoCraft builds enable it; distributors choose).
+  behind the non-default `heif` feature (official LumaFoundry builds enable it; distributors choose).
   Without it, HEIF is still detected and decoding returns `CodecError::Unsupported` ("HEIC/HEIF
   support isn't included in this build"). iPhone and Mac photos decode with `heic-rs` (pure Rust, no `unsafe`):
   single pictures and grid-tiled photos, 8 to 12 bits, auxiliary alpha, ICC, EXIF and XMP. The

@@ -12,7 +12,7 @@
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Hungarian image-editing vocabulary (réteg, maszk, kijelölés ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
-# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# Product and technology names (LumaFoundry, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept. Plural rule: a count is followed by the
 # singular noun in Hungarian, so every @plural entry has a single form.
 
@@ -495,7 +495,7 @@
 	32-bit Preview Options…	32 bites előnézet beállításai…
 	4-up	4 nézet
 	6-up	6 nézet
-	About PhotoCraft	A PhotoCraft névjegye
+	About LumaFoundry	A LumaFoundry névjegye
 	About {app}	Névjegy: {app}
 	Actions	Műveletsorok
 	Activate Panel	Panel aktiválása
@@ -778,9 +778,9 @@
 	Paths	Útvonalak
 	Paths to Illustrator	Útvonalak Illustrator-fájlba
 	Pattern Preview	Mintázat előnézete
-	PhotoCraft	PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft a GitHubon
-	PhotoCraft Website	PhotoCraft-weboldal
+	LumaFoundry	LumaFoundry
+	LumaFoundry on GitHub	LumaFoundry a GitHubon
+	LumaFoundry Website	LumaFoundry-weboldal
 	Photography	Fotózás
 	Picture Frame…	Képkeret…
 	Pinch…	Becsípés…
@@ -2709,7 +2709,7 @@ cameraRaw	Yellow	Sárga
 	Advanced	Speciális
 	Adwaita dark	Adwaita sötét
 	All	Mind
-	All shortcuts reset to PhotoCraft defaults.	Minden billentyűparancs visszaállt a PhotoCraft alapértékére.
+	All shortcuts reset to LumaFoundry defaults.	Minden billentyűparancs visszaállt a LumaFoundry alapértékére.
 	All Slices	Összes szelet
 	All User Slices	Összes felhasználói szelet
 	Always create smart objects when placing	Elhelyezéskor mindig intelligens objektum létrehozása
@@ -2801,7 +2801,7 @@ cameraRaw	Yellow	Sárga
 	Data	Adatok
 	Date	Dátum
 	Day For Night	Nappali éjszaka
-	Default PhotoCraft Size	Alapértelmezett PhotoCraft-méret
+	Default LumaFoundry Size	Alapértelmezett LumaFoundry-méret
 	Default printer	Alapértelmezett nyomtató
 	Default restored.	Alapértelmezés visszaállítva.
 	Defaults	Alapértékek
@@ -2949,10 +2949,10 @@ cameraRaw	Yellow	Sárga
 	Permission denied	Hozzáférés megtagadva
 	Phone	Telefon
 	Photo	Fotó
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	A PhotoCraft egy másik képszerkesztő billentyűparancs-készletét találta ezen a számítógépen: {set}. Ebben {n} billentyűparancs eltér a PhotoCraftétól. Importálod?
-	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	A PhotoCraft tovább próbálkozik; amíg a mentés nem sikerül, a beállítások módosításai bezáráskor elvesznek.
-	PhotoCraft Manages Colors	A PhotoCraft kezeli a színeket
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft – nyílt forráskódú, natív képszerkesztő Rust nyelven.
+	LumaFoundry found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from LumaFoundry's. Import it?	A LumaFoundry egy másik képszerkesztő billentyűparancs-készletét találta ezen a számítógépen: {set}. Ebben {n} billentyűparancs eltér a LumaFoundryétól. Importálod?
+	LumaFoundry keeps retrying; until a save succeeds, preference changes are lost when it closes.	A LumaFoundry tovább próbálkozik; amíg a mentés nem sikerül, a beállítások módosításai bezáráskor elvesznek.
+	LumaFoundry Manages Colors	A LumaFoundry kezeli a színeket
+	LumaFoundry — an open-source, native image editor written in Rust.	LumaFoundry – nyílt forráskódú, natív képszerkesztő Rust nyelven.
 	Picas	Pica
 	Pixels	Pixel
 	Pixels/Centimeter	Pixel/centiméter
@@ -3068,7 +3068,7 @@ cameraRaw	Yellow	Sárga
 	The document does not have an embedded colour profile. Working space: {working}.	A dokumentumnak nincs beágyazott színprofilja. Munkaszíntér: {working}.
 	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	A dokumentum beágyazott színprofilja eltér a munkaszíntértől.\nBeágyazott: {embedded}\nMunkaszíntér: {working}
 	The keyboard shortcut set was not imported: {error}	A billentyűparancs-készlet importálása nem sikerült: {error}
-	These settings aren't available in PhotoCraft yet.	Ezek a beállítások a PhotoCraftban még nem érhetők el.
+	These settings aren't available in LumaFoundry yet.	Ezek a beállítások a LumaFoundryban még nem érhetők el.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	A folytatáshoz a kitöltőréteget raszterizálni kell. A kitöltés tartalma ezután nem lesz szerkeszthető. Raszterizálod a réteget?
 	This layer must be rasterized before proceeding.	A folytatáshoz a réteget raszterizálni kell.
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	A folytatáshoz az alakzatréteget raszterizálni kell. Ezután alakzatként nem lesz szerkeszthető. Raszterizálod az alakzatot?
@@ -3103,7 +3103,7 @@ cameraRaw	Yellow	Sárga
 	Y	Y
 	Yes	Igen
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	A billentyűparancs-készleted itt is használatban van: {set}. Ebből {n} billentyűparancs eltér az alapértelmezettől. A Szerkesztés › Billentyűparancsok alatt láthatod őket; az Összes visszaállítása alapértékre paranccsal ez visszavonható.
-	{n} commands are not in PhotoCraft.	{n} parancs nem érhető el a PhotoCraftban.
+	{n} commands are not in LumaFoundry.	{n} parancs nem érhető el a LumaFoundryban.
 	{shortcut} assigned.	Billentyűparancs hozzárendelve: {shortcut}
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	A billentyűparancs már foglalt: {shortcut}. Jelenlegi parancs: {commands}. Az OK gombra kattintva onnan törlődik.
 	Action playback failed: {error}	A műveletsor lejátszása sikertelen: {error}
@@ -3493,7 +3493,7 @@ cameraRaw	Yellow	Sárga
 	Opened {name}	Megnyitva: {name}
 	Opened {url}	Megnyitva: {url}
 	Opening…	Megnyitás…
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	Vagy állítsd X11-re a Beállítások › Teljesítmény › Linuxos megjelenítőszerver értékét: a PhotoCraft ekkor mindig XWayland alatt indul.
+	Or set Preferences › Performance › Linux display server to X11: LumaFoundry then always starts under XWayland.	Vagy állítsd X11-re a Beállítások › Teljesítmény › Linuxos megjelenítőszerver értékét: a LumaFoundry ekkor mindig XWayland alatt indul.
 	Original Ratio	Eredeti arány
 	Other	Egyéb
 	Out	Végpont
@@ -3512,9 +3512,9 @@ cameraRaw	Yellow	Sárga
 	Performance	Teljesítmény
 	Perimeter	Kerület
 	Perspective Crop Tool	Perspektivikus körbevágás
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	A PhotoCraft a CPU-s képösszeállítót használja. Az ablak megjelenítése ettől még használhatja a grafikus adaptert.
-	PhotoCraft website	PhotoCraft-weboldal
-	PhotoCraft — Screen Color Picker	PhotoCraft — Képernyő-színválasztó
+	LumaFoundry is using the CPU image compositor. The window may still use your graphics adapter.	A LumaFoundry a CPU-s képösszeállítót használja. Az ablak megjelenítése ettől még használhatja a grafikus adaptert.
+	LumaFoundry website	LumaFoundry-weboldal
+	LumaFoundry — Screen Color Picker	LumaFoundry — Képernyő-színválasztó
 	Photomerge	Fotóegyesítés
 	Pick a screen pixel or press Esc to cancel	Válassz egy pixelt a képernyőn, vagy nyomd meg az Esc billentyűt a megszakításhoz
 	Pick screen color	Szín kiválasztása a képernyőről
@@ -3595,7 +3595,7 @@ cameraRaw	Yellow	Sárga
 	Sample a pixel anywhere on the screen	Mintavétel a képernyő bármely pixeléből
 	Sampler	Színmintavevő
 	Save in background	Mentés a háttérben
-	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	A GPU-gyorsítás újrapróbálásához mentsd a munkádat, majd indítsd újra a PhotoCraftot. Ebben a munkamenetben a CPU-s megjelenítés marad aktív.
+	Save your work and restart LumaFoundry to retry GPU acceleration. CPU rendering remains active for this session.	A GPU-gyorsítás újrapróbálásához mentsd a munkádat, majd indítsd újra a LumaFoundryot. Ebben a munkamenetben a CPU-s megjelenítés marad aktív.
 	Saved a copy as {path}	Másolat mentve: {path}
 	Saved {name}	Mentve: {name}
 	Saved {path}; image assets: {n} in {dir}	Mentve: {path}; képelemek: {n} ({dir})
@@ -3685,7 +3685,7 @@ cameraRaw	Yellow	Sárga
 	This session: {reason}	Ebben a munkamenetben: {reason}
 	Tiny	Apró
 	To Center	Középre
-	To drop files, start PhotoCraft under XWayland: `{command}`	Fájlok behúzásához indítsd a PhotoCraftot XWayland alatt: `{command}`
+	To drop files, start LumaFoundry under XWayland: `{command}`	Fájlok behúzásához indítsd a LumaFoundryot XWayland alatt: `{command}`
 	Tool	Eszköz
 	Top Left	Bal felső
 	Top Right	Jobb felső
@@ -3945,7 +3945,7 @@ cameraRaw	Yellow	Sárga
 	Modify Date	Módosítás dátuma
 	Mouse Controls	Egérvezérlés
 	Mouse Coordinates	Egérkoordináták
-	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	A fájlok natív behúzása Waylanden még nem támogatott. Használd a Fájl › Megnyitás parancsot, vagy futtasd a PhotoCraftot XWaylanden: `WAYLAND_DISPLAY= photocraft`.
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run LumaFoundry under XWayland with `WAYLAND_DISPLAY= photocraft`.	A fájlok natív behúzása Waylanden még nem támogatott. Használd a Fájl › Megnyitás parancsot, vagy futtasd a LumaFoundryot XWaylanden: `WAYLAND_DISPLAY= photocraft`.
 	New channel only	Csak új csatorna
 	New document…     ⌘N	Új dokumentum…     ⌘N
 	New Layer from Brush	Új réteg ecsetből
@@ -3994,7 +3994,7 @@ cameraRaw	Yellow	Sárga
 	Profile Mismatches: Ask When Opening	Profileltérés: rákérdezés megnyitáskor
 	Province / State	Megye / állam
 	Quick Sync	Gyors szinkronizálás
-	Quit PhotoCraft	Kilépés a PhotoCraftból
+	Quit LumaFoundry	Kilépés a LumaFoundryból
 	Recent Items	Legutóbbi elemek
 	Reference point location	Viszonyítási pont helye
 	Rendering…	Renderelés…
@@ -4141,7 +4141,7 @@ cameraRaw	Yellow	Sárga
 	{name} (Photoshop)	{name} (Photoshop)
 	{message} ({note})	{message} ({note})
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{n} művelet betöltve. Forrás: {file}
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} lépésnek még nincs megfelelője a PhotoCraftban
+@plural	{n} step has no LumaFoundry equivalent yet|{n} steps have no LumaFoundry equivalent yet	{n} lépésnek még nincs megfelelője a LumaFoundryban
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} művelet mentve. Cél: {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} Photoshop-megfelelő nélküli lépés kihagyva
 @plural	{n} action file loaded|{n} action files loaded	{n} műveletfájl betöltve
@@ -4250,12 +4250,12 @@ cameraRaw	Yellow	Sárga
 	Bicubic Smoother	Simább bikubikus
 	Bicubic Sharper	Élesebb bikubikus
 	Pasting from other apps is unavailable	A beillesztés más alkalmazásokból nem érhető el
-	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	A PhotoCraft ebben a munkamenetben nem fér hozzá a rendszer vágólapjához. Waylanden a Flatpak homokozó elrejti azt a protokollt, amelyen keresztül más alkalmazások képei olvashatók.
-	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Ha más alkalmazásokból szeretne beilleszteni, indítsa a PhotoCraftot XWayland alatt: `{command}`
-	Nothing to paste: PhotoCraft can't read the system clipboard here	Nincs mit beilleszteni: a PhotoCraft itt nem tudja olvasni a rendszer vágólapját
+	LumaFoundry can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	A LumaFoundry ebben a munkamenetben nem fér hozzá a rendszer vágólapjához. Waylanden a Flatpak homokozó elrejti azt a protokollt, amelyen keresztül más alkalmazások képei olvashatók.
+	To paste from other apps, start LumaFoundry under XWayland: `{command}`	Ha más alkalmazásokból szeretne beilleszteni, indítsa a LumaFoundryot XWayland alatt: `{command}`
+	Nothing to paste: LumaFoundry can't read the system clipboard here	Nincs mit beilleszteni: a LumaFoundry itt nem tudja olvasni a rendszer vágólapját
 	Delete this set	Készlet törlése
 	New Set…	Új készlet…
-	PhotoCraft Defaults	PhotoCraft alapértelmezések
+	LumaFoundry Defaults	LumaFoundry alapértelmezések
 	Save a list of these shortcuts as a web page	A billentyűparancsok listájának mentése weboldalként
 	Save the changes to this set	A készlet változásainak mentése
 	Save these shortcuts as a .kys file	A billentyűparancsok mentése .kys fájlként
@@ -4358,9 +4358,9 @@ smartSvg	Choose executable…	Futtatható fájl kiválasztása…
 smartSvg	Choose the application used to edit this SVG:	Válassza ki az SVG szerkesztésére használt alkalmazást:
 smartSvg	Edit SVG Smart Object	SVG intelligens objektum szerkesztése
 smartSvg	Other application	Másik alkalmazás
-smartSvg	PhotoCraft (internal editor)	PhotoCraft (belső szerkesztő)
+smartSvg	LumaFoundry (internal editor)	LumaFoundry (belső szerkesztő)
 smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	Az SVG-szerkesztő megnyílt. Mentse az SVG-t az intelligens objektum frissítéséhez.
-smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Mentse a megnyitott SVG-fájlba. Minden mentett módosítás külön visszavonási lépés lesz a PhotoCraftban.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in LumaFoundry.	Mentse a megnyitott SVG-fájlba. Minden mentett módosítás külön visszavonási lépés lesz a LumaFoundryban.
 smartSvg	Stop syncing this Smart Object	Az intelligens objektum szinkronizálásának leállítása
 smartSvg	Updates wait while another document or an editing dialog is active.	A frissítések várakoznak, amíg másik dokumentum vagy szerkesztési párbeszédablak aktív.
 smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Az AI/PDF/EPS tartalom SVG-ként szerkeszthető. A mentés lecseréli a beágyazott forrást; a formátumspecifikus tulajdonságok megváltozhatnak.

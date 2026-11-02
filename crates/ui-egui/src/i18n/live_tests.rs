@@ -42,8 +42,8 @@ fn ukrainian_native_app_menu_keeps_product_and_language_names() {
         let h = harness();
         let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(h.state()), lang("uk"), "uk");
         for (id, template) in [("help.about", "About {app}"), (crate::native_menu::HIDE, "Hide {app}"), ("file.exit", "Quit {app}")] {
-            let label = fmt(tr(lang("uk"), template), &[("app", "PhotoCraft")]);
-            assert!(label.contains("PhotoCraft"), "{id}: {label}");
+            let label = fmt(tr(lang("uk"), template), &[("app", "LumaFoundry")]);
+            assert!(label.contains("LumaFoundry"), "{id}: {label}");
             assert_eq!(layout.bar.find(id).map(|item| item.label.as_str()), Some(label.as_str()), "{id}");
         }
         assert_eq!(layout.bar.find("app.language.uk").map(|item| (item.label.as_str(), item.checked)), Some(("Українська", Some(true))));
@@ -405,7 +405,7 @@ fn czech_status_notices_and_navigator_draw_translated_text() {
             crate::notices::post(
                 h.state_mut(),
                 "Preferences can't be saved",
-                vec!["PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.".into()],
+                vec!["LumaFoundry keeps retrying; until a save succeeds, preference changes are lost when it closes.".into()],
                 true,
                 None,
             );

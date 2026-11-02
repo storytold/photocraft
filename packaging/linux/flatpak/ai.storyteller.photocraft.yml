@@ -1,4 +1,4 @@
-# Flatpak manifest for PhotoCraft, ready for a Flathub submission.
+# Flatpak manifest for LumaFoundry, ready for a Flathub submission.
 #
 # Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
 #

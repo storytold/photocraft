@@ -134,7 +134,7 @@ mod missing_font_warning_tests {
 
     #[test]
     fn missing_typeface_is_reported_by_run_info_and_convert() {
-        let family = "DefinitelyMissingPhotoCraftTypeface1251";
+        let family = "DefinitelyMissingLumaFoundryTypeface1251";
         let folder = std::env::temp_dir().join(format!("photocraft-cli-font-warnings-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let native = folder.join("missing.pcraft");

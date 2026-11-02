@@ -113,7 +113,7 @@ pub struct TextFieldMenu;
 
 impl egui::plugin::Plugin for TextFieldMenu {
     fn debug_name(&self) -> &'static str {
-        "PhotoCraft text field menu"
+        "LumaFoundry text field menu"
     }
 
     /// Esc closes only the menu: the field (a layer rename cancels on Esc) and egui (which drops

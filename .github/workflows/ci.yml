@@ -2,7 +2,7 @@ name: CI
 
 # Quality gates for every push to main and every pull request. The Linux gate runs through the
 # suite's shared gate workflow in craft-common-actions (`cargo xtask ci`); the Windows legs, the
-# test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
+# test variant and the corpus, web and fuzz jobs are LumaFoundry's own.
 on:
   push:
     branches: [main]

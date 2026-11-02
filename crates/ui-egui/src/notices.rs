@@ -82,9 +82,9 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
     ];
     let mut args = vec![("paste".to_owned(), paste_hint(app))];
     if let Some(command) = &app.services.xwayland_command {
-        lines.push("To drop files, start PhotoCraft under XWayland: `{command}`".to_owned());
+        lines.push("To drop files, start LumaFoundry under XWayland: `{command}`".to_owned());
         args.push(("command".to_owned(), command.clone()));
-        lines.push("Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.".to_owned());
+        lines.push("Or set Preferences › Performance › Linux display server to X11: LumaFoundry then always starts under XWayland.".to_owned());
     }
     let id = post(app, "Native file drag-and-drop is unavailable", lines, false, Some(WAYLAND_FILE_DROP_DISMISSED));
     if let Some(notice) = app.ui.notices.iter_mut().find(|notice| notice.id == id) {
@@ -97,17 +97,17 @@ pub fn wayland_file_drop_guidance(app: &mut PhotocraftApp) {
 /// fall back to, so the clipboard may hold an image all the same. Say so, and give the command
 /// that starts this install under XWayland, where the X11 clipboard works, when there is one.
 pub fn clipboard_unreadable(app: &mut PhotocraftApp) {
-    app.ui.status = tl!("Nothing to paste: PhotoCraft can't read the system clipboard here").into();
+    app.ui.status = tl!("Nothing to paste: LumaFoundry can't read the system clipboard here").into();
     app.ui.status_error = false;
     if app.ui.notices.iter().any(|notice| notice.title == CLIPBOARD_UNREADABLE) {
         return;
     }
     // English templates, translated when drawn, as in `wayland_file_drop_guidance`.
     let mut lines =
-        vec!["PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.".to_owned()];
+        vec!["LumaFoundry can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.".to_owned()];
     let mut args = Vec::new();
     if let Some(command) = &app.services.xwayland_command {
-        lines.push("To paste from other apps, start PhotoCraft under XWayland: `{command}`".to_owned());
+        lines.push("To paste from other apps, start LumaFoundry under XWayland: `{command}`".to_owned());
         args.push(("command".to_owned(), command.clone()));
     }
     let id = post(app, CLIPBOARD_UNREADABLE, lines, false, None);
@@ -315,7 +315,7 @@ mod tests {
             let r = crate::menus::invoke(&mut app, &ctx, "edit.paste", serde_json::json!({})).unwrap();
             assert_eq!(r["pasted"], serde_json::json!(false));
         }
-        assert_eq!(app.ui.status, "Nothing to paste: PhotoCraft can't read the system clipboard here");
+        assert_eq!(app.ui.status, "Nothing to paste: LumaFoundry can't read the system clipboard here");
         let shown: Vec<_> = app.ui.notices.iter().filter(|notice| notice.title == CLIPBOARD_UNREADABLE).collect();
         assert_eq!(shown.len(), 1, "a second paste doesn't stack another notice");
         let guidance = english(shown[0]);

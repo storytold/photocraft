@@ -954,7 +954,7 @@ impl Ex {
             // layer. A linked file we can't decode is not embedded.
             let (size, dpi) = match crate::linked::source_geometry(file_name, bytes, &photocraft_raster::Interrupt::NONE) {
                 Ok(geometry) => geometry,
-                Err(e) if linked => return Err(format!("the linked file {file_name} is not an image PhotoCraft can open: {e}")),
+                Err(e) if linked => return Err(format!("the linked file {file_name} is not an image LumaFoundry can open: {e}")),
                 Err(_) => ((0.0, 0.0), f64::from(self.dpi)),
             };
             (file_name.to_string(), bytes.to_vec(), size, dpi, None)
