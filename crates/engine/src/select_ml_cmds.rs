@@ -328,6 +328,8 @@ struct Prompting {
     /// Soft mask edges from the detector (`softEdge`: its logits through a sigmoid at this
     /// temperature); 0 asks for the usual hard mask.
     soft_edge: f64,
+    /// How many instances the detector may return (none: its default, one).
+    max_detections: Option<usize>,
 }
 
 /// Ask the detector: the masks it returned, at the request size.
@@ -356,6 +358,9 @@ fn detect(
     params.insert("threshold".to_string(), json!(pr.threshold));
     if pr.soft_edge > 0.0 {
         params.insert("softEdge".to_string(), json!(pr.soft_edge));
+    }
+    if let Some(n) = pr.max_detections {
+        params.insert("maxDetections".to_string(), json!(n));
     }
     if pr.declared.contains("points") {
         params.insert("points".to_string(), Value::String(scaled(&pr.points)));
@@ -451,6 +456,19 @@ fn without_specks(mut instances: Vec<(Vec<f32>, Rect, u64)>) -> Vec<(Vec<f32>, R
 /// little smoothing and feather, as Remove Background and Select Subject do): hair and soft
 /// edges get partial coverage from the pixels themselves.
 pub(crate) fn refine_coverage(doc: &Document, active: Option<LayerId>, all_layers: bool, cov: Vec<f32>, area: Rect) -> Vec<f32> {
+    refine_coverage_brushed(doc, active, all_layers, cov, area, None)
+}
+
+/// [`refine_coverage`] with the Refine Edge Brush painted where `brush` adds (hair: coverage
+/// estimated from the colours, strand by strand).
+pub(crate) fn refine_coverage_brushed(
+    doc: &Document,
+    active: Option<LayerId>,
+    all_layers: bool,
+    cov: Vec<f32>,
+    area: Rect,
+    brush: Option<&photocraft_algo::matting::EdgeBrush>,
+) -> Vec<f32> {
     let (content, found) = coverage_bounds(&cov, area);
     if found == 0 {
         return cov;
@@ -467,7 +485,7 @@ pub(crate) fn refine_coverage(doc: &Document, active: Option<LayerId>, all_layer
         v
     };
     let refined = crate::smartselect_cmds::with_doc_sampler(doc, active, all_layers, |smp, d| {
-        photocraft_algo::matting::refine_mask(smp, &reader, content, d.bounds(), &crate::cutout_cmds::REFINE)
+        photocraft_algo::matting::refine_mask_brushed(smp, &reader, content, d.bounds(), &crate::cutout_cmds::REFINE, brush)
     });
     match refined {
         Some(reg) => photocraft_algo::matting::region_reader(&reg)(area),
@@ -525,6 +543,7 @@ fn prompting(plan: &Plan) -> Prompting {
         negatives: plan.negatives.clone(),
         bbox: plan.bbox,
         soft_edge: 0.0,
+        max_detections: None,
     }
 }
 
@@ -772,6 +791,7 @@ fn prompting_for(s: &Session, cmd: &str, template: &str, prompt: &str) -> Option
         negatives: Vec::new(),
         bbox: None,
         soft_edge: 0.0,
+        max_detections: None,
     };
     Some((backend, server, prompting))
 }
@@ -865,6 +885,12 @@ impl SubjectFinder {
     /// Ask the detector for soft mask edges at temperature `t` (see [`Prompting::soft_edge`]).
     pub(crate) fn soft_edges(mut self, t: f64) -> Self {
         self.prompting.soft_edge = t;
+        self
+    }
+
+    /// Let the detector return up to `n` instances (its default is one).
+    pub(crate) fn at_most(mut self, n: usize) -> Self {
+        self.prompting.max_detections = Some(n.max(1));
         self
     }
 

@@ -127,6 +127,12 @@ fn split_takes_hair_from_the_matte_around_each_subject() {
     // The other edge sources, by name.
     let r = s.execute(SPLIT, json!({"layers": 2, "edges": "refine"})).unwrap();
     assert_eq!(r["edges"], "refine", "{r}");
+    let r = s.execute(SPLIT, json!({"layers": 2, "edges": "hair"})).unwrap();
+    assert_eq!(r["edges"], "hair", "{r}");
+    assert!(
+        fake.state().runs.iter().any(|r| r.request["task"] == "segment" && r.request["prompt"] == "hair" && r.request["params"]["maxDetections"].is_number()),
+        "the detector asked for hair"
+    );
     let r = s.execute(SPLIT, json!({"layers": 2, "edges": "soft:2"})).unwrap();
     assert_eq!(r["edges"], "soft", "{r}");
     assert!(fake.state().runs.iter().any(|r| r.request["task"] == "segment" && r.request["params"]["softEdge"] == 2.0), "the detector asked for soft edges");
