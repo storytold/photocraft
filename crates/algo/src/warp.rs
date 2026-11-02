@@ -28,6 +28,23 @@ const MAX_CELLS: usize = 512;
 /// destination pixel the filter follows (bounds the footprint each tile reads).
 const MAX_SS: f64 = 8.0;
 
+/// A PSD can store a source-sized custom warp frame at an offset from the source canvas;
+/// the contents still fill that mesh (#8227). Larger frames retain their parameterization:
+/// native smart-object warps pad their knots over an expanded frame (#4113).
+fn source_warp_offset(w: &photocraft_geom::warp::Warp, src_rect: Rect) -> (f64, f64) {
+    let b = w.bounds;
+    let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * (1.0 + a.abs().max(b.abs()));
+    if w.style == photocraft_geom::warp::WarpStyle::Custom
+        && !src_rect.is_empty()
+        && near(b[2] - b[0], f64::from(src_rect.width()))
+        && near(b[3] - b[1], f64::from(src_rect.height()))
+    {
+        (b[0] - f64::from(src_rect.x0), b[1] - f64::from(src_rect.y0))
+    } else {
+        (0.0, 0.0)
+    }
+}
+
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
 /// through `warp` (source space) and then the affine `t` (source → document) in one resampling
 /// pass, an exact shift for whole-pixel translations (so conversions and re-renders are
@@ -40,8 +57,9 @@ pub fn place_source(
 ) -> Result<Surface, photocraft_raster::AllocationError> {
     let [a, b, c, d, e, f] = t.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
+        let (dx, dy) = source_warp_offset(w, src_rect);
         let map = |x: f64, y: f64| {
-            let (u, v) = w.map(x, y);
+            let (u, v) = w.map(x + dx, y + dy);
             (a * u + c * v + e, b * u + d * v + f)
         };
         return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
@@ -62,8 +80,9 @@ pub fn place_source_projective(
     warp: Option<&photocraft_geom::warp::Warp>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
+        let (dx, dy) = source_warp_offset(w, src_rect);
         let map = |x: f64, y: f64| {
-            let (u, v) = w.map(x, y);
+            let (u, v) = w.map(x + dx, y + dy);
             h.apply(u, v)
         };
         return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
@@ -523,6 +542,88 @@ mod tests {
             }
         }
         surf
+    }
+
+    #[test]
+    fn custom_smart_object_warp_uses_the_source_canvas() {
+        // #8227: PSD warp.bounds can be offset from Sz without moving the contents inside
+        // the mesh. The same bent mesh must render identically with either bounds origin.
+        let rect = Rect::new(0, 0, 40, 24);
+        let bounds = [0.0, 0.0, 40.0, 24.0];
+        let t = photocraft_geom::Affine { m: [1.2, 0.1, -0.2, 1.1, 12.0, 8.0] };
+        let h = crate::transform::Homography([1.2, -0.2, 12.0, 0.1, 1.1, 8.0, 0.002, 0.001, 1.0]);
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+            src.fill_rect(rect, &[1.0, 0.0, 1.0, 1.0]);
+            src.fill_rect(Rect::new(2, 2, 38, 22), &[0.0, 0.5, 1.0, 1.0]);
+            for split in [false, true] {
+                let mut mesh = BezierMesh::identity(bounds, 1, 1);
+                mesh.points[5] = [8.0, -4.0];
+                mesh.points[10] = [32.0, 28.0];
+                if split {
+                    assert!(mesh.split_u(0.4));
+                    assert!(mesh.split_v(0.6));
+                }
+                let canonical = Warp::custom(mesh.clone(), bounds);
+                for offset in [[-6.0, -8.0], [6.0, 8.0]] {
+                    let warp = Warp::custom(mesh.clone(), [offset[0], offset[1], offset[0] + 40.0, offset[1] + 24.0]);
+                    for projective in [false, true] {
+                        let place = |w: &Warp| {
+                            if projective { place_source_projective(&src, rect, &h, Some(w)) } else { place_source(&src, rect, &t, Some(w)) }
+                                .expect("place source")
+                        };
+                        let (expected, actual) = (place(&canonical), place(&warp));
+                        let area = expected.content_bounds().union(&actual.content_bounds());
+                        let worst = expected.read_region(area).iter().zip(actual.read_region(area)).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                        assert!(worst < 1e-6, "{sample:?}, split {split}, offset {offset:?}, projective {projective}: {worst}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_sized_warp_offset_preserves_other_frames_and_identity() {
+        let rect = Rect::new(0, 0, 40, 24);
+        let t = photocraft_geom::Affine { m: [1.0, 0.0, 0.0, 1.0, 12.0, 8.0] };
+        let h = crate::transform::Homography([1.0, 0.0, 12.0, 0.0, 1.0, 8.0, 0.002, 0.001, 1.0]);
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+            src.fill_rect(Rect::new(2, 2, 38, 22), &[0.2, 0.5, 1.0, 1.0]);
+            let bounds = [-6.0, -8.0, 34.0, 16.0];
+            // The issue's unaffected cases: warpNone and a flat identity grid over offset bounds.
+            for warp in [Warp::none(bounds), Warp::custom(BezierMesh::identity(bounds, 1, 1), bounds)] {
+                for projective in [false, true] {
+                    let place = |warp| {
+                        if projective { place_source_projective(&src, rect, &h, warp) } else { place_source(&src, rect, &t, warp) }.expect("place source")
+                    };
+                    let (actual, expected) = (place(Some(&warp)), place(None));
+                    let area = actual.content_bounds().union(&expected.content_bounds());
+                    assert_eq!(actual.read_region(area), expected.read_region(area));
+                }
+            }
+            // #4113's native expanded frames, and preset warps, still use their original box.
+            let expanded = [-6.0, -8.0, 46.0, 32.0];
+            let mut mesh = BezierMesh::identity(expanded, 1, 1);
+            mesh.points[5][1] -= 5.0;
+            for warp in [Warp::custom(mesh, expanded), Warp::preset(WarpStyle::Arc, 25.0, bounds)] {
+                for projective in [false, true] {
+                    let actual = if projective { place_source_projective(&src, rect, &h, Some(&warp)) } else { place_source(&src, rect, &t, Some(&warp)) }
+                        .expect("place source");
+                    let expected = warp_mesh_surface(
+                        &src,
+                        rect,
+                        &|x, y| {
+                            let (u, v) = warp.map(x, y);
+                            if projective { h.apply(u, v) } else { (u + 12.0, v + 8.0) }
+                        },
+                        Interp::Bicubic,
+                    );
+                    let area = actual.content_bounds().union(&expected.content_bounds());
+                    assert_eq!(actual.read_region(area), expected.read_region(area), "{sample:?} {:?}, projective {projective}", warp.style);
+                }
+            }
+        }
     }
 
     #[test]
