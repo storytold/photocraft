@@ -81,6 +81,7 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
 }
 
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::toolbar_docking::record_docked(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
@@ -88,6 +89,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let double = app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
     crate::direction::start_panel("toolbar")
+        .show_separator_line(false)
         .resizable(false)
         .exact_size(w)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8)))

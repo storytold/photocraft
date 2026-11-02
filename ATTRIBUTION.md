@@ -155,3 +155,9 @@ are adapted from Skyfuller1303’s MIT OR Apache-2.0 implementation in
 `897f20072762fdf0eb688adcdb8d8cda7b38ce66`. Don Omondi’s embedded AI/PDF/EPS
 extension and current-main integration build on that source. Clipboard and unrelated
 Shape Tools changes from that branch are not included.
+
+## Panel workspace regression fixture (not shipped)
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/ui-egui/tests/fixtures/panel-repair-workspace.json` | Panel-only workspace regression fixture | @KotovGGG | Sanitized panel audit snapshot, 2026-10-29 | MIT OR Apache-2.0; adjacent `panel-repair-workspace.LICENSE` |

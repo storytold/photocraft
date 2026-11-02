@@ -23,6 +23,11 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
+/// The same SVG source for native panel strips and ordinary buttons.
+pub(crate) fn source(name: &str) -> egui::ImageSource<'static> {
+    white_icons().source(name)
+}
+
 /// Panel footer buttons share one glyph per action and one size, so the Layers footer and the
 /// Swatches, Gradients and Patterns footers read the same, as in Photoshop (#10656).
 pub const FOOTER_SIZE: f32 = 26.0;
