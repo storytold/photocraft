@@ -3199,3 +3199,40 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# 箭头、导入问题流程、直方图统计、画板与 CPU 渲染说明（覆盖率报告列出的 zh-hans 缺失字符串）
+	Answer the open import question first, then import this file again.	先回答未处理的导入问题，然后再次导入此文件。
+	Arrowhead options	箭头选项
+	Arrowheads	箭头
+	Artboards	画板
+	CPU Rendering	CPU 渲染
+	Calculating…	正在计算…
+	Click to refresh histogram with uncached data	点击以使用未缓存的数据刷新直方图
+	Concavity	凹度
+	Count:	数量：
+	Create new set	新建集合
+	Drawn on the CPU: {reason}. Click for System Info.	由 CPU 绘制：{reason}。点击查看系统信息。
+	End	终点
+	Import as New Group	作为新组导入
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	“作为新组导入”会保留“{group}”，并将该文件作为新组添加到它旁边。
+	Length	长度
+	Level:	级别：
+	Locked	已锁定
+	Move Down	下移
+	Move Up	上移
+	No import is waiting. Import the file again.	没有正在等待的导入。请再次导入该文件。
+	No matching fonts	无匹配字体
+	Percentile:	百分位：
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	“替换”会先删除“{group}”中的所有内容，包括你在其中编辑过或移入的预设。此操作无法撤销。
+	Set as default	设为默认
+	Show Channels in Color	以彩色显示通道
+	Show Statistics	显示统计信息
+	Source:	源：
+	Start	起点
+	Uncached Refresh	无缓存刷新
+	Use these settings for new arrows	将这些设置用于新箭头
+	X	X
+	Y	Y
+	{message} into “{group}”	{message}到“{group}”中
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	画笔组“{group}”中已包含你的 {n} 个画笔。
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	渐变组“{group}”已存在（{n} 个渐变）。
