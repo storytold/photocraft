@@ -909,7 +909,9 @@ fn only_stored_previews_refuse_unreadable_embedded_images() {
 }
 
 fn drawing(w: u32, h: u32, body: &str) -> String {
-    format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\"><defs><filter id=\"f\"><feOffset dx=\"1\"/></filter><pattern id=\"p\" patternUnits=\"userSpaceOnUse\" width=\"TILE\" height=\"TILE\"><rect width=\"4\" height=\"4\"/></pattern></defs>{body}</svg>")
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\"><defs><filter id=\"f\"><feOffset dx=\"1\"/></filter><pattern id=\"p\" patternUnits=\"userSpaceOnUse\" width=\"TILE\" height=\"TILE\"><rect width=\"4\" height=\"4\"/></pattern></defs>{body}</svg>"
+    )
 }
 
 fn pixel_layers(r: &ImportResult) -> usize {
@@ -959,4 +961,94 @@ fn ordinary_filters_and_patterns_still_rasterise() {
     let svg = drawing(512, 512, "<rect width=\"512\" height=\"512\" fill=\"url(#p)\"/>").replace("TILE", "64");
     let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
     assert!(buf.px.iter().any(|p| p[3] > 0.99));
+}
+
+fn tile_svg(tile: &str, body: &str) -> String {
+    drawing(100, 100, body).replace("TILE", tile)
+}
+
+fn too_big(svg: &str) {
+    let err = rasterize(svg.as_bytes(), 1.0).unwrap_err().to_string();
+    assert!(err.contains("MiB limit"), "{err}");
+}
+
+/// The filter region is not clamped by resvg: a flood fills all of it.
+#[test]
+fn a_huge_filter_region_is_refused() {
+    let svg = tile_svg(
+        "4",
+        "<filter id=\"r\" x=\"0\" y=\"0\" width=\"100000\" height=\"100000\" filterUnits=\"userSpaceOnUse\"><feFlood/></filter><rect width=\"10\" height=\"10\" filter=\"url(#r)\"/>",
+    );
+    too_big(&svg);
+}
+
+/// A default region follows the element, so a huge element makes a huge region for turbulence.
+#[test]
+fn a_huge_element_with_a_region_sized_primitive_is_refused() {
+    let svg = tile_svg("4", "<filter id=\"t\"><feTurbulence baseFrequency=\"0.1\"/></filter><rect width=\"200000\" height=\"200000\" filter=\"url(#t)\"/>");
+    too_big(&svg);
+}
+
+/// What an feImage draws is walked too.
+#[test]
+fn a_hostile_pattern_inside_fe_image_is_refused() {
+    let svg = tile_svg(
+        "100000",
+        "<g id=\"g\"><rect width=\"100\" height=\"100\" fill=\"url(#p)\"/></g><filter id=\"i\" x=\"0\" y=\"0\" width=\"200\" height=\"200\" filterUnits=\"userSpaceOnUse\"><feImage href=\"#g\"/></filter><rect width=\"10\" height=\"10\" filter=\"url(#i)\"/>",
+    );
+    too_big(&svg);
+}
+
+/// An embedded SVG image is drawn by resvg on its own pixmap, with its own drawing inside.
+#[test]
+fn a_hostile_pattern_inside_an_embedded_svg_image_is_refused() {
+    let inner = tile_svg("100000", "<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/>");
+    let svg = image_svg(&embedded_image("image/svg+xml", inner.as_bytes())).replacen("width=\"1\" height=\"1\"", "width=\"100\" height=\"100\"", 2);
+    too_big(&svg);
+}
+
+/// Each link of a clip-path chain, and of a mask-on-mask chain, needs a layer while the next is applied.
+#[test]
+fn long_clip_and_mask_chains_are_refused() {
+    let n = 150;
+    let mut clips = String::new();
+    let mut masks = String::new();
+    for i in 0..n {
+        let next = if i + 1 < n { format!(" clip-path=\"url(#c{})\"", i + 1) } else { String::new() };
+        clips.push_str(&format!("<clipPath id=\"c{i}\"{next}><rect width=\"2000\" height=\"2000\"/></clipPath>"));
+        let next = if i + 1 < n { format!(" mask=\"url(#m{})\"", i + 1) } else { String::new() };
+        masks.push_str(&format!("<mask id=\"m{i}\"{next}><rect width=\"2000\" height=\"2000\" fill=\"#fff\"/></mask>"));
+    }
+    for (defs, attr) in [(clips, "clip-path=\"url(#c0)\""), (masks, "mask=\"url(#m0)\"")] {
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2000\" height=\"2000\"><defs>{defs}</defs><rect width=\"2000\" height=\"2000\" {attr}/></svg>"
+        );
+        too_big(&svg);
+    }
+    // A short chain is fine.
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"200\"><defs><clipPath id=\"a\" clip-path=\"url(#b)\"><rect width=\"100\" height=\"100\"/></clipPath><clipPath id=\"b\"><rect width=\"80\" height=\"80\"/></clipPath></defs><rect width=\"200\" height=\"200\" clip-path=\"url(#a)\"/></svg>";
+    assert!(rasterize(svg.as_bytes(), 1.0).is_ok());
+}
+
+/// The estimate itself has a depth limit, so a deep drawing cannot overflow its own walk.
+#[test]
+fn a_very_deep_drawing_is_refused_by_the_estimate() {
+    let svg = tile_svg("4", &format!("{}<rect width=\"10\" height=\"10\"/>{}", "<g opacity=\"0.9\">".repeat(300), "</g>".repeat(300)));
+    std::thread::Builder::new().stack_size(64 << 20).spawn(move || too_big(&svg)).unwrap().join().unwrap();
+}
+
+#[test]
+fn an_unknown_size_counts_as_unbounded() {
+    assert_eq!(px(f64::NAN), f64::INFINITY);
+    assert_eq!(most(f64::NAN, 1.0), f64::INFINITY);
+    assert_eq!(most(2.0, 1.0), 2.0);
+}
+
+/// Clips, masks, filters and patterns of ordinary size still draw.
+#[test]
+fn ordinary_clips_masks_and_filters_still_rasterise() {
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"200\"><defs><clipPath id=\"c\"><rect width=\"100\" height=\"100\"/></clipPath><mask id=\"m\"><rect width=\"200\" height=\"200\" fill=\"#fff\"/></mask><filter id=\"f\"><feFlood flood-color=\"red\"/><feGaussianBlur stdDeviation=\"2\"/></filter></defs><rect width=\"200\" height=\"200\" clip-path=\"url(#c)\" mask=\"url(#m)\"/><rect x=\"20\" y=\"20\" width=\"50\" height=\"50\" filter=\"url(#f)\"/></svg>";
+    let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
+    assert!(buf.px[10 * 200 + 10][3] > 0.99);
+    assert!(buf.px[150 * 200 + 150][3] < 0.01);
 }
