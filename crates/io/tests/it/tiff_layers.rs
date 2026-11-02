@@ -299,6 +299,25 @@ fn cmyk_float_composite_stores_paper_under_clear_pixels() {
     assert!(be(4, 0) > 0.9, "the painted pixel stays opaque");
 }
 
+/// A layer opacity past 1 (an out-of-range float a script can set) must not leak alpha past 1.0
+/// into the native CMYK composite: the exporters disagree there — flat drops the alpha at
+/// `>= 1.0` while the merged-plane writer would store the raw value — so the compositor bounds
+/// the alpha it hands them.
+#[test]
+fn native_cmyk_composite_alpha_is_bounded() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 2.0;
+    d.layers.push(ink);
+    let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+    assert!(b.px.iter().all(|p| (0.0..=1.0).contains(&p[4])), "alpha must stay in 0..=1, got {:?}", b.px.iter().map(|p| p[4]).fold(0.0f32, f32::max));
+}
+
 /// Photoshop (27.11) saves a layered TIFF with Save Transparency as a composite with a
 /// transparency sample, a positive layer count and an `MTrn` block first in the layer data
 /// (the specification's key is `Mtrn`; `nrTM` in an `II` file). That sample is the merged
