@@ -44,6 +44,12 @@ const IMAGE_LIMITS: Limits = Limits { max_width: 8192, max_height: 8192, max_pix
 const MAX_KEPT_BYTES: usize = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
 /// Unreadable brushes reported one by one; the rest are counted.
 const MAX_NOTED: usize = 10;
+/// Longest name or path kept from a file, as the brush library takes (`MAX_NAME` in the engine).
+const MAX_TEXT: usize = 255;
+
+fn capped(s: &str) -> String {
+    s.chars().take(MAX_TEXT).collect()
+}
 
 /// The presets read from one file plus everything that could not be mapped.
 #[derive(Clone, Debug, Default)]
@@ -70,11 +76,19 @@ pub fn read_procreate_with(bytes: &[u8], group: &str, ctl: &Interrupt) -> Result
         return Err("the file holds no Procreate brushes".into());
     }
     let mut m = Mapper { zip: &zip, unmapped: BTreeSet::new(), kept: 0 };
-    let mut unreadable = 0usize;
+    let (mut unreadable, mut noted) = (0usize, 0usize);
     for (i, dir) in dirs.iter().enumerate() {
         ctl.check().map_err(|e| e.to_string())?;
         ctl.progress(i as f32 / dirs.len() as f32);
-        match m.brush(dir, i, &mut out.warnings) {
+        let mut notes = Vec::new();
+        let brush = m.brush(dir, i, &mut notes);
+        for note in notes {
+            noted += 1;
+            if noted <= MAX_NOTED {
+                out.warnings.push(note);
+            }
+        }
+        match brush {
             Ok(Some(brush)) => out.presets.push(BrushPreset {
                 name: brush.0,
                 brush: brush.1,
@@ -98,6 +112,9 @@ pub fn read_procreate_with(bytes: &[u8], group: &str, ctl: &Interrupt) -> Result
     }
     if unreadable > MAX_NOTED {
         out.warnings.push(format!("{} more brushes could not be read; skipped", unreadable - MAX_NOTED));
+    }
+    if noted > MAX_NOTED {
+        out.warnings.push(format!("{} more notes about missing shapes and grains", noted - MAX_NOTED));
     }
     if out.presets.is_empty() {
         return Err(out.warnings.first().cloned().unwrap_or_else(|| "no brush in the file could be read".into()));
@@ -167,7 +184,7 @@ fn set_plist(bytes: &[u8]) -> Result<(Option<String>, Vec<String>), String> {
     while let Some(key) = items.next() {
         let Some(value) = items.next() else { break };
         match key.text() {
-            Some("name") => name = value.text().map(str::to_string),
+            Some("name") => name = value.text().map(capped),
             Some("brushes") => brushes = value.children().filter(|n| n.has_tag_name("string")).filter_map(|n| n.text().map(str::to_string)).collect(),
             _ => {}
         }
@@ -430,7 +447,7 @@ impl Mapper<'_> {
     fn brush(&mut self, dir: &str, index: usize, notes: &mut Vec<String>) -> Result<Option<(String, BrushSettings)>, String> {
         let bytes = self.zip.read_by_name(&format!("{dir}Brush.archive"), MAX_ARCHIVE).map_err(|e| e.to_string())?;
         let a = Archive::parse(&bytes)?;
-        let name = a.text("name").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Brush {}", index + 1));
+        let name = a.text("name").map(|n| capped(n.trim())).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Brush {}", index + 1));
         let mut b = settings(&a, &mut self.unmapped);
         match self.image(dir, "Shape.png")? {
             Some(img) => {
@@ -445,7 +462,7 @@ impl Mapper<'_> {
                 b.tip = TipShape::Sampled(tile(w, h, &v));
             }
             None => match a.text("bundledShapePath") {
-                Some(path) => notes.push(format!("\"{name}\" uses Procreate's built-in shape \"{path}\"; a round tip stands in")),
+                Some(path) => notes.push(format!("\"{name}\" uses Procreate's built-in shape \"{}\"; a round tip stands in", capped(&path))),
                 None => notes.push(format!("\"{name}\" has no shape image; a round tip stands in")),
             },
         }
@@ -480,7 +497,7 @@ impl Mapper<'_> {
             // Procreate's blank grain is no grain.
             Ok(None) => {
                 if let Some(path) = a.text("bundledGrainPath").filter(|p| !p.contains("Blank")) {
-                    notes.push(format!("\"{name}\" uses Procreate's built-in grain \"{path}\"; left out"));
+                    notes.push(format!("\"{name}\" uses Procreate's built-in grain \"{}\"; left out", capped(&path)));
                 }
             }
             Err(e) => notes.push(format!("\"{name}\": its grain could not be read ({e}); left out")),

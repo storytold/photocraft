@@ -297,6 +297,21 @@ fn many_bad_brushes_are_summed_up() {
     assert_eq!(imp.warnings[12], "4 more brushes could not be read; skipped");
 }
 
+/// A file can hold thousands of small brushes: what it says about them stays bounded.
+#[test]
+fn names_and_notes_from_a_file_are_capped() {
+    let long = "x".repeat(100_000);
+    let brush = write_archive(&[("name", Field::Text(long.clone())), ("bundledShapePath", Field::Text(long.clone()))]);
+    let set = write_brushset(&long, &vec![(brush, None, None); 40]);
+    let imp = read_procreate(&set, "Set").unwrap();
+    assert_eq!(imp.presets.len(), 40);
+    assert!(imp.presets.iter().all(|p| p.name.chars().count() == MAX_TEXT));
+    assert_eq!(imp.set_name.unwrap().chars().count(), MAX_TEXT);
+    assert_eq!(imp.warnings.len(), MAX_NOTED + 1, "{:?}", imp.warnings.last());
+    assert!(imp.warnings.iter().all(|w| w.len() < 3 * MAX_TEXT), "a note holds a capped name and path");
+    assert_eq!(imp.warnings[MAX_NOTED], "30 more notes about missing shapes and grains");
+}
+
 #[test]
 fn settings_without_an_equivalent_are_listed_once() {
     let archive = write_archive(&[

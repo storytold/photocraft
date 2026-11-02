@@ -148,6 +148,8 @@ fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: String, mut presets
         free_group(&group, |g| groups.contains(g))
     };
     let replaced = |x: &photocraft_paint::BrushPreset| replace && !x.builtin && x.group == group;
+    // An imported brush can reuse the name, and Update Brush Preset would then overwrite it.
+    let current_goes = s.tools.current_preset.as_ref().is_some_and(|c| s.tools.presets.iter().any(|x| replaced(x) && x.name.eq_ignore_ascii_case(c)));
     let mut taken = UniqueNames::new(s.tools.presets.iter().filter(|x| !replaced(x)).map(|x| x.name.as_str()));
     let names: Vec<String> = presets
         .iter_mut()
@@ -173,6 +175,9 @@ fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: String, mut presets
         s.tools.brush = b;
         // So Update Brush Preset saves to the imported preset, not the one picked before.
         s.tools.current_preset = Some(name);
+        s.tools.brush_changed();
+    } else if current_goes {
+        s.tools.current_preset = None;
         s.tools.brush_changed();
     }
     Ok((group, names))
@@ -595,7 +600,13 @@ mod tests {
         s.execute("brush.presets.importProcreate", json!({"data": data, "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let pixels = |s: &Session| {
+            let d = s.active().unwrap();
+            d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(d.doc.bounds())
+        };
+        let blank = pixels(&s);
         s.execute("paint.stroke", json!({"points": [[5, 30], [60, 30]], "preset": "Soft Ink"})).unwrap();
+        assert!(pixels(&s) != blank, "the imported brush paints");
         // From a file on disk, the group is the file's name.
         let path = std::env::temp_dir().join(format!("pc-procreate-{}.brushset", std::process::id()));
         std::fs::write(&path, procreate_set()).unwrap();
@@ -639,6 +650,24 @@ mod tests {
         let before = in_group(&s, &builtin);
         s.execute(CMD, json!({"data": data, "group": builtin, "replace": true})).unwrap();
         assert_eq!(in_group(&s, &builtin), before + 2);
+    }
+
+    #[test]
+    fn a_replace_that_removes_the_current_preset_clears_it() {
+        const CMD: &str = "brush.presets.importProcreate";
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&procreate_set());
+        s.execute(CMD, json!({"data": data, "group": "Kit", "select": true})).unwrap();
+        assert_eq!(s.tools.current_preset.as_deref(), Some("Soft Ink"));
+        let bumped = s.tools.brush_rev;
+        s.execute(CMD, json!({"data": data, "group": "Kit", "replace": true})).unwrap();
+        assert_eq!(s.tools.current_preset, None, "the imported Soft Ink is a new preset");
+        assert_ne!(s.tools.brush_rev, bumped, "the UI hears of it");
+        assert!(s.execute("brush.presets.update", json!({"brush": {"size": 33}})).is_err());
+        // A preset in another group stays current.
+        s.execute("tools.setBrush", json!({"preset": "Hard Round"})).unwrap();
+        s.execute(CMD, json!({"data": data, "group": "Kit", "replace": true})).unwrap();
+        assert_eq!(s.tools.current_preset.as_deref(), Some("Hard Round"));
     }
 
     #[test]
