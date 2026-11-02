@@ -352,4 +352,7 @@ fn a_gradient_preview_paints_a_copy_exactly_as_the_command_does() {
     // Bad params are an error, as for the command, and paint nothing.
     let mut untouched = (*s.active().unwrap().doc).clone();
     assert!(gradient_preview(&s, &mut untouched, &json!({"to": [1, 1], "target": "mask"})).is_err());
+    // CodeRabbit on #10722: the refused preview left the copy as it was.
+    let row = |d: &photocraft_doc::Document| (0..20).map(|x| mask(d, x)).collect::<Vec<f32>>();
+    assert_eq!(row(&untouched), row(&s.active().unwrap().doc), "the refused preview painted nothing into the copy");
 }

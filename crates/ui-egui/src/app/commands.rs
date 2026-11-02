@@ -58,7 +58,7 @@ impl PhotocraftApp {
         // as Photoshop applies it first (#10703) — after the automation gate, so a command that
         // is refused there changes nothing at all (#10703 review).
         if self.run_depth == 1 {
-            crate::gradient_ui::mask::before_command(self, id);
+            crate::gradient_ui::mask::before_command(self, id, &params)?;
         }
         // A new layer while Free Transform is open applies the transform first, as Photoshop does
         // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a

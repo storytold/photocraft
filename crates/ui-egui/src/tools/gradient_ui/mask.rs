@@ -30,6 +30,10 @@ pub(crate) struct Pending {
 /// A drag drawing a new mask gradient (`grab` None) or moving the pending one's handles or line.
 #[derive(Clone, Copy, Debug)]
 struct Drag {
+    /// The document and layer the press came on: a release on another (a tab or layer switched
+    /// mid-drag) draws nothing.
+    doc: DocId,
+    layer: LayerId,
     grab: Option<Grab>,
     down: [f32; 2],
     /// The line when the press came, for dragging it whole.
@@ -41,7 +45,9 @@ struct Drag {
 /// The live mask gradient's state (not saved).
 #[derive(Default)]
 pub(crate) struct MaskGradient {
-    pending: Option<Pending>,
+    /// At most one per document: a gradient drawn in another document waits there, it is not
+    /// replaced.
+    pending: Vec<Pending>,
     drag: Option<Drag>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
@@ -74,10 +80,23 @@ fn target(app: &PhotocraftApp) -> Option<(DocId, LayerId, u64)> {
     Some((st.doc.id, st.active_layer?, st.revision))
 }
 
+/// The active document's pending gradient, whatever layer it is on.
+fn pending_in_active(app: &PhotocraftApp) -> Option<Pending> {
+    let doc = app.session.active()?.doc.id;
+    app.gradient.mask.pending.iter().find(|q| q.doc == doc).copied()
+}
+
 /// The pending gradient, when it belongs to the active document and layer.
 fn pending_here(app: &PhotocraftApp) -> Option<Pending> {
-    let (doc, layer, _) = target(app)?;
-    app.gradient.mask.pending.filter(|q| q.doc == doc && q.layer == layer)
+    let (_, layer, _) = target(app)?;
+    pending_in_active(app).filter(|q| q.layer == layer)
+}
+
+/// Takes the active document's pending gradient out of the list.
+fn take_active(app: &mut PhotocraftApp) -> Option<Pending> {
+    let doc = app.session.active()?.doc.id;
+    let i = app.gradient.mask.pending.iter().position(|q| q.doc == doc)?;
+    Some(app.gradient.mask.pending.remove(i))
 }
 
 /// The line shown: the one being dragged, else the pending one.
@@ -109,12 +128,13 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifi
     let zoom = app.point_zoom().max(0.01);
     match ev {
         ToolEvent::Down { x, y, .. } => {
+            let Some((doc, layer, _)) = target(app) else { return true };
             let p = [x as f32, y as f32];
             let pending = pending_here(app);
             let grab = pending.and_then(|q| hit(q.from, q.to, p, GRAB / zoom));
             app.gradient.mask.drag = Some(match (grab, pending) {
-                (Some(grab), Some(q)) => Drag { grab: Some(grab), down: p, start: (q.from, q.to), from: q.from, to: q.to },
-                _ => Drag { grab: None, down: p, start: (p, p), from: p, to: p },
+                (Some(grab), Some(q)) => Drag { doc, layer, grab: Some(grab), down: p, start: (q.from, q.to), from: q.from, to: q.to },
+                _ => Drag { doc, layer, grab: None, down: p, start: (p, p), from: p, to: p },
             });
         }
         ToolEvent::Move { x, y, .. } => drag_to(app, [x as f32, y as f32], mods),
@@ -150,16 +170,29 @@ fn drag_to(app: &mut PhotocraftApp, p: [f32; 2], mods: egui::Modifiers) {
 fn release(app: &mut PhotocraftApp) {
     let Some(d) = app.gradient.mask.drag.take() else { return };
     let Some((doc, layer, revision)) = target(app) else { return };
+    // A tab or layer switched mid-drag: the release is not on what the press drew on.
+    if (doc, layer) != (d.doc, d.layer) {
+        return;
+    }
     let zoom = app.point_zoom().max(0.01);
-    // A click draws nothing and leaves a pending gradient as it is.
+    // A click draws nothing and leaves a pending gradient as it is. A new line is as long as the
+    // preview needs to show it ([`display_doc`]), so nothing is painted that was never shown.
     let moved = match d.grab {
-        None => dist(d.from, d.to) * zoom >= 2.0,
+        None => dist(d.from, d.to) * zoom >= 2.0 && dist(d.from, d.to) >= MIN_SPAN,
         Some(_) => d.from != d.start.0 || d.to != d.start.1,
     };
     if moved {
-        app.gradient.mask.pending = Some(Pending { doc, layer, revision, from: d.from, to: d.to });
+        let q = Pending { doc, layer, revision, from: d.from, to: d.to };
+        let list = &mut app.gradient.mask.pending;
+        match list.iter_mut().find(|p| p.doc == doc) {
+            Some(slot) => *slot = q,
+            None => list.push(q),
+        }
     }
 }
+
+/// The shortest line, in document pixels, a mask gradient is previewed and painted for.
+const MIN_SPAN: f32 = 1.0;
 
 /// `paint.gradient`'s params for line `from`→`to` on the mask of `layer`.
 fn params(app: &PhotocraftApp, layer: LayerId, from: [f32; 2], to: [f32; 2]) -> Value {
@@ -169,27 +202,23 @@ fn params(app: &PhotocraftApp, layer: LayerId, from: [f32; 2], to: [f32; 2]) -> 
     p
 }
 
-/// Paints the pending gradient into its mask (one history step). A failure is reported in the
-/// status bar and drops it.
-pub(crate) fn commit(app: &mut PhotocraftApp) {
+/// Paints the active document's pending gradient into its mask (one history step); one pending
+/// in another document waits there. A failure is reported in the status bar, drops it and is
+/// returned.
+pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     app.gradient.mask.drag = None;
-    let Some(q) = app.gradient.mask.pending.take() else { return };
-    if app.session.active().map(|st| st.doc.id) != Some(q.doc) {
-        // Painted only into its own document; it waits there.
-        app.gradient.mask.pending = Some(q);
-        return;
-    }
+    let Some(q) = take_active(app) else { return Ok(()) };
     let p = params(app, q.layer, q.from, q.to);
-    if let Err(e) = app.run("paint.gradient", p) {
-        app.ui.status = e;
+    app.run("paint.gradient", p).map(|_| ()).inspect_err(|e| {
+        app.ui.status = e.clone();
         app.ui.status_error = true;
-    }
+    })
 }
 
-/// Drops the pending gradient without painting it.
+/// Drops the active document's pending gradient without painting it.
 pub(crate) fn cancel(app: &mut PhotocraftApp) {
     app.gradient.mask.drag = None;
-    app.gradient.mask.pending = None;
+    take_active(app);
     app.gradient.mask.preview = None;
 }
 
@@ -197,27 +226,37 @@ pub(crate) fn cancel(app: &mut PhotocraftApp) {
 /// first would put it in the step being undone, and the undo would swallow it (#10703 review).
 const STEPPING: [&str; 2] = ["edit.undo", "edit.redo"];
 
-/// Before command `id` runs: paints a pending gradient first when the command edits the document.
-/// Recursion is not a worry — [`commit`] runs `paint.gradient` one level down, where the caller
-/// no longer asks — so the Classic Gradient commits the pending one before laying its own.
-pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str) {
-    if app.gradient.mask.pending.is_some() && !STEPPING.contains(&id) && COMMITTING.iter().any(|p| id.starts_with(p)) {
-        commit(app);
+/// Before command `id` runs: paints the active document's pending gradient first when the
+/// command edits the document. Recursion is not a worry — [`commit`] runs `paint.gradient` one
+/// level down, where the caller no longer asks — so the Classic Gradient commits the pending one
+/// before laying its own. A command the engine refuses (bad params, not enabled, a hidden target)
+/// changes nothing: the gradient stays pending. A gradient that can't be painted refuses the
+/// command, with its reason, rather than let it run over a gradient that was lost.
+pub(crate) fn before_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<(), String> {
+    if pending_in_active(app).is_none() || STEPPING.contains(&id) || !COMMITTING.iter().any(|p| id.starts_with(p)) {
+        return Ok(());
     }
+    if photocraft_engine::commands::find(id).is_some() {
+        app.session.precheck(id, params).map_err(|e| e.to_string())?;
+    }
+    commit(app)
 }
 
 /// Once a frame: paints the pending gradient when the tool, the target or the layer changed, and
 /// drops it when its document changed under it (an undo, a history step chosen).
 pub(crate) fn tick(app: &mut PhotocraftApp) {
-    let Some(q) = app.gradient.mask.pending else { return };
-    let Some((doc, layer, revision)) = target(app) else { return };
-    if doc != q.doc {
-        return;
+    // A closed document takes its pending gradient with it.
+    if !app.gradient.mask.pending.is_empty() {
+        let open: Vec<DocId> = app.session.documents().iter().map(|st| st.doc.id).collect();
+        app.gradient.mask.pending.retain(|q| open.contains(&q.doc));
     }
+    let Some(q) = pending_in_active(app) else { return };
+    let Some((_, layer, revision)) = target(app) else { return };
     if revision != q.revision {
         cancel(app);
     } else if app.gradient.mask.drag.is_none() && (!active(app) || layer != q.layer) {
-        commit(app);
+        // The status bar says why, if it can't be painted.
+        let _ = commit(app);
     }
 }
 
@@ -227,7 +266,8 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         return false;
     }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-        commit(app);
+        // The status bar says why, if it can't be painted.
+        let _ = commit(app);
         return true;
     }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -243,13 +283,17 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.gradient.mask.preview = None;
         return None;
     }
-    let Some((from, to)) = shown(app).filter(|(f, t)| dist(*f, *t) >= 1.0) else {
+    let Some((from, to)) = shown(app).filter(|(f, t)| dist(*f, *t) >= MIN_SPAN) else {
         app.gradient.mask.preview = None;
         return None;
     };
     let (_, layer, revision) = target(app)?;
     let p = params(app, layer, from, to);
-    let key = super::preview_key(revision, &format!("mask{p}"));
+    // The colours the gradient takes from outside its params: the foreground and background, and
+    // the current gradient (Gradients panel), so a change to either shows at once.
+    let (tools, presets) = (&app.session.tools, &app.session.presets);
+    let colours = format!("{:?}{:?}{:?}", tools.foreground, tools.background, presets.gradient);
+    let key = super::preview_key(revision, &format!("mask{p}{colours}"));
     if let Some((k, d)) = &app.gradient.mask.preview
         && *k == key
     {
@@ -278,5 +322,5 @@ pub(crate) fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vi
 
 #[cfg(test)]
 pub(crate) fn pending(app: &PhotocraftApp) -> Option<([f32; 2], [f32; 2])> {
-    app.gradient.mask.pending.map(|q| (q.from, q.to))
+    pending_in_active(app).map(|q| (q.from, q.to))
 }

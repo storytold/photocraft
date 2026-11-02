@@ -476,7 +476,7 @@ fn a_gradient_on_a_mask_previews_with_handles_and_paints_what_was_shown() {
     drag(&mut app, [100.0, 60.0], [90.0, 70.0]);
     assert_eq!(mask::pending(&app), Some(([10.0, 70.0], [170.0, 70.0])));
     let (shown, _) = display_doc(&mut app, 0).unwrap();
-    mask::commit(&mut app);
+    mask::commit(&mut app).unwrap();
     assert_eq!(mask::pending(&app), None);
     let st = app.session.active().unwrap();
     assert_eq!(st.revision, revision + 1, "one history step");
@@ -565,4 +565,143 @@ fn undo_an_authorization_refusal_and_classic_treat_the_pending_gradient_right() 
     assert_eq!(mask::pending(&app), None, "the pending one went down first");
     assert_eq!(app.session.active().unwrap().revision, before + 2, "two steps: the pending gradient, then this one");
     let _ = layer;
+}
+
+/// CodeRabbit on #10722: the preview follows the colours the gradient takes from outside its
+/// params: a new foreground shows at once, not the cached preview of the old one.
+#[test]
+fn the_mask_preview_follows_a_new_foreground() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    assert!(mask_at(&shown, layer, 10) > 0.95, "white foreground");
+    app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    let (shown, _) = display_doc(&mut app, 0).unwrap();
+    assert!(mask_at(&shown, layer, 10) < 0.05, "the black foreground shows");
+}
+
+/// CodeRabbit on #10722: a drag whose release comes on another layer than its press (the layer
+/// switched mid-drag) draws nothing.
+#[test]
+fn a_mask_drag_released_on_another_layer_draws_nothing() {
+    let (mut app, first) = app_on_mask();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.sync_views();
+    let second = app.session.active().unwrap().active_layer.unwrap();
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 60.0, pressure: 1.0 }, mods());
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 60.0, pressure: 1.0 }, mods());
+    app.session.active_mut().unwrap().active_layer = Some(first);
+    app.sync_views();
+    assert!(mask::active(&app), "the other layer's mask is targeted");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 60.0 }, mods());
+    assert_eq!(mask::pending(&app), None, "nothing waits on the layer the drag did not start on");
+    let _ = second;
+}
+
+/// CodeRabbit on #10722: a line too short for the preview to show is not painted either, however
+/// far the pointer moved on screen at a high zoom.
+#[test]
+fn a_mask_gradient_too_short_to_preview_is_not_kept() {
+    let (mut app, _) = app_on_mask();
+    app.ui.views[0].zoom = 8.0;
+    assert!(app.point_zoom() >= 7.9);
+    drag(&mut app, [20.0, 60.0], [20.5, 60.0]);
+    assert_eq!(mask::pending(&app), None, "half a pixel: no preview, so nothing to paint");
+    drag(&mut app, [20.0, 60.0], [22.0, 60.0]);
+    assert!(mask::pending(&app).is_some(), "two pixels are shown, and kept");
+}
+
+/// CodeRabbit on #10722: a gradient waiting in one document is not replaced by one drawn in
+/// another: each waits in its own until it is painted there.
+#[test]
+fn a_mask_gradient_waits_in_its_own_document() {
+    let (mut app, _) = app_on_mask();
+    app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.sync_views();
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    assert!(app.session.set_active(1));
+    app.sync_views();
+    mask::tick(&mut app);
+    drag(&mut app, [30.0, 40.0], [90.0, 40.0]);
+    assert_eq!(mask::pending(&app), Some(([30.0, 40.0], [90.0, 40.0])));
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the first document's gradient still waits");
+}
+
+/// CodeRabbit on #10722: a command the engine refuses (here, a layer the document doesn't have)
+/// changes nothing: the pending gradient is not painted for it.
+#[test]
+fn a_refused_command_does_not_paint_the_pending_gradient() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let before = app.session.active().unwrap().revision;
+    assert!(app.run("layer.select", json!({"layer": 424_242})).is_err());
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "it still waits");
+    assert_eq!(app.session.active().unwrap().revision, before);
+    assert_eq!(mask_at(&app.session.active().unwrap().doc, layer, 150), 1.0);
+}
+
+/// CodeRabbit on #10722: a pending gradient that can't be painted (its layer hidden meanwhile)
+/// refuses the command that would paint it, with the reason, rather than let it run as though
+/// nothing was lost.
+#[test]
+fn a_gradient_that_cannot_be_painted_refuses_the_command() {
+    let (mut app, layer) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    app.session
+        .edit("hide", |doc, _| {
+            doc.layer_mut(layer).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+    // The edit above moved the revision, which `tick` would take as an undo; the command comes first.
+    let err = app.run("select.all", json!({})).expect_err("the gradient could not be painted");
+    assert!(!err.is_empty() && app.ui.status_error, "{err}");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Select All did not run");
+}
+
+/// CodeRabbit on #10722: Esc through the shortcut dispatch drops the pending gradient.
+#[test]
+fn escape_drops_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let ctx = egui::Context::default();
+    let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+    ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(mask::pending(&app), None);
+}
+
+/// CodeRabbit on #10722: the overlay draws the line and its two handles where the gradient runs.
+#[test]
+fn the_mask_overlay_draws_the_line_and_its_handles() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let xf = crate::canvas::ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 120.0)),
+        zoom: 1.0,
+        center: [100.0, 60.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| mask::draw_overlay(&app, ui.painter(), &xf));
+    out.textures_delta.clear();
+    let handles: Vec<egui::Pos2> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Circle(c) if c.fill == egui::Color32::WHITE => Some(c.center),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(handles, [xf.to_screen(20.0, 60.0), xf.to_screen(120.0, 60.0)]);
+    assert!(out.shapes.len() > 2, "and the line between them");
 }
