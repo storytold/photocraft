@@ -392,3 +392,40 @@ fn photography_sources_cannot_each_spend_the_psd_allowance() {
     assert_eq!(load_sources(&s, &two, "test").unwrap().0.len(), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+/// A source replaced after its read cannot change the pixels or allowance of this load.
+fn photography_psd_imports_the_exact_bytes_that_passed_preflight() {
+    let dir = std::env::temp_dir().join(format!("photocraft-10778-source-snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":8,"depth":depth,"background":"#ff0000"})).unwrap();
+        let first = dir.join(format!("first-{depth}.psd")).to_string_lossy().into_owned();
+        let second = dir.join(format!("second-{depth}.psd")).to_string_lossy().into_owned();
+        for path in [&first, &second] {
+            crate::file_cmds::save_doc(&s.active().unwrap().doc, path, None).unwrap();
+        }
+        s.execute("file.new", json!({"width":256,"height":256,"depth":depth,"background":"#0000ff"})).unwrap();
+        let replacement = photocraft_io::document_to_psd(&s.active().unwrap().doc).to_bytes().unwrap();
+        s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":depth / 8})).unwrap();
+        let mut reads = Vec::new();
+        let (sources, _, _) = load_sources_with_read(&s, &json!({"paths":[first,second]}), "test", |path| {
+            let bytes = read_file(path)?;
+            reads.push(path.to_string());
+            if path == first {
+                // A second read would now fail the allowance and import different pixels.
+                std::fs::write(path, &replacement).unwrap();
+            }
+            Ok(bytes)
+        })
+        .unwrap();
+        assert_eq!(reads, [first, second], "every source must be read exactly once");
+        assert_eq!(sources.len(), 2);
+        for source in sources {
+            assert_eq!((source.w, source.h), (8, 8));
+            assert_eq!(source.surf.rgba(0, 0), [1.0, 0.0, 0.0, 1.0]);
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

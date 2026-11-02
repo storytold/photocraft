@@ -815,12 +815,15 @@ files are automatically removed on Windows; CUPS needs none.
 The pixel allowance applies to batch action steps as well as their primary inputs. Photomerge
 and Merge to HDR Pro preflight the sum of all PSD/PSB source estimates against one allowance
 before importing any source. Each estimate includes retained pixels and decode workspace;
-the aggregate conservatively sums both. Non-PSD inputs remain subject to their existing checks.
+the aggregate conservatively sums both. Each source is read once; the encoded bytes that passed
+preflight are kept until all imports finish, so replacing a file cannot bypass the shared limit.
+Non-PSD inputs remain subject to their existing checks.
 On Linux, every PSD preflight also checks current free RAM/swap and cgroup headroom, leaving
 512 MiB for the app and system. This check applies to both Automatic and explicit allowances;
 only installed RAM is cached, never dynamic free memory.
 
 The real 6144 × 2560, 38-layer PSD/PSB decode regression runs automatically in the existing
-release corpus suite (`cargo xtask test-corpus`), on machines with at least 8 GiB of RAM and
-sufficient current process/cgroup headroom. It remains opt-in for debug tests:
+release corpus suite (`cargo xtask test-corpus`). It requires at least 8 GiB of RAM and sufficient
+current process/cgroup headroom before each decode; insufficient resources fail the test visibly.
+Each decode result is released before the next import. It remains opt-in for debug tests:
 `cargo test -p photocraft-io --lib ordinary_38_layer_documents_open_under_the_native_default -- --ignored`.

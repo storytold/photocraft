@@ -67,6 +67,12 @@ type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 /// Preflight the combined PSD source allowance before importing files, then flatten them
 /// to a common pixel format alongside any requested open documents.
 fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
+    load_sources_with_read(s, p, cmd, read_file)
+}
+
+/// Keep the exact encoded inputs that passed preflight until every import has finished.
+/// The reader seam lets tests replace a source on disk without a timing-dependent race.
+fn load_sources_with_read(s: &Session, p: &Value, cmd: &str, mut read: impl FnMut(&str) -> Result<Vec<u8>>) -> Result<Loaded> {
     let mut docs: Vec<(String, Document)> = Vec::new();
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
@@ -80,14 +86,18 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     };
     let opts = crate::jobs::import_options(s.prefs());
     let mut budget = photocraft_io::PsdImportBatchBudget::default();
-    // Read one source at a time, and reject the combined PSD estimate before decoding any.
+    let mut encoded = Vec::new();
+    encoded.try_reserve(paths.len()).map_err(|error| bad(cmd, format!("cannot retain source inputs: {error}")))?;
+    // Retain each read so replacing a file cannot invalidate the shared preflight.
     for path in &paths {
-        budget.include(&read_file(path)?, &opts).map_err(|error| EngineError::Other(error.to_string()))?;
+        let bytes = read(path)?;
+        budget.include(&bytes, &opts).map_err(|error| EngineError::Other(error.to_string()))?;
+        encoded.push((file_name(path), bytes));
     }
-    for path in &paths {
-        let bytes = read_file(path)?;
-        docs.push((file_name(path), import_with_options(&file_name(path), &bytes, &opts)?));
+    for (name, bytes) in &encoded {
+        docs.push((name.clone(), import_with_options(name, bytes, &opts)?));
     }
+    drop(encoded);
     if docs.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }

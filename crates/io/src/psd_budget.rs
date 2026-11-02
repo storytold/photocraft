@@ -148,8 +148,13 @@ impl ImportBudget {
 /// buffers, interleave output and float conversion workspace. This is an upper estimate,
 /// rather than a promise that an allocator or OS can satisfy an accepted import.
 pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
+    check_with_available(file, limit, crate::memory::available())
+}
+
+/// The import check with explicit headroom, keeping estimation and enforcement on one path.
+fn check_with_available(file: &PsdFile, limit: u64, available: Option<u64>) -> Result<(), IoError> {
     let budget = estimate_budget(file)?;
-    check_available(file, &budget, limit, crate::memory::available())
+    check_available(file, &budget, limit, available)
 }
 
 /// Apply both the configured allowance and fresh process/cgroup headroom, even for overrides.

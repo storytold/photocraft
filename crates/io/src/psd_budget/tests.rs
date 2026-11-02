@@ -242,7 +242,7 @@ fn ordinary_layered_psd_and_psb_fit_a_large_machine_without_decoding() {
             assert!(!super::super::psd_import::merged_needed(&file));
             assert!(estimate(&file) > 2 << 30);
             assert!(check(&file, 2 << 30).is_err());
-            assert!(check(&file, native_default(128 << 30, i64::MAX as u64)).is_ok());
+            assert!(check_with_available(&file, native_default(128 << 30, i64::MAX as u64), None).is_ok());
             assert!(check(&file, effective_limit(64 << 30, true)).is_err());
         }
     }
@@ -254,16 +254,13 @@ fn ordinary_layered_psd_and_psb_fit_a_large_machine_without_decoding() {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(debug_assertions, ignore = "large PSD/PSB decode: included in the release corpus suite on machines with at least 8 GiB RAM")]
 /// Decode the reported 38-layer geometry through default and explicit byte/file PSD and PSB paths.
-/// Release corpus runs include this test when the machine meets its memory requirements.
-fn ordinary_38_layer_documents_open_under_the_native_default() {
+/// Release corpus runs require sufficient memory; unmet requirements are reported as failures.
+fn ordinary_38_layer_documents_open_under_the_native_default() -> Result<(), Box<dyn std::error::Error>> {
     use photocraft_psd::layer::ChannelData;
     let mut system = sysinfo::System::new();
     system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram());
     let needed = estimate(&ordinary_layer_records(Version::Psd, 8));
-    if system.total_memory() < 8 << 30 || crate::memory::available().is_some_and(|free| free < needed.saturating_add(crate::memory::RESERVE)) {
-        eprintln!("large PSD/PSB regression requires 8 GiB RAM and sufficient current process/cgroup headroom");
-        return;
-    }
+    require_large_regression_headroom(system.total_memory(), needed, crate::memory::available())?;
     for version in [Version::Psd, Version::Psb] {
         let mut file = ordinary_layer_records(version, 8);
         let plane = vec![0; 6144 * 2560];
@@ -277,18 +274,47 @@ fn ordinary_38_layer_documents_open_under_the_native_default() {
         let bytes = file.to_bytes().unwrap();
         let opts = crate::ImportOptions { psd_max_pixel_bytes: 2 << 30, ..Default::default() };
         assert!(matches!(crate::import_with_options("ordinary.psd", &bytes, &opts), Err(IoError::PsdImportBudget { .. })));
-        let opened = crate::import("ordinary.psd", &bytes).unwrap();
+        require_large_regression_headroom(system.total_memory(), required, crate::memory::available())?;
+        let opened = crate::import("ordinary.psd", &bytes)?;
         assert_eq!(opened.document.layers.len(), 38);
         assert_eq!(opened.document.size.width, 6144);
         assert_eq!(opened.document.size.height, 2560);
+        drop(opened);
         // The explicit allowance may exceed the old ceiling on both bytes and file routes.
         let opts = crate::ImportOptions { psd_max_pixel_bytes: required, ..opts };
-        assert_eq!(crate::import_with_options("ordinary.psd", &bytes, &opts).unwrap().document.layers.len(), 38);
+        require_large_regression_headroom(system.total_memory(), required, crate::memory::available())?;
+        assert_eq!(crate::import_with_options("ordinary.psd", &bytes, &opts)?.document.layers.len(), 38);
         let path = std::env::temp_dir().join(format!("photocraft-10745-{:?}-{}.psd", version, std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
-        assert_eq!(crate::import_file("ordinary.psd", &path, &opts, &photocraft_raster::Interrupt::NONE).unwrap().document.layers.len(), 38);
+        let imported = require_large_regression_headroom(system.total_memory(), required, crate::memory::available())
+            .map_err(crate::IoError::Unsupported)
+            .and_then(|()| crate::import_file("ordinary.psd", &path, &opts, &photocraft_raster::Interrupt::NONE))
+            .map(|result| result.document.layers.len());
         std::fs::remove_file(path).unwrap();
+        assert_eq!(imported?, 38);
     }
+    Ok(())
+}
+
+/// A resource shortfall must be a visible test failure, never a successful early return.
+#[cfg(not(target_arch = "wasm32"))]
+fn require_large_regression_headroom(total_ram: u64, required: u64, available: Option<u64>) -> Result<(), String> {
+    if total_ram < 8 << 30 {
+        return Err("large PSD/PSB regression requires at least 8 GiB RAM".into());
+    }
+    crate::memory::check_fits(6144, 2560, required, available).map_err(|error| format!("large PSD/PSB regression requires more current headroom: {error}"))
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+/// Low physical RAM and reduced free memory must report errors instead of skipping checks.
+fn large_regression_resource_shortfalls_are_errors() {
+    let required = 3 << 30;
+    let room = required + crate::memory::RESERVE;
+    assert!(require_large_regression_headroom(8 << 30, required, Some(room)).is_ok());
+    assert!(require_large_regression_headroom(8 << 30, required, None).is_ok());
+    assert!(require_large_regression_headroom((8 << 30) - 1, required, Some(room)).unwrap_err().contains("8 GiB"));
+    assert!(require_large_regression_headroom(8 << 30, required, Some(room - 1)).unwrap_err().contains("headroom"));
 }
 
 #[test]
@@ -299,12 +325,12 @@ fn psd_limits_also_respect_current_process_and_cgroup_headroom() {
     let required = budget.required().unwrap();
     let room = required + crate::memory::RESERVE;
     for limit in [required, native_default(128 << 30, i64::MAX as u64)] {
-        assert!(check_available(&file, &budget, limit, Some(room)).is_ok());
-        let error = check_available(&file, &budget, limit, Some(room - 1)).unwrap_err();
+        assert!(check_with_available(&file, limit, Some(room)).is_ok());
+        let error = check_with_available(&file, limit, Some(room - 1)).unwrap_err();
         assert!(error.to_string().contains("not enough memory"), "{error}");
-        assert!(check_available(&file, &budget, limit, None).is_ok());
+        assert!(check_with_available(&file, limit, None).is_ok());
     }
-    assert!(matches!(check_available(&file, &budget, required - 1, Some(u64::MAX)), Err(IoError::PsdImportBudget { .. })));
+    assert!(matches!(check_with_available(&file, required - 1, Some(u64::MAX)), Err(IoError::PsdImportBudget { .. })));
 }
 
 #[test]
