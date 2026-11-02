@@ -206,6 +206,18 @@ their usual file access. Source replacement, relinking and export commands remai
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
 editing session; non-type layers return an error without changing the tool or document.
 
+### Selected colour channel sets
+
+`channel.target {"colors":[0,2]}` selects native colour components. Shift-click is
+`channel.target {"channel":{"color":1},"extend":true}`: toggle that component,
+starting from all colour components when the composite is selected. Masks and saved
+channels cannot join a colour set. All components selected becomes the composite.
+Channel inspection adds `selectedColors`; the legacy primary `target` remains.
+Applicable drawing, adjustment, clipboard and filter commands follow the selected
+set, or accept `"target":{"colors":[0,2]}` explicitly. Invalid or empty sets fail
+without a document edit. Move/transform on partial sets and Camera Raw on a partial
+set return an unsupported error. See [selected colour editing](multi-channel-editing.md).
+
 ### Command list replies
 
 `engine.commands` (control channel and `serve`), the engine command `command.list` and the MCP
@@ -296,6 +308,15 @@ are never written. The Actions list is `actions.json` in that same folder and su
 Headless CLI/MCP sessions and the web build keep brush presets and the action list for the session
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
+
+`brush.presets.importAbr` and `gradient.presets.importGrd` never overwrite a group by default: a
+file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
+result's `group` names the one it landed in. Pass `"replace": true` to delete that group's own
+presets first (built-in brushes are kept); the preset libraries are outside document history, so
+this can't be undone (#10640). In the app, opening such a file (`app.open`, File › Open,
+drag-and-drop, Import Brushes…) shows a prompt instead: `ui.dialog.confirm` imports as a new
+group, `ui.dialog.set {"choice":"replace"}` then `ui.dialog.confirm` replaces, and
+`ui.dialog.cancel` imports nothing.
 
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
 web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or

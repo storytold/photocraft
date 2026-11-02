@@ -4181,6 +4181,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	There is no color table to save.	Neexistuje žádná tabulka barev k uložení.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Uložena {n} barva do {file}|Uloženy {n} barvy do {file}|Uloženo {n} barev do {file}
 	GPU adapter	Adaptér GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Obsah AI/PDF/EPS se bude upravovat jako SVG. Uložení nahradí vložený zdroj; vlastnosti specifické pro formát se mohou změnit.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importovat styly…
 	Export Selected Styles…	Exportovat vybrané styly…
 	Export Styles…	Exportovat styly…
@@ -4233,6 +4236,7 @@ cameraRaw	Dehaze	Odstranění oparu
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Neplatná číselná hodnota. Je vyžadováno celé číslo mezi {min}% a {max}%. Byla vložena předchozí hodnota.
 	Color Aware	Podle barev
 	Decontaminate Colors	Dekontaminovat barvy
 	Edge Detection	Detekce okraje
@@ -4250,4 +4254,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
 	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 	Drag to move the selected path	Tažením přesunete vybranou cestu
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Nedávno použité barvy
+	Stop Color	Barva zarážky
+	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
