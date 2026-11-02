@@ -13,7 +13,8 @@ fn controlled_composite_keeps_native_pixels_and_cancels_between_bands() {
             let fmt = PixelFormat::new(mode, depth, true);
             let mut layer = Layer::raster("pixels", fmt);
             for y in 0..600 {
-                layer.surface_mut().unwrap().fill_rect(Rect::new(0, y, 16, 1), &vec![(y + 1) as f32 / 601.0; fmt.channels()]);
+                let pixel: Vec<f32> = (0..fmt.channels()).map(|channel| (1 + (y as usize % 29) + channel * 40) as f32 / 255.0).collect();
+                layer.surface_mut().unwrap().fill_rect(Rect::from_xywh(0, y, 16, 1), &pixel);
             }
             doc.layers.push(layer);
             let expected = composite_to_surface(&doc, doc.bounds(), fmt, None);
