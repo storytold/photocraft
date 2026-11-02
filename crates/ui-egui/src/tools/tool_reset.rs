@@ -156,7 +156,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         }};
     }
     match tool {
-        Tool::Move => reset!(move_auto_select, move_target, move_show_transform, transform_interpolation),
+        Tool::Move => reset!(move_auto_select, move_target, move_show_transform, move_align_to_canvas, transform_interpolation),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
