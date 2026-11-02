@@ -206,6 +206,9 @@ fn validate_replacement(cmd: &str, command: &str, old: &Value, new: &Value, mode
     if let Some(kind) = command.strip_prefix("image.adjustments.") {
         return crate::adjust_params::from_params(kind, new, None, mode).map(drop);
     }
+    // The same range and type checks a fresh run of the filter gets: `params_for` defaults or clamps
+    // a bad value (a text `radius`, 5000), which would commit settings other than the ones rendered.
+    crate::filters::validate_params(command, new)?;
     if crate::filters::params_for(command, old).is_some() && crate::filters::params_for(command, new).is_none() {
         return Err(bad(cmd, format!("the new settings aren't valid for {command}")));
     }

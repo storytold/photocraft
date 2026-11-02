@@ -547,6 +547,24 @@ fn smart_filter_replace_validates_the_new_params() {
     assert_eq!(smart_filters_of(&s)[0].params, json!({}));
 }
 
+/// The review on #6187: `replace` holds a non-adjustment filter to the range and type checks of a
+/// fresh run (`params_for` would default a text `radius` and clamp 5000), before anything commits.
+#[test]
+fn smart_filter_replace_refuses_out_of_range_filter_params() {
+    let mut s = smart_session();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    let before = smart_filters_of(&s)[0].params.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [json!({"radius": "large"}), json!({"radius": 5000}), json!({"radius": 0})] {
+        let r = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": bad, "replace": true}));
+        assert!(r.is_err(), "{bad} is refused");
+    }
+    assert_eq!(smart_filters_of(&s)[0].params, before, "a refused edit changes nothing");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "and adds no history step");
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"radius": 9}, "replace": true})).unwrap();
+    assert_eq!(smart_filters_of(&s)[0].params["radius"], json!(9));
+}
+
 /// A selection becomes the smart filter's mask, and the adjustment with its own command
 /// (Shadows/Highlights) records a filter too.
 #[test]
