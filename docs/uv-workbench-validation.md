@@ -144,3 +144,26 @@ All runs used the same Windows host, shared dependency versions, GPU, `RUST_MIN_
 The former live-stroke test is now split into four parts; parts 1–3 passed in all three configurations. The shared part-0 failure uses zoom 12, smoothing 0.5, 16-bit depth, pressure and flipped canvas. A single passing baseline run was therefore insufficient: repeated baseline execution reproduced the exact head assertion and 97/255 difference.
 
 These results establish baseline reproductions of all six previously deferred failures on this host, including an unstable live-stroke case. They do not make the tests green or establish correctness on every renderer. Their existing assertions remain in place; fixing these shared canvas/display issues is separate from the UV-feature changes. Detailed logs are in `D:/PhotoCraft-UV-build/Temp/{baseline,head-default,head-uv,repeat-baseline,repeat-head}-*.txt` locally and are not committed.
+
+## 2026-11-02 PR #8805 CI and import-budget follow-up
+
+These checks cover the final CI lint cleanup and bounded automatic UV texture import. They are scoped results, not a claim that the full workspace or corpus suite is green.
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all -- --check` | Passed after the import-budget changes |
+| `cargo xtask layers` | Passed, 32 crates |
+| `cargo xtask wasm` | Passed, 25 crates and `photocraft-codecs --features heif` |
+| `cargo clippy --workspace --all-targets --features heif -- -D warnings` | Passed on the CI-fix source before the final UV import-budget changes |
+| `cargo clippy -p photocraft-gpu --all-targets -- -D warnings` | Passed |
+| `cargo test -p photocraft-compose --lib --tests` | 440 passed, 2 ignored; 3 artboard integration tests passed |
+| `cargo test -p photocraft-engine --lib cmd::brush_cmds::tests` | 77 passed, 2 ignored |
+| `cargo test -p photocraft-engine --features uv-workbench uv_cmds::import_budget_tests --lib --locked -j 6` | 6 passed, including duplicate-channel and 8K-budget boundaries |
+| GPU mask-stack integration tests | 13 passed on Vulkan with an RTX 5080 adapter |
+| Offscreen UI snapshot | Passed after rebuilding current sources; 256×256 white canvas visible, Eyedropper selected, and panels intact |
+
+The `uv-workbench` engine Clippy run still reports cognitive complexity in the existing `crates/engine/src/uv_mask_paint_cmds.rs:357`; the default workspace strict-Clippy run above passed before the final UV import-budget edits.
+
+`cargo xtask test-corpus` did not pass. Its release `photocraft-io --lib` test executable aborted with Windows `STATUS_STACK_OVERFLOW` in `svg::tests::bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left`. A direct release-binary isolation reproduced that failure. The no-HEIF integration binary also aborts in `svg::an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left` on its explicit 1 MiB worker stack, even with `RUST_MIN_STACK=16777216` (the test sets its own stack size). The failing SVG source and test files are byte-identical to `fab871d`; the baseline binary was not rerun, so this is not recorded as a runtime baseline reproduction. The pinned `usvg` 0.45.1 converter recursively visits nested groups, which is consistent with the failure at the current 512-element XML-depth limit. No SVG source or assertion was changed for this follow-up.
+
+The fresh snapshot was rendered with `cargo run --offline -p photocraft-ui-egui --example snapshot --locked -- --out D:/PhotoCraft-UV-build/Temp/ci-canvas-smoke.png --size 1100x700 --scale 1 --script '[["engine.execute",{"command":"file.new","params":{"width":256,"height":256,"background":"white"}}],["ui.set",{"tool":"eyedropper"}]]'`. The image was inspected visually. Validation logs and the snapshot remain under `D:/PhotoCraft-UV-build/Temp/` and are not committed.
