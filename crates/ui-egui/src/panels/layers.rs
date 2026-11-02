@@ -539,9 +539,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         // Double-clicking a mask thumbnail opens its settings: show Properties.
         if id == "ui.properties" {
-            app.ui.panels.properties = true;
-            app.ui.dock_tabs.properties = 0;
-            app.ui.dock.collapsed.retain(|g| *g != crate::dock::Group::Properties);
+            crate::panel_docking::show_properties(app);
             continue;
         }
         if p.is_null() || id == "layer.newFillLayer.solidColor" || id == photocraft_engine::pattern_fill_cmds::CREATE {
