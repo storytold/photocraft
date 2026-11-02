@@ -3545,3 +3545,40 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Arrowheads, import-question flow, histogram statistics, artboards and CPU-renderer notes (the strings the coverage report listed as missing for de)
+	Answer the open import question first, then import this file again.	Beantworte zuerst die offene Importfrage, und importiere diese Datei dann erneut.
+	Arrowhead options	Pfeilspitzen-Optionen
+	Arrowheads	Pfeilspitzen
+	Artboards	Zeichenflächen
+	CPU Rendering	CPU-Rendering
+	Calculating…	Berechnen…
+	Click to refresh histogram with uncached data	Klicken, um das Histogramm mit ungecachten Daten neu zu laden
+	Concavity	Krümmung
+	Count:	Anzahl:
+	Create new set	Neues Set erstellen
+	Drag to move the selected path	Ziehen, um den ausgewählten Pfad zu verschieben
+	Drawn on the CPU: {reason}. Click for System Info.	Auf der CPU gezeichnet: {reason}. Klicken für Systeminformationen.
+	End	Ende
+	Import as New Group	Als neue Gruppe importieren
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	„Als neue Gruppe importieren“ behält „{group}“ und fügt die Datei daneben als neue Gruppe hinzu.
+	Level:	Stufe:
+	Locked	Gesperrt
+	Move Down	Nach unten
+	Move Up	Nach oben
+	No import is waiting. Import the file again.	Es wartet kein Import. Importiere die Datei erneut.
+	No matching fonts	Keine passenden Schriften
+	Percentile:	Perzentil:
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Ersetzen löscht zuerst alles in „{group}“, einschließlich der Vorgaben, die du dort bearbeitet oder abgelegt hast. Das kann nicht rückgängig gemacht werden.
+	Set as default	Als Standard festlegen
+	Show Channels in Color	Kanäle in Farbe anzeigen
+	Show Statistics	Statistiken anzeigen
+	Source:	Quelle:
+	Start	Anfang
+	Uncached Refresh	Ohne Cache neu laden
+	Use these settings for new arrows	Diese Einstellungen für neue Pfeile verwenden
+	X	X
+	Y	Y
+	{message} into “{group}”	{message} in „{group}“
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	Deine Pinselgruppe „{group}“ enthält bereits {n} deiner Pinsel.|Deine Pinselgruppe „{group}“ enthält bereits {n} deiner Pinsel.
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	Die Verlaufsgruppe „{group}“ existiert bereits ({n} Verlauf).|Die Verlaufsgruppe „{group}“ existiert bereits ({n} Verläufe).
