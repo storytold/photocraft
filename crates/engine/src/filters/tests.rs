@@ -369,6 +369,7 @@ fn smart_object_records_smart_filter() {
                 warp: None,
                 stack_mode: None,
                 perspective: None,
+                placed_size: None,
             }),
         );
         *active = Some(doc.insert_above(*active, l));

@@ -333,6 +333,9 @@ pub enum ContentM {
         /// Distort / Perspective placement (row-major 3×3); absent for affine placements.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
+        /// The `SoLd` `Sz  `: the placed size the source scales to before warp and transform.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placed_size: Option<(f64, f64)>,
     },
 }
 

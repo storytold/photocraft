@@ -28,24 +28,58 @@ const MAX_CELLS: usize = 512;
 /// destination pixel the filter follows (bounds the footprint each tile reads).
 const MAX_SS: f64 = 8.0;
 
+/// The box `src_rect` is stretched onto before the warp and transform apply: the placed size `Sz`
+/// a `SoLd` stored, else `src_rect` itself. `Sz` lives in the descriptor's own units, which need
+/// not be the source's pixels — mapping source pixels to it as if they were rescales the
+/// placement (#10207). A warp's `bounds` is the warp's domain *within* that space (what
+/// [`photocraft_geom::warp::Warp::map`] normalizes by), not the box the source fills, so it is
+/// not a stretch target — a partial domain samples only that part of the mesh, and stored warps
+/// keep their knots in this same space.
+fn placed_box(src_rect: Rect, _warp: Option<&photocraft_geom::warp::Warp>, placed_size: Option<(f64, f64)>) -> [f64; 4] {
+    if let Some((w, h)) = placed_size.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0) {
+        return [0.0, 0.0, w, h];
+    }
+    [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)]
+}
+
+/// The affine stretching `src_rect` onto `placed_box`'s rect (identity when they agree).
+fn placed_stretch(src_rect: Rect, warp: Option<&photocraft_geom::warp::Warp>, placed_size: Option<(f64, f64)>) -> photocraft_geom::Affine {
+    let [x0, y0, x1, y1] = placed_box(src_rect, warp, placed_size);
+    let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
+    let (bw, bh) = (x1 - x0, y1 - y0);
+    if !(sw > 0.0 && sh > 0.0 && bw > 0.0 && bh > 0.0) {
+        return photocraft_geom::Affine::IDENTITY;
+    }
+    photocraft_geom::Affine { m: [bw / sw, 0.0, 0.0, bh / sh, x0 - f64::from(src_rect.x0) * bw / sw, y0 - f64::from(src_rect.y0) * bh / sh] }
+}
+
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
-/// through `warp` (source space) and then the affine `t` (source → document) in one resampling
-/// pass, an exact shift for whole-pixel translations (so conversions and re-renders are
-/// lossless), bicubic otherwise. Shared by the engine's re-render and PSD export's filter cache.
+/// stretched onto the box the warp and transform are defined over ([`placed_box`]), then
+/// through `warp` and the affine `t` in one resampling pass, an exact shift for whole-pixel
+/// translations (so conversions and re-renders are lossless), bicubic otherwise. Shared by the
+/// engine's re-render and PSD export's filter cache. `placed_size` is the `Sz  ` a `SoLd`
+/// stored ([`photocraft_doc::SmartObject::placed_size`]); `None` for contents whose source
+/// pixels are already the transform's input space.
 pub fn place_source(
     src: &Surface,
     src_rect: Rect,
     t: &photocraft_geom::Affine,
     warp: Option<&photocraft_geom::warp::Warp>,
+    placed_size: Option<(f64, f64)>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
+    let s = placed_stretch(src_rect, warp, placed_size);
     let [a, b, c, d, e, f] = t.m;
+    let [sa, sb, sc, sd, se, sf] = s.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
         let map = |x: f64, y: f64| {
-            let (u, v) = w.map(x, y);
+            let (px, py) = (sa * x + sc * y + se, sb * x + sd * y + sf);
+            let (u, v) = w.map(px, py);
             (a * u + c * v + e, b * u + d * v + f)
         };
         return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
     }
+    let t = &t.mul(&s);
+    let [a, b, c, d, e, f] = t.m;
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
         return Ok(crate::resample::translate_surface(src, e.round() as i32, f.round() as i32));
@@ -54,20 +88,25 @@ pub fn place_source(
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
-/// warp first (in source space), then `h`.
+/// warp first (in the placed box's space), then `h`.
 pub fn place_source_projective(
     src: &Surface,
     src_rect: Rect,
     h: &crate::transform::Homography,
     warp: Option<&photocraft_geom::warp::Warp>,
+    placed_size: Option<(f64, f64)>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
+    let s = placed_stretch(src_rect, warp, placed_size);
+    let [sa, sb, sc, sd, se, sf] = s.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
         let map = |x: f64, y: f64| {
-            let (u, v) = w.map(x, y);
+            let (px, py) = (sa * x + sc * y + se, sb * x + sd * y + sf);
+            let (u, v) = w.map(px, py);
             h.apply(u, v)
         };
         return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
     }
+    let h = &h.mul(&crate::transform::Homography([sa, sc, se, sb, sd, sf, 0.0, 0.0, 1.0]));
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
 }
 
@@ -672,7 +711,7 @@ mod tests {
             src.write_region(r, &px);
             let warp = Warp::preset(WarpStyle::Arc, 15.0, [0.0, 0.0, f64::from(w), f64::from(h)]);
             let t = photocraft_geom::Affine { m: [0.2, 0.0, 0.0, 0.2, 7.0, 5.0] };
-            let out = place_source(&src, r, &t, Some(&warp)).unwrap();
+            let out = place_source(&src, r, &t, Some(&warp), None).unwrap();
             let b = out.content_bounds();
             let o = out.read_region(b);
             let opaque: Vec<f32> = o.as_chunks::<4>().0.iter().filter(|p| p[3] >= 0.999).map(|p| p[0]).collect();
@@ -682,6 +721,43 @@ mod tests {
             // (up to 0.2 off); point sampling lands wholly on or off a line (up to 0.56 off).
             assert!(worst < 0.25, "{s:?}: worst deviation from the area average {worst}");
         }
+    }
+
+    /// #10207: a `SoLd` `Sz` that isn't the embedded file's pixel size — the source is scaled
+    /// to the placed size before the transform applies, not fed pixel-for-pixel (which placed
+    /// the contents Sz/src times too large).
+    #[test]
+    fn a_placed_size_scales_the_source_into_the_transform_frame() {
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        src.fill_rect(Rect::new(0, 0, 8, 8), &[1.0, 0.0, 0.0, 1.0]);
+        let r = Rect::new(0, 0, 8, 8);
+        // The transform maps the 4 × 4 placed box to (8, 8)-(16, 16).
+        let t = photocraft_geom::Affine { m: [2.0, 0.0, 0.0, 2.0, 8.0, 8.0] };
+        let out = place_source(&src, r, &t, None, Some((4.0, 4.0))).unwrap();
+        let b = out.content_bounds();
+        assert!((b.x0 - 8).abs() <= 1 && (b.x1 - 16).abs() <= 1 && (b.y0 - 8).abs() <= 1 && (b.y1 - 16).abs() <= 1, "{b:?}");
+    }
+
+    /// #10207: a warp defined over a box smaller than the source's pixels — the source is
+    /// stretched to the box before the mesh applies, so the normalized mesh coordinates stay
+    /// inside `0..=1` instead of extrapolating past the patch (the flat, oversized result).
+    #[test]
+    fn a_warp_box_is_stretched_onto_not_fed_source_pixels() {
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        src.fill_rect(Rect::new(0, 0, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+        let r = Rect::new(0, 0, 16, 16);
+        // A 1-patch custom warp over [0,0,8,8]: the bottom control row folds up to y 4.
+        let mut mesh = photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 8.0, 8.0], 1, 1);
+        for p in mesh.points.iter_mut().skip(12) {
+            p[1] = 4.0;
+        }
+        let w = Warp::custom(mesh, [0.0, 0.0, 8.0, 8.0]);
+        let t = photocraft_geom::Affine::translate(10.0, 10.0);
+        let out = place_source(&src, r, &t, Some(&w), None).unwrap();
+        let b = out.content_bounds();
+        // The folded mesh fills y 10..14 (box 0..8 folded to 0..4, shifted by 10): the warp is
+        // applied over the whole source, not fed the source's 16 px against the box's 8.
+        assert!((b.x0 - 10).abs() <= 1 && (b.x1 - 18).abs() <= 1 && (b.y0 - 10).abs() <= 1 && (b.y1 - 15).abs() <= 1, "{b:?}");
     }
 
     #[test]

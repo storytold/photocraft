@@ -193,6 +193,7 @@ struct Placement {
     transform: photocraft_geom::Affine,
     perspective: Option<[f64; 9]>,
     warp: Option<photocraft_geom::warp::Warp>,
+    placed_size: Option<(f64, f64)>,
 }
 
 impl Ctx<'_> {
@@ -255,7 +256,7 @@ impl Ctx<'_> {
             .or_insert_with(|| crate::linked::source_size_in_blocks(global.iter().map(|(_, k, d)| (k, d.as_slice())), &id, &ctl));
         // Without the source (missing or unreadable), it is taken as placed at 100 %.
         let (transform, perspective) = blocks::plld_transform(&p, size, warp.as_ref());
-        Placement { id, transform, perspective, warp }
+        Placement { id, transform, perspective, warp, placed_size: size }
     }
 
     /// Builds a raster surface from the layer channels, leaving the surface empty if
@@ -637,13 +638,13 @@ impl Ctx<'_> {
     }
 
     fn smart_content(&mut self, rec: &LayerRecord, name: &str, k: &[u8; 4], principal: &impl Fn(&[u8; 4]) -> Option<Arc<Vec<u8>>>) -> LayerContent {
-        let Placement { id, transform, perspective, warp } = match rec.block(k) {
+        let Placement { id, transform, perspective, warp, placed_size } = match rec.block(k) {
             Some(b) if k == b"PlLd" => self.plld_placement(&b.data, name),
             Some(b) => {
                 let (id, transform) = blocks::parse_smart(k, &b.data);
                 // Distort / Perspective: the fourth corner (the affine `transform` drops it).
                 let perspective = blocks::parse_smart_perspective(k, &b.data);
-                Placement { id, transform, perspective, warp: blocks::parse_placed_warp(k, &b.data) }
+                Placement { id, transform, perspective, warp: blocks::parse_placed_warp(k, &b.data), placed_size: blocks::parse_placed_size(k, &b.data) }
             }
             None => Placement::default(),
         };
@@ -706,6 +707,7 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
+            placed_size,
         })
     }
 

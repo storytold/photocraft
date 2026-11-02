@@ -542,6 +542,11 @@ pub struct SmartObject {
     /// full projective map from source pixels to document pixels, row-major 3×3. It overrides
     /// `transform`, which then holds its affine approximation at the source origin.
     pub perspective: Option<[f64; 9]>,
+    /// The `Sz  ` a `SoLd`/`SoLE` stored: the placed object's size in the descriptor's own
+    /// units, which the source image is scaled to before `warp` and `transform` apply (it need
+    /// not equal the embedded file's pixel size — #10207). `None` for objects without one,
+    /// whose source pixels go to the warp and transform as they are.
+    pub placed_size: Option<(f64, f64)>,
 }
 
 impl SmartObject {
@@ -560,6 +565,7 @@ impl SmartObject {
             warp: None,
             stack_mode: None,
             perspective: None,
+            placed_size: None,
         }
     }
 }

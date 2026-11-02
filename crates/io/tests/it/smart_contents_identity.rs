@@ -349,3 +349,24 @@ fn plld_only_spilled_custom_warp_places_like_sold_and_round_trips_verbatim() {
     assert!(close(c.transform, t), "{:?} vs {t:?}", c.transform);
     assert_eq!(c.warp.as_ref(), Some(&warp));
 }
+
+/// A `placed_size` that no longer matches the stored `Sz` (a `.pcraft` round trip carries both,
+/// and a contents resize can leave the record behind): the block is regenerated with the current
+/// size, not copied verbatim with the stale `Sz`.
+#[test]
+fn a_changed_placed_size_rewrites_the_sold_sz() {
+    let (before, mut doc) = round_trip(&fixture(), "psd");
+    let old = sold(&before, "original");
+    assert_eq!(smart_map::stored_size(&old.descriptor), Some((2.0, 2.0)));
+    let sm = smart_mut(&mut doc.layers[0]);
+    assert_eq!(sm.placed_size, Some((2.0, 2.0)));
+    let original_raw = sm.psd_raw.clone().unwrap();
+    sm.placed_size = Some((4.0, 4.0));
+
+    let (after, back) = round_trip(&doc, "psd");
+    let now = sold(&after, "original");
+    assert_eq!(smart_map::stored_size(&now.descriptor), Some((4.0, 4.0)));
+    let rec = after.layers().iter().find(|l| l.name() == "original").unwrap();
+    assert_ne!(rec.block(b"SoLd").unwrap().data, *original_raw, "a stale `Sz` was copied verbatim");
+    assert_eq!(smart(&back, "original").placed_size, Some((4.0, 4.0)));
+}
