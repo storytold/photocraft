@@ -70,8 +70,8 @@ impl Headless {
     }
 
     /// Mutable reference to the active renderer if any.
-    pub fn renderer_mut(&mut self) -> Option<&mut (dyn photocraft_io::BandRenderer + 'static)> {
-        self.renderer.as_deref_mut()
+    pub fn renderer_mut(&mut self) -> Option<&mut dyn photocraft_io::BandRenderer> {
+        self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer)
     }
 
     #[cfg(feature = "gpu")]
@@ -316,13 +316,26 @@ impl Headless {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
                 let writer = self.writers.entry(doc.id.0).or_default();
-                files::save_with_renderer(&doc, &target, format, opts, Some(writer), self.renderer.as_deref_mut())?
+                files::save_with_renderer(
+                    &doc,
+                    &target,
+                    format,
+                    opts,
+                    Some(writer),
+                    self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
+                )?
             }
             Filesystem::Workspace(workspace) => {
                 // Only the target is granted: a linked smart object's stored path is document
                 // data, so PSD export writes that layer as pixels instead of embedding the file.
                 let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
-                let (bytes, warnings) = files::save_bytes_with_renderer(&doc, target_text, format, &opts, self.renderer.as_deref_mut())?;
+                let (bytes, warnings) = files::save_bytes_with_renderer(
+                    &doc,
+                    target_text,
+                    format,
+                    &opts,
+                    self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
+                )?;
                 workspace.write(target_text, &bytes)?;
                 warnings
             }
@@ -368,7 +381,7 @@ impl Headless {
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_preview(doc.size.width, doc.size.height, max_side)?;
         }
-        let png = files::render_png_with_renderer(doc, max_side, self.renderer.as_deref_mut())?;
+        let png = files::render_png_with_renderer(doc, max_side, self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer))?;
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_png(png.len())?;
         }
