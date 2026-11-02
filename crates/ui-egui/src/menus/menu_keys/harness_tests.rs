@@ -185,6 +185,14 @@ fn a_key_press_while_the_switchers_alt_is_still_reported_opens_no_menu() {
     key(&mut h, egui::Key::F);
     assert_eq!(Keys::current(&h.ctx).focus, None, "no keyboard on the bar");
     assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "and still nothing underlined");
+    // CodeRabbit on #10383: the same press with egui still reporting the switcher's Alt in its
+    // modifiers, as it does until the release reaches the window: still no menu.
+    let f = |pressed| egui::Event::Key { key: egui::Key::F, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::ALT };
+    h.event_modifiers(f(true), egui::Modifiers::ALT);
+    h.event_modifiers(f(false), egui::Modifiers::ALT);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "the switcher's Alt with F opens no menu");
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "and underlines nothing");
     // A tap of this window's own Alt works as ever.
     alt_tap(&mut h);
     assert_eq!(Keys::current(&h.ctx).focus, Some(0), "a real Alt tap still reaches the bar");
