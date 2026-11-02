@@ -147,18 +147,81 @@ fn press(h: &mut Harness<'_, PhotocraftApp>, key: Key, m: Modifiers) {
     h.run_steps(3);
 }
 
+/// Fill shortcuts open the dialog on raster pixels and automatically targeted adjustment masks.
 #[test]
 fn shift_f5_and_shift_backspace_open_the_dialog() {
-    for key in [Key::F5, Key::Backspace] {
+    for (key, mask) in [(Key::F5, false), (Key::Backspace, false), (Key::F5, true), (Key::Backspace, true)] {
         let mut h = harness();
+        if mask {
+            h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+            h.state_mut().ui.mask_target = false;
+        }
+        let history = h.state().session.active().unwrap().history.past_len();
         press(&mut h, key, Modifiers::SHIFT);
         let open: Vec<_> = h.state().ui.dialogs.iter().filter(|d| owns(&d.fields)).map(|d| d.id).collect();
-        assert_eq!(open.len(), 1, "{key:?} opens the Fill dialog");
+        assert_eq!(open.len(), 1, "{key:?} opens the Fill dialog (mask: {mask})");
         // Nothing is filled until OK.
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
         let id = open[0];
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), 1);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+    }
+}
+
+/// Dialog admission must resolve the same mask target as menu enablement and execution.
+#[test]
+fn menu_and_context_fill_edit_non_raster_masks_and_undo() {
+    for kind in ["adjustment icon", "adjustment mask", "shape", "filter"] {
+        let mut app = app();
+        match kind {
+            "adjustment icon" | "adjustment mask" => {
+                app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+                // Adjustment layers edit their mask even when its thumbnail isn't targeted.
+                app.ui.mask_target = kind == "adjustment mask";
+            }
+            "shape" => {
+                app.run("shape.create", json!({"kind": "rect", "rect": [0, 0, 40, 30], "fill": "#ff0000"})).unwrap();
+                app.run("layer.layerMask.revealAll", json!({})).unwrap();
+                app.ui.mask_target = true;
+            }
+            _ => {
+                app.run(COMMAND, json!({"contents": "white"})).unwrap();
+                app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                app.run("select.all", json!({})).unwrap();
+                app.run("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+                app.ui.filter_mask_target = app.session.active().unwrap().active_layer.map(|id| id.0);
+            }
+        }
+        app.run("select.rect", json!({"x": 2, "y": 3, "width": 8, "height": 6})).unwrap();
+        let target = app.with_mask_target(COMMAND, json!({}));
+        assert_eq!(target["target"], if kind == "filter" { "filterMask" } else { "mask" });
+        assert!(crate::menus::is_enabled(&app, COMMAND), "{kind}");
+        let sample = |app: &PhotocraftApp, x, y| {
+            let st = app.session.active().unwrap();
+            photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &target).unwrap().sample_channel(x, y, 0)
+        };
+        let history = app.session.active().unwrap().history.past_len();
+        let ctx = egui::Context::default();
+        if kind.starts_with("adjustment") {
+            assert!(crate::canvas_tool_menu::open(&mut app, &ctx, crate::Tool::RectMarquee, [5.0, 5.0]));
+            crate::canvas_tool_menu::choose(&mut app, &ctx, COMMAND);
+            assert!(!app.ui.status_error, "{}", app.ui.status);
+        } else {
+            crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
+        }
+        let dialog = app.ui.dialogs.iter().find(|d| owns(&d.fields)).expect("enabled Fill opens its dialog").id;
+        assert_eq!(sample(&app, 4, 5), 1.0, "opening does not fill the {kind} mask");
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("contents".into(), json!("black"));
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(sample(&app, 4, 5), 0.0, "selected {kind} mask pixels are filled");
+        assert_eq!(sample(&app, 20, 20), 1.0, "outside the selection is unchanged");
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(sample(&app, 4, 5), 1.0, "Undo restores the {kind} mask");
+        let why = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({"contents": "contentAware"})).unwrap_err();
+        assert!(why.contains("layer pixels only"), "{why}");
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
     }
 }
 

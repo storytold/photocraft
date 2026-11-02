@@ -14,6 +14,7 @@ fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [f32; 4] {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
 }
 
+/// Dialog entrypoints preserve target refusals, while parameterized Stroke calls execute directly.
 #[test]
 fn menu_and_canvas_invocations_open_options_but_explicit_params_run_directly() {
     let mut app = app();
@@ -36,6 +37,58 @@ fn menu_and_canvas_invocations_open_options_but_explicit_params_run_directly() {
     let mut empty = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     assert!(crate::menus::invoke(&mut empty, &ctx, COMMAND, json!({})).is_err());
     assert!(empty.ui.dialogs.is_empty());
+    app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    assert!(!crate::menus::is_enabled(&app, COMMAND), "ordinary adjustment masks retain their existing refusal");
+    assert!(crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).is_err());
+    assert!(app.ui.dialogs.is_empty());
+}
+
+/// A real filter mask supports direct Stroke and must also admit its dialog, selection and Undo.
+#[test]
+fn menu_stroke_edits_the_targeted_filter_mask_and_undoes() {
+    let mut app = app();
+    app.run("edit.fill", json!({"contents": "white"})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+    app.run("layer.setProps", json!({"locks": {"pixels": true, "transparency": true}})).unwrap();
+    app.ui.filter_mask_target = app.session.active().unwrap().active_layer.map(|id| id.0);
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+    assert!(app.filter_mask_targeted());
+    assert!(crate::menus::is_enabled(&app, COMMAND));
+    let sample = |app: &PhotocraftApp, x, y| {
+        let st = app.session.active().unwrap();
+        photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &json!({"target": "filterMask"})).unwrap().sample_channel(x, y, 0)
+    };
+    let history = app.session.active().unwrap().history.past_len();
+    assert_eq!(sample(&app, 10, 15), 1.0, "the real filter mask starts white");
+    // Direct execution already permits this target; opening its dialog must agree.
+    app.run(COMMAND, json!({"width": 2, "location": "inside", "color": "#000000"})).unwrap();
+    assert_eq!(sample(&app, 10, 15), 0.0);
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(sample(&app, 10, 15), 1.0);
+
+    let opened = crate::menus::invoke(&mut app, &egui::Context::default(), COMMAND, json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    let dialog = app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap();
+    dialog.fields.insert("width".into(), json!(2));
+    dialog.fields.insert("location".into(), json!("inside"));
+    dialog.fields.insert("color".into(), json!("#000000"));
+    crate::dialogs::confirm(&mut app, opened["dialog"].as_u64().unwrap()).unwrap();
+    assert_eq!(sample(&app, 10, 15), 0.0, "the mask's selected edge is stroked");
+    assert_eq!(sample(&app, 15, 15), 1.0, "the selection's interior is unchanged");
+    assert_eq!(sample(&app, 9, 15), 1.0, "outside is unchanged");
+    assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(sample(&app, 10, 15), 1.0);
+
+    // With no selection the grayscale mask is opaque, so Stroke follows its canvas edge.
+    app.run("select.deselect", json!({})).unwrap();
+    app.run(COMMAND, json!({"width": 2, "location": "inside", "color": "#000000"})).unwrap();
+    assert_eq!(sample(&app, 0, 15), 0.0);
+    assert_eq!(sample(&app, 15, 15), 1.0);
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(sample(&app, 0, 15), 1.0);
 }
 
 #[test]
