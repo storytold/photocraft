@@ -31,6 +31,11 @@ pub use headless::Headless;
 pub use server::{Backend, PhotocraftMcp};
 pub use workspace::AuthorizedWorkspace;
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
+#[cfg(feature = "gpu")]
+pub use gpu::GpuRenderer;
+
 #[derive(Debug, thiserror::Error)]
 pub enum AutomationError {
     #[error("{0}")]

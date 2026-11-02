@@ -6,6 +6,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+gpu = [
+    "dep:photocraft-gpu",
+    "dep:wgpu",
+    "dep:pollster",
+    "photocraft-gpu/native",
+]
+
 [lints]
 workspace = true
 
@@ -27,6 +36,11 @@ schemars = "1"
 getrandom = { workspace = true }
 cap-std = "4"
 clap = { workspace = true }
+
+# Optional native GPU rendering backend
+photocraft-gpu = { workspace = true, optional = true }
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"], optional = true }
+pollster = { version = "1", optional = true }
 
 [dev-dependencies]
 # Synthetic camera raws (#7789).

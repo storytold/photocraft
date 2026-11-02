@@ -5,7 +5,7 @@ use std::path::Path;
 
 use photocraft_doc::Document;
 use photocraft_format::{PcraftWriter, SaveOptions};
-use photocraft_io::ExportOptions;
+use photocraft_io::{BandRenderer, ExportOptions};
 
 use crate::AutomationError;
 
@@ -89,6 +89,18 @@ pub fn save(
     opts: &ExportOptions,
     writer: Option<&mut PcraftWriter>,
 ) -> Result<Vec<String>, AutomationError> {
+    save_with_renderer(doc, path, format_override, opts, writer, None)
+}
+
+/// [`save`] with an optional custom [`BandRenderer`].
+pub fn save_with_renderer(
+    doc: &Document,
+    path: &Path,
+    format_override: Option<&str>,
+    opts: &ExportOptions,
+    writer: Option<&mut PcraftWriter>,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Vec<String>, AutomationError> {
     let ext = format_override
         .map(|f| f.trim_start_matches('.').to_ascii_lowercase())
         .or_else(|| path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()))
@@ -100,7 +112,7 @@ pub fn save(
         w.save_path(&named, path, &native_options(&named, opts))?;
         return Ok(Vec::new());
     }
-    let r = photocraft_io::export(doc, &ext, opts)?;
+    let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     // Crash-safe: a failed write never destroys the previous file.
     photocraft_format::atomic_write(path, &r.bytes).map_err(|e| AutomationError::Io(e.to_string()))?;
     Ok(r.warnings)
@@ -109,6 +121,17 @@ pub fn save(
 /// Encode a document for a capability-scoped write. Unlike [`save`], this
 /// never obtains ambient filesystem authority and emits `.pcraft` as a ZIP.
 pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opts: &ExportOptions) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
+    save_bytes_with_renderer(doc, name, format_override, opts, None)
+}
+
+/// [`save_bytes`] with an optional custom [`BandRenderer`].
+pub fn save_bytes_with_renderer(
+    doc: &Document,
+    name: &str,
+    format_override: Option<&str>,
+    opts: &ExportOptions,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
     let ext = format_override
         .map(|format| format.trim_start_matches('.').to_ascii_lowercase())
         .or_else(|| Path::new(name).extension().map(|extension| extension.to_string_lossy().to_ascii_lowercase()))
@@ -117,13 +140,35 @@ pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opt
         let named = named_for_output(doc, name);
         return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts))?, Vec::new()));
     }
-    let result = photocraft_io::export(doc, &ext, opts)?;
+    let result = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     Ok((result.bytes, result.warnings))
 }
 
 /// Flattened document as PNG, scaled to fit `max_side` (0 = full size).
 pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+    render_png_with_renderer(doc, max_side, None)
+}
+
+/// [`render_png`] with an optional custom [`BandRenderer`].
+pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
     let side = if max_side == 0 { doc.size.width.max(doc.size.height) } else { max_side };
+    let (target_w, target_h) = photocraft_compose::thumbnail_size(doc, side.max(1));
+
+    if let Some(r) = renderer.as_deref_mut() {
+        if (target_w, target_h) == (doc.size.width, doc.size.height) {
+            let res = photocraft_io::export_flat_with_renderer(
+                doc,
+                photocraft_codecs::Format::Png,
+                &Default::default(),
+                &photocraft_raster::Interrupt::NONE,
+                Some(r),
+            );
+            if let Ok(res) = res {
+                return Ok(res.bytes);
+            }
+        }
+    }
+
     let img = photocraft_compose::thumbnail(doc, side.max(1));
     let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, img.pixels)
         .map_err(|e| AutomationError::Other(e.to_string()))?;

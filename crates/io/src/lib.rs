@@ -70,6 +70,8 @@ mod psd_import;
 pub use psd_budget::DEFAULT_PSD_IMPORT_PIXEL_BYTES;
 pub mod psd_thumbnail;
 pub mod raw;
+pub mod renderer;
+pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 pub mod slices_map;
 pub mod smart_map;
 pub mod svg;
@@ -88,8 +90,9 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, import_webp_frames,
-    tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
+    export_png_streamed_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_webp_frames, tga_alpha_channel_to_transparency,
+    tga_default_bits,
 };
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
@@ -143,6 +146,18 @@ pub enum IoError {
     /// A background import or save was cancelled ([`import_with`], [`export_with`]).
     #[error("cancelled")]
     Cancelled,
+    /// A band renderer failed to produce pixels.
+    #[error("renderer error: {0}")]
+    Render(RenderError),
+}
+
+impl From<RenderError> for IoError {
+    fn from(e: RenderError) -> Self {
+        match e {
+            RenderError::Cancelled => IoError::Cancelled,
+            other => IoError::Render(other),
+        }
+    }
 }
 
 /// Result of [`import`].
@@ -603,8 +618,19 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// layered TIFF, in coarse steps for the other formats) and checks it between stages. A cancelled
 /// export fails with [`IoError::Cancelled`]; otherwise the bytes are exactly [`export`]'s.
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    export_with_renderer(doc, name_or_ext, opts, ctl, None)
+}
+
+/// [`export_with`] with an optional custom [`BandRenderer`] for flat formats.
+pub fn export_with_renderer(
+    doc: &Document,
+    name_or_ext: &str,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = export_stages(doc, name_or_ext, opts, ctl)?;
+    let r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
@@ -630,6 +656,16 @@ const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 const PSD_MODEL_DONE: f32 = 0.9;
 
 fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    export_stages_with_renderer(doc, name_or_ext, opts, ctl, None)
+}
+
+fn export_stages_with_renderer(
+    doc: &Document,
+    name_or_ext: &str,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
@@ -707,7 +743,7 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
         return tiff_layers::export_layered(doc, opts, ctl);
     }
-    flat::export_flat_with(doc, format, opts, ctl)
+    flat::export_flat_with_renderer(doc, format, opts, ctl, renderer)
 }
 
 /// The flattened document at its canvas size, in 8-bit RGBA like a `.pcraft` file's two previews,

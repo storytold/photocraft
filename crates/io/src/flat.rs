@@ -8,6 +8,7 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
+use crate::renderer::BandRenderer;
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
@@ -516,12 +517,28 @@ pub(crate) fn csample(s: SampleType) -> CSample {
 
 /// Renders the document to a flat codec image (native pixels when possible).
 pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<Image, IoError> {
-    document_to_image_for(doc, warnings, true, false)
+    document_to_image_with_renderer(doc, warnings, None)
+}
+
+/// [`document_to_image`] with an optional custom [`BandRenderer`].
+pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
+    document_to_image_for_with_renderer(doc, warnings, true, false, renderer)
 }
 
 /// `cmyk_target` / `lab_target`: the format stores CMYK / Lab pixels.
 fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target: bool, lab_target: bool) -> Result<Image, IoError> {
-    let src = FlatSource::new(doc, warnings, cmyk_target, lab_target)?;
+    document_to_image_for_with_renderer(doc, warnings, cmyk_target, lab_target, None)
+}
+
+fn document_to_image_for_with_renderer(
+    doc: &Document,
+    warnings: &mut Vec<String>,
+    cmyk_target: bool,
+    lab_target: bool,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Image, IoError> {
+    let mut src = FlatSource::new(doc, warnings, cmyk_target, lab_target)?;
+    src.renderer = renderer;
     let (w, h) = (doc.size.width, doc.size.height);
     // The single layer's alpha is dropped up front when it is opaque. A composite is rendered
     // with alpha, dropped afterwards, in place, when every pixel turned out opaque.
@@ -560,6 +577,7 @@ struct FlatSource<'a> {
     icc: Option<Vec<u8>>,
     /// Rows per band; 0 picks them from the size (tests ask for small bands).
     rows: i32,
+    pub(crate) renderer: Option<&'a mut dyn BandRenderer>,
 }
 
 impl<'a> FlatSource<'a> {
@@ -573,7 +591,7 @@ impl<'a> FlatSource<'a> {
         let native = single.filter(|_| fmt.mode != ColorMode::Lab || lab_target);
         let mut icc = doc.icc_profile.as_ref().map(|i| i.to_vec());
         if native.is_some() {
-            return Ok(Self { doc, native, mode: fmt.mode, sample, inks: false, space: None, icc, rows: 0 });
+            return Ok(Self { doc, native, mode: fmt.mode, sample, inks: false, space: None, icc, rows: 0, renderer: None });
         }
         if single.is_none() {
             let count = doc.layer_count();
@@ -605,7 +623,7 @@ impl<'a> FlatSource<'a> {
                 warnings.push("CMYK composite converted back through the document's CMYK profile; ink values can differ from the layers'".to_string());
                 photocraft_compose::cmyk_space(doc)
             };
-            return Ok(Self { doc, native: None, mode: ColorMode::Cmyk, sample, inks, space, icc, rows: 0 });
+            return Ok(Self { doc, native: None, mode: ColorMode::Cmyk, sample, inks, space, icc, rows: 0, renderer: None });
         }
         if matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab) {
             // RGB-only targets use the sRGB composite directly, without separating CMYK; the
@@ -614,7 +632,7 @@ impl<'a> FlatSource<'a> {
             icc = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
         }
         let mode = if fmt.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb };
-        Ok(Self { doc, native: None, mode, sample, inks: false, space: None, icc, rows: 0 })
+        Ok(Self { doc, native: None, mode, sample, inks: false, space: None, icc, rows: 0, renderer: None })
     }
 
     fn layout(&self, alpha: bool) -> ChannelLayout {
@@ -702,15 +720,14 @@ impl<'a> FlatSource<'a> {
         let cmyk = self.mode == ColorMode::Cmyk;
         let gray = self.mode == ColorMode::Grayscale;
         let space = &self.space;
-        // Rendered and quantised in bands (no full-size float composite), with alpha.
-        photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| -> Result<(), IoError> {
-            let translucent = band.px.iter().any(|p| p[3] < 1.0 || p[3].is_nan());
-            let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
+        let mut render_one_band = |rect: Rect, px: Vec<[f32; 4]>| -> Result<(), IoError> {
+            let translucent = px.iter().any(|p| p[3] < 1.0 || p[3].is_nan());
+            let parts = crate::pixels::par_map(crate::pixels::bands(px.len()), |range| {
                 // A CMYK composite came through the document's CMYK profile: convert back through it.
                 photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
                     let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
                     let mut converted = [0.0; 5];
-                    for p in band.px.get(range).unwrap_or_default() {
+                    for p in px.get(range).unwrap_or_default() {
                         if cmyk {
                             let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
                             for value in converted.iter().take(channels) {
@@ -729,8 +746,15 @@ impl<'a> FlatSource<'a> {
                     out
                 })
             });
-            emit(band.rect.height(), parts, translucent)
-        })
+            emit(rect.height(), parts, translucent)
+        };
+
+        if let Some(r) = self.renderer.as_deref_mut() {
+            r.render_bands(doc, doc.bounds(), self.rows, &mut |band| render_one_band(band.rect, band.pixels))?;
+        } else {
+            photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.px))?;
+        }
+        Ok(())
     }
 }
 
@@ -793,22 +817,66 @@ fn composite_share(format: Format) -> f32 {
 
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
-    export_flat_with(doc, format, opts, &photocraft_raster::Interrupt::NONE)
+    export_flat_with_renderer(doc, format, opts, &photocraft_raster::Interrupt::NONE, None)
 }
 
 /// [`export_flat`] reporting a coarse step through `ctl` once the composite is rendered; the
 /// encoder does the rest (#3389).
 pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    export_flat_with_renderer(doc, format, opts, ctl, None)
+}
+
+/// [`export_flat`] with an optional custom [`BandRenderer`] and complete CPU retry upon render failure.
+pub fn export_flat_with_renderer(
+    doc: &Document,
+    format: Format,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    mut renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
     if let Some(r) = export_mode_specific(doc, format, opts)? {
         return Ok(r);
     }
     if format == Format::Png && streams_png(doc) {
-        return export_png_streamed(doc, opts, ctl, 0);
+        return export_png_streamed_with_renderer(doc, opts, ctl, 0, renderer);
     }
+
+    if renderer.is_some() {
+        let mut warnings = Vec::new();
+        let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
+        let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
+        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, renderer) {
+            Ok(mut img) => {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
+                ctl.progress(composite_share(format));
+                strip_xmp(&mut img.meta, opts);
+                let mut img = prepare_flat(img, format, &mut warnings)?;
+                if format == Format::Tga {
+                    img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
+                }
+                if format == Format::Dds {
+                    img = dds_image(doc, img, &mut warnings)?;
+                }
+                if format == Format::Tiff {
+                    warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
+                }
+                return encode_image(&img, format, opts, warnings);
+            }
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                log::warn!("Flat export: renderer unavailable or unsupported ({render_err}); restarting complete export on CPU");
+                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                let mut cpu_result = export_flat_with_renderer(doc, format, opts, ctl, None)?;
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-    let mut img = document_to_image_for(doc, &mut warnings, cmyk_target, lab_target)?;
+    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, None)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(composite_share(format));
     strip_xmp(&mut img.meta, opts);
@@ -901,18 +969,52 @@ fn streams_png(doc: &Document) -> bool {
 /// when every pixel turns out opaque (that is only known once the last row is written).
 ///
 /// `rows`: rows per band, 0 to size them to the document.
-fn export_png_streamed(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt, rows: i32) -> Result<ExportResult, IoError> {
-    // A wrong guess (a knockout or a blend mode the guess doesn't foresee) shows in a band and
-    // the export starts again with alpha.
+pub(crate) fn export_png_streamed(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt, rows: i32) -> Result<ExportResult, IoError> {
+    export_png_streamed_with_renderer(doc, opts, ctl, rows, None)
+}
+
+/// [`export_png_streamed`] with an optional custom [`BandRenderer`] and complete CPU retry upon render failure.
+pub fn export_png_streamed_with_renderer(
+    doc: &Document,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    rows: i32,
+    mut renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
+    if renderer.is_some() {
+        let opaque = match single_layer(doc) {
+            Some(s) => opaque_surface(s, doc.bounds()),
+            None => opaque_bottom(doc),
+        };
+        let mut progress = 0.0;
+        let attempt = (|| -> Result<Option<ExportResult>, IoError> {
+            match stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, renderer)? {
+                Some(r) => Ok(Some(r)),
+                None => stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, None),
+            }
+        })();
+        match attempt {
+            Ok(Some(r)) => return Ok(r),
+            Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
+            Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+                log::warn!("Streamed PNG export: renderer failed ({render_err}); restarting complete export on CPU");
+                let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                let mut cpu_result = export_png_streamed_with_renderer(doc, opts, ctl, rows, None)?;
+                cpu_result.warnings.push(fallback_warning);
+                return Ok(cpu_result);
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let opaque = match single_layer(doc) {
         Some(s) => opaque_surface(s, doc.bounds()),
         None => opaque_bottom(doc),
     };
-    // Progress never goes back: a second pass reports nothing new until it passes the first.
     let mut progress = 0.0;
-    match stream_png(doc, opts, ctl, !opaque, rows, &mut progress)? {
+    match stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, None)? {
         Some(r) => Ok(r),
-        None => stream_png(doc, opts, ctl, true, rows, &mut progress)?.ok_or_else(|| IoError::Unsupported("PNG export lost its alpha channel".into())),
+        None => stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, None)?
+            .ok_or_else(|| IoError::Unsupported("PNG export lost its alpha channel".into())),
     }
 }
 
@@ -933,12 +1035,25 @@ fn stream_png(
     rows: i32,
     progress: &mut f32,
 ) -> Result<Option<ExportResult>, IoError> {
+    stream_png_with_renderer(doc, opts, ctl, alpha, rows, progress, None)
+}
+
+fn stream_png_with_renderer(
+    doc: &Document,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    alpha: bool,
+    rows: i32,
+    progress: &mut f32,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<Option<ExportResult>, IoError> {
     let format = Format::Png;
     let (w, h) = (doc.size.width, doc.size.height);
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-    let src = FlatSource { rows, ..FlatSource::new(doc, &mut warnings, cmyk_target, lab_target)? };
+    let mut src = FlatSource { rows, ..FlatSource::new(doc, &mut warnings, cmyk_target, lab_target)? };
+    src.renderer = renderer;
     let mut encode = opts.encode.clone();
     let mut late = Vec::new();
     if encode.png_interlaced {

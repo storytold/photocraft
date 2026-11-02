@@ -472,6 +472,24 @@ impl Compositor {
         self.health.as_ref().and_then(DeviceHealth::fault)
     }
 
+    /// The accumulation texture format used by this compositor.
+    pub fn acc_format(&self) -> wgpu::TextureFormat {
+        self.acc_format
+    }
+
+    /// The device health monitor if one was attached with [`Compositor::set_health`].
+    pub fn health(&self) -> Option<&DeviceHealth> {
+        self.health.as_ref()
+    }
+
+    /// Clear all resident layer pages, effect maps, pattern textures and lower-stack composites.
+    pub fn reset_cache(&mut self) {
+        self.residents.clear();
+        self.fx.clear();
+        self.patterns.clear();
+        self.prefix.clear();
+    }
+
     /// Measure how long the GPU spends executing each [`Compositor::render`], with timestamp
     /// queries read back asynchronously (nothing waits for the GPU). Returns whether the device
     /// supports it: without [`timing::FEATURES`] there is no measurement at all, and callers

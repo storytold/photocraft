@@ -15,7 +15,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
-    Headless { session, writers: HashMap::new(), filesystem }
+    Headless { session, writers: HashMap::new(), filesystem, renderer: None }
 }
 
 enum Filesystem {
@@ -30,6 +30,7 @@ pub struct Headless {
     /// Incremental `.pcraft` writers per document id.
     writers: HashMap<u64, PcraftWriter>,
     filesystem: Filesystem,
+    renderer: Option<Box<dyn photocraft_io::BandRenderer>>,
 }
 
 impl Default for Headless {
@@ -48,13 +49,42 @@ impl Headless {
     /// not a remote automation client, supplies these host paths. Nested
     /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal }
+        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, renderer: None }
     }
 
     /// Create an automation session with capability-scoped file access.
     /// Each step of `actions.play` is checked with [`authorize_engine_step`].
     pub fn with_workspace(workspace: AuthorizedWorkspace) -> Self {
         untrusted(Filesystem::Workspace(workspace))
+    }
+
+    /// Configure a custom [`photocraft_io::BandRenderer`] for flat exports and previews.
+    pub fn with_renderer(mut self, renderer: Box<dyn photocraft_io::BandRenderer>) -> Self {
+        self.renderer = Some(renderer);
+        self
+    }
+
+    /// Set or clear the active [`photocraft_io::BandRenderer`].
+    pub fn set_renderer(&mut self, renderer: Option<Box<dyn photocraft_io::BandRenderer>>) {
+        self.renderer = renderer;
+    }
+
+    /// Mutable reference to the active renderer if any.
+    pub fn renderer_mut(&mut self) -> Option<&mut (dyn photocraft_io::BandRenderer + 'static)> {
+        self.renderer.as_deref_mut()
+    }
+
+    #[cfg(feature = "gpu")]
+    /// Enable the native GPU renderer backend with lazy device initialization.
+    pub fn enable_gpu(&mut self) {
+        self.renderer = Some(Box::new(crate::gpu::GpuRenderer::lazy()));
+    }
+
+    #[cfg(feature = "gpu")]
+    /// Builder method to enable the native GPU renderer backend.
+    pub fn with_gpu(mut self) -> Self {
+        self.enable_gpu();
+        self
     }
 
     /// Apply background jobs that finished since the last request, so every request (save,
@@ -286,13 +316,13 @@ impl Headless {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
                 let writer = self.writers.entry(doc.id.0).or_default();
-                files::save(&doc, &target, format, opts, Some(writer))?
+                files::save_with_renderer(&doc, &target, format, opts, Some(writer), self.renderer.as_deref_mut())?
             }
             Filesystem::Workspace(workspace) => {
                 // Only the target is granted: a linked smart object's stored path is document
                 // data, so PSD export writes that layer as pixels instead of embedding the file.
                 let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
-                let (bytes, warnings) = files::save_bytes(&doc, target_text, format, &opts)?;
+                let (bytes, warnings) = files::save_bytes_with_renderer(&doc, target_text, format, &opts, self.renderer.as_deref_mut())?;
                 workspace.write(target_text, &bytes)?;
                 warnings
             }
@@ -338,7 +368,7 @@ impl Headless {
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_preview(doc.size.width, doc.size.height, max_side)?;
         }
-        let png = files::render_png(doc, max_side)?;
+        let png = files::render_png_with_renderer(doc, max_side, self.renderer.as_deref_mut())?;
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             crate::budgets::check_png(png.len())?;
         }
