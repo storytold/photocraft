@@ -201,7 +201,8 @@ mod tests {
         let near = Rect::new(0, 0, 1, 1);
         let far = Rect::new(100_000, 100_000, 100_001, 100_001);
         let bounds = near.union(&far);
-        for format in [PixelFormat::RGB8, PixelFormat::RGBA8] {
+        for alpha in [false, true] {
+            let format = PixelFormat { alpha, ..PixelFormat::RGBA8 };
             let mut surface = Surface::with_default(format, &[1.0; 4][..format.channels()]);
             surface.fill_rect(far, &[0.0; 4][..format.channels()]);
             assert_eq!(work_tiles(&surface, None, bounds, false).unwrap(), Some(vec![TileCoord::containing(far.x0, far.y0)]));
