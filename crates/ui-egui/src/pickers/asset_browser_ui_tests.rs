@@ -173,6 +173,196 @@ fn canonical_group_drop_outline_left_edge_is_visible_in_rendered_pixels() {
     assert!(top_edge, "top edge missing from rendered drop outline: target={target:?}, accent={accent:?}, ppp={ppp}");
 }
 
+#[test]
+fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
+    let groups = vec![group("A", vec![item("a1", "A card", &[])])];
+    let ghost_rect = std::rc::Rc::new(std::cell::Cell::new(None::<Rect>));
+    let ghost_rect_ui = ghost_rect.clone();
+    let mut h = Harness::builder().with_size(vec2(420.0, 420.0)).build_ui_state(
+        move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            let picker_clip = Rect::from_min_size(pos2(32.0, 24.0), vec2(300.0, 220.0));
+            ui.set_clip_rect(ui.clip_rect().intersect(picker_clip));
+            ui.add_space(24.0);
+            let mut paint_item = |ui: &egui::Ui, rect: Rect, _: usize, _: usize, state: ItemPaintState| {
+                if matches!(state, ItemPaintState::DragGhost) {
+                    ghost_rect_ui.set(Some(rect));
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(255, 0, 255));
+                }
+            };
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                options: BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    grid_indent: 8.0,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    item_size: Some(vec2(72.0, 48.0)),
+                    list_item_height: Some(26.0),
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: BrowserCapabilities {
+                    item_drag: true,
+                    item_drop: false,
+                    group_drag: false,
+                    selection: false,
+                    activation: false,
+                    canonical_hierarchy_drag: true,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: None,
+                hierarchy_item_move: None,
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            let (preset_ui, actions) = state;
+            actions.extend(browser(ui, preset_ui, &mut adapter, 180.0));
+        },
+        (PresetUi::default(), Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let source = h.get_by_label("A card").rect();
+    let browser_clip = h.ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(("preset-browser-rect", PANEL)))).expect("browser viewport");
+    let picker_clip = Rect::from_min_size(pos2(32.0, 24.0), vec2(300.0, 220.0));
+    let app_clip = h.ctx.content_rect();
+    let pointer = pos2(source.center().x, browser_clip.bottom() - 8.0);
+    assert!(browser_clip.contains(source.center()));
+    assert!(browser_clip.contains(pointer), "test pointer must remain inside the asset-browser viewport: {browser_clip:?}, pointer={pointer:?}");
+    assert!(picker_clip.contains(pointer), "test pointer must remain inside the picker shell: {picker_clip:?}, pointer={pointer:?}");
+    assert!(app_clip.contains(pointer), "test pointer must remain inside the app window: {app_clip:?}, pointer={pointer:?}");
+
+    h.event(Event::PointerMoved(source.center()));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    let drag_start = source.center() + vec2(12.0, 0.0);
+    h.event(Event::PointerMoved(drag_start));
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pointer));
+    h.run_steps(2);
+
+    let expected = Rect::from_min_size(pos2(source.center().x - source.width() * 0.5, browser_clip.bottom() - source.height()), source.size());
+    assert_eq!(ghost_rect.get(), Some(expected), "ghost should be clamped fully inside the asset-browser viewport");
+    let image = h.render().expect("render dragged item preview against picker edge");
+    let x = (expected.center().x * h.ctx.pixels_per_point()).round() as u32;
+    let y = (expected.center().y * h.ctx.pixels_per_point()).round() as u32;
+    let edge_pixel = image.get_pixel(x, y).0;
+    assert!(ghost_rect.get().is_some(), "the adapter's drag-preview painter should run outside the ScrollArea");
+    assert!(
+        edge_pixel[0] > edge_pixel[1] && edge_pixel[2] > edge_pixel[1],
+        "drag preview should remain visible while pressed against the asset-browser viewport edge; picker={picker_clip:?}, browser={browser_clip:?}, pointer={pointer:?}, edge_pixel={edge_pixel:?}"
+    );
+}
+
+#[test]
+fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_asset_browser_viewport() {
+    let groups = vec![group("A", vec![item("a1", "A card", &[])])];
+    let ghost_rect = std::rc::Rc::new(std::cell::Cell::new(None::<Rect>));
+    let ghost_rect_ui = ghost_rect.clone();
+    let mut h = Harness::builder().with_size(vec2(420.0, 420.0)).build_ui_state(
+        move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
+            if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            // Reset every frame so the assertion below proves the ghost was painted again,
+            // rather than observing a rectangle retained from the previous frame.
+            ghost_rect_ui.set(None);
+            let picker_clip = Rect::from_min_size(pos2(32.0, 24.0), vec2(300.0, 220.0));
+            ui.set_clip_rect(ui.clip_rect().intersect(picker_clip));
+            ui.add_space(24.0);
+            let mut paint_item = |ui: &egui::Ui, rect: Rect, _: usize, _: usize, state: ItemPaintState| {
+                if matches!(state, ItemPaintState::DragGhost) {
+                    ghost_rect_ui.set(Some(rect));
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(255, 0, 255));
+                }
+            };
+            let mut adapter = BrowserAdapter {
+                panel: PANEL,
+                groups: &groups,
+                options: BrowserOptions {
+                    canvas: Rect::NOTHING,
+                    flush: false,
+                    center_grid: false,
+                    grid_indent: 8.0,
+                    all_groups_open: true,
+                    compact_context_menus: false,
+                    item_size: Some(vec2(72.0, 48.0)),
+                    list_item_height: Some(26.0),
+                    domain_hierarchy_actions: false,
+                    root_item_group: None,
+                },
+                capabilities: BrowserCapabilities {
+                    item_drag: true,
+                    item_drop: false,
+                    group_drag: false,
+                    selection: false,
+                    activation: false,
+                    canonical_hierarchy_drag: true,
+                },
+                item_context_menu: None,
+                group_context_menu: None,
+                nested_group_context_menu: None,
+                canonical_hierarchy_move: None,
+                hierarchy_item_move: None,
+                paint_group: None,
+                paint_item: &mut paint_item,
+                paint_list_item: None,
+            };
+            let (preset_ui, actions) = state;
+            actions.extend(browser(ui, preset_ui, &mut adapter, 180.0));
+        },
+        (PresetUi::default(), Vec::new()),
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let source = h.get_by_label("A card").rect();
+    let app_clip = h.ctx.content_rect();
+    let picker_clip = Rect::from_min_size(pos2(32.0, 24.0), vec2(300.0, 220.0));
+    let browser_clip = h.ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(("preset-browser-rect", PANEL)))).expect("browser viewport");
+    let pointer = pos2(source.center().x, browser_clip.bottom() + 8.0);
+    assert!(!browser_clip.contains(pointer), "test pointer must be outside the ScrollArea: {browser_clip:?}, pointer={pointer:?}");
+    assert!(picker_clip.contains(pointer), "test pointer must remain inside the picker shell, in its footer region: pointer={pointer:?}");
+    assert!(app_clip.contains(pointer));
+    h.event(Event::PointerMoved(source.center()));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(source.center() + vec2(12.0, 0.0)));
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pointer));
+    h.run_steps(2);
+    let expected_outside = Rect::from_min_size(pointer - source.size() * 0.5, source.size());
+    assert_eq!(ghost_rect.get(), Some(expected_outside), "outside the asset-browser viewport, the ghost must follow the cursor while preserving the original center grab offset");
+
+    // Also cover the native PointerGone event path. Do not first send an artificial out-of-bounds
+    // PointerMoved event here; the preceding assertion already covers leaving the browser viewport.
+    h.remove_cursor();
+    h.run_steps(2);
+    assert_eq!(ghost_rect.get(), Some(source), "without a pointer position, the ghost falls back to its pickup bounds; app={app_clip:?}, picker={picker_clip:?}");
+    let image = h.render().expect("render dragged item preview after PointerGone");
+    let source_center = source.center();
+    let ppp = h.ctx.pixels_per_point();
+    let x = (source_center.x * ppp).round() as u32;
+    let y = (source_center.y * ppp).round() as u32;
+    let snapped_pixel = image.get_pixel(x, y).0;
+    assert!(
+        snapped_pixel[0] > snapped_pixel[1] && snapped_pixel[2] > snapped_pixel[1],
+        "drag preview should fall back to its pickup position when PointerGone removes the cursor; source={source:?}, app={app_clip:?}, picker={picker_clip:?}, pixel={snapped_pixel:?}"
+    );
+}
+
 fn drag_labels(h: &mut Harness<'static, UiTestState>, source: &str, target: &str, offset: Vec2) {
     let from = h.get_by_label(source).rect().center();
     let to = h.get_by_label(target).rect().center() + offset;

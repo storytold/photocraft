@@ -35,6 +35,122 @@ const GROUP_GAP_DROP_HEIGHT: f32 = 6.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
 const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
+#[derive(Clone, Debug, PartialEq)]
+enum BrowserDragGhostSource {
+    Group(NodeId),
+    Item { group: usize, item: usize },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BrowserDragGhost {
+    source: BrowserDragGhostSource,
+    origin: Rect,
+    grab_offset: egui::Vec2,
+    press_origin: Option<Pos2>,
+}
+
+/// Keep a dragged card/header pressed against the asset-browser viewport edges while the pointer is inside
+/// it. Outside the shell, follow the pointer using the original pickup offset.
+fn browser_drag_ghost_rect(
+    ui: &egui::Ui,
+    panel: &str,
+    source: BrowserDragGhostSource,
+    response_dragged: bool,
+    source_rect: Rect,
+    picker_bounds: Rect,
+) -> Option<Rect> {
+    let ctx = ui.ctx();
+    let id = egui::Id::new(("preset-browser-drag-ghost", panel));
+    let has_panel_payload = egui::DragAndDrop::payload::<AssetDrag>(ctx).is_some_and(|payload| {
+        match payload.as_ref() {
+            AssetDrag::Preset { scope, .. } | AssetDrag::Group { scope, .. } | AssetDrag::CanonicalGroup { scope, .. } => scope == panel,
+        }
+    });
+    if !has_panel_payload {
+        ctx.data_mut(|data| data.remove::<BrowserDragGhost>(id));
+        return None;
+    }
+    if response_dragged && ctx.pointer_interact_pos().is_some() {
+        let press_origin = ctx.input(|input| input.pointer.press_origin());
+        let already_captured = ctx.data(|data| {
+            data.get_temp::<BrowserDragGhost>(id).is_some_and(|ghost| {
+                ghost.source == source && (press_origin.is_none() || ghost.press_origin == press_origin)
+            })
+        });
+        if !already_captured {
+            let grab_offset = press_origin
+                .filter(|origin| source_rect.contains(*origin))
+                .map(|origin| origin - source_rect.min)
+                .unwrap_or_else(|| source_rect.size() * 0.5);
+            ctx.data_mut(|data| data.insert_temp(id, BrowserDragGhost { source: source.clone(), origin: source_rect, grab_offset, press_origin }));
+        }
+    }
+    let ghost = ctx.data(|data| data.get_temp::<BrowserDragGhost>(id))?;
+    if ghost.source != source {
+        return None;
+    }
+    Some(browser_drag_ghost_position(ctx.input(|input| input.pointer.hover_pos()), ghost.origin, ghost.grab_offset, picker_bounds))
+}
+
+fn browser_drag_ghost_position(pointer: Option<Pos2>, origin: Rect, grab_offset: egui::Vec2, picker_bounds: Rect) -> Rect {
+    let Some(pointer) = pointer else { return origin };
+    let pointer_rect = Rect::from_min_size(pointer - grab_offset, origin.size());
+    if picker_bounds.contains(pointer) {
+        clamp_drag_ghost(pointer_rect, picker_bounds)
+    } else {
+        pointer_rect
+    }
+}
+
+fn clamp_drag_ghost(rect: Rect, bounds: Rect) -> Rect {
+    let max_x = (bounds.right() - rect.width()).max(bounds.left());
+    let max_y = (bounds.bottom() - rect.height()).max(bounds.top());
+    let min = pos2(rect.left().clamp(bounds.left(), max_x), rect.top().clamp(bounds.top(), max_y));
+    Rect::from_min_size(min, rect.size())
+}
+
+#[cfg(test)]
+mod browser_drag_ghost_tests {
+    use super::{Rect, browser_drag_ghost_position, clamp_drag_ghost, pos2, vec2};
+
+    #[test]
+    fn pointer_leaving_the_window_returns_the_ghost_to_its_exact_pickup_bounds() {
+        let origin = Rect::from_min_size(pos2(12.0, 18.0), vec2(80.0, 40.0));
+        let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+        assert_eq!(browser_drag_ghost_position(None, origin, vec2(15.0, 10.0), picker), origin);
+    }
+
+    #[test]
+    fn pointer_outside_the_picker_shell_follows_cursor_with_original_pickup_offset() {
+        let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
+        let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+        let expected = Rect::from_min_size(pos2(85.0, 160.0), origin.size());
+        assert_eq!(browser_drag_ghost_position(Some(pos2(100.0, 170.0)), origin, vec2(15.0, 10.0), picker), expected);
+    }
+
+    #[test]
+    fn ghost_stays_fully_inside_browser_window_when_pointer_reaches_its_edges() {
+        let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
+        let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+        let expected = Rect::from_min_size(pos2(140.0, 110.0), vec2(80.0, 40.0));
+        assert_eq!(browser_drag_ghost_position(Some(pos2(215.0, 145.0)), origin, vec2(15.0, 10.0), picker), expected);
+    }
+
+    #[test]
+    fn dragged_cards_and_groups_press_against_each_window_edge() {
+        let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+        let ghost = Rect::from_min_size(pos2(-15.0, 130.0), vec2(80.0, 40.0));
+        assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 110.0), vec2(80.0, 40.0)));
+    }
+
+    #[test]
+    fn oversized_drag_ghosts_anchor_to_the_window_origin() {
+        let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(80.0, 40.0));
+        let ghost = Rect::from_min_size(pos2(-15.0, -15.0), vec2(100.0, 60.0));
+        assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 30.0), vec2(100.0, 60.0)));
+    }
+}
+
 fn hit_debug_label_position(hit: &DropHitRegion) -> Pos2 {
     let label_y = if hit.hit_rect.height() <= 6.1 {
         match hit.region {
@@ -893,19 +1009,28 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let Some((render_segments, mut hierarchy, hierarchy_identities)) = build_hierarchy_projection(groups, &display, &parents, &hierarchy_orders) else {
         return ev;
     };
+    // Retain the shell's horizontal clip for hierarchy hit arbitration; drag-ghost movement uses
+    // the narrower ScrollArea viewport captured inside the closure below.
+    let browser_parent_clip = ui.clip_rect();
     // The browser is the flexible middle region of a picker panel. Keep it at the allocated
     // height even when the library is short; otherwise the footer floats up and each consumer's
     // panel geometry depends on how many presets happen to be installed.
-    // The group rows intentionally paint flush to the parent UI's left clip edge, while
-    // ScrollArea::inner_rect excludes its built-in content margin. Retain the parent's horizontal
-    // extent but the scroll viewport's vertical bounds for row hit-testing and overlays.
-    let browser_parent_clip = ui.clip_rect();
+    // Foreground ghosts are clipped only to the app viewport; their movement bounds are the
+    // ScrollArea viewport below (the asset browser between the shell header and footer).
+    let app_window_clip = ui.ctx().content_rect();
+    // Drag previews are collected while rows are laid out, then painted from the parent UI.
+    // A child created inside ScrollArea inherits its painter's viewport clip, which cannot be
+    // expanded to show the preview elsewhere in the picker window.
+    let mut group_drag_ghosts = Vec::<(Rect, usize, bool, usize)>::new();
+    let mut nested_group_drag_ghosts = Vec::<(Rect, bool, String, usize, usize)>::new();
+    let mut item_drag_ghosts = Vec::<(Rect, usize, usize)>::new();
     let scroll = egui::ScrollArea::vertical()
         .id_salt(("preset-scroll", panel))
         .max_height(scroll_height)
         .min_scrolled_height(scroll_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            let browser_bounds = ui.clip_rect();
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             // Keep drag targets reachable when a preset or hierarchy node is dragged beyond the
             // current viewport. This behavior belongs to the shared scrollable browser, not to a
@@ -1053,22 +1178,21 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         _ => {}
                     }
                 }
-                if capabilities.group_drag
-                    && hresp.dragged()
-                    && let Some(p) = ui.ctx().pointer_interact_pos()
-                {
+                if capabilities.group_drag && hresp.dragged() && let Some(p) = ui.ctx().pointer_interact_pos() {
                     drag = Some((gi, p));
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    // Reuse the actual header painter on a tooltip layer so the drag ghost stays
-                    // visually identical to the painted row, including consumer-specific styling.
-                    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("preset-group-drag", panel)));
-                    let gr = Rect::from_center_size(p, vec2(hr.width(), hr.height()));
-                    let ghost_ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(gr));
-                    if let Some(paint) = paint_group.as_deref_mut() {
-                        paint(&ghost_ui, gr, g, open, false, GROUP_DRAG_GHOST_OPACITY);
-                    } else {
-                        crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, gr, open, &g.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
-                    }
+                }
+                if capabilities.group_drag
+                    && let Some(gr) = browser_drag_ghost_rect(
+                        ui,
+                        panel,
+                        BrowserDragGhostSource::Group(NodeId::group(&g.name)),
+                        hresp.dragged(),
+                        hr,
+                        browser_bounds,
+                    )
+                {
+                    group_drag_ghosts.push((gr, gi, open, depth));
                 }
                 if capabilities.group_drag
                     && !canonical_hierarchy_drag
@@ -1132,6 +1256,18 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 std::iter::once(g.name.clone()).chain(group.path.iter().take(group.path.len().saturating_sub(1)).cloned()),
                                 name.to_owned(),
                             );
+                            if capabilities.group_drag
+                                && let Some(ghost_rect) = browser_drag_ghost_rect(
+                                    ui,
+                                    panel,
+                                    BrowserDragGhostSource::Group(node_id.clone()),
+                                    fresp.dragged(),
+                                    fr,
+                                    browser_bounds,
+                                )
+                            {
+                                nested_group_drag_ghosts.push((ghost_rect, group_open, name.to_owned(), row_depth, group.count));
+                            }
                             gap_headers.push((node_id.clone(), inset_row_rect(fr, row_depth), row_depth, group_open));
                             canonical_node_bounds.borrow_mut().insert(node_id.clone(), inset_row_rect(fr, row_depth));
                             if canonical_hierarchy_drag {
@@ -1398,25 +1534,20 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 } else if selected {
                                     ev_cell.borrow_mut().push(BrowserAction::SelectItem { group: g.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
                                 }
+                                if capabilities.item_drag && resp.dragged() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                }
                                 if capabilities.item_drag
-                                    && resp.dragged()
-                                    && let Some(pp) = ui.ctx().pointer_interact_pos()
+                                    && let Some(ghost_rect) = browser_drag_ghost_rect(
+                                        ui,
+                                        panel,
+                                        BrowserDragGhostSource::Item { group: gi, item: ii },
+                                        resp.dragged(),
+                                        r,
+                                        browser_bounds,
+                                    )
                                 {
-                                    // Keep the source card's size and preview, floating above the
-                                    // browser content while the shared hit targets continue working.
-                                    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("preset-drag", panel)));
-                                    let grab_offset = ui
-                                        .input(|input| input.pointer.press_origin())
-                                        .filter(|origin| r.contains(*origin))
-                                        .map(|origin| origin - r.min)
-                                        .unwrap_or_else(|| r.size() * 0.5);
-                                    let ghost_rect = Rect::from_min_size(pp - grab_offset, r.size());
-                                    // Extend the child clip by half the selection stroke so the outer
-                                    // half is not clipped at the card's bounds.
-                                    let mut ghost_ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
-                                    ghost_ui.set_opacity(0.4);
-                                    paint_item(&ghost_ui, ghost_rect, gi, ii, ItemPaintState::DragGhost);
-                                    ghost_ui.painter().rect_stroke(ghost_rect, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
+                                    item_drag_ghosts.push((ghost_rect, gi, ii));
                                 }
                                 if capabilities.item_drag
                                     && resp.drag_stopped()
@@ -1869,6 +2000,31 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
             }
         });
+    for (ghost_rect, gi, open, depth) in group_drag_ghosts {
+        let Some(group) = groups.get(gi) else { continue };
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+        let mut ghost_ui = egui::Ui::new(ui.ctx().clone(), egui::Id::new(("preset-group-drag-ui", panel)), egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
+        ghost_ui.set_clip_rect(app_window_clip);
+        if let Some(paint) = paint_group.as_deref_mut() {
+            paint(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
+        } else {
+            crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
+        }
+    }
+    for (ghost_rect, open, name, depth, count) in nested_group_drag_ghosts {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+        let mut ghost_ui = egui::Ui::new(ui.ctx().clone(), egui::Id::new(("preset-group-drag-ui", panel)), egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
+        ghost_ui.set_clip_rect(app_window_clip);
+        crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
+    }
+    for (ghost_rect, gi, ii) in item_drag_ghosts {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-drag", panel)));
+        let mut ghost_ui = egui::Ui::new(ui.ctx().clone(), egui::Id::new(("preset-drag-ui", panel)), egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
+        ghost_ui.set_clip_rect(app_window_clip);
+        ghost_ui.set_opacity(0.4);
+        paint_item(&ghost_ui, ghost_rect, gi, ii, ItemPaintState::DragGhost);
+        ghost_ui.painter().rect_stroke(ghost_rect, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
+    }
     let browser_view_clip = Rect::from_min_max(
         pos2(browser_parent_clip.left(), browser_parent_clip.top()),
         pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()),
