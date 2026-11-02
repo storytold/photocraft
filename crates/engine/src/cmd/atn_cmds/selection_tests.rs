@@ -193,6 +193,9 @@ fn group_f_string_ids_map_like_their_codes() {
         ("IntW", "intersectWith", rectangle([30.0, 30.0, 120.0, 120.0], false)),
         ("Dstr", "distribute", desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "AdLf"))),
         ("MrgL", "mergeLayers", desc("null")),
+        // The run-time names the reference application reports for IntW and Dstr.
+        ("IntW", "interfaceWhite", rectangle([30.0, 30.0, 120.0, 120.0], false)),
+        ("Dstr", "distort", desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "AdLf"))),
     ] {
         let by_code = import(&file(AtnEvent::Code(id.as_bytes().try_into().unwrap()), d.clone())).unwrap();
         let by_name = import(&file(AtnEvent::name(name), d)).unwrap();

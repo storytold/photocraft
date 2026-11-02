@@ -489,8 +489,9 @@ pub(super) const EVENTS: &[Event] = &[
     adjustment_event!("Pstr", "Pstr", "posterize", "Posterize"),
     adjustment_event!("Invr", "Invr", "invert", "Invert"),
     adjustment_event!("ClrB", "ClrB", "colorBalance", "Color Balance"),
-    adjustment_event!("Vbrn", "vibrance", "vibrance", "Vibrance"),
-    adjustment_event!("", "Vbrn", "vibrance", "Vibrance"),
+    // Written as the string event the reference application runs, with the `vibrance` class it
+    // records; the old `Vbrn` code still loads through LEGACY_CODES.
+    adjustment_event!("", "vibrance", "vibrance", "Vibrance"),
     adjustment_event!("Exps", "Exps", "exposure", "Exposure"),
     // Photoshop runs Photo Filter by name only: `PhtF` is the class, not an event (#8301).
     adjustment_event!("", "PhtF", "photoFilter", "Photo Filter"),
@@ -851,6 +852,10 @@ const LEGACY_CODES: &[(&str, &str)] = &[
     ("GdMp", "gradientMapEvent"),
 ];
 
+/// Older string names a step can carry for an event that is listed under another name: the
+/// reference application reports `IntW` and `Dstr` as `interfaceWhite` and `distort` at run time.
+const NAME_ALIASES: &[(&str, &str)] = &[("interfaceWhite", "intersectWith"), ("distort", "distribute")];
+
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
     let by_name = |name: &str| EVENTS.iter().find(|e| !e.name.is_empty() && e.name == name);
@@ -859,13 +864,8 @@ pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
             .iter()
             .find(|e| !e.code.is_empty() && e.code.trim_end() == id.trim_end())
             .or_else(|| LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| by_name(name))),
-        AtnEvent::Name(_) => by_name(&id),
+        AtnEvent::Name(_) => by_name(&id).or_else(|| NAME_ALIASES.iter().find(|(old, _)| *old == id).and_then(|(_, name)| by_name(name))),
     }
-    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || (!e.name.is_empty() && e.name == id));
-    find(&id).or_else(|| match item {
-        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
-        AtnEvent::Name(_) => None,
-    })
 }
 
 /// The event `id` exports as: the first event listing it whose converter accepts the params

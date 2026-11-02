@@ -20,6 +20,7 @@ fn recorded(event: &str, descriptor: Option<Descriptor>) -> Vec<u8> {
             ..Default::default()
         }],
         warnings: vec![],
+        encoding: None,
     })
     .unwrap()
 }

@@ -25,6 +25,7 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
         // A group end is no layer: fail rather than fall back to the selection.
         Some(v @ Value::Object(fields)) if fields.contains_key("index") || fields.contains_key("ordinal") => {
             super::recorded_layer(s, v)?.map(Some).ok_or_else(|| EngineError::Other("a group end is not a layer".into()))
+        }
         Some(Value::Object(selector)) if selector.len() == 1 && selector.get("background") == Some(&Value::Bool(true)) => {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             d.doc.background().map(|l| Some(l.id)).ok_or_else(|| EngineError::Other("the document has no Background layer".into()))

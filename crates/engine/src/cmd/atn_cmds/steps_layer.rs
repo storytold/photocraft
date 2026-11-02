@@ -10,19 +10,13 @@ use super::tables::{FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, b
 use super::{D, Descriptor, Id, Map, ReferenceItem, UnicodeString, Value, json};
 
 /// Import recorded targets while retaining stack and opening-order references for playback.
+/// Resolve a recorded selection while retaining layer names, Background properties and modifiers.
 pub(super) fn select_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match (ref_class(r).as_deref(), target(r)) {
         (Some("Lyr"), Target::Name(_) | Target::Index(_) | Target::Ordinal(_)) => {
             let Some(params) = recorded_layer_target(r) else { return Mapped::Unsupported { harmless: false } };
             let mut p = Value::Object(params);
-/// Resolve a recorded selection while retaining layer names, Background properties and modifiers.
-pub(super) fn select_from(d: &Descriptor) -> Mapped {
-    let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
-    match (ref_class(r).as_deref(), target(r)) {
-        (Some("Lyr"), Target::Name(_) | Target::Property(_)) => {
-            let Some(p) = layer_target(r) else { return Mapped::Unsupported { harmless: false } };
-            let mut p = Value::Object(p);
             match get_enum(d, "selectionModifier").as_deref() {
                 Some("addToSelection") => p["mode"] = json!("add"),
                 Some("removeFromSelection") => p["mode"] = json!("remove"),
@@ -31,6 +25,11 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
                 _ => {}
             }
             step("layer.select", p)
+        }
+        // A Cmd-click recorded on a layer property (e.g. the Background, #10702).
+        (Some("Lyr"), Target::Property(_)) => {
+            let Some(p) = layer_target(r) else { return Mapped::Unsupported { harmless: false } };
+            step("layer.select", Value::Object(p))
         }
         // The Channels panel: the active layer's mask, or back to the composite (`RGB`, `CMYK`…).
         (Some("Chnl"), Target::Ordinal(o)) => match o.as_str() {
@@ -51,9 +50,8 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         },
         // Switching to another open document: its offset from the active one, -1 for the previous
         // opened document and 1 for the next, independently of dragged tabs (#7103).
-        (Some("Dcmn"), Target::Offset(o)) => step("document.activate", json!({"offset": o})),
-        (Some("Dcmn"), Target::Index(index)) if r.len() == 1 => step("document.activate", json!({"document": {"index": index}})),
         (Some("Dcmn"), Target::Offset(o)) if o != 0 => step("document.activate", json!({"offset": o})),
+        (Some("Dcmn"), Target::Index(index)) if r.len() == 1 => step("document.activate", json!({"document": {"index": index}})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
@@ -72,11 +70,7 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
                 name_ref("Lyr ", name.as_str()?)
             } else {
                 p.get("layer").filter(|v| !v.is_null())?;
-                recorded_layer_ref(p)?
-            let reference = match jstr(p, "name") {
-                Some(name) => name_ref("Lyr ", name),
-                None if p.get("layer").is_some_and(|v| !v.is_null()) => layer_ref(p)?,
-                None => return None,
+                recorded_layer_ref(p).or_else(|| layer_ref(p))?
             };
             let mut d = desc("null").with("null", reference);
             match jstr(p, "mode") {
@@ -115,7 +109,7 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         // A native numeric document selects a tab; the typed index above selects opening order.
         "document.activate" if p.get("document").is_none_or(Value::is_null) => {
             let offset = i32::try_from(p.get("offset")?.as_i64()?).ok()?;
-            // Photoshop rejects zero, though the native command permits that no-op.
+            // The reference application rejects zero, though the native command permits that no-op.
             if offset == 0 {
                 return None;
             }

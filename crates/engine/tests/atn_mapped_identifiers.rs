@@ -487,6 +487,7 @@ fn recorded(event: AtnEvent, d: Descriptor) -> Action {
             ..Default::default()
         }],
         warnings: vec![],
+        encoding: None,
     })
     .unwrap();
     atn_cmds::import(&bytes).unwrap().actions.remove(0)
@@ -527,7 +528,11 @@ fn recorded_vibrance_uses_the_string_event_and_keeps_legacy_playback() {
             assert_eq!(action.steps, vec![("image.adjustments.vibrance".into(), json!({"vibrance":47,"saturation":-19}))]);
             let written = saved(&action);
             assert_eq!(written.event, AtnEvent::name("vibrance"), "Vibrance must save by its string event");
-            assert_eq!(written.descriptor, Some(d.clone()));
+            // Saved with the `vibrance` class the reference application records (#8534); the
+            // top-level class does not change what it plays.
+            let mut want = d.clone();
+            want.class_id = Descriptor::new("vibrance").class_id;
+            assert_eq!(written.descriptor, Some(want));
             let create = || {
                 let mut s = Session::new();
                 s.execute("file.new", json!({"width":4,"height":3,"depth":depth})).unwrap();
