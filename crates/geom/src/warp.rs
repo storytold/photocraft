@@ -645,8 +645,11 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false for malformed meshes or when `s` is on or too close to an existing boundary.
     pub fn split_u(&mut self, s: f64) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         if !(0.01..=0.99).contains(&a) {
             return false;
@@ -665,8 +668,11 @@ impl BezierMesh {
         true
     }
 
-    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact.
+    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact; rejects malformed meshes.
     pub fn split_v(&mut self, t: f64) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         self.transpose();
         let ok = self.split_u(t);
         self.transpose();
@@ -675,8 +681,11 @@ impl BezierMesh {
 
     /// Removes interior vertical boundary `k` (1..us.len()-1), merging its two patch columns.
     /// Exact when the patches came from an unedited split; otherwise the outer control points are
-    /// kept and the inner handles extrapolated.
+    /// kept and the inner handles extrapolated. Returns false for malformed meshes.
     pub fn remove_split_u(&mut self, k: usize) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         if k == 0 || k >= self.us.len().saturating_sub(1) {
             return false;
         }
@@ -699,8 +708,11 @@ impl BezierMesh {
         true
     }
 
-    /// Removes interior horizontal boundary `k`.
+    /// Removes interior horizontal boundary `k`; rejects malformed meshes.
     pub fn remove_split_v(&mut self, k: usize) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         self.transpose();
         let ok = self.remove_split_u(k);
         self.transpose();
