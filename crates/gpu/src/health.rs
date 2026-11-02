@@ -339,16 +339,22 @@ impl DeviceHealth {
 /// rather than as an error. Only wgpu's own out-of-memory error is [`OUT_OF_MEMORY`].
 fn fault_of(e: &wgpu::Error) -> Fault {
     let text = e.to_string();
-    let lower = text.to_ascii_lowercase();
     if matches!(e, wgpu::Error::OutOfMemory { .. }) {
         Fault::Error(OUT_OF_MEMORY.into())
-    } else if lower.contains("lost") || lower.contains("destroyed") || LossCause::of(&text) == LossCause::DriverFault {
+    } else if says_lost(&text) {
         // wgpu-core loses the device for a driver fault ("Unexpected error variant"), whether the
-        // error reaches us before or after the device-lost callback (#10464).
-        Fault::Lost(first_line(&text))
+        // error reaches us before or after the device-lost callback (#10464). Keep the line that
+        // says so: `Fault::loss_cause` reads the stored text, and it may not be the first line.
+        Fault::Lost(first_line(text.lines().find(|l| says_lost(l)).unwrap_or(&text)))
     } else {
         Fault::Error(first_line(&text))
     }
+}
+
+/// Whether a wgpu error text says the device is lost, destroyed or hit a driver fault.
+fn says_lost(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("lost") || lower.contains("destroyed") || LossCause::of(text) == LossCause::DriverFault
 }
 
 fn first_line(s: &str) -> String {

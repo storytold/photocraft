@@ -115,20 +115,47 @@ fn restart_wanted(recover_on_launch: bool, unsaved: usize) -> bool {
     recover_on_launch || unsaved == 0
 }
 
-/// Most files named for the restart (a command line is not unbounded).
-const MAX_REOPEN: usize = 32;
+/// Most characters of file names given to the restarted process (a Windows command line holds
+/// about 32,000; this leaves a wide margin).
+const MAX_REOPEN_CHARS: usize = 8_000;
+
+/// The files to name for the restart: as many of `clean` as fit in [`MAX_REOPEN_CHARS`], in order,
+/// and how many were left out.
+fn reopen_list(clean: Vec<String>) -> (Vec<String>, usize) {
+    let total = clean.len();
+    let mut used = 0usize;
+    let reopen: Vec<String> = clean
+        .into_iter()
+        .take_while(|p| {
+            used = used.saturating_add(p.len()).saturating_add(3);
+            used <= MAX_REOPEN_CHARS
+        })
+        .collect();
+    let left_out = total.saturating_sub(reopen.len());
+    (reopen, left_out)
+}
 
 /// Ask the host (see [`crate::Services::restart_after_window_loss`]) to start PhotoCraft again
 /// once this process ends (#10464). `unsaved` is how many documents were saved for recovery.
 fn request_restart(app: &mut PhotocraftApp, reason: &str, unsaved: usize) {
-    if !restart_wanted(app.session.prefs().file_handling.recover_on_launch, unsaved) {
+    if app.services.restart_after_window_loss.is_none() || !restart_wanted(app.session.prefs().file_handling.recover_on_launch, unsaved) {
         return;
     }
-    let reopen: Vec<String> =
-        app.session.documents().iter().filter(|d| !d.is_dirty()).filter_map(|d| d.path.clone()).filter(|p| !p.is_empty()).take(MAX_REOPEN).collect();
+    // The new process reads Recover on Launch from the preferences file, not from this process:
+    // with unsaved work waiting in recovery, make sure the file says what memory says.
+    if unsaved > 0
+        && let Err(e) = crate::prefs_ui::save_preferences(app)
+    {
+        log::warn!("not restarting: the preferences couldn't be saved, so the restarted PhotoCraft might not recover the {unsaved} unsaved document(s): {e}");
+        return;
+    }
+    let clean = app.session.documents().iter().filter(|d| !d.is_dirty()).filter_map(|d| d.path.clone()).filter(|p| !p.is_empty()).collect();
+    let (reopen, left_out) = reopen_list(clean);
     let Some(restart) = app.services.restart_after_window_loss.as_mut() else { return };
-    log::warn!("the window's graphics device is gone; PhotoCraft restarts to get a new one ({unsaved} unsaved document(s) come back from recovery)");
-    restart(crate::WindowRestart { reason: reason.to_string(), reopen });
+    log::warn!(
+        "the window's graphics device is gone; PhotoCraft restarts to get a new one ({unsaved} unsaved document(s) come back from recovery, {left_out} file(s) not reopened)"
+    );
+    restart(crate::WindowRestart { reason: reason.to_string(), reopen, left_out });
 }
 
 /// The adapter the window draws with, for the lines that report a fault: the failing call and
@@ -413,7 +440,7 @@ mod tests {
 
         let reason = "Unexpected error variant (driver implementation is at fault)";
         request_restart(&mut app, reason, 1);
-        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into()] }]);
+        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into()], left_out: 0 }]);
 
         // Recovery off with unsaved work: the work wouldn't come back, so no restart is asked for.
         app.session.prefs.edit(|p| p.file_handling.recover_on_launch = false);
@@ -426,6 +453,49 @@ mod tests {
         // A host without the service: nothing happens.
         let mut bare = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         request_restart(&mut bare, reason, 0);
+    }
+
+    /// The restarted process reads Recover on Launch from the preferences file: the file is
+    /// written before the restart is asked for, and a failed write means no restart (the unsaved
+    /// work stays in recovery storage, as when the app just closes).
+    #[test]
+    fn the_preferences_are_saved_before_the_restart_is_requested() {
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+        let (saves, restarts, disk_full) = (log.clone(), log.clone(), std::rc::Rc::new(std::cell::Cell::new(true)));
+        let full = disk_full.clone();
+        let services = crate::Services {
+            save_prefs: Some(Box::new(move |_| {
+                saves.borrow_mut().push("save");
+                if full.get() { Err("disk full".into()) } else { Ok(()) }
+            })),
+            restart_after_window_loss: Some(Box::new(move |_| restarts.borrow_mut().push("restart"))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.prefs.edit(|p| p.file_handling.recover_on_launch = true);
+        request_restart(&mut app, "lost", 2);
+        assert_eq!(*log.borrow(), vec!["save"], "the write failed, so the new process might not recover the work: no restart");
+        disk_full.set(false);
+        request_restart(&mut app, "lost", 2);
+        assert_eq!(*log.borrow(), vec!["save", "save", "restart"], "saved first, then the request");
+        // Nothing unsaved: nothing to recover, so the preferences are not touched.
+        request_restart(&mut app, "lost", 0);
+        assert_eq!(*log.borrow(), vec!["save", "save", "restart", "restart"]);
+    }
+
+    /// A restart names every clean file that fits on a command line, and counts the rest.
+    #[test]
+    fn files_that_do_not_fit_are_counted_not_dropped() {
+        let (reopen, left_out) = reopen_list((0..100).map(|i| format!("C:/work/file{i}.psd")).collect());
+        assert_eq!((reopen.len(), left_out), (100, 0), "more than a few dozen tabs all come back");
+        assert_eq!(reopen.first().map(String::as_str), Some("C:/work/file0.psd"));
+        let long = "x".repeat(1_000);
+        let (reopen, left_out) = reopen_list(vec![long.clone(); 20]);
+        assert_eq!(reopen.len() + left_out, 20);
+        assert!(left_out > 0 && reopen.len() * 1_000 < MAX_REOPEN_CHARS, "{} named, {left_out} left out", reopen.len());
+        assert_eq!(reopen_list(Vec::new()), (Vec::new(), 0));
+        // A single name longer than the whole budget is left out, not a panic.
+        assert_eq!(reopen_list(vec!["y".repeat(MAX_REOPEN_CHARS + 1)]), (Vec::new(), 1));
     }
 
     #[test]

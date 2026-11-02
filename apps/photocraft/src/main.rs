@@ -387,7 +387,13 @@ fn main() -> eframe::Result {
     // A new process can only take over after a lost window device if it would start the same way
     // (`window_loss`): no per-process options, no control port, no separate instance.
     #[cfg(not(target_os = "macos"))]
-    let plain_launch = launch_options.is_empty() && control_port.is_none() && !new_instance;
+    let plain_launch = window_loss::plain_launch(
+        &launch_options,
+        &single_instance::env_launch_options(),
+        control_port.is_some(),
+        new_instance,
+        std::env::var("PHOTOCRAFT_NEW_INSTANCE").ok().as_deref(),
+    );
     // One PhotoCraft per user (#3708): files opened from Explorer or a file manager while it runs
     // become tabs in its window. Lives until the event loop returns, then `shutdown` lets the next
     // launch become the primary.
@@ -695,10 +701,11 @@ fn main() -> eframe::Result {
             // The previous process lost its window's graphics device and started this one
             // (`window_loss`): its unsaved documents come back from crash recovery.
             let lost_reason = std::env::var(window_loss::REASON).ok();
-            if let Some((title, line, reason)) = window_loss::notice(lost_reason.as_deref()) {
-                let id = photocraft_ui_egui::notices::post(&mut app, title, vec![line.into()], false, None);
+            let left_out = std::env::var(window_loss::LEFT_OUT).ok();
+            if let Some((title, lines, args)) = window_loss::notice(lost_reason.as_deref(), left_out.as_deref()) {
+                let id = photocraft_ui_egui::notices::post(&mut app, title, lines, false, None);
                 if let Some(notice) = app.ui.notices.iter_mut().find(|n| n.id == id) {
-                    notice.args.push(("reason".into(), reason));
+                    notice.args.extend(args);
                 }
             }
             // The next device loss starts a new process instead of just closing. Not on macOS,

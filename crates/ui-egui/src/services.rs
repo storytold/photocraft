@@ -358,6 +358,8 @@ pub struct WindowRestart {
     /// Files of the documents without unsaved changes, to open again. The unsaved ones come back
     /// from crash recovery instead.
     pub reopen: Vec<String>,
+    /// How many more such files didn't fit in a command line and are not reopened.
+    pub left_out: usize,
 }
 
 /// Asks the host to start PhotoCraft again once this process has ended (see
