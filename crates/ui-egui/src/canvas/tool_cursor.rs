@@ -12,7 +12,10 @@ use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 use crate::canvas::ViewXform;
 
 mod hand;
+mod pen;
 mod zoom;
+
+pub use pen::PenVariant;
 
 /// The largest cursor bitmap (physical pixels; points on macOS, see [`native_scale`]); a larger tip
 /// paints its outline instead, with a small OS crosshair at the hotspot, and that outline trails
@@ -33,10 +36,18 @@ enum Shape {
     Hand { closed: bool },
     Zoom { out: bool },
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
+    Pen(PenVariant),
+}
+
+const MAX_CACHE_ENTRIES: usize = 16;
+
+#[derive(Clone, Default)]
+struct CursorCache {
+    entries: Vec<CachedEntry>,
 }
 
 #[derive(Clone)]
-struct Cached {
+struct CachedEntry {
     shape: Shape,
     scale: f32,
     image: CustomCursorImage,
@@ -284,6 +295,25 @@ fn zoom_with(ctx: &egui::Context, out: bool, bitmap: bool) -> CursorIcon {
     if out { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn }
 }
 
+/// Direct rasterization of a Pen tool cursor bitmap, for benchmarks and visual verification.
+pub fn rasterize_pen(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
+    pen::rasterize(variant, scale)
+}
+
+/// The Pen tool's pointer: its toolbar icon with the nib/apex on `at`. Uses an OS cursor bitmap
+/// where supported so its movement tracks hardware input without waiting for canvas frames (#9122);
+/// returns `None` when unsupported or unrasterizable so the caller can paint the fallback.
+pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
+    let variant = PenVariant::from_tool(tool)?;
+    if !native(ctx) {
+        return None;
+    }
+    let scale = native_scale(ctx);
+    let image = cached_image(ctx, &Shape::Pen(variant), scale)?;
+    ctx.set_cursor_image(Some(image));
+    Some(CursorIcon::None)
+}
+
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
     // Where cursor images can't be uploaded (immediate viewports, the web), paint the shape.
@@ -307,14 +337,22 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
 
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     let id = egui::Id::unique("photocraft-tool-cursor");
-    if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id))
-        && cached.shape == *shape
-        && cached.scale == scale
-    {
-        return Some(cached.image);
+    if let Some(mut cache) = ctx.data(|d| d.get_temp::<CursorCache>(id)) {
+        if let Some(pos) = cache.entries.iter().position(|e| e.shape == *shape && (e.scale - scale).abs() < 1e-4) {
+            let hit = cache.entries.remove(pos);
+            let image = hit.image.clone();
+            cache.entries.push(hit);
+            ctx.data_mut(|d| d.insert_temp(id, cache));
+            return Some(image);
+        }
     }
     let image = rasterize(shape, scale)?;
-    ctx.data_mut(|d| d.insert_temp(id, Cached { shape: shape.clone(), scale, image: image.clone() }));
+    let mut cache = ctx.data(|d| d.get_temp::<CursorCache>(id)).unwrap_or_default();
+    if cache.entries.len() >= MAX_CACHE_ENTRIES {
+        cache.entries.remove(0);
+    }
+    cache.entries.push(CachedEntry { shape: shape.clone(), scale, image: image.clone() });
+    ctx.data_mut(|d| d.insert_temp(id, cache));
     Some(image)
 }
 
@@ -343,8 +381,8 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
                     paint_crosshair(painter, at, 3.0, 0.0, stroke);
                 }
             }
-            // Only ever a bitmap: without one the OS draws its own grab cursors.
-            Shape::Hand { .. } | Shape::Zoom { .. } => {}
+            // Only ever a bitmap: without one the OS draws its own grab cursors, or fallback paints.
+            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pen { .. } => {}
         }
     }
 }
@@ -393,6 +431,7 @@ fn extent(shape: &Shape) -> Option<f32> {
         }
         Shape::Hand { .. } => hand::HALF,
         Shape::Zoom { .. } => zoom::HALF,
+        Shape::Pen(_) => 12.0,
     })
 }
 
@@ -440,6 +479,7 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             let (lx, ly) = (dx / scale, dy / scale);
             silhouette(zoom::shape(lx, ly), zoom::glyph(*out, lx, ly), 0.75, scale)
         }
+        Shape::Pen(_) => (0.0, 0.0),
     }
 }
 
@@ -526,6 +566,9 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
+    if let Shape::Pen(variant) = shape {
+        return pen::rasterize(*variant, scale);
+    }
     let extent = extent(shape)?;
     // Odd dimensions put the hotspot on the centre pixel at every DPI. Include the outline
     // and its antialiasing fringe, then check before converting or allocating.
@@ -597,6 +640,12 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         }
     }
     Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] })
+}
+
+#[cfg(test)]
+pub(crate) fn pen_bitmap(tool: Tool, scale: f32) -> Option<CustomCursorImage> {
+    let variant = PenVariant::from_tool(tool)?;
+    pen::rasterize(variant, scale)
 }
 
 #[cfg(test)]

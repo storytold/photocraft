@@ -616,3 +616,106 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
     let float = Some(egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(200.0, 300.0)));
     assert!(covers(float, Some(egui::pos2(150.0, 150.0))) && !covers(float, Some(egui::pos2(98.0, 150.0))), "just outside its edge stays here");
 }
+
+#[test]
+fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        for variant in super::PenVariant::all() {
+            let image = super::pen::rasterize(variant, scale).expect("pen variant rasterizes");
+            let [w, h] = image.size;
+            assert!(w > 0 && h > 0, "{variant:?} side at {scale}");
+            assert!(w <= (38.0 * scale) as u16, "{variant:?} side within cursor bounds at {scale}");
+            assert_eq!(image.rgba.len(), (usize::from(w) * usize::from(h) * 4));
+
+            let [hx, hy] = image.hotspot;
+            assert!(hx < w && hy < h, "{variant:?} hotspot inside bitmap at {scale}");
+
+            // Verify straight RGBA: white foreground has RGB=255, dark outline has RGB=0 and alpha>0
+            let pixels = image.rgba.as_chunks::<4>().0;
+            let has_white = pixels.iter().any(|p| p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] > 180);
+            let has_dark_outline = pixels.iter().any(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] > 50);
+            assert!(has_white, "{variant:?} at {scale} has solid white foreground");
+            assert!(has_dark_outline, "{variant:?} at {scale} has dark outline");
+
+            // Verify hotspot matches expected formula: pad + (hot_box / 24.0) * 22.0 * scale
+            let offset = (1.0 * scale).round().max(1.0) as f32;
+            let pad = offset + 1.0;
+            let hot_box = variant.hotspot_in_box();
+            let expected_hx = (pad + (hot_box.x / 24.0) * 22.0 * scale).round() as u16;
+            let expected_hy = (pad + (hot_box.y / 24.0) * 22.0 * scale).round() as u16;
+            assert_eq!(hx, expected_hx, "{variant:?} hotspot x at {scale}");
+            assert_eq!(hy, expected_hy, "{variant:?} hotspot y at {scale}");
+        }
+    }
+}
+
+#[test]
+fn pen_variants_have_distinct_hotspots_and_geometry() {
+    let standard = super::pen::rasterize(super::PenVariant::Standard, 1.0).unwrap();
+    let convert = super::pen::rasterize(super::PenVariant::ConvertPoint, 1.0).unwrap();
+    let freeform = super::pen::rasterize(super::PenVariant::Freeform, 1.0).unwrap();
+
+    // Standard nib vs ConvertPoint apex vs Freeform nib
+    assert_ne!(standard.hotspot, convert.hotspot);
+    assert_ne!(standard.hotspot, freeform.hotspot);
+    assert_ne!(convert.hotspot, freeform.hotspot);
+    assert_ne!(standard.rgba, convert.rgba);
+    assert_ne!(standard.rgba, freeform.rgba);
+}
+
+#[test]
+fn hostile_scales_get_no_pen_bitmap() {
+    for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX, 500.0] {
+        for variant in super::PenVariant::all() {
+            assert!(super::pen::rasterize(variant, scale).is_none(), "{variant:?} at {scale}");
+        }
+    }
+}
+
+#[test]
+fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
+    let ctx = egui::Context::default();
+    let shape_a = super::Shape::Pen(super::PenVariant::Standard);
+    let a1 = super::cached_image(&ctx, &shape_a, 1.0).unwrap();
+    let a2 = super::cached_image(&ctx, &shape_a, 1.0).unwrap();
+    assert!(Arc::ptr_eq(&a1.rgba, &a2.rgba), "pointer movement reuses cached bitmap");
+
+    // All six variants can be cached concurrently without thrashing
+    let mut images = Vec::new();
+    for v in super::PenVariant::all() {
+        let img = super::cached_image(&ctx, &super::Shape::Pen(v), 1.0).unwrap();
+        images.push(img);
+    }
+    for (i, v) in super::PenVariant::all().into_iter().enumerate() {
+        let lookup = super::cached_image(&ctx, &super::Shape::Pen(v), 1.0).unwrap();
+        assert!(Arc::ptr_eq(&lookup.rgba, &images[i].rgba), "switching tools retains cached image");
+    }
+
+    // Bounded cache capacity: inserting more shapes evicts the oldest
+    for i in 0..25 {
+        let _ = super::cached_image(&ctx, &super::Shape::Circle { radius: (10 + i) as f32, centre: false }, 1.0);
+    }
+    let id = egui::Id::unique("photocraft-tool-cursor");
+    let cache = ctx.data(|d| d.get_temp::<super::CursorCache>(id)).unwrap();
+    assert!(cache.entries.len() <= super::MAX_CACHE_ENTRIES, "cache remains strictly bounded");
+}
+
+#[test]
+fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
+    let ctx = egui::Context::default();
+    ctx.add_plugin(super::CursorLifecycle);
+
+    // Simulated native pass
+    let output = frame(&ctx, |ui| {
+        let icon = super::pen(ui.ctx(), Tool::Pen);
+        if let Some(i) = icon {
+            ui.ctx().set_cursor_icon(i);
+        }
+    });
+    assert!(output.platform_output.cursor_image.is_some(), "desktop root sets native cursor");
+    assert_eq!(output.platform_output.cursor_icon, CursorIcon::Crosshair, "fallback if OS rejects upload");
+
+    // Clear on pass end / leaving canvas
+    let empty = frame(&ctx, |_| {});
+    assert!(empty.platform_output.cursor_image.is_none(), "lifecycle clears cursor image");
+}
