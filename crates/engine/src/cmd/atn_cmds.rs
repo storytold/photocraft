@@ -37,8 +37,8 @@ mod steps_doc;
 mod steps_image;
 mod steps_layer;
 mod steps_make;
-mod steps_render;
 mod steps_other;
+mod steps_render;
 mod tables;
 
 #[cfg(test)]

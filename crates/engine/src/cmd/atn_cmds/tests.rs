@@ -3582,266 +3582,6 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
 }
 
-/// A Pattern Fill step whose `Ptrn` holds `id` and `name`, as the reference application records it.
-fn pattern_fill_step(id: &str, name: &str) -> AtnItem {
-    let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text(name))));
-    item(
-        "Mk  ",
-        "Make",
-        Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
-    )
-}
-
-/// Defines a 4×4 pattern of `color` named `name` in `s`'s library from its active document.
-fn define_pattern(s: &mut Session, color: &str, name: &str) -> String {
-    s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
-    s.execute("edit.definePattern", json!({"name": name})).unwrap()["pattern"].as_str().unwrap().to_string()
-}
-
-fn pixel(s: &mut Session) -> Vec<f64> {
-    let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
-    v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect()
-}
-
-/// A Pattern Fill step whose `Ptrn` names both an installed id and a display name shared by
-/// another pattern plays the pattern with that id; a foreign id falls back to the name.
-#[test]
-fn pattern_fill_prefers_an_installed_id_over_a_colliding_name() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    let mut define = |color: &str| {
-        s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
-        s.execute("edit.definePattern", json!({"name": "Twin"})).unwrap()["pattern"].as_str().unwrap().to_string()
-    };
-    let red = define("#ff0000");
-    let blue = define("#0000ff");
-    assert_ne!(red, blue);
-    s.patterns.items.retain(|p| p.id == red || p.id == blue);
-    s.patterns.items.sort_by_key(|p| p.id != blue);
-    let fill_step = |id: &str| {
-        let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text("Twin"))));
-        item(
-            "Mk  ",
-            "Make",
-            Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
-        )
-    };
-    let data = set_of("Pat", vec![("Installed", vec![fill_step(&red)]), ("Foreign", vec![fill_step("not-installed-id")])]);
-    let r = s.execute("actions.load", json!({"data": data})).unwrap();
-    assert!(r["unsupported"].as_array().is_none_or(|u| u.is_empty()), "{r}");
-    for (action, want) in [("Installed", [1.0, 0.0, 0.0, 1.0]), ("Foreign", [0.0, 0.0, 1.0, 1.0])] {
-        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-        let r = s.execute("actions.play", json!({"action": action})).unwrap();
-        assert!(r.get("failed").is_none(), "{r}");
-        let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
-        let got: Vec<f64> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect();
-        assert_eq!(got, want, "{action}");
-    }
-}
-
-/// The recorded id is looked up by id alone, in the document and then the library, before any
-/// name: a document pattern *named* like the id does not beat the library pattern with that id,
-/// and a foreign id that happens to be another pattern's name falls back to the recorded name.
-/// An id and a name of the same pattern play it.
-#[test]
-fn pattern_fill_ids_beat_names_across_document_and_library() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    let red = define_pattern(&mut s, "#ff0000", "Red");
-    define_pattern(&mut s, "#0000ff", "Blue");
-    let green = define_pattern(&mut s, "#00ff00", &red);
-    let data = set_of(
-        "Pat",
-        vec![
-            ("IdWins", vec![pattern_fill_step(&red, "Blue")]),
-            ("NameFallback", vec![pattern_fill_step("Red", "Blue")]),
-            ("Same", vec![pattern_fill_step(&red, "Red")]),
-        ],
-    );
-    s.execute("actions.load", json!({"data": data})).unwrap();
-    // Only the playback document holds the green pattern named like the red one's id.
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    s.execute("layer.newFillLayer.pattern", json!({"pattern": green})).unwrap();
-    s.execute("pattern.delete", json!({"pattern": green})).unwrap();
-    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == green && p.name == red));
-    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
-    for (action, want) in [("IdWins", [1.0, 0.0, 0.0, 1.0]), ("NameFallback", [0.0, 0.0, 1.0, 1.0]), ("Same", [1.0, 0.0, 0.0, 1.0])] {
-        let r = s.execute("actions.play", json!({"action": action})).unwrap();
-        assert!(r.get("failed").is_none(), "{action}: {r}");
-        assert_eq!(pixel(&mut s), want, "{action}");
-    }
-}
-
-/// CodeRabbit on batch 11: a pattern step that names its pattern only by `patternName` exports
-/// that name, rather than a step with no pattern (which plays the current one).
-#[test]
-fn pattern_steps_named_only_by_pattern_name_export_the_name() {
-    let one = Action { name: "P".into(), steps: vec![("layer.newFillLayer.pattern".into(), json!({"patternName": "Checkerboard"}))], ..Default::default() };
-    let (bytes, skipped) = export("Pat", &[&one], &[], false).unwrap();
-    assert!(skipped.is_empty());
-    let steps = import(&bytes).unwrap().actions[0].steps.clone();
-    assert_eq!(steps[0].0, "layer.newFillLayer.pattern");
-    assert_eq!(steps[0].1["pattern"], json!("Checkerboard"), "{}", steps[0].1);
-}
-
-/// CodeRabbit on batch 11: when the recorded id is installed nowhere, the recorded name is looked
-/// up as a name only. A pattern whose id equals that name text doesn't beat the one named so.
-#[test]
-fn pattern_fill_name_fallback_matches_names_not_ids() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    let red = define_pattern(&mut s, "#ff0000", "Red");
-    // Green is named like the red pattern's id.
-    define_pattern(&mut s, "#00ff00", &red);
-    let data = set_of("Pat", vec![("NameIsAnId", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", &red)])]);
-    s.execute("actions.load", json!({"data": data})).unwrap();
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    let r = s.execute("actions.play", json!({"action": "NameIsAnId"})).unwrap();
-    assert!(r.get("failed").is_none(), "{r}");
-    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
-}
-
-/// A recorded pattern installed neither by id nor by name fails with an error that names the
-/// pattern, from the imported step and from the Pattern Fill dialog's command alike.
-#[test]
-fn pattern_fill_missing_everywhere_names_the_pattern() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
-    define_pattern(&mut s, "#ff0000", "Red");
-    let data = set_of("Pat", vec![("Missing", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", "My Wood")])]);
-    s.execute("actions.load", json!({"data": data})).unwrap();
-    let r = s.execute("actions.play", json!({"action": "Missing"})).unwrap();
-    let err = r["failed"]["error"].as_str().unwrap_or_default();
-    assert!(err.contains("\"My Wood\""), "{r}");
-    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Red"})).unwrap();
-    let e = s.execute("layer.fill.pattern.set", json!({"pattern": "5e1c0000-aaaa-4bbb-8ccc-000000000000", "patternName": "My Wood"})).unwrap_err();
-    assert!(e.to_string().contains("\"My Wood\""), "{e}");
-}
-
-/// FredApps review on #10459: a set whose name has surrounding spaces (a Photoshop `.atn` or an
-/// older actions.json can have one, and New Action records into it under that exact name) saves
-/// by that name. `actions.save` used to trim it and then find no set.
-#[test]
-fn save_finds_a_set_by_its_exact_name_with_spaces() {
-    let mut s = Session::new();
-    s.actions.list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) });
-    s.execute("actions.record", json!({"name": "New", "set": " Web "})).unwrap();
-    s.execute("actions.stop", json!({})).unwrap();
-    let saved = s.execute("actions.save", json!({"set": " Web "})).unwrap();
-    assert_eq!((&saved["set"], &saved["actions"]), (&json!(" Web "), &json!(["Old", "New"])));
-    // The file keeps the name, as Photoshop's does.
-    let mut reloaded = Session::new();
-    let r = reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-    assert_eq!(r["set"], " Web ");
-    // Other names are still trimmed.
-    s.execute("actions.assignSet", json!({"action": "Old", "set": "Print"})).unwrap();
-    assert_eq!(s.execute("actions.save", json!({"set": "  Print "})).unwrap()["set"], "Print");
-}
-
-/// FredApps review on #10459: Save Actions… on an empty set made with New Set writes it, as
-/// Photoshop saves an empty set to the `.atn`, and loading that file brings the empty set back.
-#[test]
-fn an_empty_new_set_saves_and_loads_back() {
-    let mut s = Session::new();
-    s.execute("actions.newSet", json!({"name": "Later"})).unwrap();
-    let saved = s.execute("actions.save", json!({"set": "Later"})).unwrap();
-    assert_eq!((&saved["set"], &saved["actions"], &saved["steps"]), (&json!("Later"), &json!([]), &json!(0)));
-    let mut other = Session::new();
-    let r = other.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-    assert_eq!((&r["set"], &r["actions"]), (&json!("Later"), &json!([])));
-    assert_eq!(crate::actions_edit_cmds::set_names(&other), ["Later"], "an empty folder");
-    other.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-    assert_eq!(crate::actions_edit_cmds::set_names(&other), ["Later"], "loaded twice, still one folder");
-    // New Action records into it as into any set, and it saves with that action.
-    other.execute("actions.record", json!({"name": "Now", "set": "Later"})).unwrap();
-    other.execute("actions.stop", json!({})).unwrap();
-    assert_eq!(other.execute("actions.save", json!({"set": "Later"})).unwrap()["actions"], json!(["Now"]));
-    // A set that doesn't exist is still refused, and so is saving every action when there is none.
-    let err = s.execute("actions.save", json!({"set": "Nope"})).unwrap_err().to_string();
-    assert!(err.contains("no actions in a set named `Nope`"), "{err}");
-    let err = Session::new().execute("actions.save", json!({})).unwrap_err().to_string();
-    assert!(err.contains("there are no actions to save"), "{err}");
-}
-
-/// A set from Chinese Photoshop: UTF-16 set and action names, a step name in GBK (可选颜色,
-/// the bytes from #6743) on an event PhotoCraft has no command for, with no descriptor.
-fn gbk_set() -> Vec<u8> {
-    let step = AtnItem { dictionary: b"\xbf\xc9\xd1\xa1\xd1\xd5\xc9\xab".to_vec(), ..item("syntheticFill", "", None) };
-    let file = AtnFile {
-        name: UnicodeString::new_nul("相馆"),
-        actions: vec![AtnAction { name: UnicodeString::new_nul("调白"), items: vec![step], ..Default::default() }],
-        ..Default::default()
-    };
-    atn::write(&file).unwrap()
-}
-
-#[test]
-fn load_decodes_legacy_step_names() {
-    let mut s = Session::new();
-    let r = s.execute("actions.load", json!({"data": b64(&gbk_set())})).unwrap();
-    assert_eq!(r["encoding"], "GBK", "{r}");
-    assert_eq!(r["unsupported"][0]["name"], "可选颜色", "{r}");
-    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    let played = s.execute("actions.play", json!({"action": "调白"})).unwrap();
-    assert!(played["failed"]["error"].as_str().unwrap().contains("可选颜色"), "{played}");
-}
-
-#[test]
-fn load_keeps_windows_1252_symbols() {
-    // Windows Photoshop step names with no Unicode copy: Mac Roman reads ° and » as ∞ and ª,
-    // which must not win ("50 ∞", "Grˆﬂe ª"). Save Actions writes the names back as that text.
-    let steps = vec![
-        AtnItem { dictionary: b"50 \xb0".to_vec(), ..item("syntheticFill", "", None) },
-        AtnItem { dictionary: b"Gr\xf6\xdfe \xbb".to_vec(), ..item("syntheticFill", "", None) },
-    ];
-    let file = AtnFile {
-        name: UnicodeString::new_nul("Größe ändern"),
-        actions: vec![AtnAction { name: UnicodeString::new_nul("Logo"), items: steps, ..Default::default() }],
-        ..Default::default()
-    };
-    let mut s = Session::new();
-    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
-    assert_eq!(r["encoding"], "windows-1252", "{r}");
-    assert_eq!(r["unsupported"][0]["name"], "50 °", "{r}");
-    assert_eq!(r["unsupported"][1]["name"], "Größe »", "{r}");
-    let saved = s.execute("actions.save", json!({"set": "Größe ändern"})).unwrap();
-    let saved = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
-    let names: Vec<String> = saved.actions[0].items.iter().map(|i| saved.item_label(i)).collect();
-    assert_eq!(names, ["50 °", "Größe »"]);
-}
-
-#[test]
-fn load_encoding_override() {
-    let mut s = Session::new();
-    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "shift_jis"})).unwrap();
-    assert_eq!(r["encoding"], "Shift_JIS", "{r}");
-    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "auto"})).unwrap();
-    assert_eq!(r["encoding"], "GBK", "{r}");
-}
-
-#[test]
-fn load_reports_utf8() {
-    let mut s = Session::new();
-    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
-    assert_eq!(r["encoding"], "UTF-8", "{r}");
-}
-
-#[test]
-fn load_rejects_bad_encodings() {
-    let mut s = Session::new();
-    for bad in [json!(3), json!(""), json!("nope"), json!("replacement"), json!(["gbk"])] {
-        assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
-    }
-    assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
-/// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
-fn distort(code: &str, d: Descriptor) -> Mapped {
-/// The step `d` of the Photoshop event `code` (a four-character code), as PhotoCraft loads it.
-fn other_step(code: &str, d: Descriptor) -> Mapped {
-    let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
-    (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
-}
-
-fn one_step(m: Mapped) -> (String, Value) {
 /// A Photoshop step of one of the newer features, as its event reference records it (#10610).
 fn newer(name: &str, d: Descriptor) -> Mapped {
     (events::event_for(&AtnEvent::name(name)).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
@@ -3854,446 +3594,6 @@ fn mapped(m: Mapped) -> (String, Value) {
     }
 }
 
-/// Photoshop's Distort filter steps load with its defaults for missing keys and its clamping for
-/// out-of-range values, play, and save back with every key in recorded order (#10605).
-#[test]
-fn distort_filter_steps_load_clamp_play_and_save_back() {
-    // Photoshop's defaults, as its steps record them.
-    let wave = desc("null")
-        .with("Wvtp", enm("Wvtp", "WvSn"))
-        .with("NmbG", D::Integer(5))
-        .with("WLMn", D::Integer(10))
-        .with("WLMx", D::Integer(120))
-        .with("AmMn", D::Integer(5))
-        .with("AmMx", D::Integer(35))
-        .with("SclH", D::Integer(100))
-        .with("SclV", D::Integer(100))
-        .with("UndA", enm("UndA", "RptE"))
-        .with("RndS", D::Integer(-7));
-    let zigzag = desc("null").with("Amnt", D::Integer(10)).with("NmbR", D::Integer(5)).with("ZZTy", enm("ZZTy", "PndR"));
-    let cases = [
-        ("Pnch", desc("null").with("Amnt", D::Integer(50)), "filter.distort.pinch", json!({"amount": 50})),
-        ("Plr ", desc("null").with("Cnvr", enm("Cnvr", "RctP")), "filter.distort.polarCoordinates", json!({"mode": "rectangularToPolar"})),
-        (
-            "Sphr",
-            desc("null").with("Amnt", D::Integer(100)).with("SphM", enm("SphM", "Nrml")),
-            "filter.distort.spherize",
-            json!({"amount": 100, "mode": "normal"}),
-        ),
-        ("Twrl", desc("null").with("Angl", D::Integer(50)), "filter.distort.twirl", json!({"angle": 50})),
-        (
-            "Wave",
-            wave,
-            "filter.distort.wave",
-            json!({"type": "sine", "generators": 5, "wavelengthMin": 10, "wavelengthMax": 120, "amplitudeMin": 5, "amplitudeMax": 35,
-                "undefinedAreas": "repeat", "seed": 4_294_967_289_u32}),
-        ),
-        ("ZgZg", zigzag, "filter.distort.zigZag", json!({"amount": 10, "ridges": 5, "style": "pondRipples"})),
-    ];
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
-    s.execute("filter.render.clouds", json!({})).unwrap();
-    for (code, d, id, params) in cases {
-        let (got, p) = one_step(distort(code, d.clone()));
-        assert_eq!((got.as_str(), &p), (id, &params), "{code}");
-        // Every key, in the order Photoshop records them.
-        assert_eq!(export_item(id, &p, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
-        s.actions.list.push(Action::new(code, vec![(id.to_string(), p)]));
-        let played = s.execute("actions.play", json!({"action": code})).unwrap();
-        assert_eq!(played["ran"], 1, "{code}: {played}");
-    }
-    // A step that leaves its keys out takes Photoshop's defaults: Wave's undefined areas are
-    // Repeat Edge Pixels, where the command's own default is wrap.
-    assert_eq!(one_step(distort("Wave", desc("null"))).1["undefinedAreas"], "repeat");
-    assert_eq!(one_step(distort("Sphr", desc("null"))).1, json!({"amount": 100, "mode": "normal"}));
-    // Out-of-range values are clamped, as Photoshop clamps them.
-    assert_eq!(one_step(distort("Pnch", desc("null").with("Amnt", D::Integer(500)))).1, json!({"amount": 100}));
-    assert_eq!(one_step(distort("Twrl", desc("null").with("Angl", D::Integer(-5000)))).1, json!({"angle": -999}));
-    assert_eq!(one_step(distort("ZgZg", desc("null").with("NmbR", D::Integer(40)))).1["ridges"], 20);
-    assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
-}
-
-/// PhotoCraft's renderer draws at most `MAX_WAVE_GENERATORS` (64) generators, so a Wave step
-/// recorded with more keeps the Photoshop step on import and is refused on export, as the PSD
-/// smart-filter mapper does, rather than mapping a step that plays differently (#10605).
-#[test]
-fn wave_generators_past_what_photocraft_draws_keep_the_step() {
-    assert_eq!(photocraft_algo::MAX_WAVE_GENERATORS, 64);
-    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(64)))).1;
-    assert_eq!(p["generators"], 64, "{p}");
-    for n in [65, 999, 1_000_000] {
-        let m = distort("Wave", desc("null").with("NmbG", D::Integer(n)));
-        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "NmbG {n}");
-    }
-    assert!(export_item("filter.distort.wave", &json!({"generators": 65}), "S").is_none());
-    assert!(export_item("filter.distort.wave", &json!({"generators": 64}), "S").is_some());
-}
-
-/// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
-/// scaled below 100 % (the command has no scale), or a key the event does not have (#10605).
-#[test]
-fn distort_filter_steps_the_commands_cannot_play_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    assert!(kept(distort("Sphr", desc("null").with("SphM", enm("SphM", "Dgnl")))));
-    assert!(kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "Sprl")))));
-    assert!(kept(distort("Wave", desc("null").with("SclH", D::Integer(50)))));
-    assert!(kept(distort("Wave", desc("null").with("UndA", enm("UndA", "Trns")))));
-    assert!(kept(distort("Pnch", desc("null").with("Rds ", D::Integer(3)))));
-    // A scale of 100 % (or above, which Photoshop clamps to 100) plays.
-    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(250)))));
-}
-
-/// A setting the events cannot hold refuses the step instead of replaying differently: a
-/// fractional amount (the keys are integers), a mask target, a seed past 32 bits (#10605).
-#[test]
-fn distort_filter_steps_that_cannot_be_written_are_refused() {
-    for (id, params) in [
-        ("filter.distort.pinch", json!({"amount": 12.5})),
-        ("filter.distort.twirl", json!({"angle": 10, "target": "mask"})),
-        ("filter.distort.zigZag", json!({"ridges": 2.5})),
-        ("filter.distort.wave", json!({"seed": 4_294_967_296_u64})),
-        ("filter.distort.wave", json!({"undefinedAreas": "transparent"})),
-        ("filter.distort.spherize", json!({"mode": "diagonal"})),
-    ] {
-        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
-    }
-    // Left out, a setting is written as the command replays it: Wave wraps.
-    let wave = export_item("filter.distort.wave", &json!({}), "S").unwrap().descriptor.unwrap();
-    assert_eq!(get_enum(&wave, "UndA").as_deref(), Some("WrpA"));
-}
-
-/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
-/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10605).
-#[test]
-fn distort_filter_steps_with_a_wrong_typed_setting_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (code, key, v) in [
-        ("Pnch", "Amnt", D::Boolean(true)),
-        ("Twrl", "Angl", text("90")),
-        ("Plr ", "Cnvr", D::Integer(1)),
-        ("Sphr", "SphM", text("HrzO")),
-        ("ZgZg", "NmbR", enm("Ordn", "Trgt")),
-        ("Wave", "NmbG", D::Boolean(false)),
-        ("Wave", "Wvtp", D::Integer(2)),
-        ("Wave", "SclH", text("50")),
-        ("Wave", "SclV", D::Boolean(true)),
-        ("Wave", "UndA", D::Integer(1)),
-        ("Wave", "RndS", text("7")),
-    ] {
-        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
-    }
-}
-
-/// An integer outside the range Photoshop clamps the key to refuses the step: written as is, it
-/// would load back clamped, as another value (#10605).
-#[test]
-fn distort_filter_steps_outside_photoshops_range_are_refused() {
-    for (id, params) in [
-        ("filter.distort.pinch", json!({"amount": 500})),
-        ("filter.distort.spherize", json!({"amount": -101})),
-        ("filter.distort.twirl", json!({"angle": 1000})),
-        ("filter.distort.zigZag", json!({"ridges": 21})),
-        ("filter.distort.zigZag", json!({"ridges": -1})),
-        ("filter.distort.wave", json!({"generators": 0})),
-        ("filter.distort.wave", json!({"amplitudeMax": 1000})),
-    ] {
-        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
-    }
-    // The limits themselves are written.
-    for (id, params) in [
-        ("filter.distort.pinch", json!({"amount": -100})),
-        ("filter.distort.twirl", json!({"angle": 999})),
-        ("filter.distort.zigZag", json!({"ridges": 0})),
-        ("filter.distort.wave", json!({"generators": 64, "wavelengthMin": 1})),
-    ] {
-        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
-    }
-}
-
-/// Wave's `RndS` is the seed's 32 bits, signed or not: it loads exactly or keeps the step,
-/// never saturated or truncated to another seed (#10605).
-#[test]
-fn wave_seed_loads_its_exact_32_bits_or_keeps_the_step() {
-    let seed = |v: D| match distort("Wave", desc("null").with("RndS", v)) {
-        Mapped::Steps(s) => Some(s[0].1["seed"].clone()),
-        Mapped::Unsupported { .. } => None,
-    };
-    assert_eq!(seed(D::LargeInteger(4_000_000_000)), Some(json!(4_000_000_000_u32)));
-    assert_eq!(seed(D::LargeInteger(-1)), Some(json!(u32::MAX)));
-    assert_eq!(seed(D::Integer(-7)), Some(json!(4_294_967_289_u32)));
-    assert_eq!(seed(D::Double(12.0)), Some(json!(12)));
-    for v in [D::Double(7.5), D::LargeInteger(4_294_967_296), D::LargeInteger(i64::from(i32::MIN) - 1)] {
-        assert_eq!(seed(v.clone()), None, "RndS {v:?} was mapped");
-    }
-}
-
-/// A step recording one of its keys twice can't be saved back with both values, so it stays a
-/// Photoshop step instead of playing the first and dropping the second (#10605).
-#[test]
-fn distort_filter_steps_with_a_repeated_key_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (code, key, a, b) in [
-        ("Pnch", "Amnt", D::Integer(10), D::Integer(20)),
-        ("Sphr", "SphM", enm("SphM", "Nrml"), enm("SphM", "HrzO")),
-        ("Plr ", "Cnvr", enm("Cnvr", "RctP"), enm("Cnvr", "RctP")),
-        ("Wave", "NmbG", D::Integer(5), D::Integer(7)),
-        ("Wave", "SclH", D::Integer(100), D::Integer(50)),
-        ("Wave", "UndA", enm("UndA", "WrpA"), enm("UndA", "RptE")),
-        ("Wave", "RndS", D::Integer(1), D::Integer(2)),
-        ("ZgZg", "NmbR", D::Integer(5), D::Integer(6)),
-    ] {
-        assert!(kept(distort(code, desc("null").with(key, a.clone()).with(key, b.clone()))), "{code} with {key} twice was mapped");
-    }
-}
-
-/// An enumeration of another type isn't the setting Photoshop records, so the step stays a
-/// Photoshop step instead of loading its value and saving back the expected type (#10605).
-#[test]
-fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (code, key, v) in [
-        ("Plr ", "Cnvr", enm("Ordn", "RctP")),
-        ("Sphr", "SphM", enm("Cnvr", "Nrml")),
-        ("ZgZg", "ZZTy", enm("Ordn", "PndR")),
-        ("Wave", "Wvtp", enm("WvSn", "WvSn")),
-        ("Wave", "UndA", enm("Ordn", "WrpA")),
-    ] {
-        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
-    }
-    assert!(!kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "PlrR")))));
-    assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
-}
-
-/// Photoshop clamps Wave's wavelengths and amplitudes to 1..999, but `filter.distort.wave`
-/// takes a minimum wavelength of 1..998, a maximum of 2..999 and a minimum amplitude of 1..998.
-/// A value the command rejects keeps the Photoshop step on import and refuses it on export,
-/// rather than mapping a step that fails when it plays; a minimum above its maximum, which the
-/// command takes, maps and plays (#10605).
-#[test]
-fn wave_values_the_command_rejects_are_kept_or_refused() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (key, n) in [("WLMn", 999), ("WLMn", 5000), ("WLMx", 1), ("WLMx", 0), ("AmMn", 999), ("AmMn", 1200)] {
-        assert!(kept(distort("Wave", desc("null").with(key, D::Integer(n)))), "{key} {n} was mapped");
-    }
-    for (param, n) in [("wavelengthMin", 999), ("wavelengthMax", 1), ("amplitudeMin", 999)] {
-        assert!(export_item("filter.distort.wave", &json!({ param: n }), "S").is_none(), "{param} {n} exported");
-    }
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
-    s.execute("filter.render.clouds", json!({})).unwrap();
-    let plays = [
-        desc("null").with("WLMn", D::Integer(998)),
-        desc("null").with("WLMx", D::Integer(2)),
-        desc("null").with("AmMn", D::Integer(998)),
-        desc("null").with("WLMn", D::Integer(200)).with("WLMx", D::Integer(100)),
-        desc("null").with("AmMn", D::Integer(40)).with("AmMx", D::Integer(20)),
-    ];
-    for (k, d) in plays.into_iter().enumerate() {
-        let (id, p) = one_step(distort("Wave", d));
-        assert!(export_item(&id, &p, "S").is_some(), "{p} refused");
-        let name = format!("W{k}");
-        s.actions.list.push(Action::new(&name, vec![(id, p.clone())]));
-        let played = s.execute("actions.play", json!({"action": name})).unwrap();
-        assert_eq!(played["ran"], 1, "{p}: {played}");
-    }
-}
-
-/// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
-/// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
-#[test]
-fn wave_with_a_fractional_scale_is_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    for (key, n) in [("SclH", 99.6), ("SclV", 99.5), ("SclH", 100.4)] {
-        assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
-    }
-    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
-/// Photoshop's De-Interlace, NTSC Colors, HSB/HSL, Custom, Average and Remove Black / White
-/// Matte steps load as their commands, play, and save back with the same keys (#10607).
-#[test]
-fn video_other_and_matting_steps_load_play_and_save_back() {
-    let cells: Vec<D> = (0..25)
-        .map(|i| {
-            D::Integer(if i == 12 {
-                5
-            } else if [7, 11, 13, 17].contains(&i) {
-                -1
-            } else {
-                0
-            })
-        })
-        .collect();
-    let kernel: Vec<i32> = (0..25)
-        .map(|i| {
-            if i == 12 {
-                5
-            } else if [7, 11, 13, 17].contains(&i) {
-                -1
-            } else {
-                0
-            }
-        })
-        .collect();
-    let cases = [
-        (
-            "Dntr",
-            desc("null").with("IntE", enm("IntE", "ElmE")).with("IntC", enm("IntC", "CrtD")),
-            "filter.video.deInterlace",
-            json!({"eliminate": "evenFields", "createBy": "duplication"}),
-        ),
-        ("NTSC", desc("null"), "filter.video.ntscColors", json!({})),
-        (
-            "HsbP",
-            desc("null").with("Inpt", enm("ClrS", "RGBC")).with("Otpt", enm("ClrS", "HSLC")),
-            "filter.other.hsbHsl",
-            json!({"inputMode": "rgb", "rowOrder": "hsl"}),
-        ),
-        (
-            "Cstm",
-            desc("null").with("Scl ", D::Integer(1)).with("Ofst", D::Integer(0)).with("Mtrx", D::List(cells)),
-            "filter.other.custom",
-            json!({"kernel": kernel, "scale": 1, "offset": 0}),
-        ),
-        ("Avrg", desc("null"), "filter.blur.average", json!({})),
-        ("RmvB", desc("null"), "layer.matting.removeBlackMatte", json!({})),
-        ("RmvW", desc("null"), "layer.matting.removeWhiteMatte", json!({})),
-    ];
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
-    s.execute("filter.render.clouds", json!({})).unwrap();
-    for (code, d, id, params) in cases {
-        let Mapped::Steps(steps) = other_step(code, d.clone()) else { panic!("{code} kept") };
-        let mut p = steps[0].1.clone();
-        // Numbers come back as the descriptor's integers.
-        if let Some(k) = p.get_mut("kernel") {
-            *k = json!(k.as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as i32).collect::<Vec<_>>());
-        }
-        for k in ["scale", "offset"] {
-            if let Some(v) = p.get_mut(k) {
-                *v = json!(v.as_f64().unwrap() as i32);
-            }
-        }
-        assert_eq!((steps[0].0.as_str(), &p), (id, &params), "{code}");
-        assert_eq!(export_item(id, &steps[0].1, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
-        s.actions.list.push(Action::new(code, vec![(id.to_string(), steps[0].1.clone())]));
-        let played = s.execute("actions.play", json!({"action": code})).unwrap();
-        assert_eq!(played["ran"], 1, "{code}: {played}");
-    }
-    // Missing keys are Photoshop's defaults.
-    let Mapped::Steps(steps) = other_step("Dntr", desc("null")) else { panic!("kept") };
-    assert_eq!(steps[0].1, json!({"eliminate": "oddFields", "createBy": "interpolation"}));
-    let Mapped::Steps(steps) = other_step("HsbP", desc("null")) else { panic!("kept") };
-    assert_eq!(steps[0].1, json!({"inputMode": "rgb", "rowOrder": "hsb"}));
-}
-
-/// A step the commands cannot play keeps the Photoshop step: a Custom matrix that is not 5 × 5,
-/// an unknown enumeration value, or a key the event does not have (#10607).
-#[test]
-fn video_other_and_matting_steps_the_commands_cannot_play_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    let nine = D::List((0..9).map(D::Integer).collect());
-    assert!(kept(other_step("Cstm", desc("null").with("Mtrx", nine))));
-    assert!(kept(other_step("Cstm", desc("null"))));
-    assert!(kept(other_step("HsbP", desc("null").with("Inpt", enm("ClrS", "LbCl")))));
-    assert!(kept(other_step("Dntr", desc("null").with("IntE", enm("IntE", "ElmA")))));
-    assert!(kept(other_step("NTSC", desc("null").with("Lvl ", D::Integer(1)))));
-    assert!(kept(other_step("RmvW", desc("null").with("Lyr ", D::Integer(1)))));
-}
-
-/// What the events cannot hold refuses the step: a fractional kernel cell, a kernel that is not
-/// 25 cells, a mask target, an unknown mode (#10607).
-#[test]
-fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
-    let mut cells = vec![json!(0); 25];
-    cells[12] = json!(1.5);
-    for (id, params) in [
-        ("filter.other.custom", json!({"kernel": cells})),
-        ("filter.other.custom", json!({"kernel": [0, 0, 0, 0, 1, 0, 0, 0, 0]})),
-        ("filter.other.custom", json!({"scale": 2.5})),
-        ("filter.blur.average", json!({"target": "mask"})),
-        ("filter.other.hsbHsl", json!({"inputMode": "lab"})),
-        ("filter.video.deInterlace", json!({"eliminate": "allFields"})),
-        ("filter.other.custom", json!([1])),
-        ("filter.blur.average", json!(5)),
-        ("filter.other.hsbHsl", json!("hsl")),
-    ] {
-        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
-    }
-    // `null` params set nothing.
-    assert!(export_item("filter.blur.average", &Value::Null, "S").is_some());
-    // A Custom step without a kernel is the command's identity kernel.
-    let d = export_item("filter.other.custom", &json!({}), "S").unwrap().descriptor.unwrap();
-    let cells = get_list(&d, "Mtrx").unwrap();
-    assert_eq!((cells.len(), cells.get(12)), (25, Some(&D::Integer(1))));
-}
-
-/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
-/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10607).
-#[test]
-fn video_other_steps_with_a_wrong_typed_setting_are_kept() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
-    for (code, d) in [
-        ("Dntr", desc("null").with("IntE", D::Integer(1))),
-        ("Dntr", desc("null").with("IntC", text("CrtD"))),
-        ("HsbP", desc("null").with("Inpt", D::Boolean(true))),
-        ("HsbP", desc("null").with("Otpt", text("HSLC"))),
-        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", text("2"))),
-        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Boolean(true))),
-        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl", enm("Ordn", "Trgt"))),
-    ] {
-        assert!(kept(other_step(code, d.clone())), "{code} {d:?} was mapped");
-    }
-}
-
-/// The key gate admits `Scl` without its padding, so the mapper reads it too: an unpadded
-/// scale is the step's scale, not the default 1.
-#[test]
-fn custom_reads_an_unpadded_scale() {
-    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
-    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Scl", D::Integer(3)).with("Mtrx", identity)) else { panic!("kept") };
-    assert_eq!(steps[0].1["scale"], json!(3.0));
-}
-
-/// `filter.other.custom` plays a scale of 1..9999, an offset of -9999..9999 and cells of
-/// -999..999, and clamps anything else: `Scl 0` would play as 1 and save back as 0. Such a step
-/// stays a Photoshop step, as does a matrix of more than 25 cells, and export refuses those
-/// values instead of writing what the command doesn't play (#10607).
-#[test]
-fn custom_outside_the_commands_range_is_kept_and_refused() {
-    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    let kernel = |cell: i32| D::List((0..25).map(|i| D::Integer(if i == 12 { cell } else { 0 })).collect());
-    let identity = kernel(1);
-    for d in [
-        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(0)),
-        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(10_000)),
-        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(-10_000)),
-        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(10_000)),
-        desc("null").with("Mtrx", kernel(1000)),
-        desc("null").with("Mtrx", kernel(-1000)),
-        desc("null").with("Mtrx", D::List((0..26).map(|_| D::Integer(0)).collect())),
-        desc("null").with("Mtrx", D::List((0..1000).map(|_| D::Integer(0)).collect())),
-        // Fractions: export writes integers, so Save Actions would refuse the mapped step.
-        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(1.5)),
-        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Double(2.5)),
-        desc("null").with("Mtrx", D::List((0..25).map(|i| if i == 12 { D::Double(0.5) } else { D::Integer(0) }).collect())),
-    ] {
-        assert!(kept(other_step("Cstm", d.clone())), "{:?} was mapped", d.items);
-    }
-    for (scale, offset, cell) in [(1, -9999, -999), (9999, 9999, 999)] {
-        let d = desc("null").with("Scl ", D::Integer(scale)).with("Ofst", D::Integer(offset)).with("Mtrx", kernel(cell));
-        let Mapped::Steps(steps) = other_step("Cstm", d) else { panic!("{scale} {offset} {cell} kept") };
-        assert_eq!(
-            (&steps[0].1["scale"], &steps[0].1["offset"], &steps[0].1["kernel"][12]),
-            (&json!(f64::from(scale)), &json!(f64::from(offset)), &json!(f64::from(cell)))
-        );
-    }
-    // An integral Double is a whole number and still maps.
-    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(2.0))) else { panic!("Scl 2.0 kept") };
-    assert_eq!(steps[0].1["scale"], json!(2.0));
-    let mut cells = vec![json!(0); 25];
-    cells[12] = json!(1000);
-    for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {
-        assert!(export_item("filter.other.custom", &params, "S").is_none(), "{params} exported");
 /// Oil Paint, Smart Sharpen, Focus Area, Select Sky and Remove Background load with the keys and
 /// defaults Photoshop records; Oil Paint's and Select Sky's defaults differ from the commands'
 /// and are written out (#10610).
@@ -4313,6 +3613,7 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
     assert_eq!(mapped(newer("oilPaint", desc("null"))).1, expected_oil, "a missing key takes Photoshop's default");
     // Smart Sharpen in the form the command plays (the newer filter, removing a Gaussian blur).
     let sharpen = desc("null")
+        .with("presetKind", enm("presetKindType", "presetKindCustom"))
         .with("useLegacy", D::Boolean(false))
         .with("Amnt", pct(150.0))
         .with("Rds ", px(2.5))
@@ -4714,4 +4015,721 @@ fn oil_paint_outside_the_commands_ranges_is_clamped_on_import_and_refused_on_exp
     ] {
         assert!(export_item("filter.stylize.oilPaint", &params, "S").is_none(), "{params} exported");
     }
+}
+
+/// The step `d` of the Photoshop event `code` (a four-character code), as PhotoCraft loads it.
+fn other_step(code: &str, d: Descriptor) -> Mapped {
+    let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
+    (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
+}
+
+/// Photoshop's De-Interlace, NTSC Colors, HSB/HSL, Custom, Average and Remove Black / White
+/// Matte steps load as their commands, play, and save back with the same keys (#10607).
+#[test]
+fn video_other_and_matting_steps_load_play_and_save_back() {
+    let cells: Vec<D> = (0..25)
+        .map(|i| {
+            D::Integer(if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            })
+        })
+        .collect();
+    let kernel: Vec<i32> = (0..25)
+        .map(|i| {
+            if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            }
+        })
+        .collect();
+    let cases = [
+        (
+            "Dntr",
+            desc("null").with("IntE", enm("IntE", "ElmE")).with("IntC", enm("IntC", "CrtD")),
+            "filter.video.deInterlace",
+            json!({"eliminate": "evenFields", "createBy": "duplication"}),
+        ),
+        ("NTSC", desc("null"), "filter.video.ntscColors", json!({})),
+        (
+            "HsbP",
+            desc("null").with("Inpt", enm("ClrS", "RGBC")).with("Otpt", enm("ClrS", "HSLC")),
+            "filter.other.hsbHsl",
+            json!({"inputMode": "rgb", "rowOrder": "hsl"}),
+        ),
+        (
+            "Cstm",
+            desc("null").with("Scl ", D::Integer(1)).with("Ofst", D::Integer(0)).with("Mtrx", D::List(cells)),
+            "filter.other.custom",
+            json!({"kernel": kernel, "scale": 1, "offset": 0}),
+        ),
+        ("Avrg", desc("null"), "filter.blur.average", json!({})),
+        ("RmvB", desc("null"), "layer.matting.removeBlackMatte", json!({})),
+        ("RmvW", desc("null"), "layer.matting.removeWhiteMatte", json!({})),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, d, id, params) in cases {
+        let Mapped::Steps(steps) = other_step(code, d.clone()) else { panic!("{code} kept") };
+        let mut p = steps[0].1.clone();
+        // Numbers come back as the descriptor's integers.
+        if let Some(k) = p.get_mut("kernel") {
+            *k = json!(k.as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as i32).collect::<Vec<_>>());
+        }
+        for k in ["scale", "offset"] {
+            if let Some(v) = p.get_mut(k) {
+                *v = json!(v.as_f64().unwrap() as i32);
+            }
+        }
+        assert_eq!((steps[0].0.as_str(), &p), (id, &params), "{code}");
+        assert_eq!(export_item(id, &steps[0].1, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
+        s.actions.list.push(Action::new(code, vec![(id.to_string(), steps[0].1.clone())]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+    // Missing keys are Photoshop's defaults.
+    let Mapped::Steps(steps) = other_step("Dntr", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"eliminate": "oddFields", "createBy": "interpolation"}));
+    let Mapped::Steps(steps) = other_step("HsbP", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"inputMode": "rgb", "rowOrder": "hsb"}));
+}
+
+/// A step the commands cannot play keeps the Photoshop step: a Custom matrix that is not 5 × 5,
+/// an unknown enumeration value, or a key the event does not have (#10607).
+#[test]
+fn video_other_and_matting_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let nine = D::List((0..9).map(D::Integer).collect());
+    assert!(kept(other_step("Cstm", desc("null").with("Mtrx", nine))));
+    assert!(kept(other_step("Cstm", desc("null"))));
+    assert!(kept(other_step("HsbP", desc("null").with("Inpt", enm("ClrS", "LbCl")))));
+    assert!(kept(other_step("Dntr", desc("null").with("IntE", enm("IntE", "ElmA")))));
+    assert!(kept(other_step("NTSC", desc("null").with("Lvl ", D::Integer(1)))));
+    assert!(kept(other_step("RmvW", desc("null").with("Lyr ", D::Integer(1)))));
+}
+
+/// What the events cannot hold refuses the step: a fractional kernel cell, a kernel that is not
+/// 25 cells, a mask target, an unknown mode (#10607).
+#[test]
+fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1.5);
+    for (id, params) in [
+        ("filter.other.custom", json!({"kernel": cells})),
+        ("filter.other.custom", json!({"kernel": [0, 0, 0, 0, 1, 0, 0, 0, 0]})),
+        ("filter.other.custom", json!({"scale": 2.5})),
+        ("filter.blur.average", json!({"target": "mask"})),
+        ("filter.other.hsbHsl", json!({"inputMode": "lab"})),
+        ("filter.video.deInterlace", json!({"eliminate": "allFields"})),
+        ("filter.other.custom", json!([1])),
+        ("filter.blur.average", json!(5)),
+        ("filter.other.hsbHsl", json!("hsl")),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // `null` params set nothing.
+    assert!(export_item("filter.blur.average", &Value::Null, "S").is_some());
+    // A Custom step without a kernel is the command's identity kernel.
+    let d = export_item("filter.other.custom", &json!({}), "S").unwrap().descriptor.unwrap();
+    let cells = get_list(&d, "Mtrx").unwrap();
+    assert_eq!((cells.len(), cells.get(12)), (25, Some(&D::Integer(1))));
+}
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10607).
+#[test]
+fn video_other_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    for (code, d) in [
+        ("Dntr", desc("null").with("IntE", D::Integer(1))),
+        ("Dntr", desc("null").with("IntC", text("CrtD"))),
+        ("HsbP", desc("null").with("Inpt", D::Boolean(true))),
+        ("HsbP", desc("null").with("Otpt", text("HSLC"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", text("2"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Boolean(true))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl", enm("Ordn", "Trgt"))),
+    ] {
+        assert!(kept(other_step(code, d.clone())), "{code} {d:?} was mapped");
+    }
+}
+
+/// The key gate admits `Scl` without its padding, so the mapper reads it too: an unpadded
+/// scale is the step's scale, not the default 1.
+#[test]
+fn custom_reads_an_unpadded_scale() {
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Scl", D::Integer(3)).with("Mtrx", identity)) else { panic!("kept") };
+    assert_eq!(steps[0].1["scale"], json!(3.0));
+}
+
+/// `filter.other.custom` plays a scale of 1..9999, an offset of -9999..9999 and cells of
+/// -999..999, and clamps anything else: `Scl 0` would play as 1 and save back as 0. Such a step
+/// stays a Photoshop step, as does a matrix of more than 25 cells, and export refuses those
+/// values instead of writing what the command doesn't play (#10607).
+#[test]
+fn custom_outside_the_commands_range_is_kept_and_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let kernel = |cell: i32| D::List((0..25).map(|i| D::Integer(if i == 12 { cell } else { 0 })).collect());
+    let identity = kernel(1);
+    for d in [
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(0)),
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(-10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(10_000)),
+        desc("null").with("Mtrx", kernel(1000)),
+        desc("null").with("Mtrx", kernel(-1000)),
+        desc("null").with("Mtrx", D::List((0..26).map(|_| D::Integer(0)).collect())),
+        desc("null").with("Mtrx", D::List((0..1000).map(|_| D::Integer(0)).collect())),
+        // Fractions: export writes integers, so Save Actions would refuse the mapped step.
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(1.5)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Double(2.5)),
+        desc("null").with("Mtrx", D::List((0..25).map(|i| if i == 12 { D::Double(0.5) } else { D::Integer(0) }).collect())),
+    ] {
+        assert!(kept(other_step("Cstm", d.clone())), "{:?} was mapped", d.items);
+    }
+    for (scale, offset, cell) in [(1, -9999, -999), (9999, 9999, 999)] {
+        let d = desc("null").with("Scl ", D::Integer(scale)).with("Ofst", D::Integer(offset)).with("Mtrx", kernel(cell));
+        let Mapped::Steps(steps) = other_step("Cstm", d) else { panic!("{scale} {offset} {cell} kept") };
+        assert_eq!(
+            (&steps[0].1["scale"], &steps[0].1["offset"], &steps[0].1["kernel"][12]),
+            (&json!(f64::from(scale)), &json!(f64::from(offset)), &json!(f64::from(cell)))
+        );
+    }
+    // An integral Double is a whole number and still maps.
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(2.0))) else { panic!("Scl 2.0 kept") };
+    assert_eq!(steps[0].1["scale"], json!(2.0));
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1000);
+    for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {
+        assert!(export_item("filter.other.custom", &params, "S").is_none(), "{params} exported");
+    }
+}
+
+/// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
+fn distort(code: &str, d: Descriptor) -> Mapped {
+    let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
+    (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
+}
+
+fn one_step(m: Mapped) -> (String, Value) {
+    match m {
+        Mapped::Steps(mut s) if s.len() == 1 => s.remove(0),
+        _ => panic!("not one step"),
+    }
+}
+
+/// Photoshop's Distort filter steps load with its defaults for missing keys and its clamping for
+/// out-of-range values, play, and save back with every key in recorded order (#10605).
+#[test]
+fn distort_filter_steps_load_clamp_play_and_save_back() {
+    // Photoshop's defaults, as its steps record them.
+    let wave = desc("null")
+        .with("Wvtp", enm("Wvtp", "WvSn"))
+        .with("NmbG", D::Integer(5))
+        .with("WLMn", D::Integer(10))
+        .with("WLMx", D::Integer(120))
+        .with("AmMn", D::Integer(5))
+        .with("AmMx", D::Integer(35))
+        .with("SclH", D::Integer(100))
+        .with("SclV", D::Integer(100))
+        .with("UndA", enm("UndA", "RptE"))
+        .with("RndS", D::Integer(-7));
+    let zigzag = desc("null").with("Amnt", D::Integer(10)).with("NmbR", D::Integer(5)).with("ZZTy", enm("ZZTy", "PndR"));
+    let cases = [
+        ("Pnch", desc("null").with("Amnt", D::Integer(50)), "filter.distort.pinch", json!({"amount": 50})),
+        ("Plr ", desc("null").with("Cnvr", enm("Cnvr", "RctP")), "filter.distort.polarCoordinates", json!({"mode": "rectangularToPolar"})),
+        (
+            "Sphr",
+            desc("null").with("Amnt", D::Integer(100)).with("SphM", enm("SphM", "Nrml")),
+            "filter.distort.spherize",
+            json!({"amount": 100, "mode": "normal"}),
+        ),
+        ("Twrl", desc("null").with("Angl", D::Integer(50)), "filter.distort.twirl", json!({"angle": 50})),
+        (
+            "Wave",
+            wave,
+            "filter.distort.wave",
+            json!({"type": "sine", "generators": 5, "wavelengthMin": 10, "wavelengthMax": 120, "amplitudeMin": 5, "amplitudeMax": 35,
+                "undefinedAreas": "repeat", "seed": 4_294_967_289_u32}),
+        ),
+        ("ZgZg", zigzag, "filter.distort.zigZag", json!({"amount": 10, "ridges": 5, "style": "pondRipples"})),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, d, id, params) in cases {
+        let (got, p) = one_step(distort(code, d.clone()));
+        assert_eq!((got.as_str(), &p), (id, &params), "{code}");
+        // Every key, in the order Photoshop records them.
+        assert_eq!(export_item(id, &p, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
+        s.actions.list.push(Action::new(code, vec![(id.to_string(), p)]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+    // A step that leaves its keys out takes Photoshop's defaults: Wave's undefined areas are
+    // Repeat Edge Pixels, where the command's own default is wrap.
+    assert_eq!(one_step(distort("Wave", desc("null"))).1["undefinedAreas"], "repeat");
+    assert_eq!(one_step(distort("Sphr", desc("null"))).1, json!({"amount": 100, "mode": "normal"}));
+    // Out-of-range values are clamped, as Photoshop clamps them.
+    assert_eq!(one_step(distort("Pnch", desc("null").with("Amnt", D::Integer(500)))).1, json!({"amount": 100}));
+    assert_eq!(one_step(distort("Twrl", desc("null").with("Angl", D::Integer(-5000)))).1, json!({"angle": -999}));
+    assert_eq!(one_step(distort("ZgZg", desc("null").with("NmbR", D::Integer(40)))).1["ridges"], 20);
+    assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
+}
+
+/// PhotoCraft's renderer draws at most `MAX_WAVE_GENERATORS` (64) generators, so a Wave step
+/// recorded with more keeps the Photoshop step on import and is refused on export, as the PSD
+/// smart-filter mapper does, rather than mapping a step that plays differently (#10605).
+#[test]
+fn wave_generators_past_what_photocraft_draws_keep_the_step() {
+    assert_eq!(photocraft_algo::MAX_WAVE_GENERATORS, 64);
+    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(64)))).1;
+    assert_eq!(p["generators"], 64, "{p}");
+    for n in [65, 999, 1_000_000] {
+        let m = distort("Wave", desc("null").with("NmbG", D::Integer(n)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "NmbG {n}");
+    }
+    assert!(export_item("filter.distort.wave", &json!({"generators": 65}), "S").is_none());
+    assert!(export_item("filter.distort.wave", &json!({"generators": 64}), "S").is_some());
+}
+
+/// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
+/// scaled below 100 % (the command has no scale), or a key the event does not have (#10605).
+#[test]
+fn distort_filter_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(distort("Sphr", desc("null").with("SphM", enm("SphM", "Dgnl")))));
+    assert!(kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "Sprl")))));
+    assert!(kept(distort("Wave", desc("null").with("SclH", D::Integer(50)))));
+    assert!(kept(distort("Wave", desc("null").with("UndA", enm("UndA", "Trns")))));
+    assert!(kept(distort("Pnch", desc("null").with("Rds ", D::Integer(3)))));
+    // A scale of 100 % (or above, which Photoshop clamps to 100) plays.
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(250)))));
+}
+
+/// A setting the events cannot hold refuses the step instead of replaying differently: a
+/// fractional amount (the keys are integers), a mask target, a seed past 32 bits (#10605).
+#[test]
+fn distort_filter_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": 12.5})),
+        ("filter.distort.twirl", json!({"angle": 10, "target": "mask"})),
+        ("filter.distort.zigZag", json!({"ridges": 2.5})),
+        ("filter.distort.wave", json!({"seed": 4_294_967_296_u64})),
+        ("filter.distort.wave", json!({"undefinedAreas": "transparent"})),
+        ("filter.distort.spherize", json!({"mode": "diagonal"})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // Left out, a setting is written as the command replays it: Wave wraps.
+    let wave = export_item("filter.distort.wave", &json!({}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(get_enum(&wave, "UndA").as_deref(), Some("WrpA"));
+}
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10605).
+#[test]
+fn distort_filter_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Pnch", "Amnt", D::Boolean(true)),
+        ("Twrl", "Angl", text("90")),
+        ("Plr ", "Cnvr", D::Integer(1)),
+        ("Sphr", "SphM", text("HrzO")),
+        ("ZgZg", "NmbR", enm("Ordn", "Trgt")),
+        ("Wave", "NmbG", D::Boolean(false)),
+        ("Wave", "Wvtp", D::Integer(2)),
+        ("Wave", "SclH", text("50")),
+        ("Wave", "SclV", D::Boolean(true)),
+        ("Wave", "UndA", D::Integer(1)),
+        ("Wave", "RndS", text("7")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+}
+
+/// An integer outside the range Photoshop clamps the key to refuses the step: written as is, it
+/// would load back clamped, as another value (#10605).
+#[test]
+fn distort_filter_steps_outside_photoshops_range_are_refused() {
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": 500})),
+        ("filter.distort.spherize", json!({"amount": -101})),
+        ("filter.distort.twirl", json!({"angle": 1000})),
+        ("filter.distort.zigZag", json!({"ridges": 21})),
+        ("filter.distort.zigZag", json!({"ridges": -1})),
+        ("filter.distort.wave", json!({"generators": 0})),
+        ("filter.distort.wave", json!({"amplitudeMax": 1000})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // The limits themselves are written.
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": -100})),
+        ("filter.distort.twirl", json!({"angle": 999})),
+        ("filter.distort.zigZag", json!({"ridges": 0})),
+        ("filter.distort.wave", json!({"generators": 64, "wavelengthMin": 1})),
+    ] {
+        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}
+
+/// Wave's `RndS` is the seed's 32 bits, signed or not: it loads exactly or keeps the step,
+/// never saturated or truncated to another seed (#10605).
+#[test]
+fn wave_seed_loads_its_exact_32_bits_or_keeps_the_step() {
+    let seed = |v: D| match distort("Wave", desc("null").with("RndS", v)) {
+        Mapped::Steps(s) => Some(s[0].1["seed"].clone()),
+        Mapped::Unsupported { .. } => None,
+    };
+    assert_eq!(seed(D::LargeInteger(4_000_000_000)), Some(json!(4_000_000_000_u32)));
+    assert_eq!(seed(D::LargeInteger(-1)), Some(json!(u32::MAX)));
+    assert_eq!(seed(D::Integer(-7)), Some(json!(4_294_967_289_u32)));
+    assert_eq!(seed(D::Double(12.0)), Some(json!(12)));
+    for v in [D::Double(7.5), D::LargeInteger(4_294_967_296), D::LargeInteger(i64::from(i32::MIN) - 1)] {
+        assert_eq!(seed(v.clone()), None, "RndS {v:?} was mapped");
+    }
+}
+
+/// A step recording one of its keys twice can't be saved back with both values, so it stays a
+/// Photoshop step instead of playing the first and dropping the second (#10605).
+#[test]
+fn distort_filter_steps_with_a_repeated_key_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, a, b) in [
+        ("Pnch", "Amnt", D::Integer(10), D::Integer(20)),
+        ("Sphr", "SphM", enm("SphM", "Nrml"), enm("SphM", "HrzO")),
+        ("Plr ", "Cnvr", enm("Cnvr", "RctP"), enm("Cnvr", "RctP")),
+        ("Wave", "NmbG", D::Integer(5), D::Integer(7)),
+        ("Wave", "SclH", D::Integer(100), D::Integer(50)),
+        ("Wave", "UndA", enm("UndA", "WrpA"), enm("UndA", "RptE")),
+        ("Wave", "RndS", D::Integer(1), D::Integer(2)),
+        ("ZgZg", "NmbR", D::Integer(5), D::Integer(6)),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, a.clone()).with(key, b.clone()))), "{code} with {key} twice was mapped");
+    }
+}
+
+/// An enumeration of another type isn't the setting Photoshop records, so the step stays a
+/// Photoshop step instead of loading its value and saving back the expected type (#10605).
+#[test]
+fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Plr ", "Cnvr", enm("Ordn", "RctP")),
+        ("Sphr", "SphM", enm("Cnvr", "Nrml")),
+        ("ZgZg", "ZZTy", enm("Ordn", "PndR")),
+        ("Wave", "Wvtp", enm("WvSn", "WvSn")),
+        ("Wave", "UndA", enm("Ordn", "WrpA")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+    assert!(!kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "PlrR")))));
+    assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
+}
+
+/// Photoshop clamps Wave's wavelengths and amplitudes to 1..999, but `filter.distort.wave`
+/// takes a minimum wavelength of 1..998, a maximum of 2..999 and a minimum amplitude of 1..998.
+/// A value the command rejects keeps the Photoshop step on import and refuses it on export,
+/// rather than mapping a step that fails when it plays; a minimum above its maximum, which the
+/// command takes, maps and plays (#10605).
+#[test]
+fn wave_values_the_command_rejects_are_kept_or_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("WLMn", 999), ("WLMn", 5000), ("WLMx", 1), ("WLMx", 0), ("AmMn", 999), ("AmMn", 1200)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Integer(n)))), "{key} {n} was mapped");
+    }
+    for (param, n) in [("wavelengthMin", 999), ("wavelengthMax", 1), ("amplitudeMin", 999)] {
+        assert!(export_item("filter.distort.wave", &json!({ param: n }), "S").is_none(), "{param} {n} exported");
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    let plays = [
+        desc("null").with("WLMn", D::Integer(998)),
+        desc("null").with("WLMx", D::Integer(2)),
+        desc("null").with("AmMn", D::Integer(998)),
+        desc("null").with("WLMn", D::Integer(200)).with("WLMx", D::Integer(100)),
+        desc("null").with("AmMn", D::Integer(40)).with("AmMx", D::Integer(20)),
+    ];
+    for (k, d) in plays.into_iter().enumerate() {
+        let (id, p) = one_step(distort("Wave", d));
+        assert!(export_item(&id, &p, "S").is_some(), "{p} refused");
+        let name = format!("W{k}");
+        s.actions.list.push(Action::new(&name, vec![(id, p.clone())]));
+        let played = s.execute("actions.play", json!({"action": name})).unwrap();
+        assert_eq!(played["ran"], 1, "{p}: {played}");
+    }
+}
+
+/// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
+/// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
+#[test]
+fn wave_with_a_fractional_scale_is_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("SclH", 99.6), ("SclV", 99.5), ("SclH", 100.4)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
+    }
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
+}
+
+/// A Pattern Fill step whose `Ptrn` holds `id` and `name`, as the reference application records it.
+fn pattern_fill_step(id: &str, name: &str) -> AtnItem {
+    let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text(name))));
+    item(
+        "Mk  ",
+        "Make",
+        Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
+    )
+}
+
+/// Defines a 4×4 pattern of `color` named `name` in `s`'s library from its active document.
+fn define_pattern(s: &mut Session, color: &str, name: &str) -> String {
+    s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+    s.execute("edit.definePattern", json!({"name": name})).unwrap()["pattern"].as_str().unwrap().to_string()
+}
+
+fn pixel(s: &mut Session) -> Vec<f64> {
+    let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
+    v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect()
+}
+
+/// A Pattern Fill step whose `Ptrn` names both an installed id and a display name shared by
+/// another pattern plays the pattern with that id; a foreign id falls back to the name.
+#[test]
+fn pattern_fill_prefers_an_installed_id_over_a_colliding_name() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let mut define = |color: &str| {
+        s.execute("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        s.execute("edit.definePattern", json!({"name": "Twin"})).unwrap()["pattern"].as_str().unwrap().to_string()
+    };
+    let red = define("#ff0000");
+    let blue = define("#0000ff");
+    assert_ne!(red, blue);
+    s.patterns.items.retain(|p| p.id == red || p.id == blue);
+    s.patterns.items.sort_by_key(|p| p.id != blue);
+    let fill_step = |id: &str| {
+        let t = desc("patternLayer").with("Ptrn", D::Descriptor(desc("Ptrn").with("Idnt", text(id)).with("Nm  ", text("Twin"))));
+        item(
+            "Mk  ",
+            "Make",
+            Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))))),
+        )
+    };
+    let data = set_of("Pat", vec![("Installed", vec![fill_step(&red)]), ("Foreign", vec![fill_step("not-installed-id")])]);
+    let r = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert!(r["unsupported"].as_array().is_none_or(|u| u.is_empty()), "{r}");
+    for (action, want) in [("Installed", [1.0, 0.0, 0.0, 1.0]), ("Foreign", [0.0, 0.0, 1.0, 1.0])] {
+        s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+        let r = s.execute("actions.play", json!({"action": action})).unwrap();
+        assert!(r.get("failed").is_none(), "{r}");
+        let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
+        let got: Vec<f64> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect();
+        assert_eq!(got, want, "{action}");
+    }
+}
+
+/// The recorded id is looked up by id alone, in the document and then the library, before any
+/// name: a document pattern *named* like the id does not beat the library pattern with that id,
+/// and a foreign id that happens to be another pattern's name falls back to the recorded name.
+/// An id and a name of the same pattern play it.
+#[test]
+fn pattern_fill_ids_beat_names_across_document_and_library() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let red = define_pattern(&mut s, "#ff0000", "Red");
+    define_pattern(&mut s, "#0000ff", "Blue");
+    let green = define_pattern(&mut s, "#00ff00", &red);
+    let data = set_of(
+        "Pat",
+        vec![
+            ("IdWins", vec![pattern_fill_step(&red, "Blue")]),
+            ("NameFallback", vec![pattern_fill_step("Red", "Blue")]),
+            ("Same", vec![pattern_fill_step(&red, "Red")]),
+        ],
+    );
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    // Only the playback document holds the green pattern named like the red one's id.
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": green})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": green})).unwrap();
+    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == green && p.name == red));
+    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
+    for (action, want) in [("IdWins", [1.0, 0.0, 0.0, 1.0]), ("NameFallback", [0.0, 0.0, 1.0, 1.0]), ("Same", [1.0, 0.0, 0.0, 1.0])] {
+        let r = s.execute("actions.play", json!({"action": action})).unwrap();
+        assert!(r.get("failed").is_none(), "{action}: {r}");
+        assert_eq!(pixel(&mut s), want, "{action}");
+    }
+}
+
+/// CodeRabbit on batch 11: a pattern step that names its pattern only by `patternName` exports
+/// that name, rather than a step with no pattern (which plays the current one).
+#[test]
+fn pattern_steps_named_only_by_pattern_name_export_the_name() {
+    let one = Action { name: "P".into(), steps: vec![("layer.newFillLayer.pattern".into(), json!({"patternName": "Checkerboard"}))], ..Default::default() };
+    let (bytes, skipped) = export("Pat", &[&one], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let steps = import(&bytes).unwrap().actions[0].steps.clone();
+    assert_eq!(steps[0].0, "layer.newFillLayer.pattern");
+    assert_eq!(steps[0].1["pattern"], json!("Checkerboard"), "{}", steps[0].1);
+}
+
+/// CodeRabbit on batch 11: when the recorded id is installed nowhere, the recorded name is looked
+/// up as a name only. A pattern whose id equals that name text doesn't beat the one named so.
+#[test]
+fn pattern_fill_name_fallback_matches_names_not_ids() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let red = define_pattern(&mut s, "#ff0000", "Red");
+    // Green is named like the red pattern's id.
+    define_pattern(&mut s, "#00ff00", &red);
+    let data = set_of("Pat", vec![("NameIsAnId", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", &red)])]);
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "NameIsAnId"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(pixel(&mut s), [0.0, 1.0, 0.0, 1.0]);
+}
+
+/// A recorded pattern installed neither by id nor by name fails with an error that names the
+/// pattern, from the imported step and from the Pattern Fill dialog's command alike.
+#[test]
+fn pattern_fill_missing_everywhere_names_the_pattern() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "rgb", "depth": 8})).unwrap();
+    define_pattern(&mut s, "#ff0000", "Red");
+    let data = set_of("Pat", vec![("Missing", vec![pattern_fill_step("5e1c0000-aaaa-4bbb-8ccc-000000000000", "My Wood")])]);
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    let r = s.execute("actions.play", json!({"action": "Missing"})).unwrap();
+    let err = r["failed"]["error"].as_str().unwrap_or_default();
+    assert!(err.contains("\"My Wood\""), "{r}");
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Red"})).unwrap();
+    let e = s.execute("layer.fill.pattern.set", json!({"pattern": "5e1c0000-aaaa-4bbb-8ccc-000000000000", "patternName": "My Wood"})).unwrap_err();
+    assert!(e.to_string().contains("\"My Wood\""), "{e}");
+}
+
+/// FredApps review on #10459: a set whose name has surrounding spaces (a Photoshop `.atn` or an
+/// older actions.json can have one, and New Action records into it under that exact name) saves
+/// by that name. `actions.save` used to trim it and then find no set.
+#[test]
+fn save_finds_a_set_by_its_exact_name_with_spaces() {
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) });
+    s.execute("actions.record", json!({"name": "New", "set": " Web "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let saved = s.execute("actions.save", json!({"set": " Web "})).unwrap();
+    assert_eq!((&saved["set"], &saved["actions"]), (&json!(" Web "), &json!(["Old", "New"])));
+    // The file keeps the name, as Photoshop's does.
+    let mut reloaded = Session::new();
+    let r = reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    assert_eq!(r["set"], " Web ");
+    // Other names are still trimmed.
+    s.execute("actions.assignSet", json!({"action": "Old", "set": "Print"})).unwrap();
+    assert_eq!(s.execute("actions.save", json!({"set": "  Print "})).unwrap()["set"], "Print");
+}
+
+/// FredApps review on #10459: Save Actions… on an empty set made with New Set writes it, as
+/// Photoshop saves an empty set to the `.atn`, and loading that file brings the empty set back.
+#[test]
+fn an_empty_new_set_saves_and_loads_back() {
+    let mut s = Session::new();
+    s.execute("actions.newSet", json!({"name": "Later"})).unwrap();
+    let saved = s.execute("actions.save", json!({"set": "Later"})).unwrap();
+    assert_eq!((&saved["set"], &saved["actions"], &saved["steps"]), (&json!("Later"), &json!([]), &json!(0)));
+    let mut other = Session::new();
+    let r = other.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    assert_eq!((&r["set"], &r["actions"]), (&json!("Later"), &json!([])));
+    assert_eq!(crate::actions_edit_cmds::set_names(&other), ["Later"], "an empty folder");
+    other.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    assert_eq!(crate::actions_edit_cmds::set_names(&other), ["Later"], "loaded twice, still one folder");
+    // New Action records into it as into any set, and it saves with that action.
+    other.execute("actions.record", json!({"name": "Now", "set": "Later"})).unwrap();
+    other.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(other.execute("actions.save", json!({"set": "Later"})).unwrap()["actions"], json!(["Now"]));
+    // A set that doesn't exist is still refused, and so is saving every action when there is none.
+    let err = s.execute("actions.save", json!({"set": "Nope"})).unwrap_err().to_string();
+    assert!(err.contains("no actions in a set named `Nope`"), "{err}");
+    let err = Session::new().execute("actions.save", json!({})).unwrap_err().to_string();
+    assert!(err.contains("there are no actions to save"), "{err}");
+}
+
+/// A set from Chinese Photoshop: UTF-16 set and action names, a step name in GBK (可选颜色,
+/// the bytes from #6743) on an event PhotoCraft has no command for, with no descriptor.
+fn gbk_set() -> Vec<u8> {
+    let step = AtnItem { dictionary: b"\xbf\xc9\xd1\xa1\xd1\xd5\xc9\xab".to_vec(), ..item("syntheticFill", "", None) };
+    let file = AtnFile {
+        name: UnicodeString::new_nul("相馆"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("调白"), items: vec![step], ..Default::default() }],
+        ..Default::default()
+    };
+    atn::write(&file).unwrap()
+}
+
+#[test]
+fn load_decodes_legacy_step_names() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set())})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+    assert_eq!(r["unsupported"][0]["name"], "可选颜色", "{r}");
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "调白"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("可选颜色"), "{played}");
+}
+
+#[test]
+fn load_keeps_windows_1252_symbols() {
+    // Windows Photoshop step names with no Unicode copy: Mac Roman reads ° and » as ∞ and ª,
+    // which must not win ("50 ∞", "Grˆﬂe ª"). Save Actions writes the names back as that text.
+    let steps = vec![
+        AtnItem { dictionary: b"50 \xb0".to_vec(), ..item("syntheticFill", "", None) },
+        AtnItem { dictionary: b"Gr\xf6\xdfe \xbb".to_vec(), ..item("syntheticFill", "", None) },
+    ];
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Größe ändern"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("Logo"), items: steps, ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    assert_eq!(r["encoding"], "windows-1252", "{r}");
+    assert_eq!(r["unsupported"][0]["name"], "50 °", "{r}");
+    assert_eq!(r["unsupported"][1]["name"], "Größe »", "{r}");
+    let saved = s.execute("actions.save", json!({"set": "Größe ändern"})).unwrap();
+    let saved = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let names: Vec<String> = saved.actions[0].items.iter().map(|i| saved.item_label(i)).collect();
+    assert_eq!(names, ["50 °", "Größe »"]);
+}
+
+#[test]
+fn load_encoding_override() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "shift_jis"})).unwrap();
+    assert_eq!(r["encoding"], "Shift_JIS", "{r}");
+    let r = s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": "auto"})).unwrap();
+    assert_eq!(r["encoding"], "GBK", "{r}");
+}
+
+#[test]
+fn load_reports_utf8() {
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
+    assert_eq!(r["encoding"], "UTF-8", "{r}");
+}
+
+#[test]
+fn load_rejects_bad_encodings() {
+    let mut s = Session::new();
+    for bad in [json!(3), json!(""), json!("nope"), json!("replacement"), json!(["gbk"])] {
+        assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
+    }
+    assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
 }

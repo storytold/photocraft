@@ -1,5 +1,6 @@
 use super::descriptors::{
-    PX, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, num, pct, px, ref_class, Target, target, trimmed,
+    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_list, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref,
+    layer_target, long, num, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -662,17 +663,17 @@ fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default
 
 /// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
 fn sets_only(p: &Value, allowed: &[&str]) -> bool {
-    p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
+    p.is_null() || p.as_object().is_some_and(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
 }
 
 /// Focus Area (`focusMask`) and Remove Background (`removeBackground`): Photoshop runs both with
 /// an empty descriptor. A step that carries settings keeps them as a Photoshop step.
-pub(super) fn bare_from(d: &Descriptor, id: &str) -> Mapped {
+pub(super) fn empty_from(d: &Descriptor, id: &str) -> Mapped {
     if d.items.is_empty() { step(id, json!({})) } else { Mapped::Unsupported { harmless: false } }
 }
 
 /// Only a step with no settings writes the empty descriptor; any setting would be lost.
-pub(super) fn bare_to(_: &str, p: &Value) -> Option<Descriptor> {
+pub(super) fn empty_to(_: &str, p: &Value) -> Option<Descriptor> {
     sets_only(p, &[]).then(|| desc("null"))
 }
 
@@ -855,8 +856,8 @@ fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
 }
 
 /// The form `smart_sharpen_params` reads, with the keys in the order Photoshop records them (as
-/// PSD smart filters write it; `presetKind` is left out, as Photoshop leaves it out of a step with
-/// explicit values). The command's defaults fill what the step leaves out.
+/// recorded steps carry them, `presetKind` Custom first). The command's defaults fill what the
+/// step leaves out.
 pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !pixel_target(p) || !sets_only(p, &["target", "amount", "radius", "reduceNoise"]) {
         return None;
@@ -867,6 +868,7 @@ pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
     };
     Some(
         desc("null")
+            .with("presetKind", enm("presetKindType", "presetKindCustom"))
             .with("useLegacy", D::Boolean(false))
             .with("Amnt", pct(num("amount", 100.0)?))
             .with("Rds ", px(num("radius", 1.0)?))

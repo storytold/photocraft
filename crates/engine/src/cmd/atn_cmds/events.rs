@@ -9,7 +9,9 @@ use super::steps_doc::{
     place_from, place_to, profile_from, profile_to, purge_from, purge_to, reset_from, reset_to, save_from, save_to, stop_from, stop_to,
 };
 use super::steps_image::{
-    GALLERY_IDS, REFINE_EDGE, RIPPLE_SIZE, SMART_BRUSH, apply_image_from, apply_image_to, camera_raw_from, camera_raw_to, color_range_from, color_range_to, gallery_from, gallery_to, has_refine_strokes, oil_paint_from, oil_paint_to, radial_blur_from, radial_blur_to, refine_edge_to, select_sky_from, select_sky_to, smart_sharpen_from, smart_sharpen_to, transform_from, transform_to,
+    GALLERY_IDS, REFINE_EDGE, RIPPLE_SIZE, SMART_BRUSH, apply_image_from, apply_image_to, camera_raw_from, camera_raw_to, color_range_from, color_range_to,
+    empty_from, empty_to, gallery_from, gallery_to, has_refine_strokes, oil_paint_from, oil_paint_to, radial_blur_from, radial_blur_to, refine_edge_to,
+    select_sky_from, select_sky_to, smart_sharpen_from, smart_sharpen_to, transform_from, transform_to,
 };
 use super::steps_layer::{
     STROKE, apply_comp_from, apply_comp_to, clear_from, clear_to, delete_from, delete_to, duplicate_from, duplicate_to, fill_from, fill_to, flip_from, flip_to,
@@ -370,18 +372,20 @@ pub(super) const EVENTS: &[Event] = &[
         label: "Remove White Matte",
         ids: &["layer.matting.removeWhiteMatte"],
         from: |d| bare_from(d, "layer.matting.removeWhiteMatte"),
+        to: bare_to,
+    },
     // Newer features (#10610): Photoshop records these by string ID only.
     Event { code: "", name: "oilPaint", label: "Oil Paint", ids: &["filter.stylize.oilPaint"], from: oil_paint_from, to: oil_paint_to },
     Event { code: "", name: "smartSharpen", label: "Smart Sharpen", ids: &["filter.sharpen.smartSharpen"], from: smart_sharpen_from, to: smart_sharpen_to },
-    Event { code: "", name: "focusMask", label: "Focus Area", ids: &["select.focusArea"], from: |d| bare_from(d, "select.focusArea"), to: bare_to },
+    Event { code: "", name: "focusMask", label: "Focus Area", ids: &["select.focusArea"], from: |d| empty_from(d, "select.focusArea"), to: empty_to },
     Event { code: "", name: "selectSky", label: "Sky", ids: &["select.sky"], from: select_sky_from, to: select_sky_to },
     Event {
         code: "",
         name: "removeBackground",
         label: "Remove Background",
         ids: &["layer.removeBackground"],
-        from: |d| bare_from(d, "layer.removeBackground"),
-        to: bare_to,
+        from: |d| empty_from(d, "layer.removeBackground"),
+        to: empty_to,
     },
     // Adjustments (Image › Adjustments).
     Event {
