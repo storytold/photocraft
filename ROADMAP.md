@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-31 · **Change:** minor (Hindi catalog covers every measured key; previously minor: Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
 the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
@@ -94,7 +94,7 @@ because engine messages are still English. Detail: [localization-parity](docs/lo
 | English | `en` | 100% | full |
 | Simplified Chinese | `zh-hans` | 100% | partial |
 | Spanish | `es` | 100% | partial |
-| Hindi | `hi` | 0% | none |
+| Hindi | `hi` | 100% | partial |
 | Arabic | `ar` | 0% (RTL shell only) | none |
 | French | `fr` | 100% | partial |
 | Portuguese (Brazil) | `pt-br` | 100% | partial |
@@ -136,6 +136,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Hindi catalog covers every measured key (Languages table) |
 | 2026-10-17 | minor | Object Finder retains large enclosed foregrounds (#6548) |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/it/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
 | 2026-10-15 | minor | Russian catalog covers every dynamic UI label the other catalogs translate |
