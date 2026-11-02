@@ -552,7 +552,8 @@ fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
         h.run_steps(1);
         h.hover_at(away);
         h.run_steps(1);
-        assert!(h.state().live_adjust.is_some(), "{depth}: live preview");
+        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+        assert_eq!(preview, Some(Some(3)), "{depth}: the preview drops the stop");
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{depth}: dragging records no history");
         h.drop_at(away);
         h.run_steps(3);
