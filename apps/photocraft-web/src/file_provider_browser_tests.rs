@@ -280,6 +280,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     let requested = published.detail(0)?;
     assert_eq!(Reflect::get(&requested, &"type".into())?.as_string().as_deref(), Some("openRequest"));
     assert_eq!(Reflect::get(&requested, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
+    assert_eq!(Reflect::get(&requested, &"resourceId".into())?.as_string().as_deref(), Some("file-one"));
     call(&api, "openResource", &[accepted, "loaded.png".into(), Uint8Array::from(&[1u8, 2, 3][..]).into()])?;
     assert!(host.busy());
     crate::file_providers::publish(&host);
