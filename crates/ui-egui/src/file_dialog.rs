@@ -155,6 +155,10 @@ impl PhotocraftApp {
             // provider destination while that save is still asking for format options.
             return Err(crate::SAVE_OPTIONS_OPEN.into());
         }
+        // A queued chooser still owns its document before the dialog service runs.
+        if self.file_dialog.is_some() {
+            return Err("a file dialog is already open".into());
+        }
         if let Some(provider) = self.services.file_provider.as_ref() {
             provider.prepare_dialog(doc);
         }

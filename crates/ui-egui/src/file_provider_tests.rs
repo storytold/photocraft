@@ -85,6 +85,72 @@ fn disabled_provider_keeps_new_saves_local() {
 }
 
 #[test]
+fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    let first = app.session.active().unwrap().doc.id;
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+
+    // Both Save As requests arrive before the first poll shows the queued chooser.
+    app.run("file.new", json!({"width": 2, "height": 2, "name": "Other"})).unwrap();
+    let second = app.session.active().unwrap().doc.id;
+    assert_ne!(first, second);
+    app.session.active_mut().unwrap().revision = 11;
+    app.session.active_mut().unwrap().saved_revision = 3;
+    let second_document = app.session.active().unwrap().doc.clone();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap_err(), "a file dialog is already open");
+    assert!(app.file_dialog_open());
+    assert!(provider.take_events().is_empty());
+    assert!(written.borrow().is_empty());
+
+    app.poll_file_dialog(&ctx, None);
+    let dialog = event(&provider, "saveDialog");
+    assert_eq!(dialog["documentId"], first.0.to_string(), "the queued chooser must keep the first document's owner");
+    assert_eq!(dialog["intent"], "saveAs");
+    assert!(provider.pending_for(first));
+    assert!(!provider.pending_for(second));
+    provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "first.psd").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let events = provider.take_events();
+    assert_eq!(events.len(), 1);
+    let capture = events.into_iter().next().unwrap();
+    assert_eq!(capture.metadata["type"], "save");
+    assert_eq!(capture.metadata["documentId"], first.0.to_string());
+    assert_eq!(capture.metadata["revision"], "7");
+    assert_eq!(capture.metadata["filename"], "first.psd");
+    assert_eq!(capture.metadata["destination"], "provider");
+    assert_eq!(capture.bytes.as_deref(), Some([10, 20, 30].as_slice()));
+    assert!(provider.pending_for(first));
+    assert!(!provider.pending_for(second));
+    assert_eq!(app.session.documents().iter().find(|state| state.doc.id == first).unwrap().saved_revision, 2);
+    assert!(written.borrow().is_empty());
+
+    provider.result(capture.metadata["requestId"].as_str().unwrap().into(), "saved".into(), "resource-first".into()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    let saved = app.session.documents().iter().find(|state| state.doc.id == first).unwrap();
+    assert_eq!(saved.revision, 7);
+    assert_eq!(saved.saved_revision, 7);
+    assert!(!saved.is_dirty());
+    assert_eq!(saved.doc.name, "first.psd");
+    assert!(saved.path.is_none());
+    assert!(provider.bound(first));
+    assert!(!provider.bound(second));
+    assert!(!provider.pending_for(first));
+    assert!(!provider.pending_for(second));
+    let selected = app.session.active().unwrap();
+    assert_eq!(selected.doc.id, second);
+    assert!(std::sync::Arc::ptr_eq(&selected.doc, &second_document));
+    assert_eq!(selected.revision, 11);
+    assert_eq!(selected.saved_revision, 3);
+    assert!(selected.is_dirty());
+    assert!(selected.path.is_none());
+    assert!(app.ui.recent_files.is_empty());
+    assert!(written.borrow().is_empty());
+    assert!(!app.file_dialog_open());
+    assert!(!app.saving());
+}
+
+#[test]
 fn provider_ack_owns_its_revision_without_becoming_a_local_path() {
     let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
