@@ -346,6 +346,8 @@ fn fontconfig_match(script: CjkScript) -> Option<FontFile> {
     Some(FontFile { path: path.canonicalize().unwrap_or(path), family })
 }
 
+/// Whether face `family` in font `bytes` genuinely covers representative sample glyphs
+/// for `script` with drawable outlines.
 #[cfg(target_os = "linux")]
 fn fontconfig_font_covers_sample(bytes: &[u8], family: &str, script: CjkScript) -> bool {
     use skrifa::MetadataProvider;
@@ -361,7 +363,7 @@ fn fontconfig_font_covers_sample(bytes: &[u8], family: &str, script: CjkScript) 
         CjkScript::TraditionalChinese => "圖層",
         CjkScript::Korean => "카드 배경",
     };
-    sample.chars().all(|character| font.charmap().map(character).is_some())
+    sample.chars().all(|character| crate::scripts::font_has_glyph_outline(&font, character))
 }
 
 #[cfg(target_os = "linux")]
@@ -436,11 +438,53 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         .iter()
         .map(|p| f(p, noto))
         .collect();
+        // Individual standalone Noto CJK fonts for distros that package scripts separately
+        // (Arch Linux: noto-fonts-cjk, openSUSE: noto-sans-cjk-fonts, Fedora: google-noto-sans-cjk-fonts,
+        // Debian/Ubuntu: fonts-noto-cjk). Paths documented by upstream distribution package manifests.
+        match script {
+            Japanese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansJP-Regular.otf", ""),
+            ]),
+            SimplifiedChinese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansSC-Regular.otf", ""),
+            ]),
+            TraditionalChinese => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansTC-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansTC-Regular.ttf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansTC-Regular.otf", ""),
+            ]),
+            Korean => v.extend([
+                f("/usr/share/fonts/noto-cjk/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/opentype/noto/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf", ""),
+                f("/usr/share/fonts/opentype/NotoSansKR-Regular.otf", ""),
+                f("/usr/share/fonts/truetype/NotoSansKR-Regular.ttf", ""),
+                f("/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansKR-Regular.otf", ""),
+            ]),
+        }
         v.extend(match script {
             Japanese => vec![
                 f("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", ""),
                 f("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", ""),
                 f("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf", ""),
+                // VL-Gothic: documented package paths for Arch Linux (vlgothic), openSUSE (vlgothic-fonts), Debian/Ubuntu (fonts-vlgothic).
+                f("/usr/share/fonts/vlgothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/vlgothic/VL-Gothic-Regular.ttf", ""),
+                f("/usr/share/fonts/VL-Gothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/VL-Gothic/VL-Gothic-Regular.ttf", ""),
+                f("/usr/share/fonts/truetype/vlgothic/VL-PGothic-Regular.ttf", ""),
+                f("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", ""),
             ],
             SimplifiedChinese | TraditionalChinese => vec![
                 f("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", ""),
@@ -449,10 +493,15 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc", ""),
             ],
             Korean => vec![
+                // Documented distribution packages: Arch Linux (ttf-nanum, ttf-unfonts-core, ttf-baekmuk under /usr/share/fonts/TTF), Debian/Ubuntu (fonts-nanum, fonts-unfonts-core, fonts-baekmuk).
+                f("/usr/share/fonts/TTF/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/nanum/NanumGothic.ttf", ""),
+                f("/usr/share/fonts/TTF/UnDotum.ttf", ""),
                 f("/usr/share/fonts/truetype/unfonts-core/UnDotum.ttf", ""),
                 f("/usr/share/fonts/un-core/UnDotum.ttf", ""),
+                f("/usr/share/fonts/truetype/baekmuk/gulim.ttf", ""),
+                f("/usr/share/fonts/baekmuk-ttf/gulim.ttf", ""),
             ],
         });
         let mut files = with_flatpak_host_fonts(v);

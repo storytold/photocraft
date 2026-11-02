@@ -4550,3 +4550,18 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	CPU Rendering	Rendu processeur
+	Calculating…	Calcul en cours…
+	Click to refresh histogram with uncached data	Cliquer pour actualiser l'histogramme avec des données non mises en cache
+	Count:	Nombre :
+	Drawn on the CPU: {reason}. Click for System Info.	Dessiné sur le processeur : {reason}. Cliquez pour afficher les informations système.
+	Level:	Niveau :
+	Percentile:	Centile :
+	Release Notes	Notes de version
+	Show Channels in Color	Afficher les couches en couleur
+	Show Statistics	Afficher les statistiques
+	Source:	Source :
+	Uncached Refresh	Actualisation non mise en cache
+	Update and Restart	Mettre à jour et redémarrer

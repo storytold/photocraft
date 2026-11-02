@@ -3734,3 +3734,23 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	Artboards	대지
+	CPU Rendering	CPU 렌더링
+	Calculating…	계산 중…
+	Click to refresh histogram with uncached data	캐시되지 않은 데이터로 히스토그램 새로 고침
+	Count:	개수:
+	Drawn on the CPU: {reason}. Click for System Info.	CPU에서 렌더링됨: {reason}. 시스템 정보를 보려면 클릭하십시오.
+	Level:	레벨:
+	Percentile:	백분위수:
+	Release Notes	릴리스 노트
+	Show Channels in Color	색상으로 채널 표시
+	Show Statistics	통계 표시
+	Source:	소스:
+	Uncached Refresh	캐시되지 않은 새로 고침
+	Update and Restart	업데이트 및 다시 시작
+	X	X
+	Y	Y
+	General Blending	일반 혼합
+	Advanced Blending	고급 혼합

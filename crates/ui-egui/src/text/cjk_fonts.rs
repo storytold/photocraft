@@ -347,7 +347,7 @@ impl CraftFontProvider {
             if !cjk::font_face_is_readable(source.bytes(), index) {
                 continue;
             }
-            if !scripts::face_covers(source.bytes(), index, c) {
+            if !scripts::face_covers(source.bytes(), index, c) || !scripts::face_has_glyph_outline(source.bytes(), index, c) {
                 continue;
             }
             return Some(self.system_insert_face(file.path, index, source));
@@ -444,7 +444,10 @@ impl FontProvider for CraftFontProvider {
 /// testing any face of a collection would select a face whose glyphs egui never uses. Test face
 /// 0 here, exactly like the lazy loader's `load_embedded_faces`.
 fn craft_face_installs_coverage(face: &CraftFont, c: char) -> bool {
-    !face.bytes.is_empty() && cjk::font_face_is_readable(face.bytes, 0) && scripts::face_covers(face.bytes, 0, c)
+    !face.bytes.is_empty()
+        && cjk::font_face_is_readable(face.bytes, 0)
+        && scripts::face_covers(face.bytes, 0, c)
+        && scripts::face_has_glyph_outline(face.bytes, 0, c)
 }
 
 /// The best injected craft face declaring `iso` that really covers `c` in the face
@@ -561,6 +564,7 @@ fn craft_provider_id() -> egui::Id {
 /// An English UI on a Japanese, Korean or Chinese OS therefore uses that OS script, not the
 /// migration baseline's manifest-first face. The baseline applies only when the effective locale
 /// is non-CJK or unknown.
+#[cfg(not(target_arch = "wasm32"))]
 fn effective_locale(ui_code: &str, os_locale: Option<&str>) -> Option<String> {
     match ui_code {
         "ja" | "ko" | "zh-hans" | "zh-hant" => Some(ui_code.to_owned()),
@@ -627,6 +631,7 @@ pub struct CjkFallback {
     /// Non-CJK scripts whose candidates were tried (each at most once per install).
     scripts_tried: Vec<Script>,
     loaded: Vec<PathBuf>,
+    failed_paths: std::collections::HashSet<PathBuf>,
     /// Fonts registered so far: (name, path, face index).
     pub registered: Vec<(String, PathBuf, u32)>,
 }
@@ -641,6 +646,7 @@ impl CjkFallback {
             last_resort_tried: false,
             scripts_tried: Vec::new(),
             loaded: Vec::new(),
+            failed_paths: std::collections::HashSet::new(),
             registered: Vec::new(),
         }
     }
@@ -675,8 +681,9 @@ impl CjkFallback {
         }
         let order = self.order();
         let scripts: Vec<CjkScript> = std::iter::once(kind.preferred(&order)).chain(order).collect();
+        let mut failed = Vec::new();
         for s in scripts {
-            if self.tried.contains(&s) {
+            if self.tried.contains(&s) || failed.contains(&s) {
                 continue;
             }
             let embedded = if manifest_baseline { self.load_embedded_manifest(s, c) } else { self.load_embedded(s, c) };
@@ -693,7 +700,12 @@ impl CjkFallback {
             if fontconfig_pending {
                 return None;
             }
-            self.tried.push(s);
+            failed.push(s);
+        }
+        for s in failed {
+            if !self.tried.contains(&s) {
+                self.tried.push(s);
+            }
         }
         if !self.last_resort_tried {
             self.last_resort_tried = true;
@@ -720,10 +732,13 @@ impl CjkFallback {
             if reads >= MAX_SCRIPT_READS {
                 break;
             }
-            if self.loaded.contains(&path) {
+            if self.loaded.contains(&path) || self.failed_paths.contains(&path) {
                 continue;
             }
-            let Some(bytes) = read_font(&path) else { continue };
+            let Some(bytes) = read_font(&path) else {
+                self.failed_paths.insert(path.clone());
+                continue;
+            };
             reads += 1;
             if !cjk::font_file_is_readable(&bytes) {
                 continue;
@@ -760,7 +775,12 @@ impl CjkFallback {
 
     /// The first of `faces` that really covers `c`, registered from its static bytes.
     fn load_embedded_faces(&mut self, faces: Vec<&'static CraftFont>, c: char) -> Option<(String, FontData)> {
-        let f = faces.into_iter().find(|f| !f.bytes.is_empty() && cjk::font_face_is_readable(f.bytes, 0) && scripts::face_covers(f.bytes, 0, c))?;
+        let f = faces.into_iter().find(|f| {
+            !f.bytes.is_empty()
+                && cjk::font_face_is_readable(f.bytes, 0)
+                && scripts::face_covers(f.bytes, 0, c)
+                && scripts::face_has_glyph_outline(f.bytes, 0, c)
+        })?;
         let path = PathBuf::from(format!("craft-fonts/{} {}", f.family, f.style));
         if self.loaded.contains(&path) {
             return None;
@@ -776,11 +796,18 @@ impl CjkFallback {
     /// covers `c`. A family miss skips the file rather than using whichever face happens to cover
     /// the character.
     fn load_first(&mut self, files: &[FontFile], c: char) -> Option<(String, FontData)> {
+        let pending = (self.sources.pending)();
         for f in files {
-            if self.loaded.contains(&f.path) {
+            if self.loaded.contains(&f.path) || self.failed_paths.contains(&f.path) {
                 continue;
             }
-            let Some(bytes) = read_font(&f.path) else { continue };
+            let Some(bytes) = read_font(&f.path) else {
+                if !pending {
+                    self.failed_paths.insert(f.path.clone());
+                }
+
+                continue;
+            };
             // Register only what the text engine can actually parse. A readable collection may
             // still have a selected face whose `cmap` is valid while another table points outside
             // the file; `font_face_is_readable` below rejects such a face before registration.
@@ -798,7 +825,7 @@ impl CjkFallback {
             if !cjk::font_face_is_readable(&bytes, index) {
                 continue;
             }
-            if !scripts::face_covers(&bytes, index, c) {
+            if !scripts::face_covers(&bytes, index, c) || !scripts::face_has_glyph_outline(&bytes, index, c) {
                 continue;
             }
             self.loaded.push(f.path.clone());

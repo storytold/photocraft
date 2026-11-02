@@ -4191,3 +4191,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	Artboards	アートボード
+	CPU Rendering	CPU レンダリング
+	Calculating…	計算中…
+	Click to refresh histogram with uncached data	キャッシュされていないデータでヒストグラムを更新
+	Count:	カウント:
+	Drawn on the CPU: {reason}. Click for System Info.	CPU で描画: {reason}。システム情報を表示するにはクリックしてください。
+	Level:	レベル:
+	Percentile:	パーセンタイル:
+	Release Notes	リリースノート
+	Show Channels in Color	カラーでチャンネルを表示
+	Show Statistics	統計を表示
+	Source:	ソース:
+	Uncached Refresh	キャッシュなしで更新
+	Update and Restart	更新して再起動

@@ -3155,3 +3155,23 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	Artboards	工作畫布
+	CPU Rendering	CPU 算繪
+	Calculating…	正在計算…
+	Click to refresh histogram with uncached data	使用未快取的資料重新整理分佈圖
+	Count:	計數:
+	Drawn on the CPU: {reason}. Click for System Info.	於 CPU 上繪製：{reason}。按一下以查看系統資訊。
+	Level:	色階:
+	Percentile:	百分位數:
+	Release Notes	版本資訊
+	Show Channels in Color	以色彩顯示色版
+	Show Statistics	顯示統計資料
+	Source:	來源:
+	Uncached Refresh	未快取重新整理
+	Update and Restart	更新並重新啟動
+	X	X
+	Y	Y
+	General Blending	一般混合
+	Advanced Blending	進階混合

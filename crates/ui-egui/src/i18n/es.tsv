@@ -4426,3 +4426,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	CPU Rendering	Procesamiento de CPU
+	Calculating…	Calculando…
+	Click to refresh histogram with uncached data	Haga clic para actualizar el histograma con datos no almacenados en caché
+	Count:	Recuento:
+	Drawn on the CPU: {reason}. Click for System Info.	Dibujado en la CPU: {reason}. Haga clic para obtener información del sistema.
+	Level:	Nivel:
+	Percentile:	Percentil:
+	Release Notes	Notas de la versión
+	Show Channels in Color	Mostrar canales en color
+	Show Statistics	Mostrar estadísticas
+	Source:	Origen:
+	Uncached Refresh	Actualización sin caché
+	Update and Restart	Actualizar y reiniciar

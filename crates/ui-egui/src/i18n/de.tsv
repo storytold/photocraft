@@ -3545,3 +3545,21 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	Artboards	Zeichenflächen
+	CPU Rendering	CPU-Rendering
+	Calculating…	Berechnen…
+	Click to refresh histogram with uncached data	Klicken, um Histogramm mit nicht zwischengespeicherten Daten zu aktualisieren
+	Count:	Anzahl:
+	Drawn on the CPU: {reason}. Click for System Info.	Auf der CPU gezeichnet: {reason}. Klicken für Systeminfo.
+	Level:	Stufe:
+	Percentile:	Perzentil:
+	Release Notes	Versionshinweise
+	Show Channels in Color	Kanäle in Farbe anzeigen
+	Show Statistics	Statistik anzeigen
+	Source:	Quelle:
+	Uncached Refresh	Nicht zwischengespeicherte Aktualisierung
+	Update and Restart	Aktualisieren und neu starten
+	X	X
+	Y	Y
