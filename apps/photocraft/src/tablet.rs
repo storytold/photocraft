@@ -51,6 +51,18 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
     None
 }
 
+/// Was the barrel button held when the pen last touched down (Windows)? A pen press with the
+/// barrel button held is a right-click (#5364).
+#[cfg(target_os = "windows")]
+pub fn barrel_press_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
+    Some(Box::new(photocraft_tablet::windows::was_barrel_held_at_press))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn barrel_press_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
+    None
+}
+
 /// Install the AppKit tablet monitor (main thread, once winit created the shared application:
 /// from eframe's app creation, not before the event loop). Keep the result until the event loop
 /// returns. On failure this logs why: pens then paint like a mouse.

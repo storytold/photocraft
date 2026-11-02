@@ -11,6 +11,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static BARREL_DOWN: AtomicBool = AtomicBool::new(false);
+/// The barrel state of the last `WM_POINTERDOWN`. Unlike [`BARREL_DOWN`] it outlives the
+/// `WM_POINTERUP`: a quick tap's press and release can reach egui in the same frame, after the
+/// release already cleared [`BARREL_DOWN`] (#5364).
+static BARREL_AT_PRESS: AtomicBool = AtomicBool::new(false);
 
 #[repr(C)]
 struct POINT {
@@ -114,6 +118,9 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                 };
                 let is_barrel = is_barrel_pressed(pen_flags, pointer_message_flags);
                 BARREL_DOWN.store(is_barrel, Ordering::Relaxed);
+                if msg.message == WM_POINTERDOWN {
+                    BARREL_AT_PRESS.store(is_barrel, Ordering::Relaxed);
+                }
             }
             WM_POINTERUP | WM_POINTERLEAVE => {
                 BARREL_DOWN.store(false, Ordering::Relaxed);
@@ -157,12 +164,18 @@ impl Drop for Monitor {
             UnhookWindowsHookEx(self.hook);
         }
         BARREL_DOWN.store(false, Ordering::Relaxed);
+        BARREL_AT_PRESS.store(false, Ordering::Relaxed);
     }
 }
 
 /// Returns true if the stylus barrel button is physically pressed.
 pub fn is_barrel_button_down() -> bool {
     BARREL_DOWN.load(Ordering::Relaxed)
+}
+
+/// Returns true if the barrel button was held when the pen last touched down.
+pub fn was_barrel_held_at_press() -> bool {
+    BARREL_AT_PRESS.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

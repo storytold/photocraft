@@ -262,9 +262,12 @@ impl eframe::App for PhotocraftApp {
         self.inject_synthetic(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);
-        self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
+        // A pen press with the barrel button held is a right-click (#5364). Only a pen press: a
+        // mouse click after a barrel tap stays a left click.
+        let pen_barrel = pen_down && self.services.pen_barrel_press.as_ref().is_some_and(|f| f());
+        self.control_click.normalize_with_pen(&mut raw_input.events, cfg!(target_os = "macos"), pen_barrel);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);

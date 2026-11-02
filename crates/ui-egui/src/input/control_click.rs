@@ -1,4 +1,5 @@
-//! Normalize macOS Control-click before egui routes clicks to panels and canvas tools.
+//! Normalize macOS Control-click, and a pen press with the barrel button held (Windows, #5364),
+//! into right-clicks before egui routes clicks to panels and canvas tools.
 #[derive(Default)]
 pub(crate) struct ControlClick {
     secondary_down: bool,
@@ -6,7 +7,13 @@ pub(crate) struct ControlClick {
 
 impl ControlClick {
     pub fn normalize(&mut self, events: &mut [egui::Event], macos: bool) {
-        if !macos {
+        self.normalize_with_pen(events, macos, false);
+    }
+
+    /// [`Self::normalize`], where `pen_barrel` says this frame's pen press had the barrel button
+    /// held. A barrel press's release still maps after the barrel lets go.
+    pub fn normalize_with_pen(&mut self, events: &mut [egui::Event], macos: bool, pen_barrel: bool) {
+        if !macos && !pen_barrel && !self.secondary_down {
             return;
         }
         for event in events {
@@ -14,7 +21,7 @@ impl ControlClick {
                 egui::Event::PointerButton { button, pressed, modifiers, .. } if *button == egui::PointerButton::Primary => {
                     if *pressed {
                         // Control-Option is the existing brush resize gesture.
-                        self.secondary_down = modifiers.ctrl && !modifiers.alt && !modifiers.command;
+                        self.secondary_down = pen_barrel || (macos && modifiers.ctrl && !modifiers.alt && !modifiers.command);
                     }
                     if self.secondary_down {
                         *button = egui::PointerButton::Secondary;
@@ -98,6 +105,43 @@ mod tests {
         }
         assert_eq!(down.first(), Some(&(true, false)), "the Control press is a secondary press");
         assert_eq!(down.last(), Some(&(false, false)), "the release after re-entry ends it: no stuck button");
+    }
+
+    #[test]
+    fn a_pen_barrel_tap_opens_the_context_menu_and_the_next_click_stays_primary() {
+        let ctx = egui::Context::default();
+        let mut state = ControlClick::default();
+        let mut secondary = false;
+        let mut primary = false;
+        // A quick tap: press and release in one frame, the barrel known only at the press.
+        for (mut events, barrel) in
+            [(vec![Event::PointerMoved(egui::pos2(50.0, 50.0))], false), (vec![button(true, Modifiers::NONE), button(false, Modifiers::NONE)], true)]
+        {
+            state.normalize_with_pen(&mut events, false, barrel);
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let r = ui.allocate_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0)), egui::Sense::click());
+                secondary |= r.secondary_clicked();
+                primary |= r.clicked();
+            })
+            .textures_delta
+            .clear();
+        }
+        assert!(secondary);
+        assert!(!primary);
+        let mut events = [button(true, Modifiers::NONE), button(false, Modifiers::NONE)];
+        state.normalize_with_pen(&mut events, false, false);
+        assert!(events.iter().all(|e| matches!(e, Event::PointerButton { button: PointerButton::Primary, .. })));
+    }
+
+    #[test]
+    fn a_barrel_press_released_after_the_barrel_lets_go_still_releases_secondary() {
+        let mut state = ControlClick::default();
+        let mut press = [button(true, Modifiers::NONE)];
+        state.normalize_with_pen(&mut press, false, true);
+        let mut release = [button(false, Modifiers::NONE)];
+        state.normalize_with_pen(&mut release, false, false);
+        assert!(matches!(press[0], Event::PointerButton { button: PointerButton::Secondary, .. }));
+        assert!(matches!(release[0], Event::PointerButton { button: PointerButton::Secondary, .. }));
     }
 
     #[test]
