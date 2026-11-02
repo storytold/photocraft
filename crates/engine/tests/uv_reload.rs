@@ -6,13 +6,20 @@ use serde_json::json;
 fn relative_model_filename_loads_material_and_discovered_textures() {
     const CHILD: &str = "PHOTOCRAFT_TEST_RELATIVE_MODEL_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        for source in ["mesh.obj", "./mesh.obj"] {
+        let absolute = std::env::current_dir().unwrap().join("mesh.obj").to_string_lossy().into_owned();
+        for source in ["mesh.obj", "./mesh.obj", &absolute] {
             let mut s = Session::new();
             s.execute("uv.model.import", json!({"path":source})).unwrap();
             let material = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "Painted").unwrap();
             assert!(s.uv.bindings[material].is_some(), "MTL color texture missing for {source}");
             assert!(s.uv.normal_bindings[material].is_some(), "Discovered normal texture missing for {source}");
             assert_eq!(s.documents().len(), 2);
+            s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+            s.execute("uv.project.save", json!({"path":"scene.pcuv"})).unwrap();
+            let mut restored = Session::new();
+            restored.execute("uv.project.load", json!({"path":"scene.pcuv"})).unwrap();
+            let export = restored.execute("file.uv.saveAllTextures", json!({})).unwrap();
+            assert_eq!(export["saved"], 1, "Imported texture destination was lost after restore for {source}: {export}");
         }
         return;
     }

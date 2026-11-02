@@ -10,6 +10,38 @@ fn fixture() -> Session {
     s
 }
 #[test]
+fn relative_texture_and_project_paths_preserve_the_original_export_destination() {
+    let cwd = std::env::current_dir().unwrap();
+    let temp = tempfile::tempdir_in(&cwd).unwrap();
+    for local in [true, false] {
+        let project_dir = temp.path().join(if local { "local" } else { "external" });
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let texture_dir = if local { project_dir.clone() } else { temp.path().to_path_buf() };
+        let texture = texture_dir.join("map.png");
+        let other_texture = project_dir.join("map.png");
+        let checker = include_bytes!("../../uv/tests/fixtures/checker.png");
+        std::fs::write(&texture, checker).unwrap();
+        if !local {
+            std::fs::write(&other_texture, checker).unwrap();
+        }
+        let mut session = fixture();
+        session.execute("uv.texture.open", json!({"path":texture.strip_prefix(&cwd).unwrap(),"material":0})).unwrap();
+        assert!(std::path::Path::new(session.active().unwrap().path.as_ref().unwrap()).is_absolute());
+        session.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+        let project = project_dir.join("scene.pcuv");
+        session.execute("uv.project.save", json!({"path":project})).unwrap();
+        let mut restored = Session::new();
+        restored.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        restored.execute("uv.project.load", json!({"path":project.strip_prefix(&cwd).unwrap()})).unwrap();
+        let export = restored.execute("file.uv.saveAllTextures", json!({})).unwrap();
+        assert_eq!(export["saved"], if local { 1 } else { 0 }, "{export}");
+        if !local {
+            assert_eq!(std::fs::read(other_texture).unwrap(), checker);
+            assert_eq!(std::fs::read(texture).unwrap(), checker);
+        }
+    }
+}
+#[test]
 fn container_embeds_editable_maps_library_and_sky_without_exporting_sources() {
     let mut s = fixture();
     let temp = tempfile::tempdir().unwrap();

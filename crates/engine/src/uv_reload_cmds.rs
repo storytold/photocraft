@@ -169,9 +169,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (mut scene, stamp) = crate::uv_cmds::load_scene(&source, uv_set)?;
     let topology = photocraft_uv::topology::Topology::build(&scene).map_err(|e| EngineError::Other(e.to_string()))?;
-    let uv_changed = s.uv.uv_set != uv_set
-        || old.triangles.len() != scene.triangles.len()
-        || old.triangles.iter().zip(&scene.triangles).any(|(a, b)| a.corners.iter().zip(b.corners).any(|(a, b)| a.vertex != b.vertex || a.uv != b.uv));
+    let uv_changed = uv_geometry_changed(s.uv.uv_set, uv_set, old, &scene);
     let mut old_names = BTreeMap::<&str, Vec<usize>>::new();
     let mut new_names = BTreeMap::<&str, usize>::new();
     for (id, material) in old.materials.iter().enumerate() {
@@ -226,14 +224,51 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"reimported":true,"uvChanged":uv_changed,"triangles":s.uv.scene.as_ref().map_or(0,|s|s.triangles.len())}))
 }
 
+fn uv_geometry_changed(old_uv_set: usize, new_uv_set: usize, old: &photocraft_uv::Scene, new: &photocraft_uv::Scene) -> bool {
+    let has_duplicate_material_names = |scene: &photocraft_uv::Scene| {
+        let mut names = std::collections::BTreeSet::new();
+        scene.materials.iter().any(|material| !names.insert(material.name.as_str()))
+    };
+    let ambiguous_names = has_duplicate_material_names(old) || has_duplicate_material_names(new);
+    old_uv_set != new_uv_set
+        || old.triangles.len() != new.triangles.len()
+        || old.triangles.iter().zip(&new.triangles).any(|(a, b)| {
+            a.corners.iter().zip(b.corners).any(|(a, b)| a.vertex != b.vertex || a.uv != b.uv)
+                || (ambiguous_names && a.material != b.material)
+                || old.materials.get(a.material).map(|material| material.name.as_str()) != new.materials.get(b.material).map(|material| material.name.as_str())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
     #[test]
+    fn uv_change_tracks_triangle_material_identity_but_ignores_slot_reordering() {
+        let corner = photocraft_uv::Corner { vertex: 0, uv: [0.0, 0.0], normal: None };
+        let triangle = |material| photocraft_uv::Triangle { corners: [corner; 3], material };
+        let material = |name: &str| photocraft_uv::Material { name: name.into(), ..Default::default() };
+        let old =
+            photocraft_uv::Scene { triangles: vec![triangle(0), triangle(1)], materials: vec![material("wood"), material("metal")], ..Default::default() };
+        let reordered =
+            photocraft_uv::Scene { triangles: vec![triangle(1), triangle(0)], materials: vec![material("metal"), material("wood")], ..Default::default() };
+        assert!(!uv_geometry_changed(0, 0, &old, &reordered));
+
+        let reassigned = photocraft_uv::Scene { triangles: vec![triangle(1), triangle(1)], ..old.clone() };
+        assert!(uv_geometry_changed(0, 0, &old, &reassigned));
+
+        let ambiguous =
+            photocraft_uv::Scene { triangles: vec![triangle(0), triangle(1)], materials: vec![material("shared"), material("shared")], ..Default::default() };
+        assert!(!uv_geometry_changed(0, 0, &ambiguous, &ambiguous));
+        let ambiguous_reassigned = photocraft_uv::Scene { triangles: vec![triangle(1), triangle(1)], ..ambiguous.clone() };
+        assert!(uv_geometry_changed(0, 0, &ambiguous, &ambiguous_reassigned));
+    }
+
+    #[test]
     fn bound_mask_cache_refresh_invalidates_views_without_dirtying_documents_or_exports() {
         let mut session = Session::new();
+        session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
         session.execute("file.new", json!({"width":32,"height":32})).unwrap();
         let id = session.active().unwrap().doc.id;
 
@@ -244,6 +279,7 @@ mod tests {
         session.uv.exported_revisions.insert(id, initial_content_revision);
         session.uv.saved_revisions.insert(id, initial_content_revision);
         session.uv.scene = Some(Arc::new(photocraft_uv::Scene::default()));
+        session.uv.project_path = "fixture.pcuv".into();
         session.uv.saved_generation = session.uv.generation;
 
         let before = session.active().unwrap();

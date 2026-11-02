@@ -390,9 +390,11 @@ mod container_tests {
 
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("mesh.obj");
+        let picked = temp.path().join("picked.obj");
         let project = temp.path().join("scene.pcuv");
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
-        std::fs::copy(fixture, &source).unwrap();
+        std::fs::copy(&fixture, &source).unwrap();
+        std::fs::copy(&fixture, &picked).unwrap();
 
         let mut session = photocraft_engine::Session::new();
         session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
@@ -405,10 +407,12 @@ mod container_tests {
         assert!(!restored.uv.source_authorized);
         assert_eq!(restored.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], false);
 
-        let (dialog, asked) = crate::file_dialog::fake(vec![Some(FileDialogAnswer::Paths(vec![source.to_string_lossy().into_owned()]))]);
+        let (dialog, asked) = crate::file_dialog::fake(vec![Some(FileDialogAnswer::Paths(vec![picked.to_string_lossy().into_owned()]))]);
         let mut app = PhotocraftApp::new(restored, crate::Services { file_dialog: Some(dialog), ..Default::default() });
         app.ui.workspace = "3D".into();
         crate::menus::apply_workspace(&mut app);
+        app.ui.uv_workbench.selected_polygons = std::collections::BTreeSet::from([0, 1]);
+        app.ui.uv_workbench.polygon_document = Some(photocraft_doc::DocId(123));
         let ctx = egui::Context::default();
         assert!(crate::uv_workspace::menu(&mut app, "file.uv.reimport").unwrap().is_ok());
         app.poll_file_dialog(&ctx, None);
@@ -416,8 +420,16 @@ mod container_tests {
         assert_eq!(asked.borrow().len(), 1);
         assert!(matches!(&asked.borrow()[0], FileDialogRequest::Open { multiple: false, .. }));
         assert!(app.session.uv.source_authorized);
-        assert_eq!(app.session.uv.source, source.to_string_lossy().into_owned());
+        assert_eq!(app.session.uv.source, picked.to_string_lossy().into_owned());
+        assert!(app.ui.uv_workbench.selected_polygons.is_empty());
+        assert_eq!(app.ui.uv_workbench.polygon_document, None);
         assert_eq!(app.session.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], true);
+
+        app.ui.uv_workbench.selected_polygons = std::collections::BTreeSet::from([2, 3]);
+        app.ui.uv_workbench.polygon_document = Some(photocraft_doc::DocId(456));
+        crate::uv_ui::reimport(&mut app);
+        assert!(app.ui.uv_workbench.selected_polygons.is_empty());
+        assert_eq!(app.ui.uv_workbench.polygon_document, None);
     }
 
     fn app() -> PhotocraftApp {
