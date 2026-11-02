@@ -401,8 +401,8 @@ the native sample-copy, resampling and GPU sampling loops measured above are unc
 The guard is covered separately by native command and adversarial tests.
 Subsequent reviews corrected outline offsets, selection snapping, temporary-Move shortcuts,
 mask dispatch, copy guards and transform-control frames without changing those pixel kernels.
-The table retains the recorded build's provenance; the later dispatch and frame fixes are
-validated separately, rather than presented as another 24 MP measurement of the current head.
+The table retains the recorded build's provenance; later dispatch, frame and native reduced-Move
+sampling changes are validated separately. It is not a new measurement of the current head.
 
 ## 2026-11-02: transform review follow-ups
 
@@ -421,3 +421,59 @@ perspective horizons as commit, and apply display encoding to partial linear-RGB
 Unsupported sources use the CPU preview. Display-profile and background-colour changes
 invalidate the corresponding view caches. Deferred native and web canvas drops retain their
 original destination document.
+
+Affine channel extraction runs inside the cancellable worker. Scalar affine resampling,
+selected lifting/compositing and the selection outline share its interruption flag. Isolated
+Warp prices its destination grid against Preferences › Performance › Memory Usage before
+extracting native planes. Frame queries use the compositor's tile-identity bounds cache.
+Ordinary layer transforms and tiny selected scalar edits retain their existing sparse extent
+semantics. Queued drops also wait for command-started isolated jobs that have no interactive box.
+
+A recovered CPU preview clears only the error it owns; a GPU draw alone cannot clear an
+unresolved CPU refusal. The main GPU Move canvas retains the CPU document preview used by
+secondary displays and Navigator, and a GPU drag commit refreshes the main compositor.
+
+Reduced RGB Move previews retain compact native byte planes (one RGBA8 integer texture-array
+layer per byte of an 8/16/32-bit sample). Each output pixel reads the native integer source
+coordinate for the current drag offset, including offsets between reduced-preview samples.
+The shared display shader still protects stationary transparency and unselected components;
+warm drags change uniforms and draw once. Capture is bounded by the GPU memory budget and
+texture limits. Unsupported adapters, selections, stacks, profiles or native sources use the
+CPU oracle. The reduced path uses the same float-render capability requirement as other
+channel GPU previews; OpenGL adapters without it retain CPU rendering.
+
+Regression coverage includes native sample phases at all depths, HDR values, scalar/set
+targets and eye combinations; unsupported-renderer fallback; deferred pipeline readiness;
+live target changes during Move; per-display cache reuse; uploaded profile-converted pixels;
+worker capture, cancellation and output pricing. The Move benchmark accepts `--step 21` to
+measure offsets that are not multiples of the preview reduction factor.
+
+### Native Move measurements, 2026-11-02
+
+The corrected reduced Move path was measured in release on a 6000 × 4000 synthetic RGB8
+layer, with completed 1000 × 700 offscreen frames, software Vulkan llvmpipe and two Rayon
+and llvmpipe workers. Three processes per case supplied 27 warm frames. Builds and tests
+were idle during the measurements. The retained baseline binary is from `0543ba6b`;
+its Move implementation and harness are identical to `8a214f50`. The candidate is the
+local review diff on `8a214f50`; source and binary hashes are retained below.
+
+| Warm completed frame, milliseconds (p50 / p95) | Before, 20 px steps | Corrected, 20 px steps | Corrected, 21 px steps |
+|---|---:|---:|---:|
+| One channel | 19.27 / 20.54 | 17.99 / 21.37 | 18.20 / 21.45 |
+| Red + Blue | 20.43 / 21.32 | 19.07 / 22.70 | 18.83 / 23.51 |
+| Whole-layer control | 301.39 / 321.38 | 312.59 / 318.41 | 311.02 / 321.63 |
+
+Channel-drag medians remain comparable while sampling the correct native pixels at odd
+offsets. Tail observations vary by about 1–2 ms; this small software-renderer run does not
+establish a statistical speedup or a hardware-GPU guarantee. Warm dragging still changes
+uniforms and draws once; native byte capture happens once. First-frame medians were
+88.24 → 84.64 ms for one channel and 96.30 → 88.36 ms for Red + Blue at 20 px steps.
+The separate CPU-fallback observations at 21 px steps were 189.92 and 226.49 ms respectively.
+
+Offscreen screenshots were inspected. At aligned offsets, both the CPU and GPU renderers
+are individually byte-identical before/after. The existing difference between the CPU
+canvas's area-averaged texture and the GPU preview's nearest source reduction remains;
+the native sample-phase regressions compare like-for-like texels instead.
+See [summary](benchmarks/channel-move-native-20261102/summary.json),
+[raw frames](benchmarks/channel-move-native-20261102/samples.json) and
+[environment and provenance](benchmarks/channel-move-native-20261102/environment.json).

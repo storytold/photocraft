@@ -13,16 +13,25 @@ use crate::state::TransformSession;
 #[path = "channel_transform_gpu_validation.rs"]
 mod validation;
 use validation::{Validated, validated};
+#[path = "channel_move_native.rs"]
+mod native_move;
 
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FLOAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const UNIFORM_BYTES: u64 = 144;
+
+fn supports_channels(rs: &RenderState) -> bool {
+    rs.adapter.get_texture_format_features(FLOAT).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+}
 
 struct Pipelines {
     inputs: wgpu::BindGroupLayout,
     moved: wgpu::BindGroupLayout,
     scalar: OnceLock<Validated<Option<Passes>>>,
     multiple: OnceLock<Validated<Option<Passes>>>,
+    native_inputs: wgpu::BindGroupLayout,
+    native_scalar: OnceLock<Validated<Option<wgpu::RenderPipeline>>>,
+    native_multiple: OnceLock<Validated<Option<wgpu::RenderPipeline>>>,
 }
 
 struct Passes {
@@ -52,6 +61,7 @@ pub(crate) struct Preview {
     last: Option<(TransformSession, ChannelView, bool, bool, Option<photocraft_geom::Rect>)>,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
+    native: Option<[u32; 3]>,
 }
 
 /// Deliberately narrow: no flattened RGB shortcut may change a mask, blending or ICC result.
@@ -109,7 +119,7 @@ impl Preview {
             || size.into_iter().any(|n| n > limit)
             || bytes > gpu.memory_budget().unwrap_or(256 * 1024 * 1024).min(512 * 1024 * 1024)
             || fill.iter().any(|v| !v.is_finite() || v.abs() > 65504.0)
-            || !rs.adapter.get_texture_format_features(FLOAT).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+            || !supports_channels(rs)
         {
             return None;
         }
@@ -251,10 +261,18 @@ impl Preview {
             last: None,
             vertices: buffer("channel warp vertices", wgpu::BufferUsages::VERTEX),
             indices: buffer("channel warp triangles", wgpu::BufferUsages::INDEX),
+            native: None,
         })
     }
 
+    pub(crate) fn new_move(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4], factor: u32) -> Option<Self> {
+        if factor > 1 { Self::capture_native_move(gpu, doc, layer, fill, factor) } else { Self::new(gpu, doc, layer, fill) }
+    }
+
     pub(crate) fn texture(&mut self, t: &TransformSession, view: &ChannelView, in_color: bool, encode: bool, factor: u32) -> Option<egui::TextureId> {
+        if self.native.is_some() {
+            return None;
+        }
         self.texture_with_mode(t, view, in_color, encode, factor, None)
     }
 
@@ -271,6 +289,9 @@ impl Preview {
     ) -> Option<egui::TextureId> {
         if t.warp.is_some() {
             return None;
+        }
+        if self.native.is_some() {
+            return self.texture_native_move(t, view, in_color, encode, factor, bounds);
         }
         self.texture_with_mode(t, view, in_color, encode, factor, Some(bounds))
     }
@@ -685,19 +706,30 @@ impl Pipelines {
             ],
         });
         let moved = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("channel preview moved"), entries: &[tex(0)] });
-        Self { inputs, moved, scalar: OnceLock::new(), multiple: OnceLock::new() }
+        let native_inputs = native_move::input_layout(device);
+        Self {
+            inputs,
+            moved,
+            scalar: OnceLock::new(),
+            multiple: OnceLock::new(),
+            native_inputs,
+            native_scalar: OnceLock::new(),
+            native_multiple: OnceLock::new(),
+        }
     }
+}
+
+fn shader_source(multiple: bool) -> Option<std::borrow::Cow<'static, str>> {
+    const SCALAR: &str = "alias Sample = vec2<f32>;\nconst COMPONENTS: u32 = 1u;";
+    const MULTIPLE: &str = "alias Sample = vec4<f32>;\nconst COMPONENTS: u32 = 3u;";
+    let shared = include_str!("channel_transform_gpu.wgsl");
+    let (prefix, suffix) = shared.split_once(SCALAR)?;
+    Some(if multiple { std::borrow::Cow::Owned(format!("{prefix}{MULTIPLE}{suffix}")) } else { std::borrow::Cow::Borrowed(shared) })
 }
 
 impl Passes {
     fn build(device: &wgpu::Device, layouts: &Pipelines, multiple: bool) -> Option<Self> {
-        // WGSL has no vector-width generics. Specialize only this fixed header so scalar
-        // previews keep their original vec2 sampler and sets share the vec4 interpolation.
-        const SCALAR: &str = "alias Sample = vec2<f32>;\nconst COMPONENTS: u32 = 1u;";
-        const MULTIPLE: &str = "alias Sample = vec4<f32>;\nconst COMPONENTS: u32 = 3u;";
-        let shared = include_str!("channel_transform_gpu.wgsl");
-        let (prefix, suffix) = shared.split_once(SCALAR)?;
-        let source = if multiple { std::borrow::Cow::Owned(format!("{prefix}{MULTIPLE}{suffix}")) } else { std::borrow::Cow::Borrowed(shared) };
+        let source = shader_source(multiple)?;
         let simple = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("channel preview"),
             bind_group_layouts: &[Some(&layouts.inputs)],
@@ -749,18 +781,29 @@ impl Passes {
 
 /// Pending scopes need another frame, including when the first capture used the CPU fallback.
 pub(crate) fn validation_pending(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
-    let renderer = gpu.render_state().renderer.read();
+    validation_pending_for(gpu.render_state())
+}
+
+fn validation_pending_for(rs: &RenderState) -> bool {
+    let renderer = rs.renderer.read();
     let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
     if cache.is_pending() {
         return true;
     }
-    cache.get().is_some_and(|pipes| [&pipes.scalar, &pipes.multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending)))
+    cache.get().is_some_and(|pipes| {
+        [&pipes.scalar, &pipes.multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
+            || [&pipes.native_scalar, &pipes.native_multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending))
+    })
 }
 
 /// Advance even abandoned captures, and request one final frame when a scope settles so a
 /// capture that used the CPU earlier in this frame gets another chance to use the GPU.
 pub(crate) fn poll_validation(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
-    let renderer = gpu.render_state().renderer.read();
+    poll_validation_for(gpu.render_state())
+}
+
+fn poll_validation_for(rs: &RenderState) -> bool {
+    let renderer = rs.renderer.read();
     let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
     let mut pending = cache.is_pending();
     if let Some(pipes) = cache.get() {
@@ -770,8 +813,40 @@ pub(crate) fn poll_validation(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
                 let _ = validation.get();
             }
         }
+        for slot in [&pipes.native_scalar, &pipes.native_multiple] {
+            if let Some(validation) = slot.get() {
+                pending |= validation.is_pending();
+                let _ = validation.get();
+            }
+        }
     }
     pending
+}
+
+#[cfg(test)]
+pub(crate) fn test_supported(rs: &RenderState) -> bool {
+    let supported = supports_channels(rs);
+    if !supported {
+        eprintln!("Adapter cannot render RGBA32Float; channel transforms use the CPU oracle");
+    }
+    supported
+}
+
+/// A test drives the same deferred validation as repainting the app, instead of assuming that
+/// scopes settle on their first poll (DX12 and WebGPU can take another device poll/frame).
+#[cfg(test)]
+pub(crate) fn test_wait<T>(rs: &RenderState, mut operation: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let value = operation();
+        if !validation_pending_for(rs) {
+            return value;
+        }
+        assert!(std::time::Instant::now() < deadline, "channel pipeline validation timed out");
+        let _ = rs.device.poll(wgpu::PollType::Poll);
+        poll_validation_for(rs);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 #[cfg(test)]

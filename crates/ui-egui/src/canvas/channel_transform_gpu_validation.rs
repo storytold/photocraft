@@ -54,6 +54,8 @@ pub(super) fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> 
         for scope in scopes {
             if let Some(e) = scope.await {
                 log::warn!("channel preview uses CPU: {e}");
+                #[cfg(test)]
+                eprintln!("channel preview uses CPU: {e}");
                 valid = false;
             }
         }

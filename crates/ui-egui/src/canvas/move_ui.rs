@@ -270,16 +270,14 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             && p.factor == factor
     });
     if !fresh {
-        let native_bounds = doc.layer(layer)?.surface()?.content_bounds();
+        let native_bounds = photocraft_compose::bounds::content_bounds(doc.layer(layer)?.surface()?);
         // The shader uploads the document only. An off-canvas source can move pixels in from
         // beyond that upload, so retain the CPU oracle for it.
         let (bounds, preview) = if native_bounds.is_empty() || !doc.bounds().contains_rect(&native_bounds) {
             (Rect::EMPTY, None)
         } else {
-            let proxy = crate::proxy::proxy_document(&doc, factor);
-            let bounds = proxy.layer(layer).and_then(|l| l.surface()).map_or(Rect::EMPTY, photocraft_raster::Surface::content_bounds);
-            let preview = crate::channel_transform_gpu::Preview::new(gpu, &proxy, Some(layer), background);
-            (bounds, preview)
+            let preview = crate::channel_transform_gpu::Preview::new_move(gpu, &doc, Some(layer), background, factor);
+            (native_bounds, preview)
         };
         app.move_gpu_preview = Some(MoveGpuPreview {
             doc: doc.id,
@@ -295,7 +293,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         });
     }
     let p = app.move_gpu_preview.as_mut()?;
-    let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(|v| f64::from(v) * f64::from(factor));
+    let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(f64::from);
     let quad =
         [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| [x + f64::from(offset.0), y + f64::from(offset.1)]);
     let t = TransformSession {
@@ -304,7 +302,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         rect,
         quad,
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
-        interpolation: if offset.0.rem_euclid(factor as i32) == 0 && offset.1.rem_euclid(factor as i32) == 0 { "nearest" } else { "bilinear" }.into(),
+        interpolation: "nearest".into(),
         warp: None,
         selection: false,
         target: Some(colors.params()),
@@ -319,10 +317,8 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         g.texture_move(&t, &view, app.session.prefs().interface.show_channels_in_color, display.as_ref().is_some_and(|d| d.encode_srgb), factor, p.bounds)
     });
     p.shown = texture.is_some();
-    if texture.is_some() {
-        // A prior CPU frame (e.g. the Navigator's first frame) must not be composited too.
-        app.move_preview = None;
-    }
+    // Other displays and the Navigator share the CPU document cache. The main canvas
+    // paints this texture directly, so retaining that cache cannot apply the move twice.
     texture
 }
 
@@ -587,6 +583,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // Within the range the preview and the ΔX/ΔY readout show (`drag_offset`), so the release
     // commits the offset they showed even at the lowest zoom of a huge document.
     let (dx, dy) = (dx.clamp(-1e7, 1e7), dy.clamp(-1e7, 1e7));
+    let had_gpu_preview = app.move_gpu_preview.as_ref().is_some_and(|p| p.shown);
     app.move_gpu_preview = None;
     // Only when the canvas shows this very offset (else it recomposites everything once).
     let at = (dx as i32, dy as i32);
@@ -601,6 +598,11 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
         return;
     }
     let Some(p) = shown else { return };
+    // A secondary CPU view can be current while the main compositor still holds an older
+    // fallback frame under the GPU overlay. Refresh it on commit rather than relabelling it.
+    if had_gpu_preview {
+        return;
+    }
     crate::canvas::shown_as_document(app, p.doc, is_preview_key);
 }
 

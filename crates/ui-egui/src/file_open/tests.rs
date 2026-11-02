@@ -1233,3 +1233,27 @@ fn native_canvas_drop_queued_during_a_channel_transform_does_not_follow_a_tab_sw
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
     assert!(std::sync::Arc::ptr_eq(&other, &app.session.active().unwrap().doc));
 }
+
+#[test]
+fn queued_drop_waits_for_a_command_started_channel_job() {
+    let mut app = app_with_canvas();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#123456"})).unwrap();
+    let ctx = egui::Context::default();
+    let document = app.session.active().unwrap().doc.id;
+    app.drop_places.push_back(crate::file_open::DropPlace::Bytes(document, "queued.png".into(), png_bytes(2, 2)));
+    let photocraft_engine::jobs::Started::Job(job) =
+        app.session.start("edit.transform.warp", json!({"target":{"colors":[0,2]},"style":"arc","bend":20})).unwrap()
+    else {
+        panic!("expected a background commit")
+    };
+    assert!(app.ui.transform.is_none());
+    assert!(photocraft_engine::channel_transform::locked(&app.session));
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.drop_places.len(), 1, "the queued bytes must survive the job's edit lock");
+    assert!(app.session.cancel_job(job));
+    app.session.join_cancelled_jobs();
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_some(), "the saved drop is placed once the job releases the lock");
+}

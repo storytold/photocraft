@@ -972,3 +972,18 @@ fn raster_mask_alpha_and_quick_mask_warp_use_the_same_job_path() {
         );
     }
 }
+
+#[test]
+fn affine_channel_capture_runs_in_the_worker_not_in_start() {
+    for target in [json!({"color":0}), json!({"colors":[0,2]})] {
+        let mut s = session(32, 24);
+        let before = s.active().unwrap().doc.clone();
+        crate::allocation::fail_next_for_test();
+        let started = s.start("edit.transform", json!({"target":target,"dx":2}));
+        // The allocation hook is thread-local: it must remain unused on the dispatch thread.
+        assert!(crate::allocation::capacity::<u8>(1, "dispatch probe").is_err());
+        let id = job(started.unwrap());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+    }
+}

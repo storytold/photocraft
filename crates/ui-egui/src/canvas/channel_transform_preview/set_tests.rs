@@ -100,6 +100,9 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
         eprintln!("No GPU adapter available; skipping GPU oracle comparison");
         return;
     };
+    if !crate::channel_transform_gpu::test_supported(&rs) {
+        return;
+    }
     let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
     let mut doc = Document::with_background("different scalar outlines", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
     doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(2, 2, 8, 8), &[0.2, 1.0, 1.0, 1.0]);
@@ -111,10 +114,13 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
     let view = a.session.active().unwrap().channel_view.clone();
     let mut t = a.ui.transform.clone().unwrap();
     t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
-    let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).unwrap();
-    assert!(fast.texture(&t, &view, false, false, 1).is_none(), "different affine edge-repeat bounds retain the scalar oracle");
+    let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
+    assert!(
+        crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_none(),
+        "different affine edge-repeat bounds retain the scalar oracle"
+    );
     t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
-    assert!(fast.texture(&t, &view, false, false, 1).is_some(), "a full-frame Warp has common coverage");
+    assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_some(), "a full-frame Warp has common coverage");
     let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
     cpu.update(&t).unwrap();
     let expected = cpu.image(&view, crate::channel_view::Look::default(), None);

@@ -301,6 +301,7 @@ mod tests {
         let id = egui::Id::unique(("filter-preview-ui", dialog));
         let mut fields = json!({"__command":"filter.blur.gaussianBlur","__preview":false}).as_object().unwrap().clone();
         let mut old = None;
+        let mut old_pixels = None;
         for profile in ["srgb", "display-p3"] {
             let icc = resolve_profile(profile, None, None).unwrap().to_bytes();
             app.session.color.set_displays(Ok(vec![Display {
@@ -312,9 +313,31 @@ mod tests {
             }]));
             app.session.color.main_display = Some(4);
             let mut output = ctx.run_ui(Default::default(), |ui| window(&app, dialog, ui, &mut fields));
-            output.textures_delta.clear();
             let cache = ctx.data(|d| d.get_temp::<Cache>(id)).unwrap();
             let tex = cache.original.unwrap().tex;
+            let actual = output.textures_delta.set.get(&tex.id()).and_then(|d| d.last()).map(|uploaded| {
+                let egui::ImageData::Color(image) = &uploaded.image;
+                image.pixels.clone()
+            });
+            output.textures_delta.clear();
+            let actual = actual.expect("the new preview must upload its pixels");
+            let st = app.session.active().unwrap();
+            let (display, _) = crate::canvas::canvas_display(&app, &st.doc, None);
+            let expected = crate::channel_view::render_for_display(
+                &st.doc,
+                &st.channel_view,
+                st.doc.bounds(),
+                1,
+                crate::channel_view::Look::of(&app.session),
+                st.active_layer,
+                display.as_deref(),
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "uploaded colours must use the new monitor profile");
+            if let Some(previous) = old_pixels {
+                assert_ne!(actual, previous, "the fixture must distinguish these profiles");
+            }
+            old_pixels = Some(actual);
             if let Some(previous) = old {
                 assert_ne!(tex.id(), previous, "monitor changes must invalidate the retained channel preview");
             }

@@ -312,7 +312,7 @@ impl PhotocraftApp {
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
-        while self.ui.transform.is_none() {
+        while self.ui.transform.is_none() && !photocraft_engine::channel_transform::locked(&self.session) {
             let Some(next) = self.drop_places.pop_front() else { return };
             let document = match &next {
                 DropPlace::File(document, _) | DropPlace::Bytes(document, _, _) => *document,

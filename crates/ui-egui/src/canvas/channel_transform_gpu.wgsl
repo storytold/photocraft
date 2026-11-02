@@ -10,6 +10,7 @@ struct Params {
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var selection: texture_2d<f32>;
 @group(1) @binding(0) var moved: texture_2d<f32>;
+fn source_at(at: vec2<i32>) -> vec4<f32> { return textureLoad(source, at, 0); }
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) src: vec2<f32> }
 @vertex fn vs_full(@builtin(vertex_index) i: u32) -> Vertex {
     let uv = vec2(f32((i << 1u) & 2u), f32(i & 2u));
@@ -46,7 +47,7 @@ fn lifted(pos: vec2<i32>, repeat_edge: bool) -> Sample {
     let xy = vec2<f32>(at);
     if any(at < vec2(0)) || any(at >= vec2<i32>(p.size.xy)) || any(xy < p.rect.xy) || any(xy >= p.rect.zw) { return Sample(0.0); }
     let alpha = quant(textureLoad(selection, at, 0).r);
-    let pixel = textureLoad(source, at, 0);
+    let pixel = source_at(at);
     var value = Sample(0.0);
     for (var i = 0u; i < COMPONENTS; i++) { value[i] = pixel[color_index(i)] * alpha; }
     value[COMPONENTS] = alpha;
@@ -109,7 +110,7 @@ fn merge_color(at: vec2<i32>, rgba: vec4<f32>, transformed: Sample, slot: u32, c
     return value;
 }
 fn finish(at: vec2<i32>, transformed: Sample) -> vec4<f32> {
-    var rgba = textureLoad(source, at, 0);
+    var rgba = source_at(at);
     let mask = u32(p.size.z); let weight = textureLoad(selection, at, 0).r;
     for (var slot = 0u; slot < COMPONENTS; slot++) {
         let c = color_index(slot);

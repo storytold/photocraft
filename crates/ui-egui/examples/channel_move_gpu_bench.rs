@@ -1,6 +1,7 @@
 //! Completed offscreen 24 MP Move-drag frames for one targeted colour channel.
 //! cargo run --release -p photocraft-ui-egui --example channel_move_gpu_bench
 //! Add --cpu for the exact CPU fallback, or --save /tmp/move-preview for screenshots.
+//! Add --step 21 to exercise offsets between reduced-preview samples.
 
 use std::time::Instant;
 
@@ -25,6 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cpu = args.iter().any(|a| a == "--cpu");
     let whole = args.iter().any(|a| a == "--whole");
     let set = args.iter().any(|a| a == "--set");
+    let stride = args.iter().position(|a| a == "--step").map(|i| args.get(i + 1).ok_or("--step requires a positive integer")).transpose()?;
+    let stride = stride.map(|s| s.parse::<u32>()).transpose()?.unwrap_or(20);
+    if !(1..=10_000).contains(&stride) {
+        return Err("--step must be between 1 and 10000 pixels".into());
+    }
     let save = args.iter().position(|a| a == "--save").and_then(|i| args.get(i + 1));
     let mut doc = Document::new("24 MP channel Move", Size::new(6000, 4000), ColorMode::Rgb, SampleType::U8);
     doc.layers.push(Layer::raster("Unlocked image", doc.pixel_format()));
@@ -72,14 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = h.render()?;
     let ctx = h.ctx.clone();
     pointer(h.state_mut(), &ctx, "down", 3000.0, 2000.0)?;
-    pointer(h.state_mut(), &ctx, "move", 3020.0, 2000.0)?;
+    pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(stride), 2000.0)?;
     let cold = Instant::now();
     h.run_steps(1);
     let _ = h.render()?;
     let cold_ms = cold.elapsed().as_secs_f64() * 1000.0;
     let mut frames = Vec::new();
     for step in 2..=10 {
-        pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(step * 20), 2000.0)?;
+        pointer(h.state_mut(), &ctx, "move", 3000.0 + f64::from(step * stride), 2000.0)?;
         let start = Instant::now();
         h.run_steps(1);
         let image = h.render()?;
@@ -90,6 +96,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             image.save(format!("{path}-{}-{}.png", if whole { "whole" } else { "channel" }, if cpu { "cpu" } else { "gpu" }))?;
         }
     }
-    println!("{}", json!({"cpu":cpu,"whole":whole,"set":set,"cold_ms":cold_ms,"completed_frame_ms":frames}));
+    println!("{}", json!({"cpu":cpu,"whole":whole,"set":set,"step":stride,"cold_ms":cold_ms,"completed_frame_ms":frames}));
     Ok(())
 }

@@ -273,11 +273,12 @@ fn warp_layer(
         m.surface = match mask_sel {
             // Use the selection directly when its frame fits the warp box. An explicit
             // smaller box still needs the clipped coverage built by `warp_scalar`.
-            Some(sel) if sel.content_bounds().intersect(&rect) == sel.content_bounds() => crate::transform_cmds::move_gray_selected(
+            Some(sel) if sel.content_bounds().intersect(&rect) == sel.content_bounds() => crate::transform_cmds::move_gray_selected_with(
                 &m.surface,
                 sel,
                 &|lifted, src| warp_mesh_surface_with(lifted, src, &map, interp, ctl).ok_or(EngineError::Cancelled),
                 &|s| Ok(warp_mesh_gray(s, &map, interp)),
+                ctl,
             )?,
             Some(sel) => warp_scalar(&m.surface, Some(sel), rect, w, interp, ctl)?,
             // Whole-layer transforms carry the complete linked mask, whose content can
@@ -447,12 +448,51 @@ fn warp_scalar(s: &Surface, selection: Option<&Surface>, frame: Rect, w: &Warp, 
         coverage.try_write_region(r, &values)?;
     }
     let map = |x, y| w.map(x, y);
-    crate::transform_cmds::move_gray_selected(
+    crate::transform_cmds::move_gray_selected_with(
         s,
         &coverage,
         &|src, bounds| warp_mesh_surface_with(src, bounds, &map, interp, ctl).ok_or(EngineError::Cancelled),
         &|_| Err(bad("edit.transform.warp", "expected a scalar channel")),
+        ctl,
     )
+}
+
+/// Price the mesh's actual destination grid, including the resampler's one-pixel border.
+/// This runs before native-plane extraction, inside the cancellable worker.
+fn check_scalar_budget(doc: &Document, layer: Option<LayerId>, params: &Value, frame: Rect, warp: &Warp, ctl: &Interrupt) -> Result<()> {
+    let map = |x, y| warp.map(x, y);
+    let (nx, ny) = photocraft_algo::warp::mesh_grid(frame, &map);
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for y in 0..=ny {
+        cancelled(ctl)?;
+        for x in 0..=nx {
+            let (u, v) = map(
+                f64::from(frame.x0) + f64::from(frame.width()) * x as f64 / nx as f64,
+                f64::from(frame.y0) + f64::from(frame.height()) * y as f64 / ny as f64,
+            );
+            if [u, v].iter().any(|n| !n.is_finite() || n.abs() > f64::from(1 << 28)) {
+                return Err(bad("edit.transform.warp", "warp coordinates are out of range"));
+            }
+            b = [b[0].min(u), b[1].min(v), b[2].max(u), b[3].max(v)];
+        }
+    }
+    let width = (b[2].ceil() - b[0].floor()).max(0.0) as u64;
+    let height = (b[3].ceil() - b[1].floor()).max(0.0) as u64;
+    let fmt = if crate::channel_transform::is_color(params) {
+        let sample = doc
+            .layer(layer.ok_or_else(|| bad("edit.transform.warp", "no active layer"))?)
+            .and_then(|l| l.surface())
+            .ok_or_else(|| bad("edit.transform.warp", "missing raster layer"))?
+            .format()
+            .sample;
+        photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, false)
+    } else {
+        crate::transform_cmds::lone_target(doc, layer, params)?.ok_or_else(|| bad("edit.transform.warp", "missing transform channel"))?.format()
+    };
+    for format in std::iter::once(fmt).chain(doc.selection.iter().map(Surface::format)) {
+        crate::transform_cmds::check_output_budget(width.saturating_add(2), height.saturating_add(2), "mask or channel", format)?;
+    }
+    Ok(())
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -513,6 +553,7 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             move |doc, _, ctx| {
                 ctx.stage(0.0, 1.0, "Warping channels", |ctl| {
                     cancelled(ctl)?;
+                    check_scalar_budget(doc, layer, &params, frame, &w, ctl)?;
                     let planes = crate::channel_transform::planes_with_interrupt(doc, layer, &params, background, ctl)?
                         .ok_or_else(|| bad("edit.transform.warp", "missing transform channels"))?;
                     for plane in &planes {

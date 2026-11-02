@@ -39,6 +39,10 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
             app.ui.tool = Tool::Move;
             app.ui.extras.snap = false;
             app.ui.view.show.smart_guides = false;
+
+            if !crate::channel_transform_gpu::test_supported(&rs) {
+                return;
+            }
             app.set_wgpu(rs.clone());
             let m = egui::Modifiers::NONE;
             crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 260.0, y: 16.0, pressure: 1.0 }, m);
@@ -48,7 +52,7 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
                 for name in ["red", "green", "blue"] {
                     app.session.execute("channel.setVisible", json!({"channel":name,"visible":visible || name == "red"})).unwrap();
                 }
-                let tex = super::channel_texture(&mut app, 0, None);
+                let tex = crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None));
                 assert!(
                     tex.is_some(),
                     "GPU path at {depth:?}, offset {dx}; drag={:?}, stack={:?}, source_cached={}",
@@ -61,9 +65,20 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
                 }
                 cached_texture = tex;
                 if dx == 17 {
-                    assert!(super::channel_texture(&mut app, 0, Some(999)).is_none(), "another display uses its own CPU conversion");
+                    assert!(
+                        crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, Some(999))).is_none(),
+                        "another display uses its own CPU conversion"
+                    );
                     assert!(super::gpu_showing(&app, 0), "a secondary display does not hide the main GPU preview");
-                    assert!(super::channel_texture(&mut app, 0, None).is_some(), "main display keeps its GPU source");
+                    let secondary = super::display_doc(&mut app, 0).unwrap().0;
+                    crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).unwrap();
+                    let again = super::display_doc(&mut app, 0).unwrap().0;
+                    assert!(std::sync::Arc::ptr_eq(&secondary, &again), "main GPU frames must retain the secondary CPU cache");
+
+                    assert!(
+                        crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).is_some(),
+                        "main display keeps its GPU source"
+                    );
                 }
                 assert!(super::gpu_showing(&app, 0));
                 let actual = app.move_gpu_preview.as_ref().unwrap().gpu.as_ref().unwrap().readback();
@@ -89,11 +104,14 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
             }
             app.set_wgpu(rs.clone());
             assert!(app.move_gpu_preview.is_none(), "replacing the GPU drops textures from the old device");
-            assert!(super::channel_texture(&mut app, 0, None).is_some(), "the current drag can recapture on the new GPU");
+            assert!(
+                crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).is_some(),
+                "the current drag can recapture on the new GPU"
+            );
             crate::gpu_status::fall_back(&mut app, &photocraft_gpu::Fault::Error("Validation Error".into()));
             assert!(app.move_gpu_preview.is_none(), "CPU fallback releases the GPU drag capture");
             app.set_wgpu(rs.clone());
-            assert!(super::channel_texture(&mut app, 0, None).is_some(), "retry preserves the active drag");
+            assert!(crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).is_some(), "retry preserves the active drag");
             crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 257.0, y: 16.0 }, m);
             assert!(app.move_gpu_preview.is_none(), "release drops cached GPU source");
             assert_eq!(
@@ -110,7 +128,7 @@ fn gpu_channel_move_matches_native_commit_and_tracks_visibility() {
                 .unwrap();
             crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 260.0, y: 16.0, pressure: 1.0 }, m);
             crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 261.0, y: 16.0, pressure: 1.0 }, m);
-            assert!(super::channel_texture(&mut app, 0, None).is_none());
+            assert!(crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).is_none());
             assert!(super::display_doc(&mut app, 0).is_some(), "transparent stack keeps its CPU preview");
             app.drag = None;
             app.sync_views();
@@ -143,12 +161,16 @@ fn gpu_move_fills_only_the_sparse_source_bounds() {
     app.ui.tool = Tool::Move;
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;
-    app.set_wgpu(rs);
+
+    if !crate::channel_transform_gpu::test_supported(&rs) {
+        return;
+    }
+    app.set_wgpu(rs.clone());
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 255.0, y: 16.0, pressure: 1.0 }, m);
     for dx in [10, -7, 28] {
         crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 255.0 + f64::from(dx), y: 16.0, pressure: 1.0 }, m);
-        assert!(super::channel_texture(&mut app, 0, None).is_some());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).is_some());
         let actual = app.move_gpu_preview.as_ref().unwrap().gpu.as_ref().unwrap().readback();
         let mut moved = doc.clone();
         photocraft_engine::channel_cmds::move_color_channel(&mut moved, id, 0, dx, 0, app.session.tools.background).unwrap();
@@ -1273,4 +1295,37 @@ fn viewed_mask_move_preview_agrees_with_edit_target_precedence() {
         assert!(app.session.undo());
         assert!(app.session.active().unwrap().doc.layers == before.layers);
     }
+}
+
+#[test]
+fn switching_colour_sets_during_a_move_recaptures_the_gpu_source() {
+    let _lock = photocraft_testkit::gpu_lock();
+    let Ok(rs) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())))
+    else {
+        return;
+    };
+    if !crate::channel_transform_gpu::test_supported(&rs) {
+        return;
+    }
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":32,"height":24})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#407fc0"})).unwrap();
+    app.run("channel.target", json!({"channel":"red"})).unwrap();
+    app.sync_views();
+    app.set_wgpu(rs.clone());
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.tool_options.move_auto_select = false;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 10.0, y: 9.0, pressure: 1.0 }, m);
+    let old = crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+    let next = crate::channel_transform_gpu::test_wait(&rs, || super::channel_texture(&mut app, 0, None)).unwrap();
+    assert_ne!(old, next, "changing targets during an active drag must replace the captured preview");
+    assert_eq!(app.move_gpu_preview.as_ref().unwrap().colors.indices().collect::<Vec<_>>(), vec![0, 2]);
+    assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
 }

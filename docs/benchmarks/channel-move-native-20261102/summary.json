@@ -1,0 +1,182 @@
+{
+  "measurements": {
+    "single": {
+      "before": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 19.273262,
+        "p95_ms": 20.536593,
+        "max_ms": 21.142991,
+        "cold_median_ms": 88.242317,
+        "cold_samples_ms": [
+          315.221997,
+          88.242317,
+          87.226264
+        ]
+      },
+      "after_step20": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 17.989570999999998,
+        "p95_ms": 21.372456000000003,
+        "max_ms": 21.826663,
+        "cold_median_ms": 84.636662,
+        "cold_samples_ms": [
+          151.255209,
+          84.636662,
+          84.104048
+        ]
+      },
+      "after_step21": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 18.200889,
+        "p95_ms": 21.447807,
+        "max_ms": 23.051786,
+        "cold_median_ms": 85.495297,
+        "cold_samples_ms": [
+          87.697199,
+          85.495297,
+          84.965293
+        ]
+      },
+      "cpu_step21": {
+        "processes": 1,
+        "warm_frames": 9,
+        "p50_ms": 189.917156,
+        "p95_ms": 208.66795199999999,
+        "max_ms": 208.66795199999999,
+        "cold_median_ms": 202.521556,
+        "cold_samples_ms": [
+          202.521556
+        ]
+      }
+    },
+    "set": {
+      "before": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 20.425434,
+        "p95_ms": 21.324839,
+        "max_ms": 21.559358,
+        "cold_median_ms": 96.297867,
+        "cold_samples_ms": [
+          103.046805,
+          96.297867,
+          94.39201899999999
+        ]
+      },
+      "after_step20": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 19.072403,
+        "p95_ms": 22.704016,
+        "max_ms": 22.757717,
+        "cold_median_ms": 88.35963500000001,
+        "cold_samples_ms": [
+          161.945144,
+          88.35963500000001,
+          88.01909099999999
+        ]
+      },
+      "after_step21": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 18.830035,
+        "p95_ms": 23.509971,
+        "max_ms": 23.521171,
+        "cold_median_ms": 89.373412,
+        "cold_samples_ms": [
+          91.12941400000001,
+          85.370968,
+          89.373412
+        ]
+      },
+      "cpu_step21": {
+        "processes": 1,
+        "warm_frames": 9,
+        "p50_ms": 226.485736,
+        "p95_ms": 263.87695,
+        "max_ms": 263.87695,
+        "cold_median_ms": 245.161923,
+        "cold_samples_ms": [
+          245.161923
+        ]
+      }
+    },
+    "whole": {
+      "before": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 301.389435,
+        "p95_ms": 321.379472,
+        "max_ms": 324.97805,
+        "cold_median_ms": 305.529318,
+        "cold_samples_ms": [
+          305.529318,
+          303.060514,
+          308.006425
+        ]
+      },
+      "after_step20": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 312.59161800000004,
+        "p95_ms": 318.41363299999995,
+        "max_ms": 342.271507,
+        "cold_median_ms": 318.212268,
+        "cold_samples_ms": [
+          318.212268,
+          315.27635799999996,
+          320.602457
+        ]
+      },
+      "after_step21": {
+        "processes": 3,
+        "warm_frames": 27,
+        "p50_ms": 311.018395,
+        "p95_ms": 321.631406,
+        "max_ms": 333.451691,
+        "cold_median_ms": 315.921797,
+        "cold_samples_ms": [
+          312.729312,
+          315.921797,
+          318.880644
+        ]
+      }
+    }
+  },
+  "visual_comparison": {
+    "size": [
+      1000,
+      700
+    ],
+    "maximum_byte_difference": 37,
+    "different_pixels": 47759,
+    "total_pixels": 700000
+  },
+  "visual_baseline_comparison": {
+    "before_cpu_gpu": {
+      "maximum_byte_difference": 37,
+      "changed_pixels": 41358,
+      "pixels_over_2": 28233
+    },
+    "after_cpu_gpu": {
+      "maximum_byte_difference": 37,
+      "changed_pixels": 41358,
+      "pixels_over_2": 28233
+    },
+    "cpu_before_after": {
+      "maximum_byte_difference": 0,
+      "changed_pixels": 0,
+      "pixels_over_2": 0
+    },
+    "gpu_before_after": {
+      "maximum_byte_difference": 0,
+      "changed_pixels": 0,
+      "pixels_over_2": 0
+    }
+  },
+  "visual_note": "Offscreen CPU and GPU images were inspected. At aligned offsets, each renderer is byte-identical before/after. The pre-existing CPU/GPU whole-canvas filtering difference remains; native sample-phase tests compare GPU texels to the exact native Move followed by the same nearest reduction.",
+  "measurement_note": "Warm p50/p95 pool 27 completed frames from 3 processes per case. P95 uses nearest rank. Cold median pools 3 first frames. CPU fallback is a separate single-process observation of 9 frames. Timings are observations on software Vulkan, not a hardware-GPU or statistical no-regression claim. Build/test tasks were idle during timing runs. Extra visual diagnostic runs took place later and are excluded."
+}

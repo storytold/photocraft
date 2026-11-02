@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-02",
+  "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+  "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+  "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "rendering": "software Vulkan llvmpipe (Mesa 26.0.8, LLVM 21.1.8)",
+  "rayon_threads": 2,
+  "llvmpipe_threads": 2,
+  "fixture": "6000x4000 RGB8, one unlocked raster, synthetic 256-pixel colour blocks; 1000x700 completed offscreen frames",
+  "baseline": {
+    "source_commit": "0543ba6b644e5475faedede33120cd78a6151e72",
+    "binary_sha256": "5a493beee783cca5339e28ab1dc318418da3daf1e8f799591938b52e40bc8c81",
+    "move_files_identical_to_8a214f50": true
+  },
+  "candidate": {
+    "binary": "target/release/examples/channel_move_gpu_bench",
+    "binary_sha256": "61223a4c02bd03d5ab84a2777c66fcea5b859a6a90ba1705bd710976b53e677b",
+    "head": "8a214f50f803827998d31b5bcee27f3c7ee09a7c",
+    "code_diff_sha256": "c2c29720d8be88542b35882e74e8438b68e5dde3af79f8f73c3375f3488395fd",
+    "environment": "same runner software Vulkan llvmpipe, 2 Rayon workers, 2 software GPU workers, 1000x700 offscreen; 6000x4000 RGB8; three independent processes per case, 9 warm completed frames each; first process may have shader disk-cache cold cost"
+  },
+  "source_provenance": "Candidate is the uncommitted local review diff on the recorded head. The baseline binary was retained from its successful recorded release build."
+}

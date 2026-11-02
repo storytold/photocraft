@@ -353,6 +353,7 @@ fn check_background_job(depth: SampleType, cancel: bool) {
     let view = s.active().unwrap().channel_view.clone();
     if cancel {
         assert!(s.cancel_job(job));
+        s.join_cancelled_jobs();
     }
     let event = wait_for_job(&mut s, job);
     assert!(!locked(&s));
@@ -1052,4 +1053,66 @@ fn remote_sparse_colour_samples_are_rejected_before_extraction() {
     let before = s.active().unwrap().doc.clone();
     assert!(s.execute("edit.transform", json!({"target":{"color":0},"dx":1})).is_err());
     assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
+fn channel_warp_prices_output_before_extracting_native_planes() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for command in ["edit.transform.warp", "layer.smartObjects.warp"] {
+            let mut s = session(ColorMode::Rgb, depth);
+            let target = if command == "layer.smartObjects.warp" {
+                s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                s.execute("channel.new", json!({"fill":"white"})).unwrap();
+                json!({"channel":0})
+            } else {
+                json!({"colors":[0,2]})
+            };
+            let before = s.active().unwrap().doc.clone();
+            let steps = s.active().unwrap().history.past_len();
+            let rect = [0.0, 0.0, 12.0, 8.0];
+            let mesh = BezierMesh::identity(rect, 1, 1).map_points(|p| [p[0] * 4000.0 / 12.0, p[1] * 4000.0 / 8.0]);
+            crate::allocation::fail_next_for_test();
+            let result = s.execute(command, json!({"target":target,"warp":Warp::custom(mesh,rect)}));
+            assert!(crate::allocation::capacity::<u8>(1, "pricing probe").is_err(), "pricing must precede dense native capture");
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Memory Usage"), "{command} {depth:?}: {error}");
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), steps);
+        }
+    }
+}
+
+#[test]
+fn a_small_selection_can_transform_a_large_sparse_scalar_surface() {
+    for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+        let mut s = session(ColorMode::Rgb, SampleType::F32);
+        if target == "mask" {
+            s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        } else if target == "quickMask" {
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+        } else {
+            s.execute("channel.new", json!({"fill":"black"})).unwrap();
+        }
+        let params = json!({"target":target});
+        s.edit("sparse scalar", |doc, layer| {
+            let (surface, _) = crate::channel_cmds::target_surface(doc, *layer, &params)?;
+            *surface = Surface::new(surface.format());
+            surface.write_pixel(0, 0, &[1.0]);
+            surface.write_pixel(20000, 6000, &[0.5]);
+            let mut selected = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+            selected.write_pixel(0, 0, &[1.0]);
+            doc.selection = Some(selected);
+            Ok(())
+        })
+        .unwrap();
+        let mut transform = params.clone();
+        transform["dx"] = json!(2);
+        transform["interpolation"] = json!("nearest");
+        s.execute("edit.transform", transform).unwrap();
+        let st = s.active().unwrap();
+        let surface = crate::channel_cmds::read_target_surface(&st.doc, st.active_layer, &params).unwrap();
+        assert_eq!(surface.sample_channel(0, 0, 0), 0.0);
+        assert_eq!(surface.sample_channel(2, 0, 0), 1.0);
+        assert!((surface.sample_channel(20000, 6000, 0) - 0.5).abs() < 0.005, "unselected distant samples stay put");
+    }
 }

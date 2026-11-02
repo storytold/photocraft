@@ -128,6 +128,11 @@ fn preset_frames_keep_explicit_layer_targets_and_exclude_a_selected_background()
         assert_eq!(ids.map(|id| bounds(&s, id)), expected);
         let after = &s.active().unwrap().doc;
         assert!(after.layer(bg) == before.layer(bg));
+        if mode == 1 {
+            let target = after.layer(ids[0]).unwrap().surface().unwrap();
+            assert_eq!(target.sample_channel(5, 4, 2), 1.0, "the blue marker must actually flip");
+            assert_eq!(target.sample_channel(2, 4, 2), 0.0);
+        }
         if mode < 2 {
             let untouched = ids[usize::from(mode == 1)];
             assert!(after.layer(untouched) == before.layer(untouched));
@@ -403,4 +408,45 @@ fn panel_colour_moves_only_the_active_raster_when_several_layers_are_selected() 
         s.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().to_interleaved(Rect::new(0, 0, 60, 40)),
         original.to_interleaved(Rect::new(0, 0, 60, 40))
     );
+}
+
+#[test]
+fn scalar_resamplers_observe_cancellation_during_a_plane() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for selected in [false, true] {
+        let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+        let mut source = Surface::new(fmt);
+        let area = Rect::new(0, 0, 256, 256);
+        source.fill_rect(area, &[0.5]);
+        let mut selection = Surface::new(fmt);
+        selection.fill_rect(area, &[0.7]);
+        let before = source.clone();
+        let cancel = AtomicBool::new(false);
+        let check = || cancel.load(Ordering::Relaxed);
+        let progress = |_: f32| cancel.store(true, Ordering::Relaxed);
+        let ctl = Interrupt::new(&check, &progress);
+        let h = Homography([8.0, 0.0, 0.0, 0.0, 8.0, 0.0, 0.0, 0.0, 1.0]);
+        let result =
+            if selected { warp_gray_selected_with(&source, &selection, &h, Interp::Bicubic, &ctl) } else { warp_gray_with(&source, &h, Interp::Bicubic, &ctl) };
+        assert!(cancel.load(Ordering::Relaxed), "the native resampler must report progress through the job's interrupt");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(source == before);
+    }
+}
+
+#[test]
+fn ordinary_layer_transform_does_not_use_the_scalar_selection_area_cap() {
+    let (mut s, _) = preset_layers(SampleType::U8);
+    s.edit("large sparse selection", |doc, _| {
+        let mut selection = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+        selection.write_pixel(-10000, 0, &[1.0]);
+        selection.write_pixel(10000, 10000, &[1.0]);
+        doc.selection = Some(selection);
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    s.execute("edit.transform", json!({"matrix":[1,0,0,1,0,0]})).unwrap();
+    assert!(s.active().unwrap().doc.layers == before.layers);
+    assert!(s.active().unwrap().doc.selection == before.selection);
 }

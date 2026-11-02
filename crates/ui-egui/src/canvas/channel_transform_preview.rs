@@ -19,6 +19,7 @@ pub(crate) struct Preview {
     factor: u32,
     geometry: Value,
     failed: Option<String>,
+    reported_error: Option<String>,
     shown: Arc<Document>,
     textures: HashMap<Option<u32>, CpuTexture>,
     gpu: Option<crate::channel_transform_gpu::Preview>,
@@ -44,6 +45,7 @@ impl Preview {
             factor,
             geometry: Value::Null,
             failed: None,
+            reported_error: None,
             textures: HashMap::new(),
             gpu: None,
             gpu_attempted: false,
@@ -56,6 +58,16 @@ impl Preview {
 
     pub(crate) fn background(&self) -> [f32; 4] {
         self.background
+    }
+
+    fn recovered(&mut self, status: &mut String, status_error: &mut bool) {
+        if let Some(own) = self.reported_error.take()
+            && *status_error
+            && *status == own
+        {
+            status.clear();
+            *status_error = false;
+        }
     }
 
     /// Resample only when geometry changes; cache deterministic geometry failures as well.
@@ -181,14 +193,29 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
             preview.gpu_attempted = preview.gpu.is_some() || !crate::channel_transform_gpu::validation_pending(gpu);
         }
         if let Some(tex) = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor)) {
+            // Drawing the visible canvas is cheaper than validating the full output. A
+            // previously refused geometry must pass the oracle before its error is cleared.
+            if preview.reported_error.is_some() {
+                match preview.update(t) {
+                    Ok(()) => preview.recovered(&mut app.ui.status, &mut app.ui.status_error),
+                    Err(error) => {
+                        preview.reported_error = Some(error.clone());
+                        app.ui.status = error;
+                        app.ui.status_error = true;
+                    }
+                }
+            }
             return Some(tex);
         }
     }
     if let Err(error) = preview.update(t) {
+        preview.reported_error = Some(error.clone());
         app.ui.status = error;
         app.ui.status_error = true;
         // A refused commit keeps the box open. Its last valid pixels still follow the
         // current eyes and display profile, even while this geometry cannot be resampled.
+    } else {
+        preview.recovered(&mut app.ui.status, &mut app.ui.status_error);
     }
     let key = (view.clone(), look, display_key);
     if preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
@@ -227,6 +254,10 @@ mod tests {
             eprintln!("no GPU adapter for channel preview readback");
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for selected in [false, true] {
@@ -244,7 +275,8 @@ mod tests {
                 crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
                 let st = a.session.active().unwrap();
                 let doc = &st.doc;
-                let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, [1.0; 4]).unwrap();
+                let mut fast =
+                    crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, [1.0; 4])).unwrap();
                 for interpolation in ["bilinear", "bicubic"] {
                     for perspective in [false, true] {
                         let mut t = a.ui.transform.clone().unwrap();
@@ -254,7 +286,10 @@ mod tests {
                             t.quad[2][0] += 0.75;
                             t.quad[2][1] += 2.0;
                         }
-                        assert!(fast.texture(&t, &st.channel_view, false, false, 1).is_some(), "stretch stays on the cached GPU path");
+                        assert!(
+                            crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &st.channel_view, false, false, 1)).is_some(),
+                            "stretch stays on the cached GPU path"
+                        );
                         let actual = fast.readback();
                         let mut oracle = Preview::new(doc, st.active_layer, [1.0; 4], false);
                         oracle.update(&t).unwrap();
@@ -295,6 +330,10 @@ mod tests {
             eprintln!("no GPU adapter for channel preview readback");
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for pattern in 0..2 {
@@ -326,7 +365,8 @@ mod tests {
                     let st = a.session.active().unwrap();
                     let doc = &st.doc;
                     let fill = [1.0; 4];
-                    let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill).unwrap();
+                    let mut fast =
+                        crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill)).unwrap();
                     for interpolation in ["bilinear", "bicubic"] {
                         for geometry in 0..10 {
                             let mut t = a.ui.transform.clone().unwrap();
@@ -362,7 +402,7 @@ mod tests {
                                     t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 0.25, p[1] + 0.25]), t.rect));
                                 }
                             }
-                            let texture = fast.texture(&t, &st.channel_view, false, false, factor);
+                            let texture = crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &st.channel_view, false, false, factor));
                             if geometry == 1
                                 || (geometry == 3 && texture.is_none())
                                 || (geometry == 6 && selection == 0)
@@ -402,6 +442,10 @@ mod tests {
             eprintln!("no GPU adapter for stretched channel Warp readback");
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for selected in [false, true] {
@@ -423,7 +467,8 @@ mod tests {
                 let st = a.session.active().unwrap();
                 let doc = &st.doc;
                 let fill = [0.0, 0.0, 0.0, 1.0];
-                let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill).unwrap();
+                let mut fast =
+                    crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill)).unwrap();
                 for factor in [1, 2] {
                     for offset in [0.0, 0.125] {
                         for interpolation in ["bilinear", "bicubic"] {
@@ -439,7 +484,7 @@ mod tests {
                             });
                             t.warp = Some(Warp::custom(mesh, t.rect));
                             t.interpolation = interpolation.into();
-                            let texture = fast.texture(&t, &st.channel_view, false, false, factor);
+                            let texture = crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &st.channel_view, false, false, factor));
                             let mut oracle = Preview::new(doc, st.active_layer, fill, false);
                             oracle.factor = factor;
                             oracle.update(&t).unwrap();
@@ -512,6 +557,10 @@ mod tests {
             eprintln!("no GPU adapter for channel preview readback");
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         eprintln!("channel preview adapter: {:?}", rs.adapter.get_info());
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -528,7 +577,8 @@ mod tests {
                 assert!(display.as_ref().unwrap().transform.is_none());
                 let encode = display.as_ref().is_some_and(|d| d.encode_srgb);
                 let fill = [0.15, 0.35, 0.65, 1.0];
-                let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, fill).expect("GPU colour fast path");
+                let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, fill))
+                    .expect("GPU colour fast path");
                 let initial = a.ui.transform.clone().unwrap();
                 for (geometry, interpolation) in (0..9).flat_map(|g| ["nearest", "bilinear", "bicubic"].map(|i| (g, i))) {
                     for component in 1u32..8 {
@@ -563,7 +613,7 @@ mod tests {
                             let before = oracle.shown.clone();
                             assert!(oracle.update(&t).unwrap_err().contains("perspective horizon"));
                             assert!(Arc::ptr_eq(&before, &oracle.shown));
-                            assert!(fast.texture(&t, &st.channel_view, false, encode, 1).is_none());
+                            assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &st.channel_view, false, encode, 1)).is_none());
                             continue;
                         }
                         oracle.update(&t).unwrap();
@@ -579,7 +629,7 @@ mod tests {
                             }
                             view.clone_from(&session.active().unwrap().channel_view);
                             for in_color in [false, true] {
-                                let texture = fast.texture(&t, &view, in_color, encode, 1);
+                                let texture = crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, in_color, encode, 1));
                                 if (interpolation == "nearest" && geometry > 1)
                                     || (interpolation == "bicubic" && matches!(geometry, 2 | 4))
                                     || (geometry == 7 && selection != 1)
@@ -620,26 +670,32 @@ mod tests {
         let mut doc = Document::with_background("allocation guard", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let layer = Some(doc.layers[0].id);
         gpu.set_memory_budget(1);
-        assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none());
         gpu.set_memory_budget(256 * 1024 * 1024);
         doc.size = Size::new(u32::MAX, u32::MAX);
-        assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none());
         doc.size = Size::new(4, 4);
         for coverage in [2.0, f32::NAN, f32::INFINITY] {
             let mut selection = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
             selection.fill_rect(doc.bounds(), &[coverage]);
             doc.selection = Some(selection);
-            assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none());
+            assert!(crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none());
         }
         let mut outside = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
         outside.fill_rect(Rect::new(-2, 0, 4, 4), &[1.0]);
         doc.selection = Some(outside);
-        assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none(), "off-canvas selected defaults use the CPU oracle");
+        assert!(
+            crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none(),
+            "off-canvas selected defaults use the CPU oracle"
+        );
         doc.selection = Some(photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
-        assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none(), "unbounded selection defaults use the CPU oracle");
+        assert!(
+            crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none(),
+            "unbounded selection defaults use the CPU oracle"
+        );
         doc.selection = None;
         gpu.health().mark(photocraft_gpu::Fault::Lost("synthetic loss".into()));
-        assert!(crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).is_none());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).is_none());
     }
 
     pub(super) fn app() -> PhotocraftApp {
@@ -664,6 +720,10 @@ mod tests {
             return;
         };
         let mut a = app();
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         a.set_wgpu(rs.clone());
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
@@ -672,14 +732,14 @@ mod tests {
         let t = a.ui.transform.as_mut().unwrap();
         t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
         let (document, view, transform) = (a.session.active().unwrap().doc.clone(), a.session.active().unwrap().channel_view.clone(), a.ui.transform.clone());
-        let original = texture(&mut a, &ctx, 0, None).unwrap();
+        let original = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
         let pixels = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.as_ref().unwrap().readback();
 
         // A replacement renderer must not reuse a texture registered on the previous one.
-        a.set_wgpu(rs);
+        a.set_wgpu(rs.clone());
         let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
         assert!(preview.gpu.is_none() && !preview.gpu_attempted, "renderer replacement releases the old capture");
-        assert_ne!(texture(&mut a, &ctx, 0, None), Some(original), "the preview recaptures its GPU source");
+        assert_ne!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)), Some(original), "the preview recaptures its GPU source");
 
         // Upstream's automatic OOM recovery frees preview allocations before retrying too.
         a.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Out of Memory".into()));
@@ -687,7 +747,7 @@ mod tests {
         assert!(a.gpu_active());
         let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
         assert!(preview.gpu.is_none() && !preview.gpu_attempted, "OOM recovery releases the old capture");
-        assert!(texture(&mut a, &ctx, 0, None).is_some());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).is_some());
         let recovered = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.as_ref().unwrap().readback();
         assert_eq!(recovered, pixels, "recapturing preserves the transformed preview");
 
@@ -696,7 +756,7 @@ mod tests {
         crate::gpu_status::check(&mut a, &ctx);
         assert!(!a.gpu_active());
         assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.is_none());
-        assert!(texture(&mut a, &ctx, 0, None).is_some());
+        assert!(crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).is_some());
         assert_eq!(a.ui.transform, transform);
         assert_eq!(a.session.active().unwrap().doc, document);
         assert_eq!(a.session.active().unwrap().channel_view, view);
@@ -846,6 +906,10 @@ mod tests {
         })) else {
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut doc = gpu_oracle_document(depth, 0);
@@ -860,7 +924,8 @@ mod tests {
             let (display, _) = crate::canvas::canvas_display(&a, &doc, None);
             assert!(display.as_ref().unwrap().encode_srgb);
             assert!(display.as_ref().unwrap().transform.is_none());
-            let mut gpu_preview = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).unwrap();
+            let mut gpu_preview =
+                crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
             for warp in [false, true] {
                 let mut t = a.ui.transform.clone().unwrap();
                 t.interpolation = "bilinear".into();
@@ -875,7 +940,7 @@ mod tests {
                     let mut view = st.channel_view.clone();
                     view.color_hidden = (0..3).map(|c| !eyes.contains(&c)).collect();
                     for in_color in [false, true] {
-                        assert!(gpu_preview.texture(&t, &view, in_color, true, 1).is_some());
+                        assert!(crate::channel_transform_gpu::test_wait(&rs, || gpu_preview.texture(&t, &view, in_color, true, 1)).is_some());
                         let expected = cpu.image(&view, crate::channel_view::Look { in_color, ..Default::default() }, display.as_deref());
                         let actual = gpu_preview.readback();
                         let max = actual
@@ -900,6 +965,10 @@ mod tests {
         })) else {
             return;
         };
+
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
         let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
         for faint_selection in [false, true] {
             let mut a = app();
@@ -927,8 +996,8 @@ mod tests {
                 let (x, y) = h.apply(x, y);
                 [x, y]
             });
-            let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).unwrap();
-            assert!(fast.texture(&t, &view, false, false, 1).is_none(), "faint_selection={faint_selection}");
+            let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
+            assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_none(), "faint_selection={faint_selection}");
             let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
             assert!(cpu.update(&t).unwrap_err().contains("horizon"));
         }
@@ -1416,6 +1485,159 @@ mod tests {
             assert!(Arc::ptr_eq(&before, &st.doc));
         }
         a.run("channel.target", json!({"channel":"blue"})).unwrap();
+    }
+
+    #[test]
+    fn gpu_drawing_does_not_clear_an_unchanged_cpu_refusal() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
+        let mut a = app();
+        let ctx = egui::Context::default();
+        a.run("channel.target", json!({"channel":"green"})).unwrap();
+        crate::transform_tool::begin(&mut a, &ctx).unwrap();
+        let valid = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 3.0, y]);
+        a.ui.transform.as_mut().unwrap().quad = [[0.0, 0.0], [20000.0, 0.0], [20000.0, 15000.0], [0.0, 15000.0]];
+        let cpu = texture(&mut a, &ctx, 0, None).unwrap();
+        uploaded_preview_pixels(&ctx, cpu);
+        assert!(a.ui.status_error);
+        let message = a.ui.status.clone();
+        a.set_wgpu(rs.clone());
+        let shown = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
+        assert_ne!(shown, cpu, "the unchanged quad is now displayed by the GPU");
+        assert!(a.ui.status_error);
+        assert_eq!(a.ui.status, message);
+        a.ui.transform.as_mut().unwrap().quad = valid;
+        crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
+        assert!(!a.ui.status_error, "a valid resample really clears the owned error");
+        let mut delta = ctx.tex_manager().write().take_delta();
+        delta.clear();
+    }
+
+    #[test]
+    fn recovered_preview_clears_only_its_own_error() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        a.run("channel.target", json!({"channel":"green"})).unwrap();
+        crate::transform_tool::begin(&mut a, &ctx).unwrap();
+        let good = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 2.0, y]);
+        for unrelated in [false, true] {
+            a.ui.transform.as_mut().unwrap().quad = [[0.0; 2]; 4];
+            let id = texture(&mut a, &ctx, 0, None).unwrap();
+            uploaded_preview_pixels(&ctx, id);
+            assert!(a.ui.status_error);
+            if unrelated {
+                a.ui.status = "another command failed".into();
+            }
+            a.ui.transform.as_mut().unwrap().quad = good;
+            texture(&mut a, &ctx, 0, None).unwrap();
+            uploaded_preview_pixels(&ctx, id);
+            assert_eq!(a.ui.status_error, unrelated);
+            assert_eq!(a.ui.status, if unrelated { "another command failed" } else { "" });
+        }
+    }
+
+    #[test]
+    fn unsupported_float_render_targets_use_the_cpu_preview() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        if crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
+        let mut a = app();
+        a.set_wgpu(rs.clone());
+        a.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut a, &ctx).unwrap();
+        a.ui.transform.as_mut().unwrap().quad = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 2.0, y]);
+        let id = texture(&mut a, &ctx, 0, None).unwrap();
+        let actual = uploaded_preview_pixels(&ctx, id).unwrap();
+        let st = a.session.active().unwrap();
+        let (display, _) = crate::canvas::canvas_display(&a, &st.doc, None);
+        let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
+        assert!(preview.gpu.is_none());
+        assert!(crate::channel_transform_gpu::Preview::new_move(a.gpu.as_ref().unwrap(), &st.doc, st.active_layer, a.session.tools.background, 2).is_none());
+        assert_eq!(actual, preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref()).pixels);
+        assert!(a.gpu.as_ref().unwrap().health().is_ok());
+    }
+
+    #[test]
+    fn reduced_move_reads_native_samples_at_every_integer_phase() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        if !crate::channel_transform_gpu::test_supported(&rs) {
+            return;
+        }
+        let background = [0.125, 0.25, 0.375, 1.0];
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::with_background("native Move phases", Size::new(32, 24), ColorMode::Rgb, depth, Color::BLACK);
+            let id = doc.layers[0].id;
+            for y in 0..24 {
+                for x in 0..32 {
+                    let alpha = 0.25 + ((x + y) % 4) as f32 * 0.25;
+                    let red = if x % 2 == 0 { 0.15 } else { 0.85 };
+                    let blue = if y % 2 == 0 { 0.9 } else { 0.1 };
+                    doc.layers[0].surface_mut().unwrap().write_pixel(x, y, &[red, (x % 3) as f32 / 2.0, blue, alpha]);
+                }
+            }
+            if depth == SampleType::F32 {
+                doc.layers[0].surface_mut().unwrap().write_pixel(5, 3, &[1.5, -0.2, 0.6, 0.7]);
+            }
+            for k in [2, 3] {
+                let mut fast =
+                    crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new_move(&gpu, &doc, Some(id), background, k))
+                        .unwrap();
+                for target in [json!({"color":1}), json!({"colors":[0,2]})] {
+                    let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), 3).unwrap().unwrap();
+                    let mut a = app();
+                    a.session.add_document(doc.clone(), None);
+                    a.run("channel.target", json!({"colors":colors.indices().collect::<Vec<_>>()})).unwrap();
+                    crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+                    let initial = a.ui.transform.clone().unwrap();
+                    for (dx, dy) in [(1, 0), (0, 1), (-1, -3), (3, 2)] {
+                        let mut expected = doc.clone();
+                        photocraft_engine::channel_cmds::move_color_channels(&mut expected, id, colors, dx, dy, background).unwrap();
+                        let reduced = crate::proxy::proxy_document(&expected, k);
+                        let oracle = Preview::new(&reduced, Some(id), background, false);
+                        let mut t = initial.clone();
+                        t.target = Some(target.clone());
+                        t.quad = t.quad.map(|[x, y]| [x + f64::from(dx), y + f64::from(dy)]);
+                        for visible in [0u8, 1, 3, 7] {
+                            for in_color in [false, true] {
+                                let mut view = a.session.active().unwrap().channel_view.clone();
+                                view.color_hidden = (0..3).map(|i| visible & (1 << i) == 0).collect();
+                                crate::channel_transform_gpu::test_wait(&rs, || fast.texture_move(&t, &view, in_color, false, k, doc.bounds())).unwrap();
+                                let actual = fast.readback();
+                                let expected = oracle.image(&view, crate::channel_view::Look { in_color, ..Default::default() }, None);
+                                let max = actual
+                                    .iter()
+                                    .zip(&expected.pixels)
+                                    .flat_map(|(a, b)| a.to_array().into_iter().zip(b.to_array()).map(|(a, b)| a.abs_diff(b)))
+                                    .max()
+                                    .unwrap_or(0);
+                                assert!(max <= 2, "{depth:?}/k={k}/{target}/{dx},{dy}/eyes={visible}: {max}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn uploaded_preview_pixels(ctx: &egui::Context, id: egui::TextureId) -> Option<Vec<Color32>> {

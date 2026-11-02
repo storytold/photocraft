@@ -132,7 +132,7 @@ fn canonical_target(colors: crate::color_channels::ColorChannels) -> Value {
 fn native_area(doc: &Document, layer: Option<LayerId>) -> Result<Rect> {
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let surface = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?;
-    Ok(doc.bounds().union(&surface.content_bounds()))
+    Ok(doc.bounds().union(&photocraft_compose::bounds::content_bounds(surface)))
 }
 
 /// Bound the aggregate native source buffers before extraction or opening an interactive box.
