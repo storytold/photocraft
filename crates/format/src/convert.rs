@@ -17,6 +17,8 @@ use crate::manifest::{
 };
 use crate::{FormatError, Result};
 
+mod sprite;
+
 /// Deepest group nesting a bundle may hold — the one nesting limit every consumer of the layer
 /// tree shares; see [`photocraft_doc::MAX_GROUP_DEPTH`].
 pub use photocraft_doc::MAX_GROUP_DEPTH;
@@ -275,6 +277,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
+        sprite: d.sprite.as_ref().map(|s| sprite::encode(s, sink)),
         file_encoding: d.file_encoding,
         layer_comps: d.layer_comps.iter().map(|c| comp_m(c, sink)).collect(),
         last_applied_comp: d.last_applied_comp,
@@ -697,6 +700,7 @@ impl Loader<'_> {
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
+            sprite: m.sprite.as_ref().map(|s| self.sprite(s)).transpose()?,
             file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,

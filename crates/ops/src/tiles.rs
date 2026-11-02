@@ -12,6 +12,16 @@ pub(crate) struct Tiles {
 }
 
 pub(crate) fn surfaces(doc: &Document, mut visit: impl FnMut(&Surface)) {
+    if let Some(sprite) = &doc.sprite {
+        for frame in &sprite.frames {
+            for cel in frame.cels.values() {
+                visit(&cel.pixels);
+                if let Some(indices) = &cel.indices {
+                    visit(indices)
+                }
+            }
+        }
+    }
     for (_, _, layer) in doc.walk() {
         if let Some(surface) = layer.surface() {
             visit(surface);
@@ -56,6 +66,26 @@ pub(crate) fn blocks(doc: &Document, mut visit: impl FnMut(usize, usize)) {
             visit(Arc::as_ptr(tile) as usize, tile.bytes().len());
         }
     });
+    if let Some(sprite) = &doc.sprite {
+        if let Some(profile) = &sprite.profile {
+            visit(Arc::as_ptr(profile) as usize, profile.len());
+        }
+        for frame in &sprite.frames {
+            let palette_bytes = frame
+                .palette
+                .iter()
+                .fold(frame.palette.len().saturating_mul(std::mem::size_of::<photocraft_doc::sprite::PaletteEntry>()), |n, e| n.saturating_add(e.name.len()));
+            visit(Arc::as_ptr(&frame.palette) as usize, palette_bytes);
+            for chunk in &frame.metadata {
+                visit(Arc::as_ptr(&chunk.bytes) as usize, chunk.bytes.len());
+            }
+        }
+        let tag_bytes =
+            sprite.tags.iter().fold(0usize, |n, tag| n.saturating_add(std::mem::size_of::<photocraft_doc::sprite::SpriteTag>()).saturating_add(tag.name.len()));
+        if tag_bytes != 0 {
+            visit(sprite.tags.as_ptr() as usize, tag_bytes);
+        }
+    }
     for (_, _, layer) in doc.walk() {
         if let LayerContent::Smart(smart) = &layer.content
             && let SmartSource::Embedded { bytes, .. } = &smart.source

@@ -93,6 +93,7 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
+| `docs/images/aseprite/*.png` | Workspace, imported editable Aseprite layers, indexed-animation Timeline and Pause regression | PhotoCraft contributors | Original offscreen PhotoCraft UI captures using original synthetic layered/indexed-animation fixtures | MIT OR Apache-2.0, adjacent `LICENSE.txt`; shown assets retain their existing licenses |
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
@@ -118,10 +119,17 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
+## Synthetic test fixtures (committed, not shipped)
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/io/tests/fixtures/aseprite/*.aseprite`, `*.png` | Original layered, grayscale, indexed animation and tilemap fixtures with application-rendered oracles | PhotoCraft contributors | Public format specification, independent aseprite-io 0.2.0 writer, and original test data saved/rendered with Aseprite 1.3.18.6; no application code or artwork copied | MIT OR Apache-2.0, adjacent `LICENSE.txt` |
+
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository, except the small
-synthetic parser fixtures listed under *Synthetic parser test fixtures* below.
+`corpus/` is gitignored and external corpus files are not committed to the repository.
+Original synthetic fixtures committed for unit/integration tests are listed separately above.
+The small synthetic parser fixtures are listed under *Synthetic parser test fixtures* below.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

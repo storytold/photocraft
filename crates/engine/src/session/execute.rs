@@ -225,6 +225,10 @@ impl Session {
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
+        if doc.size != before.size && doc.sprite.as_ref().is_some_and(|s| s.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022))) {
+            return Err(crate::EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before changing the canvas".into()));
+        }
+        doc.capture_sprite_frame().map_err(crate::EngineError::Other)?;
         st.doc = Arc::new(doc);
         st.active_layer = active;
         fix_selection(st);

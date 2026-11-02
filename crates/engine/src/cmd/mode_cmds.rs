@@ -76,6 +76,9 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
+    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022)))) {
+        return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before rotating the canvas".into()));
+    }
     // The Background stays opaque, whatever the background colour's alpha.
     let bg = [s.tools.background[0], s.tools.background[1], s.tools.background[2], 1.0];
     // Color Sampler points turn with the canvas (the same map the edit applies to the geometry).

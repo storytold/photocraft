@@ -7,6 +7,7 @@ mod affinity_artboards;
 mod affinity_corpus;
 mod annotations;
 mod artboard_guide_order;
+mod aseprite;
 mod banded;
 mod blend_modes_corpus;
 mod cancel;

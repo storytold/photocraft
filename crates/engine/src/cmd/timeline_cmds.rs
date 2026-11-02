@@ -37,6 +37,13 @@ fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Resu
     if let Some(t) = &mut doc.timeline {
         t.clamp();
     }
+    if let Some(sprite) = &doc.sprite {
+        let timeline = doc.timeline.as_ref().ok_or_else(|| EngineError::Other("a cel animation owns this timeline; remove its frames explicitly".into()))?;
+        if timeline.duration != sprite.frames.len() {
+            return Err(EngineError::Other("change cel animation length with sprite frame commands".into()));
+        }
+        doc.select_sprite_frame(timeline.current).map_err(EngineError::Other)?;
+    }
     crate::video_cmds::sync(&mut doc);
     st.doc = Arc::new(doc);
     st.revision += 1;

@@ -29,6 +29,9 @@ pub struct CommandSpec {
 
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
+    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022)))) {
+        return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before turning the canvas".into()));
+    }
     if let Some(d) = s.active() {
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
@@ -136,6 +139,7 @@ pub mod smart_cmds;
 pub mod smart_svg_cmds;
 pub mod smartselect_cmds;
 pub mod solid_fill_cmds;
+pub mod sprite_cmds;
 pub mod stamp_cmds;
 pub mod style_asl_cmds;
 pub mod swatch_cmds;
@@ -1355,6 +1359,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::migrate_cmds::specs());
     v.extend(crate::trap_cmds::specs());
     v.extend(crate::timeline_cmds::specs());
+    v.extend(sprite_cmds::specs());
     v.extend(crate::video_cmds::specs());
     v.extend(crate::jobs::specs());
     v.extend(crate::wia_cmds::specs());

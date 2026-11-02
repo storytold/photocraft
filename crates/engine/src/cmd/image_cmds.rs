@@ -607,7 +607,12 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         check_resample_budget("image.crop", &d.doc, tw, th, "")?;
     }
+    let retained_slices =
+        s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022))));
     if let Some(a) = crop_angle(p)? {
+        if retained_slices {
+            return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before rotating the crop".into()));
+        }
         let rect = explicit.ok_or_else(|| bad("image.crop", "an `angle` needs an explicit `x`, `y`, `width` and `height`"))?;
         return rotated_crop(s, rect, a, delete, content_aware, &target);
     }
@@ -617,6 +622,9 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or(Rect::EMPTY);
     if r.is_empty() {
         return Err(EngineError::Other("nothing to crop: pass x/y/width/height or make a selection".into()));
+    }
+    if retained_slices && (r.x0 != 0 || r.y0 != 0 || target.size.is_some_and(|(w, h)| w != r.width() || h != r.height())) {
+        return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before moving or resampling the canvas".into()));
     }
     s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;

@@ -68,6 +68,45 @@ fn display_name_is_the_file_name() {
 }
 
 #[test]
+fn aseprite_documents_bypass_swatches_and_keep_their_writable_sprite_path() {
+    let bytes = include_bytes!("../../../io/tests/fixtures/aseprite/layers.aseprite");
+    for automation in [false, true] {
+        for path in ["/pics/sprite.aseprite", "/pics/sprite.ase", "/pics/renamed.psd"] {
+            let (mut app, written) = app_with(vec![None]);
+            app.services.import = Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            }));
+            app.services.export =
+                Some(Box::new(|doc, path, _| photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())));
+            if automation {
+                app.open_automation_bytes(&display_name(path), bytes).unwrap();
+                app.opened_from(path);
+            } else {
+                app.open_file(path, bytes).unwrap();
+            }
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layers.len(), 2);
+            assert!(!st.source_read_only);
+            assert_eq!(st.path.as_deref(), Some(path));
+            assert_eq!(app.ui.recent_files.first().map(String::as_str), Some(path));
+            if path.ends_with(".psd") {
+                // A renamed sprite cannot silently replace itself with a static PSD.
+                assert_eq!(menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap(), json!({"fileDialog":"save"}));
+                answer(&mut app);
+                assert!(written.borrow().is_empty());
+            } else {
+                menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap();
+                let records = written.borrow();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].0, path);
+                let back = photocraft_io::import(path, &records[0].1).unwrap();
+                assert_eq!(back.document.layers.len(), 2);
+            }
+        }
+    }
+}
+
+#[test]
 fn open_file_sets_name_path_and_recent() {
     let (mut app, _) = app_with(Vec::new());
     let w = app.open_file("/pics/cat.psd", b"x").unwrap();

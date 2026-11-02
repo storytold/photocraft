@@ -14,8 +14,9 @@ use photocraft_doc::{
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
-/// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 1;
+/// Highest manifest version this build reads. Sprite bundles require version 2 so older
+/// readers refuse them instead of silently discarding animation on the next save.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Hex-encoded BLAKE3 hash (64 chars).
 pub type Hash = String;
@@ -87,6 +88,9 @@ pub struct DocM {
     /// Window › Timeline.
     #[serde(default)]
     pub timeline: Option<photocraft_doc::Timeline>,
+    /// Cel animation and exact palette-index data (absent in older documents).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<SpriteM>,
     /// The JPEG quality / WebP encoding File › Save reuses.
     #[serde(default, skip_serializing_if = "photocraft_doc::FileEncoding::is_empty")]
     pub file_encoding: photocraft_doc::FileEncoding,
@@ -102,6 +106,48 @@ pub struct DocM {
     /// Web slices (user and layer-based; layer ids are remapped on load).
     #[serde(default, skip_serializing_if = "photocraft_doc::Slices::is_empty")]
     pub slices: photocraft_doc::Slices,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpriteM {
+    pub current: usize,
+    pub layers: Vec<photocraft_doc::sprite::SpriteLayer>,
+    pub indexed: bool,
+    pub transparent_index: u8,
+    pub pixel_aspect: [u8; 2],
+    pub grid: [i16; 4],
+    pub tags: Vec<photocraft_doc::sprite::SpriteTag>,
+    pub profile: Option<Hash>,
+    /// Shared palettes are written once, including duplicate colors and entry names/alpha.
+    pub palettes: Vec<Vec<photocraft_doc::sprite::PaletteEntry>>,
+    pub frames: Vec<SpriteFrameM>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpriteFrameM {
+    pub duration_ms: u16,
+    pub palette: usize,
+    pub cels: Vec<SpriteCelM>,
+    pub metadata: Vec<SpriteChunkM>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpriteCelM {
+    pub layer: u64,
+    pub rect: photocraft_geom::Rect,
+    pub pixels: SurfaceM,
+    pub indices: Option<SurfaceM>,
+    pub opacity: u8,
+    pub z_index: i16,
+    pub linked_frame: Option<usize>,
+    pub precise: Option<[i32; 4]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpriteChunkM {
+    pub kind: u16,
+    pub target: photocraft_doc::sprite::MetadataTarget,
+    pub blob: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
