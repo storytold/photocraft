@@ -941,3 +941,13 @@ fn pencil_auto_erase_knows_the_indexed_foreground() {
     s.execute("paint.pencil", pencil).unwrap();
     assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
 }
+
+#[test]
+fn parse_color_rejects_malformed_hex() {
+    assert_eq!(parse_color(&json!("#ff0000")), Some([255, 0, 0]));
+    assert_eq!(parse_color(&json!("#+f+f+f")), None);
+    assert_eq!(parse_color(&json!("#ff0000ff00")), None);
+    assert_eq!(parse_color(&json!("#ff00")), None);
+    assert_eq!(parse_color(&json!("#gg0000")), None);
+    assert_eq!(parse_color(&json!("##ff0000")), None);
+}
