@@ -159,8 +159,9 @@ fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualCompari
             .with_context_setup(egui_extras::install_image_loaders)
             .wgpu()
             .build_ui_state(
-                |ui, state: &mut (PenVariant, u8)| {
-                    let (variant, background) = *state;
+                |ui, state: &mut (PenVariant, u8, Option<egui::TextureHandle>)| {
+                    let variant = state.0;
+                    let background = state.1;
                     ui.painter().rect_filled(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(128.0, 64.0)), 0.0, egui::Color32::from_gray(background));
                     ui.painter().text(
                         pos2(2.0, 2.0),
@@ -174,7 +175,7 @@ fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualCompari
                         let [w, h] = bitmap.size;
                         let [hx, hy] = bitmap.hotspot;
                         let image = egui::ColorImage::from_rgba_unmultiplied([usize::from(w), usize::from(h)], &bitmap.rgba);
-                        let texture = ui.ctx().load_texture("native-pen-reference", image, egui::TextureOptions::NEAREST);
+                        let texture = state.2.get_or_insert_with(|| ui.ctx().load_texture("native-pen-reference", image, egui::TextureOptions::NEAREST));
                         let rect = egui::Rect::from_min_size(
                             pos2(96.0, 32.0) - egui::vec2(f32::from(hx), f32::from(hy)) / scale,
                             egui::vec2(f32::from(w), f32::from(h)) / scale,
@@ -182,7 +183,7 @@ fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualCompari
                         ui.painter().image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), egui::Color32::WHITE);
                     }
                 },
-                (PenVariant::Standard, 240u8),
+                (PenVariant::Standard, 240u8, None),
             );
         let cell_w = (128.0 * scale).round() as usize;
         let cell_h = (64.0 * scale).round() as usize;
@@ -191,7 +192,7 @@ fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualCompari
         let mut sheet = vec![255u8; sheet_w * sheet_h * 4];
         for (bg_index, (background_name, background)) in backgrounds.iter().enumerate() {
             for (variant_index, variant) in PenVariant::all().into_iter().enumerate() {
-                *harness.state_mut() = (variant, *background);
+                *harness.state_mut() = (variant, *background, None);
                 harness.run_steps(3);
                 let rendered = harness.render().map_err(|e| format!("cursor reference render: {e}"))?;
                 if rendered.width() as usize != cell_w || rendered.height() as usize != cell_h {
@@ -352,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Verify expected dimensions at native scale
-            let expected_pad = ((1.0 * scale) + 2.0).ceil() as usize;
+            let expected_pad = (scale + 2.0).ceil() as usize;
             let icon_px = (22.0 * scale).round() as usize;
             let expected_side = icon_px + expected_pad * 2;
             if usize::from(w) != expected_side || usize::from(h) != expected_side {

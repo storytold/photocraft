@@ -638,8 +638,8 @@ fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_s
             assert!(has_dark_outline, "{variant:?} at {scale} has dark outline");
 
             // Verify hotspot matches expected formula: pad + (hot_box / 24.0) * 22.0 * scale
-            let offset_px = 1.0 * scale;
-            let pad = (offset_px + 2.0).ceil() as f32;
+            let offset_px = scale;
+            let pad = (offset_px + 2.0).ceil();
             let hot_box = variant.hotspot_in_box();
             let ideal_hx = pad + (hot_box.x / 24.0) * 22.0 * scale;
             let ideal_hy = pad + (hot_box.y / 24.0) * 22.0 * scale;
@@ -725,7 +725,7 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
 #[test]
 fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
-        let offset_px = 1.0 * scale;
+        let offset_px = scale;
         let pad = (offset_px + 2.0).ceil() as usize;
         let icon_px = (22.0 * scale).round() as usize;
         let expected_side = icon_px + pad * 2;

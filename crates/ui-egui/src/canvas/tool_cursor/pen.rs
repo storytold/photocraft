@@ -133,7 +133,7 @@ pub fn rasterize(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
         return None;
     }
 
-    let offset_px = 1.0 * scale;
+    let offset_px = scale;
     let pad = (offset_px + 2.0).ceil() as usize;
     let width = icon_w.checked_add(pad.checked_mul(2)?)?;
     let height = icon_h.checked_add(pad.checked_mul(2)?)?;
