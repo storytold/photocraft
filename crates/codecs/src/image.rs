@@ -675,7 +675,7 @@ impl Image {
         } else if let Some(fast) = self.convert_int_direct(layout, sample) {
             fast
         } else if layout == self.layout {
-            quantize(&self.to_normalized(), sample)
+            convert_depth(&self.data, self.sample, sample)
         } else {
             let src = self.to_normalized();
             let values = convert_layout(&src, self.layout, layout);
@@ -805,11 +805,26 @@ fn clamp01(v: f32) -> f32 {
 }
 
 pub(crate) fn quantize(values: &[f32], sample: SampleType) -> Vec<u8> {
+    quantize_samples(values.iter().copied(), sample)
+}
+
+/// Quantize normalized samples without an intermediate float buffer.
+fn quantize_samples(values: impl Iterator<Item = f32>, sample: SampleType) -> Vec<u8> {
     match sample {
-        SampleType::U8 => values.iter().map(|&v| (clamp01(v) * 255.0).round() as u8).collect(),
-        SampleType::U16 => values.iter().flat_map(|&v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
-        SampleType::F16 => values.iter().flat_map(|&v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
-        SampleType::F32 => values.iter().flat_map(|&v| v.to_ne_bytes()).collect(),
+        SampleType::U8 => values.map(|v| (clamp01(v) * 255.0).round() as u8).collect(),
+        SampleType::U16 => values.flat_map(|v| ((clamp01(v) * 65535.0).round() as u16).to_ne_bytes()).collect(),
+        SampleType::F16 => values.flat_map(|v| f16::from_f32(v).to_bits().to_ne_bytes()).collect(),
+        SampleType::F32 => values.flat_map(|v| v.to_ne_bytes()).collect(),
+    }
+}
+
+/// Convert sample depth with source-type dispatch outside the sample loop.
+fn convert_depth(data: &[u8], from: SampleType, sample: SampleType) -> Vec<u8> {
+    match from {
+        SampleType::U8 => quantize_samples(data.iter().map(|&v| v as f32 / 255.0), sample),
+        SampleType::U16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes([c[0], c[1]]) as f32 / 65535.0), sample),
+        SampleType::F16 => quantize_samples(data.as_chunks::<2>().0.iter().map(|c| f16::from_bits(u16::from_ne_bytes([c[0], c[1]])).to_f32()), sample),
+        SampleType::F32 => quantize_samples(data.as_chunks::<4>().0.iter().map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])), sample),
     }
 }
 
@@ -889,6 +904,32 @@ mod tests {
     /// The generic f32 route `convert` used before the integer fast paths (the reference).
     fn convert_via_f32(img: &Image, layout: ChannelLayout, sample: SampleType) -> Vec<u8> {
         quantize(&convert_layout(&img.to_normalized(), img.layout, layout), sample)
+    }
+
+    /// Depth changes match eager normalization, including every U16 and F16 bit pattern.
+    #[test]
+    fn depth_conversion_matches_the_normalized_reference() {
+        for from in SampleType::ALL {
+            let data: Vec<u8> = match from {
+                SampleType::U8 => (0..=255).collect(),
+                SampleType::U16 | SampleType::F16 => (0u32..=65535).flat_map(|v| (v as u16).to_ne_bytes()).collect(),
+                SampleType::F32 => [
+                    0u32, 0x80000000, 1, 0x007fffff, 0x00800000, 0x3effffff, 0x3f000000, 0x3f000001, 0x3f7fffff, 0x3f800000, 0x3f800001, 0x7f7fffff,
+                    0xff7fffff, 0x7f800000, 0xff800000, 0x7fc12345, 0x7f812345,
+                ]
+                .into_iter()
+                .flat_map(u32::to_ne_bytes)
+                .collect(),
+            };
+            let img = Image::from_raw((data.len() / from.bytes()) as u32, 1, ChannelLayout::Gray, from, data).unwrap();
+            let normalized = img.to_normalized();
+            for to in SampleType::ALL {
+                if from == to || (!from.is_float() && !to.is_float()) {
+                    continue;
+                }
+                assert_eq!(img.convert(ChannelLayout::Gray, to).data(), quantize(&normalized, to), "{from:?} to {to:?}");
+            }
+        }
     }
 
     #[test]
