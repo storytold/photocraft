@@ -368,6 +368,7 @@ fn deeply_nested_embedded_svg_is_dropped_not_a_stack_overflow() {
 
 /// The embedded SVG is parsed on top of the drawing's own recursion, so the two depths share
 /// [`svg::MAX_XML_DEPTH`]: 511 + 511 groups, each fine alone, overflowed a 1 MB thread stack.
+/// The cap itself has to fit that stack in release builds too (thin LTO inlines more per level).
 #[test]
 fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
     let embed = |outer: usize, inner: usize| {
@@ -379,9 +380,12 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
         .spawn(move || {
             let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
             assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
-            // Within the shared budget the embedded drawing renders (its rect is black).
-            let r = open(&embed(250, 250));
+            // Within the shared budget the embedded drawing renders (its rect is black). With the
+            // two <svg> roots, 127 + 127 groups fill the 256 budget exactly; one more is past it.
+            let r = open(&embed(127, 127));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+            let r = open(&embed(127, 128));
+            assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
         })
         .unwrap()
         .join()
@@ -406,9 +410,17 @@ fn deeply_nested_markup_is_an_error_not_a_stack_overflow() {
         .unwrap()
         .join()
         .unwrap();
-    // Just inside the limit still opens, the empty groups folded away.
-    let r = open(&nested(svg::MAX_XML_DEPTH - 1));
-    assert_eq!(r.document.layers.len(), 1);
+    // Just inside the limit still opens, the empty groups folded away, on the 1 MB stack that
+    // Windows' main thread and the browser build give the open.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let r = open(&nested(svg::MAX_XML_DEPTH - 1));
+            assert_eq!(r.document.layers.len(), 1);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// The depth check reads the markup, not the parser's tree: it must not count `<` in comments,

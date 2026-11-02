@@ -843,9 +843,13 @@ fn bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
             let deep = embed(MAX_XML_DEPTH - 2, MAX_XML_DEPTH - 2);
             let buf = rasterize_bounded(deep.as_bytes(), 1.0, MAX_RASTER_PIXELS).unwrap();
             assert!(buf.px[4 * 8 + 4][3] < 0.01, "the too-deep image is left out");
-            let fine = embed(200, 200);
+            // With the two <svg> roots, 127 + 127 groups fill the 256 budget exactly; one more is past it.
+            let fine = embed(127, 127);
             let buf = rasterize_bounded(fine.as_bytes(), 1.0, MAX_RASTER_PIXELS).unwrap();
             assert!(buf.px[4 * 8 + 4][3] > 0.99, "within the shared budget the image draws");
+            let past = embed(127, 128);
+            let buf = rasterize_bounded(past.as_bytes(), 1.0, MAX_RASTER_PIXELS).unwrap();
+            assert!(buf.px[4 * 8 + 4][3] < 0.01, "one level past the shared budget the image is left out");
         })
         .unwrap()
         .join()
