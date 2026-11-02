@@ -2954,3 +2954,55 @@ fn damage_grows_by_nested_effect_reach() {
     group.visible = false;
     assert_eq!(effect_reach(&[group]), 0);
 }
+
+#[test]
+fn tab_reorder_keeps_floating_documents_in_place() {
+    let visible = [0, 2];
+    assert_eq!(move_target_after_filter(&visible, 0, 1, 3), 2);
+    assert_eq!(move_target_after_filter(&visible, 2, 0, 3), 0);
+}
+
+#[test]
+fn arrange_layout_only_includes_docked_documents() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for name in ["first", "floating", "last"] {
+        app.run("file.new", json!({"width": 80, "height": 60, "name": name})).unwrap();
+    }
+    app.ui.view.arrange = "threeUpStacked".into();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let shown: Vec<_> = arranged_cells(&app, rect).unwrap().into_iter().map(|(doc, _)| doc).collect();
+    assert_eq!(shown, vec![0, 2]);
+
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 2})).unwrap();
+    assert!(arranged_cells(&app, rect).is_none(), "the main canvas should be blank when every document is floating");
+}
+
+#[test]
+fn torn_off_document_is_not_drawn_again_in_the_main_window() {
+    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 60, "name": "floating"})).unwrap();
+        app.run("file.new", json!({"width": 80, "height": 60, "name": "docked"})).unwrap();
+        app.sync_views();
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+        assert!(app.ui.windows[0].floating);
+        assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
+        assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, kind);
+        h.state_mut().1 = true;
+        h.run_steps(3);
+        let tabs = h.state().0.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(doc, _)| *doc).collect::<Vec<_>>());
+        assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
+    }
+}

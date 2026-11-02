@@ -603,6 +603,9 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
         Some(2) => FontBaseline::Subscript,
         _ => FontBaseline::Normal,
     };
+    // Vertical type's roman text: 2 rotated along the column, 1 upright (#9470). A run without
+    // its own value takes the style sheet's, which Photoshop writes as 2.
+    s.rotate_roman = g("BaselineDirection").and_then(E::as_i64) == Some(2);
     if let Some(c) = g("FillColor") {
         // Positions matter (alpha, then the channels): a non-finite entry voids the colour.
         let v: Vec<f64> = c.get("Values").and_then(E::as_array).map(|a| a.iter().filter_map(E::as_f64).collect()).unwrap_or_default();

@@ -437,6 +437,25 @@ fn press(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modi
     ctx.run_ui(input, |ui| keys(app, ui.ctx())).textures_delta.clear();
 }
 
+/// With the overlay colour's Color Picker open over the workspace, its keys (tool letters, undo)
+/// belong to the picker, not to the tools under it.
+#[test]
+fn keys_wait_while_the_overlay_colour_picker_is_open() {
+    let mut app = app_with_selection();
+    let ctx = egui::Context::default();
+    open(&mut app).unwrap();
+    press(&mut app, &ctx, Key::R, Modifiers::NONE);
+    assert_eq!(ws(&app).tool, SmTool::RefineEdge);
+    crate::color_picker_ui::request_for_widget(&ctx, egui::Id::unique("overlay-swatch"), "Color Picker (Overlay Color)", [1.0, 0.0, 0.0]);
+    crate::color_picker_ui::widget_tick(&mut app, &ctx);
+    assert!(crate::color_picker_ui::any_open(&app));
+    press(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_eq!(ws(&app).tool, SmTool::RefineEdge, "B went to the picker");
+    app.ui.dialogs.clear();
+    press(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_eq!(ws(&app).tool, SmTool::Brush);
+}
+
 /// Photoshop's keys: W, R, B, L, H, Z pick the tools (Shift+W and Shift+L cycle their slots),
 /// [ and ] size the brush, the view letters, F, J and P the view, Ctrl+Z undoes.
 #[test]
@@ -692,7 +711,9 @@ fn ok_after_a_document_switch_changes_neither_document() {
     ui(&mut app, json!({"stroke": {"points": [[120.0, 50.0], [130.0, 50.0]]}}));
     let before = (fingerprint(&app, 0), fingerprint(&app, 1));
     let switched = call(&mut app, "engine.execute", json!({"command": "document.activate", "params": {"document": 1}}));
-    assert_eq!(app.session.active_index(), Some(1), "{switched}");
+    assert_eq!(switched["ok"], false, "external edits respect the modal gate");
+    assert_eq!(app.session.active_index(), Some(0));
+    assert!(app.session.set_active(1), "simulate a trusted native target change before the next frame");
     let r = call(&mut app, "ui.menu.invoke", json!({"command": "select.selectAndMask", "params": {"ui": {"commit": true}}}));
     assert!(r.get("error").is_some(), "the stale OK is refused: {r}");
     assert_eq!((fingerprint(&app, 0), fingerprint(&app, 1)), before, "neither document changed");
@@ -732,7 +753,9 @@ fn ok_after_a_layer_switch_leaves_the_new_layer_alone() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "layerMask"}));
     let revision = app.session.active().unwrap().revision;
-    call(&mut app, "engine.execute", json!({"command": "layer.select", "params": {"layer": other.0}}));
+    let blocked = call(&mut app, "engine.execute", json!({"command": "layer.select", "params": {"layer": other.0}}));
+    assert_eq!(blocked["ok"], false, "external edits respect the modal gate");
+    app.session.execute("layer.select", json!({"layer":other.0})).unwrap();
     let revision_after_select = app.session.active().unwrap().revision;
     let r = call(&mut app, "ui.menu.invoke", json!({"command": "select.selectAndMask", "params": {"ui": {"commit": true}}}));
     assert!(r.get("error").is_some(), "the stale OK is refused: {r}");
