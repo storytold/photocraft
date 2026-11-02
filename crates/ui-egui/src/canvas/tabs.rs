@@ -15,6 +15,10 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::brush_mode_menu::show(app, ui.ctx());
 }
 
+/// Where each docked document is drawn under Window › Arrange: its index and the cell it gets,
+/// at the border positions the user has dragged them to. `None` with no docked document, or when
+/// the arrangement is the plain single canvas. With more documents than the layout has cells, the
+/// shown run starts at [`PhotocraftApp::arrange_start`] and always includes the active one.
 pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
     let documents = docked_document_indices(app);
     let n = documents.len();
@@ -85,12 +89,9 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(shown) = arranged_cells(app, rect) {
         app.arrange_start = shown.first().map_or(0, |(d, _)| *d);
         let t = crate::theme::Tokens::get(ui.ctx());
-        // A press on a border grip drags the border (`drag_borders`): it activates no document,
-        // and the canvas under it takes no tool input from it either — a grip overlaps the
-        // active document's edge, where a press would otherwise start a stroke (#10101 review).
+        // A press on a border grip drags the border (`drag_borders`); it activates no document.
+        // The grips are laid out after the canvases, so egui gives them the press (#10101).
         let grips: Vec<Rect> = border_grips(app, rect).into_iter().map(|(_, grip)| grip).collect();
-        app.arrange_grip_press =
-            ui.input(|i| (i.pointer.any_pressed() || i.pointer.any_down()) && i.pointer.press_origin().is_some_and(|p| grips.iter().any(|g| g.contains(p))));
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();

@@ -983,3 +983,51 @@ fn full_screen_modes_need_a_document() {
     leave_full_screen_without_document(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
 }
+
+/// #10101 review: the grip overlaps the *active* document's edge too, and a press there must
+/// drag the border without painting. The cells the canvases are actually drawn in follow.
+#[test]
+fn grabbing_the_border_inside_the_active_document_drags_it_without_painting() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "twoUpVertical".into();
+    app.ui.tool = crate::state::Tool::Brush;
+    // The right-hand document is active, and the grab below is inside *its* edge.
+    app.session.set_active(1);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let area = h.state().last_canvas_rect;
+    let n = h.state().session.documents().len();
+    let border = borders("twoUpVertical", area, n, &[])[0].line;
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().map_or(0, |d| d.history.entries().len());
+    let before = steps(&h);
+    // 2 pt into the right-hand (active) document, where its canvas would otherwise take the press.
+    let from = border.center() + egui::vec2(2.0, 0.0);
+    let to = from + egui::vec2(150.0, 0.0);
+    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    ev(&mut h, egui::Event::PointerMoved(from));
+    h.run();
+    ev(&mut h, button(from, true));
+    h.run();
+    for step in 1..=10 {
+        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
+        h.run();
+    }
+    ev(&mut h, button(to, false));
+    h.run_steps(2);
+    assert_eq!(steps(&h), before, "the press dragged the border and painted nothing");
+    // And the cells the documents are drawn in follow the border, not just the stored fractions.
+    let shown = crate::canvas::arranged_cells(h.state(), area).expect("two documents are arranged");
+    assert!((shown[0].1.max.x - to.x).abs() < 2.0, "the left cell ends at the border: {:?}, pointer at {}", shown[0].1, to.x);
+    assert!((shown[1].1.min.x - to.x).abs() < 2.0, "and the right one starts there: {:?}", shown[1].1);
+}

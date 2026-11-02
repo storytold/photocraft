@@ -1792,9 +1792,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // never maps through a camera that is still moving under the pointer.
     let (pointer_here, hover_here) = ctx.input(|i| {
         (
-            // A press that began on an arrangement's border grip belongs to that border, not to
-            // the canvas it overlaps (#10101 review).
-            !app.arrange_grip_press && (i.pointer.any_pressed() || i.pointer.any_down()) && i.pointer.press_origin().is_some_and(|p| rect.contains(p)),
+            (i.pointer.any_pressed() || i.pointer.any_down()) && i.pointer.press_origin().is_some_and(|p| rect.contains(p)),
             i.pointer.hover_pos().is_some_and(|p| rect.contains(p)),
         )
     });

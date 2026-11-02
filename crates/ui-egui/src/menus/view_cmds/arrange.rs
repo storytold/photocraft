@@ -48,6 +48,9 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     wid
 }
 
+/// The Window › Arrange items: a layout (2-up, 4-up, Tiled…), which starts from even cells and
+/// refits every document, or one of the window commands beside them — Consolidate All to Tabs,
+/// New Window, Float in Window, Float All in Windows, Match Zoom and the rest.
 pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Value, String> {
     if LAYOUTS.contains(&k) {
         app.ui.view.arrange = k.to_string();
