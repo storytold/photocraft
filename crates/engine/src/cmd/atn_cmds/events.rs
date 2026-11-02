@@ -2,6 +2,7 @@ const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
 use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
+use super::steps_channels::{match_color_from, match_color_to, merge_spot_from, merge_spot_to, split_from, split_to, trap_from, trap_to};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
     crop_from, crop_to, export_from, export_to, image_size_from, image_size_to, merge_visible_from, merge_visible_to, open_from, open_to, paste_from, paste_to,
@@ -283,9 +284,14 @@ pub(super) const EVENTS: &[Event] = &[
     adjustment_event!("ChnM", "ChnM", "channelMixer", "Channel Mixer"),
     adjustment_event!("GdMp", "GdMp", "gradientMapEvent", "Gradient Map", "image.adjustments.gradientMap"),
     adjustment_event!("SlcC", "SlcC", "selectiveColor", "Selective Color"),
+    Event { code: "", name: "matchColor", label: "Match Color", ids: &["image.adjustments.matchColor"], from: match_color_from, to: match_color_to },
     ev!("Dstt", "desaturate", "Desaturate", "image.adjustments.desaturate", &[]),
     ev!("Eqlz", "equalize", "Equalize", "image.adjustments.equalize", &[]),
     ev!("", "autoColor", "Auto Color", "image.autoColor", &[]),
+    // Channels and Trap (#10609).
+    Event { code: "SplC", name: "splitChannels", label: "Split Channels", ids: &["channel.split"], from: split_from, to: split_to },
+    Event { code: "MSpt", name: "mergeSpotChannel", label: "Merge Spot Channel", ids: &["channel.mergeSpot"], from: merge_spot_from, to: merge_spot_to },
+    Event { code: "Trap", name: "trap", label: "Trap", ids: &["image.trap"], from: trap_from, to: trap_to },
     // Image.
     Event { code: "ImgS", name: "imageSize", label: "Image Size", ids: &["image.imageSize"], from: image_size_from, to: image_size_to },
     Event { code: "CnvS", name: "canvasSize", label: "Canvas Size", ids: &["image.canvasSize"], from: canvas_size_from, to: canvas_size_to },
