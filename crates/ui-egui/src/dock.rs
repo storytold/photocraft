@@ -339,7 +339,7 @@ pub(crate) fn close_tab(app: &mut PhotocraftApp, g: Group, tab: usize, pro: bool
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
-    let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
+    let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed, "toolbarFloating": app.ui.toolbar_floating, "panelPresentation": app.ui.panel_presentation});
     keep_newer(app, &mut layout);
     layout
 }
@@ -411,6 +411,11 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// saved workspace cannot be loaded, retain its payload while showing the native default.
 /// Explicit layout changes replace that payload. Panel widths still carry over separately.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
+    app.ui.panel_presentation = crate::panel_docking::migration::presentation(v);
+    app.ui.toolbar_floating = v
+        .get("toolbarFloating")
+        .and_then(|v| serde_json::from_value::<[f32; 2]>(v.clone()).ok())
+        .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1_000_000.0));
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     (app.ui.docking, app.ui.docking_returns) = crate::panel_docking::load(v).map_or((None, Default::default()), |(w, r)| (Some(w), r));
@@ -418,6 +423,7 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     if app.ui.docking_kept.is_some() {
         app.ui.status = tl!("The saved panel layout could not be restored. It has been preserved; reset the workspace to replace it.").to_string();
     }
+    crate::panel_docking::migration::upgrade_metrics(app);
     // Collapsed custom groups belong to the workspace; the native dock keeps its own flags.
     app.ui.docking_collapsed = match app.ui.docking {
         Some(_) => v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),

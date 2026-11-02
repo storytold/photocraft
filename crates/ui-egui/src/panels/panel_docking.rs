@@ -20,6 +20,9 @@ use crate::PhotocraftApp;
 /// The saved arrangement: layout, hidden panels with their return places, and the lock.
 pub(crate) type Workspace = craft_ui::docking::Workspace<String>;
 
+pub(crate) mod migration;
+pub(crate) const COMPACT_COLUMN_WIDTH: f32 = 42.0;
+
 type Returns = std::collections::BTreeMap<String, Location<String>>;
 
 const PANELS: &[(&str, &str, Group)] = &[
@@ -143,7 +146,9 @@ pub(crate) fn valid_workspace(workspace: &Workspace) -> bool {
 /// Read a saved `docking` workspace and where its floating panels dock back. Anything else,
 /// such as the bare layouts written before workspaces, gives `None`: the native dock's default.
 pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
-    let docking = saved.get("docking").filter(|v| v.get("layout").is_some())?;
+    let Some(docking) = saved.get("docking").filter(|v| v.get("layout").is_some()) else {
+        return migration::migrate(saved).map(|workspace| (workspace, Default::default()));
+    };
     let mut workspace: Workspace = serde_json::from_value(docking.clone()).ok()?;
     workspace.layout = beside_canvas(workspace.layout);
     workspace.saved = workspace.saved.map(beside_canvas);
@@ -157,14 +162,25 @@ pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
 pub(crate) fn retained_payload(saved: &Value) -> Option<Map<String, Value>> {
     let docking = saved.get("docking")?;
     let newer = docking.get("version").and_then(Value::as_u64).is_some_and(|v| v > u64::from(Workspace::VERSION));
-    if docking.get("layout").is_none() && !newer {
+    let legacy = docking.is_object() && ["dockingColumns", "dockingEdges", "dockingStripWidths"].iter().any(|key| saved.get(*key).is_some());
+    if docking.get("layout").is_none() && !newer && !legacy {
         return None;
     }
     Some(
-        ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"]
-            .into_iter()
-            .filter_map(|key| Some((key.to_owned(), saved.get(key)?.clone())))
-            .collect(),
+        [
+            "docking",
+            "dockingReturns",
+            "dockingCollapsed",
+            "panelPresentation",
+            "toolbarFloating",
+            "dockingColumns",
+            "dockingEdges",
+            "dockingStripWidths",
+            "dockingHidden",
+        ]
+        .into_iter()
+        .filter_map(|key| Some((key.to_owned(), saved.get(key)?.clone())))
+        .collect(),
     )
 }
 

@@ -202,6 +202,42 @@ pub struct DocWindow {
     pub position: Option<[f32; 2]>,
 }
 
+/// Application chrome which is not structural docking state. The authoritative
+/// membership, tab order, geometry and hidden return places remain in Workspace.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelPresentation {
+    pub compact: Vec<String>,
+    pub widths: std::collections::BTreeMap<String, f32>,
+    pub heights: std::collections::BTreeMap<String, f32>,
+    pub migrated: bool,
+    pub flyouts: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Normal floating size, preserved while a panel fills a horizontal dock.
+    pub floating_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Visible group sizes within a floating split, separate from detached editor sizes.
+    #[serde(default)]
+    pub stacked_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    pub tools_size: Option<[f32; 2]>,
+    /// Version 1 narrows the old 44 pt default; later explicit 44 pt sizes remain personal.
+    #[serde(default)]
+    pub metrics_revision: u8,
+}
+impl Default for PanelPresentation {
+    fn default() -> Self {
+        Self {
+            compact: Vec::new(),
+            widths: Default::default(),
+            heights: Default::default(),
+            migrated: false,
+            flyouts: Default::default(),
+            floating_sizes: Default::default(),
+            stacked_sizes: Default::default(),
+            tools_size: None,
+            metrics_revision: 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
@@ -432,6 +468,13 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
+    /// Whole Tools palette position while detached.
+    #[serde(default)]
+    pub toolbar_floating: Option<[f32; 2]>,
+    #[serde(default)]
+    pub panel_presentation: PanelPresentation,
+    #[serde(skip)]
+    pub docking_flyout: Option<String>,
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
@@ -597,6 +640,9 @@ impl Default for UiState {
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
+            toolbar_floating: None,
+            panel_presentation: Default::default(),
+            docking_flyout: None,
             color_panel: Default::default(),
             color_panel_synced: None,
             brush_section: 0,
