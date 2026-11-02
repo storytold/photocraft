@@ -217,6 +217,10 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 opt_label(ui, tl!("Size"));
                 widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
             });
+            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
+            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
+            // Hardness stays with Size, so Opacity follows Mode as in Photoshop and the Pro bar (#9784).
+            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             widgets::vline(ui, 22.0);
             if app.ui.tool == Tool::Eraser {
                 crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
@@ -225,9 +229,6 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 let held = app.held_erase;
                 paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held);
             }
-            // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
-            let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
-            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
             ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0));
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
             opt_label(ui, tl!("Smoothing"));
