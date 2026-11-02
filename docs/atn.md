@@ -361,6 +361,18 @@ commands record).
   `artboardBackgroundType` absent with `changeBackground` 1 gives type 1 (white).
 - The artboard takes the group's bounds; `Clr ` is stored on the artboard as given even when the type is 1..3.
 
+**Measured for the mapped events** (2026-11-02, script runs in the reference application):
+
+- **Transform reference point** (`FTcs`, type `QCSt`): `Qcs0` top-left, `Qcs1` top-right, `Qcs2` bottom-right, `Qcs3` bottom-left
+  corner; `Qcs4` top, `Qcs5` right, `Qcs6` bottom, `Qcs7` left edge centre; `Qcsa` the centre. `Qcs8` and unknown values also scale
+  about the centre (not recorded).
+- **Convert to Profile** records `sdwM` = -1 (with `Inte`, `Dthr`, `Fltt`, `rasterizePlaced`).
+- **Plain Edit > Paste** records `AntA` = `Annt.Anno` and `As  ` = class `Pxel`.
+- **Link Layers** (`linkSelectedLayers`) toggles when played: played twice on the same two layers it links, then unlinks them.
+- **Split Channels** splits a document with a single layer, Background or not (a lone layer gives one more document); a document
+  with more than one layer is refused.
+- **Load Actions** with a set whose name is already in the panel adds a second set of that name; nothing is replaced.
+
 ## Measured through dialogs and recordings
 
 Measured on 2026-11-01 in two ways: by running the event with its dialog and pressing OK (the reference
@@ -1537,8 +1549,8 @@ No parameters: the step carries an empty descriptor.
 
 | Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
-| `Scl ` | scale | integer |  | 1 | 1 .. 9999 (measured in the dialog). Without the dialog the value is ignored |
-| `Ofst` | offset | integer |  | 0 | -9999 .. 9999 (measured in the dialog). Without the dialog the value is ignored |
+| `Scl ` | scale | integer |  | 1 | 1 .. 9999 (measured in the dialog); applied also when played without the dialog (scale 2 halves the result) |
+| `Ofst` | offset | integer |  | 0 | -9999 .. 9999 (measured in the dialog); applied also when played without the dialog (offset 50 adds 50) |
 | `Mtrx` | matrix | list |  | none: a step always carries all 25 cells | exactly 25 integers (5 x 5, row by row), each -999 .. 999; a 3 x 3 list makes the application fail |
 
 #### Replace Color
