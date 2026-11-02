@@ -982,6 +982,7 @@ fn streams_png(doc: &Document) -> bool {
 /// when every pixel turns out opaque (that is only known once the last row is written).
 ///
 /// `rows`: rows per band, 0 to size them to the document.
+#[cfg(test)]
 pub(crate) fn export_png_streamed(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt, rows: i32) -> Result<ExportResult, IoError> {
     export_png_streamed_with_renderer(doc, opts, ctl, rows, None)
 }
@@ -1042,6 +1043,7 @@ fn opaque_bottom(doc: &Document) -> bool {
 /// [`export_png_streamed`] with or without `alpha`, in bands of `rows` rows (0: sized to the
 /// document). `None` when a translucent pixel shows up without `alpha`. `progress` is the most
 /// reported so far, by this pass or an earlier one.
+#[cfg(test)]
 fn stream_png(
     doc: &Document,
     opts: &ExportOptions,

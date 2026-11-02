@@ -176,10 +176,10 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
     let mut layer = Layer::new("shadow_layer", LayerContent::Raster(s));
 
     // Drop shadow with blur radius 16 extending downward and upward
-    let mut shadow = photocraft_doc::DropShadow::default();
+    let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
     shadow.distance = 8.0;
-    shadow.blur = 16.0;
-    shadow.opacity = 0.8;
+    shadow.size = 16.0;
+    shadow.common.opacity = 0.8;
     layer.effects.items.push(Effect::DropShadow(shadow));
     doc.layers.push(layer);
 

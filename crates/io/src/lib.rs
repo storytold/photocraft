@@ -656,10 +656,6 @@ const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
 
-fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    export_stages_with_renderer(doc, name_or_ext, opts, ctl, None)
-}
-
 fn export_stages_with_renderer(
     doc: &Document,
     name_or_ext: &str,
