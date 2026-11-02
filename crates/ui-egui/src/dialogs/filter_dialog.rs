@@ -1388,6 +1388,26 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
     s.set_active(0);
 }
 
+/// The same document parameters the preview imports also identify its pixel dependencies.
+/// Keep their revisions separate from command params and slider changes.
+pub(crate) fn preview_source_revisions(session: &photocraft_engine::Session, command: &str, params: &Value) -> Vec<(photocraft_doc::DocId, u64)> {
+    let Some(spec) = photocraft_engine::commands::find(command) else { return Vec::new() };
+    let mut indices: Vec<_> = parse_spec(spec.params).into_iter().filter(|p| p.kind == Kind::Document).filter_map(|p| params.get(&p.key)?.as_u64()).collect();
+    // Smart-filter Displace has its map document one level down, as in add_source_documents.
+    if command == SMART_FILTER_SET_PARAMS
+        && let Some(index) = params.get("params").and_then(|p| p.get("mapDocument")).and_then(Value::as_u64)
+    {
+        indices.push(index);
+    }
+    indices
+        .into_iter()
+        .filter_map(|index| {
+            let st = session.documents().get(usize::try_from(index).ok()?)?;
+            Some((st.doc.id, st.revision))
+        })
+        .collect()
+}
+
 /// Cached preview state on the app.
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
@@ -1408,6 +1428,7 @@ pub struct FilterPreview {
 pub struct FilterPreviewKey {
     pub doc: photocraft_doc::DocId,
     pub revision: u64,
+    pub sources: Vec<(photocraft_doc::DocId, u64)>,
     pub dialog: u64,
     pub active: Option<photocraft_doc::LayerId>,
     pub target: photocraft_engine::channel_cmds::ChannelTarget,
@@ -1417,7 +1438,7 @@ pub struct FilterPreviewKey {
 }
 
 impl FilterPreviewKey {
-    /// Everything except the parameters: same dialog, document, revision, layer, channel target,
+    /// Everything except the parameters: same dialog, document and source revisions, layer, channel target,
     /// command and proxy factor.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
@@ -1428,6 +1449,7 @@ impl FilterPreviewKey {
     pub fn same_target(&self, other: &Self) -> bool {
         self.doc == other.doc
             && self.revision == other.revision
+            && self.sources == other.sources
             && self.dialog == other.dialog
             && self.active == other.active
             && self.target == other.target

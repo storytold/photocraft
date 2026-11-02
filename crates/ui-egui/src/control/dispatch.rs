@@ -1028,6 +1028,12 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         Some(d) => {
             // Reconcile old choices before interpreting a new explicit source index.
             crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
+            if field == "source"
+                && d.fields.get("__command").and_then(Value::as_str) == Some("image.adjustments.matchColor")
+                && d.fields.get("source") != Some(&value)
+            {
+                d.fields.remove("sourceLayer");
+            }
             d.fields.insert(field.to_string(), value);
             ok(Value::Null)
         }

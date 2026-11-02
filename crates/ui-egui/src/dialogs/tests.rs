@@ -11,6 +11,7 @@ fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: id,
         active: st.active_layer,
         target: st.channel_view.target,

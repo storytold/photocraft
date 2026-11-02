@@ -88,6 +88,7 @@ fn key() -> FilterPreviewKey {
     FilterPreviewKey {
         doc: photocraft_doc::DocId(7),
         revision: 11,
+        sources: Vec::new(),
         dialog: 3,
         active: Some(photocraft_doc::LayerId(2)),
         target: Default::default(),
@@ -100,7 +101,8 @@ fn key() -> FilterPreviewKey {
 #[test]
 fn same_target_ignores_parameters_but_nothing_else() {
     // A drag only changes the parameters, and that must not hide the finished frame.
-    let base = key();
+    let mut base = key();
+    base.sources = vec![(photocraft_doc::DocId(9), 1)];
     let mut moved = base.clone();
     moved.params = json!({"radius": 40.0});
     assert!(base.same_target(&moved));
@@ -110,6 +112,9 @@ fn same_target_ignores_parameters_but_nothing_else() {
     for break_it in [
         |k: &mut FilterPreviewKey| k.doc = photocraft_doc::DocId(8),
         |k: &mut FilterPreviewKey| k.revision = 12,
+        |k: &mut FilterPreviewKey| k.sources[0].0 = photocraft_doc::DocId(10),
+        |k: &mut FilterPreviewKey| k.sources[0].1 = 2,
+        |k: &mut FilterPreviewKey| k.sources.clear(),
         |k: &mut FilterPreviewKey| k.dialog = 4,
         |k: &mut FilterPreviewKey| k.active = Some(photocraft_doc::LayerId(5)),
         |k: &mut FilterPreviewKey| k.active = None,
@@ -1888,4 +1893,137 @@ fn replace_color_localized_color_clusters() {
     let px = |x: i32| doc.layers[0].surface().unwrap().read_region(photocraft_geom::Rect::new(x, 5, x + 1, 6));
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
+}
+
+#[test]
+fn match_color_control_source_changes_reset_layer_even_with_copied_ids() {
+    use photocraft_doc::{Color, ColorMode, Layer, SampleType, Size};
+    use photocraft_geom::Rect;
+    let area = Rect::new(0, 0, 8, 8);
+    let mut source = Document::with_background("first", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let bottom = source.layers[0].id;
+    let mut cover = Layer::raster("cover", source.pixel_format());
+    cover.surface_mut().unwrap().fill_rect(area, &[0.9, 0.2, 0.1, 1.0]);
+    source.layers.push(cover);
+    let mut other = source.clone();
+    other.id = Document::new("identity", source.size, source.mode, source.depth).id;
+    other.name = "second".into();
+    other.layers[0].surface_mut().unwrap().fill_rect(area, &[0.1, 0.8, 0.2, 1.0]);
+    for frame in [false, true] {
+        let mut session = photocraft_engine::Session::new();
+        session.add_document(source.clone(), None);
+        session.add_document(other.clone(), None);
+        session.execute("file.new", json!({"width":8,"height":8,"background":"white"})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        app.sync_views();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        for explicit_layer in [false, true] {
+            let id = open(&mut app, "image.adjustments.matchColor").unwrap();
+            for (field, value) in [("source", json!(0)), ("sourceLayer", json!(bottom)), ("source", json!(0))] {
+                assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":field,"value":value}))["ok"], true);
+            }
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["sourceLayer"], json!(bottom), "unchanged Source retains Layer");
+            assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"source","value":1}))["ok"], true);
+            if frame {
+                ctx.run_ui(Default::default(), |ui| crate::dialogs::show(&mut app, ui.ctx())).textures_delta.clear();
+            }
+            assert!(!app.ui.dialog_mut(id).unwrap().fields.contains_key("sourceLayer"), "a different Source returns to Merged");
+            if explicit_layer {
+                assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"sourceLayer","value":bottom}))["ok"], true);
+            }
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            let pixel = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(4, 4);
+            assert_eq!(pixel[1] > pixel[0], explicit_layer, "explicit layer samples green; Merged samples red: {pixel:?}");
+            app.run("edit.undo", json!({})).unwrap();
+        }
+        assert_eq!(*app.session.documents()[0].doc, source);
+        assert_eq!(*app.session.documents()[1].doc, other);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn match_color_preview_refreshes_when_a_source_job_lands() {
+    use photocraft_doc::{Color, ColorMode, SampleType, Size};
+    use photocraft_geom::Rect;
+    let area = Rect::new(0, 0, 8, 8);
+    {
+        let mut source = Document::with_background("reference", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        source.layers[0].surface_mut().unwrap().fill_rect(area, &[0.1, 0.3, 0.9, 1.0]);
+        let mut session = photocraft_engine::Session::new();
+        session.add_document(source, None);
+        // Start before opening the dialog; applying a completed source job is a normal producer.
+        let photocraft_engine::jobs::Started::Job(job) = session
+            .start_job(
+                "test.source",
+                json!({}),
+                "Source pixels",
+                true,
+                |_| Ok(()),
+                move |session, ()| {
+                    session.edit("Source pixels", |doc, active| {
+                        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(area, &[0.9, 0.2, 0.1, 1.0]);
+                        Ok(())
+                    })?;
+                    Ok(Value::Null)
+                },
+            )
+            .unwrap()
+        else {
+            panic!("native source job");
+        };
+        session.execute("file.new", json!({"width":8,"height":8,"background":"white"})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        app.sync_views();
+        app.background_jobs = false;
+        let target = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        let ctx = egui::Context::default();
+        let id = open(&mut app, "image.adjustments.matchColor").unwrap();
+        assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog":id,"field":"source","value":0}))["ok"], true);
+        let preview = |app: &mut PhotocraftApp, blue: bool| {
+            crate::canvas::ensure_filter_preview(app, 1, &ctx).expect("inline preview");
+            let pixel = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layers[0].surface().unwrap().rgba(4, 4);
+            assert_eq!(pixel[2] > pixel[0], blue, "preview follows current source pixels: {pixel:?}");
+            pixel
+        };
+        preview(&mut app, true);
+        let before_key = app.filter_preview.as_ref().unwrap().key.clone();
+        let cached = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().clone();
+        preview(&mut app, true);
+        assert!(std::sync::Arc::ptr_eq(&cached, app.filter_preview.as_ref().unwrap().result.as_ref().unwrap()), "unchanged source reuses cached preview");
+        app.session.wait_job(job).unwrap();
+        assert_eq!(app.session.active_index(), Some(1));
+        assert_eq!(app.session.active().unwrap().revision, revision, "target revision remains unchanged");
+        assert!(std::sync::Arc::ptr_eq(&target, &app.session.active().unwrap().doc));
+        let shown = preview(&mut app, false);
+        let after_key = &app.filter_preview.as_ref().unwrap().key;
+        assert_ne!(&before_key, after_key);
+        assert!(!before_key.same_target(after_key), "old-source worker results must not be republished as slider updates");
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let applied = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(4, 4);
+        assert!(shown.iter().zip(applied).all(|(a, b)| (a - b).abs() <= 1.0 / 255.0), "preview agrees with OK");
+        assert_eq!(app.session.active().unwrap().history.past_len(), 1);
+    }
+}
+
+#[test]
+fn preview_source_revisions_follow_only_referenced_documents() {
+    let mut session = photocraft_engine::Session::new();
+    for _ in 0..2 {
+        session.execute("file.new", json!({"width":1,"height":1})).unwrap();
+    }
+    let source = &session.documents()[0];
+    let want = vec![(source.doc.id, source.revision)];
+    for (command, params) in [
+        ("image.adjustments.matchColor", json!({"source":0})),
+        ("filter.distort.displace", json!({"mapDocument":0})),
+        (SMART_FILTER_SET_PARAMS, json!({"params":{"mapDocument":0}})),
+    ] {
+        assert_eq!(preview_source_revisions(&session, command, &params), want, "{command}");
+    }
+    for params in [json!({}), json!({"source":-1}), json!({"source":99})] {
+        assert!(preview_source_revisions(&session, "image.adjustments.matchColor", &params).is_empty());
+    }
 }
