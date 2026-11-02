@@ -171,7 +171,7 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
     // Iterative, so no document's nesting can make this recurse. The timeline's base and baked
     // trees render when its marker moves there, so they are checked too.
     let mut stack: Vec<&Layer> = Vec::new();
@@ -184,24 +184,28 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
         if let LayerContent::Adjustment(Adjustment::ColorLookup { name: _, size, lut, .. }) = &l.content {
             match lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)) {
                 Some((table, len)) if table.len() >= len => {}
-                Some((table, len)) => out.push(format!(
-                    "layer \"{}\": its Color Lookup table has {} values, but a {size}³ lookup needs {len}; the layer renders without the lookup",
-                    l.name,
-                    table.len()
+                Some((table, len)) => out.push((
+                    l.id,
+                    format!(
+                        "layer \"{}\": its Color Lookup table has {} values, but a {size}³ lookup needs {len}; the layer renders without the lookup",
+                        l.name,
+                        table.len()
+                    ),
                 )),
-                None => {
-                    out.push(format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name))
-                }
+                None => out.push((
+                    l.id,
+                    format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name),
+                )),
             }
         }
         if let Some(children) = l.children() {
             stack.extend(children.iter().rev());
         }
     }
-    // A layer the timeline left unchanged is in several trees: name it once.
+    // A layer the timeline left unchanged is in several trees: name it once. Another layer with
+    // the same name and damage keeps its own warning.
     let mut seen = std::collections::HashSet::new();
-    out.retain(|w| seen.insert(w.clone()));
-    out
+    out.into_iter().filter(|w| seen.insert(w.clone())).map(|(_, w)| w).collect()
 }
 
 /// Result of [`export`].
@@ -790,7 +794,8 @@ mod tests {
     use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
 
-    /// A damaged lookup that only the timeline's base holds is reported once, as is one in both.
+    /// A damaged lookup that only the timeline's base holds is reported, one in both trees once,
+    /// and two layers with the same name and damage each.
     #[test]
     fn open_warnings_cover_the_design_timeline_trees() {
         use photocraft_doc::adjust::Adjustment;
@@ -808,13 +813,13 @@ mod tests {
             l
         };
         let mut base = Document::new("d", Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
-        base.layers = vec![lookup("both"), lookup("old")];
+        base.layers = vec![lookup("both"), lookup("old"), lookup("old")];
         let mut doc = base.clone();
         doc.layers.truncate(1);
         doc.design_timeline = Some(std::sync::Arc::new(DesignTimeline::new(std::sync::Arc::new(base))));
         let w = super::open_warnings(&doc);
-        assert_eq!(w.len(), 2, "{w:?}");
-        assert!(w.iter().any(|w| w.contains("\"old\"")), "{w:?}");
+        assert_eq!(w.len(), 3, "\"both\" once, each \"old\" layer on its own: {w:?}");
+        assert_eq!(w.iter().filter(|w| w.contains("\"old\"")).count(), 2, "{w:?}");
     }
 
     /// Verifies a valid PSD remains editable after import.

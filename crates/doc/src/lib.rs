@@ -72,13 +72,30 @@ thread_local! {
 #[derive(Clone, Debug)]
 pub struct IdScope {
     step: u64,
+    /// Who opened it (0 = nobody in particular): a session inside another's command opens its own.
+    owner: u64,
     next: Arc<AtomicU64>,
 }
 
 impl IdScope {
     /// A scope minting ids for step `step`, from its first counter value.
     pub fn new(step: u64) -> Self {
-        IdScope { step, next: Arc::new(AtomicU64::new(1)) }
+        IdScope { step, owner: 0, next: Arc::new(AtomicU64::new(1)) }
+    }
+
+    /// This scope, opened by `owner`.
+    pub fn owned_by(self, owner: u64) -> Self {
+        IdScope { owner, ..self }
+    }
+
+    /// Who opened this scope.
+    pub fn owner(&self) -> u64 {
+        self.owner
+    }
+
+    /// Install no scope until the guard drops: commands run meanwhile are steps of their own.
+    pub fn detach() -> IdScopeGuard {
+        IdScopeGuard(ID_SCOPE.with(|s| s.replace(None)))
     }
 
     /// The scope installed on this thread, if any.
@@ -101,11 +118,6 @@ impl IdScope {
         IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))))
     }
 
-    /// Install no scope until the guard drops: a scratch session inside a command keeps its own
-    /// steps rather than minting ids in the command's.
-    pub fn detach() -> IdScopeGuard {
-        IdScopeGuard(ID_SCOPE.with(|s| s.replace(None)))
-    }
 
     /// The next id of this step, or `None` once the step or its counter is out of range.
     fn mint(&self) -> Option<u64> {

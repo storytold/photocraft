@@ -102,21 +102,26 @@ fn a_saved_timeline_replays_in_another_session() {
 }
 
 #[test]
-fn playing_an_action_is_one_baked_step_that_replays_without_the_action() {
+fn playing_an_action_records_its_steps_and_replays_a_canvas_change() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
     s.execute("actions.record", json!({"name": "Red"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "R"})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("image.imageSize", json!({"width": 20, "height": 20, "resample": "bicubic"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
-    s.execute("design.start", json!({})).unwrap();
-    s.execute("actions.play", json!({"action": "Red"})).unwrap();
-    let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
-    assert_eq!(tl.steps.iter().map(|st| st.command.as_str()).collect::<Vec<_>>(), ["actions.play"]);
-    assert!(tl.steps[0].baked.is_some(), "the playback's result is kept");
-    // Another session has no "Red" action: the step replays from its stored result.
-    let doc = (*s.active().unwrap().doc).clone();
+    // Played into a fresh document.
+    let mut s2 = s;
+    s2.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s2.execute("design.start", json!({})).unwrap();
+    s2.execute("actions.play", json!({"action": "Red"})).unwrap();
+    assert_eq!(s2.active().unwrap().doc.size.width, 20);
+    let tl = s2.active().unwrap().doc.design_timeline.clone().unwrap();
+    let commands: Vec<&str> = tl.steps.iter().map(|st| st.command.as_str()).collect();
+    assert_eq!(commands, ["layer.new.layer", "select.rect", "edit.fill", "image.imageSize"], "each command the action ran is a step");
+    // Another session has no "Red" action: the steps replay as the commands, size included.
+    let doc = (*s2.active().unwrap().doc).clone();
     let bytes = photocraft_format::save_to_bytes(&doc, &photocraft_format::SaveOptions::default()).unwrap();
     let mut r = Session::new();
     r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
@@ -124,6 +129,7 @@ fn playing_an_action_is_one_baked_step_that_replays_without_the_action() {
     let before = content(&r);
     r.execute("design.replay", json!({})).unwrap();
     let tl = r.active().unwrap().doc.design_timeline.clone().unwrap();
-    assert!(!tl.steps[0].state.is_failure(), "{:?}", tl.steps[0].state);
+    assert!(tl.steps.iter().all(|st| !st.state.is_failure()), "{:?}", tl.steps.iter().map(|st| &st.state).collect::<Vec<_>>());
     assert_eq!(content(&r), before);
+    assert_eq!(r.active().unwrap().doc.size.width, 20);
 }

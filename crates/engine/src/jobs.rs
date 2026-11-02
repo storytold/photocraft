@@ -787,10 +787,10 @@ impl Session {
     /// design-timeline step `id` with `params`, keeping its result: a replay can't make it again.
     /// Inside a command, that command's step records it instead.
     pub fn record_outside<T>(&mut self, id: &str, params: Value, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
-        if photocraft_doc::IdScope::current().is_some() {
+        if self.in_own_scope() {
             return f(self);
         }
-        let scope = photocraft_doc::IdScope::new(self.next_step);
+        let scope = photocraft_doc::IdScope::new(self.next_step).owned_by(self.scope_owner.0);
         let before = crate::timeline::capture(self);
         let timed = !before.is_empty();
         let r = {
@@ -806,13 +806,19 @@ impl Session {
         r
     }
 
+    /// Whether this session's own command (or a replay of one into it) is running: a command it
+    /// runs now is part of that step. Another session's scope doesn't count.
+    pub(crate) fn in_own_scope(&self) -> bool {
+        photocraft_doc::IdScope::current().is_some_and(|sc| sc.owner() == self.scope_owner.0)
+    }
+
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     /// Ids a command mints are keyed to its step; a command run on another's behalf shares it.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
-        if photocraft_doc::IdScope::current().is_some() {
+        if self.in_own_scope() {
             return self.dispatch_scoped(id, params, background);
         }
-        let scope = photocraft_doc::IdScope::new(self.next_step);
+        let scope = photocraft_doc::IdScope::new(self.next_step).owned_by(self.scope_owner.0);
         let before = crate::timeline::capture(self);
         let recorded = (!before.is_empty()).then(|| params.clone());
         let timed = recorded.is_some();

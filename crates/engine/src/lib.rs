@@ -186,6 +186,16 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
 }
 
+/// A number unique to each session ([`Session::scope_owner`]).
+pub(crate) struct ScopeOwner(pub(crate) u64);
+
+impl Default for ScopeOwner {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        ScopeOwner(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -296,6 +306,9 @@ pub struct Session {
     /// The step id the next command mints layer and smart-contents ids under. Session-wide, so
     /// a layer copied into another document never collides with that document's ids.
     pub(crate) next_step: u64,
+    /// This session as the owner of the id scopes it opens: one inside another session's command
+    /// (a batch input, a package) runs its commands as its own steps, not nested in that command.
+    pub(crate) scope_owner: ScopeOwner,
     /// Tool-state commands since the last design-timeline step, replayed ahead of the next one.
     pub(crate) timeline_prelude: Vec<photocraft_doc::design::Prelude>,
 }

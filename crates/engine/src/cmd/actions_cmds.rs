@@ -523,7 +523,12 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
-    let (ran, failed) = run_recorded(s, &action, from);
+    // Each command the action runs is a design-timeline step of its own, as History lists them:
+    // it replays as that command (a canvas change resamples channels and paths too).
+    let (ran, failed) = {
+        let _own_steps = photocraft_doc::IdScope::detach();
+        run_recorded(s, &action, from)
+    };
     finish_playback(s, recording, &action, from);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),

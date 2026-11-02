@@ -31,8 +31,6 @@ const PRELUDE: &[&str] = &["tools.", "tool.", "brush.", "gradient.", "pattern.",
 /// state a replay session doesn't have (the clipboards, the Fade source, the journal), and copying today's
 /// clipboard would paste something other than what was pasted when the step was recorded.
 pub const BAKED: &[&str] = &[
-    // Played again, an action would follow the session's action list, not the recording.
-    "actions.play",
     "select.reselect",
     "edit.paste",
     "edit.pasteSpecial.pasteInPlace",
@@ -92,9 +90,8 @@ pub(crate) fn capture(s: &Session) -> Vec<Before> {
 /// Record command `id` (run under id-scope `step`) into each document of `before` it changed.
 /// `force_bake` keeps the result of an edit that can't run again (a file placed from bytes).
 pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, params: &Value, force_bake: bool) {
-    // Queries and view-only commands (video frame navigation) aren't steps. Playing an action
-    // journals itself, so its spec says otherwise, yet it is one.
-    if before.is_empty() || id.starts_with("design.") || !(id == "actions.play" || crate::commands::find(id).is_some_and(|c| c.journal)) {
+    // Queries and view-only commands (video frame navigation) aren't steps.
+    if before.is_empty() || id.starts_with("design.") || !crate::commands::find(id).is_some_and(|c| c.journal) {
         return;
     }
     let mut recorded = false;
@@ -316,7 +313,7 @@ fn run_step(r: &mut Session, step: &mut DesignStep) {
     let ran = match step.baked.clone().filter(|_| !step.rerecord) {
         Some(baked) => apply_baked(r, step, &baked),
         None => {
-            let _scope = photocraft_doc::IdScope::new(step.step).enter();
+            let _scope = photocraft_doc::IdScope::new(step.step).owned_by(r.scope_owner.0).enter();
             r.execute(&step.command, step.params.clone()).map(|_| ())
         }
     };

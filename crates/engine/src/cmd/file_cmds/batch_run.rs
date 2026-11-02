@@ -189,8 +189,6 @@ fn process_outputs<'a>(
     let mut written = OutputClaims::default();
     for (path, out) in outputs {
         let r = (|| -> Result<()> {
-            // The input's own design-timeline steps and ids, not this command's.
-            let _detached = photocraft_doc::IdScope::detach();
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
