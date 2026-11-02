@@ -277,8 +277,8 @@
 	Delete Layer…	Ta bort lager…
 
 # Type
-	Font	Teckensnitt
-	Font Preview Size	Storlek på förhandsgranskning av teckensnitt
+	Font	Typsnitt
+	Font Preview Size	Storlek på typsnittsförhandsgranskning
 	Orientation	Orientering
 	Horizontal	Vågrät
 	Vertical	Lodrät
@@ -507,7 +507,7 @@
 	Match Rotation	Matcha rotation
 	Match All	Matcha alla
 	New Window for Document	Nytt fönster för dokument
-	Workspace	Arbetsyta
+	Workspace	Arbetslayout
 	Extensions	Tillägg
 	Panels	Paneler
 	Actions	Åtgärder
@@ -683,7 +683,7 @@
 	Transparency & Gamut…	Genomskinlighet och färgomfång…
 	Units & Rulers…	Enheter och linjaler…
 	Guides, Grid & Slices…	Stödlinjer, rutnät och skivor…
-	Plug-ins…	Plugin-program…
+	Plug-ins…	Plugins…
 	Technology Previews	Teknikförhandsgranskningar
 	Scratch Disks…	Arbetsdiskar…
 	Export Preferences…	Exportinställningar…
@@ -1182,7 +1182,7 @@
 # Glyphs panel
 	Glyph	Glyf
 	Select a type layer or click into text to insert glyphs	Markera ett textlager eller klicka i texten för att infoga glyfer
-	Entire Font	Hela teckensnittet
+	Entire Font	Hela typsnittet
 	Alternates for Current Selection	Alternativ för aktuell markering
 	Recently Used	Senast använda
 	Digits	Siffror
@@ -1500,21 +1500,21 @@
 	Pro Light Theme	Pro ljust tema
 
 # Workspaces
-	Workspace…	Arbetsyta…
+	Workspace…	Arbetslayout…
 	Essentials	Grundläggande
-	New Workspace…	Ny arbetsyta…
-	Delete Workspace…	Ta bort arbetsyta…
-	Reset Workspace	Återställ arbetsyta
+	New Workspace…	Ny arbetslayout…
+	Delete Workspace…	Radera arbetslayout…
+	Reset Workspace	Återställ arbetslayout
 	Reset Tool	Återställ verktyg
 	Reset All Tools	Återställ alla verktyg
 	Reset all tools to their default settings?	Vill du återställa alla verktyg till standardinställningarna?
-	Lock Workspace	Lås arbetsyta
+	Lock Workspace	Lås arbetslayout
 	Photography	Fotografi
 	Graphic and web	Grafik och webb
 	Painting	Målning
 	Motion	Rörelse
 	Minimalistic	Minimalistisk
-	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	Panelernas placering sparas i arbetsytan. Kortkommandon, menyer och verktygsfält är valfria.
+	Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional.	Panelernas placering sparas i arbetslayouten. Kortkommandon, menyer och verktygsfält är valfria.
 	Keyboard Shortcuts	Kortkommandon
 	Keyboard Shortcuts and Menus	Kortkommandon och menyer
 	Menus	Menyer
@@ -1610,7 +1610,7 @@
 	Create new count group	Skapa ny räknegrupp
 	Search commands, tools and panels…	Sök kommandon, verktyg och paneler…
 	Search Brushes	Sök penslar
-	Search fonts	Sök teckensnitt
+	Search fonts	Sök typsnitt
 	No matching commands	Inga matchande kommandon
 	No document	Inget dokument
 	Pixel Layer	Pixellager
@@ -1852,7 +1852,7 @@
 	Pass Through	Genomsläpp
 	Dissolve	Upplös
 	Darken	Mörkare
-	Color Burn	Färgbränning
+	Color Burn	Färgefterbelysning
 	Linear Burn	Linjär efterbelysning
 	Darker Color	Mörkare färg
 	Lighten	Ljusare
@@ -2005,7 +2005,7 @@
 	Pixel Grid	Pixelrutnät
 	Pixelate	Pixla
 	Place Scale Marker…	Placera skalmarkör…
-	Plug-ins	Plugin-program
+	Plug-ins	Plugins
 	Print One Copy	Skriv ut en kopia
 	Print…	Skriv ut…
 	Range	Intervall
@@ -2013,8 +2013,8 @@
 	Relink to File…	Länka om till fil…
 	Relight…	Ändra belysning…
 	Render	Rendera
-	Replace All Missing Fonts	Ersätt alla saknade teckensnitt
-	Resolve Missing Fonts…	Lös saknade teckensnitt…
+	Replace All Missing Fonts	Ersätt alla saknade typsnitt
+	Resolve Missing Fonts…	Lös saknade typsnitt…
 	Reveal Selection	Visa markering
 	Right Edges	Högerkanter
 	Selection Edges	Markeringskanter
@@ -2371,7 +2371,7 @@
 	File Handling	Filhantering
 	File path	Filsökväg
 	Fill new type layers with placeholder	Fyll nya textlager med platshållartext
-	Font preview	Förhandsgranskning av teckensnitt
+	Font preview	Förhandsgranskning av typsnitt
 	Full size tip	Spets i full storlek
 	GPU backend	GPU-backend
 	Linux display server	Linux-visningsserver
@@ -2441,9 +2441,9 @@
 	Recent file count	Antal senaste filer
 	LUT folder	LUT-mapp
 	Recent files	Senaste filer
-	Recent fonts	Senaste teckensnitt
+	Recent fonts	Senaste typsnitt
 	Recover on launch	Återställ vid start
-	Remember workspace changes	Kom ihåg ändringar i arbetsytan
+	Remember workspace changes	Kom ihåg ändringar i arbetslayouten
 	Resize image during place	Ändra bildstorlek vid placering
 	Right click with painting tools	Högerklick med målarverktyg
 	Rotate view with trackpad	Rotera vyn med styrplattan
@@ -2457,7 +2457,7 @@
 	Show channels in color	Visa kanaler i färg
 	Show crosshair in brush tip	Visa hårkors i penselspetsen
 	Show extension panels	Visa tilläggspaneler
-	Show font names in english	Visa teckensnittsnamn på engelska
+	Show font names in english	Visa typsnittsnamn på engelska
 	Show menu colors	Visa menyfärger
 	Show only crosshair while painting	Visa bara hårkors vid målning
 	Show slice numbers	Visa skivnummer
@@ -2736,7 +2736,7 @@ cameraRaw	Roughness	Grovhet
 	Unavailable in this color mode	Inte tillgängligt i det här färgläget
 	Selection Preview:	Förhandsgranskning av markering:
 	Black Matte	Svart kantfärg
-	White Matte	Vit mattering
+	White Matte	Vit kantfärg
 	Quick Mask	Snabbmask
 
 # Layer colour labels.
@@ -2853,7 +2853,7 @@ fontWeight	Italic	Kursiv
 	Glow	Glöd
 	Negation	Negation
 	XOR	XOR
-	Color Burn (Paint.NET)	Färgbränning (Paint.NET)
+	Color Burn (Paint.NET)	Färgefterbelysning (Paint.NET)
 	Color Dodge (Paint.NET)	Färgskuggning (Paint.NET)
 	Stroke Options	Linjealternativ
 	Solid	Heldragen
@@ -3059,7 +3059,7 @@ cameraData	Lens	Objektiv
 	The document or Smart Filter changed. Reopen its dialog.	Dokumentet eller det smarta filtret har ändrats. Öppna dialogrutan igen.
 	Opacity must be between 0% and 100%.	Opaciteten måste vara mellan 0 % och 100 %.
 	Dissolve is approximated: it blends without Photoshop's dither.	Upplös är en approximation: den blandar utan Photoshops dithering.
-	Loading fonts…	Läser in teckensnitt…
+	Loading fonts…	Läser in typsnitt…
 	Response curve	Responskurva
 	Tool	Verktyg
 	Simulate Pressure	Simulera tryck
@@ -3240,33 +3240,33 @@ curves	Smooth	Jämna ut
 	Gray Value (Median)	Gråvärde (median)
 	Integrated Density	Integrerad densitet
 	Length	Längd
-	Show Favorite Fonts	Visa favoritteckensnitt
-	No favorite fonts yet: click the star beside a font to add it.	Inga favoritteckensnitt än: klicka på stjärnan bredvid ett teckensnitt för att lägga till det.
-	Favorite fonts	Favoritteckensnitt
+	Show Favorite Fonts	Visa favorittypsnitt
+	No favorite fonts yet: click the star beside a font to add it.	Inga favorittypsnitt än: klicka på stjärnan bredvid ett typsnitt för att lägga till det.
+	Favorite fonts	Favorittypsnitt
 	Add to Favorites	Lägg till i favoriter
 	Remove from Favorites	Ta bort från favoriter
-	Show All Fonts	Visa alla teckensnitt
+	Show All Fonts	Visa alla typsnitt
 	All Classes	Alla klasser
 	Blackletter	Fraktur
 	Decorative	Dekorativ
-	Font preview:	Förhandsgranskning av teckensnitt:
+	Font preview:	Förhandsgranskning av typsnitt:
 	Handwritten	Handskrift
-	Hide Font Classes	Dölj teckensnittsklasser
+	Hide Font Classes	Dölj typsnittsklasser
 	Hide Styles	Dölj stilar
 	Monospace	Fast teckenbredd
-	No fonts match these filters.	Inga teckensnitt matchar de här filtren.
-	No similar fonts: the current font doesn't say what it looks like.	Inga liknande teckensnitt: det aktuella teckensnittet beskriver inte hur det ser ut.
-	OpenType font	OpenType-teckensnitt
+	No fonts match these filters.	Inga typsnitt matchar de här filtren.
+	No similar fonts: the current font doesn't say what it looks like.	Inga liknande typsnitt: det aktuella typsnittet beskriver inte hur det ser ut.
+	OpenType font	OpenType-typsnitt
 	Sans Serif	Sans serif
 	Script	Skrivstil
 	Serif	Serif
-	Show Font Classes	Visa teckensnittsklasser
-	Show Similar Fonts	Visa liknande teckensnitt
+	Show Font Classes	Visa typsnittsklasser
+	Show Similar Fonts	Visa liknande typsnitt
 	Show Styles	Visa stilar
-	Show Variable Fonts	Visa variabla teckensnitt
+	Show Variable Fonts	Visa variabla typsnitt
 	Slab Serif	Slab serif
-	TrueType font	TrueType-teckensnitt
-	Variable font	Variabelt teckensnitt
+	TrueType font	TrueType-typsnitt
+	Variable font	Variabelt typsnitt
 # Bevel & Emboss shading controls.
 	Highlight Mode	Högdagerläge
 	Highlight Color	Högdagerfärg
@@ -3636,7 +3636,7 @@ curves	Smooth	Jämna ut
 	Degrees	Grader
 	Delete Channel	Ta bort kanal
 	Delete Mask	Ta bort mask
-	Delete Workspace	Ta bort arbetsyta
+	Delete Workspace	Radera arbetslayout
 	Delete brush	Ta bort pensel
 	Delete path	Ta bort bana
 	Delete vector mask	Ta bort vektormask
@@ -3929,7 +3929,7 @@ curves	Smooth	Jämna ut
 	Infinite	Oändlig
 	Information	Information
 	Initial Direction	Startriktning
-	Ink Outlines	Bläckkonturer
+	Ink Outlines	Tryckfärgskonturer
 	Inner Bevel	Inre fasning
 	Input	Indata
 	Input Levels	Ingångsnivåer
@@ -4085,7 +4085,7 @@ curves	Smooth	Jämna ut
 	New Spot Channel…	Ny dekorfärgskanal…
 	New Video Layer from File	Nytt videolager från fil
 	New Window	Nytt fönster
-	New Workspace	Ny arbetsyta
+	New Workspace	Ny arbetslayout
 	New document	Nytt dokument
 	New document…	Nytt dokument…
 	New document…     ⌘N	Nytt dokument…     ⌘N
@@ -4264,7 +4264,7 @@ curves	Smooth	Jämna ut
 	Reset Alignment	Återställ justering
 	Reset All	Återställ alla
 	Reset Preferences	Återställ inställningar
-	Resolve Missing Fonts	Lös saknade teckensnitt
+	Resolve Missing Fonts	Lös saknade typsnitt
 	Restart	Starta om
 	Restart Required	Omstart krävs
 	Resume	Återuppta
@@ -4574,7 +4574,7 @@ curves	Smooth	Jämna ut
 	Working Gray	Arbetsgrå
 	Working Rgb	Arbets-RGB
 	Working-cmyk	Arbets-CMYK
-	Workspaces	Arbetsytor
+	Workspaces	Arbetslayouter
 	Wrap	Radbryt
 	Yellows	Gula
 	ZigZag	Sicksack
@@ -4767,3 +4767,33 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+	Answer the open import question first, then import this file again.	Besvara den öppna importfrågan först och importera sedan filen igen.
+	Arrowhead options	Alternativ för pilspetsar
+	Arrowheads	Pilspetsar
+	Concavity	Konkavitet
+	Drag to move the selected path	Dra för att flytta den markerade banan
+	End	Slut
+	Import as New Group	Importera som ny grupp
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	Importera som ny grupp behåller ”{group}” och lägger till filen som en ny grupp bredvid den.
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ogiltigt numeriskt värde. Ett heltal mellan {min} % och {max} % krävs. Föregående värde infogades.
+	No import is waiting. Import the file again.	Ingen import väntar. Importera filen igen.
+	No matching fonts	Inga matchande typsnitt
+	Recently Used Colors	Senast använda färger
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Ersätt raderar först allt i ”{group}”, även förinställningar som du har redigerat eller flyttat dit. Det går inte att ångra.
+	Select Layer Under Cursor	Markera lager under pekaren
+	Set as default	Ange som standard
+	Shapes can't use patterns yet	Former kan inte använda mönster än
+	Start	Start
+	Stop Color	Stoppfärg
+	Use these settings for new arrows	Använd de här inställningarna för nya pilar
+	{message} into “{group}”	{message} i ”{group}”
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS-innehåll redigeras som SVG. När du sparar ersätts den inbäddade källan; formatspecifika funktioner kan ändras.
+smartSvg	Choose executable…	Välj körbar fil…
+smartSvg	Choose the application used to edit this SVG:	Välj programmet som ska användas för att redigera den här SVG-filen:
+smartSvg	Edit SVG Smart Object	Redigera smart SVG-objekt
+smartSvg	Other application	Annat program
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (inbyggd redigerare)
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Spara till den öppnade SVG-filen. Varje sparad ändring blir ett ångringssteg i PhotoCraft.
+smartSvg	Stop syncing this Smart Object	Sluta synkronisera det här smarta objektet
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-redigeraren har öppnats. Spara SVG-filen för att uppdatera det här smarta objektet.
+smartSvg	Updates wait while another document or an editing dialog is active.	Uppdateringar väntar medan ett annat dokument eller en redigeringsdialogruta är aktiv.
