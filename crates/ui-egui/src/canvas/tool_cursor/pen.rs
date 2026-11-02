@@ -2,9 +2,8 @@
 //!
 //! Standard Pen tool cursors must move with the hardware pointer without waiting for UI rendering
 //! and presentation latency. This module rasterizes the standard Pen icons (Pen, Freeform Pen,
-//! Curvature Pen, Add Anchor Point, Delete Anchor Point, and Convert Point) using continuous
-//! subpixel resampling and hotspot quantization compensation to preserve exact fractional-scale
-//! geometry matching the painted fallback.
+//! Curvature Pen, Add Anchor Point, Delete Anchor Point, and Convert Point) into crisp OS cursor
+//! bitmaps matching the painted fallback without resampling blur.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,36 +84,7 @@ const LOGICAL_SIZE: f32 = 22.0;
 const OUTLINE_TINT_ALPHA: f32 = 200.0 / 255.0;
 
 /// The eight cardinal and diagonal offsets in logical points (`icons::cursor`).
-const OUTLINE_OFFSETS: [(f32, f32); 8] = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
-
-fn sample_alpha(pixels: &[egui::Color32], w: usize, h: usize, x: f32, y: f32) -> f32 {
-    if x <= -1.0 || y <= -1.0 || x >= w as f32 || y >= h as f32 {
-        return 0.0;
-    }
-    let x0 = x.floor() as i32;
-    let y0 = y.floor() as i32;
-    let x1 = x0 + 1;
-    let y1 = y0 + 1;
-    let fx = x - x.floor();
-    let fy = y - y.floor();
-
-    let get = |ix: i32, iy: i32| -> f32 {
-        if ix >= 0 && (ix as usize) < w && iy >= 0 && (iy as usize) < h {
-            pixels.get((iy as usize) * w + (ix as usize)).map_or(0.0, |p| f32::from(p.a()) / 255.0)
-        } else {
-            0.0
-        }
-    };
-
-    let p00 = get(x0, y0);
-    let p10 = get(x1, y0);
-    let p01 = get(x0, y1);
-    let p11 = get(x1, y1);
-
-    let top = p00 * (1.0 - fx) + p10 * fx;
-    let bottom = p01 * (1.0 - fx) + p11 * fx;
-    top * (1.0 - fy) + bottom * fy
-}
+const OUTLINE_OFFSETS: [(i32, i32); 8] = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)];
 
 /// Rasterize a native cursor bitmap for `variant` at `scale` bitmap pixels per point.
 pub fn rasterize(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
@@ -133,15 +103,14 @@ pub fn rasterize(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
         return None;
     }
 
-    let offset_px = scale;
-    let pad = (offset_px + 2.0).ceil() as usize;
+    let offset = (1.0 * scale).round().max(1.0) as i32;
+    let pad = (scale + 2.0).ceil() as usize;
     let width = icon_w.checked_add(pad.checked_mul(2)?)?;
     let height = icon_h.checked_add(pad.checked_mul(2)?)?;
     if width > usize::from(super::MAX_SIDE) || height > usize::from(super::MAX_SIDE) {
         return None;
     }
 
-    // Hotspot computation with OS integer quantization compensation
     let hot_box = variant.hotspot_in_box();
     let hot_pt_x = (hot_box.x / 24.0) * LOGICAL_SIZE;
     let hot_pt_y = (hot_box.y / 24.0) * LOGICAL_SIZE;
@@ -152,43 +121,60 @@ pub fn rasterize(variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
     let hx = ideal_hx.round() as u16;
     let hy = ideal_hy.round() as u16;
 
-    // Subpixel shift to place the continuous nib exactly at the integer OS hotspot pixel
-    let quant_dx = (hx as f32) - ideal_hx;
-    let quant_dy = (hy as f32) - ideal_hy;
-    let origin_x = (pad as f32) + quant_dx;
-    let origin_y = (pad as f32) + quant_dy;
-
     let total_pixels = width.checked_mul(height)?;
+    let mut outline_alpha = vec![0.0f32; total_pixels];
+
+    // 1. Accumulate the 8-offset dark outline using over-blending (black over black).
+    for (dx, dy) in OUTLINE_OFFSETS {
+        let ox = (pad as i32).checked_add(dx.checked_mul(offset)?)?;
+        let oy = (pad as i32).checked_add(dy.checked_mul(offset)?)?;
+        if ox < 0 || oy < 0 {
+            continue;
+        }
+        let (ox, oy) = (ox as usize, oy as usize);
+
+        for y in 0..icon_h {
+            let src_row = y.checked_mul(icon_w)?;
+            let dst_row = (oy.checked_add(y)?).checked_mul(width)?;
+            for x in 0..icon_w {
+                let Some(svg_pixel) = icon_image.pixels.get(src_row.checked_add(x)?) else {
+                    continue;
+                };
+                let a_svg = f32::from(svg_pixel.a()) / 255.0;
+                if a_svg <= 0.0 {
+                    continue;
+                }
+                let a_layer = a_svg * OUTLINE_TINT_ALPHA;
+                let dst_idx = dst_row.checked_add(ox)?.checked_add(x)?;
+                if let Some(dst) = outline_alpha.get_mut(dst_idx) {
+                    *dst = a_layer + *dst * (1.0 - a_layer);
+                }
+            }
+        }
+    }
+
+    // 2. Composite the white foreground over the dark outline into straight RGBA (winit form).
     let byte_count = total_pixels.checked_mul(4)?;
     let mut rgba = vec![0u8; byte_count];
 
     for y in 0..height {
-        let sy = (y as f32) - origin_y;
         let row_offset = y.checked_mul(width)?;
         for x in 0..width {
-            let sx = (x as f32) - origin_x;
+            let dst_idx = row_offset.checked_add(x)?;
+            let a_dark = outline_alpha.get(dst_idx).copied().unwrap_or(0.0);
+            let a_fg = if x >= pad && x < pad.checked_add(icon_w)? && y >= pad && y < pad.checked_add(icon_h)? {
+                let fx = x - pad;
+                let fy = y - pad;
+                let src_idx = fy.checked_mul(icon_w)?.checked_add(fx)?;
+                icon_image.pixels.get(src_idx).map(|p| f32::from(p.a()) / 255.0).unwrap_or(0.0)
+            } else {
+                0.0
+            };
 
-            // 1. Accumulate 8-offset dark outline using continuous subpixel resampling
-            let mut a_dark = 0.0f32;
-            for (odx, ody) in OUTLINE_OFFSETS {
-                let sample_x = sx - odx * offset_px;
-                let sample_y = sy - ody * offset_px;
-                let a_svg = sample_alpha(&icon_image.pixels, icon_w, icon_h, sample_x, sample_y);
-                if a_svg > 0.0 {
-                    let a_layer = a_svg * OUTLINE_TINT_ALPHA;
-                    a_dark = a_layer + a_dark * (1.0 - a_layer);
-                }
-            }
-
-            // 2. Sample white foreground
-            let a_fg = sample_alpha(&icon_image.pixels, icon_w, icon_h, sx, sy);
-
-            // 3. Composite white foreground over dark outline into straight RGBA
             let a_out = a_fg + a_dark * (1.0 - a_fg);
             if a_out > 0.0 {
                 let white = ((a_fg / a_out) * 255.0).round().clamp(0.0, 255.0) as u8;
                 let alpha = (a_out * 255.0).round().clamp(0.0, 255.0) as u8;
-                let dst_idx = row_offset.checked_add(x)?;
                 let px = dst_idx.checked_mul(4)?;
                 if let Some(dest) = rgba.get_mut(px..px.checked_add(4)?) {
                     dest[0] = white;

@@ -778,3 +778,32 @@ fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
         }
     }
 }
+
+#[test]
+fn synthetic_straight_rgba_compositing_math_proves_equivalence() {
+    // Mathematical equivalence of single-pass straight RGBA hardware blending
+    // vs multi-pass painter fallback (dark outline + white foreground) over any background:
+    // Hardware blend: C_hw = C_straight * a_out + C_bg * (1 - a_out)
+    // Multi-pass blend: C_painter = 255 * a_fg + (C_bg * (1 - a_dark)) * (1 - a_fg)
+    // Equivalence: C_straight * a_out = (a_fg / a_out) * a_out = a_fg.
+    // (1 - a_out) = 1 - (a_fg + a_dark * (1 - a_fg)) = (1 - a_fg) * (1 - a_dark).
+    // Therefore C_hw == C_painter for all C_bg, within integer rounding tolerance (<= 1 LSB).
+    for &c_bg in &[0u8, 15, 64, 128, 200, 240, 255] {
+        for fg_step in 0..=20 {
+            let a_fg = fg_step as f32 / 20.0;
+            for dark_step in 0..=20 {
+                let a_dark = dark_step as f32 / 20.0;
+                let a_out = a_fg + a_dark * (1.0 - a_fg);
+                if a_out <= 0.0 {
+                    continue;
+                }
+                let white = ((a_fg / a_out) * 255.0).round().clamp(0.0, 255.0);
+                let alpha = (a_out * 255.0).round().clamp(0.0, 255.0);
+
+                let c_hw = ((white * alpha + (c_bg as f32) * (255.0 - alpha) + 127.5) / 255.0).floor() as i32;
+                let c_painter = ((255.0 * a_fg + ((c_bg as f32) * (1.0 - a_dark)) * (1.0 - a_fg)).round()) as i32;
+                assert!((c_hw - c_painter).abs() <= 1, "background {c_bg}, a_fg {a_fg}, a_dark {a_dark}: hw {c_hw} vs painter {c_painter}");
+            }
+        }
+    }
+}
