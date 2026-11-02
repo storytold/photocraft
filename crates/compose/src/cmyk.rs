@@ -588,6 +588,12 @@ fn render_tile(doc: &Document, rect: Rect, cx: &Ctx, space: Option<&Arc<CmykSpac
     for p in &mut b.px {
         if p[4].is_finite() {
             p[4] = p[4].clamp(0.0, 1.0);
+            // An opacity past 1 also pushes inks out of 0..=1 through a blend mode while the
+            // alpha stays finite (Multiply at ink 0.2 over paper renders 1.8), and the F32
+            // exporter writes inks raw. Bound them with the alpha.
+            for ink in &mut p[..4] {
+                *ink = if ink.is_finite() { ink.clamp(0.0, 1.0) } else { 0.0 };
+            }
         } else {
             *p = [0.0; 5];
         }

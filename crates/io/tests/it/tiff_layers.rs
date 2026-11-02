@@ -336,6 +336,34 @@ fn native_cmyk_composite_clears_non_finite_alpha() {
     assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "inks and alpha must be finite and in 0..=1");
 }
 
+/// An opacity past 1 also pushes *inks* out of the buffer's promised `0..=1` range, through a
+/// blend mode, while the alpha stays finite: Multiply at ink 0.2 over paper renders 1.8, Screen
+/// over 0.5 renders -0.25. The F32 exporter writes those raw, so the tile bounds them.
+#[test]
+fn native_cmyk_composite_bounds_inks() {
+    use photocraft_color::BlendMode;
+    for (blend, base_ink, top_ink) in [(BlendMode::Multiply, 0.2f32, 1.0f32), (BlendMode::Screen, 0.5, 0.5)] {
+        let mut d = Document::new("t", photocraft_geom::Size::new(2, 2), ColorMode::Cmyk, SampleType::F32);
+        let fmt = d.pixel_format();
+        let mut base = raster("Base", fmt, photocraft_geom::Rect::new(0, 0, 2, 2), 0, false);
+        if let LayerContent::Raster(s) = &mut base.content {
+            let px: Vec<f32> = (0..4).flat_map(|_| [base_ink, base_ink, base_ink, base_ink, 1.0]).collect();
+            s.write_region(photocraft_geom::Rect::new(0, 0, 2, 2), &px);
+        }
+        d.layers.push(base);
+        let mut top = raster("Top", fmt, photocraft_geom::Rect::new(0, 0, 2, 2), 0, false);
+        if let LayerContent::Raster(s) = &mut top.content {
+            let px: Vec<f32> = (0..4).flat_map(|_| [top_ink, top_ink, top_ink, top_ink, 1.0]).collect();
+            s.write_region(photocraft_geom::Rect::new(0, 0, 2, 2), &px);
+        }
+        top.blend = blend;
+        top.opacity = 2.0;
+        d.layers.push(top);
+        let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+        assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{blend:?}: inks and alpha must be finite and in 0..=1");
+    }
+}
+
 /// Photoshop (27.11) saves a layered TIFF with Save Transparency as a composite with a
 /// transparency sample, a positive layer count and an `MTrn` block first in the layer data
 /// (the specification's key is `Mtrn`; `nrTM` in an `II` file). That sample is the merged
