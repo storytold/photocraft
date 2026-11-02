@@ -4805,6 +4805,7 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Generative Fill will send this to {destination}:	Generatiivinen täyttö lähettää tämän kohteeseen {destination}:
 	Generative Fill	Generatiivinen täyttö
 	Generative Fill…	Generatiivinen täyttö…
+	Always show the Generative Fill… button in the options bar	Näytä Generatiivinen täyttö… -painike aina asetuspalkissa
 	Generative Fills in progress	Käynnissä olevat generatiiviset täytöt
 	Go to area	Siirry alueeseen
 	It runs on this computer: nothing leaves it.	Se toimii tällä tietokoneella: mitään ei lähde siltä.

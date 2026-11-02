@@ -4059,6 +4059,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Tô tạo sinh sẽ gửi những thứ này tới {destination}:
 	Generative Fill	Tô tạo sinh
 	Generative Fill…	Tô tạo sinh…
+	Always show the Generative Fill… button in the options bar	Luôn hiện nút Tô tạo sinh… trên thanh tuỳ chọn
 	Generative Fills in progress	Các lần tô tạo sinh đang chạy
 	Go to area	Đến vùng
 	It runs on this computer: nothing leaves it.	Chạy trên máy này: không có gì rời khỏi máy.

@@ -4587,6 +4587,7 @@ shape	Appearance	Apparence
 	Generative Fill will send this to {destination}:	Le remplissage génératif enverra ceci à {destination} :
 	Generative Fill	Remplissage génératif
 	Generative Fill…	Remplissage génératif…
+	Always show the Generative Fill… button in the options bar	Toujours afficher le bouton Remplissage génératif… dans la barre d'options
 	Generative Fills in progress	Remplissages génératifs en cours
 	Go to area	Aller à la zone
 	It runs on this computer: nothing leaves it.	Il s’exécute sur cet ordinateur : rien n’en sort.

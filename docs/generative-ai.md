@@ -9,7 +9,9 @@ windows. This page follows the shape the maintainers asked for in issue #41 and 
 
 Every Craft app works with no AI set up. Until a model is chosen for the catalogue's
 `generative-fill` tool, Generative Fill is greyed out, the options bar has no button for it, and
-nothing is contacted.
+nothing is contacted. The selection tools' options bar shows a Generative Fill… button once it can
+run; Preferences › Integrations › Always show the Generative Fill… button in the options bar
+(off by default) shows it before that too, and then it opens the setup.
 
 ## Setting it up
 

@@ -4297,6 +4297,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Generativní výplň odešle na {destination} toto:
 	Generative Fill	Generativní výplň
 	Generative Fill…	Generativní výplň…
+	Always show the Generative Fill… button in the options bar	Vždy zobrazovat tlačítko Generativní výplň… na panelu možností
 	Generative Fills in progress	Probíhající generativní výplně
 	Go to area	Přejít na oblast
 	It runs on this computer: nothing leaves it.	Běží na tomto počítači: nic z něj neodchází.

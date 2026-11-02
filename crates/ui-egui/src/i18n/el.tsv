@@ -4251,6 +4251,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Το παραγωγικό γέμισμα θα στείλει τα εξής στο {destination}:
 	Generative Fill	Παραγωγικό γέμισμα
 	Generative Fill…	Παραγωγικό γέμισμα…
+	Always show the Generative Fill… button in the options bar	Να εμφανίζεται πάντα το κουμπί «Παραγωγικό γέμισμα…» στη γραμμή επιλογών
 	Generative Fills in progress	Παραγωγικά γεμίσματα σε εξέλιξη
 	Go to area	Μετάβαση στην περιοχή
 	It runs on this computer: nothing leaves it.	Εκτελείται σε αυτόν τον υπολογιστή: τίποτα δεν φεύγει από αυτόν.

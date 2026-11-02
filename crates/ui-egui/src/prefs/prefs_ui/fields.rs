@@ -70,6 +70,10 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "generatorEnabled" {
         return "Enable Generator".into();
     }
+    // Integrations: the opt-in for the options bar's Generative Fill button (genai_ui).
+    if key == "alwaysShowGenerativeFillButton" {
+        return "Always show the Generative Fill… button in the options bar".into();
+    }
     if key == "lowLatencyDrawing" {
         return "Low-Latency Drawing (vsync off, applies at next launch)".into();
     }
@@ -378,6 +382,8 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
         || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
+        // The web build has no Generative AI, so no button to show.
+        || (cfg!(target_arch = "wasm32") && path == "integrations.alwaysShowGenerativeFillButton")
         || (section == "export" && !export_field_visible(obj, k))
         || (section == "tools" && !tools_field_visible(obj, k));
     (query.is_empty() || preference_matches(section, k, query))

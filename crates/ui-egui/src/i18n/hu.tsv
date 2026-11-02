@@ -4471,6 +4471,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	A generatív kitöltés ezt küldi ide: {destination}:
 	Generative Fill	Generatív kitöltés
 	Generative Fill…	Generatív kitöltés…
+	Always show the Generative Fill… button in the options bar	A Generatív kitöltés… gomb mindig látszódjon a beállítósávon
 	Generative Fills in progress	Folyamatban lévő generatív kitöltések
 	Go to area	Ugrás a területre
 	It runs on this computer: nothing leaves it.	Ezen a számítógépen fut: semmi sem hagyja el.

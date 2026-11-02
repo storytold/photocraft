@@ -4285,6 +4285,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Üretken Dolgu şunları {destination} adresine gönderecek:
 	Generative Fill	Üretken Dolgu
 	Generative Fill…	Üretken Dolgu…
+	Always show the Generative Fill… button in the options bar	Üretken Dolgu… düğmesini seçenekler çubuğunda her zaman göster
 	Generative Fills in progress	Süren Üretken Dolgular
 	Go to area	Alana git
 	It runs on this computer: nothing leaves it.	Bu bilgisayarda çalışır: hiçbir şey dışarı çıkmaz.

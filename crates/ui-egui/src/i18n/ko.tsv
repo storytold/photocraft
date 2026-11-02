@@ -3772,6 +3772,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	생성형 채우기가 다음을 {destination}(으)로 보냅니다:
 	Generative Fill	생성형 채우기
 	Generative Fill…	생성형 채우기…
+	Always show the Generative Fill… button in the options bar	옵션 막대에 생성형 채우기… 버튼 항상 표시
 	Generative Fills in progress	진행 중인 생성형 채우기
 	Go to area	영역으로 이동
 	It runs on this computer: nothing leaves it.	이 컴퓨터에서 실행됩니다. 외부로 나가는 것은 없습니다.

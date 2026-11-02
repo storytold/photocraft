@@ -4804,6 +4804,7 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Generative Fill will send this to {destination}:	Generativ udfyldning sender dette til {destination}:
 	Generative Fill	Generativ udfyldning
 	Generative Fill…	Generativ udfyldning…
+	Always show the Generative Fill… button in the options bar	Vis altid knappen Generativ udfyldning… i indstillingslinjen
 	Generative Fills in progress	Igangværende generative udfyldninger
 	Go to area	Gå til området
 	It runs on this computer: nothing leaves it.	Den kører på denne computer: intet forlader den.

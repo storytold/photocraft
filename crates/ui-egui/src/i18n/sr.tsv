@@ -4630,6 +4630,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Generativna popuna će poslati ovo na {destination}:
 	Generative Fill	Generativna popuna
 	Generative Fill…	Generativna popuna…
+	Always show the Generative Fill… button in the options bar	Uvek prikaži dugme Generativna popuna… na traci opcija
 	Generative Fills in progress	Generativne popune u toku
 	Go to area	Idi na oblast
 	It runs on this computer: nothing leaves it.	Radi na ovom računaru: ništa ne izlazi iz njega.

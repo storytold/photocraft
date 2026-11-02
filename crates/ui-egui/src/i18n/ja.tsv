@@ -4229,6 +4229,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	生成塗りつぶしは次の内容を {destination} に送信します：
 	Generative Fill	生成塗りつぶし
 	Generative Fill…	生成塗りつぶし…
+	Always show the Generative Fill… button in the options bar	オプションバーに「生成塗りつぶし…」ボタンを常に表示
 	Generative Fills in progress	実行中の生成塗りつぶし
 	Go to area	領域へ移動
 	It runs on this computer: nothing leaves it.	このコンピューター上で動作します。外部には何も送られません。

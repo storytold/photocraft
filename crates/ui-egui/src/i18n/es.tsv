@@ -4463,6 +4463,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	El relleno generativo enviará esto a {destination}:
 	Generative Fill	Relleno generativo
 	Generative Fill…	Relleno generativo…
+	Always show the Generative Fill… button in the options bar	Mostrar siempre el botón Relleno generativo… en la barra de opciones
 	Generative Fills in progress	Rellenos generativos en curso
 	Go to area	Ir a la zona
 	It runs on this computer: nothing leaves it.	Se ejecuta en este ordenador: nada sale de él.

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::Session;
 use photocraft_engine::genai::{
     AiErrorKind, AiFailure, ConnectionRow, Disclosure, FillJob, FillPlan, FillRequest, GenerativeAi, JobPoll, ModelRow, SentInput, SentItem, SentKind,
@@ -221,25 +221,48 @@ fn unavailable_greys_the_menu_item_and_says_why() {
     assert!(app.ui.dialogs.is_empty());
 }
 
+/// FredApps on #2879: no setup promotion in the options bar. The button is there once a model is
+/// set up; before that only if the person turned it on, and then it opens the setup.
 #[test]
-fn the_options_bar_button_shows_only_when_the_tool_can_run() {
-    for (status, shown) in [
-        (AiStatus::Ready { model: "M".into(), connection: "C".into(), local: true }, true),
-        (AiStatus::Unavailable { reason: "No model is chosen.".into() }, false),
-    ] {
+fn the_options_bar_button_shows_once_set_up_or_when_asked_for() {
+    let ready = AiStatus::Ready { model: "M".into(), connection: "C".into(), local: true };
+    let not_set_up = AiStatus::Unavailable { reason: "No model is chosen.".into() };
+    for (status, always, shown) in [(ready.clone(), false, true), (ready, true, true), (not_set_up.clone(), false, false), (not_set_up, true, true)] {
         let (mut app, f) = app_with(fake());
         app.run("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
-        *f.status.lock().unwrap() = status;
+        app.run("prefs.set", json!({"path": "integrations.alwaysShowGenerativeFillButton", "value": always})).unwrap();
+        *f.status.lock().unwrap() = status.clone();
         let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), app);
         h.run_steps(2);
-        assert_eq!(h.query_by_label("Generative Fill…").is_some(), shown);
+        assert_eq!(h.query_by_label("Generative Fill…").is_some(), shown, "{status:?}, always {always}");
+        if !shown {
+            continue;
+        }
+        h.get_by_label("Generative Fill…").click();
+        h.run_steps(2);
+        let app = h.state();
+        let setup = app.ui.dialogs.iter().any(|d| crate::prefs_ui::is_preferences(&d.fields) && d.fields["section"] == SETUP_SECTION);
+        let prompt = dialog_with(app, PROMPT_MARK).is_some();
+        // Set up, it asks for a prompt; not set up, it opens the setup instead.
+        assert_eq!((prompt, setup), (status.is_ready(), !status.is_ready()), "{status:?}");
     }
-    // Not set up at all (the web build): never.
+    // Configured but no selection: shown, greyed out.
+    let (app, _) = app_with(fake());
+    let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), app);
+    h.run_steps(2);
+    assert!(h.get_by_label("Generative Fill…").accesskit_node().is_disabled(), "nothing to fill yet");
+    // The web build has no Generative AI: never, even when asked for.
     let mut web = PhotocraftApp::new(Session::new(), Services::default());
     web.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    web.run("prefs.set", json!({"path": "integrations.alwaysShowGenerativeFillButton", "value": true})).unwrap();
     let mut h = harness(|ui, app: &mut PhotocraftApp| options_bar_button(app, ui), web);
     h.run_steps(2);
     assert!(h.query_by_label("Generative Fill…").is_none());
+}
+
+#[test]
+fn showing_the_button_before_setup_is_opt_in() {
+    assert!(!photocraft_engine::prefs::Preferences::default().integrations.always_show_generative_fill_button);
 }
 
 #[test]

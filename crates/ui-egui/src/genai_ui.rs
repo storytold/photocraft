@@ -272,21 +272,32 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 }
 
 /// The Generative Fill button for the selection tools' options bar, next to Select and Mask….
-/// Shown only while the tool can run (a configured, working model); otherwise it would be
-/// permanent clutter, and Edit › Generative Fill and Preferences say why it can't.
+/// Shown once the tool can run (a configured, working model). Before that it would only promote
+/// setup, permanent clutter in three bars for someone who doesn't use AI, so it stays hidden
+/// unless Preferences › Integrations › Always show the Generative Fill… button is on; then it
+/// opens the setup. Edit › Generative Fill stays the main route either way. Never in the web build.
 pub fn options_bar_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if !offered(app) || !app.session.generative_status().is_ready() {
+    if !offered(app) {
         return;
     }
-    let can_fill = app.session.is_enabled(FILL);
-    let clicked = ui
-        .add_enabled_ui(can_fill, |ui| {
-            crate::widgets::secondary_button(ui, tl!("Generative Fill…"), 0.0).on_hover_text(tl!("Fill the selection from a prompt"))
-        })
-        .inner
-        .clicked();
-    if clicked {
+    let why_not = match app.session.generative_status() {
+        AiStatus::Ready { .. } => None,
+        AiStatus::Unavailable { reason } => Some(reason),
+    };
+    if why_not.is_some() && !app.session.prefs().integrations.always_show_generative_fill_button {
+        return;
+    }
+    // Not set up, the button says why and is always clickable: it opens the setup.
+    let enabled = why_not.is_some() || app.session.is_enabled(FILL);
+    let hover = why_not.clone().unwrap_or_else(|| tl!("Fill the selection from a prompt").to_string());
+    let clicked = ui.add_enabled_ui(enabled, |ui| crate::widgets::secondary_button(ui, tl!("Generative Fill…"), 0.0).on_hover_text(hover)).inner.clicked();
+    if !clicked {
+        return;
+    }
+    if why_not.is_none() {
         let _ = crate::menus::invoke(app, &ui.ctx().clone(), FILL, json!({}));
+    } else {
+        open_setup(app);
     }
 }
 

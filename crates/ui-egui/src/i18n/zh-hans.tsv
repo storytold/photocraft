@@ -3237,6 +3237,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	生成式填充将把以下内容发送到 {destination}：
 	Generative Fill	生成式填充
 	Generative Fill…	生成式填充…
+	Always show the Generative Fill… button in the options bar	始终在选项栏中显示“生成式填充…”按钮
 	Generative Fills in progress	进行中的生成式填充
 	Go to area	转到区域
 	It runs on this computer: nothing leaves it.	在这台电脑上运行：不会有任何数据离开。

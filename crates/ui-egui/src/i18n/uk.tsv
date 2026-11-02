@@ -4263,6 +4263,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Генеративна заливка надішле до {destination} таке:
 	Generative Fill	Генеративна заливка
 	Generative Fill…	Генеративна заливка…
+	Always show the Generative Fill… button in the options bar	Завжди показувати кнопку «Генеративна заливка…» на панелі параметрів
 	Generative Fills in progress	Генеративні заливки в роботі
 	Go to area	Перейти до області
 	It runs on this computer: nothing leaves it.	Працює на цьому комп’ютері: ніщо його не залишає.

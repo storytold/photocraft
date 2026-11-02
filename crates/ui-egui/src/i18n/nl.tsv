@@ -4308,6 +4308,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Generative Fill will send this to {destination}:	Generatief vullen stuurt dit naar {destination}:
 	Generative Fill	Generatief vullen
 	Generative Fill…	Generatief vullen…
+	Always show the Generative Fill… button in the options bar	Knop Generatief vullen… altijd in de optiebalk tonen
 	Generative Fills in progress	Generatieve vullingen bezig
 	Go to area	Naar gebied
 	It runs on this computer: nothing leaves it.	Het draait op deze computer: er gaat niets naar buiten.

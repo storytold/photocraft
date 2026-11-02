@@ -4748,6 +4748,7 @@ shape	Appearance	Оформление
 	Generative Fill will send this to {destination}:	Генеративная заливка отправит в {destination} следующее:
 	Generative Fill	Генеративная заливка
 	Generative Fill…	Генеративная заливка…
+	Always show the Generative Fill… button in the options bar	Всегда показывать кнопку «Генеративная заливка…» на панели параметров
 	Generative Fills in progress	Генеративные заливки в работе
 	Go to area	Перейти к области
 	It runs on this computer: nothing leaves it.	Работает на этом компьютере: ничего не покидает его.

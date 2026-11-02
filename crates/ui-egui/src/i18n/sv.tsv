@@ -4802,6 +4802,7 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Generative Fill will send this to {destination}:	Generativ fyllning skickar detta till {destination}:
 	Generative Fill	Generativ fyllning
 	Generative Fill…	Generativ fyllning…
+	Always show the Generative Fill… button in the options bar	Visa alltid knappen Generativ fyllning… i alternativfältet
 	Generative Fills in progress	Pågående generativa fyllningar
 	Go to area	Gå till området
 	It runs on this computer: nothing leaves it.	Det körs på den här datorn: inget lämnar den.
