@@ -722,6 +722,61 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.distort.ripple", json!({"amount": 50, "size": "medium"})),
         ("filter.pixelate.crystallize", json!({"cellSize": 5})),
         ("filter.gallery.spatter", json!({"sprayRadius": 7, "smoothness": 15})),
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 14, "edgeBrightness": 50, "smoothness": 15})),
+        ("filter.gallery.angledStrokes", json!({"directionBalance": 100, "strokeLength": 50, "sharpness": 10})),
+        ("filter.gallery.basRelief", json!({"detail": 15, "smoothness": 15, "light": "bottomLeft"})),
+        ("filter.gallery.chalkCharcoal", json!({"charcoalArea": 20, "chalkArea": 20, "strokePressure": 5})),
+        ("filter.gallery.charcoal", json!({"charcoalThickness": 7, "detail": 0, "lightDarkBalance": 100})),
+        ("filter.gallery.chrome", json!({"detail": 10, "smoothness": 10})),
+        ("filter.gallery.coloredPencil", json!({"pencilWidth": 24, "strokePressure": 15, "paperBrightness": 50})),
+        (
+            "filter.gallery.conteCrayon",
+            json!({"foregroundLevel": 15, "backgroundLevel": 15, "texture": "brick", "scaling": 200, "relief": 50, "light": "bottomLeft", "invert": true}),
+        ),
+        ("filter.gallery.craquelure", json!({"crackSpacing": 100, "crackDepth": 10, "crackBrightness": 10})),
+        ("filter.gallery.crosshatch", json!({"strokeLength": 50, "sharpness": 20, "strength": 3})),
+        ("filter.gallery.cutout", json!({"numberOfLevels": 8, "edgeSimplicity": 10, "edgeFidelity": 3})),
+        ("filter.gallery.darkStrokes", json!({"balance": 10, "blackIntensity": 10, "whiteIntensity": 10})),
+        ("filter.gallery.diffuseGlow", json!({"graininess": 10, "glowAmount": 20, "clearAmount": 20})),
+        ("filter.gallery.dryBrush", json!({"brushSize": 10, "brushDetail": 10, "texture": 3})),
+        ("filter.gallery.filmGrain", json!({"grain": 20, "highlightArea": 20, "intensity": 0})),
+        ("filter.gallery.fresco", json!({"brushSize": 10, "brushDetail": 10, "texture": 3})),
+        ("filter.gallery.glass", json!({"distortion": 20, "smoothness": 15, "texture": "canvas", "scaling": 200, "invert": true})),
+        ("filter.gallery.glowingEdges", json!({"edgeWidth": 14, "edgeBrightness": 20, "smoothness": 15})),
+        ("filter.gallery.graphicPen", json!({"strokeLength": 1, "lightDarkBalance": 100, "strokeDirection": "horizontal"})),
+        ("filter.gallery.halftonePattern", json!({"size": 12, "contrast": 50, "patternType": "circle"})),
+        ("filter.gallery.inkOutlines", json!({"strokeLength": 50, "darkIntensity": 50, "lightIntensity": 50})),
+        ("filter.gallery.mosaicTiles", json!({"tileSize": 100, "groutWidth": 15, "lightenGrout": 10})),
+        ("filter.gallery.neonGlow", json!({"glowSize": 24, "glowBrightness": 50, "glowColor": "#336699"})),
+        ("filter.gallery.notePaper", json!({"imageBalance": 50, "graininess": 20, "relief": 25})),
+        ("filter.gallery.oceanRipple", json!({"rippleSize": 15, "rippleMagnitude": 20})),
+        ("filter.gallery.paintDaubs", json!({"brushSize": 50, "sharpness": 40, "brushType": "darkRough"})),
+        ("filter.gallery.paletteKnife", json!({"strokeSize": 50, "strokeDetail": 1, "softness": 10})),
+        ("filter.gallery.patchwork", json!({"squareSize": 10, "relief": 25})),
+        ("filter.gallery.photocopy", json!({"detail": 24, "darkness": 50})),
+        ("filter.gallery.plaster", json!({"imageBalance": 50, "smoothness": 15, "light": "bottomLeft"})),
+        ("filter.gallery.plasticWrap", json!({"highlightStrength": 20, "detail": 15, "smoothness": 15})),
+        ("filter.gallery.posterEdges", json!({"edgeThickness": 10, "edgeIntensity": 10, "posterization": 6})),
+        ("filter.gallery.reticulation", json!({"density": 50, "foregroundLevel": 50, "backgroundLevel": 50})),
+        (
+            "filter.gallery.roughPastels",
+            json!({"strokeLength": 40, "strokeDetail": 20, "texture": "brick", "scaling": 200, "relief": 50, "light": "bottomLeft", "invert": true}),
+        ),
+        ("filter.gallery.smudgeStick", json!({"strokeLength": 10, "highlightArea": 20, "intensity": 0})),
+        ("filter.gallery.sponge", json!({"brushSize": 10, "definition": 25, "smoothness": 15})),
+        ("filter.gallery.sprayedStrokes", json!({"strokeLength": 20, "sprayRadius": 25, "strokeDirection": "horizontal"})),
+        ("filter.gallery.stainedGlass", json!({"cellSize": 50, "borderThickness": 20, "lightIntensity": 10})),
+        ("filter.gallery.stamp", json!({"lightDarkBalance": 50, "smoothness": 50})),
+        ("filter.gallery.sumiE", json!({"strokeWidth": 15, "strokePressure": 15, "contrast": 40})),
+        ("filter.gallery.texturizer", json!({"texture": "brick", "scaling": 200, "relief": 50, "light": "bottomLeft", "invert": true})),
+        ("filter.gallery.tornEdges", json!({"imageBalance": 50, "smoothness": 15, "contrast": 25})),
+        (
+            "filter.gallery.underpainting",
+            json!({"brushSize": 40, "textureCoverage": 40, "texture": "brick", "scaling": 200, "relief": 50, "light": "bottomLeft", "invert": true}),
+        ),
+        ("filter.gallery.waterPaper", json!({"fiberLength": 50, "brightness": 100, "contrast": 100})),
+        ("filter.gallery.watercolor", json!({"brushDetail": 14, "shadowIntensity": 10, "texture": 3})),
+        ("filter.gallery.grain", json!({"intensity": 100, "contrast": 100, "grainType": "contrasty"})),
         (
             "select.refineEdge",
             json!({"radius": 0, "smartRadius": false, "smooth": 2, "feather": 0.5, "contrast": 15, "shiftEdge": -100, "decontaminate": false, "output": "layerMask"}),
@@ -3639,6 +3694,248 @@ fn long_names_are_clipped_instead_of_copied_into_every_diagnostic() {
     assert_eq!(imp.actions[0].set.as_deref().map(|s| s.chars().count()), Some(MAX_NAME_CHARS));
     assert_eq!(imp.unsupported.len(), 50);
     assert!(imp.unsupported.iter().all(|u| u.action.chars().count() == MAX_NAME_CHARS));
+}
+
+/// A Filter Gallery step as Photoshop records it: `GEfc` with the effect in `GEfk`, or the
+/// effect's own event carrying the same key.
+fn gallery_step(event: &str, effect: &str, d: Descriptor) -> Mapped {
+    let d = d.with("GEfk", enm("GEft", effect));
+    let event = AtnEvent::Code(event.as_bytes().try_into().unwrap());
+    (events::event_for(&event).unwrap_or_else(|| panic!("{effect} is unknown")).from)(&d)
+}
+
+fn gallery_params(m: Mapped) -> (String, Value) {
+    match m {
+        Mapped::Steps(mut s) if s.len() == 1 => s.remove(0),
+        _ => panic!("kept"),
+    }
+}
+
+/// The Filter Gallery effects load with Photoshop's defaults for missing keys and its clamping,
+/// from `GEfc` or from the effect's own event, play, and save back as `GEfc` with every key in
+/// recorded order (#10592).
+#[test]
+fn gallery_effect_steps_load_clamp_play_and_save_back() {
+    let edges = desc("null").with("EdgW", D::Integer(3)).with("EdgB", D::Integer(20)).with("Smth", D::Integer(7));
+    assert_eq!(
+        gallery_params(gallery_step("GEfc", "AccE", edges.clone())),
+        ("filter.gallery.accentedEdges".into(), json!({"edgeWidth": 3, "edgeBrightness": 20, "smoothness": 7}))
+    );
+    // Run from its own menu item, the effect's id is the event.
+    assert_eq!(gallery_params(gallery_step("AccE", "AccE", edges.clone())).0, "filter.gallery.accentedEdges");
+    // Missing keys take Photoshop's defaults; enumerations, booleans and colours map.
+    assert_eq!(gallery_params(gallery_step("GEfc", "BsRl", desc("null"))).1, json!({"detail": 13, "smoothness": 3, "light": "bottom"}));
+    let pastels = desc("null").with("TxtT", enm("TxtT", "TxBr")).with("LghD", enm("LghD", "LDTR")).with("InvT", D::Boolean(true));
+    let p = gallery_params(gallery_step("GEfc", "RghP", pastels)).1;
+    assert_eq!((p["texture"].as_str(), p["light"].as_str(), p["invert"].as_bool()), (Some("brick"), Some("topRight"), Some(true)));
+    let glow = desc("null").with("Clr ", D::Descriptor(color_desc("#33cc66").unwrap()));
+    assert_eq!(gallery_params(gallery_step("GEfc", "NGlw", glow)).1["glowColor"], "#33cc66");
+    // Out-of-range values are clamped as Photoshop clamps them.
+    let wide = desc("null").with("EdgW", D::Integer(99)).with("EdgB", D::Integer(-5));
+    let p = gallery_params(gallery_step("GEfc", "AccE", wide)).1;
+    assert_eq!((p["edgeWidth"].as_i64(), p["edgeBrightness"].as_i64()), (Some(14), Some(0)));
+
+    // Saved back as `GEfc`, with `GEfk` first and every key in recorded order.
+    let item = export_item("filter.gallery.accentedEdges", &json!({"edgeWidth": 3, "edgeBrightness": 20, "smoothness": 7}), "S").unwrap();
+    assert_eq!(item.event.id(), "GEfc");
+    let mut expected = vec![(Id::new("GEfk"), enm("GEft", "AccE"))];
+    expected.extend(edges.items);
+    assert_eq!(item.descriptor.unwrap().items, expected);
+
+    // They play.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, effect) in [("AccE", "accentedEdges"), ("Ct  ", "cutout"), ("Plst", "plaster")] {
+        let (id, p) = gallery_params(gallery_step("GEfc", code, desc("null")));
+        assert_eq!(id, format!("filter.gallery.{effect}"));
+        s.actions.list.push(Action::new(code, vec![(id, p)]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+}
+
+/// What the effects cannot play keeps the Photoshop step: an unknown effect or value, a Glass
+/// texture the reference gives no code for, a key the effect does not have (#10592).
+#[test]
+fn gallery_effect_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(gallery_step("GEfc", "Zzzz", desc("null"))));
+    assert!(kept(gallery_step("GEfc", "BsRl", desc("null").with("LghD", enm("LghD", "LDCn")))));
+    assert!(kept(gallery_step("GEfc", "Gls ", desc("null").with("TxtT", enm("TxtT", "TxBr")))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("Rds ", D::Integer(3)))));
+}
+
+/// What the event cannot hold refuses the step: a fraction in an integer key, the colours a
+/// Sketch effect pinned, a value with no Photoshop code, a mask target (#10592).
+#[test]
+fn gallery_effect_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 2.5})),
+        ("filter.gallery.charcoal", json!({"foreground": "#000000"})),
+        ("filter.gallery.glass", json!({"texture": "blocks"})),
+        ("filter.gallery.cutout", json!({"target": "mask"})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    assert!(export_item("filter.gallery.glass", &json!({"texture": "frosted"}), "S").is_some());
+}
+
+/// An integer outside the setting's range refuses the step rather than saving a value Photoshop
+/// clamps on playback and that loads back as another (`edgeWidth` 99 as 14); each end of a range
+/// still saves (#10592).
+#[test]
+fn gallery_effect_integers_outside_the_settings_range_are_refused() {
+    for (id, params) in [
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 99})),
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 0})),
+        ("filter.gallery.neonGlow", json!({"glowSize": -25, "glowColor": "#336699"})),
+        ("filter.gallery.glass", json!({"scaling": 201})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    for (id, params) in [
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 1})),
+        ("filter.gallery.accentedEdges", json!({"edgeWidth": 14})),
+        ("filter.gallery.neonGlow", json!({"glowSize": -24, "glowColor": "#336699"})),
+        ("filter.gallery.glass", json!({"scaling": 200})),
+    ] {
+        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}
+
+/// Neon Glow without a colour plays with the effect's default glow colour, so it saves with that
+/// colour, component for component (#10592).
+#[test]
+fn gallery_neon_glow_without_a_colour_saves_the_colour_it_plays_with() {
+    let item = export_item("filter.gallery.neonGlow", &json!({"glowSize": 5}), "S").expect("refused");
+    let d = item.descriptor.unwrap();
+    let c = get_obj(&d, "Clr ").expect("no colour");
+    assert_eq!(trimmed(&c.class_id), "RGBC");
+    let neon = photocraft_algo::GalleryEffect::new(photocraft_algo::GalleryFilter::NeonGlow).color;
+    for (key, v) in [("Rd  ", neon[0]), ("Grn ", neon[1]), ("Bl  ", neon[2])] {
+        assert_eq!(get_num(c, key), Some(f64::from(v) * 255.0), "{key}");
+    }
+}
+
+/// Each enumeration saves with the type Photoshop's terminology gives it: stroke direction's is
+/// `StrD`, not its key, and texture's is `TxtT`, as Photoshop records Glass (#10592).
+#[test]
+fn gallery_effect_enumerations_save_with_photoshops_type_ids() {
+    let enum_type = |id: &str, params: Value, key: &str| match export_item(id, &params, "S").unwrap().descriptor.unwrap().get(key) {
+        Some(D::Enumerated { type_id, .. }) => trimmed(type_id),
+        other => panic!("{id} {key}: {other:?}"),
+    };
+    assert_eq!(enum_type("filter.gallery.graphicPen", json!({}), "SDir"), "StrD");
+    assert_eq!(enum_type("filter.gallery.sprayedStrokes", json!({}), "SDir"), "StrD");
+    for id in ["filter.gallery.conteCrayon", "filter.gallery.glass", "filter.gallery.roughPastels", "filter.gallery.texturizer", "filter.gallery.underpainting"]
+    {
+        assert_eq!(enum_type(id, json!({}), "TxtT"), "TxtT", "{id}");
+    }
+    assert_eq!(enum_type("filter.gallery.basRelief", json!({}), "LghD"), "LghD");
+    assert_eq!(enum_type("filter.gallery.plaster", json!({}), "LghP"), "LghP");
+    assert_eq!(enum_type("filter.gallery.halftonePattern", json!({}), "ScrT"), "ScrT");
+    assert_eq!(enum_type("filter.gallery.paintDaubs", json!({}), "BrsT"), "BrsT");
+    assert_eq!(enum_type("filter.gallery.grain", json!({}), "Grnt"), "Grnt");
+}
+
+/// Neon Glow recorded without `Clr ` glows in Photoshop's default colour, blue (0, 0, 255) per
+/// the event reference, not PhotoCraft's own default: the step loads with that colour and saves
+/// it back, loading again as the same step (#10592).
+#[test]
+fn gallery_neon_glow_without_a_colour_loads_photoshops_blue() {
+    let (id, p) = gallery_params(gallery_step("GEfc", "NGlw", desc("null")));
+    assert_eq!(id, "filter.gallery.neonGlow");
+    assert_eq!(p, json!({"glowSize": 5, "glowBrightness": 15, "glowColor": "#0000ff"}));
+    let d = export_item(&id, &p, "S").expect("refused").descriptor.unwrap();
+    let c = get_obj(&d, "Clr ").expect("no colour");
+    assert_eq!(trimmed(&c.class_id), "RGBC");
+    assert_eq!([get_num(c, "Rd  "), get_num(c, "Grn "), get_num(c, "Bl  ")], [Some(0.0), Some(0.0), Some(255.0)]);
+    let event = AtnEvent::Code(*b"GEfc");
+    let back = (events::event_for(&event).unwrap().from)(&d);
+    assert_eq!(gallery_params(back), (id, p));
+}
+
+/// An effect recorded under its own event by string ID (`cutout`, as newer versions record it)
+/// maps like its 4-char code; only the effect's string IDs count as names (#10592).
+#[test]
+fn gallery_effects_recorded_by_string_id_map_like_their_codes() {
+    for (code, name, effect) in [("Ct  ", "cutout", "Ct"), ("HlfS", "halftoneScreen", "HlfS"), ("Grn ", "grain", "Grn")] {
+        let d = desc("null").with("GEfk", enm("GEft", effect));
+        let by_name = (events::event_for(&AtnEvent::name(name)).unwrap_or_else(|| panic!("{name} by name")).from)(&d);
+        let by_code = (events::event_for(&AtnEvent::Code(code.as_bytes().try_into().unwrap())).unwrap().from)(&d);
+        assert_eq!(gallery_params(by_name), gallery_params(by_code), "{name}");
+    }
+    assert!(events::event_for(&AtnEvent::name("Ct  ")).is_none());
+    assert!(events::event_for(&AtnEvent::Code(*b"MscT")).is_some());
+}
+
+/// A step recorded as the effect's own event (by code or string ID) loads, plays and saves back
+/// as that event with its panel name and descriptor unchanged; a `GEfc` step stays `GEfc`
+/// (#10592).
+#[test]
+fn gallery_effect_steps_save_back_as_the_event_they_were_recorded_as() {
+    let edges = desc("null").with("GEfk", enm("GEft", "AccE")).with("EdgW", D::Integer(2)).with("EdgB", D::Integer(38)).with("Smth", D::Integer(5));
+    let cutout = desc("null").with("GEfk", enm("GEft", "Ct")).with("NmbL", D::Integer(6)).with("EdgS", D::Integer(4)).with("EdgF", D::Integer(2));
+    let gallery = desc("null").with("GEfk", enm("GEft", "AccE")).with("EdgW", D::Integer(3)).with("EdgB", D::Integer(20)).with("Smth", D::Integer(7));
+    let source = vec![item("AccE", "Accented Edges", Some(edges)), item("cutout", "Cutout", Some(cutout)), item("GEfc", "Filter Gallery", Some(gallery))];
+    let data = set_of("S", vec![("A", source.clone())]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(ids, ["filter.gallery.accentedEdges", "filter.gallery.cutout", "filter.gallery.accentedEdges"]);
+
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 3, "{played}");
+    // The remembered event is for Save Actions only: playback strips it, so the journal (Last
+    // Filter) and the smart filters (`.pcraft` saves) never carry it.
+    let gallery: Vec<&Value> = s.journal.iter().filter(|(id, _)| id.starts_with("filter.gallery.")).map(|(_, p)| p).collect();
+    assert_eq!(gallery.len(), 3, "{:?}", s.journal);
+    assert!(gallery.iter().all(|p| p.get("_atnEvent").is_none()), "{gallery:?}");
+    let d = s.active().unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not smart") };
+    assert_eq!(sm.smart_filters.len(), 3);
+    assert!(sm.smart_filters.iter().all(|f| f.params.get("_atnEvent").is_none()), "{:?}", sm.smart_filters);
+
+    let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
+    assert_eq!(saved["skipped"], json!([]));
+    let file = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+    let got: Vec<_> = file.actions[0].items.iter().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone())).collect();
+    let want: Vec<_> = source.iter().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone())).collect();
+    assert_eq!(got, want);
+
+    // A step made in PhotoCraft keeps saving as `GEfc`, and so does a forged event param.
+    assert_eq!(export_item("filter.gallery.cutout", &json!({}), "S").unwrap().event, AtnEvent::Code(*b"GEfc"));
+    let forged = json!({"_atnEvent": {"event": "GsnB", "eventKind": "code", "name": "Gaussian Blur"}});
+    assert_eq!(export_item("filter.gallery.cutout", &forged, "S").unwrap().event, AtnEvent::Code(*b"GEfc"));
+    // Another effect's event (stale or forged) does not relabel the step either.
+    for (event, kind) in [("AccE", "code"), ("accentedEdges", "name")] {
+        let other = json!({"_atnEvent": {"event": event, "eventKind": kind, "name": "Accented Edges"}});
+        let item = export_item("filter.gallery.cutout", &other, "S").unwrap();
+        assert_eq!((item.event, item.dictionary), (AtnEvent::Code(*b"GEfc"), b"Filter Gallery".to_vec()), "{event}");
+    }
+    let own = json!({"_atnEvent": {"event": "cutout", "eventKind": "name", "name": "Cutout"}});
+    assert_eq!(export_item("filter.gallery.cutout", &own, "S").unwrap().event, AtnEvent::name("cutout"));
+}
+
+/// Only a missing key takes Photoshop's default: a key there with the wrong type or a non-finite
+/// number keeps the Photoshop step instead of playing a default (#10592).
+#[test]
+fn gallery_effect_keys_with_the_wrong_type_keep_the_step() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(gallery_step("GEfc", "Txtz", desc("null").with("InvT", D::Integer(1)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", D::Double(f64::NAN)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", D::Double(f64::INFINITY)))));
+    assert!(kept(gallery_step("GEfc", "AccE", desc("null").with("EdgW", text("9")))));
+    assert!(kept(gallery_step("GEfc", "BsRl", desc("null").with("LghD", D::Integer(3)))));
+    assert!(kept(gallery_step("GEfc", "NGlw", desc("null").with("Clr ", D::Integer(3)))));
+    // Missing keys still take the defaults.
+    assert_eq!(gallery_params(gallery_step("GEfc", "Txtz", desc("null"))).1["invert"], false);
+    assert_eq!(gallery_params(gallery_step("GEfc", "AccE", desc("null").with("EdgB", D::Integer(9)))).1["edgeWidth"], 2);
 }
 
 /// Photoshop's Split Channels, Merge Spot Channel, Trap and Match Color steps load as their

@@ -36,6 +36,7 @@ mod files;
 mod steps_channels;
 mod steps_distort;
 mod steps_doc;
+mod steps_gallery;
 mod steps_image;
 mod steps_layer;
 mod steps_make;
@@ -65,6 +66,7 @@ use fields::Mapped;
 use files::{load, save};
 #[cfg(test)]
 use steps_doc::crop_from;
+pub(crate) use steps_gallery::RECORDED_EVENT;
 #[cfg(test)]
 use steps_image::{apply_image_from, transform_to};
 #[cfg(test)]
