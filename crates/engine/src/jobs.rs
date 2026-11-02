@@ -766,7 +766,9 @@ impl Session {
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         // Last-resort guard (AGENTS.md, Never crash) around the whole dispatch: the checks before
         // `run` and the bookkeeping after it see the same untrusted params as `run` (#8604). A
-        // panic there leaves no per-command flag set for the next command.
+        // panic there leaves no per-command flag set for the next command. It keeps the process
+        // alive, not the session consistent: anything else a panic left half-changed stays so.
+        // It needs an unwinding build; the desktop profiles unwind, the wasm32 web build aborts.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_unguarded(id, params, background))).unwrap_or_else(|_| {
             self.jobs.spawn = false;
             self.coalesce_request = None;
