@@ -635,6 +635,7 @@ fn layer_spanning(width: i32, height: i32) -> Document {
 /// 20000 × 14000 RGBA is 1.12 GB.
 #[cfg(target_pointer_width = "64")]
 #[test]
+#[ignore = "needs about 2.2 GB of RAM"]
 fn a_layer_past_1_gib_keeps_its_pixels() {
     let (w, h) = (20_000, 14_000);
     let doc = layer_spanning(w as i32, h as i32);
@@ -668,6 +669,9 @@ fn a_gather_is_refused_past_the_cap_or_the_memory() {
     assert!(gather_fits(1 << 20));
     assert!(!gather_fits(MAX_LAYER_GATHER_BYTES + 1));
     assert!(gather_fits_with(1 << 20, |peak| peak == 2 << 20), "twice the samples are asked for");
+    // #10760: a 19866 × 14031 RGBA layer, without allocating it.
+    #[cfg(target_pointer_width = "64")]
+    assert!(gather_fits_with(1_120_000_000, |_| true), "the cap takes a layer past 1 GiB");
     assert!(!gather_fits_with(1 << 20, |_| false), "memory that can't be had refuses it");
     assert!(!gather_fits(u64::MAX));
 }
