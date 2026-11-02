@@ -35,7 +35,7 @@ pub fn kind_icon(content: &LayerContent) -> &'static str {
         LayerContent::Group(_) => "folder",
         LayerContent::Fill(_) => "paint-bucket",
         LayerContent::Text(_) => "type",
-        LayerContent::Shape(_) => "pentagon",
+        LayerContent::Shape(_) => "vector-shape",
         LayerContent::Smart(_) => "app-window",
         LayerContent::Raster(_) => "image",
     }
@@ -55,7 +55,7 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
     let icon_r = Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(20.0, 20.0));
-    crate::icons::paint(ui, icon_r, kind_icon(&layer.content), 15.0, t.icon);
+    crate::icons::paint(ui, icon_r, kind_icon(&layer.content), if matches!(&layer.content, LayerContent::Shape(_)) { 18.0 } else { 15.0 }, t.icon);
     let kind = kind_label(layer);
     let kind_g = ui.painter().layout_no_wrap(tl!(&kind).to_owned(), egui::FontId::proportional(11.0), t.text_faint);
     let kind_w = kind_g.size().x;
