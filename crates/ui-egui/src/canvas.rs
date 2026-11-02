@@ -101,7 +101,7 @@ pub(crate) use strokes::multiple_color_target;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
 use strokes::{
-    HOLD_REPEAT_MS, click_modifiers, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, press_alt_id, press_alt_in,
+    HOLD_REPEAT_MS, click_modifiers, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, press_alt_for, press_alt_id, press_alt_in,
     stroke_wants_time, tap_at_peak_pressure,
 };
 #[cfg(test)]
@@ -841,7 +841,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     // press, must not paint because Alt was let go with the button (#10544).
     let press_alt = press_alt_id(idx);
     if let Some(alt) = ui.input(|i| press_alt_in(&i.events, rect)) {
-        ctx.data_mut(|d| d.insert_temp(press_alt, alt));
+        ctx.data_mut(|d| d.insert_temp(press_alt, (tool, alt)));
     }
 
     handle_canvas_tool_menus(app, input, mods, &mut buttons);
@@ -850,7 +850,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
     // The press is over: the next click starts from its own Alt.
     if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }))) {
-        ctx.data_mut(|d| d.remove::<bool>(press_alt));
+        ctx.data_mut(|d| d.remove::<(Tool, bool)>(press_alt));
     }
 }
 
@@ -1165,7 +1165,7 @@ fn handle_canvas_tool_clicks(
         } else {
             click_mods
         };
-        let press_alt = click_button == PointerButton::Primary && ctx.data(|d| d.get_temp::<bool>(press_alt_id(input.idx))).unwrap_or(false);
+        let press_alt = click_button == PointerButton::Primary && press_alt_for(tool, ctx.data(|d| d.get_temp::<(Tool, bool)>(press_alt_id(input.idx))));
         let click_mods = click_modifiers(tool, click_mods, press_alt);
         let d = xf.to_doc(p);
         match tool {

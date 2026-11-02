@@ -3023,6 +3023,15 @@ fn a_click_is_replayed_with_the_alt_of_its_press_for_alt_click_tools_only() {
     }
 }
 
+/// An Alt latched at a Brush press is not an ⌥-click for the Clone Stamp the tool was switched to.
+#[test]
+fn the_latched_press_alt_only_counts_for_the_tool_it_was_pressed_with() {
+    assert!(strokes::press_alt_for(Tool::Brush, Some((Tool::Brush, true))));
+    assert!(!strokes::press_alt_for(Tool::CloneStamp, Some((Tool::Brush, true))), "another tool");
+    assert!(!strokes::press_alt_for(Tool::Brush, Some((Tool::Brush, false))), "no Alt at the press");
+    assert!(!strokes::press_alt_for(Tool::Brush, None), "no press");
+}
+
 /// The press of this frame inside the canvas decides the latched Alt; a press outside, a release
 /// and the other buttons never do.
 #[test]

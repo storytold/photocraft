@@ -620,6 +620,13 @@ pub(super) fn press_alt_in(events: &[egui::Event], rect: egui::Rect) -> Option<b
     })
 }
 
+/// The Alt stored at the press, for the click's tool only: a press that started under one tool (the
+/// Brush) must not make the click replayed under another (the Clone Stamp, whose ⌥ sets the source)
+/// an ⌥-click.
+pub(super) fn press_alt_for(tool: Tool, stored: Option<(Tool, bool)>) -> bool {
+    stored.is_some_and(|(at_press, alt)| at_press == tool && alt)
+}
+
 /// The modifiers a click replays its tool events with. They are the release's, except that for
 /// the tools whose ⌥-click matters (the Eyedropper of the painting tools, the clone source, the
 /// Mixer Brush's paint load) Alt is what it was at the press: a click is decided by the Alt held
