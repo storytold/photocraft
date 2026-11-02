@@ -635,7 +635,6 @@ mod tests {
         assert_eq!(r.unwrap()["group"], format!("pc-procreate-{}", std::process::id()));
     }
 
-    /// #10640: a second import of a file never drops the group's brushes on its own.
     #[test]
     fn a_procreate_group_taken_from_a_name_is_trimmed() {
         const CMD: &str = "brush.presets.importProcreate";
@@ -654,6 +653,15 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(r.unwrap()["group"], stem.as_str());
         s.execute("brush.presets.deleteGroup", json!({"group": stem})).unwrap();
+        // A file name of only spaces falls back to the set's name.
+        let dir = std::env::temp_dir().join(format!("pc-blank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let blank = dir.join("   .brushset");
+        std::fs::write(&blank, set("Inside")).unwrap();
+        let r = s.execute(CMD, json!({"path": blank.to_string_lossy()}));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(r.unwrap()["group"], "Inside");
+        s.execute("brush.presets.deleteGroup", json!({"group": "Inside"})).unwrap();
     }
 
     #[test]
@@ -661,20 +669,23 @@ mod tests {
         const CMD: &str = "brush.presets.importProcreate";
         let mut s = Session::new();
         let data = photocraft_paint::tile::b64_encode(&procreate_set());
-        let before = s.tools.presets.len();
+        let snapshot = |s: &Session| s.tools.presets.iter().map(|x| (x.group.clone(), x.name.clone(), x.brush.size)).collect::<Vec<_>>();
+        let before = snapshot(&s);
         let e = s.execute(CMD, json!({"data": data, "group": "g".repeat(256)})).unwrap_err();
         assert!(e.to_string().contains("at most 255 characters"), "{e}");
-        assert_eq!(s.tools.presets.len(), before, "nothing was imported");
+        assert_eq!(snapshot(&s), before, "nothing was imported");
         let r = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap();
         assert_eq!(r["group"].as_str().map(str::len), Some(255));
-        // A clash would number it past what the group commands accept.
-        let before = s.tools.presets.len();
+        // A clash would number it past what the group commands accept. The edit shows up a replaced group.
+        s.tools.presets.iter_mut().find(|p| p.group == "g".repeat(255)).unwrap().brush.size = 77.0;
+        let before = snapshot(&s);
         let e = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap_err();
         assert!(e.to_string().contains("after numbering"), "{e}");
-        assert_eq!(s.tools.presets.len(), before, "nothing was imported");
+        assert_eq!(snapshot(&s), before, "nothing was imported");
         s.execute("brush.presets.deleteGroup", json!({"group": "g".repeat(255)})).unwrap();
     }
 
+    /// #10640: a second import of a file never drops the group's brushes on its own.
     #[test]
     fn procreate_reimport_keeps_the_groups_brushes_unless_replace() {
         const CMD: &str = "brush.presets.importProcreate";
