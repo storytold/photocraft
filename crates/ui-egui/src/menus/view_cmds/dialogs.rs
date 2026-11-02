@@ -461,12 +461,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             dialog(app, json!({"path": format!("{dir}/{stem}.cube"), "size": 33, "title": stem, "scope": scope}), json!({"scope": ["all", "selected"]}))
         }
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app)}))),
-        // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).
-        "file.automate.photomerge" => dialog(
-            app,
-            json!({"paths": dir, "useOpenDocuments": false, "layout": "auto", "blend": true, "vignetteRemoval": false, "geometricCorrection": false, "contentAwareFill": false}),
-            json!({"layout": ["auto", "perspective", "cylindrical", "spherical", "collage", "reposition"]}),
-        ),
+        // Photography automation (photo_cmds / lens_cmds): files or a folder (or the open documents).
+        "file.automate.photomerge" => Some(Ok(json!({"dialog": crate::stack_dialog::open_photomerge(app)}))),
         "file.automate.mergeToHdrPro" => dialog(
             app,
             json!({"paths": dir, "useOpenDocuments": false, "align": true, "removeGhosts": false, "mode": "32", "method": "localAdaptation", "radius": 7.0, "strength": 0.52, "gamma": 1.0, "exposure": 0.0, "detail": 30.0, "saturation": 20.0}),

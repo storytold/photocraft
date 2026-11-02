@@ -1,8 +1,10 @@
 //! File › Scripts › Load Files into Stack… and Statistics: shared Source Files controls
 //! with Use (Files or Folder), the list of what will be loaded, Browse…, Remove, Add Open Files and
 //! Sort By Name, then Attempt to Automatically Align Source Images and Create Smart Object after
-//! Loading Layers. Statistics adds Stack Mode and always creates a smart object. OK runs the
-//! corresponding engine command with the list or the folder.
+//! Loading Layers. Statistics adds Stack Mode and always creates a smart object. File › Automate ›
+//! Photomerge… shares the Source Files controls with Layout above them and Blend Images Together,
+//! Vignette Removal, Geometric Distortion Correction and Content Aware Fill Transparent Areas
+//! below. OK runs the corresponding engine command with the list or the folder.
 use egui::{RichText, vec2};
 use serde_json::{Map, Value, json};
 
@@ -12,6 +14,25 @@ use crate::{PhotocraftApp, state::DialogKind, theme::Tokens, widgets};
 const MARK: &str = "__loadStack";
 pub const COMMAND: &str = "file.scripts.loadFilesIntoStack";
 const STATISTICS: &str = "file.scripts.statistics";
+const PHOTOMERGE: &str = "file.automate.photomerge";
+
+/// Photomerge's layouts (engine ids), in Photoshop's order.
+const LAYOUTS: [(&str, &str); 6] = [
+    ("auto", "Auto"),
+    ("perspective", "Perspective"),
+    ("cylindrical", "Cylindrical"),
+    ("spherical", "Spherical"),
+    ("collage", "Collage"),
+    ("reposition", "Reposition"),
+];
+
+/// Photomerge's options: field (the engine's parameter), label, default.
+const PHOTOMERGE_OPTIONS: [(&str, &str, bool); 4] = [
+    ("blend", "Blend Images Together", true),
+    ("vignetteRemoval", "Vignette Removal", false),
+    ("geometricCorrection", "Geometric Distortion Correction", false),
+    ("contentAwareFill", "Content Aware Fill Transparent Areas", false),
+];
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
@@ -26,8 +47,20 @@ pub fn open_statistics(app: &mut PhotocraftApp) -> u64 {
     open_for(app, STATISTICS, "Image Statistics")
 }
 
+pub fn open_photomerge(app: &mut PhotocraftApp) -> u64 {
+    open_for(app, PHOTOMERGE, "Photomerge")
+}
+
 fn statistics(f: &Map<String, Value>) -> bool {
     f.get("__command").and_then(Value::as_str) == Some(STATISTICS)
+}
+
+fn photomerge(f: &Map<String, Value>) -> bool {
+    f.get("__command").and_then(Value::as_str) == Some(PHOTOMERGE)
+}
+
+fn flag(f: &Map<String, Value>, key: &str, default: bool) -> bool {
+    f.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
 fn open_for(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
@@ -38,8 +71,15 @@ fn open_for(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
     f.insert("use".into(), json!("files"));
     f.insert("files".into(), json!([]));
     f.insert("folder".into(), json!(""));
-    f.insert("align".into(), json!(false));
-    f.insert("smartObject".into(), json!(false));
+    if command == PHOTOMERGE {
+        f.insert("layout".into(), json!("auto"));
+        for (key, _, on) in PHOTOMERGE_OPTIONS {
+            f.insert(key.into(), json!(on));
+        }
+    } else {
+        f.insert("align".into(), json!(false));
+        f.insert("smartObject".into(), json!(false));
+    }
     if command == STATISTICS {
         f.insert("mode".into(), json!("median"));
     }
@@ -82,9 +122,10 @@ fn open_files(app: &PhotocraftApp) -> Vec<String> {
     app.session.documents().iter().filter_map(|d| d.path.clone()).collect()
 }
 
-/// OK needs files to load: some in the list, or a chosen folder.
+/// OK needs files to load: some in the list (two for Photomerge), or a chosen folder.
 pub fn can_confirm(f: &Map<String, Value>) -> bool {
-    !owns(f) || if folder_mode(f) { !folder(f).is_empty() } else { !files(f).is_empty() }
+    let least = if photomerge(f) { 2 } else { 1 };
+    !owns(f) || if folder_mode(f) { !folder(f).is_empty() } else { files(f).len() >= least }
 }
 
 /// Browse…: files to add (Files) or the folder to load (Folder), into dialog `id` once the file
@@ -99,7 +140,7 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
     } else {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
         app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, move |app, answer| {
-            let FileDialogAnswer::Paths(paths) = answer else { return Err("Load Files into Stack reads files from disk".into()) };
+            let FileDialogAnswer::Paths(paths) = answer else { return Err("source files are read from disk".into()) };
             let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
             add(&mut d.fields, paths);
             Ok(Value::Null)
@@ -120,6 +161,17 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let options: Vec<_> = photocraft_doc::StackMode::ALL.iter().map(|m| (m.id().to_string(), m.label())).collect();
             if widgets::dropdown(ui, "statistics-stack-mode", tl!("Mode"), &mut mode, &options, 180.0) {
                 f.insert("mode".into(), json!(mode));
+            }
+        });
+        ui.add_space(8.0);
+    }
+    if photomerge(f) {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Layout:"));
+            let mut layout = f.get("layout").and_then(Value::as_str).unwrap_or("auto").to_string();
+            let options: Vec<_> = LAYOUTS.iter().map(|(id, label)| (id.to_string(), tl!(*label))).collect();
+            if widgets::dropdown(ui, "photomerge-layout", tl!("Layout"), &mut layout, &options, 180.0) {
+                f.insert("layout".into(), json!(layout));
             }
         });
         ui.add_space(8.0);
@@ -191,13 +243,24 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         });
     });
     ui.add_space(8.0);
-    for (key, label) in [("align", tl!("Attempt to Automatically Align Source Images")), ("smartObject", tl!("Create Smart Object after Loading Layers"))] {
-        if statistics(f) && key == "smartObject" {
-            continue;
+    if photomerge(f) {
+        for (key, label, default) in PHOTOMERGE_OPTIONS {
+            // The engine fills transparent areas from the blended composite only.
+            let enabled = key != "contentAwareFill" || flag(f, "blend", true);
+            let mut on = flag(f, key, default);
+            if ui.add_enabled_ui(enabled, |ui| widgets::checkbox(ui, &mut on, label)).inner.changed() {
+                f.insert(key.into(), json!(on));
+            }
         }
-        let mut on = f.get(key).and_then(Value::as_bool).unwrap_or(false);
-        if widgets::checkbox(ui, &mut on, label).changed() {
-            f.insert(key.into(), json!(on));
+    } else {
+        for (key, label) in [("align", tl!("Attempt to Automatically Align Source Images")), ("smartObject", tl!("Create Smart Object after Loading Layers"))] {
+            if statistics(f) && key == "smartObject" {
+                continue;
+            }
+            let mut on = flag(f, key, false);
+            if widgets::checkbox(ui, &mut on, label).changed() {
+                f.insert(key.into(), json!(on));
+            }
         }
     }
     if browse_now {
@@ -224,9 +287,15 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         }
         json!(list)
     };
-    let align = f.get("align").and_then(Value::as_bool).unwrap_or(false);
-    let smart = f.get("smartObject").and_then(Value::as_bool).unwrap_or(false);
-    let r = if statistics(f) {
+    let align = flag(f, "align", false);
+    let smart = flag(f, "smartObject", false);
+    let r = if photomerge(f) {
+        let mut p = json!({"paths": paths, "layout": f.get("layout").and_then(Value::as_str).unwrap_or("auto")});
+        for (key, _, default) in PHOTOMERGE_OPTIONS {
+            p[key] = json!(flag(f, key, default));
+        }
+        app.run(PHOTOMERGE, p)
+    } else if statistics(f) {
         let mode = f.get("mode").and_then(Value::as_str).unwrap_or("median");
         app.run(STATISTICS, json!({"paths": paths, "align": align, "mode": mode}))
     } else {

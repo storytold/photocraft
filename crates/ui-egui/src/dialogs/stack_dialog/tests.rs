@@ -228,3 +228,104 @@ fn a_folder_loads_its_images() {
     assert_eq!(d.layers.len(), 1);
     assert!(matches!(d.layers[0].content, photocraft_doc::LayerContent::Smart(_)));
 }
+
+/// Two overlapping crops of one blocky random scene, saved as PNGs in a fresh folder for `tag`
+/// (enough detail for Photomerge to register them): (folder, paths).
+fn panorama_pngs(tag: &str) -> (String, Vec<String>) {
+    let dir = std::env::temp_dir().join(format!("photocraft-photomerge-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let cell = |x: u64, y: u64, c: u64| (((x * 73_856_093) ^ (y * 19_349_663) ^ (c * 83_492_791)).wrapping_mul(2_654_435_761) >> 7) % 256;
+    let paths = [("left.png", 0), ("right.png", 25)]
+        .into_iter()
+        .map(|(name, offset)| {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 160, "height": 120})).unwrap();
+            s.edit("texture", |doc, active| {
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for cy in 0..30 {
+                    for cx in 0..40 {
+                        let rgb = [0, 1, 2].map(|c| cell(cx + offset, cy, c) as f32 / 255.0);
+                        let (x, y) = (cx as i32 * 4, cy as i32 * 4);
+                        surface.fill_rect(photocraft_geom::Rect::new(x, y, x + 4, y + 4), &[rgb[0], rgb[1], rgb[2], 1.0]);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+            let p = dir.join(name).to_string_lossy().into_owned();
+            s.execute("file.saveACopy", json!({"path": p})).unwrap();
+            p
+        })
+        .collect();
+    (dir.to_string_lossy().into_owned(), paths)
+}
+
+/// File › Automate › Photomerge… opens Photoshop's dialog: Layout, the Source Files list (Use:
+/// Files picks single files with Browse…), the four options; OK merges the chosen files.
+#[test]
+fn photomerge_merges_the_files_chosen_with_browse() {
+    let (_, paths) = panorama_pngs("files");
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::Paths(vec![paths[0].clone()])), Some(FileDialogAnswer::Paths(vec![paths[1].clone()]))]);
+    h.state_mut().background_jobs = false;
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, PHOTOMERGE, json!({})).unwrap();
+    h.run_steps(4);
+    for label in [
+        "Layout:",
+        "Source Files",
+        "Browse…",
+        "Remove",
+        "Add Open Files",
+        "Blend Images Together",
+        "Vignette Removal",
+        "Geometric Distortion Correction",
+        "Content Aware Fill Transparent Areas",
+    ] {
+        assert!(h.query_by_label(label).is_some(), "Photomerge is missing {label}");
+    }
+    assert!(h.query_by_label("Create Smart Object after Loading Layers").is_none());
+    let (id, f) = dialog(&h).unwrap();
+    assert!(!f.contains_key("paths"), "no generic Paths text field");
+
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow()[0], FileDialogRequest::Open { multiple: true, .. }), "{:?}", asked.borrow());
+    assert_eq!(listed(&h), ["left.png"]);
+    assert!(h.get_by_label("OK").accesskit_node().is_disabled(), "Photomerge needs two images");
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert_eq!(listed(&h), ["left.png", "right.png"]);
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+
+    h.get_by_label("Blend Images Together").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Content Aware Fill Transparent Areas").accesskit_node().is_disabled(), "fill needs the blended composite");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("layout".into(), json!("reposition"));
+    h.run_steps(2);
+    let r = crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(r["layout"], "reposition", "{r}");
+    assert_eq!(r["placed"], json!(["left.png", "right.png"]), "{r}");
+    assert!((r["width"].as_i64().unwrap() - 260).abs() <= 2, "{r}");
+    let d = &h.state().session.active().unwrap().doc;
+    assert_eq!(d.layers.len(), 2);
+    assert!(d.layers.iter().all(|l| l.mask.is_none()), "Blend Images Together off: plain layers");
+}
+
+/// Use: Folder still merges every image of the chosen folder.
+#[test]
+fn photomerge_merges_a_folder() {
+    let (dir, _) = panorama_pngs("folder");
+    let (mut h, _) = harness(vec![Some(FileDialogAnswer::FolderTo(dir))]);
+    h.state_mut().background_jobs = false;
+    let id = open_photomerge(h.state_mut());
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("use".into(), json!("folder"));
+    h.run_steps(3);
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("left.png").is_some() && h.query_by_label("right.png").is_some(), "the folder's images are listed");
+    let r = crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(r["placed"].as_array().unwrap().len(), 2, "{r}");
+    let d = &h.state().session.active().unwrap().doc;
+    assert!(d.layers.iter().all(|l| l.mask.is_some()), "blended by default: one masked layer per image");
+}
