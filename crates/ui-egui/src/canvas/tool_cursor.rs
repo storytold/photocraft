@@ -595,4 +595,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
 }
 
 #[cfg(test)]
+mod pen_render_tests;
+#[cfg(test)]
 mod tests;

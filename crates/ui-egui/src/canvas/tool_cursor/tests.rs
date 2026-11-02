@@ -723,91 +723,58 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
 }
 
 #[test]
-fn pen_bitmap_independent_comparison_versus_painted_path_on_light_dark_midgrey() {
+fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
     for scale in [1.0, 1.25, 1.5, 2.0] {
-        for bg_lum in [240u8, 15u8, 128u8] {
-            for variant in super::PenVariant::all() {
-                // 1. Native bitmap path
-                let native_img = super::pen::rasterize(variant, scale).expect("rasterize succeeds");
-                let [nw, nh] = native_img.size;
+        let offset_px = 1.0 * scale;
+        let pad = (offset_px + 2.0).ceil() as usize;
+        let icon_px = (22.0 * scale).round() as usize;
+        let expected_side = icon_px + pad * 2;
 
-                let mut native_comp = vec![bg_lum; usize::from(nw) * usize::from(nh)];
-                for (i, px) in native_img.rgba.as_chunks::<4>().0.iter().enumerate() {
-                    let fg_val = px[0] as f32;
-                    let alpha = px[3] as f32 / 255.0;
-                    let comp = fg_val * alpha + (bg_lum as f32) * (1.0 - alpha);
-                    native_comp[i] = comp.round().clamp(0.0, 255.0) as u8;
-                }
+        for variant in super::PenVariant::all() {
+            let image = super::pen::rasterize(variant, scale).expect("pen variant rasterizes");
+            let [w, h] = image.size;
+            let [hx, hy] = image.hotspot;
 
-                // 2. Independent painted path representation
-                let icon_px = (22.0 * scale).round() as u32;
-                let svg_image = crate::icons::rasterize_svg(variant.icon_name(), icon_px, icon_px).expect("svg rasterize succeeds");
-                let [sw, sh] = svg_image.size;
+            // 1. Geometric bounds: exact bounding box accommodating 22pt icon + 1pt outline + padding
+            assert_eq!(usize::from(w), expected_side, "{variant:?} width at {scale}");
+            assert_eq!(usize::from(h), expected_side, "{variant:?} height at {scale}");
 
-                let pad = ((1.0 * scale) + 2.0).ceil() as usize;
-                let pw = sw + pad * 2;
-                let ph = sh + pad * 2;
-                assert_eq!(usize::from(nw), pw);
-                assert_eq!(usize::from(nh), ph);
+            // 2. Hotspot quantization: OS cursor requires integer hotspot coordinates.
+            let hot_box = variant.hotspot_in_box();
+            let ideal_hx = pad as f32 + (hot_box.x / 24.0) * 22.0 * scale;
+            let ideal_hy = pad as f32 + (hot_box.y / 24.0) * 22.0 * scale;
 
-                let mut painted_comp = vec![bg_lum; pw * ph];
+            // Quantization to integer physical pixel must not exceed 0.5 px (round)
+            let diff_x = (f32::from(hx) - ideal_hx).abs();
+            let diff_y = (f32::from(hy) - ideal_hy).abs();
+            assert!(diff_x <= 0.5 + 1e-4, "{variant:?} hotspot x quantization error {diff_x} exceeds 0.5 px at scale {scale}");
+            assert!(diff_y <= 0.5 + 1e-4, "{variant:?} hotspot y quantization error {diff_y} exceeds 0.5 px at scale {scale}");
 
-                let outline_alpha = 200.0 / 255.0;
-                let offset = 1.0 * scale;
-                for (dx, dy) in [(-1.0f32, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
-                    let ox = (pad as f32) + dx * offset;
-                    let oy = (pad as f32) + dy * offset;
-                    for y in 0..sh {
-                        for x in 0..sw {
-                            let src_a = f32::from(svg_image.pixels[y * sw + x].a()) / 255.0;
-                            if src_a <= 0.0 {
-                                continue;
-                            }
-                            let layer_a = src_a * outline_alpha;
-                            let dst_x = (ox + x as f32).round() as usize;
-                            let dst_y = (oy + y as f32).round() as usize;
-                            if dst_x < pw && dst_y < ph {
-                                let idx = dst_y * pw + dst_x;
-                                let cur = painted_comp[idx] as f32;
-                                painted_comp[idx] = (cur * (1.0 - layer_a)).round().clamp(0.0, 255.0) as u8;
-                            }
-                        }
-                    }
-                }
+            // Hotspot must lie strictly within bitmap bounds
+            assert!(usize::from(hx) < expected_side);
+            assert!(usize::from(hy) < expected_side);
 
-                for y in 0..sh {
-                    for x in 0..sw {
-                        let src_a = f32::from(svg_image.pixels[y * sw + x].a()) / 255.0;
-                        if src_a <= 0.0 {
-                            continue;
-                        }
-                        let dst_x = pad + x;
-                        let dst_y = pad + y;
-                        if dst_x < pw && dst_y < ph {
-                            let idx = dst_y * pw + dst_x;
-                            let cur = painted_comp[idx] as f32;
-                            painted_comp[idx] = (255.0 * src_a + cur * (1.0 - src_a)).round().clamp(0.0, 255.0) as u8;
-                        }
-                    }
-                }
-
-                // 3. Comparison metrics
-                let mut sum_abs_diff = 0.0f64;
-                let total_px = pw * ph;
-                for i in 0..total_px {
-                    let d = (native_comp[i] as i16 - painted_comp[i] as i16).unsigned_abs() as u8;
-                    sum_abs_diff += d as f64;
-                }
-                let mean_abs_diff = sum_abs_diff / (total_px as f64);
-
-                // Both must have visible white foreground and dark outline
-                assert!(native_comp.iter().any(|&p| p > bg_lum.saturating_add(30) || (bg_lum == 240 && p >= 250)));
-                assert!(native_comp.iter().any(|&p| p < bg_lum.saturating_sub(30) || (bg_lum == 15 && p <= 5)));
-
-                // Perceptual similarity: Mean Absolute Error should remain within tolerance (< 20 / 255)
-                // Note: we do not assert pixel-exact equality as subpixel resampling differs from discrete integer offsets
-                assert!(mean_abs_diff < 20.0, "{variant:?} at scale {scale} on bg {bg_lum}: MAE {mean_abs_diff:.2} exceeds tolerance");
+            // 3. Measured alpha edge profile:
+            // - Transparent margins: outermost 1px perimeter has zero alpha (no clipping)
+            let pixels = image.rgba.as_chunks::<4>().0;
+            for x in 0..usize::from(w) {
+                let top_alpha = pixels[x][3];
+                let bottom_alpha = pixels[(usize::from(h) - 1) * usize::from(w) + x][3];
+                assert_eq!(top_alpha, 0, "{variant:?} top border pixel non-zero at scale {scale}");
+                assert_eq!(bottom_alpha, 0, "{variant:?} bottom border pixel non-zero at scale {scale}");
             }
+            for y in 0..usize::from(h) {
+                let left_alpha = pixels[y * usize::from(w)][3];
+                let right_alpha = pixels[y * usize::from(w) + usize::from(w) - 1][3];
+                assert_eq!(left_alpha, 0, "{variant:?} left border pixel non-zero at scale {scale}");
+                assert_eq!(right_alpha, 0, "{variant:?} right border pixel non-zero at scale {scale}");
+            }
+
+            // - Non-empty foreground with solid white pixels and dark halo outline
+            let white_count = pixels.iter().filter(|p| p[0] == 255 && p[1] == 255 && p[2] == 255 && p[3] >= 200).count();
+            let dark_count = pixels.iter().filter(|p| p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] >= 50).count();
+            assert!(white_count > 10, "{variant:?} at {scale} has insufficient white foreground pixels: {white_count}");
+            assert!(dark_count > 10, "{variant:?} at {scale} has insufficient dark outline pixels: {dark_count}");
         }
     }
 }

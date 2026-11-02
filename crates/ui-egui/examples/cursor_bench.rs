@@ -17,8 +17,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use base64::Engine as _;
 use egui::{Context, pos2};
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType, encode};
+use photocraft_testkit::gpu_lock;
 use photocraft_ui_egui::canvas::tool_cursor::{PenVariant, native_scale, pen, pen_rasterization_count, rasterize_pen, reset_pen_rasterization_count};
 use photocraft_ui_egui::icons;
 use photocraft_ui_egui::state::Tool;
@@ -58,10 +60,31 @@ struct PerfReportRow {
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
+struct CursorVisualComparison {
+    variant: String,
+    scale: f32,
+    background: String,
+    dimensions: [u32; 2],
+    hotspot: [u32; 2],
+    mae_rgb: f64,
+    max_abs_diff_rgb: u8,
+    rmse_rgb: f64,
+    exact_match_pixels: usize,
+    total_pixels: usize,
+    match_percentage: f64,
+    pixels_diff_gt_2: usize,
+    pixels_diff_gt_5: usize,
+    pixels_diff_gt_15: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
 struct PerfReport {
     context: serde_json::Value,
     rows: Vec<PerfReportRow>,
     results: Vec<BenchmarkRun>,
+    visual_comparisons: Vec<CursorVisualComparison>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contact_sheet_png_base64: Option<String>,
 }
 
 fn percentile(sorted: &[f64], pct: f64) -> f64 {
@@ -119,6 +142,214 @@ fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, 
         elapsed_us = start.elapsed().as_secs_f64() * 1_000_000.0;
     });
     (elapsed_us, output.platform_output.cursor_image)
+}
+
+fn run_visual_oracle(save_dir: Option<&Path>) -> (Vec<CursorVisualComparison>, Option<String>) {
+    let _gpu = gpu_lock();
+
+    let scales = [1.0f32, 1.25, 1.5, 2.0];
+    let variants = PenVariant::all();
+    let backgrounds = [
+        ("light_240", egui::Color32::from_rgb(240, 240, 240)),
+        ("midgrey_128", egui::Color32::from_rgb(128, 128, 128)),
+        ("dark_15", egui::Color32::from_rgb(15, 15, 15)),
+    ];
+
+    let mut comparisons = Vec::new();
+    let mut rendered_scale_images: Vec<(f32, Vec<u8>, u32, u32)> = Vec::new();
+
+    for &scale in &scales {
+        let canvas_w = 640.0;
+        let canvas_h = 320.0;
+
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(canvas_w, canvas_h)).with_pixels_per_point(scale).wgpu().build_ui(|ui| {
+                ui.painter().rect_filled(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(canvas_w, canvas_h)), 0.0, egui::Color32::from_rgb(40, 40, 40));
+
+                for (bg_idx, (_bg_name, bg_color)) in backgrounds.iter().enumerate() {
+                    let y_top = 25.0 + (bg_idx as f32) * 95.0;
+                    let bg_rect = egui::Rect::from_min_size(egui::pos2(10.0, y_top), egui::vec2(canvas_w - 20.0, 90.0));
+                    ui.painter().rect_filled(bg_rect, 0.0, *bg_color);
+
+                    for (var_idx, variant) in variants.iter().enumerate() {
+                        let cell_x = 20.0 + (var_idx as f32) * 100.0;
+                        let y_center = y_top + 45.0;
+
+                        // Left: Painted baseline
+                        let p_painted = egui::pos2(cell_x + 24.0, y_center);
+                        icons::cursor(ui.ctx(), variant.icon_name(), p_painted, variant.hotspot_in_box() / 24.0, 22.0);
+
+                        // Right: Native cursor bitmap displayed at 1:1 pixel scale
+                        if let Some(native_img) = rasterize_pen(*variant, scale) {
+                            let [w, h] = native_img.size;
+                            let [hx, hy] = native_img.hotspot;
+                            let color_img = egui::ColorImage::from_rgba_unmultiplied([usize::from(w), usize::from(h)], &native_img.rgba);
+                            let tex = ui.ctx().load_texture(
+                                format!("bench_native_{}_{scale}_{bg_idx}", variant.icon_name()),
+                                color_img,
+                                egui::TextureOptions::NEAREST,
+                            );
+                            let p_native = egui::pos2(cell_x + 68.0, y_center);
+                            let native_rect = egui::Rect::from_min_size(
+                                p_native - egui::vec2(hx as f32 / scale, hy as f32 / scale),
+                                egui::vec2(w as f32 / scale, h as f32 / scale),
+                            );
+                            ui.painter().image(tex.id(), native_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                        }
+                    }
+                }
+            });
+            h.run_steps(3);
+            h.render()
+        }));
+
+        let Ok(Ok(rendered_img)) = built else {
+            eprintln!("wgpu rendering unavailable on this platform; skipping visual reference generation");
+            return (Vec::new(), None);
+        };
+
+        let img_w = rendered_img.width();
+        let img_h = rendered_img.height();
+        let raw_pixels = rendered_img.into_raw();
+
+        // Compute compare metrics for each variant and background
+        for (bg_idx, (bg_name, _)) in backgrounds.iter().enumerate() {
+            let y_top = 25.0 + (bg_idx as f32) * 95.0;
+            let y_center = y_top + 45.0;
+
+            for (var_idx, variant) in variants.iter().enumerate() {
+                let cell_x = 20.0 + (var_idx as f32) * 100.0;
+                let p_painted = egui::pos2(cell_x + 24.0, y_center);
+                let p_native = egui::pos2(cell_x + 68.0, y_center);
+
+                let Some(native_img) = rasterize_pen(*variant, scale) else {
+                    continue;
+                };
+                let [w, h] = native_img.size;
+                let [hx, hy] = native_img.hotspot;
+
+                let px_hot_painted = (p_painted.x * scale).round() as i32;
+                let py_hot_painted = (p_painted.y * scale).round() as i32;
+                let px_hot_native = (p_native.x * scale).round() as i32;
+                let py_hot_native = (p_native.y * scale).round() as i32;
+
+                let mut sum_abs_diff = 0.0f64;
+                let mut sum_sq_diff = 0.0f64;
+                let mut max_diff: u8 = 0;
+                let mut exact_matches = 0;
+                let mut diff_gt_2 = 0;
+                let mut diff_gt_5 = 0;
+                let mut diff_gt_15 = 0;
+                let total_pixels = usize::from(w) * usize::from(h);
+
+                for dy in 0..(h as i32) {
+                    let rel_y = dy - (hy as i32);
+                    let y_p = py_hot_painted + rel_y;
+                    let y_n = py_hot_native + rel_y;
+
+                    for dx in 0..(w as i32) {
+                        let rel_x = dx - (hx as i32);
+                        let x_p = px_hot_painted + rel_x;
+                        let x_n = px_hot_native + rel_x;
+
+                        if x_p >= 0 && x_p < img_w as i32 && y_p >= 0 && y_p < img_h as i32 && x_n >= 0 && x_n < img_w as i32 && y_n >= 0 && y_n < img_h as i32
+                        {
+                            let idx_p = ((y_p as u32 * img_w + x_p as u32) * 4) as usize;
+                            let idx_n = ((y_n as u32 * img_w + x_n as u32) * 4) as usize;
+
+                            let dr = (raw_pixels[idx_p] as i16 - raw_pixels[idx_n] as i16).unsigned_abs() as u8;
+                            let dg = (raw_pixels[idx_p + 1] as i16 - raw_pixels[idx_n + 1] as i16).unsigned_abs() as u8;
+                            let db = (raw_pixels[idx_p + 2] as i16 - raw_pixels[idx_n + 2] as i16).unsigned_abs() as u8;
+
+                            let pixel_max = dr.max(dg).max(db);
+                            let avg_diff = (dr as f64 + dg as f64 + db as f64) / 3.0;
+                            sum_abs_diff += avg_diff;
+                            sum_sq_diff += ((dr as f64).powi(2) + (dg as f64).powi(2) + (db as f64).powi(2)) / 3.0;
+
+                            if pixel_max > max_diff {
+                                max_diff = pixel_max;
+                            }
+                            if pixel_max == 0 {
+                                exact_matches += 1;
+                            }
+                            if pixel_max > 2 {
+                                diff_gt_2 += 1;
+                            }
+                            if pixel_max > 5 {
+                                diff_gt_5 += 1;
+                            }
+                            if pixel_max > 15 {
+                                diff_gt_15 += 1;
+                            }
+                        }
+                    }
+                }
+
+                let mae = if total_pixels > 0 { sum_abs_diff / (total_pixels as f64) } else { 0.0 };
+                let rmse = if total_pixels > 0 { (sum_sq_diff / (total_pixels as f64)).sqrt() } else { 0.0 };
+                let match_pct = if total_pixels > 0 { (exact_matches as f64 / total_pixels as f64) * 100.0 } else { 0.0 };
+
+                comparisons.push(CursorVisualComparison {
+                    variant: variant.icon_name().to_string(),
+                    scale,
+                    background: bg_name.to_string(),
+                    dimensions: [u32::from(w), u32::from(h)],
+                    hotspot: [u32::from(hx), u32::from(hy)],
+                    mae_rgb: mae,
+                    max_abs_diff_rgb: max_diff,
+                    rmse_rgb: rmse,
+                    exact_match_pixels: exact_matches,
+                    total_pixels,
+                    match_percentage: match_pct,
+                    pixels_diff_gt_2: diff_gt_2,
+                    pixels_diff_gt_5: diff_gt_5,
+                    pixels_diff_gt_15: diff_gt_15,
+                });
+            }
+        }
+
+        rendered_scale_images.push((scale, raw_pixels, img_w, img_h));
+    }
+
+    // Stitch rendered scales into a contact-sheet PNG
+    let max_w = rendered_scale_images.iter().map(|(_, _, w, _)| *w).max().unwrap_or(0);
+    let total_h: u32 = rendered_scale_images.iter().map(|(_, _, _, h)| *h + 10).sum();
+
+    if max_w == 0 || total_h == 0 {
+        return (comparisons, None);
+    }
+
+    let mut contact_sheet = vec![30u8; (max_w * total_h * 4) as usize];
+    let mut curr_y = 0u32;
+    for (_, pixels, w, h) in &rendered_scale_images {
+        for row in 0..*h {
+            let src_start = ((row * w) * 4) as usize;
+            let src_end = src_start + (*w * 4) as usize;
+            let dst_start = (((curr_y + row) * max_w) * 4) as usize;
+            let dst_end = dst_start + (*w * 4) as usize;
+            if dst_end <= contact_sheet.len() && src_end <= pixels.len() {
+                contact_sheet[dst_start..dst_end].copy_from_slice(&pixels[src_start..src_end]);
+            }
+        }
+        curr_y += *h + 10;
+    }
+
+    let img = match Image::from_raw(max_w, total_h, ChannelLayout::Rgba, SampleType::U8, contact_sheet) {
+        Ok(i) => i,
+        Err(_) => return (comparisons, None),
+    };
+    let encoded = match encode(&img, Format::Png, &EncodeOptions::default()) {
+        Ok(e) => e,
+        Err(_) => return (comparisons, None),
+    };
+
+    if let Some(dir) = save_dir {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(dir.join("pen_cursor_contact_sheet.png"), &encoded);
+    }
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
+    (comparisons, Some(b64))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -295,6 +526,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Run visual consistency oracle and render contact sheet outside timing samples
+    let (visual_comparisons, contact_sheet_b64) = run_visual_oracle(save_dir.as_deref().map(Path::new));
+
     if json_output {
         let perf_report = PerfReport {
             context: serde_json::json!({
@@ -305,6 +539,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
             rows: perf_rows,
             results: results.clone(),
+            visual_comparisons: visual_comparisons.clone(),
+            contact_sheet_png_base64: contact_sheet_b64,
         };
         let json_str = serde_json::to_string_pretty(&perf_report)?;
         if let Some(path) = json_file_path {
@@ -353,6 +589,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("- Cost gate (warm-path p95 < 0.1 ms / 100 µs): {}", if results.iter().all(|r| r.cost_gate_pass) { "PASS" } else { "FAIL" });
         if let Some(ref dir_path) = save_dir {
             println!("- Cursor PNG artifacts saved to: {dir_path}");
+        }
+        if !visual_comparisons.is_empty() {
+            println!("---------------------------------------------------------------------------------------------------------------------------------");
+            println!("Visual Consistency Reference (Painted Baseline vs Native Bitmap 1:1 on wgpu):");
+            println!(
+                "{:<18} {:<6} {:<12} {:<10} {:<10} {:<10} {:<10} {:<10} {:<10}",
+                "Variant", "Scale", "Background", "Size (px)", "Hotspot", "MAE (RGB)", "Max Diff", "RMSE", "Match %"
+            );
+            println!("---------------------------------------------------------------------------------------------------------------------------------");
+            for vc in &visual_comparisons {
+                println!(
+                    "{:<18} {:<6.2} {:<12} {:<10} {:<10} {:<10.2} {:<10} {:<10.2} {:<9.1}%",
+                    vc.variant,
+                    vc.scale,
+                    vc.background,
+                    format!("{}x{}", vc.dimensions[0], vc.dimensions[1]),
+                    format!("{},{}", vc.hotspot[0], vc.hotspot[1]),
+                    vc.mae_rgb,
+                    vc.max_abs_diff_rgb,
+                    vc.rmse_rgb,
+                    vc.match_percentage
+                );
+            }
         }
         println!("=================================================================================================================================");
     }
