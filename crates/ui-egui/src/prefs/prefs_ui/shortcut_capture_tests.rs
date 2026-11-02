@@ -210,12 +210,14 @@ fn cmd_z_is_recorded_while_capturing_and_undoes_otherwise() {
     assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"));
     assert_eq!(field(&h, id, "capture"), json!(false));
     key(&mut h, Key::Z, true, Modifiers::COMMAND);
+    key(&mut h, Key::Z, false, Modifiers::COMMAND);
     h.run_steps(2);
     assert_ne!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"), "⌘Z outside a capture undoes the change");
     assert_eq!(field(&h, id, "capture"), json!(false), "and doesn't wait for keys again");
     // CodeRabbit on #9504: clearing the restored capture isn't a new edit, so Redo still works.
     h.run_steps(2);
     key(&mut h, Key::Z, true, Modifiers::COMMAND | Modifiers::SHIFT);
+    key(&mut h, Key::Z, false, Modifiers::COMMAND | Modifiers::SHIFT);
     h.run_steps(2);
     assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"), "⇧⌘Z redoes the recorded shortcut");
     assert_eq!(field(&h, id, "capture"), json!(false));

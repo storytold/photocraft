@@ -147,10 +147,13 @@ pub(crate) mod tests {
 
     use super::*;
 
-    /// One frame of the shell's key handling with ⌘Z (plus `modifiers`) pressed.
+    /// One frame of the shell's key handling with ⌘Z (plus `modifiers`) pressed and released.
     pub(crate) fn press_z(app: &mut PhotocraftApp, ctx: &egui::Context, modifiers: egui::Modifiers) {
         let raw = egui::RawInput {
-            events: vec![egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers }],
+            events: vec![
+                egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers },
+                egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: false, repeat: false, modifiers },
+            ],
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw, |ui| crate::shortcuts::handle(app, ui.ctx()));

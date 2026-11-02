@@ -534,10 +534,8 @@ fn shortcut_handler_undoes_liquify_even_when_egui_owns_keyboard_focus() {
     }
     assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
 
-    let raw = egui::RawInput {
-        events: vec![egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }],
-        ..Default::default()
-    };
+    let z = |pressed: bool, modifiers: egui::Modifiers| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed, repeat: false, modifiers };
+    let raw = egui::RawInput { events: vec![z(true, egui::Modifiers::COMMAND), z(false, egui::Modifiers::COMMAND)], ..Default::default() };
     let mut out = ctx.run_ui(raw, |ui| {
         let ctx = ui.ctx();
         ctx.memory_mut(|m| m.request_focus(egui::Id::unique("liquify-slider-focus")));
@@ -546,16 +544,8 @@ fn shortcut_handler_undoes_liquify_even_when_egui_owns_keyboard_focus() {
     });
     out.textures_delta.clear();
     assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 0);
-    let raw = egui::RawInput {
-        events: vec![egui::Event::Key {
-            key: egui::Key::Z,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-        }],
-        ..Default::default()
-    };
+    let redo = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    let raw = egui::RawInput { events: vec![z(true, redo), z(false, redo)], ..Default::default() };
     let _ = ctx.run_ui(raw, |ui| {
         crate::shortcuts::handle(&mut app, ui.ctx());
     });
@@ -591,10 +581,11 @@ fn liquify_undo_and_redo_work_while_a_numeric_field_is_focused() {
     frame(&mut app, Vec::new());
     assert!(ctx.text_edit_focused(), "the numeric field is a focused text edit");
 
-    let z = |modifiers| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers };
-    frame(&mut app, vec![z(egui::Modifiers::COMMAND)]);
+    let z = |pressed: bool, modifiers| egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed, repeat: false, modifiers };
+    frame(&mut app, vec![z(true, egui::Modifiers::COMMAND), z(false, egui::Modifiers::COMMAND)]);
     assert_eq!(strokes(&app), 0, "Cmd+Z undoes the stroke with the field focused");
-    frame(&mut app, vec![z(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT)]);
+    let redo = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    frame(&mut app, vec![z(true, redo), z(false, redo)]);
     assert_eq!(strokes(&app), 1, "Cmd+Shift+Z redoes it");
 }
 
