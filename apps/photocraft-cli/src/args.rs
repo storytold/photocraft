@@ -102,6 +102,9 @@ pub(crate) struct InfoArgs {
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
     pub(crate) compact: bool,
+    /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
+    #[arg(long)]
+    pub(crate) detail: bool,
 }
 
 /// Open a file (or start a new document), run engine commands in order, save the result
