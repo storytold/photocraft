@@ -32,6 +32,9 @@ pub enum FileDialogRequest {
         extensions: Option<Vec<String>>,
         /// Per-file limit: byte-producing services must check size before reading; consumers recheck.
         max_bytes: Option<u64>,
+        /// Aggregate staged contents limit; byte-producing services preflight before any read.
+        /// Path-producing services do not stage payloads and leave this to the contents consumer.
+        max_contents_bytes: Option<u64>,
     },
     /// Which folder to read from. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
@@ -250,7 +253,7 @@ impl PhotocraftApp {
     ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
-        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, max_bytes: max }, move |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, max_bytes: max, max_contents_bytes: None }, move |app, answer| {
             let (name, bytes) = read_picked(answer, max)?;
             then(app, name, bytes)
         })
@@ -259,7 +262,7 @@ impl PhotocraftApp {
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, max_bytes: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, max_bytes: None, max_contents_bytes: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);

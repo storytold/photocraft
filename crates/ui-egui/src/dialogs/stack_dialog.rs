@@ -98,12 +98,15 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
         })
     } else {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-        app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, max_bytes: None }, move |app, answer| {
-            let FileDialogAnswer::Paths(paths) = answer else { return Err("Load Files into Stack reads files from disk".into()) };
-            let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
-            add(&mut d.fields, paths);
-            Ok(Value::Null)
-        })
+        app.ask_file(
+            FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, max_bytes: None, max_contents_bytes: None },
+            move |app, answer| {
+                let FileDialogAnswer::Paths(paths) = answer else { return Err("Load Files into Stack reads files from disk".into()) };
+                let d = app.ui.dialog_mut(id).ok_or("the dialog was closed")?;
+                add(&mut d.fields, paths);
+                Ok(Value::Null)
+            },
+        )
     };
     if let Err(e) = r.map(|_| ()).or_else(|e| if e == crate::file_dialog::CANCELLED { Ok(()) } else { Err(e) }) {
         app.ui.status = e;

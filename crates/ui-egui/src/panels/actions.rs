@@ -558,10 +558,34 @@ fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Val
     Ok(r)
 }
 
+/// Bound browser selection staging to 512 MiB, separately from each preset file's input cap.
+/// This does not bound parsed actions, transient copies or the whole process's memory.
+const MAX_LOAD_CONTENTS_BYTES: u64 = 512 << 20;
+
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
+    load_dialog_with_limit(app, MAX_LOAD_CONTENTS_BYTES)
+}
+
+/// Carry the selection budget through the producer and recheck byte-producing custom services.
+fn load_dialog_with_limit(app: &mut PhotocraftApp, max_contents_bytes: u64) -> Result<Value, String> {
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]), max_bytes: None }, |app, answer| {
+    let request = FileDialogRequest::Open {
+        multiple: true,
+        initial_dir,
+        extensions: Some(vec!["atn".into()]),
+        max_bytes: None,
+        max_contents_bytes: Some(max_contents_bytes),
+    };
+    app.ask_file(request, move |app, answer| {
+        let total = match &answer {
+            FileDialogAnswer::Contents(_, bytes) => Some(bytes.len() as u64),
+            FileDialogAnswer::ContentsMany(files) => files.iter().try_fold(0u64, |sum, (_, bytes)| sum.checked_add(bytes.len() as u64)),
+            _ => Some(0), // Native paths are read one at a time, not staged as contents.
+        };
+        if total.is_none_or(|total| total > max_contents_bytes) {
+            return Err(format!("the selected files are larger than {max_contents_bytes} bytes or their total size is invalid"));
+        }
         let files: Vec<_> = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
             FileDialogAnswer::Contents(name, bytes) => vec![(name, Some(bytes))],

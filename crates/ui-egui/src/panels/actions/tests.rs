@@ -26,7 +26,9 @@ fn bulk_load_imports_every_chosen_action_file() {
     load_dialog(&mut app).unwrap();
     app.poll_file_dialog(&egui::Context::default(), None);
     assert_eq!(app.session.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: Some(ext), .. }] if ext == &["atn"]));
+    assert!(
+        matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: Some(ext), max_bytes: None, max_contents_bytes: Some(MAX_LOAD_CONTENTS_BYTES), .. }] if ext == &["atn"])
+    );
     assert!(!app.file_dialog_open());
     assert!(!app.ui.status_error, "{}", app.ui.status);
 }
@@ -2031,4 +2033,61 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let names: Vec<&str> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
+}
+
+/// Byte-producing providers must stay within the whole-selection budget before the first
+/// set is parsed or replaced; exact-size single and multiple selections still import normally.
+#[test]
+fn bulk_load_rechecks_total_contents_before_importing_any_set() {
+    use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
+    let first = ("replacement.atn".to_string(), action_set_bytes("Shared", "Replacement"));
+    let last = ("later.atn".to_string(), action_set_bytes("Other", "Later"));
+    for multiple in [false, true] {
+        for allowed in [false, true] {
+            let total = first.1.len() as u64 + if multiple { last.1.len() as u64 } else { 0 };
+            let max = total - u64::from(!allowed);
+            let answer = if multiple {
+                FileDialogAnswer::ContentsMany(vec![first.clone(), last.clone()])
+            } else {
+                FileDialogAnswer::Contents(first.0.clone(), first.1.clone())
+            };
+            let (show, asked) = crate::file_dialog::fake(vec![Some(answer)]);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+            let mut original = Action::new("Original", vec![]);
+            original.set = Some("Shared".into());
+            app.session.actions.list.push(original);
+            app.ui.actions.selected = Some(0);
+            let before = app.session.actions.clone();
+            let panel = app.ui.actions.clone();
+            let journal = app.session.journal.clone();
+            load_dialog_with_limit(&mut app, max).unwrap();
+            app.poll_file_dialog(&egui::Context::default(), None);
+            assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { max_bytes: None, max_contents_bytes: Some(limit), .. }] if *limit == max));
+            assert!(!app.file_dialog_open());
+            assert_eq!(app.ui.status_error, !allowed, "{}", app.ui.status);
+            if allowed {
+                let names: Vec<_> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
+                assert_eq!(names, if multiple { vec!["Replacement", "Later"] } else { vec!["Replacement"] });
+            } else {
+                assert!(app.ui.status.contains("selected files"), "{}", app.ui.status);
+                assert_eq!(app.session.actions, before, "not even the first same-set replacement may run");
+                assert_eq!(app.ui.actions, panel);
+                assert_eq!(app.session.journal, journal);
+            }
+        }
+    }
+}
+
+/// Native path services do not retain a whole selection's payloads in the picker.
+#[test]
+fn bulk_load_contents_budget_does_not_limit_native_paths() {
+    use crate::file_dialog::FileDialogAnswer;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native.atn");
+    std::fs::write(&path, action_set_bytes("Native", "From disk")).unwrap();
+    let mut app = disk_app(vec![Some(FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()]))]);
+    load_dialog_with_limit(&mut app, 0).unwrap();
+    app.poll_file_dialog(&egui::Context::default(), None);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.actions.list[0].name, "From disk");
 }

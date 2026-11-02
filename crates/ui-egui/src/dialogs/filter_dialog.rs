@@ -1099,7 +1099,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, dialog: u64, command: St
     use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
     let doc = app.active_doc_id()?;
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None, max_bytes: None }, move |app, answer| {
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None, max_bytes: None, max_contents_bytes: None }, move |app, answer| {
         let path = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
             FileDialogAnswer::Unavailable(e) => return Err(e),
