@@ -36,6 +36,8 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
+On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
@@ -630,6 +632,10 @@ PhotoCraft equivalent.
 
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
+
+`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against four small,
+independently encoded fixtures in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
+its README): `cargo test -p photocraft-psd --test it atn_contract::`.
 
 ## Remove Tool quality
 
