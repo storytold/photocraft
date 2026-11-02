@@ -53,11 +53,15 @@ the editor on an egui frame rather than re-entering a document from a callback.
 | `setEnabled(boolean)` | Enable or suspend new provider operations; returns `true`. |
 | `setResources(connectionId, resources)` | Replace that connection's recent resource list with at most 100 entries. |
 | `requestOpen(resourceId)` | Start an opening request and return its opaque `requestId`; dispatches `openRequest`. |
-| `openResource(requestId, filename, bytes)` | Supply a known read request's file as a `Uint8Array`, up to 80 MiB. |
+| `openResource(requestId, filename, bytes)` | Supply a known read request's file as a `Uint8Array`, up to 80 MiB per file and across all queued opens. |
 | `cancelOpen(requestId, error)` | Finish a failed read. An empty error cancels it; a nonempty error reports failure. |
 | `resolveSaveDialog(requestId, destination, filename)` | Answer a pending Save destination request with `provider`, `device` or `cancel`. |
 | `saveResult(requestId, status, resourceId)` | Report `saved`, `failed`, `download` or `cancel` for a captured save. Only a valid `saved` acknowledges persistence. |
 | `snapshot()` | Inspect provider identity, active document, captured revision and outstanding save state. |
+
+A byte-size or queue-capacity rejection does not retire a known pending read request. Retry
+with acceptable bytes after queued work is consumed, or call `cancelOpen` to cancel or report
+failure for that request.
 
 A resource list entry has this shape:
 
@@ -67,8 +71,11 @@ A resource list entry has this shape:
 
 Only these fields are read; extra properties are ignored without serializing their values.
 The provider owns sorting and refreshing the list. `updatedAt` is bounded display text, not a
-timestamp the editor interprets. Resource IDs are opaque identifiers, never filesystem paths.
-External Recents are separate from the editor's existing local paths and preferences.
+timestamp the editor interprets. Provider IDs, account namespaces and resource IDs must each
+contain 1–160 ASCII letters, digits, hyphens (`-`) or underscores (`_`). Hosts must map storage
+identifiers that do not satisfy this syntax before passing them to the bridge. Resource IDs are
+opaque identifiers, never filesystem paths. External Recents are separate from the editor's
+existing local paths and preferences.
 
 ## Save and durable acknowledgement
 
@@ -334,11 +341,11 @@ Success requires the original literal fixture marker exactly once, one passed/ze
 ignored, an actual `PHOTOCRAFT_OPAQUE_CHILD_PROOF` from the parent and durable matching index/
 module/WASM receipts. The child has its own generated test context; its output does not replace
 the top-level test result. Missing/unbound support fails rather than silently skipping the
-foreign-origin scenario. Seven native support regressions cover the nonzero loopback HTTP
+foreign-origin scenario. Nine native support regressions cover the nonzero loopback HTTP
 binding, separation from ChromeDriver's URL, exact proof origin, route escapes, chunk framing,
-streaming SHA256 against the existing implementation, and real bounded loopback HTTP responses
-with exactly one CORP, COOP, COEP and opaque-origin CORS header at their required values for
-HTML, JavaScript and WASM artifacts.
+streaming SHA256 against the existing implementation, bare evidence filenames and accepted-socket
+blocking setup. The real bounded loopback HTTP responses retain exactly one CORP, COOP, COEP and
+opaque-origin CORS header at their required values for HTML, JavaScript and WASM artifacts.
 
 The existing malformed-open Rust fixture injects an importer failure. It does not demonstrate
 decoding of a real corrupt file. Neither native nor browser boundary tests establish remote

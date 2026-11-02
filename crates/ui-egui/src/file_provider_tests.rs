@@ -123,6 +123,79 @@ fn save_a_copy_does_not_use_the_provider_or_mark_the_editable_saved() {
 }
 
 #[test]
+fn refused_pending_saves_leave_no_new_intent_and_keep_local_copies_local() {
+    for pending_command in ["file.save", "file.saveAs"] {
+        for refused_command in ["file.save", "file.saveAs"] {
+            let ctx = egui::Context::default();
+            let (mut app, provider, written) = app(true);
+            let request = start_save(&mut app, &provider, &ctx, pending_command);
+            let state = app.session.active().unwrap();
+            let document = state.doc.id;
+            let before = (document, state.revision, state.saved_revision, state.is_dirty(), state.path.clone(), state.doc.name.clone());
+            let journal = app.session.journal.clone();
+            let status = (app.ui.status.clone(), app.ui.status_error);
+            assert!(provider.pending_for(document) && app.saving());
+            assert!(!app.file_dialog_open());
+            assert!(written.borrow().is_empty());
+            // begin consumed the admitted capture's intent. Observe the same routing decision
+            // pick_save uses, without introducing another chooser or replacing that capture.
+            provider.prepare_dialog(Some(document));
+            assert!(!provider.wants_dialog());
+            file_providers::capture(&mut app);
+            let pending = provider.snapshot();
+            let error = menus::invoke(&mut app, &ctx, refused_command, json!({})).unwrap_err();
+            assert_eq!(error, "Wait for the pending save to finish before saving again");
+            file_providers::capture(&mut app);
+            assert!(!provider.wants_dialog(), "a refused save must not install an ownerless filename-chooser intent");
+            assert_eq!(provider.snapshot(), pending, "the original request and document still own the pending capture");
+            let state = app.session.active().unwrap();
+            assert_eq!((state.doc.id, state.revision, state.saved_revision, state.is_dirty(), state.path.clone(), state.doc.name.clone()), before);
+            assert_eq!(app.session.journal, journal);
+            assert_eq!((app.ui.status.clone(), app.ui.status_error), status);
+            assert!(provider.pending_for(document) && app.saving());
+            assert!(!app.file_dialog_open() && !app.save_options_open());
+            assert!(provider.take_events().is_empty());
+            assert!(written.borrow().is_empty());
+
+            // A failed upload keeps the exact immutable capture available for retry.
+            provider.result(request.clone(), "failed".into(), String::new()).unwrap();
+            assert!(provider.pending_for(document));
+            file_providers::tick(&mut app, &ctx);
+            assert!(provider.pending_for(document) && app.saving());
+            assert!(!provider.wants_dialog());
+            // Explicit cancellation retires that original capture without acknowledging persistence.
+            provider.result(request, "cancel".into(), String::new()).unwrap();
+            file_providers::tick(&mut app, &ctx);
+            assert!(!provider.pending_for(document) && !app.saving());
+            assert!(!provider.wants_dialog());
+            let state = app.session.active().unwrap();
+            assert_eq!((state.doc.id, state.revision, state.saved_revision, state.is_dirty(), state.path.clone(), state.doc.name.clone()), before);
+            // The normal copy entry point clears idle intents itself; preserve its actual local route.
+            menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
+            app.poll_file_dialog(&ctx, None);
+            assert_eq!(written.borrow().len(), 1);
+            assert_eq!(written.borrow()[0].1, [10, 20, 30]);
+            assert!(provider.take_events().is_empty());
+            let state = app.session.active().unwrap();
+            assert_eq!((state.doc.id, state.revision, state.saved_revision, state.is_dirty(), state.path.clone(), state.doc.name.clone()), before);
+            assert!(!provider.pending_for(document));
+
+            // Once idle, the same Save/Save As entry point still records its intended route.
+            menus::invoke(&mut app, &ctx, refused_command, json!({})).unwrap();
+            app.poll_file_dialog(&ctx, None);
+            let retry = event(&provider, "saveDialog");
+            let document_id = document.0.to_string();
+            assert_eq!(retry["documentId"].as_str(), Some(document_id.as_str()));
+            assert_eq!(retry["intent"], if refused_command == "file.save" { "save" } else { "saveAs" });
+            provider.resolve_dialog(retry["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+            app.poll_file_dialog(&ctx, None);
+            assert!(!provider.pending_for(document) && !app.saving());
+            assert_eq!(written.borrow().len(), 1);
+        }
+    }
+}
+
+#[test]
 fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
     for edit_after_capture in [false, true] {
         let ctx = egui::Context::default();

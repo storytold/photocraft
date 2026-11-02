@@ -85,7 +85,9 @@ mod support {
             return Err("--tmp-root must be an existing task-owned private directory, not / or /tmp".into());
         }
         let evidence = evidence.ok_or("--evidence is required")?;
-        let parent = evidence.parent().ok_or("evidence needs an existing parent")?.canonicalize().map_err(|e| e.to_string())?;
+        let parent = evidence.parent().ok_or("evidence needs an existing parent")?;
+        let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+        let parent = parent.canonicalize().map_err(|e| e.to_string())?;
         let filename = evidence.file_name().ok_or("evidence needs a filename")?;
         let evidence = parent.join(filename);
         if evidence.exists() {
@@ -472,6 +474,13 @@ mod support {
         Ok(Request { target, origin })
     }
 
+    /// Accepted sockets can inherit the listener's nonblocking mode on Unix; request reads must wait within the existing timeout.
+    fn configure_accepted_socket(socket: &TcpStream, timeout: Duration) -> Result<(), String> {
+        socket.set_nonblocking(false).map_err(|e| e.to_string())?;
+        socket.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+        socket.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())
+    }
+
     fn serve(listener: TcpListener, token: &str, state: &Mutex<State>, stop: &AtomicBool, deadline: Instant) -> Result<(), String> {
         let mut count = 0;
         while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -481,8 +490,7 @@ mod support {
                     if !peer.ip().is_loopback() || count > MAX_CONNECTIONS {
                         return Err("relay connection bound exceeded".into());
                     }
-                    socket.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
-                    socket.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+                    configure_accepted_socket(&socket, Duration::from_secs(10))?;
                     if let Err(error) = handle(&mut socket, token, state, stop, deadline) {
                         let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                         // Unauthorised browser favicon requests do not invalidate a genuine run.
@@ -768,14 +776,98 @@ mod support {
 
     #[cfg(test)]
     mod tests {
-        use super::{Digest, MAX_HEADER, State, artifact_path, configure_runner_http, observe, request, response_headers, unchunk, valid_proof};
+        use super::{
+            Digest, MAX_HEADER, State, artifact_path, config, configure_accepted_socket, configure_runner_http, observe, request, response_headers, unchunk,
+            valid_proof,
+        };
         use std::ffi::OsStr;
         use std::io::{Read, Write};
         use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-        use std::path::Path;
+        use std::path::{Path, PathBuf};
         use std::process::Command;
-        use std::sync::atomic::AtomicBool;
-        use std::time::{Duration, Instant};
+        use std::sync::{atomic::AtomicBool, mpsc};
+        use std::thread;
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+        /// Own only a freshly created fixture directory; clean it even if a configuration assertion fails.
+        struct ConfigDirectory(PathBuf);
+
+        impl Drop for ConfigDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        /// Exercise actual argument resolution without changing process CWD or creating evidence in it.
+        #[test]
+        fn evidence_config_accepts_bare_filenames_and_preserves_path_guards() -> Result<(), String> {
+            let nonce = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
+            let name = format!("photocraft-origin-config-{}-{nonce}", std::process::id());
+            let directory = std::env::temp_dir().join(&name);
+            std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+            let directory = ConfigDirectory(directory);
+            let temporary = directory.0.to_str().ok_or("non-UTF8 fixture directory")?;
+            let configure = |evidence: &str| config(&["--tmp-root", temporary, "--evidence", evidence]);
+            let cwd = std::env::current_dir().and_then(|path| path.canonicalize()).map_err(|e| e.to_string())?;
+            let filename = format!("{name}.json");
+            assert!(!cwd.join(&filename).exists(), "bare evidence fixture must not already exist");
+            let bare = configure(&filename)?;
+            assert_eq!(bare.evidence, cwd.join(&filename));
+            assert_eq!(bare.temporary, directory.0.canonicalize().map_err(|e| e.to_string())?);
+            assert_eq!(bare.timeout, Duration::from_secs(1800));
+            assert!(!bare.evidence.exists(), "configuration must not create the evidence file");
+
+            let nested = directory.0.join("new-origin.json");
+            let expected = directory.0.canonicalize().map_err(|e| e.to_string())?.join("new-origin.json");
+            assert_eq!(configure(nested.to_str().ok_or("non-UTF8 evidence path")?)?.evidence, expected);
+            let missing = directory.0.join("missing-parent").join("new-origin.json");
+            assert!(configure(missing.to_str().ok_or("non-UTF8 missing path")?).is_err());
+            assert!(configure(".").is_err(), "a directory without a filename must remain invalid");
+            assert!(configure("").is_err(), "an empty path must remain invalid");
+            assert!(config(&["--tmp-root", temporary]).is_err(), "evidence remains required");
+            std::fs::write(&nested, b"preserved evidence").map_err(|e| e.to_string())?;
+            assert!(configure(nested.to_str().ok_or("non-UTF8 evidence path")?).is_err(), "existing evidence must not be overwritten");
+            assert_eq!(std::fs::read(&nested).map_err(|e| e.to_string())?, b"preserved evidence".to_vec());
+            Ok(())
+        }
+
+        /// Force the inherited-mode condition on Linux too, then read a real request through the production socket setup.
+        #[test]
+        fn accepted_socket_setup_blocks_until_request_bytes_arrive() -> Result<(), String> {
+            let timeout = Duration::from_secs(2);
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+            let mut client = TcpStream::connect_timeout(&listener.local_addr().map_err(|e| e.to_string())?, timeout).map_err(|e| e.to_string())?;
+            client.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+            let (mut server, peer) = listener.accept().map_err(|e| e.to_string())?;
+            assert!(peer.ip().is_loopback());
+            server.set_nonblocking(true).map_err(|e| e.to_string())?;
+            let mut byte = [0_u8; 1];
+            assert!(matches!(server.read(&mut byte), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+            configure_accepted_socket(&server, timeout)?;
+            assert_eq!(server.read_timeout().map_err(|e| e.to_string())?, Some(timeout));
+            assert_eq!(server.write_timeout().map_err(|e| e.to_string())?, Some(timeout));
+            let received = thread::scope(|scope| -> Result<_, String> {
+                let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+                let (result_tx, result_rx) = mpsc::sync_channel(1);
+                let reader = scope.spawn(move || -> Result<(), String> {
+                    ready_tx.send(()).map_err(|e| e.to_string())?;
+                    let received = request(&mut server, &AtomicBool::new(false), Instant::now() + timeout);
+                    result_tx.send(received).map_err(|e| e.to_string())
+                });
+                ready_rx.recv_timeout(timeout).map_err(|e| e.to_string())?;
+                assert!(
+                    matches!(result_rx.recv_timeout(Duration::from_millis(100)), Err(mpsc::RecvTimeoutError::Timeout)),
+                    "accepted relay socket must wait for request bytes instead of returning WouldBlock"
+                );
+                client.write_all(b"GET /fixture/ HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\n\r\n").map_err(|e| e.to_string())?;
+                let received = result_rx.recv_timeout(timeout).map_err(|e| e.to_string())?;
+                reader.join().map_err(|_| "request reader panicked".to_string())??;
+                received
+            })?;
+            assert_eq!(received.target, "/fixture/");
+            assert_eq!(received.origin.as_deref(), Some("null"));
+            Ok(())
+        }
 
         #[test]
         fn relay_wire_headers_allow_public_artifact_embedding_without_weakening_isolation() -> Result<(), String> {
@@ -789,9 +881,7 @@ mod support {
                 client.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
                 let (mut server, peer) = listener.accept().map_err(|e| e.to_string())?;
                 assert!(peer.ip().is_loopback());
-                server.set_nonblocking(false).map_err(|e| e.to_string())?;
-                server.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-                server.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+                configure_accepted_socket(&server, timeout)?;
                 client.write_all(b"GET /fixture/ HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\n\r\n").map_err(|e| e.to_string())?;
                 let received = request(&mut server, &AtomicBool::new(false), Instant::now() + timeout)?;
                 assert_eq!(received.target, "/fixture/");

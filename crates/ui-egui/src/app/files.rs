@@ -189,10 +189,10 @@ impl PhotocraftApp {
         }
         let provider = self.services.file_provider.clone().filter(|host| host.enabled());
         if let (Some(provider), Some(doc)) = (&provider, self.session.active().map(|state| state.doc.id)) {
-            provider.ensure_intent(doc, if plain_save { "save" } else { "saveAs" });
             if provider.pending_for(doc) {
                 return Err("Wait for the pending save to finish before saving again".into());
             }
+            provider.ensure_intent(doc, if plain_save { "save" } else { "saveAs" });
             if let Some(path) = path.as_ref().filter(|_| !provider.prepared_for(doc)) {
                 let suggested = path.clone();
                 return self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path, choices)));
