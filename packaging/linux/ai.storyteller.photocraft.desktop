@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=PhotoCraft
+Name=ShotoPhopEX
 GenericName=Image Editor
 Comment=Edit photos and layered PSD documents
 Exec=photocraft %F

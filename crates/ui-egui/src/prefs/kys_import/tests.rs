@@ -149,7 +149,7 @@ fn import_button_fills_the_dialog_and_ok_applies_the_set() {
     assert!(overrides.get("view.zoomIn").is_none(), "Cmd+= is among the keys, so the default stays: {overrides}");
     let message = field(&h, "message");
     // 9 commands and the Move Tool's V (its own letter: no override).
-    assert_eq!(message, json!("Imported 10 shortcuts from texcuts.kys. Click OK to keep them. 2 commands are not in PhotoCraft."));
+    assert_eq!(message, json!("Imported 10 shortcuts from texcuts.kys. Click OK to keep them. 2 commands are not in ShotoPhopEX."));
     assert!(overrides.get("tools.select.move").is_none(), "{overrides}");
     assert_eq!(field(&h, "capture"), json!(false));
     assert_eq!(field(&h, "messageWarning"), json!(false), "an import clears the earlier shortcut conflict warning");

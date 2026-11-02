@@ -3,7 +3,7 @@ use crate::canvas::{ToolEvent, tool_event};
 
 fn app() -> PhotocraftApp {
     let mut s = photocraft_engine::Session::new();
-    // PhotoshopEX: no generative server, so the Object Selection tool stays classical here.
+    // ShotoPhopEX: no generative server, so the Object Selection tool stays classical here.
     s.edit_prefs(|p| {
         p.integrations.models_path.clear();
         p.integrations.runtime_path.clear();

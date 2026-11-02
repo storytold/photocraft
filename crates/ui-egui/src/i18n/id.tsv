@@ -3643,13 +3643,13 @@ curves	Smooth	Haluskan
 	Native runtime folders	Folder runtime native
 	Models folder	Folder model native
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Instans
 	Intersect	Irisan
 	Prompt	Prompt
 	Template	Templat
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Perlebar
 	Fill Holes	Isi Lubang
 	Widen the object's mask by this many pixels (negative shrinks it)	Perlebar mask objek sebanyak piksel ini (nilai negatif mengecilkannya)
@@ -3657,16 +3657,16 @@ curves	Smooth	Haluskan
 	Feather the mask's edge by this many pixels	Haluskan tepi mask sebanyak piksel ini
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Perlebar seleksi sebanyak piksel ini sebelum pengisian, agar pengganti yang lebih besar punya ruang
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generatif
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Pratinjau menampilkan isian klasik; OK dan Terapkan menjalankan model ke layer baru.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Terbaik dari dua
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Menjalankan dua kandidat dan menampilkan yang tampak tak tersentuh; nonaktif: satu kandidat, sekitar separuh waktu
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adaptor di subfolder loras pada folder model, diterapkan oleh mesin native
 	Strength	Kekuatan

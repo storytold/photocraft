@@ -5,14 +5,14 @@
   <id>ai.storyteller.photocraft</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>PhotoCraft</name>
+  <name>ShotoPhopEX</name>
   <summary>Edit photos and layered PSD documents</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
   <description>
     <p>
-      PhotoCraft is an open-source, native image editor with the familiar menus,
+      ShotoPhopEX is an open-source, native image editor with the familiar menus,
       shortcuts, panels and tools professionals expect: layers, masks, adjustment
       layers, layer styles, type and brushes.
     </p>

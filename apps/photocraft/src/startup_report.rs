@@ -38,7 +38,7 @@ fn has_display() -> bool {
 /// The dialog's text: the error, the renderer that was tried and why it wasn't the preference,
 /// the version and, when one was opened, the log file.
 pub fn text(error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
-    let mut text = format!("PhotoCraft could not start.\n\n{error}\n\nRenderer: {renderer}");
+    let mut text = format!("{} could not start.\n\n{error}\n\nRenderer: {renderer}", photocraft_engine::build_info::APP_NAME);
     if let Some(note) = note {
         text.push_str(&format!("\nStartup: {note}"));
     }

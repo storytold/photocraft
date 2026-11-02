@@ -89,7 +89,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.breezeLight", "Breeze", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.softLight", "Soft", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
-    // PhotoshopEX: the generative panels and the help page for the generative features.
+    // ShotoPhopEX: the generative panels and the help page for the generative features.
     ("window.toggle.generate", "Generate", &["Window"], None),
     ("window.toggle.generations", "Generations", &["Window"], None),
     ("help.generativeFeatures", "Generative Features…", &["Help"], None),

@@ -6,7 +6,7 @@ use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 
 const PRESETS: [(&str, &str, &[Group], bool); 6] = [
-    // PhotoshopEX: Essentials also shows the Generate and Generations groups.
+    // ShotoPhopEX: Essentials also shows the Generate and Generations groups.
     ("essentials", "Essentials", &[Group::Color, Group::Properties, Group::Generate, Group::Generations, Group::Layers], false),
     ("photography", "Photography", &[Group::Properties, Group::Navigator, Group::History, Group::Layers], false),
     ("painting", "Painting", &[Group::Color, Group::Layers], false),

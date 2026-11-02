@@ -1,6 +1,6 @@
 # Generative architecture
 
-Updated 2026-10-29: PhotoshopEX uses only the native worker. ComfyUI’s client, HTTP and
+Updated 2026-10-29: ShotoPhopEX uses only the native worker. ComfyUI’s client, HTTP and
 WebSocket transport, sidecar, graph templates and backend preferences have been removed.
 
 The egui shell, CLI, control channel and MCP dispatch engine commands. Generative commands
@@ -30,5 +30,5 @@ real worker protocol. It records requests and raw blobs and supplies determinist
 matte rectangles, segmentation masks, chat, errors, progress and cancellation.
 
 `docs/comfy/bench/scripts/*` remains external comparison tooling. Any ComfyUI there runs
-independently of PhotoshopEX. Scripts using removed app preferences require the last
+independently of ShotoPhopEX. Scripts using removed app preferences require the last
 ComfyUI-capable app commit `cdcedbd8`, or direct ComfyUI HTTP calls.

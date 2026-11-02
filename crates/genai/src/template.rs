@@ -142,7 +142,7 @@ pub struct Meta {
     pub erase_selection: bool,
     /// Fill templates with a removal adapter trained on a painted highlight: the colour the
     /// engine paints the selection in the request picture ("red"), sending the adapter's
-    /// trigger sentence instead of the removal wording (PhotoshopEX).
+    /// trigger sentence instead of the removal wording (ShotoPhopEX).
     #[serde(default)]
     pub highlight: Option<String>,
     #[serde(default)]

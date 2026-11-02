@@ -389,7 +389,7 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     }
     .map_err(EngineError::Other)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    // PhotoshopEX: through the fill model when asked and a backend is set up (the selection,
+    // ShotoPhopEX: through the fill model when asked and a backend is set up (the selection,
     // widened by the workspace's expand edits; the lasso edits are the workspace's own and stay
     // classical). The result is a masked layer above the active one, whatever `output` says.
     if bool_or(p, "generative", false) && crate::generate_cmds::generative_configured(s) {

@@ -353,7 +353,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
-        // PhotoshopEX: the Generate hub's cards in a window (`generate_hub`).
+        // ShotoPhopEX: the Generate hub's cards in a window (`generate_hub`).
         "help.generativeFeatures" => {
             app.ui.hub.open = true;
             Ok(json!({"hub": true}))
@@ -832,7 +832,7 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     p.history = history;
     p.properties = props;
     p.character = app.ui.workspace == "Graphic and Web";
-    // PhotoshopEX: Essentials shows the Generate and Generations groups; the focused
+    // ShotoPhopEX: Essentials shows the Generate and Generations groups; the focused
     // workspaces keep their room for the panels they are about.
     let essentials = !matches!(app.ui.workspace.as_str(), "Photography" | "Painting" | "Graphic and Web" | "Pixel Art" | "Motion");
     p.generate = essentials;

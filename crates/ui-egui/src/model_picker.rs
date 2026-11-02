@@ -1,4 +1,4 @@
-//! The model picker (PhotoshopEX, ArtCraft-style): a pill showing the chosen template's family
+//! The model picker (ShotoPhopEX, ArtCraft-style): a pill showing the chosen template's family
 //! glyph and short name; its popover lists the templates a page offers, Auto first, newest first,
 //! grouped by family into submenus once there are many, each row with the glyph, the name, the
 //! one-line description and badges (the time estimate, `research` for research-licence models,

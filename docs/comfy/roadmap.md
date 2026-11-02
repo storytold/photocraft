@@ -218,7 +218,7 @@ with typed failures and a queue popover, a prompt panel with a reference deck an
 cost) on the Generate button, then providers chosen late behind the user's own keys (Fal, the
 ArtCraft Omni API) with the local server as the default and a fallback order.
 
-**PhotoshopEX build (2026-10-11), following [`plan-artcraft-experience.md`](plan-artcraft-experience.md):**
+**ShotoPhopEX build (2026-10-11), following [`plan-artcraft-experience.md`](plan-artcraft-experience.md):**
 
 - ✅ Plan Phase 1, the persistent task queue: the **Generations library** (every generative job
   recorded with typed failures, results and thumbnails stored under the config folder, kept
@@ -267,7 +267,7 @@ ArtCraft Omni API) with the local server as the default and a fallback order.
   runs Qwen-Image-2.1 for fill, the removals, expand and edit (no ComfyUI for them); ⬜ Krea 2's style reference,
   Qwen-Image-Edit-2511 and the layered model still go to ComfyUI.
 
-**Phase 4 status after the PhotoshopEX build (2026-10-12):** ✅ capability flags the UI reads
+**Phase 4 status after the ShotoPhopEX build (2026-10-12):** ✅ capability flags the UI reads
 (kept in the templates' metadata rather than a separate `models.toml`), ✅ LoRA and style
 reference selection (Krea 2 style reference, the Multiple Angles LoRA) and reference images
 (two on 2511 edits, nine plus the picture on Qwen-Image-2.1), ✅ one-click purge
@@ -321,7 +321,7 @@ the side-by-side rewriter; learnt from AusBoss's Krea 2 clothing workflow, see
 ## Phase 6: Beyond ComfyUI
 
 🟡 **The Rust rebuild** (opened 2026-10-27, its own task:
-[`goals/rust-rebuild.md`](goals/rust-rebuild.md)): every generative feature in PhotoshopEX's
+[`goals/rust-rebuild.md`](goals/rust-rebuild.md)): every generative feature in ShotoPhopEX's
 own Rust code, one executable, no Python and no ONNX Runtime; the queue R0–R6 (SAM 3.1 on
 candle, the 2511 holdouts, Qwen-Image-Layered, one models folder, packaging, native by
 default) and its progress log live there. As of 2026-10-28: R0 ✅, R2 ✅ (fill and image from

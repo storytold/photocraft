@@ -27,9 +27,9 @@ pub enum Group {
     Color,
     /// Properties | Adjustments.
     Properties,
-    /// Generate: the prompt box (PhotoshopEX; see `generate_panel`).
+    /// Generate: the prompt box (ShotoPhopEX; see `generate_panel`).
     Generate,
-    /// Generations: every generative job and its results (PhotoshopEX; see `generations_panel`).
+    /// Generations: every generative job and its results (ShotoPhopEX; see `generations_panel`).
     Generations,
     /// Character | Paragraph (not in the default workspace; Window › Character opens it, #150).
     Character,
@@ -116,7 +116,7 @@ impl Group {
     }
 
     /// Groups that fold to their tab strip when the filler would drop below
-    /// [`Group::usable_fill`] (PhotoshopEX's generative groups; the rest only shrink).
+    /// [`Group::usable_fill`] (ShotoPhopEX's generative groups; the rest only shrink).
     pub fn yields(self) -> bool {
         matches!(self, Group::Generate | Group::Generations)
     }

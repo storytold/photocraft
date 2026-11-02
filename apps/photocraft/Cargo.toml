@@ -11,7 +11,7 @@ build = "build.rs"
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
-# Generation completion sounds (PhotoshopEX; rodio). The release packages build with it.
+# Generation completion sounds (ShotoPhopEX; rodio). The release packages build with it.
 alerts = ["photocraft-ui-egui/alerts"]
 # The native worker serves Qwen-Image-2.1 too (needs nvcc; see crates/genai/Cargo.toml).
 native-diffusion = ["photocraft-genai/native-diffusion"]

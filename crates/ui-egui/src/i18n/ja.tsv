@@ -4301,13 +4301,13 @@ curves	Smooth	スムーズ
 	Native runtime folders	ネイティブ ランタイム フォルダー
 	Models folder	ネイティブ モデル フォルダー
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	インスタンス
 	Intersect	交差
 	Prompt	プロンプト
 	Template	テンプレート
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	広げる
 	Fill Holes	穴を埋める
 	Widen the object's mask by this many pixels (negative shrinks it)	オブジェクトのマスクをこのピクセル数だけ広げます（負の値は縮めます）
@@ -4315,16 +4315,16 @@ curves	Smooth	スムーズ
 	Feather the mask's edge by this many pixels	マスクの境界をこのピクセル数だけぼかします
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	塗りつぶしの前に選択範囲をこのピクセル数だけ広げ、かさばる置き換えに余地を与えます
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	生成
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	プレビューは従来の塗りつぶしです。OK と適用はモデルを新しいレイヤーに実行します。
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	2つから最良を選択
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	候補を2つ生成し、手を加えていないように見える方を表示します。オフにすると候補は1つで、所要時間は約半分です
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	モデルフォルダーの loras サブフォルダーにあるアダプター。ネイティブエンジンが適用します
 	Generative Upscale	生成アップスケール

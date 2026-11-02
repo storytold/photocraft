@@ -462,17 +462,33 @@ pub fn t(s: &str) -> &str {
 
 /// Translate an English UI string; unknown strings come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.catalog().plain(s).unwrap_or(s)
+    branded(lang.catalog().plain(s).unwrap_or(s))
 }
 
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
-    lang.catalog().contextual(context, s).unwrap_or_else(|| tr(lang, s))
+    lang.catalog().contextual(context, s).map_or_else(|| tr(lang, s), branded)
 }
 
 /// A string keyed by its command id, falling back to the translation of the English `label`.
 pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
-    lang.catalog().id(id).unwrap_or_else(|| tr(lang, label))
+    lang.catalog().id(id).map_or_else(|| tr(lang, label), branded)
+}
+
+/// Fork: shown text names the product [`photocraft_engine::build_info::APP_NAME`] where the
+/// upstream strings (and their catalogs, which keep the name in Latin) say "PhotoCraft". The
+/// catalog keys stay upstream's, so every translation still matches. The few branded strings are
+/// interned once, so lookups keep returning plain `&str`s.
+fn branded(s: &str) -> &str {
+    use photocraft_engine::build_info::{UPSTREAM_NAME, brand};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    if !s.contains(UPSTREAM_NAME) {
+        return s;
+    }
+    static INTERNED: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let mut map = INTERNED.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.entry(s.to_owned()).or_insert_with(|| Box::leak(brand(s).into_owned().into_boxed_str()))
 }
 
 /// Fill `{name}` placeholders. Unknown placeholders are left as written.

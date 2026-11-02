@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- photocraft app icon: a rounded tile with "Pc"; rendered by
+  <!-- photocraft app icon: a rounded tile with "Sp"; rendered by
        packaging/icon-tile.py (Segoe UI Bold, or the bold sans the system has). -->
   <rect width="512" height="512" rx="112" fill="#001E36"/>
   <text x="256" y="356" text-anchor="middle" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif"
-        font-weight="700" font-size="287" fill="#31A8FF">Pc</text>
+        font-weight="700" font-size="287" fill="#31A8FF">Sp</text>
 </svg>

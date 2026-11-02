@@ -226,7 +226,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.spotHealing";
     let (stroke, id) = parse_brush(s, p, CMD)?;
     reject_huge_stroke(CMD, &stroke)?;
-    // PhotoshopEX: `generative` heals through the fill model (a masked layer above the
+    // ShotoPhopEX: `generative` heals through the fill model (a masked layer above the
     // target) when a backend is set up, and as Content-Aware otherwise.
     let kind = match string(p, "type", "contentAware") {
         "contentAware" => SpotType::ContentAware,

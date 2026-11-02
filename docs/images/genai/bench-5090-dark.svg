@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 492" width="880" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
-<title>PhotoCraftEX native engine vs ComfyUI on an RTX 5090, warm seconds, lower is faster</title>
+<title>ShotoPhopEX native engine vs ComfyUI on an RTX 5090, warm seconds, lower is faster</title>
 <rect width="880" height="492" rx="12" fill="#1a1a19"/>
 <text x="24" y="34" font-size="18" font-weight="600" fill="#f0efec">Warm seconds per result on an RTX 5090 (lower is faster)</text>
 <text x="24" y="56" font-size="13" fill="#c3c2b7">864×1152, same model, seed and settings on both routes. 2026-10-28/29.</text>
-<rect x="24" y="66" width="12" height="12" rx="3" fill="#3987e5"/><text x="42" y="76" font-size="13" fill="#c3c2b7">PhotoCraftEX native (Rust)</text>
+<rect x="24" y="66" width="12" height="12" rx="3" fill="#3987e5"/><text x="42" y="76" font-size="13" fill="#c3c2b7">ShotoPhopEX native (Rust)</text>
 <rect x="254" y="66" width="12" height="12" rx="3" fill="#d95926"/><text x="272" y="76" font-size="13" fill="#c3c2b7">ComfyUI (same GPU, --fast fp8)</text>
 <line x1="250.0" y1="88" x2="250.0" y2="458" stroke="#33332f" stroke-width="1"/>
 <text x="250.0" y="476" font-size="12" fill="#c3c2b7" text-anchor="middle">0 s</text>

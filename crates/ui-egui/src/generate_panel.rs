@@ -1,4 +1,4 @@
-//! Window › Generate (PhotoshopEX): the docked prompt box, ArtCraft-style. One prompt shaped by
+//! Window › Generate (ShotoPhopEX): the docked prompt box, ArtCraft-style. One prompt shaped by
 //! the chosen template's capabilities (`generate.models`): a reference deck when the template
 //! takes reference images, aspect and size pickers for text to image, a count, the Enhance wand,
 //! and a Generate button that shows the time estimate (`generate_cmds::estimate_seconds`, the

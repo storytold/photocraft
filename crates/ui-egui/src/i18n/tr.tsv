@@ -4159,14 +4159,14 @@ cameraData	Lens	Lens
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} renk {file} konumuna kaydedildi
 	GPU adapter	GPU bağdaştırıcısı
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Örnek
 	Intersect	Kesişim
 	Prompt	İstem
 	Template	Şablon
 	Select by Text…	Metinle Seç…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Üretken Doldurma…
 	Generate Image…	Görüntü Oluştur…
 	Allow research models	Araştırma modellerine izin ver
@@ -4350,7 +4350,7 @@ cameraData	Lens	Lens
 	Native runtime folders	Yerleşik çalışma zamanı klasörleri
 	Models folder	Yerleşik modeller klasörü
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Genişlet
 	Fill Holes	Boşlukları Doldur
 	Widen the object's mask by this many pixels (negative shrinks it)	Nesnenin maskesini bu kadar piksel genişlet (negatif değer daraltır)
@@ -4358,16 +4358,16 @@ cameraData	Lens	Lens
 	Feather the mask's edge by this many pixels	Maskenin kenarını bu kadar piksel yumuşat
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Doldurmadan önce seçimi bu kadar piksel genişlet; daha hacimli bir değiştirmeye yer açılsın
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Üretken
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Önizleme klasik doldurmayı gösterir; Tamam ve Uygula, modeli yeni bir katmana çalıştırır.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	İkisinden iyisi
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	İki aday üretir ve dokunulmamış görüneni gösterir; kapalıyken tek aday, yaklaşık yarı süre
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Modeller klasörünün loras alt klasöründeki bağdaştırıcılar, yerel motor tarafından uygulanır
 	Generative Upscale	Üretken Büyütme

@@ -29,7 +29,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("patterns", "Patterns", Group::Color),
     ("properties", "Properties", Group::Properties),
     ("adjustments", "Adjustments", Group::Properties),
-    // PhotoshopEX's generative groups.
+    // ShotoPhopEX's generative groups.
     ("generate", "Generate", Group::Generate),
     ("generations", "Generations", Group::Generations),
     ("character", "Character", Group::Character),
@@ -606,7 +606,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else if collapsed.contains(id) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
-                // The native group's smallest height, tab strip included. PhotoshopEX's
+                // The native group's smallest height, tab strip included. ShotoPhopEX's
                 // generative groups fold to their strips before Layers runs short.
                 let min = |g: Group| if g.yields() { 0.0 } else { g.min_height() - strip };
                 let height = PANELS.iter().find(|p| p.0 == id).map_or(80.0, |p| min(p.2));
@@ -1245,7 +1245,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let group = PANELS.iter().find(|p| p.0 == id)?.2;
         let body = |height: f32| (height - self.strip).max(0.0);
         let fill = if self.fillers.contains(id) { body(group.preferred_fill()).max(1.0) } else { 0.0 };
-        // PhotoshopEX's generative groups give way to their tab strips before Layers does.
+        // ShotoPhopEX's generative groups give way to their tab strips before Layers does.
         let compact = if group.yields() { 0.0 } else { body(group.compact_height()) };
         Some(DockHeights::new(body(group.default_height())).compact(compact).fill(fill))
     }

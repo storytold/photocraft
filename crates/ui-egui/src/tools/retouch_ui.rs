@@ -571,7 +571,7 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
     crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
 }
 
-/// Options bar › Spot Healing Brush: the type (PhotoshopEX adds Generative) and Sample All Layers.
+/// Options bar › Spot Healing Brush: the type (ShotoPhopEX adds Generative) and Sample All Layers.
 fn spot_healing_options(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
     opt(ui, tl!("Type:"));
     for (k, l) in [("contentAware", tl!("Content-Aware")), ("createTexture", tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))] {
@@ -580,7 +580,7 @@ fn spot_healing_options(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
             o.spot_type = k.into();
         }
     }
-    // PhotoshopEX: the stroke healed through the fill model.
+    // ShotoPhopEX: the stroke healed through the fill model.
     let mut on = o.spot_type == "generative";
     if crate::widgets::checkbox(ui, &mut on, tl!("Generative"))
         .on_hover_text(tl!("Fill from the generative model: slower, far better on textures and patterns (needs the native worker)"))
@@ -596,7 +596,7 @@ fn spot_healing_options(o: &mut crate::state::ToolOptions, ui: &mut egui::Ui) {
     crate::widgets::checkbox(ui, &mut o.sample_all.spot_healing, tl!("Sample All Layers"));
 }
 
-/// Options bar › Remove: Photoshop's options, PhotoshopEX's Generative, and ✓ / ⊘ for strokes waiting.
+/// Options bar › Remove: Photoshop's options, ShotoPhopEX's Generative, and ✓ / ⊘ for strokes waiting.
 fn remove_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let composite = crate::canvas::paint_target(app).as_str() == Some("pixels");
     let o = &mut app.ui.tool_options;
@@ -605,7 +605,7 @@ fn remove_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::widgets::checkbox(ui, &mut o.sample_all.remove, tl!("Sample All Layers"));
     ui.add_enabled_ui(composite, |ui| crate::widgets::checkbox(ui, &mut o.remove_new_layer, tl!("Create a new layer")));
     crate::widgets::checkbox(ui, &mut o.remove_after_each_stroke, tl!("Remove after each stroke"));
-    // PhotoshopEX: the hole filled through the fill model (a masked layer either way).
+    // ShotoPhopEX: the hole filled through the fill model (a masked layer either way).
     crate::widgets::checkbox(ui, &mut o.remove_generative, tl!("Generative"))
         .on_hover_text(tl!("Fill from the generative model: slower, far better on textures and patterns (needs the native worker)"));
     if o.remove_generative {

@@ -47,7 +47,7 @@ and a fill with references have no template parameter and ComfyUI's `auto` picks
 
 **Remove Background with an empty prompt** (2026-10-29, through the app, the gen-tshirt
 portrait, five unseeded runs on the native worker): 5 of 5 kept the man (511.8–515.5 k pixels,
-the same bounds), where before PhotoshopEX `49ecf6d3` (the subject named first) 3 of 5 kept
+the same bounds), where before ShotoPhopEX `49ecf6d3` (the subject named first) 3 of 5 kept
 nothing.
 
 **After genai-native `03fb72e`** (Codex: the text encoder stays resident instead of being
@@ -66,7 +66,7 @@ vocabulary on the CPU, bounded VAE scratch; outputs within 0.06/255 of before;
 
 (The cold column of this rerun is not comparable: each case started its own worker.)
 
-**Upscale** (2026-10-28 evening): PhotoshopEX `3b6f3ca5` made the app side faster with
+**Upscale** (2026-10-28 evening): ShotoPhopEX `3b6f3ca5` made the app side faster with
 byte-identical output (54.1 → 47.5 s; `research/notes/upscale-native-speed.md`), and genai-native
 `3da83bd` merges a LoRA into the resident INT8 weights once per binding as ComfyUI does (the
 Restore LoRA had cost 14.5 s of side-path GEMMs per six tiles) and runs the DiT prefix through
@@ -118,14 +118,14 @@ stays the low-VRAM option.
 **Qwen-Image-Edit-2511 with SageAttention2, 2026-10-29** (genai-native `e9a4ea1`, the same flash blocks as Layered after its own survey: 0 at |728|, 58 at |79|, 52 at |53|): Lightning-8 edit **8.09 to 7.25 s** warm (cold 43.3 to 33.0 s), the 40-step CFG 4 edit **94.4 to 86.8 s**; same seed against flash 26.8 / 35.8 dB (the snowflakes placed differently, composition, scarf and face alike) where a second seed is 14.9 / 14.5 dB.
 
 **Upscale's tiles in one batched request, 2026-10-29** (genai-native `perf/upscale-batch`
-`dce1ce3`, PhotoshopEX `perf/upscale-batch`: `params.batch` carries each tile's seed, and the
+`dce1ce3`, ShotoPhopEX `perf/upscale-batch`: `params.batch` carries each tile's seed, and the
 worker encodes all six tiles with the transient vision tower loaded once instead of once per tile,
 then samples each tile as its own request would). The workers ran in ABCCBA order with a 45 s cooldown
 before each worker, edit and upscale cold plus 2 warm each, 864x1152 x2, Restore 0.5. Per-tile
 (the old CLI) **32.88 / 32.11 s** warm against batched **30.85 / 30.77 s** (about 5 %); cold
 33.8 against 31.8 s. Vision reloads fell from 24 to 4 per worker, and per-tile denoise is the
 same 3.71 s; Edit is unchanged (4.84 s). Every output is **byte-identical** to the per-tile path,
-cold and warm. A worker that refuses the batch is asked tile by tile. The same PhotoshopEX branch
+cold and warm. A worker that refuses the batch is asked tile by tile. The same ShotoPhopEX branch
 also fixes Upscale to run as a background job: a nested `image.imageSize` used to switch the job
 off, so Upscale ran inline on the UI thread.
 
@@ -222,7 +222,7 @@ gone are the text encode (2.6 s, its load included), the DiT load (3.2 s) and th
 (0.3 s). The 84.4 s denoise is unchanged. Every layer is **byte-identical** to the per-split
 loads.
 
-**Upscale on fewer, larger tiles by default, 2026-10-29** (PhotoshopEX `perf/upscale-tiles`, the
+**Upscale on fewer, larger tiles by default, 2026-10-29** (ShotoPhopEX `perf/upscale-tiles`, the
 owner's call after the seam crops). The default tiling is now the fewest equal tiles of at most
 1.15 MP each, never a strip of three or more; `grid` names one and `tileMegapixels` asks for the
 old square tiles. 864x1152, 1232x816 and 1152x864 enlarged 2x take 2x2 where square
@@ -664,7 +664,7 @@ int8 and w4a8 encoders instead, so neither has an alternative yet. Live through 
 (`nvfp4-live.ps1`): the server loaded `qwen_2.5_vl_7b_nvfp4` for an edit and
 `krea2_turbo_nvfp4` for an image with nothing but the default preference.
 
-## 5g. Reference images and the time estimate (PhotoshopEX, 2026-10-12)
+## 5g. Reference images and the time estimate (ShotoPhopEX, 2026-10-12)
 
 Warm runs through the release CLI, one process, ComfyUI on the 5090 (NVFP4 text encoder by
 the `auto` policy): `generate.edit` on the 1024² lighthouse picture (sent at 880×880 = 0.77 MP),
@@ -684,7 +684,7 @@ reference-driven text to image (`qwen-edit-2511/image-ref`) counts its first ref
 picture: 12.1 s measured for a 3:2 1K image from one reference, 11.3 s estimated. The 40-step
 tier's per-reference cost is scaled by its steps and CFG passes (90 s, not measured).
 
-## 5h. Generative Fill from a reference (PhotoshopEX, 2026-10-21)
+## 5h. Generative Fill from a reference (ShotoPhopEX, 2026-10-21)
 
 `docs/comfy/bench/scripts/fill-ref-live.ps1`, ComfyUI on the 5090 (`--fast fp8_matrix_mult`),
 the release CLI, one process per run (so each 2511 run below includes the model switch from
@@ -708,7 +708,7 @@ swap (28 s against 150 s, the same garment); one reference on a fill costs about
 on an edit (benchmarks §5g). Not yet judged over more seeds, and `erase: false` on the
 reference template is untested live.
 
-## 5j. The Remove tool in the app, per stage (PhotoshopEX, 2026-11-01)
+## 5j. The Remove tool in the app, per stage (ShotoPhopEX, 2026-11-01)
 
 The owner's app and preferences (Quality fast, preview Sharp, Fast draft on, Auto: qwen-2.1/edit,
 25 steps, two variations at up to 0.75 MP), generative `paint.remove` with seed 42 over the stock
@@ -743,7 +743,7 @@ faults the Layered and 2511 checkpoints' pages on every core: Split at 640 px af
 warm, three runs each, the DiT ready at 8.8–10.4 s instead of 10.9–11.8 s and the Split done in
 18.2–20.3 s instead of 20.2–21.3 s.
 
-## 5i. Content-Aware Fill, Remove and Spot Healing through the model (PhotoshopEX, 2026-10-21)
+## 5i. Content-Aware Fill, Remove and Spot Healing through the model (ShotoPhopEX, 2026-10-21)
 
 The lighthouse picture's red boat (`final-fill-s11.png`, 1024², the 200×120 rectangle at
 300,600 that `edit-live.ps1` edits), ComfyUI on the 5090, the release CLI, one process per
@@ -1325,7 +1325,7 @@ the 8-step tier at 0.75 and 0.6 the old hat with a red fleck.
 
 ## 8. The native-engine baseline (plan-native-engine §5, 2026-10-18)
 
-The reference every engine of the native-engine plan is compared against: PhotoshopEX's
+The reference every engine of the native-engine plan is compared against: ShotoPhopEX's
 ComfyUI route as the product runs it (Quality `best`, the app-managed sidecar), through
 `gn-bench run --engine comfy` in the `genai-native` repository (`crates/gn-harness/fixtures/`;
 run folders under its ignored `references/2026-10-18-comfy-<suite>/`, 44 pictures, 52 MB).
@@ -1412,7 +1412,7 @@ SageAttention2, one process per picture):
 | ComfyUI (`best`, server warm) | ≈ 0.15 s | ≈ 3.7 s | inside | ≈ 0.2 s | 4.4–5.0 s engine time | 44 s the first (loads) |
 | qwen-image-rs on the 5090 (4090-tuned tiles), first run | 0.14 s | 3.5 s | 17 s to load (bf16, 16 GB) | 2.1 s (tiled: 11 GB free) | — (no resident mode in its `generate`) | 45 s (16 GB encoder load + DiT quantise 20 s) |
 | the same, page cache and INT8 cache warm (`genai-native/crates/qir`) | **0.116 s** | **2.9 s** | ≈ 5 s to load | 0.43 s | — | **11–13 s** (DiT cache 3 s + encoder 5 s + 2.9 + 0.4) |
-| **PhotoshopEX's native worker** (`gn-diffusion` over `qir::pipeline`, `integrations.engine = native`, 2026-10-20; the app's `ms`, channel included) | 0.116 s | 2.9 s | 0.25 s (bf16, resident) | 0.43 s | **3.65–3.73 s** | 11.7 s the first picture (loads), then resident |
+| **ShotoPhopEX's native worker** (`gn-diffusion` over `qir::pipeline`, `integrations.engine = native`, 2026-10-20; the app's `ms`, channel included) | 0.116 s | 2.9 s | 0.25 s (bf16, resident) | 0.43 s | **3.65–3.73 s** | 11.7 s the first picture (loads), then resident |
 
 The native worker's picture is **0.8–1.3 s faster than ComfyUI's** at the same steps and size once
 resident, and the first picture costs 11.7 s against ComfyUI's 44 s cold. Measured with ComfyUI
@@ -1562,7 +1562,7 @@ DiT 13 GB resident, the encoder 4.4 GB). Each row is one process per picture
 | the same, our flash kernel (bf16 P·V), candle's small ops | 4.74 s | 17 | 18 |
 | every DiT linear an fp8 matmul (the file's marks ignored), flash | 3.91 s | 6 | 6 |
 | **flash (fp16 P·V) + Krea 2's small ops fused** (the shipped route) | **3.20 s** | **19** | **20** |
-| … through PhotoshopEX's CLI and worker, the assembled runtime folder only (`runs/2026-10-27-app-native-krea2-fused-t2i`) | 3.2 s; **4.0 s a picture wall** | **19** | — |
+| … through ShotoPhopEX's CLI and worker, the assembled runtime folder only (`runs/2026-10-27-app-native-krea2-fused-t2i`) | 3.2 s; **4.0 s a picture wall** | **19** | — |
 
 Reading: the precision ComfyUI's two routes reach with each other is 20 of 28; the variants
 here span 16–21 and a difference of two cases is within what one rounding change moves on an

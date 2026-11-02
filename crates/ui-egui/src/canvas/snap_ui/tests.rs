@@ -254,7 +254,7 @@ fn marquee_corner_snaps_to_guides_and_document_edges() {
 /// only the corner under the pointer; with Space released the corner snaps again.
 #[test]
 fn drawing_repositioned_with_space_snaps_its_edges() {
-    // (PhotoshopEX: the Object Selection box never snaps, see `is_point_tool`.)
+    // (ShotoPhopEX: the Object Selection box never snaps, see `is_point_tool`.)
     for tool in [Tool::RectMarquee, Tool::EllipseMarquee, Tool::Rectangle, Tool::Line] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();

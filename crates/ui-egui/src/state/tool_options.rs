@@ -18,11 +18,11 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
-    /// Remove tool (PhotoshopEX): the hole filled through the generative fill model when a
+    /// Remove tool (ShotoPhopEX): the hole filled through the generative fill model when a
     /// backend is set up (`paint.remove` `generative`), the classical fill otherwise.
     #[serde(default = "yes")]
     pub remove_generative: bool,
-    /// Remove tool and Spot Healing (PhotoshopEX), generative: run two candidates and show
+    /// Remove tool and Spot Healing (ShotoPhopEX), generative: run two candidates and show
     /// the one that looks untouched (`variations` 2), or one candidate (1), faster.
     #[serde(default = "yes")]
     pub remove_pick_best: bool,
@@ -70,7 +70,7 @@ pub struct ToolOptions {
     pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
-    /// Spot Healing: contentAware | createTexture | proximityMatch | generative (PhotoshopEX:
+    /// Spot Healing: contentAware | createTexture | proximityMatch | generative (ShotoPhopEX:
     /// through the fill model when a backend is set up).
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -214,7 +214,7 @@ pub struct ToolOptions {
     /// Crop gear menu (#1919): Show Cropped Area and the crop shield. See `crop_shield`.
     #[serde(default)]
     pub crop_shield: crate::crop_shield::CropShield,
-    /// Crop options bar › Generative Expand (PhotoshopEX): a frame dragged beyond the canvas
+    /// Crop options bar › Generative Expand (ShotoPhopEX): a frame dragged beyond the canvas
     /// has the model paint the added area (`generate.expand`) instead of leaving it empty.
     #[serde(default)]
     pub crop_generative: bool,

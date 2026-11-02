@@ -3639,13 +3639,13 @@ curves	Smooth	Glätten
 	Native runtime folders	Native Laufzeitordner
 	Models folder	Nativer Modellordner
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Instanz
 	Intersect	Schnittmenge
 	Prompt	Prompt
 	Template	Vorlage
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Erweitern
 	Fill Holes	Löcher füllen
 	Widen the object's mask by this many pixels (negative shrinks it)	Die Objektmaske um so viele Pixel erweitern (negativ verkleinert sie)
@@ -3653,16 +3653,16 @@ curves	Smooth	Glätten
 	Feather the mask's edge by this many pixels	Die Maskenkante um so viele Pixel weichzeichnen
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Die Auswahl vor der Füllung um so viele Pixel erweitern, damit ein voluminöserer Ersatz Platz hat
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generativ
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Die Vorschau zeigt die klassische Füllung; OK und Anwenden lassen das Modell auf eine neue Ebene arbeiten.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Besser von zwei
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Zwei Kandidaten berechnen und den zeigen, der unberührt wirkt; aus: ein Kandidat, etwa die halbe Zeit
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adapter im Unterordner loras des Modellordners, angewendet von der nativen Engine
 	Generative Upscale	Generative Hochskalierung

@@ -262,7 +262,7 @@ fn layers_opacity_and_fill_share_one_right_column() {
         let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::new(s, crate::Services::default());
-            // PhotoshopEX: the Generate and Generations groups would squeeze the Layers panel
+            // ShotoPhopEX: the Generate and Generations groups would squeeze the Layers panel
             // this measures; upstream's layout is measured without them.
             app.ui.panels.generate = false;
             app.ui.panels.generations = false;

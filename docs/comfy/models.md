@@ -332,7 +332,7 @@ alternative in the slot's `nvfp4` field; Preferences › AI Integrations › Mod
 (`auto` = Blackwell GPUs only, by the device name ComfyUI reports). Same output, less memory;
 only Krea 2 gets faster.
 
-### Reference images (PhotoshopEX's reference deck, checked 2026-10-11)
+### Reference images (ShotoPhopEX's reference deck, checked 2026-10-11)
 
 Which templates take reference images (`meta.references`; `generate.models` reports them), each
 verified against the development PC's ComfyUI 0.39 `/object_info` on 2026-10-11:

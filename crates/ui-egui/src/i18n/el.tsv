@@ -4138,14 +4138,14 @@ curves	Smooth	Εξομάλυνση
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Αποθηκεύτηκε {n} χρώμα στο {file}|Αποθηκεύτηκαν {n} χρώματα στο {file}
 	GPU adapter	Προσαρμογέας GPU
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Παρουσία
 	Intersect	Τομή
 	Prompt	Προτροπή
 	Template	Πρότυπο
 	Select by Text…	Επιλογή βάσει κειμένου…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Παραγωγικό γέμισμα…
 	Generate Image…	Δημιουργία εικόνας…
 	Allow research models	Να επιτρέπονται ερευνητικά μοντέλα
@@ -4329,10 +4329,10 @@ curves	Smooth	Εξομάλυνση
 	Native runtime folders	Φάκελοι ενσωματωμένου περιβάλλοντος εκτέλεσης
 	Models folder	Φάκελος ενσωματωμένων μοντέλων
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best	Βέλτιστη
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Διεύρυνση
 	Fill Holes	Γέμισμα κενών
 	Widen the object's mask by this many pixels (negative shrinks it)	Διεύρυνση της μάσκας του αντικειμένου κατά τόσα εικονοστοιχεία (αρνητική τιμή τη συρρικνώνει)
@@ -4340,16 +4340,16 @@ curves	Smooth	Εξομάλυνση
 	Feather the mask's edge by this many pixels	Απάλυνση της ακμής της μάσκας κατά τόσα εικονοστοιχεία
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Διεύρυνση της επιλογής κατά τόσα εικονοστοιχεία πριν το γέμισμα, ώστε να χωρά μια ογκωδέστερη αντικατάσταση
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Παραγωγικό
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Η προεπισκόπηση δείχνει το κλασικό γέμισμα· τα OK και Εφαρμογή τρέχουν το μοντέλο σε νέο επίπεδο.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Το καλύτερο από δύο
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Εκτελεί δύο υποψήφια και δείχνει αυτό που μοιάζει ανέγγιχτο· ανενεργό: ένα υποψήφιο, περίπου ο μισός χρόνος
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Προσαρμογείς στον υποφάκελο loras του φακέλου μοντέλων, που εφαρμόζονται από την εγγενή μηχανή
 	Generative Upscale	Παραγωγική μεγέθυνση

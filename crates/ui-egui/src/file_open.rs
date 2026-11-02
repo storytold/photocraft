@@ -31,7 +31,7 @@ pub enum DropTarget {
     Tabs(usize),
     /// Anywhere else (panels, a dialog, no document): opened like File › Open.
     Elsewhere,
-    /// The Generate panel (PhotoshopEX): each file becomes a reference image.
+    /// The Generate panel (ShotoPhopEX): each file becomes a reference image.
     References,
 }
 

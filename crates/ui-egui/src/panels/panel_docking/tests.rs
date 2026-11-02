@@ -171,7 +171,7 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
         [
             vec!["color", "swatches", "gradients", "patterns"],
             vec!["properties", "adjustments"],
-            // PhotoshopEX's Essentials shows the generative groups too.
+            // ShotoPhopEX's Essentials shows the generative groups too.
             vec!["generate"],
             vec!["generations"],
             vec!["layers", "channels", "paths"]
@@ -233,7 +233,7 @@ fn a_panel_never_laid_out_opens_in_its_default_group_and_side() {
 
 #[test]
 fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
-    // Upstream's column: PhotoshopEX's generative groups would move the Layers tab down.
+    // Upstream's column: ShotoPhopEX's generative groups would move the Layers tab down.
     let mut app = app();
     app.ui.panels.generations = false;
     app.ui.panels.generate = false;

@@ -1032,7 +1032,7 @@ pub struct Integrations {
     pub allow_research_models: bool,
     /// When the generative task bar (the Generate panel's compact form) shows under a
     /// selection: `auto` = while the Generate panel is collapsed or hidden, `always`, `never`.
-    /// A saved `true` / `false` (before PhotoshopEX's Generate panel) reads as `auto` / `never`.
+    /// A saved `true` / `false` (before ShotoPhopEX's Generate panel) reads as `auto` / `never`.
     #[serde(deserialize_with = "generative_bar_mode")]
     pub show_generative_bar: String,
     /// Enter in the Generate panel's prompt generates (Shift+Enter starts a new line);

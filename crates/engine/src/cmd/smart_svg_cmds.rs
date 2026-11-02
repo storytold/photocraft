@@ -138,7 +138,7 @@ fn check_instances(s: &Session, id: LayerId) -> Result<Vec<LayerId>> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let contents = smart(doc, id)?.contents_id;
     if s.smart_links.iter().any(|link| link.parent == doc.id && link.contents_id == contents) {
-        return Err(EngineError::Other("these smart-object contents are already open in PhotoCraft".into()));
+        return Err(EngineError::Other(format!("these smart-object contents are already open in {}", crate::build_info::APP_NAME)));
     }
     let ids: Vec<_> =
         doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents).then_some(l.id)).collect();

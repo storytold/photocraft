@@ -37,9 +37,9 @@
     <string>nb</string>
   </array>
   <key>CFBundleDisplayName</key>
-  <string>PhotoCraft</string>
+  <string>ShotoPhopEX</string>
   <key>CFBundleName</key>
-  <string>PhotoCraft</string>
+  <string>ShotoPhopEX</string>
   <key>CFBundleExecutable</key>
   <string>PhotoCraft</string>
   <key>CFBundleIdentifier</key>

@@ -1,4 +1,4 @@
-//! Window › Generations (PhotoshopEX): every generative job of this and earlier sessions, as a
+//! Window › Generations (ShotoPhopEX): every generative job of this and earlier sessions, as a
 //! feed you can walk away from. Running jobs show their progress and a Cancel button, failed ones
 //! a reason the user can act on with Recreate, completed ones a thumbnail with Place, Similar,
 //! Save and Copy prompt on hover. Clicking a result selects its layer while its document is open

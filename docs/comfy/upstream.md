@@ -68,7 +68,7 @@ brand licence covers the *ArtCraft* marks. "Comfy PhotoCraft" is a working title
 the fork is; a published product needs a name decision (and a trademark check) by the owner. Until
 then the app title stays "PhotoCraft" and the fork is identified in About and the README text.
 
-**PhotoshopEX's private defaults (since 2026-10-28).** Before any build for others, set
+**ShotoPhopEX's private defaults (since 2026-10-28).** Before any build for others, set
 integrations.allowResearchModels back to false and integrations.engine back to uto (or
 comfy) in crates/engine/src/prefs.rs: Qwen-Image-2.1 is research-only (models.md), and
 the permissive default for fill, edit and expand is still Qwen-Image-Edit-2511.

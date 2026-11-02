@@ -195,7 +195,7 @@ fn caf_props_panel(
         widgets::checkbox(ui, &mut w.opts.scale, tl!("Scale"));
         widgets::checkbox(ui, &mut w.opts.mirror, tl!("Mirror"));
     });
-    // PhotoshopEX: OK runs the fill model instead of the patch fill.
+    // ShotoPhopEX: OK runs the fill model instead of the patch fill.
     widgets::checkbox(ui, &mut w.opts.generative, tl!("Generative"))
         .on_hover_text(tl!("Fill from the generative model: slower, far better on textures and patterns (needs the native worker)"));
     if w.opts.generative {

@@ -1,8 +1,8 @@
 <p align="center">
-  <img alt="PhotoCraftEX" src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png" width="112">
+  <img alt="ShotoPhopEX" src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png" width="112">
 </p>
 
-<h1 align="center">PhotoCraftEX</h1>
+<h1 align="center">ShotoPhopEX</h1>
 
 <p align="center">
   <b>A full image editor with a local generative AI studio built in, written in Rust and running on your own GPU.</b><br>
@@ -32,7 +32,7 @@
 <br>
 
 <p align="center">
-  <img src="docs/images/photocraft-demo.jpg" alt="PhotoCraftEX editing Hokusai's The Great Wave: type layers, a drop shadow, Vibrance and Curves adjustment layers, and the Curves editor over the histogram" width="100%">
+  <img src="docs/images/photocraft-demo.jpg" alt="ShotoPhopEX editing Hokusai's The Great Wave: type layers, a drop shadow, Vibrance and Curves adjustment layers, and the Curves editor over the histogram" width="100%">
 </p>
 
 <!--
@@ -40,7 +40,7 @@
   Generate Image in the Generate panel, Remove with one stroke, Split into Layers, Select by text.
 -->
 
-PhotoCraftEX is a fork of [PhotoCraft](https://github.com/storytold/photocraft), the clean-room,
+ShotoPhopEX is a fork of [PhotoCraft](https://github.com/storytold/photocraft), the clean-room,
 pure-Rust reimplementation of a professional layered image editor. Upstream deliberately left
 generative AI out. This fork puts it in, the way a working artist wants it: every result lands on
 its own masked layer, the original pixels never change, and every model runs on your own machine.
@@ -220,7 +220,7 @@ Let a coding agent (Claude Code, Codex, or any agent with a terminal) do the who
 it in an empty folder on the Windows PC and paste this:
 
 ```text
-Install PhotoCraftEX (https://github.com/CodyChuGit/comfy-photocraft, branch photoshopex) on this
+Install ShotoPhopEX (https://github.com/CodyChuGit/comfy-photocraft, branch photoshopex) on this
 Windows PC and get its generative features working. Follow the README's "Install" and "Models"
 sections exactly. Work in this order and stop to ask me if a step fails:
 
@@ -389,9 +389,9 @@ The full feature list, file formats and platform notes are in upstream's
 
 ## License and credits
 
-PhotoCraftEX is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+ShotoPhopEX is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
 option, like upstream. Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors, and the
-PhotoCraftEX contributors. Required notices are in [NOTICE](NOTICE); bundled fonts, icons and
+ShotoPhopEX contributors. Required notices are in [NOTICE](NOTICE); bundled fonts, icons and
 images keep their own licences, listed in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 Built on [PhotoCraft](https://github.com/storytold/photocraft) by the ArtCraft team. This fork is
@@ -402,4 +402,4 @@ Model weights are not part of this repository and keep their own licences (see
 [Models](#-models)). Every artwork shown is in the public domain; sources are in
 [`docs/images/SOURCES.md`](docs/images/SOURCES.md).
 
-<sub>Adobe, Photoshop and Firefly are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. PhotoCraftEX is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with. NVIDIA, RTX and CUDA are trademarks of NVIDIA Corporation.</sub>
+<sub>Adobe, Photoshop and Firefly are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. ShotoPhopEX is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with. NVIDIA, RTX and CUDA are trademarks of NVIDIA Corporation.</sub>

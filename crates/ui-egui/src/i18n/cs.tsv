@@ -4366,13 +4366,13 @@ cameraRaw	Dehaze	Odstranění oparu
 	Native runtime folders	Složky nativního běhového prostředí
 	Models folder	Složka nativních modelů
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Instance
 	Intersect	Průnik
 	Prompt	Zadání
 	Template	Šablona
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Rozšířit
 	Fill Holes	Vyplnit díry
 	Widen the object's mask by this many pixels (negative shrinks it)	Rozšířit masku objektu o tolik pixelů (záporná hodnota ji zmenší)
@@ -4380,16 +4380,16 @@ cameraRaw	Dehaze	Odstranění oparu
 	Feather the mask's edge by this many pixels	Prolnout okraj masky o tolik pixelů
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Rozšířit výběr o tolik pixelů před vyplněním, aby měla objemnější náhrada místo
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generativní
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Náhled ukazuje klasickou výplň; OK a Použít spustí model do nové vrstvy.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Lepší ze dvou
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Spustí dva kandidáty a zobrazí ten, který vypadá nedotčeně; vypnuto: jeden kandidát, zhruba poloviční čas
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adaptéry v podsložce loras složky modelů, použité nativním enginem
 	Generative Upscale	Generativní zvětšení

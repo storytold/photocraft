@@ -4505,14 +4505,14 @@ shape	Appearance	Izgled
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сачувана је {n} боја у {file}|Сачуване су {n} боје у {file}|Сачувано је {n} боја у {file}
 	GPU adapter	GPU adapter
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Instanca
 	Intersect	Presek
 	Prompt	Upit
 	Template	Šablon
 	Select by Text…	Izaberi po tekstu…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Generativna popuna…
 	Generate Image…	Generiši sliku…
 	Allow research models	Dozvoli istraživačke modele
@@ -4696,7 +4696,7 @@ shape	Appearance	Izgled
 	Native runtime folders	Fascikle ugrađenog izvršnog okruženja
 	Models folder	Fascikla ugrađenih modela
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Proširi
 	Fill Holes	Popuni rupe
 	Widen the object's mask by this many pixels (negative shrinks it)	Proširi masku objekta za toliko piksela (negativna vrednost je sužava)
@@ -4704,16 +4704,16 @@ shape	Appearance	Izgled
 	Feather the mask's edge by this many pixels	Omekšaj ivicu maske za toliko piksela
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Proširi izbor za toliko piksela pre popune, da krupnija zamena ima mesta
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generativno
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Pregled prikazuje klasičnu popunu; OK i Primeni pokreću model na novom sloju.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Bolji od dva
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Pravi dva kandidata i prikazuje onaj koji izgleda netaknuto; isključeno: jedan kandidat, otprilike pola vremena
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adapteri u podfascikli loras fascikle modela, koje primenjuje izvorni mehanizam
 	Generative Upscale	Generativno uvećanje

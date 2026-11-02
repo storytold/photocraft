@@ -506,7 +506,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             let pick_shield_color = crate::crop_shield::options_button(&mut o.crop_shield, ui);
             widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"));
             // Fill: what a turned or extending crop puts where the image doesn't reach
-            // (#3823). Generative Expand follows (PhotoshopEX).
+            // (#3823). Generative Expand follows (ShotoPhopEX).
             ui.label(tl!("Fill:"));
             widgets::dropdown(
                 ui,
@@ -516,7 +516,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 &[(false, tl!("Background (Default)")), (true, tl!("Content-Aware Fill"))],
                 150.0,
             );
-            // PhotoshopEX: a frame beyond the canvas is painted by the model.
+            // ShotoPhopEX: a frame beyond the canvas is painted by the model.
             widgets::checkbox(ui, &mut o.crop_generative, tl!("Generative Expand"));
             if crate::crop_ui::preset_ratio(app) != before_ratio {
                 match ratio_base {

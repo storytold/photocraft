@@ -10,7 +10,7 @@
 //! by itself when a selection is made, as Preferences › AI Integrations › Show generative bar says:
 //! `auto` (while the Generate panel is not on screen), `always` or `never`.
 //!
-//! PhotoshopEX: the bar is the Generate panel's compact form. Its prompt, template (per mode) and
+//! ShotoPhopEX: the bar is the Generate panel's compact form. Its prompt, template (per mode) and
 //! count are the panel's ([`crate::generate_panel::GeneratePanel`]), so the two never disagree.
 
 use egui::{Rect, RichText, Sense, Stroke, pos2, vec2};

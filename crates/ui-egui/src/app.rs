@@ -225,7 +225,7 @@ impl eframe::App for PhotocraftApp {
         // callback is inert afterwards (it holds only a weak slot).
         let finished = self.captures.cancel_all("the application is closing");
         self.finish_captures(finished);
-        // PhotoshopEX: the app-managed engine stops with the app when the preference says so.
+        // ShotoPhopEX: the app-managed engine stops with the app when the preference says so.
         crate::engine_ui::on_quit(self);
     }
 

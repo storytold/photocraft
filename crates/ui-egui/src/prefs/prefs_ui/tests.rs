@@ -1450,7 +1450,7 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(has_visible_fields(&values, "integrations"));
     assert!(!prefs::is_hidden("integrations.allowAgentControl"));
     assert!(!prefs::is_hidden("integrations.controlPort"));
-    // AI Integrations also shows the engine settings (PhotoshopEX).
+    // AI Integrations also shows the engine settings (ShotoPhopEX).
     assert!(!prefs::is_hidden("integrations.modelsPath"));
     // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
     assert!(has_visible_fields(&values, "type"));

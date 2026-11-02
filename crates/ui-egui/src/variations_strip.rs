@@ -1,4 +1,4 @@
-//! The Variations strip (PhotoshopEX, plan Phase 4): the candidates of the active document's
+//! The Variations strip (ShotoPhopEX, plan Phase 4): the candidates of the active document's
 //! recent generative runs as tiles at the canvas edge, newest run first. Click a tile to show
 //! that variation (one undo step, `generate.variation`), × to delete it
 //! (`generate.dropVariation`), ✓ on the shown one to keep it and delete the others

@@ -1,4 +1,4 @@
-# PhotoshopEX dev log (continues the Comfy PhotoCraft log)
+# ShotoPhopEX dev log (formerly PhotoshopEX; continues the Comfy PhotoCraft log)
 
 Newest entry first. Terse: what landed, numbers, what is still open. Upstream keeps its log in
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
@@ -20,6 +20,22 @@ can pick up.
   kept split was visibly better twice (nothing → a person layer; fragments → head and shoulders on
   their own layers) and arguably worse once (a clean face cutout gave way to a larger
   shoulders-and-dress layer, the score preferring the layer that holds more).
+
+## 2026-11-01: the app is ShotoPhopEX, with an "Sp" tile
+
+- The owner dropped the "Pc" tile (it read as "PC") and renamed the fork **ShotoPhopEX**, logo
+  "Sp". `build_info::APP_NAME` names it in the window and title bar, the macOS app menu, About,
+  update and GPU status text, and the exe's version info; `i18n::tr` swaps upstream's
+  "PhotoCraft" for it in shown text, so the catalog keys (and every translation) stay upstream's.
+  Installers show the new name (MSI title, Start menu shortcut, macOS bundle name, Linux desktop
+  entry and metainfo).
+- Not renamed, on purpose: crates, `photocraft.exe`, the settings folder and eframe storage name,
+  the `ai.storyteller.photocraft` app id, the MSI install folder, `Software\PhotoCraft` and the
+  UpgradeCode, and the `.pcraft` format's name. Preferences (the Models folder) and upgrades carry
+  over with no migration. The `photoshopex` branch keeps its name.
+- Icons: `assets/app-icon/pc/` became `sp/`; every render redrawn with `icon-tile.py ... Sp`
+  (Inter Display Bold in the cloud; a Segoe UI re-render on Windows is one command). The App Icon
+  picker's built-in entry is the new tile.
 
 ## 2026-11-01: upstream PhotoCraft v0.19.0 merged
 

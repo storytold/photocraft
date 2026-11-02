@@ -1,4 +1,4 @@
-//! Edit › Generative Angles… (PhotoshopEX, plan Phase 5): the picture seen from another camera,
+//! Edit › Generative Angles… (ShotoPhopEX, plan Phase 5): the picture seen from another camera,
 //! with fal's Multiple Angles LoRA for Qwen-Image-Edit-2511 (`generate.angles`). A small window
 //! beside the canvas: an orbit widget (the subject in the middle, the camera dragged around it
 //! and up or down, snapping to the 8 directions and 4 heights the LoRA knows), the direction,

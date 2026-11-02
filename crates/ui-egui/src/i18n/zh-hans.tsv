@@ -3295,13 +3295,13 @@ curves	Smooth	平滑
 	Native runtime folders	原生运行时文件夹
 	Models folder	原生模型文件夹
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	实例
 	Intersect	交叉
 	Prompt	提示词
 	Template	模板
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	加宽
 	Fill Holes	填补孔洞
 	Widen the object's mask by this many pixels (negative shrinks it)	将对象蒙版加宽这么多像素（负值则收缩）
@@ -3309,16 +3309,16 @@ curves	Smooth	平滑
 	Feather the mask's edge by this many pixels	将蒙版边缘羽化这么多像素
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	填充前将选区加宽这么多像素，让更大的替换物有空间
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	生成式
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	预览显示的是经典填充；“确定”和“应用”会把模型结果放到新图层上。
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	二选一
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	生成两个候选结果，显示看起来未经修改的那个；关闭后只生成一个，耗时约减半
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	模型文件夹 loras 子文件夹中的适配器，由原生引擎应用
 	Strength	强度

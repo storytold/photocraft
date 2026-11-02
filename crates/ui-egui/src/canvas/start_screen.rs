@@ -29,7 +29,7 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let side_by_side = 2.0 * button_width + HOME_BUTTON_GAP <= card_width;
     // Stacked buttons take one more row.
     let stacked_h = if side_by_side { 0.0 } else { 44.0 };
-    // PhotoshopEX: the Generate hub's cards under the recent files (not on the web, which has no
+    // ShotoPhopEX: the Generate hub's cards under the recent files (not on the web, which has no
     // generative commands); a window too short for everything scrolls.
     let hub = !cfg!(target_arch = "wasm32");
     let hub_h = if hub { 22.0 + crate::generate_hub::height(card_width) } else { 0.0 };

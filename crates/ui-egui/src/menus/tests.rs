@@ -345,7 +345,7 @@ fn help_search_takes_typing_and_clicks_without_closing_the_menu() {
             }
             h.run_steps(3);
         };
-        let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About PhotoCraft").is_some();
+        let open = |h: &Harness<'_, PhotocraftApp>| h.query_by_label_contains("About ShotoPhopEX").is_some();
         let field_id = egui::Id::unique("help-menu-search").with("field");
         let help = h.get_by_label("Help").rect().center();
         click(&mut h, help);
@@ -384,7 +384,7 @@ fn help_search_letters_are_not_mnemonics() {
         h.run_steps(1);
     }
     h.run_steps(3);
-    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "Help opened");
+    assert!(h.query_by_label_contains("About ShotoPhopEX").is_some(), "Help opened");
     for c in "DeSelect all".chars() {
         let key = Key::from_name(&c.to_ascii_uppercase().to_string());
         if let Some(key) = key {
@@ -397,7 +397,7 @@ fn help_search_letters_are_not_mnemonics() {
         }
     }
     h.run_steps(3);
-    assert!(h.query_by_label_contains("About PhotoCraft").is_some(), "typing keeps Help open");
+    assert!(h.query_by_label_contains("About ShotoPhopEX").is_some(), "typing keeps Help open");
     let query: String = h.ctx.data(|d| d.get_temp(egui::Id::unique("help-menu-search"))).unwrap_or_default();
     assert_eq!(query, "DeSelect all", "every letter reached the field");
     assert!(h.state().ui.dialogs.is_empty(), "no menu command ran: {:?}", h.state().ui.dialogs);

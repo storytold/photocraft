@@ -1,4 +1,4 @@
-//! Completion alerts (PhotoshopEX, plan Phase 5): a short synthesized blip when a generation
+//! Completion alerts (ShotoPhopEX, plan Phase 5): a short synthesized blip when a generation
 //! finishes or fails, as Preferences › AI Integrations › Alerts says (`off`, `done`,
 //! `doneAndFailed`; off by default). The status line says what happened either way.
 //!

@@ -359,7 +359,7 @@ pub struct UiSetParams {
     /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
     /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
     /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
-    /// `histogram`. PhotoshopEX: generativeBar (bool, the generative task bar),
+    /// `histogram`. ShotoPhopEX: generativeBar (bool, the generative task bar),
     /// generativeMode ("fill" or "edit"), generativePrompt (text), generativeTemplate (a
     /// workflow template id), generativeVariations (1..4), generationsView ("grid" or "list",
     /// Window › Generations), generatePanel (an object patching the Generate panel's mode,

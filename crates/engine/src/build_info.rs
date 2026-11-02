@@ -10,6 +10,20 @@
 //! Without them (a plain `cargo build`) the build reports itself as a dev build. Nothing here
 //! shells out to git, so builds work from a source tarball and for wasm.
 
+/// The product name shown to people (window title, title bar, menus, About, installers). Fork:
+/// "ShotoPhopEX", with its "Sp" tile. Internal names (crates, `photocraft.exe`, the settings
+/// folder, the `ai.storyteller.photocraft` app id) stay `photocraft`, so existing preferences,
+/// file associations and the updater keep working.
+pub const APP_NAME: &str = "ShotoPhopEX";
+
+/// The upstream name that [`brand`] replaces in UI strings.
+pub const UPSTREAM_NAME: &str = "PhotoCraft";
+
+/// `text` with the upstream product name replaced by [`APP_NAME`] (no allocation when absent).
+pub fn brand(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(UPSTREAM_NAME) { text.replace(UPSTREAM_NAME, APP_NAME).into() } else { text.into() }
+}
+
 /// The workspace version, such as `0.1.0` or `0.2.0-rc.1`.
 pub const VERSION: &str = match option_env!("PHOTOCRAFT_OVERRIDE_VERSION") {
     Some(v) => v,

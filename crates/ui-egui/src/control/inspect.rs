@@ -126,7 +126,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     });
-    // PhotoshopEX: the generative UI, added after the macro (one `json!` this big trips
+    // ShotoPhopEX: the generative UI, added after the macro (one `json!` this big trips
     // serde_json's recursion limit).
     if let Some(o) = v.as_object_mut() {
         // The main canvas inside the rulers (points): with `views[activeDocument]`'s zoom and

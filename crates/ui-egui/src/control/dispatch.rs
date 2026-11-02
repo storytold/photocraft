@@ -238,7 +238,7 @@ struct UiSet {
     theme: Option<crate::theme::ThemeKind>,
     brush: BrushSet,
     legacy_update: Option<crate::panel_docking::LegacyUpdate>,
-    /// PhotoshopEX: `toolOptions`, the options bar's per-tool settings merged field by field.
+    /// ShotoPhopEX: `toolOptions`, the options bar's per-tool settings merged field by field.
     tool_options: Option<crate::state::ToolOptions>,
 }
 
@@ -275,7 +275,7 @@ impl UiSet {
         if let Some(v) = self.tool_options.take() {
             app.ui.tool_options = v;
         }
-        // PhotoshopEX: the generative task bar, panels and dialog.
+        // ShotoPhopEX: the generative task bar, panels and dialog.
         crate::generative_bar::set(app, p)?;
         crate::generations_panel::set(app, p)?;
         crate::generate_panel::set(app, p)?;

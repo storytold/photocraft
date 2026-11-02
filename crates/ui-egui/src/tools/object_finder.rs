@@ -242,7 +242,7 @@ mod tests {
     /// A 200 × 160 document: a red disc (centre 100, 80, radius 45) on blue.
     pub(crate) fn disc_app() -> PhotocraftApp {
         let mut s = photocraft_engine::Session::new();
-        // PhotoshopEX: no generative server, so the finder stays classical here even with a
+        // ShotoPhopEX: no generative server, so the finder stays classical here even with a
         // ComfyUI running on the development PC.
         s.edit_prefs(|p| {
             p.integrations.models_path.clear();

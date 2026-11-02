@@ -25,7 +25,7 @@ fn harness(tool: Tool, selection: bool, scale: f32) -> Harness<'static, Photocra
             app.run("select.rect", json!({"x": 40, "y": 40, "width": 200, "height": 100})).unwrap();
         }
         app.ui.tool = tool;
-        // PhotoshopEX's generative task bar opens under a new selection while the Generate
+        // ShotoPhopEX's generative task bar opens under a new selection while the Generate
         // group is folded; these taps are for the canvas menus underneath it.
         app.session.edit_prefs(|p| p.integrations.show_generative_bar = "never".into());
         app

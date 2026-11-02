@@ -175,7 +175,7 @@ pub fn system_info(app: &PhotocraftApp) -> Vec<String> {
 
 /// Help › System Info's on-screen text: version, platform and the graphics state.
 pub fn system_info_ui(app: &PhotocraftApp) -> Vec<String> {
-    let mut v = vec![format!("PhotoCraft {}", photocraft_engine::build_info::long_version()), {
+    let mut v = vec![format!("{} {}", photocraft_engine::build_info::APP_NAME, photocraft_engine::build_info::long_version()), {
         let template = "Platform: {os} {arch}";
         crate::i18n::fmt(tl!(template), &[("os", std::env::consts::OS), ("arch", std::env::consts::ARCH)])
     }];

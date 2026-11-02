@@ -115,7 +115,7 @@ pub struct CafOpts {
     pub mirror: bool,
     /// current | new | duplicate (Photoshop opens on New Layer)
     pub output: String,
-    /// PhotoshopEX: OK and Apply fill through the generative model (`edit.contentAwareFill`
+    /// ShotoPhopEX: OK and Apply fill through the generative model (`edit.contentAwareFill`
     /// `generative`): a masked layer above the active one, no preview.
     pub generative: bool,
 }

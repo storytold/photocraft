@@ -4196,14 +4196,14 @@ curves	Smooth	Vloeiend maken
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} kleur opgeslagen in {file}|{n} kleuren opgeslagen in {file}
 	GPU adapter	GPU-adapter
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Instantie
 	Intersect	Doorsnede
 	Prompt	Prompt
 	Template	Sjabloon
 	Select by Text…	Selecteren op tekst…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Generatieve vulling…
 	Generate Image…	Afbeelding genereren…
 	Allow research models	Onderzoeksmodellen toestaan
@@ -4387,7 +4387,7 @@ curves	Smooth	Vloeiend maken
 	Native runtime folders	Mappen van de ingebouwde runtime
 	Models folder	Map met ingebouwde modellen
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Verbreden
 	Fill Holes	Gaten vullen
 	Widen the object's mask by this many pixels (negative shrinks it)	Het masker van het object met zoveel pixels verbreden (negatief verkleint het)
@@ -4395,16 +4395,16 @@ curves	Smooth	Vloeiend maken
 	Feather the mask's edge by this many pixels	De rand van het masker over zoveel pixels verzachten
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	De selectie vóór de vulling met zoveel pixels verbreden, zodat een omvangrijkere vervanging ruimte heeft
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generatief
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	De voorvertoning toont de klassieke vulling; OK en Toepassen laten het model op een nieuwe laag werken.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Beste van twee
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Berekent twee kandidaten en toont de kandidaat die onaangeroerd lijkt; uit: één kandidaat, ongeveer de helft van de tijd
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adapters in de submap loras van de modellenmap, toegepast door de native engine
 	Generative Upscale	Generatief opschalen

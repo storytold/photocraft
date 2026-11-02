@@ -315,7 +315,7 @@ mod tests {
             let r = crate::menus::invoke(&mut app, &ctx, "edit.paste", serde_json::json!({})).unwrap();
             assert_eq!(r["pasted"], serde_json::json!(false));
         }
-        assert_eq!(app.ui.status, "Nothing to paste: PhotoCraft can't read the system clipboard here");
+        assert_eq!(app.ui.status, "Nothing to paste: ShotoPhopEX can't read the system clipboard here");
         let shown: Vec<_> = app.ui.notices.iter().filter(|notice| notice.title == CLIPBOARD_UNREADABLE).collect();
         assert_eq!(shown.len(), 1, "a second paste doesn't stack another notice");
         let guidance = english(shown[0]);

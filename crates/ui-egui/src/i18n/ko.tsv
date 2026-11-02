@@ -3838,13 +3838,13 @@ curves	Smooth	매끄럽게
 	Native runtime folders	네이티브 런타임 폴더
 	Models folder	네이티브 모델 폴더
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	인스턴스
 	Intersect	교차
 	Prompt	프롬프트
 	Template	템플릿
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	넓히기
 	Fill Holes	구멍 채우기
 	Widen the object's mask by this many pixels (negative shrinks it)	개체 마스크를 이 픽셀 수만큼 넓힙니다(음수는 줄입니다)
@@ -3852,16 +3852,16 @@ curves	Smooth	매끄럽게
 	Feather the mask's edge by this many pixels	마스크 가장자리를 이 픽셀 수만큼 부드럽게 합니다
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	칠하기 전에 선택 영역을 이 픽셀 수만큼 넓혀 더 큰 대체물이 들어갈 자리를 만듭니다
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	생성형
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	미리 보기는 기존 채우기를 보여 줍니다. 확인과 적용은 모델을 새 레이어에 실행합니다.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	둘 중 더 나은 것
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	후보 두 개를 생성해 손대지 않은 것처럼 보이는 쪽을 표시합니다. 끄면 후보 하나, 시간은 약 절반입니다
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	모델 폴더의 loras 하위 폴더에 있는 어댑터로, 네이티브 엔진이 적용합니다
 	Generative Upscale	생성형 업스케일

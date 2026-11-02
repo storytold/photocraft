@@ -1,4 +1,4 @@
-//! Reference images for `generate.edit` and `generate.image` (PhotoshopEX's reference deck).
+//! Reference images for `generate.edit` and `generate.image` (ShotoPhopEX's reference deck).
 //!
 //! A command's `references` param is a list of specs, each one of
 //!

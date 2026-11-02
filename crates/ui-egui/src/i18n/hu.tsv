@@ -4352,14 +4352,14 @@ cameraRaw	Yellow	Sárga
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} szín mentve ide: {file}
 	GPU adapter	GPU-adapter
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Példány
 	Intersect	Metszet
 	Prompt	Utasítás
 	Template	Sablon
 	Select by Text…	Kijelölés szöveg alapján…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Generatív kitöltés…
 	Generate Image…	Kép generálása…
 	Allow research models	Kutatási modellek engedélyezése
@@ -4543,7 +4543,7 @@ cameraRaw	Yellow	Sárga
 	Native runtime folders	Beépített futtatókörnyezet mappái
 	Models folder	Beépített modellek mappája
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Szélesítés
 	Fill Holes	Lyukak kitöltése
 	Widen the object's mask by this many pixels (negative shrinks it)	Az objektum maszkjának szélesítése ennyi képponttal (negatív érték szűkíti)
@@ -4551,16 +4551,16 @@ cameraRaw	Yellow	Sárga
 	Feather the mask's edge by this many pixels	A maszk szélének lágyítása ennyi képponttal
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	A kijelölés szélesítése ennyi képponttal a kitöltés előtt, hogy a terjedelmesebb csere elférjen
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Generatív
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Az előnézet a klasszikus kitöltést mutatja; az OK és az Alkalmaz a modellt futtatja egy új rétegre.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Kettőből a jobb
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Két jelöltet készít, és az érintetlennek tűnőt mutatja; kikapcsolva: egy jelölt, körülbelül fele idő
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Adapterek a modellmappa loras almappájában, a natív motor alkalmazza őket
 	Generative Upscale	Generatív felskálázás

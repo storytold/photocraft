@@ -290,7 +290,7 @@ pub(super) fn drive_preview(app: &mut PhotocraftApp, ctx: &egui::Context, draggi
     if pv.running.is_some() || pv.shown == pv.want || dragging {
         return;
     }
-    // PhotoshopEX: the generative fill has no preview (the model runs on OK); the classical
+    // ShotoPhopEX: the generative fill has no preview (the model runs on OK); the classical
     // preview of the same area is still worth a look, so it is computed as before.
     let Some(doc) = doc else { return };
     let (layer, mut p, generation, limit) = (w.layer, plan_params(w, true), w.preview.want, w.texture_limit);

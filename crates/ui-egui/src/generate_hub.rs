@@ -1,4 +1,4 @@
-//! The Generate hub (PhotoshopEX, plan Phase 5): the generative features as cards, on the Home
+//! The Generate hub (ShotoPhopEX, plan Phase 5): the generative features as cards, on the Home
 //! screen under the recent files and in Help › Generative Features…. **Create** makes a picture
 //! from nothing (the Generate panel in Image mode, a new document as the result); **Edit** works
 //! on an open picture: the panel in Fill, Edit or Expand mode, or the command's dialog (Remove

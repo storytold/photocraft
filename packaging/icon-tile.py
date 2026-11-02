@@ -5,7 +5,7 @@ build (docs/comfy/upstream.md has the brand checklist).
 
 Usage: python -I icon-tile.py <repo-root> <name> <letters> <tile-hex> <letter-hex> [<app-id>]
 
-  photocraft  Pc  #001E36 #31A8FF   (PhotoCraft; navy and blue, its own letters)
+  photocraft  Sp  #001E36 #31A8FF   (ShotoPhopEX; navy and blue, its own letters)
   vectorcraft Ai  #330000 #FF9A00   (Illustrator)
   pdfcraft    @ribbon  -  -        (Acrobat: a red ribbon "A" on a white tile)
   solidcraft  @cube    -  -        (SolidWorks: a red cube with S and W on its faces)
@@ -34,6 +34,7 @@ FONT = find_font(
     r"C:\Windows\Fonts\segoeuib.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/Library/Fonts/Arial Bold.ttf",
+    "/usr/share/fonts/opentype/inter/InterDisplay-Bold.otf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 )

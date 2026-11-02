@@ -127,7 +127,7 @@ fn switching_layer_kinds_keeps_the_layers_panel_still() {
 #[test]
 fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
     let (mut app, _, _) = app_with_layers();
-    // Properties directly above the filler (PhotoshopEX's Generate and Generations groups would
+    // Properties directly above the filler (ShotoPhopEX's Generate and Generations groups would
     // sit between).
     app.ui.panels.generations = false;
     app.ui.panels.generate = false;
@@ -537,7 +537,7 @@ fn rows_in_view(h: &Harness<'static, PhotocraftApp>, n: usize) -> usize {
 }
 
 /// #147: the default workspace gives Layers the column's spare height: at least ten rows on a
-/// 900 pt window, and a usable list on a 720 pt one. PhotoshopEX's Essentials also shows the
+/// 900 pt window, and a usable list on a 720 pt one. ShotoPhopEX's Essentials also shows the
 /// Generate and Generations groups (the owner's choice, plan §0), folded to their tab strips,
 /// and Layers keeps five rows at 900 pt. Upstream's guarantee is checked without them.
 #[test]
@@ -560,7 +560,7 @@ fn default_layout_shows_ten_layer_rows_at_900pt() {
 /// user set stay as they are in a shorter one.
 #[test]
 fn defaults_give_way_to_layers_but_user_sizes_stay() {
-    // Upstream's column: PhotoshopEX's generative groups would sit between Properties and Layers.
+    // Upstream's column: ShotoPhopEX's generative groups would sit between Properties and Layers.
     let without_generative = || {
         let (mut app, _, _) = app_with_layers();
         app.ui.panels.generations = false;
@@ -717,7 +717,7 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
                 app.ui.theme = theme;
                 app.ui.panels.navigator = true;
-                // PhotoshopEX: the Generate and Generations groups would take the room this
+                // ShotoPhopEX: the Generate and Generations groups would take the room this
                 // measures; upstream's layout is measured without them.
                 app.ui.panels.generate = false;
                 app.ui.panels.generations = false;

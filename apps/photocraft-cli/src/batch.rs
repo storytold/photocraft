@@ -219,7 +219,7 @@ mod batch_action_set_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// PhotoshopEX: a generative step in a batched action runs to completion on every file (the
+    /// ShotoPhopEX: a generative step in a batched action runs to completion on every file (the
     /// job is waited for, as `run` waits), here Remove Background against the fake server, whose
     /// matte is opaque in the middle half of the picture: the saved PNGs are transparent outside it.
     #[test]

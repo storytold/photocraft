@@ -3932,14 +3932,14 @@ curves	Smooth	Làm mượt
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Đã lưu {n} màu vào {file}
 	GPU adapter	Bộ điều hợp GPU
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Instance	Thực thể
 	Intersect	Giao
 	Prompt	Lời nhắc
 	Template	Mẫu
 	Select by Text…	Chọn theo văn bản…
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Tô sinh tạo…
 	Generate Image…	Tạo ảnh…
 	Allow research models	Cho phép mô hình nghiên cứu
@@ -4126,7 +4126,7 @@ curves	Smooth	Làm mượt
 	Native runtime folders	Thư mục môi trường chạy tích hợp
 	Models folder	Thư mục mô hình tích hợp
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Mở rộng
 	Fill Holes	Lấp lỗ
 	Widen the object's mask by this many pixels (negative shrinks it)	Mở rộng mặt nạ của đối tượng thêm chừng này điểm ảnh (giá trị âm thu hẹp lại)
@@ -4134,16 +4134,16 @@ curves	Smooth	Làm mượt
 	Feather the mask's edge by this many pixels	Làm mềm viền mặt nạ chừng này điểm ảnh
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Mở rộng vùng chọn thêm chừng này điểm ảnh trước khi tô, để vật thay thế to hơn có chỗ
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Sinh tạo
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Bản xem trước hiển thị cách tô cổ điển; OK và Áp dụng chạy mô hình lên một lớp mới.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Chọn tốt nhất trong hai
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Tạo hai ứng viên và hiển thị ứng viên trông như chưa chỉnh sửa; tắt: một ứng viên, khoảng một nửa thời gian
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Các bộ điều hợp trong thư mục con loras của thư mục mô hình, do engine gốc áp dụng
 	Generative Upscale	Phóng to tạo sinh

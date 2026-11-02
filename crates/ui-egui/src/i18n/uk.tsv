@@ -4148,7 +4148,7 @@ curves	Smooth	Згладити
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Збережено {n} колір у {file}|Збережено {n} кольори у {file}|Збережено {n} кольорів у {file}
 	GPU adapter	Адаптер GPU
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative Fill…	Генеративне заповнення…
 	Generate Image…	Згенерувати зображення…
 	Select by Text…	Виділити за текстом…
@@ -4340,7 +4340,7 @@ curves	Smooth	Згладити
 	Prompt	Запит
 	Template	Шаблон
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Widen	Розширити
 	Fill Holes	Заповнити дірки
 	Widen the object's mask by this many pixels (negative shrinks it)	Розширити маску об’єкта на стільки пікселів (від’ємне значення звужує її)
@@ -4348,16 +4348,16 @@ curves	Smooth	Згладити
 	Feather the mask's edge by this many pixels	Розтушувати край маски на стільки пікселів
 	Widen the selection by this many pixels before the fill, so a bulkier replacement has room	Розширити виділення на стільки пікселів перед заповненням, щоб об’ємнішій заміні вистачило місця
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Generative	Генеративно
 	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)	Fill from the generative model: slower, far better on textures and patterns (needs the native worker)
 	The preview shows the classical fill; OK and Apply run the model onto a new layer.	Попередній перегляд показує класичне заповнення; OK і Застосувати запускають модель на новому шарі.
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	Best of two	Кращий із двох
 	Run two candidates and show the one that looks untouched; off, one candidate, about half the time	Створює два варіанти й показує той, що виглядає неторканим; вимкнено: один варіант, приблизно вдвічі швидше
 
-# PhotoshopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
+# ShotoPhopEX, upstream merge 2026-10-21: the fork's strings this catalog lacked.
 	LoRAs	LoRAs
 	Adapters in the models folder's loras subfolder, applied by the native engine	Адаптери з підпапки loras папки моделей, які застосовує вбудований рушій
 	Generative Upscale	Генеративне масштабування

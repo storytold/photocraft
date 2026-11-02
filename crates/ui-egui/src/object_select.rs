@@ -1,4 +1,4 @@
-//! The Object Selection tool's SAM 3.1 mode (PhotoshopEX): with a generative server that
+//! The Object Selection tool's SAM 3.1 mode (ShotoPhopEX): with a generative server that
 //! answers, the tool works the way the detector wants to be used.
 //!
 //! - **Object finder**: when the pointer rests over the picture the detector is asked what a
