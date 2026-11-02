@@ -2,6 +2,7 @@ const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
 use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
+use super::steps_direct_adjustments::{gradient_from, gradient_to, replace_from, replace_to};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
     crop_from, crop_to, export_from, export_to, image_size_from, image_size_to, merge_visible_from, merge_visible_to, open_from, open_to, paste_from, paste_to,
@@ -284,7 +285,9 @@ pub(super) const EVENTS: &[Event] = &[
     adjustment_event!("", "PhtF", "photoFilter", "Photo Filter"),
     adjustment_event!("", "BanW", "blackAndWhite", "Black & White", "image.adjustments.blackWhite"),
     adjustment_event!("ChnM", "ChnM", "channelMixer", "Channel Mixer"),
+    Event { code: "GrMp", name: "", label: "Gradient Map", ids: &["image.adjustments.gradientMap"], from: gradient_from, to: gradient_to },
     adjustment_event!("GdMp", "GdMp", "gradientMapEvent", "Gradient Map", "image.adjustments.gradientMap"),
+    Event { code: "RplC", name: "replaceColor", label: "Replace Color", ids: &["image.adjustments.replaceColor"], from: replace_from, to: replace_to },
     adjustment_event!("SlcC", "SlcC", "selectiveColor", "Selective Color"),
     ev!("Dstt", "desaturate", "Desaturate", "image.adjustments.desaturate", &[]),
     ev!("Eqlz", "equalize", "Equalize", "image.adjustments.equalize", &[]),
@@ -620,7 +623,12 @@ const LEGACY_CODES: &[(&str, &str)] =
 
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
-    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id);
+    let find = |id: &str| {
+        EVENTS.iter().find(|e| {
+            (!e.code.is_empty() && e.code.trim_end() == id.trim_end() && (!e.name.is_empty() || matches!(item, AtnEvent::Code(_))))
+                || (!e.name.is_empty() && e.name == id)
+        })
+    };
     find(&id).or_else(|| match item {
         AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
         AtnEvent::Name(_) => None,
