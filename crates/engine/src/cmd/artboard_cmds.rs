@@ -314,10 +314,10 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Bool(true)) => true,
         Some(value) => value.as_i64().and_then(|n| i32::try_from(n).ok()).ok_or_else(|| bad(cmd, "changeBackground must be an integer"))? == 1,
     };
-    if let Some(guides) = p.get("guideIDs") {
-        if !guides.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some_and(|n| i32::try_from(n).is_ok()))) {
-            return Err(bad(cmd, "guideIDs must be a list of integers"));
-        }
+    if let Some(guides) = p.get("guideIDs")
+        && !guides.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some_and(|n| i32::try_from(n).is_ok())))
+    {
+        return Err(bad(cmd, "guideIDs must be a list of integers"));
     }
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
