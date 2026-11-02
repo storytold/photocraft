@@ -150,7 +150,15 @@ fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
 /// New Snapshot's From: the full document, the layers merged, or the current layer.
 const SNAPSHOT_FROM: &[(&str, &str)] = &[("FllD", "fullDocument"), ("MrgL", "mergedLayers"), ("CrnL", "currentLayer")];
 
+fn type_shape_descriptor() -> Descriptor {
+    desc("null").with("null", class_ref("contentLayer")).with("Usng", target_ref("textLayer"))
+}
+
+/// Map supported Make forms, including the exact target-text-to-content-layer references.
 pub(super) fn make_from(d: &Descriptor) -> Mapped {
+    if d.items == type_shape_descriptor().items {
+        return none("type.convertToShape");
+    }
     if let Some(mapped) = duplicate_layer_from_descriptor(d) {
         return mapped;
     }
@@ -234,7 +242,11 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Build supported Make descriptors; Type to Shape exports only without native options.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if id == "type.convertToShape" {
+        return p.as_object().filter(|p| p.is_empty()).map(|_| type_shape_descriptor());
+    }
     let with_name = |cls: &str| {
         let mut u = desc(cls);
         if let Some(n) = jstr(p, "name") {
