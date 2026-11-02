@@ -1,7 +1,10 @@
 //! Real browser checks for the page-local file-provider capability, without starting eframe.
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
-use photocraft_ui_egui::file_providers::Host;
+use photocraft_ui_egui::{
+    PhotocraftApp, Services,
+    file_providers::{self, Host},
+};
 use wasm_bindgen::{JsCast, JsValue, prelude::wasm_bindgen};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -226,6 +229,39 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     rejected_without_snapshot_change(&host, &api, "openResource", &[request, "Drawing.psd".into(), Uint8Array::new_with_length(1).into()]);
     rejected_without_snapshot_change(&host, &api, "saveResult", &["unknown".into(), "invented".into(), "".into()]);
     rejected_without_snapshot_change(&host, &api, "resolveSaveDialog", &["unknown".into(), "invalid".into(), "Drawing.psd".into()]);
+
+    // A separate live request must also accept bytes through the exported adapter. Apply its
+    // queued reply with a small importer fixture, without starting eframe or a GPU/editor frame.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services { file_provider: Some(host.clone()), ..Default::default() });
+    app.run("file.new", serde_json::json!({"width":2,"height":2,"name":"Browser fixture"})).map_err(|error| JsValue::from_str(&error))?;
+    let document = app.session.active().ok_or_else(|| JsValue::from_str("fixture document missing"))?.doc.as_ref().clone();
+    app.services.import = Some(Box::new(move |name, bytes, _| {
+        assert_eq!(name, "loaded.png");
+        assert_eq!(bytes, &[1, 2, 3][..]);
+        Ok((document.clone(), Vec::new()))
+    }));
+    let accepted = call(&api, "requestOpen", &["file-one".into()])?;
+    let accepted_id = accepted.as_string().ok_or_else(|| JsValue::from_str("open request ID must be a string"))?;
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "openRequest");
+    assert_eq!(events[0].metadata["requestId"], accepted_id);
+    call(&api, "openResource", &[accepted, "loaded.png".into(), Uint8Array::from(&[1u8, 2, 3][..]).into()])?;
+    assert!(host.busy());
+    assert!(host.take_events().is_empty(), "accepted bytes wait for application-thread admission");
+    assert!(host.cancel_open(accepted_id.clone(), String::new()).is_err(), "the exported callback consumed its live request");
+    file_providers::tick(&mut app, &egui::Context::default());
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "opened");
+    assert_eq!(events[0].metadata["requestId"], accepted_id);
+    assert_eq!(events[0].metadata["resourceId"], "file-one");
+    assert_eq!(events[0].metadata["filename"], "loaded.png");
+    let active = app.session.active().ok_or_else(|| JsValue::from_str("admitted provider document missing"))?;
+    assert_eq!(events[0].metadata["documentId"], active.doc.id.0.to_string());
+    assert!(host.bound(active.doc.id));
+    assert_eq!(app.session.documents().len(), 2);
+    assert!(!host.busy());
     call(&api, "unregisterProvider", &[])?;
     assert!(!host.connected());
     assert!(!host.enabled());

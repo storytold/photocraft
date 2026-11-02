@@ -44,7 +44,9 @@ fn request_deferred_open(app: &mut PhotocraftApp, host: &Host) -> (String, Arc<A
     let document = app.session.active().unwrap().doc.as_ref().clone();
     let imports = Arc::new(AtomicUsize::new(0));
     let decoder_calls = imports.clone();
-    app.services.import = Some(Box::new(move |_, _, _| {
+    app.services.import = Some(Box::new(move |name, bytes, _| {
+        assert_eq!(name, "loaded.png");
+        assert_eq!(bytes, &[1][..]);
         decoder_calls.fetch_add(1, Ordering::Relaxed);
         Ok((document.clone(), Vec::new()))
     }));
@@ -657,6 +659,74 @@ fn deferred_provider_open_does_not_retarget_a_live_filter_dialog() {
         assert_eq!(app.session.active().unwrap().doc.id, doc, "the original dialog still targets its own document");
         assert!(app.ui.dialogs.is_empty());
     }
+}
+
+#[test]
+fn deferred_provider_open_preserves_waiting_remove_strokes_until_explicit_cancel() {
+    use crate::canvas::{ToolEvent, tool_event};
+
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let (mut app, host, doc) = app();
+    app.run("layer.new.layer", json!({"name":"Remove source"})).unwrap();
+    let (request, imports) = request_deferred_open(&mut app, &host);
+    let source = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    let checkpoint = app.session.active().unwrap().saved_revision;
+    app.ui.tool = crate::state::Tool::Remove;
+    app.ui.tool_options.remove_after_each_stroke = false;
+    let modifiers = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 0.0, y: 0.0, pressure: 1.0 }, modifiers);
+    tool_event(&mut app, ToolEvent::Move { x: 1.0, y: 1.0, pressure: 1.0 }, modifiers);
+    tool_event(&mut app, ToolEvent::Up { x: 1.0, y: 1.0 }, modifiers);
+    assert!(app.drag.is_none() && app.live_stroke.is_none(), "the stroke has ended, rather than remaining a held gesture");
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(app.remove_pending.len(), 1);
+    assert!(app.remove_trail.is_some());
+    let waiting = app.remove_pending.clone();
+    let target = app.remove_pending_target.clone();
+    host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+    let mut output = ctx.run_ui(egui::RawInput { focused: true, ..Default::default() }, |ui| {
+        assert!(ui.input(|input| input.events.is_empty() && !input.pointer.any_down() && input.keys_down.is_empty()));
+        tick(&mut app, ui.ctx());
+        assert_deferred_open_rejected(&app, &host, doc, &request);
+    });
+    output.textures_delta.clear(); // This input/protocol fixture does not paint.
+    assert_eq!(imports.load(Ordering::Relaxed), 0);
+    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.active().unwrap().saved_revision, checkpoint);
+    assert_eq!(app.remove_pending, waiting);
+    assert!(app.remove_pending_target == target);
+    assert!(app.remove_trail.is_some());
+    assert!(crate::retouch_ui::remove_pending_live(&mut app), "the waiting stroke still belongs to its original target");
+    assert_eq!(app.ui.status, crate::i18n::t("Finish or cancel the current edit before opening a provider file."));
+
+    assert!(crate::retouch_ui::remove_pending_cancel(&mut app));
+    assert!(app.remove_pending.is_empty() && app.remove_pending_target.is_none() && app.remove_trail.is_none());
+    let next = host.request_open("resource-one").unwrap();
+    assert_ne!(next, request);
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "openRequest");
+    assert_eq!(events[0].metadata["requestId"], next);
+    host.open(next.clone(), "loaded.png".into(), vec![1]).unwrap();
+    tick_once(&mut app);
+    assert_eq!(imports.load(Ordering::Relaxed), 1);
+    assert_eq!(app.session.documents().len(), 2);
+    let active = app.session.active().unwrap().doc.id;
+    assert_ne!(active, doc);
+    assert!(host.bound(active));
+    let original = app.session.documents().iter().find(|state| state.doc.id == doc).unwrap();
+    assert!(Arc::ptr_eq(&original.doc, &source));
+    assert_eq!(original.revision, revision);
+    let events = host.take_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].metadata["type"], "opened");
+    assert_eq!(events[0].metadata["requestId"], next);
+    assert_eq!(events[0].metadata["resourceId"], "resource-one");
+    assert_eq!(events[0].metadata["documentId"], active.0.to_string());
+    assert!(!host.busy());
 }
 
 #[test]

@@ -651,6 +651,7 @@ fn open_would_retarget_ui(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
         || app.discard.is_some()
         || !app.ui.dialogs.is_empty()
         || app.filter_preview.is_some()
+        || !app.remove_pending.is_empty()
         || ctx.text_edit_focused()
         || ctx.input(|input| {
             // Motion/leave alone only changes hover. A held button or document-owned gesture
