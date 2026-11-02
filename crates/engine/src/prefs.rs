@@ -880,7 +880,11 @@ impl Default for PlugIns {
 pub struct TypePrefs {
     pub smart_quotes: bool,
     pub missing_glyph_protection: bool,
-    pub show_font_names_in_english: bool,
+    /// Show font names in English: `None` (the default) follows the interface language, as in
+    /// Photoshop, whose Chinese, Japanese and Korean editions list a font by its own name; an
+    /// explicit `true`/`false` is the user's choice and wins. [`TypePrefs::font_names_in_english`]
+    /// resolves it.
+    pub show_font_names_in_english: Option<bool>,
     pub use_esc_to_commit: bool,
     pub text_engine: TextEngine,
     pub font_preview: FontPreview,
@@ -896,7 +900,7 @@ impl Default for TypePrefs {
         Self {
             smart_quotes: true,
             missing_glyph_protection: true,
-            show_font_names_in_english: true,
+            show_font_names_in_english: None,
             use_esc_to_commit: true,
             text_engine: TextEngine::WorldReady,
             font_preview: FontPreview::Medium,
@@ -913,6 +917,15 @@ impl TypePrefs {
     /// applies this in `Session::apply_prefs`.
     pub fn missing_glyph_protection(&self) -> bool {
         self.missing_glyph_protection
+    }
+
+    /// Preferences ▸ Type ▸ Show Font Names in English, resolved for the interface language: a
+    /// Chinese, Japanese or Korean interface lists a font by its own name ("未来荧黑", "ＭＳ
+    /// ゴシック") unless the user turned this on, as Photoshop's editions do; every other
+    /// interface lists English names unless the user turned it off. `localized_ui` says whether
+    /// the interface language is one of those (`photocraft_text::cjk::locale_script`).
+    pub fn font_names_in_english(&self, localized_ui: bool) -> bool {
+        self.show_font_names_in_english.unwrap_or(!localized_ui)
     }
 }
 
@@ -1367,6 +1380,17 @@ impl Session {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
         if !v.is_object() {
             return Err("preferences: expected a JSON object".into());
+        }
+        // Files before version 3 hold Show Font Names in English on because that was the default
+        // when they were written: every key is saved, chosen or not. Like Photoshop, the default
+        // follows the interface language now (a Chinese, Japanese or Korean interface lists a
+        // font by its own name), and the shell cannot tell a saved `true` from the old default,
+        // so those files take the new default. A choice made since is saved as version 3.
+        if v.get("version").and_then(Value::as_u64).unwrap_or(0) < 3
+            && let Some(type_) = v.get_mut("type").and_then(Value::as_object_mut)
+            && type_.get("showFontNamesInEnglish") == Some(&json!(true))
+        {
+            type_.remove("showFontNamesInEnglish");
         }
         // Files before version 2 hold Use Shift Key for Tool Switch off because that was the
         // default when they were written: every key is saved, chosen or not. Like Photoshop it is

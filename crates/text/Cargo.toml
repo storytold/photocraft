@@ -29,6 +29,10 @@ flate2 = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
 rayon = { workspace = true }
+# Old fonts keep a localized family name only in a legacy CJK encoding (Mac GB2312/Big5/Shift-JIS/
+# EUC-KR records, Windows encodings 2–5), which the font stack can't decode: `font_menu` reads
+# them itself. Native only: the web build has no system fonts and must stay under its size gate.
+encoding_rs = "0.8"
 
 # macOS only: the `system` feature adds fontique's Core Text backend, which lists every font the
 # system offers wherever its file lives (fonts a font manager or Adobe Fonts activated, Office's
@@ -41,3 +45,6 @@ parley = { version = "0.11", default-features = false, features = ["std", "compl
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
+# Build only: generates the font menu's per-script ordering tables from the writing systems'
+# standard character sets (build.rs → `collate.rs`). Not linked into the app.
+encoding_rs = "0.8"

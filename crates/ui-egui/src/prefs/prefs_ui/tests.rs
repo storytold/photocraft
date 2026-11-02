@@ -30,6 +30,32 @@ fn the_generator_checkbox_reads_enable_generator() {
     assert_eq!(h.state()["generatorEnabled"], true);
 }
 
+/// Show Font Names in English follows the interface language until the user chooses: the dialog
+/// draws its checkbox even while the value is unset (null), a click stores an explicit choice,
+/// and the line under it puts the choice back to following the language.
+#[test]
+fn the_font_names_checkbox_starts_at_the_languages_default() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    // The drawing language is per thread and outlives a test: pin English, so the labels below
+    // are the source strings and the default is English names.
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    let values = json!({"showFontNamesInEnglish": null}).as_object().unwrap().clone();
+    assert!(field_visible("type", &values, "showFontNamesInEnglish", ""), "an unset choice still draws");
+    let mut h = Harness::builder()
+        .with_size(vec2(680.0, 350.0))
+        .build_ui_state(|ui, values| section_fields(ui, "type", values, &["showFontNamesInEnglish".into()], crate::i18n::Lang::EN, None, ""), values);
+    h.run_steps(2);
+    // The test draws in English, whose default is English names: the box starts checked.
+    h.get_by_label("Follows the interface language.");
+    h.get_by_label("Show font names in english").click();
+    h.run_steps(2);
+    assert_eq!(h.state()["showFontNamesInEnglish"], false, "a click stores the opposite of the default");
+    assert!(h.query_by_label("Follows the interface language.").is_none(), "the line goes once the choice is explicit");
+    h.get_by_label("Follow the interface language").click();
+    h.run_steps(2);
+    assert!(h.state()["showFontNamesInEnglish"].is_null(), "back to following the language");
+}
+
 #[test]
 fn graphics_dropdowns_are_named_for_their_settings() {
     use egui::accesskit::Role;

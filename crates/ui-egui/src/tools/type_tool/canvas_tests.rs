@@ -1828,9 +1828,13 @@ fn font_styles_keep_metadata_names_and_numeric_labels() {
     let styles = super::styles("Inter");
     assert!(styles.contains(&"Regular".into()));
     assert!(styles.contains(&"SemiBold".into()));
-    assert_eq!(super::style_label("20"), "20");
-    assert_eq!(super::style_label("30"), "30");
+    // Each style shows the name the font writes (Inter has no localized subfamilies), so a
+    // numeric subfamily such as "20" stays as it is.
+    for (name, label) in super::style_options("Inter") {
+        assert_eq!(name, label, "an English-only font labels its styles as it writes them");
+    }
     assert_eq!(super::styles("Missing test family"), ["Regular"]);
+    assert_eq!(super::style_options("Missing test family"), [("Regular".to_string(), "Regular".to_string())]);
 }
 
 #[test]
@@ -1853,7 +1857,7 @@ fn variable_faces_list_the_weights_of_their_axis() {
             _ => "Bold",
         };
         let style = if italic { format!("{base} Italic") } else { base.to_string() };
-        photocraft_text::FaceInfo { family: "Montserrat".into(), style, postscript_name: None, weight, italic, axes }
+        photocraft_text::FaceInfo { family: "Montserrat".into(), style, localized_styles: Vec::new(), postscript_name: None, weight, italic, axes }
     };
     let full = || vec![("wght".to_string(), 100.0, 100.0, 900.0)];
     let names = super::style_names(&[face(100.0, false, full()), face(100.0, true, full())]);
@@ -1876,6 +1880,7 @@ fn variable_font_axes_become_sliders_with_the_drawn_value() {
     let face = |italic: bool, axes: Vec<super::Axis>| photocraft_text::FaceInfo {
         family: "Roboto Flex".into(),
         style: "Regular".into(),
+        localized_styles: Vec::new(),
         postscript_name: None,
         weight: 400.0,
         italic,
@@ -2311,7 +2316,7 @@ mod multi_layer_formatting {
         h.run();
         h.get_all_by_label("Show Styles").next().unwrap().click();
         h.run();
-        h.get_by_label(&super::super::style_label(&pick)).click();
+        h.get_by_label(&pick).click();
         h.run();
         assert_eq!(h.state().ui.tool_options.type_style, pick, "new type takes the picked style");
         for id in &ids[..2] {

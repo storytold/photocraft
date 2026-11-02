@@ -167,6 +167,10 @@ pub struct FaceInfo {
     pub family: String,
     /// OpenType typographic subfamily (name 17), or legacy subfamily (name 2).
     pub style: String,
+    /// The same subfamily in every language the face writes it in, `(language tag, name)`:
+    /// a style menu shows the interface language's ("常规") where there is one
+    /// ([`crate::font_menu::display_name`]), else [`FaceInfo::style`] as the font writes it.
+    pub localized_styles: Vec<(String, String)>,
     /// Stable face identity, including faces that share the same CSS attributes.
     pub postscript_name: Option<String>,
     /// CSS weight (100–900); variable fonts report their default.
@@ -199,6 +203,9 @@ pub struct FontDb {
     /// Each family's [`crate::FamilyTraits`] (font menu filters), filled lazily; `None` for a
     /// family whose fonts can't be read.
     traits_cache: HashMap<String, Option<crate::FamilyTraits>>,
+    /// Each family's [`crate::FamilyMenuInfo`] (font menu names and grouping), filled lazily;
+    /// `None` for a family whose fonts can't be read.
+    menu_cache: HashMap<String, Option<crate::FamilyMenuInfo>>,
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
@@ -222,6 +229,7 @@ impl FontDb {
             missing_glyph_protection: true,
             face_cache: HashMap::new(),
             traits_cache: HashMap::new(),
+            menu_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
         };
@@ -286,6 +294,7 @@ impl FontDb {
             self.ps_cache.clear();
             self.face_cache.clear();
             self.traits_cache.clear();
+            self.menu_cache.clear();
             self.refresh_generics();
         }
     }
@@ -314,6 +323,10 @@ impl FontDb {
             {
                 names.push(n.to_string());
             }
+        }
+        // A family that gained faces (another weight, another file) may read differently now.
+        for name in &names {
+            self.menu_cache.remove(name);
         }
         // Deterministic order, user-facing families first: a collection's registration order isn't
         // stable, and macOS ships private UI faces (".Hiragino Kaku Gothic Interface") whose
@@ -389,35 +402,53 @@ impl FontDb {
         v
     }
 
-    /// Each listed family's localized (non-English) name, for font menus with Preferences ▸ Type ▸
-    /// Show Font Names in English off (Photoshop then lists e.g. "MS Gothic" as "ＭＳ ゴシック").
-    /// Families without one are absent. Read from the same name ID the family name comes from
-    /// (typographic family, else family), so the pair always names the same family. Documents keep
-    /// the English family: this is a display label only.
-    pub fn localized_family_names(&mut self) -> HashMap<String, String> {
+    /// Every family's [`crate::FamilyMenuInfo`]: the names it gives itself, the writing systems it
+    /// serves and the samples it can draw (the font menus' labels, grouping and previews). The
+    /// shared engine builds this while it scans the installed fonts ([`crate::shared`]), so no
+    /// menu ever reads a font file on the UI thread.
+    pub fn menu_index(&mut self) -> HashMap<String, crate::FamilyMenuInfo> {
         let mut out = HashMap::new();
         for family in self.families() {
-            let Some(info) = self.fcx.collection.family_by_name(&family) else {
-                continue;
-            };
-            let Some(face) = info.fonts().first() else {
-                continue;
-            };
-            let Some(blob) = face.load(Some(&mut self.fcx.source_cache)) else {
-                continue;
-            };
-            let Ok(font) = skrifa::FontRef::from_index(blob.as_ref(), face.index()) else {
-                continue;
-            };
-            let names =
-                |id| -> Vec<(String, Option<String>)> { font.localized_strings(id).map(|s| (s.chars().collect(), s.language().map(str::to_string))).collect() };
-            let typographic = names(StringId::TYPOGRAPHIC_FAMILY_NAME);
-            let names = if typographic.is_empty() { names(StringId::FAMILY_NAME) } else { typographic };
-            if let Some(local) = localized_name(&family, &names) {
-                out.insert(family, local);
+            if let Some(info) = self.menu_info(&family) {
+                out.insert(family, info);
             }
         }
         out
+    }
+
+    /// Reads every listed family's [`crate::FamilyMenuInfo`] into the cache, without building the
+    /// map (the background font scan's warm-up).
+    pub fn warm_menu_index(&mut self) {
+        for family in self.families() {
+            self.menu_info(&family);
+        }
+    }
+
+    /// One family's [`crate::FamilyMenuInfo`], read from its representative face once and cached.
+    pub fn menu_info(&mut self, family: &str) -> Option<crate::FamilyMenuInfo> {
+        if let Some(info) = self.menu_cache.get(family) {
+            return info.clone();
+        }
+        let info = (|| {
+            let family_info = self.fcx.collection.family_by_name(family)?;
+            let face = representative_face(&family_info)?;
+            let blob = face.load(Some(&mut self.fcx.source_cache))?;
+            let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
+            let mut info = crate::font_menu::info_of(&font, family_info.fonts().len());
+            // An extended family (one family name, several ID 1 names) lists its representative
+            // face's name, but every face's names are searchable.
+            for other in family_info.fonts() {
+                if other.index() == face.index() && other.source().id() == face.source().id() {
+                    continue;
+                }
+                let Some(blob) = other.load(Some(&mut self.fcx.source_cache)) else { continue };
+                let Ok(other_font) = skrifa::FontRef::from_index(blob.as_ref(), other.index()) else { continue };
+                crate::font_menu::add_face_search_names(&mut info, &other_font);
+            }
+            Some(info)
+        })();
+        self.menu_cache.insert(family.to_string(), info.clone());
+        info
     }
 
     pub fn has_family(&mut self, name: &str) -> bool {
@@ -470,6 +501,7 @@ impl FontDb {
                     style: name(StringId::TYPOGRAPHIC_SUBFAMILY_NAME)
                         .or_else(|| name(StringId::SUBFAMILY_NAME))
                         .unwrap_or_else(|| fallback_style(f.weight().value(), italic)),
+                    localized_styles: font.as_ref().map(crate::font_menu::localized_subfamilies).unwrap_or_default(),
                     postscript_name: name(StringId::POSTSCRIPT_NAME),
                     weight: f.weight().value(),
                     italic,
@@ -490,7 +522,7 @@ impl FontDb {
         }
         let traits = (|| {
             let info = self.fcx.collection.family_by_name(family)?;
-            let face = info.fonts().iter().min_by_key(|f| (!matches!(f.style(), FontStyle::Normal), (f.weight().value() - 400.0).abs() as u32))?.clone();
+            let face = representative_face(&info)?;
             let blob = face.load(Some(&mut self.fcx.source_cache))?;
             let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
             Some(crate::font_class::traits_of(family, &font))
@@ -998,23 +1030,14 @@ pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     v
 }
 
-/// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
-/// picked by default.
-/// The localized family name among a font's `(name, language)` family-name records: the first
-/// one in a language other than English that differs from `english` (the name the font menus
-/// store). `None` when the font only names itself in English (most fonts).
-pub fn localized_name(english: &str, names: &[(String, Option<String>)]) -> Option<String> {
-    let is_english = |lang: &str| {
-        let primary = lang.split(['-', '_']).next().unwrap_or(lang);
-        primary.eq_ignore_ascii_case("en")
-    };
-    names
-        .iter()
-        .filter(|(name, lang)| lang.as_deref().is_some_and(|l| !l.is_empty() && !is_english(l)) && !name.trim().is_empty() && name != english)
-        .map(|(name, _)| name.clone())
-        .next()
+/// The face a family is described by: its upright face nearest weight 400, whose tables state
+/// what the family is (classification, menu names and grouping all read from it).
+fn representative_face(info: &parley::fontique::FamilyInfo) -> Option<parley::fontique::FontInfo> {
+    info.fonts().iter().min_by_key(|f| (!matches!(f.style(), FontStyle::Normal), (f.weight().value() - 400.0).abs() as u32)).cloned()
 }
 
+/// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
+/// picked by default.
 pub fn is_hidden_family(name: &str) -> bool {
     name.starts_with('.')
 }
@@ -1084,25 +1107,6 @@ mod tests {
         assert!(super::inflate_font(b"").is_empty());
         let mut db = super::FontDb::new();
         assert!(db.register_font_data(super::inflate_font(b"\x00garbage")).is_empty());
-    }
-
-    fn names(v: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
-        v.iter().map(|(n, l)| (n.to_string(), l.map(str::to_string))).collect()
-    }
-
-    /// Show Font Names in English off: a CJK font's native family name is its menu label.
-    #[test]
-    fn localized_name_picks_the_first_non_english_family_name() {
-        let ms_gothic = names(&[("MS Gothic", Some("en-US")), ("ＭＳ ゴシック", Some("ja-JP"))]);
-        assert_eq!(super::localized_name("MS Gothic", &ms_gothic).as_deref(), Some("ＭＳ ゴシック"));
-        let yahei = names(&[("Microsoft YaHei", Some("en")), ("微软雅黑", Some("zh-CN")), ("微軟雅黑", Some("zh-TW"))]);
-        assert_eq!(super::localized_name("Microsoft YaHei", &yahei).as_deref(), Some("微软雅黑"));
-        // English-only fonts, other English locales, unknown languages and copies of the English
-        // name give no localized name.
-        assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-US"))])), None);
-        assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-GB")), ("Arial", Some("de-DE"))])), None);
-        assert_eq!(super::localized_name("X", &names(&[("Y", None), ("  ", Some("ja-JP"))])), None);
-        assert_eq!(super::localized_name("X", &[]), None);
     }
 
     /// The files a collection's fonts come from (what Core Text's fonts are loaded from, #6683):

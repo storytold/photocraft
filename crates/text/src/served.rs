@@ -191,11 +191,15 @@ struct State {
     fallbacks: Vec<(String, String)>,
     /// Families to fetch, not yet taken by [`take_requests`].
     requested: Vec<String>,
+    /// The manifest's ISO 15924 scripts per family, `(family, scripts)`: font menus place a
+    /// family in its writing system's group before the file is fetched.
+    scripts: Vec<(String, Vec<String>)>,
     /// Bumped when `families` changes, so font menus refresh.
     generation: u64,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { families: Vec::new(), fallbacks: Vec::new(), requested: Vec::new(), generation: 0 });
+static STATE: Mutex<State> =
+    Mutex::new(State { families: Vec::new(), fallbacks: Vec::new(), requested: Vec::new(), scripts: Vec::new(), generation: 0 });
 
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
@@ -215,14 +219,43 @@ pub fn add_families(families: impl IntoIterator<Item = String>) {
     }
 }
 
-/// Adds the fonts of a manifest: their families (as [`add_families`]) and their script fallbacks.
+/// Adds the fonts of a manifest: their families (as [`add_families`]), their scripts (for
+/// [`families_for_script`]) and their script fallbacks. New families or scripts move
+/// [`generation`], which the font menus key their grouping on; all of it lands under one lock, so
+/// a menu never sees a family without the scripts that came with it.
 pub fn add_fonts(fonts: &[ServedFont]) {
-    add_families(fonts.iter().map(|f| f.family.clone()));
     let mut s = state();
+    let mut changed = false;
+    for font in fonts {
+        if !s.families.contains(&font.family) {
+            s.families.push(font.family.clone());
+            changed = true;
+        }
+        if font.scripts.is_empty() {
+            continue;
+        }
+        match s.scripts.iter_mut().find(|(family, _)| *family == font.family) {
+            Some((_, scripts)) => {
+                for script in &font.scripts {
+                    if !scripts.contains(script) {
+                        scripts.push(script.clone());
+                        changed = true;
+                    }
+                }
+            }
+            None => {
+                s.scripts.push((font.family.clone(), font.scripts.clone()));
+                changed = true;
+            }
+        }
+    }
     for pair in script_fallbacks(fonts) {
         if !s.fallbacks.contains(&pair) {
             s.fallbacks.push(pair);
         }
+    }
+    if changed {
+        s.generation = s.generation.wrapping_add(1);
     }
 }
 
@@ -289,6 +322,19 @@ pub fn request_for_languages<'a>(languages: impl IntoIterator<Item = &'a str>) {
 /// The served fallback family for the script `language` (a BCP 47 tag) is written in, if any.
 pub fn fallback_for_language(language: &str) -> Option<String> {
     fallback_for(&state().fallbacks, language_script(language)?)
+}
+
+/// The served families whose manifest lists `script` (an ISO 15924 code, as
+/// [`crate::cjk::CjkScript::iso_code`] gives): a font menu puts them in that writing system's group
+/// before their files are fetched, which is what the web build sees.
+pub fn families_for_script(script: crate::cjk::CjkScript) -> Vec<String> {
+    let code = script.iso_code();
+    state()
+        .scripts
+        .iter()
+        .filter(|(_, scripts)| scripts.iter().any(|listed| listed.eq_ignore_ascii_case(code)))
+        .map(|(family, _)| family.clone())
+        .collect()
 }
 
 /// Families the host can serve, installed or not (for font menus).
@@ -506,6 +552,40 @@ mod tests {
         ] {
             assert_eq!(language_script(tag), want, "{tag}");
         }
+    }
+
+    /// The manifest's scripts stay with their families, so a font menu can group a served
+    /// family before its file arrives.
+    #[test]
+    fn served_families_keep_their_manifest_scripts() {
+        let fonts = [
+            ServedFont {
+                family: "Menu Test Hans".into(),
+                file: "fonts/hans.ttf".into(),
+                scripts: vec!["Hans".into(), "Latn".into()],
+                integrity: None,
+            },
+            ServedFont { family: "Menu Test Hans".into(), file: "fonts/hans-bold.ttf".into(), scripts: vec!["Hans".into()], integrity: None },
+            ServedFont { family: "Menu Test Jpan".into(), file: "fonts/jpan.ttf".into(), scripts: vec!["Jpan".into()], integrity: None },
+        ];
+        add_fonts(&fonts);
+        let hans = families_for_script(crate::cjk::CjkScript::SimplifiedChinese);
+        assert!(hans.contains(&"Menu Test Hans".to_string()), "{hans:?}");
+        assert!(!hans.contains(&"Menu Test Jpan".to_string()), "a Japanese font is no Chinese one");
+        let jpan = families_for_script(crate::cjk::CjkScript::Japanese);
+        assert_eq!(jpan.iter().filter(|family| *family == "Menu Test Jpan").count(), 1, "once, however many files");
+        // A family listed before its scripts arrived still moves the generation when they do,
+        // so a menu that cached the old grouping rebuilds.
+        add_families(["Menu Test Late".to_string()]);
+        let before = generation();
+        add_fonts(&[ServedFont {
+            family: "Menu Test Late".into(),
+            file: "fonts/late.ttf".into(),
+            scripts: vec!["Kore".into()],
+            integrity: None,
+        }]);
+        assert_ne!(generation(), before, "new scripts move the generation");
+        assert!(families_for_script(crate::cjk::CjkScript::Korean).contains(&"Menu Test Late".to_string()));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::defaults::apply;
 use super::{Arc, HashMap, PhotocraftApp, PoisonError, json};
 
@@ -13,7 +15,12 @@ pub fn families() -> Arc<Vec<String>> {
     {
         return v.clone();
     }
-    let mut v = photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default();
+    // Never wait for the background font scan (#3021): until it finishes the menus draw their
+    // loading box (`fonts_ready`), so the empty list is not shown. The fallback is not cached
+    // either: `mark_shared` moves the generation before the scan thread publishes the engine, so
+    // that frame's key would otherwise keep the empty list for good.
+    let engine = menu_engine();
+    let mut v = engine.as_ref().map(|e| e.lock().map(|mut e| e.fonts.families()).unwrap_or_default()).unwrap_or_default();
     for f in photocraft_text::served::families() {
         if !v.contains(&f) {
             v.push(f);
@@ -21,72 +28,189 @@ pub fn families() -> Arc<Vec<String>> {
     }
     v.sort_by_key(|s| s.to_lowercase());
     let v = Arc::new(v);
-    *cached = Some((key, v.clone()));
+    if engine.is_some() {
+        *cached = Some((key, v.clone()));
+    }
     v
 }
 
-/// Where [`sync_font_names`] leaves the font menus' localized labels for this frame.
-pub(super) fn font_labels_id() -> egui::Id {
-    egui::Id::unique("photocraft-font-menu-localized-names")
+/// Where [`sync_font_names`] leaves the font menus' names and grouping for this frame.
+pub(super) fn font_menu_id() -> egui::Id {
+    egui::Id::unique("photocraft-font-menu")
 }
 
-/// Preferences ▸ Type ▸ Show Font Names in English: when off, font menus list a family that has a
-/// localized (native-language) name by that name, as Photoshop does ("MS Gothic" reads
-/// "ＭＳ ゴシック"). Called once a frame; the menus read the labels from the context.
+/// The font menu's names and grouping for the interface language (see [`sync_font_names`]).
+#[derive(Default)]
+pub(crate) struct FontMenuModel {
+    /// The label a family shows: its own name in the interface's writing system when the
+    /// preference lists names in their own language, else the English family name.
+    pub labels: HashMap<String, String>,
+    /// The label a family with a single face shows, "family + style" ("Aa厚底黑 常规",
+    /// "SimSun-ExtB Regular"), as Photoshop lists such a family.
+    pub single: HashMap<String, String>,
+    /// Every name a family gives itself, so a search finds "未来荧黑" by "未来" or "Glow".
+    pub names: HashMap<String, Vec<String>>,
+    /// The families of the interface's writing system, listed above the rest as in Photoshop.
+    pub native: HashSet<String>,
+    /// The writing system the menu groups and sorts by. `None` in an English (or other non-CJK)
+    /// interface, which has no group of its own to head the list (its names still sort as shown).
+    pub script: Option<photocraft_text::cjk::CjkScript>,
+}
+
+impl FontMenuModel {
+    /// The label `family` shows.
+    pub(super) fn label<'a>(&'a self, family: &'a str) -> &'a str {
+        self.single.get(family).or_else(|| self.labels.get(family)).map_or(family, String::as_str)
+    }
+
+    /// Does the family match `query` (lowercase) by its English name, its label or any of its
+    /// own names?
+    fn matches(&self, family: &str, label: &str, query: &str) -> bool {
+        family.to_lowercase().contains(query)
+            || label.to_lowercase().contains(query)
+            || self.names.get(family).is_some_and(|names| names.iter().any(|name| name.to_lowercase().contains(query)))
+    }
+
+    /// Is `family` one of the interface language's own fonts?
+    fn is_native(&self, family: &str) -> bool {
+        self.script.is_some() && self.native.contains(family)
+    }
+}
+
+/// Preferences ▸ Type ▸ Show Font Names in English and the interface language: works out the font
+/// menus' names and grouping once a frame, for the menus to read from the context. A Chinese,
+/// Japanese or Korean interface lists its own fonts first, in the writing system's own order
+/// (pinyin for Chinese, as Photoshop's menu does); an English interface with the preference on
+/// lists English names alphabetically, as it always has.
 pub fn sync_font_names(ctx: &egui::Context, show_in_english: bool) {
-    let labels = (!show_in_english).then(localized_families);
-    ctx.data_mut(|d| {
-        if let Some(labels) = labels {
-            d.insert_temp(font_labels_id(), labels);
-        } else {
-            d.remove::<Arc<HashMap<String, String>>>(font_labels_id());
+    let model = font_menu_model(show_in_english);
+    ctx.data_mut(|d| match model {
+        Some(model) => {
+            d.insert_temp(font_menu_id(), model);
+        }
+        None => {
+            d.remove::<Arc<FontMenuModel>>(font_menu_id());
         }
     });
 }
 
-/// The fonts' localized family names, keyed by family. Cached until the shared engine registers fonts.
-fn localized_families() -> Arc<HashMap<String, String>> {
-    type Cached = Option<(u64, Arc<HashMap<String, String>>)>;
-    static LOCALIZED: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
-    let key = photocraft_text::fonts::shared_generation();
-    let mut cached = LOCALIZED.lock().unwrap_or_else(PoisonError::into_inner);
+/// The menu model for the interface language and preference, cached until the registered fonts
+/// change. Every interface gets one, so a search finds a font by any name it gives itself in any
+/// language; an interface that shows English names keeps its labels and order all the same (no
+/// row is relabelled, so `font_menu_rows` neither sorts nor groups).
+fn font_menu_model(show_in_english: bool) -> Option<Arc<FontMenuModel>> {
+    let script = ui_script();
+    type Cached = Option<((u64, u64, u8, bool), Arc<FontMenuModel>)>;
+    static CACHE: std::sync::Mutex<Cached> = std::sync::Mutex::new(None);
+    let key =
+        (photocraft_text::fonts::shared_generation(), photocraft_text::served::generation(), script_code(script), !show_in_english);
+    let mut cached = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((k, v)) = cached.as_ref()
         && *k == key
     {
-        return v.clone();
+        return Some(v.clone());
     }
-    let v = Arc::new(photocraft_text::shared().lock().map(|mut e| e.fonts.localized_family_names()).unwrap_or_default());
-    *cached = Some((key, v.clone()));
-    v
+    // The index is built on the font-scan thread (`photocraft_text::shared`): this only copies it
+    // and never waits for the scan.
+    let engine = menu_engine()?;
+    let index = engine.lock().map(|mut e| e.fonts.menu_index()).unwrap_or_default();
+    let mut model = FontMenuModel { script, ..FontMenuModel::default() };
+    // Names in their own language are shown in a Chinese, Japanese or Korean interface (whatever
+    // the preference) and wherever the preference turns English names off; an English interface
+    // with English names on keeps the family names it always showed.
+    let named = !show_in_english || script.is_some();
+    for (family, info) in &index {
+        if named
+            && !show_in_english
+            && let Some(label) = photocraft_text::font_menu::display_name(family, &info.names, script)
+        {
+            model.labels.insert(family.clone(), label);
+        }
+        if script.is_some_and(|script| info.scripts.has(script)) {
+            model.native.insert(family.clone());
+        }
+        // A family of one face reads "family + style" ("Aa厚底黑 常规"), as Photoshop lists it;
+        // several faces get a style menu under the family name instead.
+        if named
+            && info.faces == 1
+            && let Some(label) = photocraft_text::font_menu::single_face_label(family, info, script, show_in_english)
+        {
+            model.single.insert(family.clone(), label);
+        }
+        if !info.search_names.is_empty() {
+            model.names.insert(family.clone(), info.search_names.clone());
+        }
+    }
+    // The web build's served fonts are listed before their files are fetched: the manifest's
+    // scripts put them in the interface language's group already.
+    if let Some(script) = script {
+        for family in photocraft_text::served::families_for_script(script) {
+            if !index.contains_key(&family) {
+                model.native.insert(family);
+            }
+        }
+    }
+    let model = Arc::new(model);
+    *cached = Some((key, model.clone()));
+    Some(model)
 }
 
-/// The font menu's rows: each family with the label it shows (its localized name when `labels`
-/// has one, else the family), matching `query` (lowercase) by either name. With localized labels
-/// the rows sort by label, so the menu stays alphabetical as shown. As in Photoshop, recently
-/// used families also head the menu in their own group, most recent first (Preferences ▸ Type ▸
-/// Recent Fonts), and keep their alphabetical place below it; a query shows each match once.
-/// Returns the rows and how many of them form the recent group.
+/// The shared font engine the menus read: [`photocraft_text::try_shared`], which never waits for
+/// the background font scan (#3021). A test waits for the scan instead, so the list it draws does
+/// not depend on its timing (`Harness` step counts included).
+fn menu_engine() -> Option<&'static std::sync::Mutex<photocraft_text::TextEngine>> {
+    if cfg!(test) { Some(photocraft_text::shared()) } else { photocraft_text::try_shared() }
+}
+
+/// A cache key for a writing system, and for none.
+fn script_code(script: Option<photocraft_text::cjk::CjkScript>) -> u8 {
+    use photocraft_text::cjk::CjkScript::*;
+    match script {
+        Some(SimplifiedChinese) => 0,
+        Some(TraditionalChinese) => 1,
+        Some(Japanese) => 2,
+        Some(Korean) => 3,
+        None => 4,
+    }
+}
+
+/// The font menu's rows: each family with the label it shows, matching `query` (lowercase) by any
+/// of its names. In a Chinese, Japanese or Korean interface the interface's own fonts head the
+/// list, in the writing system's own order (Photoshop's order); the rest follow. As in Photoshop,
+/// recently used families also head the menu in their own group, most recent first (Preferences ▸
+/// Type ▸ Recent Fonts), and keep their place below it; a query shows each match once.
+///
+/// Returns the rows, how many of them form the recent group, and how many of the rows after it
+/// form the interface language's group.
 pub(super) fn font_menu_rows<'a>(
     families: &'a [String],
-    labels: Option<&'a HashMap<String, String>>,
+    model: Option<&'a FontMenuModel>,
     query: &str,
     recents: &[String],
-) -> (Vec<(&'a String, &'a str)>, usize) {
-    let label = |f: &'a String| labels.and_then(|l| l.get(f)).map_or(f.as_str(), String::as_str);
+) -> (Vec<(&'a String, &'a str)>, usize, usize) {
     let mut rows: Vec<(&String, &str)> = families
         .iter()
-        .map(|f| (f, label(f)))
-        .filter(|(f, l)| query.is_empty() || f.to_lowercase().contains(query) || l.to_lowercase().contains(query))
+        .map(|f| (f, model.map_or(f.as_str(), |m| m.label(f))))
+        .filter(|(f, label)| query.is_empty() || model.map_or_else(|| f.to_lowercase().contains(query), |m| m.matches(f, label, query)))
         .collect();
-    if labels.is_some_and(|l| !l.is_empty()) {
-        rows.sort_by_cached_key(|(_, l)| l.to_lowercase());
+    match model {
+        // The interface's own fonts first, each group in the writing system's order, with case
+        // and full-width forms folded: pinyin for Chinese ("阿里巴巴" before "阿里健康"), stroke
+        // order for Traditional Chinese, gojūon for Japanese.
+        Some(m) if m.script.is_some() => {
+            rows.sort_by_cached_key(|(f, label)| (!m.is_native(f), photocraft_text::collate::menu_sort_key(label, m.script), f.to_lowercase()));
+        }
+        // Names in their own language in an English interface: sorted as shown, as before.
+        Some(m) if !m.labels.is_empty() || !m.single.is_empty() => rows.sort_by_cached_key(|(_, label)| label.to_lowercase()),
+        _ => {}
     }
+    let native = rows.iter().filter(|(f, _)| model.is_some_and(|m| m.is_native(f))).count();
     if !query.is_empty() {
-        return (rows, 0);
+        return (rows, 0, native);
     }
     let recent: Vec<(&String, &str)> = recents.iter().filter_map(|r| rows.iter().find(|(f, _)| *f == r).copied()).collect();
     let n = recent.len();
-    (recent.into_iter().chain(rows).collect(), n)
+    (recent.into_iter().chain(rows).collect(), n, native)
 }
 
 fn weight_name(w: f32) -> &'static str {
@@ -233,11 +357,49 @@ pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String 
     if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
 }
 
-/// Localized style label for the dropdown. The raw string stays the engine's `fontStyle` key;
-/// the words (weights and "Italic") are translated in the `fontWeight` context, where "Light"
-/// means a weight — unlike the Camera Raw "Light" section.
-pub fn style_label(style: &str) -> String {
-    style.split(' ').map(|w| crate::i18n::tr_ctx(crate::i18n::current(), "fontWeight", w)).collect::<Vec<_>>().join(" ")
+/// The styles of a family with the label each shows in the menus: the subfamily the font writes
+/// in the interface's language where it has one ("常规"), else its own name as written ("Wide
+/// ExtraLight"). Never a word-by-word translation, which mixed languages ("Wide 极细"). The
+/// first of each pair is the style name `fontStyle` keeps.
+pub fn style_options(family: &str) -> Vec<(String, String)> {
+    let faces = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(family);
+    let mut options = style_labels(style_names(&faces), &faces, ui_script());
+    if options.is_empty() {
+        options.push(("Regular".into(), "Regular".into()));
+    }
+    options
+}
+
+/// Each style's label: the subfamily the font writes in `prefer` ("常规"), else the style as it
+/// is written ("Wide ExtraLight"). Never a word-by-word translation, which mixed languages
+/// ("Wide 极细"); the style name itself is the key `fontStyle` keeps.
+pub(super) fn style_labels(
+    styles: Vec<String>,
+    faces: &[photocraft_text::FaceInfo],
+    prefer: Option<photocraft_text::cjk::CjkScript>,
+) -> Vec<(String, String)> {
+    styles
+        .into_iter()
+        .map(|style| {
+            // Only a Chinese, Japanese or Korean interface localizes a style; the others show the
+            // name as the font writes it, whatever language that is in.
+            let label = prefer
+                .and_then(|script| {
+                    faces
+                        .iter()
+                        .find(|face| face.style == style)
+                        .and_then(|face| photocraft_text::font_menu::name_for_script(&face.localized_styles, script))
+                })
+                .unwrap_or_else(|| style.clone());
+            (style, label)
+        })
+        .collect()
+}
+
+/// The interface language's writing system, which picks how a font or a style is named (`None`
+/// outside a Chinese, Japanese or Korean interface).
+pub(crate) fn ui_script() -> Option<photocraft_text::cjk::CjkScript> {
+    photocraft_text::cjk::locale_script(Some(crate::i18n::current().code()))
 }
 
 /// Starts scanning the installed fonts on a background thread (desktop start-up), so choosing
@@ -303,11 +465,12 @@ impl FontLibrary {
         Self { recent: app.ui.recent_fonts.clone(), favorites: lib::favorite_fonts(&app.session), ..Default::default() }
     }
 
-    /// The style names a family's ">" expands to.
-    fn styles_of(&self, family: &str) -> Vec<String> {
+    /// The styles a family's ">" expands to, with the label each shows.
+    fn style_options_of(&self, family: &str) -> Vec<(String, String)> {
         match &self.styles {
-            Some(map) => map.get(family).cloned().unwrap_or_else(|| vec!["Regular".into()]),
-            None => styles(family),
+            // Tests hand the plain names: they label themselves.
+            Some(map) => map.get(family).cloned().unwrap_or_else(|| vec!["Regular".into()]).into_iter().map(|s| (s.clone(), s)).collect(),
+            None => style_options(family),
         }
     }
 
@@ -361,10 +524,17 @@ pub(super) fn font_picker_in(
 }
 
 /// The row Enter and ⌘/Ctrl+Enter apply to a pending family query: a full name wins over a
-/// substring match (including localized family names), then the highlighted row, then the first.
-pub(super) fn accept_row(rows: &[(&String, &str)], text: &str, selected: Option<usize>) -> Option<usize> {
-    let exact = text.to_lowercase();
-    rows.iter().position(|(f, shown)| f.to_lowercase() == exact || shown.to_lowercase() == exact).or(selected).or_else(|| (!rows.is_empty()).then_some(0))
+/// substring match, whether it is the family's English name, the label the row shows, or another
+/// name its font gives itself ("未来荧黑" finds Glow Sans SC in an English menu); then the
+/// highlighted row, then the first.
+pub(super) fn accept_row(rows: &[(&String, &str)], text: &str, selected: Option<usize>, model: Option<&FontMenuModel>) -> Option<usize> {
+    let exact = text.trim().to_lowercase();
+    let is_exact = |(family, shown): &(&String, &str)| {
+        family.to_lowercase() == exact
+            || shown.to_lowercase() == exact
+            || model.is_some_and(|m| m.names.get(family.as_str()).is_some_and(|names| names.iter().any(|name| name.to_lowercase() == exact)))
+    };
+    rows.iter().position(is_exact).or(selected).or_else(|| (!rows.is_empty()).then_some(0))
 }
 
 /// Transient input belongs to one field, independently of the applied family and its peers.
@@ -399,9 +569,9 @@ pub(crate) fn family_picker_in(
     let edit_id = field.with("edit");
     let was_open = egui::Popup::is_id_open(ui.ctx(), popup);
     let had_focus = ui.memory(|m| m.has_focus(field));
-    let labels: Option<Arc<HashMap<String, String>>> = ui.ctx().data(|d| d.get_temp(font_labels_id()));
-    let labels = labels.as_deref();
-    let label = |f: &str| labels.and_then(|l| l.get(f)).cloned().unwrap_or_else(|| f.to_string());
+    let model: Option<Arc<FontMenuModel>> = ui.ctx().data(|d| d.get_temp(font_menu_id()));
+    let model = model.as_deref();
+    let label = |f: &str| model.map_or_else(|| f.to_string(), |m| m.label(f).to_string());
     let mut edit =
         ui.data(|d| d.get_temp::<FontFieldEdit>(edit_id)).filter(|e| e.current == *current && (was_open || had_focus)).unwrap_or_else(|| FontFieldEdit {
             text: label(current),
@@ -526,7 +696,7 @@ pub(crate) fn family_picker_in(
         });
         let lookup = crate::font_filters::lookup_in(library.traits.clone());
         // No recent group while a filter is on: the filters narrow the alphabetical list alone.
-        let (mut rows, n_recent) = font_menu_rows(families, labels, &edit.query, if filters.any() { &[] } else { &edit.recents });
+        let (mut rows, n_recent, _) = font_menu_rows(families, model, &edit.query, if filters.any() { &[] } else { &edit.recents });
         // Show Similar Fonts compares with the font current when it was turned on (or the menu
         // opened), as the recent group stays put: each arrow step applies a font, and sorting
         // around that one sent the next step back to the font before.
@@ -538,6 +708,12 @@ pub(crate) fn family_picker_in(
             current.clone()
         };
         let comparable = crate::font_filters::apply(&mut rows, &filters, &library.favorites, &reference, &lookup);
+        // The filters can drop rows (the interface language's group stays first) or, for similar
+        // fonts, sort by likeness (which leaves no group boundary): count the group's rows again.
+        // The recent group at the front is not the alphabetical list: skip it, so a recent row
+        // (native or not) can't cut the group short or stretch it past its end.
+        let n_native =
+            if filters.similar { 0 } else { rows.iter().skip(n_recent).take_while(|(f, _)| model.is_some_and(|m| m.is_native(f))).count() };
         let mut selected = edit.row.filter(|&i| rows.get(i).is_some_and(|(f, _)| *f == current)).or_else(|| rows.iter().position(|(f, _)| *f == current));
         // The menu opens on the current family, as Photoshop's does: with the recent group at the
         // top of the view when the marked row fits below it, else the marked row itself, at the
@@ -567,7 +743,7 @@ pub(crate) fn family_picker_in(
         }
         if enter && !edit.text.trim().is_empty() {
             // A full name wins over a substring match (including localized family names).
-            let accept = accept_row(&rows, &edit.text, selected);
+            let accept = accept_row(&rows, &edit.text, selected, model);
             if let Some((f, _)) = accept.and_then(|i| rows.get(i)) {
                 // Acceptance is an application to the selected characters, even when a
                 // mixed selection's representative already has this family (as row clicks do).
@@ -631,7 +807,9 @@ pub(crate) fn family_picker_in(
                     // The first `n_recent` rows are the recent group, above a line (`font_menu_rows`).
                     for (i, &(f, shown)) in rows.iter().enumerate() {
                         let recent_row = i < n_recent;
-                        if i == n_recent && n_recent > 0 {
+                        // A line above the interface language's group and above the rest, whichever
+                        // of the two groups comes first.
+                        if (n_recent > 0 && i == n_recent) || (n_native > 0 && i == n_recent + n_native) {
                             ui.separator();
                         }
                         // Only rows on screen read their font's format and styles, and an expanded
@@ -639,7 +817,7 @@ pub(crate) fn family_picker_in(
                         let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, egui::vec2(FONT_LIST_WIDTH, row_h)));
                         let format = if visible { lookup(f).map(|t| t.format) } else { None };
                         let open = !recent_row && expanded.contains(f);
-                        let styles = if visible || open { library.styles_of(f) } else { Vec::new() };
+                        let styles = if visible || open { library.style_options_of(f) } else { Vec::new() };
                         let favorite = library.favorites.contains(f);
                         // Highlighted by its fill alone, as Photoshop's font menu is: a hovered or selected
                         // row's stroke grew it and pushed the rows below down (#7406).
@@ -722,13 +900,13 @@ pub(crate) fn family_picker_in(
                             continue;
                         }
                         // The family's styles, each picking the family in that style.
-                        for style in &styles {
+                        for (style, style_name) in &styles {
                             let style_row = ui
                                 .horizontal(|ui| {
                                     ui.add_space(46.0);
                                     ui.add_sized(
                                         [ui.available_width(), 22.0],
-                                        egui::Button::selectable(false, style_label(style)).truncate().stroke(egui::Stroke::NONE),
+                                        egui::Button::selectable(false, style_name.clone()).truncate().stroke(egui::Stroke::NONE),
                                     )
                                 })
                                 .inner;
@@ -790,7 +968,7 @@ pub(crate) fn family_picker_in(
         }
         let notches = notches + crate::widgets::wheel_notches_of(ui, field.with("family-wheel"), hovered, 1.0);
         // Closed-field navigation stays alphabetical, independent of recent picks (#3350, #7407).
-        let (rows, _) = font_menu_rows(families, labels, "", &[]);
+        let (rows, _, _) = font_menu_rows(families, model, "", &[]);
         if let Some(i) = rows.iter().position(|(f, _)| *f == current)
             && let Some(n) = wheel_family_index(i, rows.len(), notches)
             && let Some((f, _)) = rows.get(n)
