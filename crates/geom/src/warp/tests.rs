@@ -585,3 +585,30 @@ fn overflowing_surface_drag_preserves_previous_state_and_allows_next_drag() {
     mesh.pull(&base.points, 0.3, 0.4, [2.0, -1.0]);
     assert_eq!(mesh, before_overflow);
 }
+
+#[test]
+fn splitting_extreme_finite_control_points_keeps_mesh_valid_and_shape() {
+    for vertical in [false, true] {
+        for split in [0.25, 0.5, 0.75] {
+            let mut mesh = BezierMesh::identity(B, 1, 1);
+            for j in 0..4 {
+                for i in 0..4 {
+                    let k = if vertical { j } else { i };
+                    mesh.points[j * 4 + i][usize::from(vertical)] = if k == 0 || k == 3 { -f64::MAX } else { f64::MAX };
+                }
+            }
+            assert!(mesh.is_valid());
+            let before = mesh.clone();
+            assert!(if vertical { mesh.split_v(split) } else { mesh.split_u(split) });
+            assert!(mesh.is_valid(), "split {split} on axis {vertical} produced non-finite points");
+            for (s, t) in [(0.1, 0.3), (0.5, 0.5), (0.8, 0.9)] {
+                let a = before.eval(s, t);
+                let b = mesh.eval(s, t);
+                for component in 0..2 {
+                    let scale = if component == usize::from(vertical) { f64::MAX } else { 1.0 };
+                    assert!((a[component] / scale - b[component] / scale).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
