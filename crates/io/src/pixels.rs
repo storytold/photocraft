@@ -177,6 +177,17 @@ pub fn deinterleave(bytes: &[u8], ch: usize, s: SampleType, invert: &[bool]) -> 
     planes
 }
 
+/// Whether a rendered sample rounds to the zero code at `s`'s precision. At 8 and 16 bits any
+/// value below half a step encodes as zero, so callers that special-case "clear" must ask this
+/// instead of comparing the float against `0.0` (#8777).
+pub fn rounds_to_zero(v: f32, s: SampleType) -> bool {
+    match s {
+        SampleType::U8 => (v.clamp(0.0, 1.0) * 255.0).round() == 0.0,
+        SampleType::U16 => (v.clamp(0.0, 1.0) * 65535.0).round() == 0.0,
+        SampleType::F32 => v <= 0.0,
+    }
+}
+
 /// Native-endian encoding of the maximum sample value.
 pub fn max_sample(s: SampleType) -> Vec<u8> {
     match s {

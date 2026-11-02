@@ -201,6 +201,104 @@ fn transparency_is_straight_in_the_composite() {
     assert_docs_eq(&d, &back);
 }
 
+/// #8777: a CMYK TIFF that keeps its transparency stores paper (`0,0,0,0`) under the clear
+/// pixels, flat or layered. The composite comes from an RGBA render, where a clear pixel is
+/// black; converting that black to CMYK used to put `C176 M146 Y127 K238` there, so a reader
+/// that ignores the alpha sample printed a dark sheet instead of the artwork on paper.
+#[test]
+fn cmyk_transparency_is_paper_under_the_clear_pixels() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 2, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..8).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 2, 4), &px);
+    }
+    d.layers.push(ink);
+    // A second, off-canvas layer keeps the flat export on its composite path instead of copying
+    // one layer's own samples.
+    d.layers.push(raster("Empty", fmt, photocraft_geom::Rect::new(8, 8, 9, 9), 0, false));
+    for layers in [false, true] {
+        let r = tiff(&d, layers);
+        let img = photocraft_codecs::decode(&r.bytes).unwrap();
+        assert!(img.layout().has_alpha(), "layers={layers}");
+        let px = img.data();
+        let at = |x: usize, y: usize| (y * 4 + x) * 5;
+        // Clear pixels: paper, and transparent.
+        assert_eq!(&px[at(2, 0)..at(2, 0) + 5], &[0, 0, 0, 0, 0], "layers={layers}");
+        assert_eq!(&px[at(3, 3)..at(3, 3) + 5], &[0, 0, 0, 0, 0], "layers={layers}");
+        // Painted pixels: the layer's ink, opaque.
+        assert_ne!(&px[at(0, 0)..at(0, 0) + 4], &[0, 0, 0, 0], "layers={layers}");
+        assert_eq!(px[at(0, 0) + 4], 255, "layers={layers}");
+    }
+}
+
+/// #8777, review follow-up: "clear" is judged at output precision, not on the float alpha. A
+/// 0.1 % layer renders an alpha of 0.001, which the 8-bit encoder stores as alpha byte 0 — the
+/// ink under that byte must be paper, otherwise a reader that ignores the alpha sample prints the
+/// invisible pixel's colour.
+#[test]
+fn cmyk_alpha_below_half_a_step_stores_paper() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::U8);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 0.001;
+    d.layers.push(ink);
+    // An off-canvas layer keeps the flat export on its composite path.
+    d.layers.push(raster("Empty", fmt, photocraft_geom::Rect::new(8, 8, 9, 9), 0, false));
+    for layers in [false, true] {
+        let r = tiff(&d, layers);
+        let img = photocraft_codecs::decode(&r.bytes).unwrap();
+        assert!(img.layout().has_alpha(), "layers={layers}");
+        let px = img.data();
+        assert_eq!(&px[..5], &[0, 0, 0, 0, 0], "alpha byte is 0, so the ink is paper, layers={layers}");
+    }
+}
+
+/// #8777, the conversion path: a 32-bit float CMYK document can't be mixed on its inks
+/// (`split::supports` excludes float), so the composite is rendered in RGBA and converted back
+/// through the profile. Pins that a clear pixel there is paper in the flat TIFF, the layered TIFF
+/// and the PSD merged image — the path that once stored `C176 M146 Y127 K238` under a zero alpha
+/// when the composite went in black rather than white.
+#[test]
+fn cmyk_float_composite_stores_paper_under_clear_pixels() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::F32);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 2, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..8).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 1.0]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 2, 4), &px);
+    }
+    d.layers.push(ink);
+    d.layers.push(raster("Empty", fmt, photocraft_geom::Rect::new(8, 8, 9, 9), 0, false));
+    for layers in [false, true] {
+        let r = tiff(&d, layers);
+        let img = photocraft_codecs::decode(&r.bytes).unwrap();
+        assert!(img.layout().has_alpha(), "layers={layers}");
+        let px = img.data();
+        let f = |i: usize| f32::from_ne_bytes([px[i * 4], px[i * 4 + 1], px[i * 4 + 2], px[i * 4 + 3]]);
+        // (3, 0) is clear: the ink layer covers only the first two columns.
+        let at = 3 * 5;
+        assert_eq!([f(at), f(at + 1), f(at + 2), f(at + 3), f(at + 4)], [0.0; 5], "clear pixel is paper, layers={layers}");
+        assert_eq!(f(4), 1.0, "the painted pixel stays opaque, layers={layers}");
+    }
+    // The PSD's merged image takes the same route (`merged_planes`, planar big-endian float).
+    let r = export(&d, "a.psd", &ExportOptions::default()).unwrap_or_else(|e| panic!("{e}"));
+    let file = photocraft_psd::PsdFile::from_bytes(&r.bytes).unwrap_or_else(|e| panic!("{e}"));
+    let planes = file.decode_merged().unwrap_or_else(|e| panic!("{e}"));
+    let be = |plane: usize, i: usize| {
+        let at = (plane * 16 + i) * 4;
+        f32::from_be_bytes([planes[at], planes[at + 1], planes[at + 2], planes[at + 3]])
+    };
+    // PSD stores CMYK inverted: paper is 1.0 in every ink plane.
+    assert_eq!([be(0, 15), be(1, 15), be(2, 15), be(3, 15), be(4, 15)], [1.0, 1.0, 1.0, 1.0, 0.0], "PSD merged image: paper under the clear pixel");
+    assert!(be(4, 0) > 0.9, "the painted pixel stays opaque");
+}
+
 /// Photoshop (27.11) saves a layered TIFF with Save Transparency as a composite with a
 /// transparency sample, a positive layer count and an `MTrn` block first in the layer data
 /// (the specification's key is `Mtrn`; `nrTM` in an `II` file). That sample is the merged

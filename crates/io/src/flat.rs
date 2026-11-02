@@ -507,6 +507,16 @@ pub(crate) fn csample(s: SampleType) -> CSample {
     }
 }
 
+/// The raster sample type a codec sample type is stored as: 16-bit float samples are kept as
+/// 32-bit float, as [`image_surface`] does.
+fn sample_type(cs: CSample) -> SampleType {
+    match cs {
+        CSample::U8 => SampleType::U8,
+        CSample::U16 => SampleType::U16,
+        CSample::F16 | CSample::F32 => SampleType::F32,
+    }
+}
+
 /// Renders the document to a flat codec image (native pixels when possible).
 pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     document_to_image_for(doc, warnings, true, false)
@@ -682,8 +692,11 @@ impl<'a> FlatSource<'a> {
                 let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
                     let mut out = Vec::with_capacity(range.len() * 5 * cs.bytes());
                     for p in band.px.get(range).unwrap_or_default() {
-                        for v in p {
-                            put(&mut out, *v);
+                        // A clear pixel has no colour of its own: the inks stored under a zero
+                        // alpha byte are paper, not whatever the compositor mixed there (#8777).
+                        let clear = crate::pixels::rounds_to_zero(p[4], sample_type(cs));
+                        for (i, v) in p.iter().enumerate() {
+                            put(&mut out, if clear && i < 4 { 0.0 } else { *v });
                         }
                     }
                     out
@@ -706,6 +719,11 @@ impl<'a> FlatSource<'a> {
                     for p in band.px.get(range).unwrap_or_default() {
                         if cmyk {
                             let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
+                            // Converting the compositor's black for a clear pixel would store CMYK
+                            // black (C176 M146 Y127 K238) where the file means paper (#8777).
+                            if crate::pixels::rounds_to_zero(p[3], sample_type(cs)) {
+                                converted[..4].fill(0.0);
+                            }
                             for value in converted.iter().take(channels) {
                                 put(&mut out, *value);
                             }
