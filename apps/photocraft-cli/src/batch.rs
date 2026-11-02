@@ -10,7 +10,7 @@ use crate::{
     CliError, Result,
     actions::load_actions_file,
     args::{BatchArgs, DropletArgs},
-    output::{warn_all, warn_dedup},
+    output::warn_dedup,
 };
 
 /// Whether `a` and `b` name the same existing folder, however they are spelt (relative, with a
@@ -268,7 +268,7 @@ mod tests {
         let target_dir = tmp.join("out");
         std::fs::create_dir_all(&target_dir).unwrap();
 
-        let inputs = vec![bad_file, good_file];
+        let inputs = [bad_file, good_file];
         let opts = ExportOptions::default();
 
         for (idx, input) in inputs.iter().enumerate() {

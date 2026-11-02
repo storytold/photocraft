@@ -396,7 +396,10 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     let mut cli = Cli::from_arg_matches(&matches)?;
     let from_env = |m: &ArgMatches, id: &str| m.value_source(id) == Some(ValueSource::EnvVariable);
     match (&mut cli.command, matches.subcommand()) {
-        (Command::Run(r), Some((_, m))) => r.steps = steps(m),
+        (Command::Run(r), Some((_, m))) => {
+            r.steps = steps(m);
+            check_gpu_env(&mut cmd, m)?;
+        }
         (Command::Mcp(a), Some((name, m))) => {
             a.bridge_from_env = from_env(m, "bridge");
             if a.bridge_from_env
@@ -440,7 +443,7 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
             }
             check_gpu_env(&mut cmd, m)?;
         }
-        (Command::Convert(_), Some((_, m))) | (Command::Run(_), Some((_, m))) | (Command::Batch(_), Some((_, m))) => {
+        (Command::Convert(_), Some((_, m))) | (Command::Batch(_), Some((_, m))) => {
             check_gpu_env(&mut cmd, m)?;
         }
         _ => {}
