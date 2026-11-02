@@ -80,7 +80,7 @@ pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, f
 #[cfg(test)]
 pub(crate) use gesture::constrained_polygon_point;
 pub use gesture::{commit_crop, commit_polygon, polygon_cancel_stale, polygon_replaces_selection, polygon_retract};
-pub(crate) use gesture::{finish_gesture, selection_mode};
+pub(crate) use gesture::{finish_gesture, polygon_close_reach, selection_mode};
 pub(crate) use navigator::NavigatorCache;
 #[cfg(test)]
 use navigator::navigator_waits_for_drag;
