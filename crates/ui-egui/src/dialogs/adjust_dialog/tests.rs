@@ -959,6 +959,15 @@ fn photo_filter_opens_at_its_last_settings() {
 
     let again = open(&mut app, cmd).unwrap();
     assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone()), sample, "reopened at the last settings");
+    // Preserve Luminosity is on by default; turned off and confirmed, it reopens off.
+    assert_eq!(neutral["preserveLuminosity"], json!(true));
+    app.ui.dialog_mut(again).unwrap().fields.insert("preserveLuminosity".into(), json!(false));
+    crate::dialogs::confirm(&mut app, again).unwrap();
+    let again = open(&mut app, cmd).unwrap();
+    let reopened = crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone());
+    assert_eq!(reopened["preserveLuminosity"], json!(false), "Preserve Luminosity off is remembered");
+    assert_eq!(reopened["color"], sample["color"], "with the rest of the last settings");
+    assert_eq!(reopened["density"], sample["density"]);
     app.ui.dialogs.clear();
     let smart = open_neutral(&mut app, cmd).unwrap();
     assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(smart).unwrap().fields.clone()), neutral, "open_neutral ignores them");
