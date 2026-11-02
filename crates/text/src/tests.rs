@@ -368,6 +368,27 @@ fn alignment_point_and_box() {
     assert!((l.lines[0].x1 - 200.0).abs() < 0.5, "{:?}", l.lines[0]);
 }
 
+/// Centred and right-aligned point text is placed around its anchor by its scaled width: a
+/// 63% title and a 90% right-aligned column drifted left by the width horizontal scale removed.
+#[test]
+fn point_alignment_uses_the_scaled_width() {
+    let mut e = TextEngine::new();
+    let scaled = |text: &str, hs: f32, align: TextAlign| {
+        let t = styled(text, CharStyle { size_pt: 20.0, horizontal_scale: hs, ..Default::default() });
+        with_para(t, ParagraphStyle { align, ..Default::default() })
+    };
+    let c = e.layout(&scaled("Saab 900 Turbo 16", 0.63, TextAlign::Center), 72.0);
+    let ln = &c.lines[0];
+    assert!((ln.x0 + ln.x1).abs() < 0.5, "centred on the anchor: {ln:?}");
+    let last_glyph_x = c.glyphs.iter().map(|g| g.x).fold(f32::MIN, f32::max);
+    assert!(last_glyph_x < ln.x1, "glyphs inside the line: {last_glyph_x} {ln:?}");
+    let r = e.layout(&scaled("230\r265/195\r7900\r7\r1985\r4", 0.9, TextAlign::Right), 72.0);
+    assert_eq!(r.lines.len(), 6);
+    for ln in &r.lines {
+        assert!(ln.x1.abs() < 0.5, "ends at the anchor: {ln:?}");
+    }
+}
+
 #[test]
 fn rtl_text_is_reordered() {
     let mut e = TextEngine::new();
