@@ -860,3 +860,37 @@ fn typing_without_recording_keeps_the_journal_as_it_ran() {
     assert_eq!(s.journal.len(), before + 3);
     assert!(s.journal.iter().rev().take(3).all(|(id, p)| id == "type.edit" && p.get("replace").is_some()));
 }
+
+/// CodeRabbit on #10730: typing in a type layer of another document, switched to as a tab is
+/// (no step), after a recorded `type.create` is no part of that step, even with the same layer id.
+#[test]
+fn typing_in_another_document_is_not_folded_into_the_layer_made_in_the_first() {
+    let mut s = session();
+    let other = s.execute("type.create", json!({"x": 10, "y": 40, "text": "Old", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    s.execute("actions.record", json!({"name": "Two"})).unwrap();
+    let made = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(made, other, "the setup gives both layers one id");
+    assert!(s.set_active(0));
+    type_in(&mut s, other, 3, "!", "s4");
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 2, "{steps:?}");
+    assert_eq!((steps[0].0.as_str(), steps[0].1["text"].as_str()), ("type.create", Some("")), "the new layer keeps its own text");
+    assert_eq!((steps[1].0.as_str(), steps[1].1["text"].as_str()), ("type.edit", Some("Old!")));
+}
+
+/// CodeRabbit on #10730: typing in a layer with more than one style keeps a step per edit, as
+/// before: a step setting its whole text would give all of it one style on replay.
+#[test]
+fn typing_in_styled_text_keeps_a_step_per_edit() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi there", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.setStyle", json!({"layer": id, "range": [3, 8], "fauxBold": true})).unwrap();
+    s.execute("actions.record", json!({"name": "Bold"})).unwrap();
+    type_in(&mut s, id, 8, "!!", "s5");
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 2, "{steps:?}");
+    assert!(steps.iter().all(|(id, p)| id == "type.edit" && p.get("replace").is_some()), "{steps:?}");
+}

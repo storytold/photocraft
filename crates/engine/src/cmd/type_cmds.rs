@@ -915,13 +915,20 @@ const TYPING_KEYS: [&str; 4] = ["layer", "coalesce", "replace", "text"];
 
 /// While an action records, one typing session is one step, as Photoshop records "Make text
 /// layer" or "Set current text layer" once (#10113). Its keystrokes (`type.edit` with the
-/// session's `coalesce` key, changing the text) fold into the `type.create` that made the layer,
-/// whose `text` becomes the layer's text, or into one `type.edit` that sets the whole text. Neither
-/// names the layer, so the step plays on the new or the current type layer of any document, as
-/// Batch needs. Other edits are journaled as before (`recorded_step` drops the id of a sole
-/// selected layer). Returns true when it journaled the step itself.
+/// session's `coalesce` key, changing the text) fold into the `type.create` that made the layer
+/// (in the same document), whose `text` becomes the layer's text, or into one `type.edit` that
+/// sets the whole text. Neither names the layer, so the step plays on the new or the current type
+/// layer of any document, as Batch needs. A layer with more than one character or paragraph style
+/// keeps a step per edit, as before: setting its whole text would give it one style on replay.
+/// Other edits are journaled as before (`recorded_step` drops the id of a sole selected layer).
+/// Returns true when it journaled the step itself.
 pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
     let Some((from, _)) = s.actions.recording else { return false };
+    if id == "type.create" {
+        // Remembered for the typing that follows; journaled as usual.
+        s.actions.typing_layer = s.active().and_then(|st| Some((st.doc.id.0, st.active_layer?.0)));
+        return false;
+    }
     if id != "type.edit" {
         return false;
     }
@@ -935,22 +942,27 @@ pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
     let key = params.get("coalesce").filter(|k| !k.is_null()).cloned();
     let (Some(key), true) = (key, typing) else { return false };
     let Some(text) = st.doc.layer(LayerId(layer)).and_then(|l| match &l.content {
-        LayerContent::Text(t) => Some(t.text.clone()),
+        LayerContent::Text(t) if one_style(&t.runs, |r| &r.style) && one_style(&t.paragraphs, |r| &r.style) => Some(t.text.clone()),
         _ => None,
     }) else {
         return false;
     };
-    // The newest layer was made by the step before: the type tool makes a layer, then types in it.
-    let newest = st.doc.walk().into_iter().map(|(_, _, l)| l.id.0).max() == Some(layer);
+    // The step before made this very layer: the type tool makes a layer, then types in it.
+    let made_here = s.actions.typing_layer == Some((st.doc.id.0, layer));
     let last = s.journal.len().checked_sub(1).filter(|&i| i >= from);
     match last.and_then(|i| s.journal.get_mut(i)) {
-        Some((last_id, p)) if last_id == "type.create" && newest => p["text"] = json!(text),
+        Some((last_id, p)) if last_id == "type.create" && made_here => p["text"] = json!(text),
         Some((last_id, p)) if last_id == "type.edit" && p.get("coalesce") == Some(&key) && p.get("layer").is_none() => {
             *p = json!({"text": text, "coalesce": key});
         }
         _ => s.journal.push((id.to_string(), json!({"text": text, "coalesce": key}))),
     }
     true
+}
+
+/// Do `runs` all have the same style?
+fn one_style<R, S: PartialEq>(runs: &[R], style: impl Fn(&R) -> &S) -> bool {
+    runs.windows(2).all(|w| matches!(w, [a, b] if style(a) == style(b)))
 }
 
 pub fn specs() -> Vec<CommandSpec> {

@@ -167,6 +167,18 @@ pub fn io_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
     post(app, title, warnings.to_vec(), false, None);
 }
 
+/// Report the files a folder run (Batch, Image Processor, …) could not process, one line each:
+/// the status bar shows the first as an error, and a notice titled with how many failed lists
+/// them all until dismissed (#10682).
+pub fn file_failures(app: &mut PhotocraftApp, what: &str, failures: &[String]) {
+    let Some(first) = failures.first() else { return };
+    let n = failures.len();
+    let title = crate::i18n::fmt(&crate::i18n::trn(crate::i18n::current(), n as u64, "{what}: {n} file failed", "{what}: {n} files failed"), &[("what", what)]);
+    app.ui.status = if n == 1 { format!("{what}: {first}") } else { format!("{title}: {first} …") };
+    app.ui.status_error = true;
+    post(app, title, failures.to_vec(), true, None);
+}
+
 /// Report a failed file operation: the status bar shows it as an error and a notice keeps it on
 /// screen until dismissed.
 pub fn error(app: &mut PhotocraftApp, message: String) {

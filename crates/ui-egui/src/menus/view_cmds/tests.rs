@@ -504,7 +504,10 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
     assert!(app.ui.status_error, "the status bar reports it: {}", app.ui.status);
     let notice = app.ui.notices.get(notices).expect("a notice lists the files");
     assert_eq!(notice.lines.len(), 2);
-    assert!(notice.lines[0].starts_with("a.png: ") && notice.lines[1].starts_with("b.png: "), "{:?}", notice.lines);
+    // CodeRabbit on #10730: a failure, not a warning, and each file by its whole path.
+    assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
+    let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
+    assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
