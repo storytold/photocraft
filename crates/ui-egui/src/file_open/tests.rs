@@ -1432,3 +1432,15 @@ fn opening_an_open_file_again_shows_its_tab() {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+#[test]
+fn queued_drop_waits_for_an_external_document_job() {
+    let mut app = app_with_canvas();
+    let doc = app.session.active().unwrap().doc.id;
+    app.session.start_job("test.external", json!({}), "External job", true, |_| Ok(()), |_, ()| Ok(json!(null))).unwrap();
+    assert!(app.session.active_job().is_some());
+    app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("queued.png".into(), png_bytes(4, 3))));
+    app.place_next_dropped(&egui::Context::default());
+    assert_eq!(app.drop_places.len(), 1, "busy document retains its drop");
+    assert!(app.jobs.place.is_none());
+}

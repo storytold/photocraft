@@ -323,7 +323,7 @@ impl PhotocraftApp {
     /// (with a message) when it is closed.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         self.discard_drops_of_closed_documents();
-        while self.ui.transform.is_none() && self.jobs.place.is_none() {
+        while self.ui.transform.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;

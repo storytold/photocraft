@@ -1,7 +1,7 @@
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_compose::{composite_to_surface, composite_to_surface_with_interrupt};
 use photocraft_doc::{Document, Layer};
-use photocraft_geom::Size;
+use photocraft_geom::{Rect, Size};
 use photocraft_raster::Interrupt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,7 +12,9 @@ fn controlled_composite_keeps_native_pixels_and_cancels_between_bands() {
             let mut doc = Document::new("bands", Size::new(16, 600), mode, depth);
             let fmt = PixelFormat::new(mode, depth, true);
             let mut layer = Layer::raster("pixels", fmt);
-            layer.surface_mut().unwrap().fill_rect(doc.bounds(), &vec![0.5; fmt.channels()]);
+            for y in 0..600 {
+                layer.surface_mut().unwrap().fill_rect(Rect::new(0, y, 16, 1), &vec![(y + 1) as f32 / 601.0; fmt.channels()]);
+            }
             doc.layers.push(layer);
             let expected = composite_to_surface(&doc, doc.bounds(), fmt, None);
             let actual = composite_to_surface_with_interrupt(&doc, doc.bounds(), fmt, None, &Interrupt::NONE).unwrap();
