@@ -506,7 +506,7 @@ fn main() -> eframe::Result {
     // Borrowed, not moved in: when the app is never created, the CPU-compatibility relaunch below
     // hands the bytes on.
     let piped_ref = &piped;
-    let result = eframe::run_native(
+    let mut result = eframe::run_native(
         "PhotoCraft",
         options,
         Box::new(move |cc| {
@@ -745,15 +745,12 @@ fn main() -> eframe::Result {
             // hands on the read's error so the new one doesn't read what's left of the stream.
             let handed_on = piped_image::hand_on(&mut relaunch, piped.take());
             match relaunch.spawn() {
-                Ok(mut child) => {
-                    if let (Some(bytes), Some(mut pipe)) = (handed_on, child.stdin.take()) {
-                        use std::io::Write as _;
-                        if let Err(error) = pipe.write_all(&bytes) {
-                            log::warn!("couldn't hand the piped image to CPU compatibility mode: {error}");
-                        }
-                    }
-                    return Ok(());
-                }
+                // A relaunch that didn't take the piped image won't open it: report that below
+                // rather than exit as if it had.
+                Ok(mut child) => match piped_image::write_handed_on(child.stdin.take(), handed_on) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => result = Err(eframe::Error::AppCreation(format!("{reason}; {error}").into())),
+                },
                 Err(error) => log::error!("could not start CPU compatibility mode: {error}"),
             }
         }

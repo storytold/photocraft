@@ -1488,7 +1488,17 @@ fn convert_info_and_run_read_an_image_piped_on_stdin() {
 
     let o = piped(bin().current_dir(&d).args(["run", "-", "--cmd", "image.adjustments.invert", "--out", "inverted.png"]), &png);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert!(d.join("inverted.png").is_file());
+    // The command ran on the piped image: every colour is inverted, alpha kept (within rounding
+    // of the translucent test pixels).
+    let before = photocraft_codecs::decode(&png).unwrap().to_rgba8();
+    let after = photocraft_codecs::decode(&std::fs::read(d.join("inverted.png")).unwrap()).unwrap().to_rgba8();
+    assert_eq!(after.len(), before.len());
+    for (i, (b, a)) in before.chunks(4).zip(after.chunks(4)).enumerate() {
+        assert_eq!(a[3], b[3], "pixel {i}: {b:?} -> {a:?}");
+        if b[3] >= 64 {
+            assert!((0..3).all(|c| (i16::from(a[c]) - (255 - i16::from(b[c]))).abs() <= 2), "pixel {i} not inverted: {b:?} -> {a:?}");
+        }
+    }
 
     // A file called `-` is `./-`, and stdin isn't read for it.
     std::fs::copy(d.join("in.png"), d.join("-")).unwrap();

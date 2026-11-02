@@ -51,6 +51,14 @@ pub(crate) fn hand_on(relaunch: &mut std::process::Command, piped: Option<Result
     }
 }
 
+/// Write the bytes [`hand_on`] returned to the spawned relaunch's standard input, then close it.
+/// A failed write means the new process stopped reading (it exited), so nothing will open the
+/// image: the error says so, for the startup report, instead of the launch ending as a success.
+pub(crate) fn write_handed_on(stdin: Option<impl std::io::Write>, bytes: Option<Vec<u8>>) -> Result<(), String> {
+    let (Some(bytes), Some(mut pipe)) = (bytes, stdin) else { return Ok(()) };
+    pipe.write_all(&bytes).map_err(|e| format!("CPU compatibility mode did not receive the image piped on standard input: {e}"))
+}
+
 /// Open what [`read`] returned as a new document. Its format comes from the bytes; it is named as
 /// File › New names one (the first free "Untitled-N") and has no path, so File › Save asks where
 /// to save it. A failure is shown as an error: a read as "Couldn't open standard input: …", a
@@ -145,5 +153,29 @@ mod tests {
         let reported = read_from(Some("more than 4.00 GB was piped in".into()), || panic!("standard input was read"));
         assert_eq!(reported, Err("more than 4.00 GB was piped in".to_string()));
         assert_eq!(read_from(None, || Ok(b"image".to_vec())), Ok(b"image".to_vec()));
+    }
+
+    /// #9978 review: the bytes reach the relaunch's standard input; a relaunch that stopped
+    /// reading is an error to report, not a silent success; without bytes nothing is written.
+    #[test]
+    fn a_failed_hand_on_write_is_an_error() {
+        let mut written = Vec::new();
+        assert_eq!(write_handed_on(Some(&mut written), Some(b"image".to_vec())), Ok(()));
+        assert_eq!(written, b"image");
+
+        struct Closed;
+        impl std::io::Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let error = write_handed_on(Some(Closed), Some(b"image".to_vec())).unwrap_err();
+        assert!(error.contains("did not receive the image piped on standard input"), "{error}");
+
+        assert_eq!(write_handed_on(Some(Closed), None), Ok(()), "no `-`: nothing to write");
+        assert_eq!(write_handed_on(None::<Closed>, Some(b"image".to_vec())), Ok(()));
     }
 }
