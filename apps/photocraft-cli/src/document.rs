@@ -40,6 +40,9 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let mut renderer = policy.create_renderer();
     let ws = files::save_with_renderer(&o.document, output, a.export.format.as_deref(), &opts, None, renderer.as_deref_mut())?;
     warn_dedup(err, &ws, &mut seen_warnings);
+    if let Some(renderer) = renderer.as_mut() {
+        warn_dedup(err, &renderer.drain_diagnostics(), &mut seen_warnings);
+    }
     Ok(())
 }
 

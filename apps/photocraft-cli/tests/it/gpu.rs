@@ -175,3 +175,66 @@ fn diagnostics_preserve_clean_stdout_and_emit_to_stderr() {
 
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn serve_gpu_preserves_clean_protocol_stdout_and_drains_diagnostics_to_stderr() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+
+    let mut child = bin().args(["serve", "--gpu"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    // 1. Initial valid command
+    writeln!(stdin, "{}", serde_json::json!({"id": 1, "method": "doc.new", "params": {"width": 16, "height": 16}})).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line1 = String::new();
+    assert!(stdout.read_line(&mut line1).unwrap() > 0, "server must respond");
+    let v1: Value = serde_json::from_str(&line1).expect("line 1 on stdout must be valid JSON");
+    assert_eq!(v1["id"], 1);
+    assert_eq!(v1["ok"], true, "{v1}");
+
+    // 2. Failure recovery: invalid request receives error reply without crashing server
+    writeln!(stdin, "{}", serde_json::json!({"id": 2, "method": "invalid.nonexistent.method", "params": {}})).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line2 = String::new();
+    assert!(stdout.read_line(&mut line2).unwrap() > 0, "server must respond to invalid request");
+    let v2: Value = serde_json::from_str(&line2).expect("line 2 on stdout must be valid JSON");
+    assert_eq!(v2["id"], 2);
+    assert_eq!(v2["ok"], false, "{v2}");
+
+    // 3. Subsequent valid command still succeeds (proves session & renderer recovery)
+    writeln!(stdin, "{}", serde_json::json!({"id": 3, "method": "doc.info"})).unwrap();
+    stdin.flush().unwrap();
+
+    let mut line3 = String::new();
+    assert!(stdout.read_line(&mut line3).unwrap() > 0, "server must respond to third request");
+    let v3: Value = serde_json::from_str(&line3).expect("line 3 on stdout must be valid JSON");
+    assert_eq!(v3["id"], 3);
+    assert_eq!(v3["ok"], true, "{v3}");
+
+    // Close stdin and verify graceful exit
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+}
+
+#[test]
+fn cpu_default_does_not_emit_gpu_warnings() {
+    let d = tmp("cpu_default");
+    let in_png = d.join("in.png");
+    let out_png = d.join("out.png");
+    write_png(&in_png, 16, 16);
+
+    let o = bin().args(["convert", in_png.to_str().unwrap(), out_png.to_str().unwrap()]).output().unwrap();
+    assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(out_png.is_file());
+
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!stderr.contains("GPU"), "default CPU convert should not emit GPU warnings, got: {stderr}");
+
+    let _ = std::fs::remove_dir_all(&d);
+}

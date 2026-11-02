@@ -30,27 +30,43 @@ struct BenchArgs {
     height: u32,
 
     /// Synthetic layer count (1..=128)
-    #[arg(short, long, default_value_t = 8, value_parser = clap::value_parser!(usize).range(1..=128))]
-    layers: usize,
+    #[arg(short, long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..=128))]
+    layers: u32,
 
     /// Number of warm GPU runs (0..=50)
-    #[arg(short = 'r', long = "warm-runs", default_value_t = 3, value_parser = clap::value_parser!(usize).range(0..=50))]
-    warm_runs: usize,
+    #[arg(short = 'r', long = "warm-runs", default_value_t = 3, value_parser = clap::value_parser!(u32).range(0..=50))]
+    warm_runs: u32,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = BenchArgs::parse();
+    let layers = args.layers as usize;
+    let warm_runs = args.warm_runs as usize;
 
     println!("# PhotoCraft CLI Headless Rendering Benchmark");
     println!();
 
+    const MAX_SYNTHETIC_PIXELS: u64 = 256 * 1024 * 1024;
     let doc = if let Some(path) = &args.input {
         println!("- **Input Source**: file `{}`", path.display());
         let open_res = files::open(path)?;
         open_res.document
     } else {
+        let total_pixels = u64::from(args.width) * u64::from(args.height) * u64::from(args.layers);
+        if total_pixels > MAX_SYNTHETIC_PIXELS {
+            return Err(format!(
+                "requested synthetic benchmark volume ({}x{} x {} layers = {} total pixels) exceeds budget of {} pixels (~{} MB); please lower width, height, or layer count",
+                args.width,
+                args.height,
+                args.layers,
+                total_pixels,
+                MAX_SYNTHETIC_PIXELS,
+                (MAX_SYNTHETIC_PIXELS * 4) / (1024 * 1024)
+            )
+            .into());
+        }
         println!("- **Input Source**: synthetic mockup ({}x{}, {} layers)", args.width, args.height, args.layers);
-        sample_doc(args.width, args.height, args.layers)
+        sample_doc(args.width, args.height, layers)
     };
 
     println!("- **Dimensions**: {}x{}", doc.size.width, doc.size.height);
@@ -101,10 +117,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // 3. GPU Warm Runs
-    let mut warm_durations = Vec::with_capacity(args.warm_runs);
-    if gpu_succeeded && !is_fallback && args.warm_runs > 0 {
-        for run in 1..=args.warm_runs {
-            print!("Benchmarking GPU warm export (run {run}/{})... ", args.warm_runs);
+    let mut warm_durations = Vec::with_capacity(warm_runs);
+    if gpu_succeeded && !is_fallback && warm_runs > 0 {
+        for run in 1..=warm_runs {
+            print!("Benchmarking GPU warm export (run {run}/{warm_runs})... ");
             let t0 = Instant::now();
             let warm_res = files::save_with_renderer(&doc, &gpu_warm_out, Some("png"), &opts, None, Some(&mut gpu_renderer))?;
             let d = t0.elapsed();
@@ -126,14 +142,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("| GPU Cold | {:.2} ms | N/A | Fallback to CPU occurred; no GPU speedup |", gpu_cold_dur.as_secs_f64() * 1000.0);
         println!("| GPU Warm | N/A | N/A | Not measured (GPU fell back to CPU) |");
     } else {
+        let is_software = gpu_renderer.is_software();
+        let adapter_note = if is_software { "Software rasterizer (e.g. lavapipe/llvmpipe)" } else { "Hardware GPU" };
         println!(
-            "| GPU Cold | {:.2} ms | {:.2}x | Cold adapter initialization + pipeline build |",
+            "| GPU Cold | {:.2} ms | {:.2}x | Cold adapter initialization + pipeline build ({adapter_note}) |",
             gpu_cold_dur.as_secs_f64() * 1000.0,
             cpu_dur.as_secs_f64() / gpu_cold_dur.as_secs_f64()
         );
         if !warm_durations.is_empty() {
             let avg_warm: f64 = warm_durations.iter().map(|d| d.as_secs_f64()).sum::<f64>() / (warm_durations.len() as f64);
-            println!("| GPU Warm (avg) | {:.2} ms | {:.2}x | Reused device context and pipeline caches |", avg_warm * 1000.0, cpu_dur.as_secs_f64() / avg_warm);
+            println!(
+                "| GPU Warm (avg) | {:.2} ms | {:.2}x | Reused device context and pipeline caches ({adapter_note}) |",
+                avg_warm * 1000.0,
+                cpu_dur.as_secs_f64() / avg_warm
+            );
         } else {
             println!("| GPU Warm | N/A | N/A | Not measured (0 warm runs requested) |");
         }

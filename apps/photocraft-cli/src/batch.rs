@@ -102,6 +102,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             let r = h.save(None, Some(&target), Some(&ext), &opts)?;
             Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
         })();
+        let diags = h.drain_diagnostics();
         if let Some(recovered) = h.take_renderer() {
             renderer = Some(recovered);
         }
@@ -111,10 +112,12 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
                 written.record(&target_text, &input.to_string_lossy());
                 let _ = writeln!(out, "ok    {} -> {}", input.display(), target.display());
                 warn_dedup(err, &ws, &mut seen_warnings);
+                warn_dedup(err, &diags, &mut seen_warnings);
             }
             Err(e) => {
                 failed += 1;
                 let _ = writeln!(err, "FAIL  {}: {e}", input.display());
+                warn_dedup(err, &diags, &mut seen_warnings);
             }
         }
     }

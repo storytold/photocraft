@@ -5090,6 +5090,7 @@ dependencies = [
  "clap_mangen",
  "photocraft-automation",
  "photocraft-codecs",
+ "photocraft-doc",
  "photocraft-engine",
  "photocraft-format",
  "photocraft-io",
