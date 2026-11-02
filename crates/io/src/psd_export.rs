@@ -53,7 +53,12 @@ const LOST_PIXELS: &str = "too large to save";
 /// Can `bytes` of samples be gathered: within the cap, with the peak's memory to be had? Asked
 /// first because the gather allocates infallibly, and running out there would end the app.
 fn gather_fits(bytes: u64) -> bool {
-    bytes <= MAX_LAYER_GATHER_BYTES && usize::try_from(bytes.saturating_mul(2)).is_ok_and(|peak| Vec::<u8>::new().try_reserve_exact(peak).is_ok())
+    gather_fits_with(bytes, |peak| Vec::<u8>::new().try_reserve_exact(peak).is_ok())
+}
+
+/// [`gather_fits`], with `reserve` saying whether the peak's memory can be had.
+fn gather_fits_with(bytes: u64, reserve: impl FnOnce(usize) -> bool) -> bool {
+    bytes <= MAX_LAYER_GATHER_BYTES && usize::try_from(bytes.saturating_mul(2)).is_ok_and(reserve)
 }
 
 /// The warning of a layer whose pixels the file wouldn't hold. A save stops on it: a layer written
