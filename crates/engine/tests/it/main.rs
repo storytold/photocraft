@@ -2,6 +2,8 @@
 
 mod actions_clear_all;
 mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod actions_replace;
 mod affinity;
 mod artboard_export_names;

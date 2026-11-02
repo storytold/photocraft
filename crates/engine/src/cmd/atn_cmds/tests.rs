@@ -955,6 +955,7 @@ fn group_layers_from_index_reference_stays_implicit() {
     }
 }
 
+/// Unmapped descriptors stay opaque, while absent filter settings retain menu intent.
 #[test]
 fn unsupported_shapes_become_photoshop_steps_not_errors() {
     // Image size in two different percentages, a Paint Bucket click in percent of the canvas, a
@@ -998,7 +999,8 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     };
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.blur.gaussianBlur", PHOTOSHOP_STEP]);
+    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, PHOTOSHOP_STEP]);
+    assert_eq!(imp.actions[0].steps[4].1, json!({"id":"filter.blur.gaussianBlur","eventKind":"code"}));
     assert_eq!(imp.unsupported.len(), 5);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
 }
@@ -3413,8 +3415,8 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
 }
 
 /// Review of #8714: a Camera Raw Filter step with a key the table doesn't map (an Upright
-/// setting, a profile name, any other panel) or with no settings at all stays a Photoshop step
-/// and is reported, rather than replaying without that processing.
+/// setting, a profile name, any other panel) stays a Photoshop step and is reported rather than
+/// replaying without that processing. Absent settings instead retain the menu-only event.
 #[test]
 fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
     let cr = || desc("null").with("CrVe", D::Text(UnicodeString::new_nul("16.1.1"))).with("PrVN", D::Integer(5)).with("PrVe", D::Integer(184_549_376));
@@ -3429,13 +3431,16 @@ fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
     let mut s = Session::new();
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
     let unsupported: Vec<u64> = loaded["unsupported"].as_array().unwrap().iter().map(|u| u["step"].as_u64().unwrap()).collect();
-    assert_eq!(unsupported, [0, 1, 2], "{loaded}");
+    assert_eq!(unsupported, [0, 1], "{loaded}");
     let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.cameraRaw"]);
+    assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, "filter.cameraRaw"]);
+    assert_eq!(s.actions.list[0].steps[2].1, json!({"id":"filter.cameraRaw","eventKind":"name"}));
     // Kept, it still saves back as recorded.
     let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
     let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
     assert_eq!(saved.actions[0].items[0].descriptor, Some(upright));
+    assert_eq!(saved.actions[0].items[2].event, AtnEvent::name("Adobe Camera Raw Filter"));
+    assert!(saved.actions[0].items[2].descriptor.is_none());
 }
 
 fn one_action(items: Vec<AtnItem>) -> AtnFile {

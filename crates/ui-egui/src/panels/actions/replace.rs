@@ -24,18 +24,7 @@ pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
 
 /// Apply both the request's authority and the current confirmation's authority.
 fn authorize(app: &PhotocraftApp, params: &Value, gate: Option<super::Gate>, automated: bool) -> Result<(), String> {
-    if let Some(gate) = gate {
-        gate(COMMAND, params).map_err(|e| e.to_string())?;
-    }
-    if let Some(current) = app.session.authorize {
-        current(COMMAND, params).map_err(|e| e.to_string())?;
-    }
-    if (automated || app.automation_input || app.session.authorize.is_some())
-        && let Some(check) = app.services.automation_command.as_ref()
-    {
-        check(COMMAND, params)?;
-    }
-    Ok(())
+    super::authorize_owned(app, COMMAND, params, gate, automated)
 }
 
 /// A file picker or warning must not discard an active or suspended recording.

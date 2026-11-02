@@ -58,6 +58,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         }
         params = crate::select_mask_view::request_params(&d.fields, params);
     }
+    crate::actions::authorize_preview(app, d.id, &cmd, &params).ok()?;
     let st = app.session.documents().get(idx)?;
     let k = filter_preview_factor(app, &st.doc, &cmd, &params);
     let request = crate::filter_dialog::FilterPreviewKey {

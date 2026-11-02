@@ -691,6 +691,14 @@ pub struct PhotocraftApp {
     pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
     /// The exact Actions input awaiting its own replacement confirmation.
     pub(crate) held_actions_replace: Option<actions::replace::Held>,
+    /// The step and authority owned by its Record Again editor.
+    pub(crate) held_record_again: Option<actions::record_again::Held>,
+    /// Consent and authority owned by the Reset Actions append/replace prompt.
+    pub(crate) held_actions_reset: Option<actions::reset::Held>,
+    /// Target and authority owned by the Insert Menu Item chooser.
+    pub(crate) held_insert_menu: Option<actions::menu_item::Held>,
+    /// The Clear All warning retains its caller until its own confirmation or Cancel.
+    pub(crate) held_actions_clear: Option<actions::clear_all::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).

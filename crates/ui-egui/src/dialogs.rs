@@ -278,6 +278,9 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
+    if crate::actions::owned_dialog_body(app, ui, d.id, fields) {
+        return None;
+    }
     let mut outcome: Option<bool> = None;
     match d.kind {
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
@@ -296,8 +299,6 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
-        _ if crate::actions::clear_all::owns(fields) => crate::actions::clear_all::body(ui),
-        _ if crate::actions::replace::owns(fields) => crate::actions::replace::body(app, ui, d.id),
         _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
@@ -850,7 +851,10 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::actions::owns_insert_stop,
     crate::actions::clear_all::owns,
     crate::actions::replace::owns,
+    crate::actions::reset::owns,
+    crate::actions::menu_item::owns,
     crate::actions::owns_new_set,
+    crate::actions::record_again::owns,
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
@@ -909,7 +913,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     };
     if crate::filter_dialog::needs_displace_map(&cmd, &crate::filter_dialog::params_of(&d.fields)) {
         app.filter_preview = None;
-        let result = crate::filter_dialog::ask_displace_map(app, cmd, d.fields.clone());
+        let result = crate::filter_dialog::ask_displace_map(app, d.id, cmd, d.fields.clone());
         if result.is_err() {
             crate::actions::abandoned(app, &d.fields);
         } else {
@@ -931,7 +935,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
-    let result = crate::actions::authorize_dialog(app, &d.fields, &cmd, &params).and_then(|()| app.run(&cmd, params.clone()));
+    let result = crate::actions::run_dialog_command(app, d.id, &d.fields, &cmd, params.clone());
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -967,6 +971,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
 /// that touches files itself, and a valid guide layout.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    if let Some(dialog) = app.ui.dialogs.iter().find(|d| d.id == id) {
+        crate::actions::validate_editor(app, id, &dialog.fields)?;
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -992,6 +999,9 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
 /// Confirm a command dialog through the first handler whose marker its fields carry; the prompts
 /// and small editors are here, the rest in `confirm_command_more`.
 fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+    if let Some(result) = crate::actions::confirm_owned_dialog(app, d.id, &d.fields) {
+        return result;
+    }
     match d.kind {
         _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
@@ -1009,8 +1019,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
-        _ if crate::actions::clear_all::owns(&d.fields) => crate::actions::clear_all::confirm(app, &d.fields),
-        _ if crate::actions::replace::owns(&d.fields) => crate::actions::replace::confirm(app, d.id, &d.fields),
         _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
@@ -1062,9 +1070,21 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
-    crate::actions::stopped(app, &closed.fields);
+    crate::actions::stopped(app, id, &closed.fields);
     if crate::actions::replace::owns(&closed.fields) {
         crate::actions::replace::cancel(app, id);
+    }
+    if crate::actions::reset::owns(&closed.fields) {
+        crate::actions::reset::cancel(app, id);
+    }
+    if crate::actions::menu_item::owns(&closed.fields) {
+        crate::actions::menu_item::cancel(app, id);
+    }
+    if crate::actions::clear_all::owns(&closed.fields) {
+        crate::actions::clear_all::cancel(app, id);
+    }
+    if crate::actions::record_again::owns(&closed.fields) {
+        crate::actions::record_again::cancel(app, id);
     }
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));

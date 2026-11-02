@@ -88,6 +88,8 @@ pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 #[serde(default)]
 pub struct ActionState {
     pub list: Vec<Action>,
+    /// Opt in to recording painting-tool strokes; ordinary commands are always recordable.
+    pub record_tools: bool,
     /// Journal length when recording started, and the action index being recorded into.
     #[serde(skip)]
     pub recording: Option<(usize, usize)>,
@@ -339,7 +341,7 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
     let recording = s.actions.recording.and_then(|(_, i)| s.actions.list.get(i).map(|a| a.name.clone()));
-    Ok(json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording}))
+    Ok(json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording, "toolRecording": s.actions.record_tools}))
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
@@ -393,7 +395,32 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
 /// Replayable journal entries not yet committed to this action while recording.
 pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(String, Value)> {
     let from = s.actions.recording.filter(|(_, i)| *i == action).map_or(s.journal.len(), |(from, _)| from);
-    s.journal.iter().skip(from).filter(|(id, _)| replayable(id))
+    s.journal.iter().skip(from).filter(move |(id, _)| replayable(id) && (s.actions.record_tools || !tool_stroke(id)))
+}
+
+/// The point-based painting tools committed by the canvas; fills and gradients remain commands.
+pub(crate) fn tool_stroke(id: &str) -> bool {
+    matches!(
+        id,
+        "paint.stroke"
+            | "paint.pencil"
+            | "paint.mixerBrush"
+            | "paint.colorReplacement"
+            | "paint.blur"
+            | "paint.sharpen"
+            | "paint.smudge"
+            | "paint.dodge"
+            | "paint.burn"
+            | "paint.sponge"
+            | "paint.cloneStamp"
+            | "paint.healingBrush"
+            | "paint.historyBrush"
+            | "paint.artHistoryBrush"
+            | "paint.patternStamp"
+            | "paint.backgroundEraser"
+            | "paint.spotHealing"
+            | "paint.remove"
+    )
 }
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
@@ -760,7 +787,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null}",
+            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null, toolRecording:bool}",
             enabled: always,
             run: list,
             journal: false,

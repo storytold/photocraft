@@ -886,7 +886,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.recorded_by = self.actions.recording.map(|_| self.actions.take);
+                job.recorded_by =
+                    self.actions.recording.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id)).map(|_| self.actions.take);
                 job.pre_selected = pre_selected.clone();
                 let jid = job.id;
                 self.jobs.running.push(job);

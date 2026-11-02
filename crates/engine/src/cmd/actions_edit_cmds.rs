@@ -14,12 +14,75 @@ use crate::actions_cmds::{Action, flush_recording, not_playing, pending_steps, r
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod record_again;
+pub use record_again::{RecordAgainTarget, target as record_again_target};
+mod insert_path;
+pub use insert_path::selected_path as selected_recording_path;
+
+/// Temporary empty folder until Photoshop's intended default action contents are specified.
+pub const DEFAULT_SET_PLACEHOLDER: &str = "Default Actions (placeholder)";
+
+/// Restore an explicit placeholder while keeping all admission checks before replacement.
+fn reset(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.reset";
+    not_playing(s, cmd)?;
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before resetting actions"));
+    }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, "resetting actions requires `confirm`: true"));
+    }
+    let replace = match p.get("mode").and_then(Value::as_str) {
+        Some("append") => false,
+        Some("replace") => true,
+        _ => return Err(bad(cmd, "`mode` must be append or replace")),
+    };
+    let names = if replace { Vec::new() } else { set_names(s) };
+    let name = crate::atn_cmds::UniqueNames::new(names).claim(DEFAULT_SET_PLACEHOLDER);
+    let create = json!({"name":name});
+    if let Some(gate) = s.authorize {
+        gate("actions.newSet", &create)?;
+        if replace {
+            gate("actions.clearAll", &json!({"confirm":true}))?;
+        }
+    }
+    let cleared = if replace { clear_all(s, &json!({"confirm":true}))?["cleared"].clone() } else { json!(0) };
+    new_set(s, &create)?;
+    Ok(json!({"set":name,"placeholder":true,"actions":0,"cleared":cleared}))
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
 fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
+}
+
+/// Flush under the old mode so changing the toggle never retroactively records or loses a stroke.
+fn allow_tool_recording(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.allowToolRecording";
+    not_playing(s, cmd)?;
+    let enabled = match p.get("enabled") {
+        None | Some(Value::Null) => !s.actions.record_tools,
+        Some(Value::Bool(enabled)) => *enabled,
+        Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
+    };
+    if enabled != s.actions.record_tools {
+        flush_recording(s)?;
+        s.actions.record_tools = enabled;
+    }
+    Ok(json!({"enabled": enabled}))
+}
+
+/// Insert a menu event with absent settings, reusing the ordinary validated step insertion.
+fn insert_menu_item(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.as_object().is_some_and(|o| o.keys().any(|k| !matches!(k.as_str(), "action" | "at" | "id" | "eventKind"))) {
+        return Err(bad("actions.insertMenuItem", "menu items accept no recorded settings"));
+    }
+    let params = json!({"id":p.get("id"),"eventKind":p.get("eventKind").cloned().unwrap_or(json!("name"))});
+    crate::atn_cmds::menu_item_command(&params)?;
+    s.execute("actions.insert", json!({"action":p.get("action"),"at":p.get("at"),"id":crate::atn_cmds::MENU_ITEM,"params":params}))
 }
 
 fn index(p: &Value, key: &str, cmd: &str) -> Result<Option<usize>> {
@@ -83,17 +146,17 @@ fn insert_step(s: &mut Session, idx: usize, at: usize, step: (String, Value)) ->
 
 /// Keep session-list Play Action targets stable when a copied action inserts a row.
 /// Other commands' nested JSON may own a separate action library and is not traversed.
-fn shift_action_calls(actions: &mut [Action], at: usize) {
+fn shift_action_calls(actions: &mut [Action], at: usize, count: usize) {
     for (id, params) in actions.iter_mut().flat_map(|a| &mut a.steps) {
         if id != "actions.play" {
             continue;
         }
         let Some(Value::Number(n)) = params.get("action") else { continue };
         let shifted = if let Some(n) = n.as_u64() {
-            if n >= at as u64 { n.checked_add(1).map(Value::from) } else { None }
+            if n >= at as u64 { n.checked_add(count as u64).map(Value::from) } else { None }
         } else {
             // `actions.play` also accepts floating indices, rounding them before lookup.
-            n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + 1.0))
+            n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + count as f64))
         };
         if let Some(value) = shifted {
             params["action"] = value;
@@ -105,6 +168,9 @@ fn shift_action_calls(actions: &mut [Action], at: usize) {
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.duplicate";
     not_playing(s, cmd)?;
+    if p.get("set").is_some() {
+        return duplicate_set(s, p);
+    }
     let idx = resolve(&s.actions.list, p, cmd)?;
     if let Some(step) = index(p, "step", cmd)? {
         let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
@@ -138,9 +204,51 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     let at = idx + 1;
     let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
     s.actions.list.insert(at, copied);
-    shift_action_calls(&mut s.actions.list, at);
+    shift_action_calls(&mut s.actions.list, at, 1);
     s.actions.touch();
     Ok(result)
+}
+
+/// Copy a folder below its source, using the existing first-appearance order and empty-set model.
+fn duplicate_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.duplicate";
+    if p.get("action").is_some() || p.get("step").is_some() {
+        return Err(bad(cmd, "select either a set or an action/step"));
+    }
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before duplicating a set"));
+    }
+    let source = p.get("set").and_then(Value::as_str).ok_or_else(|| bad(cmd, "`set` must be a set name"))?;
+    let sets = set_names(s);
+    if !sets.iter().any(|n| n == source) {
+        return Err(bad(cmd, "the selected set no longer exists"));
+    }
+    let mut set_names = crate::atn_cmds::UniqueNames::new(sets);
+    let name = set_names.claim(&format!("{source} copy"));
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    let at = s.actions.list.iter().position(|a| a.set.as_deref() == Some(source)).map_or(s.actions.list.len(), |i| i + 1);
+    let added: Vec<_> = s
+        .actions
+        .list
+        .iter()
+        .filter(|a| a.set.as_deref() == Some(source))
+        .cloned()
+        .map(|mut a| {
+            a.name = names.claim(&format!("{} copy", a.name));
+            a.set = Some(name.clone());
+            a
+        })
+        .collect();
+    let copied: Vec<_> = added.iter().map(|a| a.name.clone()).collect();
+    let count = added.len();
+    s.actions.list.splice(at..at, added);
+    if count != 0 {
+        shift_action_calls(&mut s.actions.list, at, count);
+    }
+    let folder = s.actions.sets.iter().position(|set| set == source).map_or(s.actions.sets.len(), |i| i + 1);
+    s.actions.sets.insert(folder, name.clone());
+    s.actions.touch();
+    Ok(json!({"set":name,"actions":copied,"index":at}))
 }
 
 /// Clear confirmed definitions and their own shortcut bindings, preserving the document.
@@ -366,6 +474,56 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
+            id: "actions.insertMenuItem",
+            label: "Insert Menu Item…",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"id":menu command,"at":index?,"eventKind":"name"|"code"="name"} → {action,step,id,steps}. Records an unambiguous supported menu event without settings. Image Size and mapped filter menu events are supported. Desktop playback opens the existing editor when settings are needed; no-settings items run immediately."##,
+            enabled: always,
+            run: insert_menu_item,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.reset",
+            label: "Reset Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"mode":"append"|"replace","confirm":true} → {set,placeholder:true,actions:0,cleared}. Restores a clearly labeled empty default-set placeholder, pending clarification of Photoshop's default contents. Append keeps the current library; replace clears it after consent. This is not complete default-set parity."##,
+            enabled: always,
+            run: reset,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.insertPath",
+            label: "Insert Path",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"name":"work"|"layer"|saved path name,"at":index?} → {action,step,id,steps}. Snapshot exactly the selected path as a path.set work-path step, preserving cubic handles and path options. No fallback from a missing Work Path to a layer path. Native replay is supported; Photoshop ATN path-descriptor export remains unsupported."##,
+            enabled: always,
+            run: insert_path::run,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.allowToolRecording",
+            label: "Allow Tool Recording",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"enabled":bool?=toggle} → {enabled:bool}. Opt in to recording painting-tool strokes (off initially). Existing pending steps are committed under the previous mode. Painting, history and the journal are unchanged. actions.list reports toolRecording."##,
+            enabled: always,
+            run: allow_tool_recording,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.recordAgain",
+            label: "Record Again",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"step":index,"params":{new settings},"revision":u64?} → {action,step,id,result}. Replays the selected command and stores its new settings only after success, preserving its enabled/dialog flags. The panel opens the command's editor at the recorded settings. Stop recording or playback first; revision optionally rejects stale library state."##,
+            enabled: always,
+            run: record_again::run,
+            journal: false,
+        },
+        CommandSpec {
             id: "actions.clearAll",
             label: "Clear All Actions",
             menu: &[],
@@ -380,7 +538,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Duplicate",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index,"step":index?} → {action,index,step?,steps}. Duplicate the action, or one step, directly below its source. Action names gain " copy" and a unique numeric suffix if needed; settings, flags, set and color are retained. Function-key bindings stay with their original action. Stop recording before duplicating a whole action. Set duplication is not supported."##,
+            params: r##"{"action":name|index,"step":index?} or {"set":name} → {action?,index,step?,steps?,set?,actions?}. Duplicate the action, set or step directly below its source. Copies receive a unique " copy" name; settings, flags and colors are retained. Function-key bindings stay with their original actions. Stop recording before duplicating an action or set."##,
             enabled: always,
             run: duplicate,
             journal: false,

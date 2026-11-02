@@ -13,6 +13,7 @@ fn file(item: AtnItem) -> Vec<u8> {
         actions: vec![AtnAction { name: UnicodeString::new_nul("Resize"), items: vec![item], ..Default::default() }],
         expanded: true,
         warnings: vec![],
+        ..Default::default()
     })
     .unwrap()
 }

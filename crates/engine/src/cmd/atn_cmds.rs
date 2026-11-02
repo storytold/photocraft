@@ -56,7 +56,7 @@ use events::{EVENTS, event_and_descriptor, event_for};
 #[cfg(test)]
 use fields::Mapped;
 use files::{load, replace, save};
-pub use menu_item::{MENU_ITEM, menu_item_command};
+pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
 #[cfg(test)]
 use steps_doc::crop_from;
 #[cfg(test)]
@@ -145,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Menu Item",
             menu: &[],
             shortcut: None,
-            params: r##"{"id":"image.imageSize","eventKind":"name"|"code"="name"} (a descriptor-free Insert Menu Item step; opens Image Size during desktop playback, fails with interactive-required during headless playback)"##,
+            params: r##"{"id":menu command,"eventKind":"name"|"code"="name"} (a descriptor-free Image Size or unambiguous mapped filter menu event; desktop playback asks for settings when needed, headless playback only runs stateless menu items)"##,
             enabled: always,
             run: menu_item::run,
             journal: true,

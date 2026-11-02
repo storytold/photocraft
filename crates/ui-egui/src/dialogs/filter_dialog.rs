@@ -1095,7 +1095,7 @@ pub(crate) fn needs_displace_map(command: &str, params: &Value) -> bool {
 /// browser the picker gives contents, not a path the filter can read: the map has to be opened
 /// as a document and picked as Map Document there. It displaces the document that asked, even
 /// when another one was activated while the picker was open.
-pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields: Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, dialog: u64, command: String, fields: Map<String, Value>) -> Result<Value, String> {
     use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
     let doc = app.active_doc_id()?;
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
@@ -1112,7 +1112,7 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields:
         fields.insert("mapPath".into(), json!(path));
         app.refocus(doc)?;
         let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
-        let result = app.run(&cmd, params);
+        let result = crate::actions::run_dialog_command(app, dialog, &fields, &cmd, params);
         if result.is_ok() {
             remember(app, &cmd, &fields);
             let _ = crate::actions::resume(app, &fields);

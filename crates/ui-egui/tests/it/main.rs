@@ -2,6 +2,8 @@
 
 mod actions_clear_all;
 mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod actions_replace;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;

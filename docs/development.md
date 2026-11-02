@@ -631,6 +631,30 @@ PhotoCraft equivalent.
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
 
+The Actions panel also exposes `actions.duplicate` for an action, set or step, and
+`actions.recordAgain` to run one selected command with edited settings and replace that step
+only after success. Record Again preserves its enabled/dialog flags. The panel seeds the
+existing command editor; agents pass the new settings in `params` directly.
+
+`actions.insertMenuItem` records Image Size or an unambiguous mapped filter event without a
+descriptor. Desktop playback opens its editor when settings are needed; headless playback
+reports `interactive-required`. Stateless filter menu items run immediately. An absent
+descriptor remains distinct from a present empty descriptor. `actions.allowToolRecording`
+opts in to recording painting-tool strokes; changing it commits pending entries under the
+previous mode. It does not suppress painting, history or journal entries.
+
+`actions.clearAll` and `actions.replace` require `confirm:true`; Replace validates the picked
+file before changing the library and the panel confirms the exact bytes already picked.
+Both remove empty folders too. Reset (`actions.reset`, `mode:"append"|"replace"`,
+`confirm:true`) currently restores a clearly labeled **empty placeholder set**. The intended
+Photoshop default contents are still awaiting clarification; this is not default-set parity.
+
+`actions.insertPath` snapshots the exact selected work, layer or saved path as a native
+`path.set` work-path step, retaining cubic controls, operations, fill rule and inversion.
+Its Photoshop `set`/`WrPt` descriptor mapping remains unsupported pending an independently
+verified fill-rule representation. Save Actions refuses that native step rather than
+writing a descriptor with guessed semantics. These two remaining parity gaps keep #10706 open.
+
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against four small,
 independently encoded fixtures in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
 its README): `cargo test -p photocraft-psd --test it atn_contract::`.
