@@ -530,6 +530,35 @@ fn registry_filesystem_path_params_are_classified() {
     assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
 }
 
+/// Insert Path's `name` resolves a document vector path, even when the name resembles a file;
+/// filesystem-bearing Actions commands still require the existing automation policy.
+#[test]
+fn insert_path_captures_document_geometry_without_filesystem_authority() {
+    let spec = photocraft_engine::command_specs().iter().find(|spec| spec.id == "actions.insertPath").unwrap();
+    assert!(!documents_filesystem_path_params(spec.id, spec.params));
+    for id in ["actions.load", "actions.save"] {
+        let spec = photocraft_engine::command_specs().iter().find(|spec| spec.id == id).unwrap();
+        assert!(documents_filesystem_path_params(spec.id, spec.params));
+        assert!(authorize_engine_command(id, &serde_json::json!({"path":"/outside/never-read.atn"})).is_err());
+        assert!(authorize_desktop_engine_command(id, &serde_json::json!({"path":"/outside/never-read.atn"})).is_err());
+    }
+    let mut headless = crate::Headless::new(); // No filesystem capability is granted.
+    headless.command_run("file.new", serde_json::json!({"width":8,"height":6})).unwrap();
+    headless.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Capture", vec![]));
+    let name = "/outside/document-curve";
+    let path = serde_json::json!({"fillRule":"evenodd","subpaths":[{"closed":false,"knots":[{"anchor":[1.0,2.0],"out":[3.0,4.0]},{"anchor":[6.0,5.0],"in":[4.0,3.0]}]}]});
+    headless.command_run("path.set", serde_json::json!({"name":name,"path":path})).unwrap();
+    let expected = headless.command_run("path.info", serde_json::json!({"name":name})).unwrap()["path"].clone();
+    let revision = headless.session.active().unwrap().revision;
+    headless.command_run("actions.insertPath", serde_json::json!({"action":"Capture","name":name})).unwrap();
+    assert_eq!(headless.session.active().unwrap().revision, revision);
+    assert_eq!(headless.session.actions.list[0].steps, vec![("path.set".into(), serde_json::json!({"name":"work","path":expected}))]);
+    let played = headless.command_run("actions.play", serde_json::json!({"action":"Capture"})).unwrap();
+    assert_eq!(played["ran"], 1);
+    assert!(played.get("failed").is_none());
+    assert_eq!(headless.command_run("path.info", serde_json::json!({"name":"work"})).unwrap()["path"], expected);
+}
+
 #[test]
 fn native_vector_preview_updates_are_not_an_untrusted_automation_capability() {
     let params = serde_json::json!({"document":1,"layer":1,"contentsId":1,"fingerprint":"00".repeat(32),"extension":"ai","sourceBase64":"JVBERi0=","previewSvg":"<svg/>"});
@@ -677,6 +706,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.addToSelection"
             | "path.subtractFromSelection"
             | "path.set"
+            | "actions.insertPath"
             | "path.transform"
             | "path.moveAnchors"
             | "path.moveHandle"
