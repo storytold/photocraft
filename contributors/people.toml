@@ -302,3 +302,7 @@ sync_github_name = true
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
+
+[people.sbjwin]
+real_name = "Baekjin Sung"
+display_name = "Baekjin"

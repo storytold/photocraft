@@ -36,6 +36,10 @@ impl PhotocraftApp {
             self.fonts_ready = true;
         }
         self.frame += 1;
+        // After the first frame has rendered, warm CJK fallback fonts lazily without holding up startup.
+        if self.frame == 2 {
+            let _ = crate::cjk_fonts::preload_cjk(ctx);
+        }
         let now = ctx.input(|i| i.time);
         let dt = (now - self.last_frame_time) as f32;
         if dt > 0.0 {
@@ -80,11 +84,12 @@ impl PhotocraftApp {
         crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
+        let splash_active = self.splash.as_ref().is_some_and(|s| s.is_active(now));
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
-            if type_tool::in_ui_pass(ctx) {
+            if !splash_active && type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);
                 } else {
@@ -173,6 +178,31 @@ impl PhotocraftApp {
             // The frame's stage record was started with its input: close it here too.
             self.finish_frame(0.0);
             return;
+        }
+        let now = ctx.input(|i| i.time);
+        if !self.synthetic.is_empty()
+            && let Some(s) = &mut self.splash
+        {
+            s.dismiss();
+            ctx.request_repaint();
+        }
+        if let Some(splash) = &mut self.splash {
+            // Closes immediately when ready and never waits for an artificial timer.
+            // In the web build or whenever notices arrive (e.g. preset warnings), dismiss immediately so failures are never hidden.
+            let has_failures_or_notices = !self.ui.notices.is_empty();
+            let system_ready = self.fonts_ready && photocraft_text::try_shared().is_some();
+            if has_failures_or_notices || system_ready || !splash.is_active(now) {
+                splash.dismiss();
+                self.splash = None;
+                ctx.request_repaint();
+            } else if splash.should_render(now) {
+                splash.show(&ctx, ui);
+                if !self.ui.notices.is_empty() {
+                    notices::show(self, &ctx);
+                }
+                self.automation_input = false;
+                return;
+            }
         }
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);
