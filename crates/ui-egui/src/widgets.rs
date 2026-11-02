@@ -37,8 +37,8 @@ pub use buttons::{
 };
 pub(crate) use color::color_swatch;
 pub use color::{
-    checker, checker_rounded, color_edit_button_rgb, color_edit_button_srgb, color_edit_button_srgba, color_swatch_button, hue_color, hue_stops, pick_pos,
-    rgb_histogram,
+    checker, checker_at, checker_rounded, color_edit_button_rgb, color_edit_button_srgb, color_edit_button_srgba, color_swatch_button, hue_color, hue_stops,
+    pick_pos, rgb_histogram,
 };
 #[cfg(test)]
 use color::{checker_tile_id, checker_uv};
