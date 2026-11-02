@@ -910,4 +910,9 @@ fn select_all_takes_the_top_level_board_even_with_a_board_inside_one() {
     // The whole 40x40 board at (10, 10), not the inner 8x8 rect.
     assert_eq!((selected(&s, 12, 12), selected(&s, 45, 45)), (1.0, 1.0), "the outer board is selected whole");
     assert_eq!(selected(&s, 5, 5), 0.0, "and nothing outside it");
+    // CodeRabbit on #10306: so does the square inside the nested group.
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": child.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 12, 12), selected(&s, 45, 45), selected(&s, 5, 5)), (1.0, 1.0, 0.0), "the square in the nested group takes the outer board");
 }
