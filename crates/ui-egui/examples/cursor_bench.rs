@@ -13,6 +13,10 @@
 //! cargo run --release -p photocraft-ui-egui --example cursor_bench -- [--moves 1000] [--reps 5] [--save-artifacts <dir>] [--json [path]]
 //! ```
 
+#[path = "cursor_bench/args.rs"]
+mod args;
+use args::checked_sample_count;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -87,6 +91,7 @@ struct PerfReport {
     contact_sheet_png_base64: Option<String>,
 }
 
+/// Read one nearest-rank percentile from sorted timing samples.
 fn percentile(sorted: &[f64], pct: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
@@ -95,6 +100,7 @@ fn percentile(sorted: &[f64], pct: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+/// Map each benchmark variant to the tool used by the production dispatcher.
 fn tool_for_variant(variant: PenVariant) -> Tool {
     match variant {
         PenVariant::Standard => Tool::Pen,
@@ -106,10 +112,12 @@ fn tool_for_variant(variant: PenVariant) -> Tool {
     }
 }
 
+/// Read a named benchmark argument without indexing beyond the argument list.
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
     args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
 }
 
+/// Export the native cursor bytes as an inspectable PNG.
 fn save_cursor_artifact(output_dir: &Path, variant_name: &str, scale: f32, image: &egui::CustomCursorImage) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(output_dir)?;
     let [w, h] = image.size;
@@ -122,8 +130,8 @@ fn save_cursor_artifact(output_dir: &Path, variant_name: &str, scale: f32, image
     Ok(())
 }
 
-// Execute one event-loop frame. Timings cover cursor preparation only, not GPU or
-// presentation latency. Each frame drains output so painted geometry cannot accumulate.
+/// Execute one frame and time only cursor preparation, excluding GPU/presentation latency.
+/// Drain frame output so painted geometry cannot accumulate between samples.
 fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, painted: bool) -> (f64, Option<egui::CustomCursorImage>) {
     let mut elapsed_us = 0.0;
     let input = egui::RawInput {
@@ -145,6 +153,7 @@ fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, 
     (elapsed_us, output.platform_output.cursor_image)
 }
 
+/// Render each painted/native pair at the same hotspot and export comparison evidence.
 fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualComparison>, String), Box<dyn std::error::Error>> {
     let _gpu = gpu_lock();
     let backgrounds = [("light_240", 240u8), ("midgrey_128", 128), ("dark_15", 15)];
@@ -286,18 +295,14 @@ fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualCompari
     Ok((comparisons, base64::engine::general_purpose::STANDARD.encode(png)))
 }
 
+/// Measure bounded cursor-preparation samples and export a rendered reference outside timing.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let moves: usize = arg_value(&args, "--moves").and_then(|v| v.parse().ok()).unwrap_or(1000);
     let reps: usize = arg_value(&args, "--reps").or_else(|| arg_value(&args, "--pairs")).and_then(|v| v.parse().ok()).unwrap_or(5);
     let save_dir = arg_value(&args, "--save-artifacts");
 
-    if moves == 0 || moves > 100_000 {
-        return Err("moves count must be in 1..=100000".into());
-    }
-    if reps == 0 || reps > 100 {
-        return Err("reps count must be in 1..=100".into());
-    }
+    let total_moves = checked_sample_count(moves, reps)?;
 
     // Check for --json flag and optional path argument
     let json_pos = args.iter().position(|a| a == "--json");
@@ -369,7 +374,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let _ = cursor_frame(&ctx, tool, variant, at, true);
             reset_pen_rasterization_count();
-            let total_moves = moves.checked_mul(reps).ok_or("move count overflow")?;
             let mut warm_samples = Vec::with_capacity(total_moves);
             let mut baseline_samples = Vec::with_capacity(total_moves);
             let mut cache_hits = 0;
@@ -426,6 +430,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 save_cursor_artifact(Path::new(dir_path), variant_name, scale, &img)?;
             }
 
+            perf_rows.push(PerfReportRow {
+                name: format!("pen_{variant_name}_{scale:.2}x"),
+                samples_ms: warm_samples.iter().map(|us| us / 1000.0).collect(),
+                p50_ms: warm_p50 / 1000.0,
+                p95_ms: warm_p95 / 1000.0,
+            });
             results.push(BenchmarkRun {
                 variant: variant_name.to_string(),
                 tool: format!("{tool:?}"),
@@ -437,7 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cold_raster_us_samples: cold_samples,
                 cold_raster_p50_us: cold_p50,
                 cold_raster_p95_us: cold_p95,
-                warm_move_us_samples: warm_samples.clone(),
+                warm_move_us_samples: warm_samples,
                 warm_move_p50_us: warm_p50,
                 warm_move_p95_us: warm_p95,
                 baseline_painted_us_samples: baseline_samples,
@@ -449,13 +459,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warm_rasterizations,
                 structural_gate_pass,
                 cost_gate_pass,
-            });
-
-            perf_rows.push(PerfReportRow {
-                name: format!("pen_{variant_name}_{scale:.2}x"),
-                samples_ms: warm_samples.iter().map(|us| us / 1000.0).collect(),
-                p50_ms: warm_p50 / 1000.0,
-                p95_ms: warm_p95 / 1000.0,
             });
         }
     }
@@ -472,15 +475,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "all_gates_passed": all_gates_passed,
             }),
             rows: perf_rows,
-            results: results.clone(),
-            visual_comparisons: visual_comparisons.clone(),
+            results,
+            visual_comparisons,
             contact_sheet_png_base64: Some(contact_sheet_b64),
         };
-        let json_str = serde_json::to_string_pretty(&perf_report)?;
         if let Some(path) = json_file_path {
-            std::fs::write(&path, json_str)?;
+            let file = std::fs::File::create(path)?;
+            let mut writer = std::io::BufWriter::new(file);
+            serde_json::to_writer_pretty(&mut writer, &perf_report)?;
+            std::io::Write::flush(&mut writer)?;
         } else {
-            println!("{json_str}");
+            let stdout = std::io::stdout();
+            let mut writer = stdout.lock();
+            serde_json::to_writer_pretty(&mut writer, &perf_report)?;
+            std::io::Write::write_all(&mut writer, b"\n")?;
         }
     } else {
         println!("=================================================================================================================================");

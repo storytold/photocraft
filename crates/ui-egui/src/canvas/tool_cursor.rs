@@ -313,6 +313,7 @@ pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
     Some(CursorIcon::None)
 }
 
+/// Reuse the latest bitmap per Pen variant and replace only the entry whose scale changed.
 fn cached_pen_image(ctx: &egui::Context, variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
     let id = egui::Id::unique("photocraft-pen-cursor-cache");
     let idx = variant as usize;

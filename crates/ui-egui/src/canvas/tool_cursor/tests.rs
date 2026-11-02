@@ -617,8 +617,10 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
     assert!(covers(float, Some(egui::pos2(150.0, 150.0))) && !covers(float, Some(egui::pos2(98.0, 150.0))), "just outside its edge stays here");
 }
 
+/// Check glyph bounds, contrast and the fixed Convert Point apex across display scales.
 #[test]
 fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
+    assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), vec2(12.0, 7.0), "match the painted Convert Point apex");
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
         for variant in super::PenVariant::all() {
             let image = super::pen::rasterize(variant, scale).expect("pen variant rasterizes");
@@ -651,6 +653,7 @@ fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_s
     }
 }
 
+/// Catch swapped glyph mappings, including the two anchor badges.
 #[test]
 fn pen_variants_have_distinct_hotspots_and_geometry() {
     let standard = super::pen::rasterize(super::PenVariant::Standard, 1.0).unwrap();
@@ -663,8 +666,14 @@ fn pen_variants_have_distinct_hotspots_and_geometry() {
     assert_ne!(convert.hotspot, freeform.hotspot);
     assert_ne!(standard.rgba, convert.rgba);
     assert_ne!(standard.rgba, freeform.rgba);
+    let add = super::pen::rasterize(super::PenVariant::AddAnchor, 1.0).unwrap();
+    let delete = super::pen::rasterize(super::PenVariant::DeleteAnchor, 1.0).unwrap();
+    assert_ne!(standard.rgba, add.rgba, "Add Anchor keeps its plus badge");
+    assert_ne!(standard.rgba, delete.rgba, "Delete Anchor keeps its minus badge");
+    assert_ne!(add.rgba, delete.rgba, "the two anchor badges differ");
 }
 
+/// Reject invalid or unbounded rasterization scales without allocating a cursor.
 #[test]
 fn hostile_scales_get_no_pen_bitmap() {
     for scale in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0, f32::MAX, 500.0] {
@@ -674,6 +683,7 @@ fn hostile_scales_get_no_pen_bitmap() {
     }
 }
 
+/// Tool switching reuses small Pen images without retaining additional brush images.
 #[test]
 fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
     let ctx = egui::Context::default();
@@ -702,6 +712,7 @@ fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
     assert_eq!(cached.shape, super::Shape::Circle { radius: 34.0, centre: false }, "non-Pen cache holds only single most recent shape");
 }
 
+/// Clear stale images and retain a visible fallback when the backend rejects a bitmap.
 #[test]
 fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
     let ctx = egui::Context::default();
@@ -722,6 +733,7 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
     assert!(empty.platform_output.cursor_image.is_none(), "lifecycle clears cursor image");
 }
 
+/// Guard padding, integer hotspot rounding and unclipped cursor ink.
 #[test]
 fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
@@ -779,6 +791,7 @@ fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
     }
 }
 
+/// Check the compositing identity independently from the rasterizer implementation.
 #[test]
 fn synthetic_straight_rgba_compositing_math_proves_equivalence() {
     // Mathematical equivalence of single-pass straight RGBA hardware blending
@@ -806,4 +819,43 @@ fn synthetic_straight_rgba_compositing_math_proves_equivalence() {
             }
         }
     }
+}
+
+/// White icon coverage is the sole source of non-black RGB. Re-premultiplying
+/// rasterizer output must recover the independently rasterized SVG coverage,
+/// including translucent pixels where a premultiplied/straight mixup is visible.
+#[test]
+fn partial_alpha_pen_rgb_recovers_source_glyph_coverage() {
+    let mut checked = 0;
+    for scale in [1.0f32, 1.25, 1.5, 2.0] {
+        let pad = (scale + 2.0).ceil() as usize;
+        let side = (22.0 * scale).round() as u32;
+        for variant in super::PenVariant::all() {
+            let source = crate::icons::rasterize_svg(variant.icon_name(), side, side).unwrap();
+            let image = super::pen::rasterize(variant, scale).unwrap();
+            let width = usize::from(image.size[0]);
+            for (i, pixel) in source.pixels.iter().enumerate() {
+                let out_i = ((i / source.size[0] + pad) * width + i % source.size[0] + pad) * 4;
+                let out = &image.rgba[out_i..out_i + 4];
+                if pixel.a() == 0 || out[3] == 0 || out[3] == 255 {
+                    continue;
+                }
+                for channel in &out[..3] {
+                    let recovered = (u16::from(*channel) * u16::from(out[3]) + 127) / 255;
+                    assert!(
+                        recovered.abs_diff(u16::from(pixel.a())) <= 1,
+                        "{variant:?} scale {scale}: partial-alpha RGB lost the source coverage at pixel {i}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "exercise actual translucent foreground edges");
+}
+
+// Exercise the benchmark's actual allocation-admission helper in normal library CI;
+// example test binaries are not part of the workspace nextest gate.
+mod benchmark_args {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cursor_bench/args.rs"));
 }
