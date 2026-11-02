@@ -238,15 +238,18 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
             }
         }
+        // The anchor Auto Add selected is drawn filled, with its handles.
+        let ds = &app.ui.direct_selection;
+        let selected = |i: usize| ds.target == Some(crate::direct_select::PathRef::Pen) && ds.anchors.contains(&[0, i]);
         for (i, k) in pen.knots.iter().enumerate() {
             let c = to_scr(k[0]);
             let last = i + 1 == pen.knots.len();
-            if last && k[2] != k[0] && !pen.curvature {
-                for hnd in [k[1], k[2]] {
+            if (last && k[2] != k[0] && !pen.curvature) || (selected(i) && !last) {
+                for hnd in [k[1], k[2]].into_iter().filter(|h| *h != k[0]) {
                     draw_handle(painter, c, to_scr(hnd), accent);
                 }
             }
-            draw_anchor(painter, c, last, accent);
+            draw_anchor(painter, c, last || selected(i), accent);
         }
         // Hovering the first anchor: Photoshop's close cue, a small ring beside the pointer.
         let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
