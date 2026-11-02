@@ -30,8 +30,19 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     f.insert(MARK.into(), json!(true));
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!("Equalize"));
+    f.insert("__document".into(), app.session.active().map(|s| json!(s.doc.id)).unwrap_or(Value::Null));
     f.insert(KEY.into(), json!(true));
     app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// OK runs only while the document the dialog was opened for is active; otherwise the dialog
+/// stays open.
+pub fn validate(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<(), String> {
+    let st = app.session.active().ok_or("no document")?;
+    if f.get("__document") != Some(&json!(st.doc.id)) {
+        return Err("the Equalize dialog belongs to another document".into());
+    }
+    Ok(())
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {

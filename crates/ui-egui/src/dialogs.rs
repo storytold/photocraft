@@ -963,7 +963,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 }
 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
-/// that touches files itself, and a valid guide layout.
+/// that touches files itself, a valid guide layout, and Equalize's own document.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
@@ -982,6 +982,9 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
             return Err("confirm or cancel the guide color picker first".into());
         }
         crate::guide_layout_ui::validate(app, &d.fields)?;
+    }
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::equalize_ui::owns(&d.fields)) {
+        crate::equalize_ui::validate(app, &d.fields)?;
     }
     Ok(())
 }

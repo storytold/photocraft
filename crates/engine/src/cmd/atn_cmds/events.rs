@@ -78,11 +78,14 @@ fn applies_at_canvas_bounds(p: &Value) -> bool {
 ///
 /// A step that leaves the setting at the value the event plays as exports as before.
 /// How a setting the event cannot carry behaves once the step is replayed without it. Which of
-/// the two a setting takes follows the command's own reading of it, not the parameter spec.
+/// these a setting takes follows the command's own reading of it, not the parameter spec.
 enum Lost {
     /// Replay uses this value, so only a step already at it survives. Numbers, strings and
     /// booleans are compared as written, since the commands below read these settings as written.
     ReplaysAs(&'static str),
+    /// Replay uses this boolean, and the command refuses any other type, so only a step at this
+    /// boolean survives: a string such as `"true"` is refused.
+    ReplaysAsBool(bool),
     /// The command reads only this one spelling as anything other than what replay does, so every
     /// other value survives -- a differently cased one included, because it too plays as replay's.
     DiffersAt(&'static str),
@@ -98,7 +101,7 @@ const UNHOLDABLE: &[(&str, &[(&str, Lost)])] = &[
     ("filter.other.minimum", &[("preserve", Lost::DiffersAt("roundness"))]),
     ("filter.other.maximum", &[("preserve", Lost::DiffersAt("roundness"))]),
     // Eqlz is exported with no fields; replay equalizes the selected area only.
-    ("image.adjustments.equalize", &[("selectedAreaOnly", Lost::ReplaysAs("true"))]),
+    ("image.adjustments.equalize", &[("selectedAreaOnly", Lost::ReplaysAsBool(true))]),
 ];
 
 /// Whether every setting of `p` that its event cannot hold would play the same without it
@@ -112,6 +115,7 @@ fn holds_its_settings(id: &str, p: &Value) -> bool {
                 || v.as_f64().is_some_and(|n| played.parse::<f64>().is_ok_and(|d| n == d))
                 || v.as_bool().is_some_and(|b| played.parse::<bool>() == Ok(b))
         }
+        (Some(v), Lost::ReplaysAsBool(played)) => v.as_bool() == Some(*played),
         (Some(v), Lost::DiffersAt(spelling)) => v.as_str() != Some(spelling),
     })
 }

@@ -67,6 +67,24 @@ fn entire_image_based_on_the_selected_area_maps_the_whole_layer() {
     assert!(gray(&app, 30, 1) < 0.05 && gray(&app, 30, 20) > 0.95, "outside the selection too");
 }
 
+/// OK on a dialog opened for one document, while another document is active, equalizes nothing and
+/// leaves the dialog open.
+#[test]
+fn ok_refuses_while_another_document_is_active() {
+    let (mut app, ctx) = setup(true);
+    let d = menu(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": [0.4, 0.4, 0.4]})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, d).is_err());
+    assert!(app.ui.dialogs.iter().any(|x| x.id == d), "the dialog stays open");
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01, "the other document is unchanged");
+    assert!(app.session.set_active(0));
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01, "nothing ran on the dialog's document either");
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    assert!(gray(&app, 1, 1) < 0.05, "OK runs once its document is active again");
+}
+
 #[test]
 fn cancel_leaves_the_layer_unchanged() {
     let (mut app, ctx) = setup(true);
