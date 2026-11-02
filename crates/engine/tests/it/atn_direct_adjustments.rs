@@ -434,13 +434,15 @@ fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
 /// Full and selected edits agree across tile edges, including the final partial tiles and Undo.
 #[test]
 fn lab_replace_crosses_tile_edges_without_changing_unselected_native_pixels() {
-    let area = photocraft_doc::Rect::new(0, 0, 260, 132);
-    let window = photocraft_doc::Rect::new(127, 127, 130, 130);
+    let tile = photocraft_geom::TILE_SIZE;
+    let area = photocraft_doc::Rect::new(0, 0, tile + 4, tile + 3);
+    let window = photocraft_doc::Rect::new(tile - 1, tile - 1, tile + 2, tile + 2);
+    let width = area.width() as usize;
     for depth in [8, 16, 32] {
         for selected in ["none", "window", "outside"] {
             let mut s = fixture("lab", depth);
             s.edit("Known Lab tiles", |doc, active| {
-                doc.size = photocraft_doc::Size::new(260, 132);
+                doc.size = area.size();
                 doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(area, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
                 if selected != "none" {
                     let default = if selected == "outside" { 1.0 } else { 0.0 };
@@ -456,7 +458,7 @@ fn lab_replace_crosses_tile_edges_without_changing_unselected_native_pixels() {
             s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
             let after = raw(&s);
             for (i, (pixel, original)) in after.chunks_exact(4).zip(original.chunks_exact(4)).enumerate() {
-                let inside = (127..130).contains(&(i % 260)) && (127..130).contains(&(i / 260));
+                let inside = window.contains((i % width) as i32, (i / width) as i32);
                 let changed = selected == "none" || (selected == "window") == inside;
                 if changed {
                     assert!(pixel[0] > 0.99, "{depth}/{selected} pixel {i}: {pixel:?}");
