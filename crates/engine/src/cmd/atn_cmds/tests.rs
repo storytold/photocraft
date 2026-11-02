@@ -103,13 +103,13 @@ fn sample() -> AtnFile {
                 function_key: 3,
                 items: vec![
                     blur,
-                    item("make", "Make", Some(make_levels)),
+                    item("Mk  ", "Make", Some(make_levels)),
                     item("setd", "Set", Some(select_all)),
                     item("select", "Select", Some(select_layer)),
                     item("slct", "Select", Some(tool)),
-                    item("stop", "Stop", Some(stop)),
+                    item("Stop", "Stop", Some(stop)),
                     item("syntheticFill", "Generative Fill", Some(fancy)),
-                    item("play", "Play", Some(play)),
+                    item("Ply ", "Play", Some(play)),
                     off,
                 ],
                 ..Default::default()
@@ -376,11 +376,11 @@ fn save_round_trips_through_photoshop_events() {
     assert_eq!(t.actions.list, first);
 
     // A step with no Photoshop equivalent fails unless skipped.
-    s.actions.list.push(Action::new("Ours", vec![("filter.render.clouds".into(), json!({}))]));
+    s.actions.list.push(Action::new("Ours", vec![("unsupported.forTest".into(), json!({}))]));
     let e = s.execute("actions.save", json!({"action": "Ours"})).unwrap_err().to_string();
-    assert!(e.contains("filter.render.clouds"), "{e}");
+    assert!(e.contains("unsupported.forTest"), "{e}");
     let r = s.execute("actions.save", json!({"action": "Ours", "skipUnsupported": true})).unwrap();
-    assert_eq!(r["skipped"], json!([{"action": "Ours", "step": 0, "id": "filter.render.clouds"}]));
+    assert_eq!(r["skipped"], json!([{"action": "Ours", "step": 0, "id": "unsupported.forTest"}]));
     assert_eq!(r["set"], "Ours");
 }
 
@@ -484,6 +484,10 @@ fn settings_at_the_value_the_event_plays_still_export() {
 #[test]
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
+        ("filter.render.clouds", json!({})),
+        ("filter.render.differenceClouds", json!({})),
+        ("filter.render.fibers", json!({"variance": 20, "strength": 7, "seed": -123})),
+        ("filter.render.lensFlare", json!({"brightness": 180, "centerX": 5, "centerY": -5, "lens": "moviePrime"})),
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),
         ("filter.sharpen.unsharpMask", json!({"amount": 120, "radius": 1.5, "threshold": 3})),
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
@@ -1081,7 +1085,7 @@ fn retouching_set_events_map_to_their_commands() {
         item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "skinTone")).with("Fzns", long(40.0)))),
         item("colorRange", "Color Range", Some(sampled)),
         item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "Rds ")).with("UsFc", D::Boolean(true)))),
-        item("make", "Make", Some(mask)),
+        item("Mk  ", "Make", Some(mask)),
         item("set", "Set", Some(fg)),
         item("set", "Set", Some(lab_fg)),
         item("groupEvent", "Create Clipping Mask", Some(desc("null").with("null", target_ref("Lyr ")))),
@@ -1466,8 +1470,8 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     let items = vec![
         item("conditional", "If", Some(cond)),
         item("imageSize", "Image Size", Some(size)),
-        item("fill", "Fill", Some(bucket_px)),
-        item("fill", "Fill", Some(bucket_pct)),
+        item("Fl  ", "Fill", Some(bucket_px)),
+        item("Fl  ", "Fill", Some(bucket_pct)),
         item("placeEvent", "Place", Some(place)),
         item("Opn ", "Open", Some(desc("null").with("null", path_value("/Users/me/in.psd")))),
     ];
