@@ -1009,6 +1009,17 @@ fn splash_dismisses_on_synthetic_batch_or_pending_captures() {
     h.state_mut().synthetic_batch = Some(Vec::new());
     h.step();
     assert!(h.state().splash.is_none(), "splash must dismiss when synthetic batch is active");
+
+    // If a capture request is pending, splash also dismisses immediately
+    let mut splash2 = crate::splash::SplashState::new();
+    splash2.start_time = 1.0;
+    h.state_mut().splash = Some(splash2);
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let doc_id = crate::screenshot::DocumentId { document: 1, revision: 1, generation: 1 };
+    let _ = h.state_mut().captures.admit(1, None, tx, Some(doc_id), 0.0, crate::screenshot::now());
+    assert!(h.state().captures.any_pending());
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must dismiss when capture is pending");
 }
 
 fn identity_app() -> PhotocraftApp {
