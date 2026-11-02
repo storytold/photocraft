@@ -94,8 +94,11 @@ pub fn apply_with(surface: &Surface, area: Rect, bounds: Rect, selection: Option
         check(ctl)?;
         surface.read_region_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
         for (x, dst) in (area.x0..area.x1).zip(row.chunks_exact_mut(n)) {
-            let p = to_rgba(&surface.format(), dst);
             let k = selection.map_or(1., |s| s.sample_channel(x, y, 0));
+            if k == 0. {
+                continue;
+            }
+            let p = to_rgba(&surface.format(), dst);
             let mut mixed = p;
             for (v, (a, b)) in mixed.iter_mut().zip(p.into_iter().zip(avg)) {
                 *v = a + (b - a) * k;
@@ -161,6 +164,24 @@ pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) 
 mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    #[test]
+    fn zero_coverage_preserves_native_cmyk_and_out_of_gamut_lab_samples() {
+        for mode in [ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in SampleType::ALL {
+                let format = PixelFormat::new(mode, depth, true);
+                let mut source = Surface::new(format);
+                let untouched: &[f32] = if mode == ColorMode::Cmyk { &[0.2, 0.4, 0.6, 0.5, 1.] } else { &[0.5, 1., 1., 1.] };
+                source.write_pixel(1, 0, untouched);
+                source.write_pixel(0, 0, &vec![0.75; format.channels()]);
+                let before = source.pixel(1, 0);
+                let mut mask = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                mask.write_pixel(0, 0, &[1.]);
+                let bounds = Rect::new(0, 0, 2, 1);
+                let output = apply_with(&source, bounds, bounds, Some(&mask), &Interrupt::NONE).unwrap();
+                assert_eq!(output.pixel(1, 0), before, "{mode:?} {depth:?}");
+            }
+        }
+    }
     #[test]
     #[ignore = "24MP native Average performance probe"]
     /// Measure release Average on a full-size original surface with bounded rows rather than a whole-frame sample

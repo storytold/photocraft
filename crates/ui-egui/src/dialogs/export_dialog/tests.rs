@@ -974,8 +974,21 @@ fn export_as_preserves_protected_sources_and_aliases_across_tabs() {
     let alias = directory.path().join("alias.png");
     std::fs::write(&source, b"original import source").unwrap();
     std::fs::hard_link(&source, &alias).unwrap();
+    let mut destinations = vec![source.clone(), alias.clone()];
+    let symlink = directory.path().join("symlink.png");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&source, &symlink).unwrap();
+        destinations.push(symlink);
+    }
+    #[cfg(windows)]
+    match std::os::windows::fs::symlink_file(&source, &symlink) {
+        Ok(()) => destinations.push(symlink),
+        Err(error) if error.raw_os_error() == Some(1314) => eprintln!("SKIP symlink case: Windows symlink privilege unavailable"),
+        Err(error) => panic!("cannot create symlink fixture: {error}"),
+    }
     for mode in ["replay", "document", "layer", "layers", "quickLayers"] {
-        for (destination, close_source) in [&source, &alias].into_iter().flat_map(|path| [false, true].map(|close| (path, close))) {
+        for (destination, close_source) in destinations.iter().flat_map(|path| [false, true].map(|close| (path, close))) {
             if mode == "replay" && close_source {
                 continue;
             }

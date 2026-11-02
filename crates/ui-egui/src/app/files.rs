@@ -433,7 +433,8 @@ impl PhotocraftApp {
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
             let doc = self.session.active().ok_or("no document")?.doc.clone();
-            return crate::view_cmds::write_copy(self, &doc, path, choices);
+            let protected_source = self.session.active().ok_or("no document")?.protected_import_source.clone();
+            return crate::view_cmds::write_copy(self, protected_source.as_deref(), &doc, path, choices);
         }
         self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), choices)
     }

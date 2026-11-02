@@ -15,7 +15,7 @@ pub(crate) fn params(p: &Value) -> Result<HdrToning> {
     for (key, value) in object {
         match key.as_str() {
             "radius" | "strength" | "gamma" | "exposure" | "detail" | "shadow" | "highlight" | "vibrance" | "saturation" | "curve" => {}
-            "layer" if value.as_u64().is_some() => {}
+            "layer" if value.as_u64().is_some() || value.is_string() => {}
             "coalesce" if value.is_string() => {}
             "target" if matches!(value.as_str(), Some("pixels" | "mask" | "quickMask")) => {}
             "target"
@@ -88,6 +88,17 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn named_layers_resolve_through_the_common_filter_runner() {
+        for name in ["Named layer", "NAMED LAYER"] {
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+            session.execute("layer.new.layer", json!({"name":"Named layer"})).unwrap();
+            session.execute(ID, json!({"layer":name,"radius":1})).unwrap();
+            assert!(session.execute(ID, json!({"layer":"missing layer","radius":1})).is_err());
+            assert!(params(&json!({"layer":true})).is_err());
+        }
+    }
     #[test]
     /// Accept native defaults while rejecting malformed controls, invalid curves and wrongly typed coalescing keys.
     fn strict_native_parameters() {

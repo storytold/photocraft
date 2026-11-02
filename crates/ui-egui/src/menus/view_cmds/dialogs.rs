@@ -582,6 +582,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
 /// with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let protected_source = app.session.active().ok_or("no document")?.protected_import_source.clone();
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
     // "<name> copy.psd", or with Preferences › File Handling › Do not append "copy" to filename
     // when saving a copy the document's own name (only the extension may change), as in
@@ -591,25 +592,32 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.pick_save(&suggested, move |app, path| {
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, and
         // a JPEG for its JPEG Options; the copy is written from the prompt.
-        let parked = app.with_document(doc.id, |app| {
-            if crate::targa_options_ui::wants_prompt(app, &path) {
-                crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            if crate::dds_options_ui::wants_prompt(&path) {
-                crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            if crate::jpeg_options_ui::wants_prompt(app, &path) {
-                crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
-                return Ok(true);
-            }
-            Ok(false)
-        })?;
+        let needs_options = (crate::targa_options_ui::is_tga_path(&path) && doc.mode != photocraft_color::ColorMode::Grayscale)
+            || crate::dds_options_ui::wants_prompt(&path)
+            || crate::jpeg_options_ui::is_jpeg_path(&path);
+        let parked = if needs_options {
+            app.with_document(doc.id, |app| {
+                if crate::targa_options_ui::wants_prompt(app, &path) {
+                    crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                if crate::dds_options_ui::wants_prompt(&path) {
+                    crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                if crate::jpeg_options_ui::wants_prompt(app, &path) {
+                    crate::jpeg_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                    return Ok(true);
+                }
+                Ok(false)
+            })?
+        } else {
+            false
+        };
         if parked {
             return Ok(json!({"path": path, "warnings": []}));
         }
-        let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
+        let r = write_copy(app, protected_source.as_deref(), &doc, &path, crate::FormatChoices::default())?;
         app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
         Ok(r)
     })
@@ -618,8 +626,16 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's
 /// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
 /// are any.
-pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
-    app.with_document(doc.id, |app| app.check_import_destination(path, false))?;
+pub(crate) fn write_copy(
+    app: &mut PhotocraftApp,
+    protected_source: Option<&str>,
+    doc: &photocraft_doc::Document,
+    path: &str,
+    choices: crate::FormatChoices,
+) -> Result<Value, String> {
+    if protected_source.is_some_and(|source| photocraft_engine::file_cmds::same_file(source, path)) {
+        return Err("the destination is the import-only source; choose a different native or export path".into());
+    }
     let settings = choices.apply(app.save_settings());
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;

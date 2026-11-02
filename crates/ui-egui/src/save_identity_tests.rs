@@ -128,6 +128,7 @@ fn delayed_save_copy_checks_the_copied_documents_source_after_switching_tabs() {
     app.session.active_mut().unwrap().protected_import_source = Some(source.to_string_lossy().into_owned());
     let copied = app.session.active().unwrap().doc.clone();
     app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
+    app.session.close(0).unwrap();
     let active = app.active_doc_id().unwrap();
     let written = Rc::new(RefCell::new(Vec::new()));
     let w = written.clone();
@@ -135,10 +136,10 @@ fn delayed_save_copy_checks_the_copied_documents_source_after_switching_tabs() {
         w.borrow_mut().push(path.to_owned());
         Ok(())
     }));
-    assert!(crate::view_cmds::write_copy(&mut app, &copied, alias.to_str().unwrap(), Default::default()).is_err());
+    assert!(crate::view_cmds::write_copy(&mut app, Some(source.to_str().unwrap()), &copied, alias.to_str().unwrap(), Default::default()).is_err());
     assert!(written.borrow().is_empty(), "no source alias may reach the writer");
     assert_eq!(app.active_doc_id().unwrap(), active);
-    crate::view_cmds::write_copy(&mut app, &copied, "converted.pcraft", Default::default()).unwrap();
+    crate::view_cmds::write_copy(&mut app, Some(source.to_str().unwrap()), &copied, "converted.pcraft", Default::default()).unwrap();
     assert_eq!(*written.borrow(), ["converted.pcraft"]);
     assert_eq!(app.active_doc_id().unwrap(), active);
 }
@@ -531,5 +532,27 @@ fn actual_xcf_bytes_and_wrappers_download_native_reports_without_confirming_a_br
     let wrapped = gzip.finish().unwrap();
     for (name, input) in [("plain.xcf", plain.clone()), ("misnamed.psd", plain), ("wrapped.xcf.gz", wrapped.clone()), ("wrapped-as-native.pcraft", wrapped)] {
         assert_xcf_browser_download_route(name, input);
+    }
+}
+
+#[test]
+fn deferred_save_copy_finishes_after_the_last_source_tab_closes() {
+    for protected in [false, true] {
+        let mut app = app();
+        if protected {
+            app.session.active_mut().unwrap().protected_import_source = Some("source.xcf".into());
+        }
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let written = writes.clone();
+        app.services.write = Some(Box::new(move |path, _| {
+            written.borrow_mut().push(path.to_owned());
+            Ok(())
+        }));
+        app.services.file_dialog = Some(crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo("copy.pcraft".into()))]).0);
+        menus::invoke(&mut app, &egui::Context::default(), "file.saveACopy", json!({})).unwrap();
+        app.session.close(0).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert_eq!(*writes.borrow(), ["copy.pcraft"], "{}", app.ui.status);
+        assert!(app.session.active().is_none());
     }
 }

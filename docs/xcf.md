@@ -93,7 +93,7 @@ become native `.pcraft` data so refresh and Edit Contents need no further XCF in
 The original file stays unchanged. To use Place Linked for these historical files, first open
 with the chosen order, save as `.pcraft`, and link that native file.
 
-Genuine U16/F32 sources qualify selected little-endian cases across XCF7–11: Windows GIMP
+Genuine U16/F32 sources qualify selected little-endian cases across XCF 7–11: Windows GIMP
 2.9.6 supplies versions 7/8/9/11, and unmodified GIMP 2.9.5 development commit
 [`0874703`](https://github.com/GNOME/gimp/commit/0874703e3b7f2d211816feccd745404ed8ec3d71)
 supplies version 10. Every source was independently saved, reopened twice and checked against
