@@ -110,7 +110,12 @@ pub fn save_with_renderer(
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
         w.save_path(&named, path, &native_options(&named, opts))?;
-        return Ok(Vec::new());
+        let mut warnings = Vec::new();
+        if let Some(r) = renderer {
+            warnings.push("native .pcraft format uses CPU compositor for previews".into());
+            warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(warnings);
     }
     let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     // Crash-safe: a failed write never destroys the previous file.
@@ -138,7 +143,12 @@ pub fn save_bytes_with_renderer(
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{name}`; pass a format")))?;
     if ext == photocraft_format::EXTENSION {
         let named = named_for_output(doc, name);
-        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts))?, Vec::new()));
+        let mut warnings = Vec::new();
+        if let Some(r) = renderer {
+            warnings.push("native .pcraft format uses CPU compositor for previews".into());
+            warnings.extend(r.drain_diagnostics());
+        }
+        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts))?, warnings));
     }
     let result = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     Ok((result.bytes, result.warnings))
@@ -150,20 +160,34 @@ pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationEr
 }
 
 /// [`render_png`] with an optional custom [`BandRenderer`].
-pub fn render_png_with_renderer(doc: &Document, max_side: u32, renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
+pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
     let side = if max_side == 0 { doc.size.width.max(doc.size.height) } else { max_side };
     let (target_w, target_h) = photocraft_compose::thumbnail_size(doc, side.max(1));
 
-    if let Some(r) = renderer
+    if let Some(r) = renderer.as_mut()
         && (target_w, target_h) == (doc.size.width, doc.size.height)
     {
-        let res =
-            photocraft_io::export_flat_with_renderer(doc, photocraft_codecs::Format::Png, &Default::default(), &photocraft_raster::Interrupt::NONE, Some(r));
+        let res = photocraft_io::export_flat_with_renderer(
+            doc,
+            photocraft_codecs::Format::Png,
+            &Default::default(),
+            &photocraft_raster::Interrupt::NONE,
+            Some(&mut **r),
+        );
         match res {
-            Ok(res) => return Ok(res.bytes),
+            Ok(res) => {
+                for w in res.warnings {
+                    r.push_diagnostic(w);
+                }
+                return Ok(res.bytes);
+            }
             Err(photocraft_io::IoError::Cancelled) => return Err(AutomationError::Other("rendering was cancelled".into())),
             Err(e) => return Err(e.into()),
         }
+    }
+
+    if let Some(r) = renderer {
+        r.push_diagnostic("scaled previews and thumbnails use CPU compositor; GPU rendering applies to full-size previews".into());
     }
 
     let img = photocraft_compose::thumbnail(doc, side.max(1));

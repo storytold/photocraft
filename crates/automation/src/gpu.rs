@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{DocId, Document};
-use photocraft_geom::Rect;
+use photocraft_doc::{DocId, Document, Rect};
 use photocraft_gpu::context::{NativeContext, NativeContextOptions};
 use photocraft_gpu::{Compositor, readback};
 use photocraft_io::{BandRenderer, IoError, RenderBand, RenderError};
@@ -18,6 +17,8 @@ pub struct GpuRenderer {
     options: NativeContextOptions,
     max_staging_bytes: usize,
     init_error: Option<String>,
+    diagnostics: Vec<String>,
+    adapter_reported: bool,
 }
 
 impl GpuRenderer {
@@ -37,17 +38,35 @@ impl GpuRenderer {
             options: NativeContextOptions::default(),
             max_staging_bytes: readback::DEFAULT_MAX_STAGING_BYTES,
             init_error: None,
+            diagnostics: Vec::new(),
+            adapter_reported: false,
         }
     }
 
     /// Create with custom [`NativeContextOptions`].
     pub fn with_options(options: NativeContextOptions) -> Self {
-        Self { context: None, compositor: None, last_doc_id: None, options, max_staging_bytes: readback::DEFAULT_MAX_STAGING_BYTES, init_error: None }
+        Self {
+            context: None,
+            compositor: None,
+            last_doc_id: None,
+            options,
+            max_staging_bytes: readback::DEFAULT_MAX_STAGING_BYTES,
+            init_error: None,
+            diagnostics: Vec::new(),
+            adapter_reported: false,
+        }
     }
 
     /// Set maximum in-flight staging bytes for bounded readback.
     pub fn set_max_staging_bytes(&mut self, bytes: usize) {
         self.max_staging_bytes = bytes;
+    }
+
+    fn push_diag(&mut self, msg: String) {
+        const MAX_DIAGNOSTICS: usize = 16;
+        if self.diagnostics.len() < MAX_DIAGNOSTICS && !self.diagnostics.contains(&msg) {
+            self.diagnostics.push(msg);
+        }
     }
 
     fn ensure_init(&mut self) -> Result<(), RenderError> {
@@ -59,17 +78,26 @@ impl GpuRenderer {
             match NativeContext::request(&self.options) {
                 Ok(ctx) => match ctx.create_compositor() {
                     Ok(comp) => {
+                        if !self.adapter_reported {
+                            self.adapter_reported = true;
+                            let is_software = ctx.is_software();
+                            let adapter_type = if is_software { "software rasterizer" } else { "hardware" };
+                            let msg = format!("GPU adapter: {} ({:?}, {adapter_type})", ctx.adapter_name(), ctx.backend());
+                            self.push_diag(msg);
+                        }
                         self.context = Some(Arc::new(ctx));
                         self.compositor = Some(comp);
                     }
                     Err(e) => {
                         let msg = format!("could not build GPU compositor: {e}");
+                        self.push_diag(msg.clone());
                         self.init_error = Some(msg.clone());
                         return Err(RenderError::Unavailable(msg));
                     }
                 },
                 Err(e) => {
                     let msg = format!("no GPU adapter available: {e}");
+                    self.push_diag(msg.clone());
                     self.init_error = Some(msg.clone());
                     return Err(RenderError::Unavailable(msg));
                 }
@@ -130,6 +158,7 @@ impl BandRenderer for GpuRenderer {
 
         let comp = self.compositor.as_mut().ok_or_else(|| RenderError::Unavailable("GPU compositor missing".into()))?;
         if let Err(unsupported) = comp.supports(doc) {
+            self.push_diag(format!("GPU rendering unsupported for document: {}", unsupported.0));
             return Err(RenderError::Unsupported(unsupported.0));
         }
 
@@ -144,14 +173,28 @@ impl BandRenderer for GpuRenderer {
         let queue = ctx.queue();
 
         readback::render_bands(comp, device, queue, doc, rect, band_rows, max_staging, |band_rect, pixels| sink(RenderBand { rect: band_rect, pixels }))
-            .map_err(|e| match e {
-                readback::ReadbackError::Unsupported(s) => RenderError::Unsupported(s),
-                readback::ReadbackError::DeviceLost(s) => RenderError::Device(s),
-                readback::ReadbackError::AllocationFailed(s) => RenderError::Unavailable(s),
-                readback::ReadbackError::MappingFailed(s) => RenderError::Device(s),
-                readback::ReadbackError::Cancelled => RenderError::Cancelled,
-                readback::ReadbackError::Execution(s) => RenderError::Execution(s),
-                readback::ReadbackError::Sink(io) => RenderError::sink(io),
+            .map_err(|e| {
+                let render_err = match e {
+                    readback::ReadbackError::Unsupported(s) => RenderError::Unsupported(s),
+                    readback::ReadbackError::DeviceLost(s) => RenderError::Device(s),
+                    readback::ReadbackError::AllocationFailed(s) => RenderError::Unavailable(s),
+                    readback::ReadbackError::MappingFailed(s) => RenderError::Device(s),
+                    readback::ReadbackError::Cancelled => RenderError::Cancelled,
+                    readback::ReadbackError::Execution(s) => RenderError::Execution(s),
+                    readback::ReadbackError::Sink(io) => RenderError::sink(io),
+                };
+                if render_err.is_retryable() {
+                    self.push_diag(format!("GPU readback error: {render_err}"));
+                }
+                render_err
             })
+    }
+
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    fn push_diagnostic(&mut self, diagnostic: String) {
+        self.push_diag(diagnostic);
     }
 }

@@ -101,6 +101,18 @@ impl NativeContext {
                 compatible_surface: None,
                 ..Default::default()
             }))
+            .or_else(|e| {
+                if !opts.force_fallback_adapter {
+                    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                        power_preference: wgpu::PowerPreference::None,
+                        force_fallback_adapter: true,
+                        compatible_surface: None,
+                        ..Default::default()
+                    }))
+                } else {
+                    Err(e)
+                }
+            })
             .map_err(|e| GpuContextError::NoAdapter(format!("request_adapter failed: {e}")))?;
 
             let info = adapter.get_info();

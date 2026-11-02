@@ -874,10 +874,12 @@ pub fn export_flat_with_renderer(
                 if format == Format::Tiff {
                     warnings.extend(crate::tiff_layers::stamp_flat_channels(doc, &mut img));
                 }
+                warnings.extend(r.drain_diagnostics());
                 return encode_image(&img, format, opts, warnings);
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                r.push_diagnostic(fallback_warning.clone());
                 let mut cpu_result = export_flat_with_renderer(doc, format, opts, ctl, None)?;
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
@@ -1003,18 +1005,22 @@ pub fn export_png_streamed_with_renderer(
         let mut progress = 0.0;
         let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, Some(&mut *r));
         let attempt = match first_try {
-            Ok(Some(r)) => Ok(Some(r)),
+            Ok(Some(res)) => Ok(Some(res)),
             Ok(None) => {
                 // Alpha was mispredicted: retry with alpha enabled, retaining the GPU provider!
-                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, Some(r))
+                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, Some(&mut *r))
             }
             Err(e) => Err(e),
         };
         match attempt {
-            Ok(Some(r)) => return Ok(r),
+            Ok(Some(mut res)) => {
+                res.warnings.extend(r.drain_diagnostics());
+                return Ok(res);
+            }
             Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
+                r.push_diagnostic(fallback_warning.clone());
                 let mut cpu_result = export_png_streamed_with_renderer(doc, opts, ctl, rows, None)?;
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);

@@ -74,6 +74,11 @@ impl Headless {
         self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer)
     }
 
+    /// Drain diagnostics from the active renderer if any.
+    pub fn drain_diagnostics(&mut self) -> Vec<String> {
+        self.renderer.as_mut().map_or_else(Vec::new, |r| r.drain_diagnostics())
+    }
+
     #[cfg(feature = "gpu")]
     /// Enable the native GPU renderer backend with lazy device initialization.
     pub fn enable_gpu(&mut self) {

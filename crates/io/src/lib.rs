@@ -734,11 +734,20 @@ fn export_stages_with_renderer(
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
         let bytes = file.to_bytes()?;
+        if let Some(r) = renderer {
+            warnings.push("PSD/PSB layered export uses CPU compositor; GPU rendering applies to flat formats".into());
+            warnings.extend(r.drain_diagnostics());
+        }
         return Ok(ExportResult { bytes, warnings });
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
-        return tiff_layers::export_layered(doc, opts, ctl);
+        let mut res = tiff_layers::export_layered(doc, opts, ctl)?;
+        if let Some(r) = renderer {
+            res.warnings.push("TIFF layered export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res);
     }
     flat::export_flat_with_renderer(doc, format, opts, ctl, renderer)
 }

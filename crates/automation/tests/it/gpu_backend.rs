@@ -105,6 +105,10 @@ mod tests {
             }
         };
 
+        let adapter = gpu_renderer.adapter_name().unwrap_or("unknown");
+        let is_software = gpu_renderer.is_software();
+        println!("GPU parity verified using adapter '{adapter}' (software: {is_software})");
+
         // Matrix: SampleType (U8, U16, F32) x Alpha modes (opaque background, translucent document)
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for with_alpha in [false, true] {
@@ -153,6 +157,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn gpu_renderer_diagnostics_and_bounded_storage() {
+        let mut r = match GpuRenderer::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIPPED: GpuRenderer unavailable ({e}); no GPU adapter present");
+                return;
+            }
+        };
+
+        let diags = r.drain_diagnostics();
+        assert!(!diags.is_empty(), "adapter status must be reported once in diagnostics");
+        assert!(diags[0].contains("GPU adapter:"), "unexpected diagnostic: {:?}", diags);
+
+        // After draining, second drain should be empty
+        assert!(r.drain_diagnostics().is_empty());
+
+        // Push diagnostics up to limit and verify bounded dedup storage
+        for i in 0..30 {
+            r.push_diagnostic(format!("test diagnostic {i}"));
+        }
+        let drained = r.drain_diagnostics();
+        assert!(drained.len() <= 16, "diagnostics must be capped to bounded limit, got {}", drained.len());
     }
 
     #[test]

@@ -833,7 +833,16 @@ impl PhotocraftMcp {
     #[tool(description = "Render the flattened document and return it as a PNG image (bridge mode: window screenshot).")]
     async fn doc_render_preview(&self, Parameters(p): Parameters<PreviewParams>) -> Result<CallToolResult, McpError> {
         let max = p.max_side.unwrap_or(1024);
-        if let Some(r) = self.headless_op(move |h| h.render_png(p.index, max)).await {
+        if let Some(r) = self
+            .headless_op(move |h| {
+                let res = h.render_png(p.index, max);
+                for d in h.drain_diagnostics() {
+                    eprintln!("warning: {d}");
+                }
+                res
+            })
+            .await
+        {
             return Ok(match r {
                 Ok(png) => png_result(&png, format!("flattened preview (max side {max})")),
                 Err(e) => fail(e),
@@ -1124,7 +1133,11 @@ impl PhotocraftMcp {
                     opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
-                h.save(p.index, path.as_deref(), p.format.as_deref(), &opts)
+                let res = h.save(p.index, path.as_deref(), p.format.as_deref(), &opts);
+                for d in h.drain_diagnostics() {
+                    eprintln!("warning: {d}");
+                }
+                res
             })
             .await
         else {

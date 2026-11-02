@@ -37,7 +37,8 @@ impl FailingRenderer {
 
 impl BandRenderer for FailingRenderer {
     fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
-        photocraft_compose::render_bands(doc, rect, band_rows, |buf| {
+        let rows = if band_rows > 0 { band_rows } else { 32 };
+        photocraft_compose::render_bands(doc, rect, rows, |buf| {
             let count = self.call_count.fetch_add(1, Ordering::SeqCst);
             if count >= self.fail_after_bands {
                 return match self.error_kind {

@@ -61,11 +61,12 @@ impl RenderError {
     /// where a complete export attempt should restart on the reference CPU compositor.
     ///
     /// Sink errors (codec failures, disk full, cancellation) are fatal to the export and
-    /// MUST NEVER be retried on the CPU compositor.
+    /// MUST NEVER be retried on the CPU compositor. Execution errors represent contract or
+    /// internal provider failures that are rejected.
     pub fn is_retryable(&self) -> bool {
         match self {
-            RenderError::Unsupported(_) | RenderError::Unavailable(_) | RenderError::Device(_) | RenderError::Execution(_) => true,
-            RenderError::Cancelled | RenderError::Sink(_) => false,
+            RenderError::Unsupported(_) | RenderError::Unavailable(_) | RenderError::Device(_) => true,
+            RenderError::Execution(_) | RenderError::Cancelled | RenderError::Sink(_) => false,
         }
     }
 }
@@ -75,6 +76,14 @@ pub trait BandRenderer: Send {
     /// Renders `doc` over `rect` in horizontal bands, passing each band to `sink`.
     /// `band_rows`: preferred rows per band (0 to let provider choose).
     fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError>;
+
+    /// Drain renderer diagnostic messages (e.g. backend/adapter status once, fallback reasons).
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Record a diagnostic message on this renderer.
+    fn push_diagnostic(&mut self, _diagnostic: String) {}
 }
 
 /// Default reference band renderer using `photocraft-compose`.
