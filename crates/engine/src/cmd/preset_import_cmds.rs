@@ -217,14 +217,17 @@ fn import_procreate(s: &mut Session, p: &Value) -> Result<Value> {
                     let g = v.as_str().map(str::trim).filter(|g| !g.is_empty() && g.chars().count() <= max);
                     Some(g.ok_or_else(|| bad(cmd, format!("`group` must be a non-empty string of at most {max} characters")))?.to_string())
                 }
-                None => Some(stem).filter(|s| !s.is_empty()),
+                // Trimmed, or the group commands, which trim theirs, could never find it.
+                None => Some(stem.trim().to_string()).filter(|g| !g.is_empty()),
             };
             ctx.check()?;
             let imp = ctx
                 .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::procreate::read_procreate_with(&bytes, "", ctl))
                 .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { bad(cmd, e) })?;
             // Data without a file name: the set's own name, if it has one.
-            let group = group.or_else(|| imp.set_name.clone().filter(|n| !n.trim().is_empty())).unwrap_or_else(|| "Procreate Brushes".to_string());
+            let group = group
+                .or_else(|| imp.set_name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string))
+                .unwrap_or_else(|| "Procreate Brushes".to_string());
             Ok((group, imp))
         },
         move |s, (group, imp)| {
@@ -633,6 +636,26 @@ mod tests {
     }
 
     /// #10640: a second import of a file never drops the group's brushes on its own.
+    #[test]
+    fn a_procreate_group_taken_from_a_name_is_trimmed() {
+        const CMD: &str = "brush.presets.importProcreate";
+        let set = |name: &str| photocraft_io::procreate::write_brushset(name, &[(photocraft_io::procreate::write_archive(&[]), None, None)]);
+        let data = |name: &str| photocraft_paint::tile::b64_encode(&set(name));
+        let mut s = Session::new();
+        let r = s.execute(CMD, json!({"data": data("  Spaced  ")})).unwrap();
+        assert_eq!(r["group"], "Spaced");
+        s.execute("brush.presets.deleteGroup", json!({"group": "Spaced"})).unwrap();
+        let r = s.execute(CMD, json!({"data": data("   ")})).unwrap();
+        assert_eq!(r["group"], "Procreate Brushes", "only spaces is no name");
+        let stem = format!("pc-spaced-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("  {stem}  .brushset"));
+        std::fs::write(&path, set("Inside")).unwrap();
+        let r = s.execute(CMD, json!({"path": path.to_string_lossy()}));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(r.unwrap()["group"], stem.as_str());
+        s.execute("brush.presets.deleteGroup", json!({"group": stem})).unwrap();
+    }
+
     #[test]
     fn a_procreate_group_name_past_the_limit_is_refused() {
         const CMD: &str = "brush.presets.importProcreate";
