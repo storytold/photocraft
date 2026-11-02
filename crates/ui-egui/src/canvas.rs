@@ -1256,6 +1256,9 @@ struct CanvasOverlayInput<'a> {
     response: &'a egui::Response,
     doc: &'a std::sync::Arc<Document>,
     tool: Tool,
+    /// `tool` is lent by a held key or the middle button (the Hand, the Zoom, the Move with ⌘),
+    /// even when it is the selected tool too: it shows its own cursor.
+    lent: bool,
     idx: usize,
     output: Option<u32>,
     border: photocraft_engine::prefs::CanvasBorder,
@@ -1368,9 +1371,10 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
-    } else if tool == app.ui.tool && eyedropper_owns_image(app) {
+    } else if !input.lent && eyedropper_owns_image(app) {
         // The eyedropper set its own cursor; the tool's isn't drawn over it (#9836). A held
-        // Space or zoom key (another `tool`) still shows its own.
+        // Space or zoom key, or the middle button, still shows the tool it lends, even when
+        // that is the selected tool as well.
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
@@ -2067,6 +2071,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             response: &response,
             doc: &doc,
             tool,
+            lent: temporary.is_some() || middle,
             idx,
             output,
             border,

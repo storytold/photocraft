@@ -234,3 +234,25 @@ fn caps_lock_gives_the_color_pickers_eyedropper_the_precise_crosshair() {
     caps(&mut h, false);
     assert_eq!(fp(&h), precise, "releasing caps lock restores the preference");
 }
+
+/// CodeRabbit on #10406: the middle button lends the Hand, and its cursor shows over an
+/// eyedropper that owns the image even when the Hand is the selected tool as well.
+#[test]
+fn a_lent_hand_shows_its_cursor_over_an_eyedropper_when_it_is_also_selected() {
+    let mut h = capslock_harness();
+    h.state_mut().ui.tool = Tool::Hand;
+    crate::color_picker_ui::open(h.state_mut(), "foreground");
+    assert!(crate::color_picker_ui::top(h.state()).is_some(), "the Color Picker owns the image");
+    other(&mut h, "standard");
+    let pipette = fp(&h);
+    assert_eq!(pipette.icon, CursorIcon::None, "the eyedropper's drawn pipette");
+    let p = h.state().last_canvas_rect.center();
+    let middle = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(middle(true));
+    h.run_steps(2);
+    let lent = fp(&h);
+    h.event(middle(false));
+    h.run_steps(2);
+    assert_ne!(lent, pipette, "the Hand's cursor, not the pipette");
+    assert!(lent.icon == CursorIcon::Grab || lent.image.is_some(), "the open hand: {:?}", lent.icon);
+}
