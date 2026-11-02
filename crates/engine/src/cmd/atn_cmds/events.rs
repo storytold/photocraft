@@ -55,6 +55,12 @@ macro_rules! ev {
     };
 }
 
+macro_rules! stylize_event {
+    ($code:literal, $name:literal, $label:literal, $id:literal) => {
+        Event { code: $code, name: $name, label: $label, ids: &[$id], from: |d| super::steps_stylize::from($id, d), to: super::steps_stylize::to }
+    };
+}
+
 /// Minimum / Maximum with Preserve: Roundness. The descriptor here maps the radius only, and
 /// Photoshop's encoding of the shape isn't verified, so such a step is not exported: it would
 /// replay as the default Squareness (#7233).
@@ -298,6 +304,18 @@ pub(super) const EVENTS: &[Event] = &[
         from: super::steps_render::flare_from,
         to: super::steps_render::flare_to,
     },
+    stylize_event!("FndE", "findEdges", "Find Edges", "filter.stylize.findEdges"),
+    stylize_event!("Slrz", "solarize", "Solarize", "filter.stylize.solarize"),
+    stylize_event!("Fct ", "facet", "Facet", "filter.pixelate.facet"),
+    stylize_event!("Frgm", "fragment", "Fragment", "filter.pixelate.fragment"),
+    stylize_event!("Extr", "extrude", "Extrude", "filter.stylize.extrude"),
+    stylize_event!("TrcC", "traceContour", "Trace Contour", "filter.stylize.traceContour"),
+    stylize_event!("Wnd ", "wind", "Wind", "filter.stylize.wind"),
+    stylize_event!("Tls ", "tiles", "Tiles", "filter.stylize.tiles"),
+    stylize_event!("ClrH", "colorHalftone", "Color Halftone", "filter.pixelate.colorHalftone"),
+    stylize_event!("Mztn", "mezzotint", "Mezzotint", "filter.pixelate.mezzotint"),
+    stylize_event!("Msc ", "mosaic", "Mosaic", "filter.pixelate.mosaic"),
+    stylize_event!("Pntl", "pointillize", "Pointillize", "filter.pixelate.pointillize"),
     ev!("GsnB", "gaussianBlur", "Gaussian Blur", "filter.blur.gaussianBlur", &[F("Rds ", "radius", Kind::Px)]),
     ev!(
         "UnsM",

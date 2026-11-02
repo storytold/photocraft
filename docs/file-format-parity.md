@@ -151,6 +151,7 @@ Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCr
 ## Revision history
 
 The original reference row retains its source date and historical totals; current totals are in the status and Actions row above.
+The original reference entry retains its source date and historical totals; current totals are in the status above.
 
 | Date | Change | Summary |
 |---|---|---|
@@ -163,6 +164,7 @@ The original reference row retains its source date and historical totals; curren
 | 2026-11-01 | minor | `.atn`: layer indexes/ordinals include collapsed children and group ends; indexed moves use pre-move boundaries; document indexes use opening order; comp index/ID/ordinal forms retain their reference kind (#10701). |
 | 2026-11-01 | minor | `.atn`: original reference snapshot, before the Group F mappings: [atn.md](atn.md) documented 117 supported events and measured keys, defaults, ranges and enum values for 101 events not mapped yet |
 | 2026-10-31 | minor | `.atn` Group F: selection combinations, Paste Into/Outside, Fade, Link, Distribute, Define Pattern and older mask/merge events load, play and save; 127 supported event IDs, 89 unmapped reference entries; AUTO-219-2 remains partial |
+| 2026-10-31 | minor | `.atn` Group D: twelve Stylize/Pixelate events load, play and save; 128 supported and 89 unmapped. Supported-table columns corrected against the event registry; the original 117/101 reference entry remains historical. |
 | 2026-10-26 | minor | Embedded AI/PDF/EPS save-back retains native format and a separate source-bound display preview; original sources remain undoable. Native Adobe interoperability and standalone EPS/DCS remain unverified; no corpus floor or percentage changed. |
 | 2026-10-22 | minor | Embedded PSD vectors gain explicit bounded SVG editor/save-back; standalone EPS/DCS and native-format fidelity remain open. |
 | 2026-10-22 | minor | TIFF: flat pages up to 300,000 px a side open (was 2^30 px, about 32,768²): `codecs::TiffBands` decodes a group of rows at a time into the layer's tiles. The 117,504 × 22,464 px banner from #8456 opens in 3.3 s at 11.45 GB peak for a 10.56 GB layer; 30,000² 6.8 s / 6.43 GB → 1.1 s / 3.86 GB; 36 MP 220 → 52 ms. Layered TIFFs still decode whole (#8169) |

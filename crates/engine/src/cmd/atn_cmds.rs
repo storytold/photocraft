@@ -38,6 +38,8 @@ mod steps_image;
 mod steps_layer;
 mod steps_make;
 
+mod steps_stylize;
+
 mod steps_other;
 mod steps_render;
 mod steps_selection;
@@ -150,6 +152,9 @@ mod tests;
 
 #[cfg(test)]
 mod layer_props_tests;
+
+#[cfg(test)]
+mod stylize_tests;
 
 #[cfg(test)]
 mod selection_tests;
