@@ -29,4 +29,4 @@ Canvas Size never scales layer pixels: it moves them by the **Anchor:** you choo
 
 ## Still stuck?
 
-If the photo itself is scaled or cropped, or the border appears with **Transparent** selected, report it in the [issue tracker](https://github.com/storytold/photocraft/issues) with your version from **Help** ▸ **System Info…** and a screenshot of the Canvas Size settings.
+If the photo itself is scaled or cropped, or the border appears with **Transparent** selected, report it in the [issue tracker](https://github.com/CodyChuGit/comfy-photocraft/issues) with your version from **Help** ▸ **System Info…** and a screenshot of the Canvas Size settings.

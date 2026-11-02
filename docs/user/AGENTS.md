@@ -21,7 +21,7 @@ either. Write for an artist, not a developer.
 - Call the product "PhotoCraft", as the app, its downloads and getartcraft.com do.
 - Name UI labels exactly as the app shows them, in **bold**. Menu paths read `File › Open…`.
 - Troubleshooting pages: `## Symptoms`, `## Fix`, `## Why this happens` (optional),
-  `## Still stuck?` (link the issue tracker or Discord).
+  `## Still stuck?` (link the issue tracker).
 
 ## Frontmatter
 
