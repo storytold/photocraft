@@ -3540,6 +3540,7 @@ curves	Smooth	تنعيم
 	X	X
 	Y	Y
 
+# Select and Mask workspace closure reasons
 # Select and Mask target ownership diagnostics (#8896 integration)
 
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل

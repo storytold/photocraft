@@ -29,6 +29,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
+const MAX_BACKGROUND_JOBS: usize = 16;
+
 type Authorization = fn(&str, &Value) -> Result<()>;
 
 thread_local! {
@@ -379,6 +381,16 @@ pub fn run<T: Send + 'static>(
     if s.jobs.pending.is_some() {
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    s.jobs.draining.retain(|handle| !handle.is_finished());
+    let admitted = s.jobs.running.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let admitted = admitted.saturating_add(s.jobs.draining.len());
+    if admitted >= MAX_BACKGROUND_JOBS {
+        return Err(EngineError::Other(format!(
+            "too many background jobs ({MAX_BACKGROUND_JOBS}); wait for a running or cancelling job to finish before starting another"
+        )));
+    }
     let (doc, snapshot, layers) = match (lock_document, s.active()) {
         (true, Some(st)) => (Some(st.doc.id), Some(Arc::downgrade(&st.doc)), Some(LayerSelection::of(st))),
         (true, None) => return Err(EngineError::NoDocument),
@@ -393,7 +405,7 @@ pub fn run<T: Send + 'static>(
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
-    s.jobs.next += 1;
+    s.jobs.next = s.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("background job identifier space exhausted".into()))?;
     let id = JobId(s.jobs.next);
     #[cfg(not(target_arch = "wasm32"))]
     let handle = {
