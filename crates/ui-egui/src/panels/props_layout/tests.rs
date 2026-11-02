@@ -414,5 +414,25 @@ fn shape_header_paints_18px_icon() {
         let expected = if kind == "shape" { 18.0 } else { 15.0 };
 
         assert_eq!(icon_sizes, vec![vec2(expected, expected)], "{kind}: Properties header icon size");
+
+        if kind == "shape" {
+            let expected_texture = h
+                .ctx
+                .try_load_texture(
+                    "bytes://icons/vector-shape.svg",
+                    Default::default(),
+                    egui::load::SizeHint::Size { width: 18, height: 18, maintain_aspect_ratio: false },
+                )
+                .unwrap()
+                .texture_id()
+                .expect("vector-shape texture loaded");
+
+            let painted_texture = h.output().shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) => rect.brush.as_ref().map(|brush| brush.fill_texture_id),
+                _ => None,
+            });
+
+            assert_eq!(painted_texture, Some(expected_texture), "Shape header must paint vector-shape");
+        }
     }
 }
