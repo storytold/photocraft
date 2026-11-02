@@ -4550,3 +4550,44 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+	Arrow color	Couleur de la flèche
+	Arrowheads	Pointes de flèche
+	Concavity	Concavité
+	Direction:	Direction :
+	Drag left or right across the part to remove; the sides join	Faites glisser à gauche ou à droite sur la partie à retirer ; les côtés se rejoignent
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Faites glisser pour dessiner · Faites glisser le point bleu pour courber · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Faites glisser vers le haut ou le bas sur la partie à retirer ; les côtés se rejoignent
+	Edge color	Couleur du bord
+	Edge:	Bord :
+	Head length	Longueur de la pointe
+	Head width	Largeur de la pointe
+	Heads:	Pointes :
+	Line:	Ligne :
+	Quick styles:	Styles rapides :
+	Export for Publication	Exporter pour publication
+	Export for Publication…	Exporter pour publication…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Faites glisser sur la partie à retirer : de côté coupe une bande verticale, vers le haut ou le bas une horizontale
+	Outline	Contour
+	Curved	Courbe
+	Marker:	Marqueur :
+	Marker color	Couleur du marqueur
+	Click to place a marker	Cliquez pour placer un marqueur
+	Make Figure	Créer une figure
+	Make Figure…	Créer une figure…
+	Prepare Collage for Publication	Préparer le collage pour publication
+	Prepare Collage for Publication…	Préparer le collage pour publication…
+	Snap to panels	Aligner sur les panneaux
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figure prête. Ensuite : ajoutez des flèches (outil Flèche) ou des marqueurs, puis Fichier › Exporter › Exporter pour publication…
+	New Screenshot	Nouvelle capture d'écran
+	Screenshot Library…	Bibliothèque de captures…
+	Screenshot Library	Bibliothèque de captures
+	Show in Finder	Afficher dans le Finder
+	Change Folder…	Changer de dossier…
+	No screenshots yet. Use New Screenshot to take one.	Aucune capture pour l'instant. Utilisez Nouvelle capture d'écran.
+	Open for editing	Ouvrir pour modifier
+	Screenshots are available on macOS for now	Les captures d'écran ne sont disponibles que sur macOS pour l'instant
+	A screenshot is already being taken	Une capture d'écran est déjà en cours
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	La capture a échoué. Autorisez {app} dans Réglages Système › Confidentialité et sécurité › Enregistrement de l'écran
+	Screenshot {name} saved to the library	Capture {name} enregistrée dans la bibliothèque
+	Saved, but the library PNG could not be updated: {error}	Enregistré, mais le PNG de la bibliothèque n'a pas pu être mis à jour : {error}
+	Could not open the screenshot	Impossible d'ouvrir la capture

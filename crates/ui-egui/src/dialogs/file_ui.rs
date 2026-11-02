@@ -51,8 +51,38 @@ fn droplet_default_dir(app: &PhotocraftApp) -> String {
     dir
 }
 
+/// The folder publication dialogs (Export for Publication, Make Figure) offer for an unsaved
+/// document, on every platform: the user's Documents folder, else their home folder. The
+/// working directory ("." — `/` for a Finder-launched app) is a last resort only without either.
+fn user_default_dir(app: &PhotocraftApp) -> String {
+    let dir = default_dir(app);
+    if dir != "." {
+        return dir;
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty());
+    match home.map(std::path::PathBuf::from) {
+        Some(home) => {
+            let documents = home.join("Documents");
+            if documents.is_dir() { documents } else { home }.to_string_lossy().into_owned()
+        }
+        None => dir,
+    }
+}
+
 fn doc_stem(app: &PhotocraftApp) -> String {
     app.session.active().map(|d| d.doc.name.rsplit_once('.').map_or(d.doc.name.clone(), |(a, _)| a.to_string())).unwrap_or_else(|| tl!("Untitled").into())
+}
+
+/// `fields` with the values the command remembered from its last run (same types only).
+fn with_remembered(app: &PhotocraftApp, command: &str, mut fields: Value) -> Value {
+    if let (Some(Value::Object(saved)), Some(f)) = (app.session.prefs().dialogs.get(command), fields.as_object_mut()) {
+        for (k, v) in saved {
+            if f.get(k).is_some_and(|cur| std::mem::discriminant(cur) == std::mem::discriminant(v)) {
+                f.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    fields
 }
 
 /// A generic form dialog for `command` (rendered by `view_cmds::form_body`).
@@ -92,6 +122,104 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         "file.printOneCopy" if photocraft_engine::print_cmds::last_print(&app.session).is_none() => {
             app.session.active()?;
             json!({"dialog": open_print(app)})
+        }
+        "figure.fromCollage" => {
+            app.session.active()?;
+            let r = form(
+                app,
+                id,
+                tl!("Prepare Collage for Publication"),
+                with_remembered(
+                    app,
+                    id,
+                    json!({"rows": 0, "columns": 0, "width": "double", "widthMm": 175.0, "dpi": 300, "gutterMm": 1.0, "gutterColor": "#ffffff", "labels": "ABC", "labelBold": true, "labelPosition": "topLeft", "labelSizePt": 12.0, "labelColor": "#ffffff", "labelOutline": true}),
+                ),
+                json!({"width": ["single", "oneAndHalf", "double", "custom"], "labels": ["ABC", "abc", "(A)", "(a)", "A)", "a)", "none"], "labelPosition": ["topLeft", "topRight", "bottomLeft", "bottomRight"]}),
+            );
+            if let Some(f) = r.get("dialog").and_then(Value::as_u64).and_then(|d| app.ui.dialogs.iter_mut().find(|x| x.id == d)) {
+                f.fields.insert(
+                    "__labels".into(),
+                    json!({
+                        "rows": "Rows (0 = detect)", "columns": "Columns (0 = detect)", "labelBold": "Bold labels",
+                    "ABC": "A, B, C (capital)", "abc": "a, b, c (small)", "(A)": "(A), (B), (C)", "(a)": "(a), (b), (c)",
+                    "A)": "A), B), C)", "a)": "a), b), c)", "width": "Figure width", "single": "Single column (85 mm)",
+                        "oneAndHalf": "1.5 column (120 mm)", "double": "Double column (175 mm)", "custom": "Custom (mm below)",
+                        "widthMm": "Custom width (mm)", "dpi": "Resolution (dpi)", "gutterMm": "Separator width (mm)",
+                        "gutterColor": "Separator color (#rrggbb)", "labels": "Panel labels", "none": "No labels", "labelPosition": "Label corner",
+                        "topLeft": "Top left", "topRight": "Top right", "bottomLeft": "Bottom left", "bottomRight": "Bottom right",
+                        "labelSizePt": "Label size (pt)", "labelColor": "Label color (#rrggbb)", "labelOutline": "Outline labels for contrast",
+                    }),
+                );
+            }
+            r
+        }
+        "figure.make" => {
+            let folder = app
+                .session
+                .active()
+                .and_then(|st| st.path.as_deref())
+                .and_then(|p| std::path::Path::new(p).parent())
+                // A relative path has an empty parent: treat it as no folder.
+                .filter(|d| !d.as_os_str().is_empty())
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_else(|| user_default_dir(app));
+            let r = form(
+                app,
+                id,
+                tl!("Make Figure"),
+                with_remembered(
+                    app,
+                    id,
+                    json!({"files": folder, "layout": "rows", "columns": 2, "width": "double", "widthMm": 175.0, "dpi": 300, "gutterMm": 1.0, "gutterColor": "#ffffff", "labels": "abc", "labelBold": true, "labelPosition": "topLeft", "labelSizePt": 12.0, "labelColor": "#ffffff", "labelOutline": true}),
+                ),
+                json!({"layout": ["rows", "grid"], "width": ["single", "oneAndHalf", "double", "custom"], "labels": ["abc", "ABC", "(a)", "(A)", "a)", "A)", "none"], "labelPosition": ["topLeft", "topRight", "bottomLeft", "bottomRight"]}),
+            );
+            if let Some(f) = r.get("dialog").and_then(Value::as_u64).and_then(|d| app.ui.dialogs.iter_mut().find(|x| x.id == d)) {
+                f.fields.insert(
+                    "__labels".into(),
+                    json!({
+                        "files": "Folder of images (placed in name order)", "labelBold": "Bold labels",
+                    "ABC": "A, B, C (capital)", "abc": "a, b, c (small)", "(A)": "(A), (B), (C)", "(a)": "(a), (b), (c)",
+                    "A)": "A), B), C)", "a)": "a), b), c)", "layout": "Layout", "rows": "Rows: same height, no cropping",
+                        "grid": "Grid: equal cells", "columns": "Columns", "width": "Figure width", "single": "Single column (85 mm)",
+                        "oneAndHalf": "1.5 column (120 mm)", "double": "Double column (175 mm)", "custom": "Custom (mm below)",
+                        "widthMm": "Custom width (mm)", "dpi": "Resolution (dpi)", "gutterMm": "Gutter between panels (mm)",
+                        "gutterColor": "Gutter color (#rrggbb)", "labels": "Panel labels", "none": "No labels", "labelPosition": "Label corner",
+                        "topLeft": "Top left", "topRight": "Top right", "bottomLeft": "Bottom left", "bottomRight": "Bottom right",
+                        "labelSizePt": "Label size (pt)", "labelColor": "Label color (#rrggbb)", "labelOutline": "Outline labels for contrast",
+                    }),
+                );
+            }
+            r
+        }
+        "file.export.publication" => {
+            let st = app.session.active()?;
+            // Beside the document, else Documents: never "." (the app's working directory, `/`
+            // when launched from the Finder).
+            let folder = st
+                .path
+                .as_deref()
+                .and_then(|p| std::path::Path::new(p).parent())
+                .filter(|d| !d.as_os_str().is_empty())
+                .map(|d| d.to_string_lossy().into_owned());
+            let folder = folder.unwrap_or_else(|| user_default_dir(app));
+            let mut fields = with_remembered(app, id, json!({"tiff": true, "png": true, "dpi": 300, "width": "keep", "widthMm": 85.0, "folder": folder}));
+            // The name states the resolution the dialog opens with (a remembered 600 included).
+            let dpi = fields["dpi"].as_f64().unwrap_or(300.0).round();
+            fields["name"] = json!(format!("{stem}_{dpi}dpi"));
+            let r = form(app, id, tl!("Export for Publication"), fields, json!({"width": ["keep", "single", "oneAndHalf", "double", "custom"]}));
+            if let Some(f) = r.get("dialog").and_then(Value::as_u64).and_then(|d| app.ui.dialogs.iter_mut().find(|x| x.id == d)) {
+                f.fields.insert(
+                    "__labels".into(),
+                    json!({
+                        "tiff": "TIFF (LZW, lossless)", "png": "PNG (lossless)", "dpi": "Resolution (dpi)", "width": "Print width",
+                        "keep": "Keep pixel size", "single": "Single column (85 mm)", "oneAndHalf": "1.5 column (120 mm)",
+                        "double": "Double column (175 mm)", "custom": "Custom (mm below)", "widthMm": "Custom width (mm)",
+                        "folder": "Folder", "name": "File name",
+                    }),
+                );
+            }
+            r
         }
         "file.export.exportPreferences" => return crate::prefs_ui::invoke(app, ctx, "edit.preferences.export", &json!({})),
         "file.automate.contactSheetII" => form(

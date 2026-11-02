@@ -3199,3 +3199,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+	Arrow color	箭头颜色
+	Arrowheads	箭头
+	Concavity	凹度
+	Direction:	方向:
+	Drag left or right across the part to remove; the sides join	左右拖过要删除的部分，两侧会拼接在一起
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	拖动绘制 · 拖动蓝点使其弯曲 · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	上下拖过要删除的部分，两侧会拼接在一起
+	Edge color	边缘颜色
+	Edge:	边缘:
+	Head length	箭头长度
+	Head width	箭头宽度
+	Heads:	箭头:
+	Line:	线条:
+	Quick styles:	快速样式:
+	Export for Publication	导出用于出版
+	Export for Publication…	导出用于出版…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	拖过要删除的部分：左右拖动删除竖条，上下拖动删除横条
+	Outline	轮廓
+	Curved	弯曲
+	Marker:	标记:
+	Marker color	标记颜色
+	Click to place a marker	单击放置标记
+	Make Figure	制作插图
+	Make Figure…	制作插图…
+	Prepare Collage for Publication	准备拼图用于出版
+	Prepare Collage for Publication…	准备拼图用于出版…
+	Snap to panels	对齐到面板
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	插图已就绪。下一步：添加箭头（箭头工具）或标记，然后选择 文件 › 导出 › 导出用于出版…
+	New Screenshot	新建截图
+	Screenshot Library…	截图库…
+	Screenshot Library	截图库
+	Show in Finder	在访达中显示
+	Change Folder…	更改文件夹…
+	No screenshots yet. Use New Screenshot to take one.	还没有截图。使用“新建截图”来截取。
+	Open for editing	打开以编辑
+	Screenshots are available on macOS for now	截图目前仅适用于 macOS
+	A screenshot is already being taken	正在截图
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	屏幕截取失败。请在 系统设置 › 隐私与安全性 › 录屏 中允许 {app}
+	Screenshot {name} saved to the library	截图 {name} 已保存到截图库
+	Saved, but the library PNG could not be updated: {error}	已保存，但无法更新截图库中的 PNG：{error}
+	Could not open the screenshot	无法打开截图

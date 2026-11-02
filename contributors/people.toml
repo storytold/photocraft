@@ -195,6 +195,11 @@ sync_github_name = true
 [people.00xJS]
 sync_github_name = true
 
+[people.drajaygarg-spec]
+real_name = "Ajay Garg"
+display_name = "Ajay Garg"
+sync_github_name = false
+
 [people.guillehr2]
 real_name = "Guillem Hermida"
 sync_github_name = true

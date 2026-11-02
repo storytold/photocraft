@@ -155,6 +155,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
                 miter_limit: 4.0,
                 dashes: vec![2.0, 1.0],
                 dash_offset: 0.5,
+                arrow_start: None,
+                arrow_end: Some(Arrowhead { width: 3.0, length: 5.0, concavity: 0.25 }),
             }),
             live: Some(LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [4.0, 0.0, 4.0, 0.0] }),
             cache: Some(cache.clone()),

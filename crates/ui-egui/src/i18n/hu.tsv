@@ -4434,3 +4434,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+	Arrow color	Nyíl színe
+	Arrowheads	Nyílhegyek
+	Concavity	Homorúság
+	Direction:	Irány:
+	Drag left or right across the part to remove; the sides join	Húzza balra vagy jobbra az eltávolítandó részen; az oldalak összeillesztődnek
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Húzással rajzol · A kék pont húzásával hajlít · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Húzza fel vagy le az eltávolítandó részen; az oldalak összeillesztődnek
+	Edge color	Szél színe
+	Edge:	Szél:
+	Head length	Hegy hossza
+	Head width	Hegy szélessége
+	Heads:	Hegyek:
+	Line:	Vonal:
+	Quick styles:	Gyorsstílusok:
+	Export for Publication	Exportálás publikációhoz
+	Export for Publication…	Exportálás publikációhoz…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Húzza át az eltávolítandó részen: oldalra függőleges, fel-le vízszintes sávot vág ki
+	Outline	Körvonal
+	Curved	Ívelt
+	Marker:	Jelölő:
+	Marker color	Jelölő színe
+	Click to place a marker	Kattintson a jelölő elhelyezéséhez
+	Make Figure	Ábra készítése
+	Make Figure…	Ábra készítése…
+	Prepare Collage for Publication	Kollázs előkészítése publikációhoz
+	Prepare Collage for Publication…	Kollázs előkészítése publikációhoz…
+	Snap to panels	Illesztés a panelekhez
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Az ábra kész. Következő: adjon hozzá nyilakat (Nyíl eszköz) vagy jelölőket, majd Fájl › Exportálás › Exportálás publikációhoz…
+	New Screenshot	Új képernyőkép
+	Screenshot Library…	Képernyőkép-könyvtár…
+	Screenshot Library	Képernyőkép-könyvtár
+	Show in Finder	Megjelenítés a Finderben
+	Change Folder…	Mappa módosítása…
+	No screenshots yet. Use New Screenshot to take one.	Még nincs képernyőkép. Használja az Új képernyőkép parancsot.
+	Open for editing	Megnyitás szerkesztésre
+	Screenshots are available on macOS for now	A képernyőképek egyelőre macOS-en érhetők el
+	A screenshot is already being taken	Már készül egy képernyőkép
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	A képernyőfelvétel nem sikerült. Engedélyezze a {app} alkalmazást: Rendszerbeállítások › Adatvédelem és biztonság › Képernyőfelvétel
+	Screenshot {name} saved to the library	A(z) {name} képernyőkép a könyvtárba mentve
+	Saved, but the library PNG could not be updated: {error}	Mentve, de a könyvtár PNG-je nem frissült: {error}
+	Could not open the screenshot	A képernyőkép nem nyitható meg

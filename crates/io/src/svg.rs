@@ -1396,6 +1396,8 @@ impl Conv {
                 miter_limit: s.miterlimit().get(),
                 dashes: s.dasharray().map(|d| d.iter().map(|v| v * k / width).collect()).unwrap_or_default(),
                 dash_offset: s.dashoffset() * k / width,
+                arrow_start: None,
+                arrow_end: None,
             }
         });
         let fill_rule = match p.fill().map(|f| f.rule()) {

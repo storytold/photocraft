@@ -49,6 +49,7 @@ pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
 pub mod screenshot;
+pub mod screenshot_library;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -268,6 +269,7 @@ pub use text::served_fonts;
 use tools::align_bar;
 pub use tools::analysis_ui;
 pub use tools::anchor_tools;
+pub use tools::arrow_ui;
 pub use tools::artboard_tool;
 pub(crate) use tools::brush_cursor;
 pub use tools::brush_picker;
@@ -282,6 +284,7 @@ pub use tools::crop_shield;
 pub use tools::crop_size;
 pub use tools::crop_straighten;
 pub use tools::crop_ui;
+pub use tools::cutout_ui;
 pub use tools::direct_select;
 pub use tools::eraser_ui;
 pub use tools::eyedropper_ui;
@@ -289,6 +292,7 @@ pub use tools::frame_tool;
 pub use tools::gradient_ui;
 pub use tools::lasso_ui;
 pub use tools::magnetic_lasso_ui;
+pub use tools::marker_ui;
 pub use tools::move_box;
 pub use tools::move_distance;
 pub use tools::move_hover;
@@ -558,6 +562,8 @@ pub struct PhotocraftApp {
     pub(crate) transform_preview: Option<transform_tool::TransformPreview>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
+    /// A screenshot being taken (File › New Screenshot), finished by `screenshot_library::tick`.
+    pub(crate) screenshot: Option<screenshot_library::Pending>,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
     /// The run of arrow-key nudges that share one History state (nudge_bundle).

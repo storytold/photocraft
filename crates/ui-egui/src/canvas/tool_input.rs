@@ -156,6 +156,12 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::corner_radius::pointer(app, raw, mods) {
         return None;
     }
+    // Cut Out finds a collage's panel edges at the press, to snap the band to (never consumes).
+    crate::cutout_ui::pointer(app, ev);
+    // The active arrow's tail, bend and tip handles (Arrow tool).
+    if crate::arrow_ui::pointer(app, ev, mods) {
+        return None;
+    }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
     if crate::direct_select::pointer(app, ev, mods) {
         return None;

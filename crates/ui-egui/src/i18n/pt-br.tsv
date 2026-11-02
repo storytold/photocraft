@@ -4441,3 +4441,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+	Arrow color	Cor da seta
+	Arrowheads	Pontas de seta
+	Concavity	Concavidade
+	Direction:	Direção:
+	Drag left or right across the part to remove; the sides join	Arraste para a esquerda ou direita sobre a parte a remover; os lados se juntam
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Arraste para desenhar · Arraste o ponto azul para curvar · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Arraste para cima ou para baixo sobre a parte a remover; os lados se juntam
+	Edge color	Cor da borda
+	Edge:	Borda:
+	Head length	Comprimento da ponta
+	Head width	Largura da ponta
+	Heads:	Pontas:
+	Line:	Linha:
+	Quick styles:	Estilos rápidos:
+	Export for Publication	Exportar para publicação
+	Export for Publication…	Exportar para publicação…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Arraste sobre a parte a remover: para o lado corta uma faixa vertical, para cima ou baixo uma horizontal
+	Outline	Contorno
+	Curved	Curva
+	Marker:	Marcador:
+	Marker color	Cor do marcador
+	Click to place a marker	Clique para colocar um marcador
+	Make Figure	Criar figura
+	Make Figure…	Criar figura…
+	Prepare Collage for Publication	Preparar colagem para publicação
+	Prepare Collage for Publication…	Preparar colagem para publicação…
+	Snap to panels	Ajustar aos painéis
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figura pronta. Próximo: adicione setas (ferramenta Seta) ou marcadores e depois Arquivo › Exportar › Exportar para publicação…
+	New Screenshot	Nova captura de tela
+	Screenshot Library…	Biblioteca de capturas…
+	Screenshot Library	Biblioteca de capturas
+	Show in Finder	Mostrar no Finder
+	Change Folder…	Alterar pasta…
+	No screenshots yet. Use New Screenshot to take one.	Ainda não há capturas. Use Nova captura de tela.
+	Open for editing	Abrir para editar
+	Screenshots are available on macOS for now	As capturas de tela estão disponíveis no macOS por enquanto
+	A screenshot is already being taken	Uma captura de tela já está em andamento
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	A captura falhou. Permita o {app} em Ajustes do Sistema › Privacidade e Segurança › Gravação de Tela
+	Screenshot {name} saved to the library	Captura {name} salva na biblioteca
+	Saved, but the library PNG could not be updated: {error}	Salvo, mas o PNG da biblioteca não pôde ser atualizado: {error}
+	Could not open the screenshot	Não foi possível abrir a captura

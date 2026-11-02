@@ -3537,3 +3537,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+	Arrow color	Warna panah
+	Arrowheads	Kepala panah
+	Concavity	Kecekungan
+	Direction:	Arah:
+	Drag left or right across the part to remove; the sides join	Seret ke kiri atau kanan melintasi bagian yang dihapus; kedua sisi tersambung
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Seret untuk menggambar · Seret titik biru untuk melengkungkan · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Seret ke atas atau bawah melintasi bagian yang dihapus; kedua sisi tersambung
+	Edge color	Warna tepi
+	Edge:	Tepi:
+	Head length	Panjang kepala
+	Head width	Lebar kepala
+	Heads:	Kepala:
+	Line:	Garis:
+	Quick styles:	Gaya cepat:
+	Export for Publication	Ekspor untuk Publikasi
+	Export for Publication…	Ekspor untuk Publikasi…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Seret melintasi bagian yang dihapus: ke samping memotong pita vertikal, ke atas atau bawah pita horizontal
+	Outline	Garis luar
+	Curved	Melengkung
+	Marker:	Penanda:
+	Marker color	Warna penanda
+	Click to place a marker	Klik untuk menaruh penanda
+	Make Figure	Buat Gambar
+	Make Figure…	Buat Gambar…
+	Prepare Collage for Publication	Siapkan Kolase untuk Publikasi
+	Prepare Collage for Publication…	Siapkan Kolase untuk Publikasi…
+	Snap to panels	Tempelkan ke panel
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Gambar siap. Berikutnya: tambahkan panah (alat Panah) atau penanda, lalu File › Ekspor › Ekspor untuk Publikasi…
+	New Screenshot	Tangkapan Layar Baru
+	Screenshot Library…	Pustaka Tangkapan Layar…
+	Screenshot Library	Pustaka Tangkapan Layar
+	Show in Finder	Tampilkan di Finder
+	Change Folder…	Ubah Folder…
+	No screenshots yet. Use New Screenshot to take one.	Belum ada tangkapan layar. Gunakan Tangkapan Layar Baru.
+	Open for editing	Buka untuk diedit
+	Screenshots are available on macOS for now	Tangkapan layar untuk saat ini tersedia di macOS
+	A screenshot is already being taken	Tangkapan layar sedang diambil
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Tangkapan layar gagal. Izinkan {app} di Pengaturan Sistem › Privasi & Keamanan › Rekaman Layar
+	Screenshot {name} saved to the library	Tangkapan layar {name} disimpan ke pustaka
+	Saved, but the library PNG could not be updated: {error}	Tersimpan, tetapi PNG pustaka tidak dapat diperbarui: {error}
+	Could not open the screenshot	Tangkapan layar tidak dapat dibuka

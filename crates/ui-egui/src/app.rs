@@ -149,6 +149,7 @@ impl PhotocraftApp {
             smart_svg: Default::default(),
             transform_preview: None,
             move_mods: Default::default(),
+            screenshot: None,
             nudge_bundle: Default::default(),
             style_preview: None,
             text_style_preview: None,

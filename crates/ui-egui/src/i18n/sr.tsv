@@ -4593,3 +4593,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+	Arrow color	Боја стрелице
+	Arrowheads	Врхови стрелице
+	Concavity	Удубљеност
+	Direction:	Смер:
+	Drag left or right across the part to remove; the sides join	Превуците лево или десно преко дела који уклањате; стране се спајају
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Превуците да нацртате · Превуците плаву тачку да савијете · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Превуците горе или доле преко дела који уклањате; стране се спајају
+	Edge color	Боја ивице
+	Edge:	Ивица:
+	Head length	Дужина врха
+	Head width	Ширина врха
+	Heads:	Врхови:
+	Line:	Линија:
+	Quick styles:	Брзи стилови:
+	Export for Publication	Извоз за објављивање
+	Export for Publication…	Извоз за објављивање…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Превуците преко дела који уклањате: бочно сече усправну траку, горе-доле водоравну
+	Outline	Обрис
+	Curved	Закривљена
+	Marker:	Ознака:
+	Marker color	Боја ознаке
+	Click to place a marker	Кликните да поставите ознаку
+	Make Figure	Направи слику
+	Make Figure…	Направи слику…
+	Prepare Collage for Publication	Припреми колаж за објављивање
+	Prepare Collage for Publication…	Припреми колаж за објављивање…
+	Snap to panels	Поравнај са панелима
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Слика је спремна. Даље: додајте стрелице (алатка Стрелица) или ознаке, затим Датотека › Извоз › Извоз за објављивање…
+	New Screenshot	Нови снимак екрана
+	Screenshot Library…	Библиотека снимака…
+	Screenshot Library	Библиотека снимака
+	Show in Finder	Прикажи у Finder-у
+	Change Folder…	Промени фасциклу…
+	No screenshots yet. Use New Screenshot to take one.	Још нема снимака. Користите Нови снимак екрана.
+	Open for editing	Отвори за уређивање
+	Screenshots are available on macOS for now	Снимци екрана су за сада доступни на macOS-у
+	A screenshot is already being taken	Снимак екрана је већ у току
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Снимање екрана није успело. Дозволите {app} у Подешавањима система › Приватност и безбедност › Снимање екрана
+	Screenshot {name} saved to the library	Снимак {name} сачуван у библиотеку
+	Saved, but the library PNG could not be updated: {error}	Сачувано, али PNG у библиотеци није ажуриран: {error}
+	Could not open the screenshot	Снимак није могуће отворити

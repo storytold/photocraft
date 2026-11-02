@@ -4021,3 +4021,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+	Arrow color	Màu mũi tên
+	Arrowheads	Đầu mũi tên
+	Concavity	Độ lõm
+	Direction:	Hướng:
+	Drag left or right across the part to remove; the sides join	Kéo sang trái hoặc phải qua phần cần xóa; hai bên sẽ nối lại
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Kéo để vẽ · Kéo chấm xanh để uốn cong · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Kéo lên hoặc xuống qua phần cần xóa; hai bên sẽ nối lại
+	Edge color	Màu viền
+	Edge:	Viền:
+	Head length	Chiều dài đầu
+	Head width	Chiều rộng đầu
+	Heads:	Đầu:
+	Line:	Đường:
+	Quick styles:	Kiểu nhanh:
+	Export for Publication	Xuất để xuất bản
+	Export for Publication…	Xuất để xuất bản…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Kéo qua phần cần xóa: kéo ngang cắt dải dọc, kéo lên hoặc xuống cắt dải ngang
+	Outline	Viền
+	Curved	Cong
+	Marker:	Dấu:
+	Marker color	Màu dấu
+	Click to place a marker	Nhấp để đặt dấu
+	Make Figure	Tạo hình
+	Make Figure…	Tạo hình…
+	Prepare Collage for Publication	Chuẩn bị ảnh ghép để xuất bản
+	Prepare Collage for Publication…	Chuẩn bị ảnh ghép để xuất bản…
+	Snap to panels	Bám theo khung ảnh
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Hình đã sẵn sàng. Tiếp theo: thêm mũi tên (công cụ Mũi tên) hoặc dấu, rồi Tệp › Xuất › Xuất để xuất bản…
+	New Screenshot	Ảnh chụp màn hình mới
+	Screenshot Library…	Thư viện ảnh chụp màn hình…
+	Screenshot Library	Thư viện ảnh chụp màn hình
+	Show in Finder	Hiện trong Finder
+	Change Folder…	Đổi thư mục…
+	No screenshots yet. Use New Screenshot to take one.	Chưa có ảnh chụp. Dùng Ảnh chụp màn hình mới để chụp.
+	Open for editing	Mở để chỉnh sửa
+	Screenshots are available on macOS for now	Hiện chỉ chụp màn hình được trên macOS
+	A screenshot is already being taken	Đang chụp màn hình
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Chụp màn hình thất bại. Cho phép {app} trong Cài đặt hệ thống › Quyền riêng tư & Bảo mật › Ghi màn hình
+	Screenshot {name} saved to the library	Đã lưu ảnh chụp {name} vào thư viện
+	Saved, but the library PNG could not be updated: {error}	Đã lưu nhưng không cập nhật được PNG trong thư viện: {error}
+	Could not open the screenshot	Không mở được ảnh chụp

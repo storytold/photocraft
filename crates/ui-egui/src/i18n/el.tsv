@@ -4214,3 +4214,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+	Arrow color	Χρώμα βέλους
+	Arrowheads	Αιχμές βέλους
+	Concavity	Κοιλότητα
+	Direction:	Κατεύθυνση:
+	Drag left or right across the part to remove; the sides join	Σύρετε αριστερά ή δεξιά πάνω στο τμήμα που θα αφαιρεθεί· οι πλευρές ενώνονται
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Σύρετε για σχεδίαση · Σύρετε την μπλε κουκκίδα για καμπύλωση · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Σύρετε πάνω ή κάτω πάνω στο τμήμα που θα αφαιρεθεί· οι πλευρές ενώνονται
+	Edge color	Χρώμα άκρης
+	Edge:	Άκρη:
+	Head length	Μήκος αιχμής
+	Head width	Πλάτος αιχμής
+	Heads:	Αιχμές:
+	Line:	Γραμμή:
+	Quick styles:	Γρήγορα στυλ:
+	Export for Publication	Εξαγωγή για δημοσίευση
+	Export for Publication…	Εξαγωγή για δημοσίευση…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Σύρετε πάνω στο τμήμα που θα αφαιρεθεί: πλάγια κόβει κάθετη λωρίδα, πάνω ή κάτω οριζόντια
+	Outline	Περίγραμμα
+	Curved	Καμπύλο
+	Marker:	Δείκτης:
+	Marker color	Χρώμα δείκτη
+	Click to place a marker	Κάντε κλικ για να τοποθετήσετε δείκτη
+	Make Figure	Δημιουργία εικόνας
+	Make Figure…	Δημιουργία εικόνας…
+	Prepare Collage for Publication	Προετοιμασία κολάζ για δημοσίευση
+	Prepare Collage for Publication…	Προετοιμασία κολάζ για δημοσίευση…
+	Snap to panels	Προσκόλληση στα πλαίσια
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Η εικόνα είναι έτοιμη. Επόμενο: προσθέστε βέλη (εργαλείο Βέλος) ή δείκτες, μετά Αρχείο › Εξαγωγή › Εξαγωγή για δημοσίευση…
+	New Screenshot	Νέο στιγμιότυπο οθόνης
+	Screenshot Library…	Βιβλιοθήκη στιγμιοτύπων…
+	Screenshot Library	Βιβλιοθήκη στιγμιοτύπων
+	Show in Finder	Εμφάνιση στο Finder
+	Change Folder…	Αλλαγή φακέλου…
+	No screenshots yet. Use New Screenshot to take one.	Δεν υπάρχουν ακόμη στιγμιότυπα. Χρησιμοποιήστε «Νέο στιγμιότυπο οθόνης».
+	Open for editing	Άνοιγμα για επεξεργασία
+	Screenshots are available on macOS for now	Τα στιγμιότυπα είναι προς το παρόν διαθέσιμα σε macOS
+	A screenshot is already being taken	Λαμβάνεται ήδη στιγμιότυπο
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Η λήψη οθόνης απέτυχε. Επιτρέψτε το {app} στις Ρυθμίσεις συστήματος › Απόρρητο και ασφάλεια › Εγγραφή οθόνης
+	Screenshot {name} saved to the library	Το στιγμιότυπο {name} αποθηκεύτηκε στη βιβλιοθήκη
+	Saved, but the library PNG could not be updated: {error}	Αποθηκεύτηκε, αλλά το PNG της βιβλιοθήκης δεν ενημερώθηκε: {error}
+	Could not open the screenshot	Δεν ήταν δυνατό το άνοιγμα του στιγμιότυπου

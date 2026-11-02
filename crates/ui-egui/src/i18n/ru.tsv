@@ -4711,3 +4711,44 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+	Arrow color	Цвет стрелки
+	Arrowheads	Наконечники
+	Concavity	Вогнутость
+	Direction:	Направление:
+	Drag left or right across the part to remove; the sides join	Проведите влево или вправо по удаляемой части; края соединятся
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Перетащите, чтобы нарисовать · Тяните синюю точку, чтобы изогнуть · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Проведите вверх или вниз по удаляемой части; края соединятся
+	Edge color	Цвет края
+	Edge:	Край:
+	Head length	Длина наконечника
+	Head width	Ширина наконечника
+	Heads:	Наконечники:
+	Line:	Линия:
+	Quick styles:	Быстрые стили:
+	Export for Publication	Экспорт для публикации
+	Export for Publication…	Экспорт для публикации…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Проведите по удаляемой части: влево-вправо — вертикальная полоса, вверх-вниз — горизонтальная
+	Outline	Обводка
+	Curved	Изогнутая
+	Marker:	Маркер:
+	Marker color	Цвет маркера
+	Click to place a marker	Щёлкните, чтобы поставить маркер
+	Make Figure	Создать рисунок
+	Make Figure…	Создать рисунок…
+	Prepare Collage for Publication	Подготовить коллаж к публикации
+	Prepare Collage for Publication…	Подготовить коллаж к публикации…
+	Snap to panels	Привязка к панелям
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Рисунок готов. Далее: добавьте стрелки (инструмент «Стрелка») или маркеры, затем Файл › Экспорт › Экспорт для публикации…
+	New Screenshot	Новый снимок экрана
+	Screenshot Library…	Библиотека снимков…
+	Screenshot Library	Библиотека снимков
+	Show in Finder	Показать в Finder
+	Change Folder…	Сменить папку…
+	No screenshots yet. Use New Screenshot to take one.	Снимков пока нет. Используйте «Новый снимок экрана».
+	Open for editing	Открыть для правки
+	Screenshots are available on macOS for now	Снимки экрана пока доступны только в macOS
+	A screenshot is already being taken	Снимок экрана уже делается
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Не удалось снять экран. Разрешите {app} в Системных настройках › Конфиденциальность и безопасность › Запись экрана
+	Screenshot {name} saved to the library	Снимок {name} сохранён в библиотеку
+	Saved, but the library PNG could not be updated: {error}	Сохранено, но PNG в библиотеке не обновлён: {error}
+	Could not open the screenshot	Не удалось открыть снимок

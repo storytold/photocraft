@@ -3734,3 +3734,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+	Arrow color	화살표 색상
+	Arrowheads	화살촉
+	Concavity	오목함
+	Direction:	방향:
+	Drag left or right across the part to remove; the sides join	제거할 부분을 좌우로 드래그하면 양쪽이 이어집니다
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	드래그하여 그리기 · 파란 점을 드래그하여 구부리기 · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	제거할 부분을 위아래로 드래그하면 양쪽이 이어집니다
+	Edge color	가장자리 색상
+	Edge:	가장자리:
+	Head length	화살촉 길이
+	Head width	화살촉 너비
+	Heads:	화살촉:
+	Line:	선:
+	Quick styles:	빠른 스타일:
+	Export for Publication	출판용으로 내보내기
+	Export for Publication…	출판용으로 내보내기…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	제거할 부분을 가로질러 드래그: 좌우는 세로 띠, 위아래는 가로 띠를 잘라냅니다
+	Outline	윤곽선
+	Curved	곡선
+	Marker:	마커:
+	Marker color	마커 색상
+	Click to place a marker	클릭하여 마커 배치
+	Make Figure	그림 만들기
+	Make Figure…	그림 만들기…
+	Prepare Collage for Publication	출판용 콜라주 준비
+	Prepare Collage for Publication…	출판용 콜라주 준비…
+	Snap to panels	패널에 맞추기
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	그림이 준비되었습니다. 다음: 화살표(화살표 도구)나 마커를 추가한 뒤 파일 › 내보내기 › 출판용으로 내보내기…
+	New Screenshot	새 스크린샷
+	Screenshot Library…	스크린샷 라이브러리…
+	Screenshot Library	스크린샷 라이브러리
+	Show in Finder	Finder에서 보기
+	Change Folder…	폴더 변경…
+	No screenshots yet. Use New Screenshot to take one.	아직 스크린샷이 없습니다. 새 스크린샷으로 찍어 보세요.
+	Open for editing	편집하려고 열기
+	Screenshots are available on macOS for now	스크린샷은 현재 macOS에서만 사용할 수 있습니다
+	A screenshot is already being taken	이미 스크린샷을 찍는 중입니다
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	화면 캡처에 실패했습니다. 시스템 설정 › 개인정보 보호 및 보안 › 화면 기록에서 {app}를 허용하세요
+	Screenshot {name} saved to the library	스크린샷 {name}을(를) 라이브러리에 저장했습니다
+	Saved, but the library PNG could not be updated: {error}	저장했지만 라이브러리 PNG를 업데이트하지 못했습니다: {error}
+	Could not open the screenshot	스크린샷을 열 수 없습니다

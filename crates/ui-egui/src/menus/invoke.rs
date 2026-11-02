@@ -232,6 +232,8 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                 r
             })
         }
+        "file.screenshot.new" => crate::screenshot_library::start(app, ctx),
+        "file.screenshot.library" => Ok(crate::screenshot_library::open_library(app)),
         "file.save" => {
             // Writes back only to a layered file that holds the whole document; anything else
             // goes through Save As, so the original is never overwritten with less (#3806).

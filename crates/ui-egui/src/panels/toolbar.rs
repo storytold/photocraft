@@ -13,6 +13,9 @@ pub(super) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
         &[Tool::Crop, Tool::PerspectiveCrop, Tool::Slice, Tool::SliceSelect],
+        // Cut Out, Arrow and Marker are annotation tools people reach for constantly: their own
+        // buttons rather than entries in the Crop and Shape flyouts.
+        &[Tool::CutOut],
         &[Tool::Frame],
         &[Tool::Eyedropper, Tool::ColorSampler, Tool::Ruler, Tool::Note, Tool::Count],
     ],
@@ -31,6 +34,8 @@ pub(super) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Type, Tool::VerticalType, Tool::VerticalTypeMask, Tool::HorizontalTypeMask],
         &[Tool::PathSelection, Tool::DirectSelection],
         &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
+        &[Tool::Arrow],
+        &[Tool::Marker],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];

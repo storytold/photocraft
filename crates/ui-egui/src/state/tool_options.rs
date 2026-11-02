@@ -109,6 +109,15 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
+    /// Arrow tool: the next arrow's colour, width, line and heads.
+    #[serde(default)]
+    pub arrow: crate::arrow_ui::ArrowOptions,
+    /// Cut Out tool: band direction and seam style.
+    #[serde(default)]
+    pub cut_out: crate::cutout_ui::CutOutOptions,
+    /// Marker tool: shape, size, colour and outline of the next marker.
+    #[serde(default)]
+    pub marker: crate::marker_ui::MarkerOptions,
     /// Line arrowheads.
     pub arrow_start: bool,
     pub arrow_end: bool,
@@ -429,6 +438,9 @@ impl Default for ToolOptions {
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
+            arrow: Default::default(),
+            cut_out: Default::default(),
+            marker: Default::default(),
             arrow_start: false,
             arrow_end: false,
             arrow_width: 52.0,

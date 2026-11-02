@@ -490,6 +490,8 @@ impl PhotocraftApp {
             }
         };
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+        // A screenshot library PNG that could not follow the save: shown last, as an error.
+        let mut png_error = None;
         // The file was written, copy or not: another tab bound to it no longer matches it.
         self.detach_others_from_file(path, doc);
         if !copy {
@@ -503,6 +505,11 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                }
+                // A screenshot library document keeps its PNG in step with the editable file, for
+                // automation saves too: it is part of the library, not a user-configured hook.
+                if arm {
+                    png_error = crate::screenshot_library::after_save(app, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks
@@ -529,6 +536,10 @@ impl PhotocraftApp {
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);
+        if let Some(e) = png_error {
+            self.ui.status = e;
+            self.ui.status_error = true;
+        }
         self.sync_views();
     }
 

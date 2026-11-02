@@ -131,6 +131,10 @@ impl PhotocraftApp {
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
+        // A screenshot library PNG opens as its editable copy, however it arrives (Finder, Open
+        // Recent, a drop, File › Open with a path): `screenshot_library::editable`.
+        let editable = crate::screenshot_library::editable(self, path);
+        let path = editable.as_str();
         if self.show_if_open(path) {
             return Ok(Vec::new());
         }

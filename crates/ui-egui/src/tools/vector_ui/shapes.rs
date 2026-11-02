@@ -3,7 +3,7 @@ use super::overlay::path_lines;
 use super::{Affine, Color32, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
 
 pub fn is_shape_tool(t: Tool) -> bool {
-    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape)
+    matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::Arrow | Tool::Marker | Tool::CustomShape)
 }
 
 fn rgb32(c: [f32; 4]) -> Color32 {
@@ -88,6 +88,13 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
 /// The box `[x0, y0, x1, y1]` a Shape-tool drag draws (a line's: its ends'), which snaps while
 /// Space repositions it (`snap_ui`). None when too small to draw.
 pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<[f64; 4]> {
+    if tool == Tool::Marker {
+        return Some([start[0], start[1], start[0], start[1]]);
+    }
+    if tool == Tool::Arrow {
+        let g = crate::arrow_ui::geometry(start, end, mods)?;
+        return Some([g.p0[0].min(g.p1[0]), g.p0[1].min(g.p1[1]), g.p0[0].max(g.p1[0]), g.p0[1].max(g.p1[1])]);
+    }
     let g = shape_geometry(o, tool, start, end, mods)?;
     if tool == Tool::Line {
         let a: [f64; 2] = serde_json::from_value(g["from"].clone()).ok()?;
@@ -100,6 +107,16 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    if tool == Tool::Marker {
+        crate::marker_ui::place(app, start);
+        return;
+    }
+    if tool == Tool::Arrow {
+        if let Some(g) = crate::arrow_ui::geometry(start, end, mods) {
+            crate::arrow_ui::create(app, &g);
+        }
+        return;
+    }
     let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
     if tool == Tool::CustomShape {
         // ⇧ keeps the shape's proportions (the rect is already squared).
@@ -129,6 +146,12 @@ pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Valu
 
 /// The preview and command both use the full float tool colours, including transparent paint.
 pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
+    if tool == Tool::Marker {
+        return crate::marker_ui::preview(app, start);
+    }
+    if tool == Tool::Arrow {
+        return crate::arrow_ui::preview(app, &crate::arrow_ui::geometry(start, end, mods)?);
+    }
     let o = &app.ui.tool_options;
     let geometry = shape_geometry(o, tool, start, end, mods)?;
     let path = if tool == Tool::CustomShape {

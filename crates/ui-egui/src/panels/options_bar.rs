@@ -122,6 +122,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         if crate::eraser_ui::options_bar(app, ui, tool)
                             || crate::retouch_ui::options_bar(app, ui, tool)
                             || crate::vector_ui::options_bar(app, ui, tool)
+                            || crate::cutout_ui::options_bar(app, ui, tool)
                             || crate::analysis_ui::options_bar(app, ui, tool)
                             || crate::slice_ui::options_bar(app, ui, tool)
                             || crate::frame_tool::options_bar(app, ui, tool)

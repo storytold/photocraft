@@ -4133,3 +4133,44 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kolor punktu
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
+	Arrow color	Kolor strzałki
+	Arrowheads	Groty strzałki
+	Concavity	Wklęsłość
+	Direction:	Kierunek:
+	Drag left or right across the part to remove; the sides join	Przeciągnij w lewo lub w prawo przez część do usunięcia; boki się połączą
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Przeciągnij, aby rysować · Przeciągnij niebieski punkt, aby wygiąć · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Przeciągnij w górę lub w dół przez część do usunięcia; boki się połączą
+	Edge color	Kolor krawędzi
+	Edge:	Krawędź:
+	Head length	Długość grotu
+	Head width	Szerokość grotu
+	Heads:	Groty:
+	Line:	Linia:
+	Quick styles:	Szybkie style:
+	Export for Publication	Eksportuj do publikacji
+	Export for Publication…	Eksportuj do publikacji…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Przeciągnij przez część do usunięcia: w bok wycina pionowy pas, w górę lub w dół poziomy
+	Outline	Obrys
+	Curved	Zakrzywiona
+	Marker:	Znacznik:
+	Marker color	Kolor znacznika
+	Click to place a marker	Kliknij, aby umieścić znacznik
+	Make Figure	Utwórz rycinę
+	Make Figure…	Utwórz rycinę…
+	Prepare Collage for Publication	Przygotuj kolaż do publikacji
+	Prepare Collage for Publication…	Przygotuj kolaż do publikacji…
+	Snap to panels	Przyciągaj do paneli
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Rycina gotowa. Dalej: dodaj strzałki (narzędzie Strzałka) lub znaczniki, potem Plik › Eksportuj › Eksportuj do publikacji…
+	New Screenshot	Nowy zrzut ekranu
+	Screenshot Library…	Biblioteka zrzutów…
+	Screenshot Library	Biblioteka zrzutów
+	Show in Finder	Pokaż w Finderze
+	Change Folder…	Zmień folder…
+	No screenshots yet. Use New Screenshot to take one.	Brak zrzutów. Użyj polecenia Nowy zrzut ekranu.
+	Open for editing	Otwórz do edycji
+	Screenshots are available on macOS for now	Zrzuty ekranu są na razie dostępne w macOS
+	A screenshot is already being taken	Zrzut ekranu jest już wykonywany
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Przechwytywanie ekranu nie powiodło się. Zezwól {app} w Ustawieniach systemowych › Prywatność i ochrona › Nagrywanie ekranu
+	Screenshot {name} saved to the library	Zrzut {name} zapisano w bibliotece
+	Saved, but the library PNG could not be updated: {error}	Zapisano, ale nie udało się zaktualizować PNG w bibliotece: {error}
+	Could not open the screenshot	Nie można otworzyć zrzutu

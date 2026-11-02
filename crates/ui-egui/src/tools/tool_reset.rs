@@ -211,6 +211,9 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete),
         Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
+        Tool::Arrow => reset!(arrow),
+        Tool::CutOut => reset!(cut_out),
+        Tool::Marker => reset!(marker),
         Tool::Line => reset!(
             vector_mode,
             shape_fill,
