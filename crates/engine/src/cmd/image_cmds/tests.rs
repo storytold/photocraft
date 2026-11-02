@@ -855,10 +855,33 @@ fn image_size_budgets_the_hidden_pixels_it_resamples() {
     let past = s.active().unwrap().history.past_len();
     let err = s.execute("image.imageSize", json!({"width": 20000, "height": 20000})).unwrap_err().to_string();
     assert!(err.contains("200000 x 200000 px is 40000 megapixels"), "{err}");
+    // The hidden pixels are a pixel layer's: Delete Cropped Pixels would clear them.
+    assert!(err.contains("or delete them first (Crop with Delete Cropped Pixels)"), "{err}");
     assert_eq!((doc(&s).size, s.active().unwrap().history.past_len()), (Size::new(10, 10), past));
     // Without resampling only the resolution changes.
     s.execute("image.imageSize", json!({"resolution": 300, "resample": "none"})).unwrap();
     assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(10, 10), 300.0));
+}
+
+/// Delete Cropped Pixels clips pixel layers only: an alpha channel keeps its pixels outside the
+/// crop, so the refusal doesn't send the user to an option that can't clear it.
+#[test]
+fn hidden_resample_budget_names_what_delete_cropped_pixels_keeps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.edit("channel", |doc, _| {
+        let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, doc.pixel_format().sample, false);
+        let mut ch = Surface::new(fmt);
+        ch.write_region(Rect::new(0, 0, 100, 100), &[1.0; 100 * 100]);
+        doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", ch));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10, "deleteCroppedPixels": true})).unwrap();
+    let err = s.execute("image.imageSize", json!({"width": 20000, "height": 20000})).unwrap_err().to_string();
+    assert!(err.contains("200000 x 200000 px is 40000 megapixels"), "{err}");
+    assert!(err.contains("channels") && !err.contains("delete them first"), "{err}");
+    assert_eq!(doc(&s).size, Size::new(10, 10));
 }
 
 #[test]

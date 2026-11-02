@@ -1,6 +1,7 @@
 //! Image menu: Image Size, Canvas Size, Crop, Trim, Mode (colour model and
 //! bit depth) conversions, Duplicate.
 
+use std::collections::HashSet;
 use std::convert::Infallible;
 
 use photocraft_algo::resample::{Resample, crop_surface, largest_resize_rect, resize_surface_in_canvas, scaled_rect, translate_surface};
@@ -333,23 +334,39 @@ pub(crate) fn resample_doc(doc: &mut Document, cmd: &str, nw: u32, nh: u32, filt
 /// `sx` x `sy` with `filter` (masks, channels and the selection with Bilinear): each keeps its
 /// pixels outside the canvas (a crop that didn't delete them, a layer moved off the canvas), and
 /// those grow with the scale like the rest. A bicubic shrink also stores the image between its
-/// two passes, one axis still at its old size ([`largest_resize_rect`]).
+/// two passes, one axis still at its old size ([`largest_resize_rect`]). The refusal suggests
+/// Delete Cropped Pixels only when the surfaces over the budget are all ones it clips
+/// ([`delete_cropped_pixels`]).
 fn check_hidden_resample_budget(cmd: &str, doc: &mut Document, sx: f64, sy: f64, filter: Resample) -> Result<()> {
     let new_canvas = scaled_rect(doc.bounds(), sx, sy);
-    // The largest surface by bytes: its width, height and bytes per pixel (a mask has one
-    // channel, the layers the document's).
-    let mut largest = (0u32, 0u32, 1u64);
+    // The surfaces Delete Cropped Pixels clips; masks, channels, the selection, type, shapes and
+    // smart objects keep their pixels outside the crop.
+    let mut clipped: HashSet<*const Surface> = HashSet::new();
+    for_each_layer(&mut doc.layers, &mut |l| {
+        clipped.extend(l.fill_cache.as_ref().map(|fc| std::ptr::from_ref(&fc.surface)));
+        if let Some(v) = &l.video {
+            clipped.extend(v.frames.iter().chain(v.original_frames.iter().flatten()).map(std::ptr::from_ref));
+        }
+        if let LayerContent::Raster(s) = &l.content {
+            clipped.insert(std::ptr::from_ref(s));
+        }
+    });
+    let bytes = |(w, h, bpp): (u32, u32, u64)| u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bpp);
+    // The largest surface by bytes, and the largest one Delete Cropped Pixels doesn't clip: its
+    // width, height and bytes per pixel (a mask has one channel, the layers the document's).
+    let (mut largest, mut largest_kept) = ((0u32, 0u32, 1u64), (0u32, 0u32, 1u64));
     let mut visit = |surf: &Surface, filter: Resample| {
         let r = largest_resize_rect(surf.content_bounds(), sx, sy, filter);
         // What stays within the new canvas is already budgeted.
         if r.is_empty() || new_canvas.union(&r) == new_canvas {
             return;
         }
-        let (w, h) = (r.width(), r.height());
-        let bpp = surf.format().bytes_per_pixel().max(1) as u64;
-        let bytes = |(w, h, bpp): (u32, u32, u64)| u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bpp);
-        if bytes((w, h, bpp)) > bytes(largest) {
-            largest = (w, h, bpp);
+        let this = (r.width(), r.height(), surf.format().bytes_per_pixel().max(1) as u64);
+        if bytes(this) > bytes(largest) {
+            largest = this;
+        }
+        if !clipped.contains(&std::ptr::from_ref(surf)) && bytes(this) > bytes(largest_kept) {
+            largest_kept = this;
         }
     };
     // The surfaces `resample_doc` scales, smart object caches included.
@@ -360,17 +377,24 @@ fn check_hidden_resample_budget(cmd: &str, doc: &mut Document, sx: f64, sy: f64,
     if let Some(sel) = &doc.selection {
         visit(sel, Resample::Bilinear);
     }
-    let (w, h, bpp) = largest;
-    let px = u64::from(w).saturating_mul(u64::from(h));
-    if px.saturating_mul(bpp) <= MAX_RESAMPLE_BYTES {
+    let (kept, (w, h, bpp)) = if bytes(largest_kept) > MAX_RESAMPLE_BYTES {
+        (true, largest_kept)
+    } else if bytes(largest) > MAX_RESAMPLE_BYTES {
+        (false, largest)
+    } else {
         return Ok(());
-    }
+    };
+    let hint = if kept {
+        "choose a smaller size (layer masks, channels, the quick mask, the selection, type, shapes and smart objects keep theirs through Crop with Delete Cropped Pixels)"
+    } else {
+        "choose a smaller size, or delete them first (Crop with Delete Cropped Pixels)"
+    };
     let max_mp = MAX_RESAMPLE_BYTES / bpp / 1_000_000;
     Err(bad(
         cmd,
         format!(
-            "{w} x {h} px is {} megapixels; resampling at this bit depth is limited to {max_mp} megapixels. The pixels outside the canvas are resampled too: choose a smaller size, or delete them first (Crop with Delete Cropped Pixels)",
-            px / 1_000_000
+            "{w} x {h} px is {} megapixels; resampling at this bit depth is limited to {max_mp} megapixels. The pixels outside the canvas are resampled too: {hint}",
+            u64::from(w).saturating_mul(u64::from(h)) / 1_000_000
         ),
     ))
 }
