@@ -201,7 +201,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -234,6 +234,9 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Thai; `th`, `th-TH` and `th_TH.UTF-8` locales resolve here. Thai has no plural inflection,
+    // so counts use one form.
+    LangInfo { code: "th", name: "ไทย", source: catalog!("th"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The

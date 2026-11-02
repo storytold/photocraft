@@ -37,6 +37,19 @@ fn vietnamese_tags_resolve() {
 }
 
 #[test]
+fn thai_tags_resolve() {
+    let th = Lang::from_code("th").expect("th registered");
+    for tag in ["th", "TH", "th-TH", "th_TH", "th_TH.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(th), "{tag}");
+        assert_eq!(Lang::from_pref(tag), th, "{tag}");
+    }
+    assert_eq!(th.name(), "ไทย");
+    assert_eq!(th.0.plural(5), 0, "Thai has one plural form");
+    assert_eq!(tr(th, "File"), "ไฟล์");
+    assert_eq!(tr(th, "Layer"), "เลเยอร์");
+}
+
+#[test]
 fn picker_lists_english_first_then_names_alphabetically() {
     let order = Lang::for_picker();
     assert_eq!(order.first().map(|l| l.code()), Some("en"));

@@ -57,3 +57,8 @@ translations of PhotoCraft's English labels, and no proprietary translation reso
 Norwegian Bokmål translations: PhotoCraft contributors, combined from the catalogs contributed by
 @nikolainyegaard and @Bolla76 and reviewed with Claude (Anthropic) as an AI contributor; original
 translations of PhotoCraft's English labels, and no proprietary translation resources were used.
+
+Thai translations: PhotoCraft contributors, with opencode (DeepSeek) as an AI contributor; a
+machine-assisted first draft from PhotoCraft's English labels, reviewed for UI terminology. The
+resulting catalog is licensed under MIT OR Apache-2.0 as stated above, and no proprietary
+localisation resource was used.

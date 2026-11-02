@@ -27,6 +27,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
+| ไทย | `th` | one form |
 | Srpski | `sr` | one / few / many (teens use many) |
 | हिन्दी | `hi` | one / other |
 | Svenska | `sv` | one / other |
