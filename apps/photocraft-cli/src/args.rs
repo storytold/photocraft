@@ -11,6 +11,7 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+pub(crate) use crate::gpu::GpuArgs;
 use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -96,6 +97,8 @@ pub(crate) struct ConvertArgs {
     #[arg(long)]
     pub(crate) in_place: bool,
     #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
     pub(crate) export: ExportArgs,
 }
 
@@ -135,6 +138,8 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) in_place: bool,
     #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
     pub(crate) export: ExportArgs,
     /// `--cmd` and `--params` values in command-line order, set by [`parse`].
     #[arg(skip)]
@@ -173,6 +178,8 @@ pub(crate) struct BatchArgs {
     /// originals; --in-place allows it
     #[arg(long)]
     pub(crate) in_place: bool,
+    #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }
@@ -217,6 +224,8 @@ pub(crate) struct McpArgs {
     #[arg(skip)]
     pub(crate) bridge_from_env: bool,
     #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
     pub(crate) control: ControlArgs,
     #[command(flatten)]
     pub(crate) automation: AutomationArgs,
@@ -237,6 +246,8 @@ pub(crate) struct ServeArgs {
     /// `--port` came from PHOTOCRAFT_CONTROL_PORT, set by [`parse`].
     #[arg(skip)]
     pub(crate) port_from_env: bool,
+    #[command(flatten)]
+    pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) control: ControlArgs,
     #[command(flatten)]
@@ -273,6 +284,12 @@ enum ServerOptionError {
     /// authority the bridge can't give (#8035).
     #[error("configure automation roots on the desktop app; --automation-read-root and --automation-write-root require headless MCP mode")]
     BridgeRoots,
+    /// Invalid value for PHOTOCRAFT_GPU.
+    #[error("invalid value '{0}' for 'PHOTOCRAFT_GPU': expected '1' or '0'")]
+    GpuVar(String),
+    /// Explicit GPU flags require headless MCP mode, not bridge mode.
+    #[error("configure rendering on the desktop app; --gpu and --no-gpu require headless MCP mode")]
+    BridgeGpu,
     /// A token flag without the bridge or port that reads it would be ignored (#8035).
     #[error("{flag} requires {transport}")]
     NeedsTransport { flag: &'static str, transport: &'static str },
@@ -281,8 +298,8 @@ enum ServerOptionError {
 impl ServerOptionError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
-            Self::BridgeVar(_) => ErrorKind::ValueValidation,
-            Self::BridgeRoots => ErrorKind::ArgumentConflict,
+            Self::BridgeVar(_) | Self::GpuVar(_) => ErrorKind::ValueValidation,
+            Self::BridgeRoots | Self::BridgeGpu => ErrorKind::ArgumentConflict,
             Self::NeedsTransport { .. } => ErrorKind::MissingRequiredArgument,
         };
         cmd.error(kind, self)
@@ -402,7 +419,14 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                 if a.bridge.is_some() && (a.automation.automation_read_root.is_some() || a.automation.automation_write_root.is_some()) {
                     return Err(ServerOptionError::BridgeRoots.into_clap(sub));
                 }
+                if a.bridge.is_some() && (m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine))
+                {
+                    return Err(ServerOptionError::BridgeGpu.into_clap(sub));
+                }
                 check_server(sub, m, a.bridge.is_some(), "--bridge")?;
+            }
+            if a.bridge.is_none() {
+                check_gpu_env(&mut cmd, m)?;
             }
         }
         (Command::Serve(a), Some((name, m))) => {
@@ -414,10 +438,27 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                 }
                 check_server(sub, m, a.port.is_some(), "--port")?;
             }
+            check_gpu_env(&mut cmd, m)?;
+        }
+        (Command::Convert(_), Some((_, m))) | (Command::Run(_), Some((_, m))) | (Command::Batch(_), Some((_, m))) => {
+            check_gpu_env(&mut cmd, m)?;
         }
         _ => {}
     }
     Ok(cli)
+}
+
+fn check_gpu_env(cmd: &mut clap::Command, m: &ArgMatches) -> Result<(), clap::Error> {
+    if m.value_source("gpu") == Some(ValueSource::CommandLine) || m.value_source("no_gpu") == Some(ValueSource::CommandLine) {
+        return Ok(());
+    }
+    if let Ok(v) = std::env::var("PHOTOCRAFT_GPU") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() && trimmed != "1" && trimmed != "0" {
+            return Err(ServerOptionError::GpuVar(trimmed.to_string()).into_clap(cmd));
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a token flag without the bridge or port that reads it (as a flag or its variable). A

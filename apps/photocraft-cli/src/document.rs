@@ -10,7 +10,7 @@ use photocraft_io::ExportOptions;
 use crate::{
     CliError, Result,
     args::{ConvertArgs, InfoArgs, RunArgs, Step},
-    output::{JsonStyle, print_json, warn_all},
+    output::{JsonStyle, print_json, warn_all, warn_dedup},
 };
 
 /// An output that is the input file itself, however it is spelt (relative, with `./`, through a
@@ -33,10 +33,13 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let mut o = files::open(input)?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
-    warn_all(err, &o.warnings);
-    warn_all(err, &missing_font_warnings(&o.document));
-    let ws = files::save(&o.document, output, a.export.format.as_deref(), &opts, None)?;
-    warn_all(err, &ws);
+    let mut seen_warnings = std::collections::HashSet::<String>::new();
+    warn_dedup(err, &o.warnings, &mut seen_warnings);
+    warn_dedup(err, &missing_font_warnings(&o.document), &mut seen_warnings);
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
+    let mut renderer = policy.create_renderer();
+    let ws = files::save_with_renderer(&o.document, output, a.export.format.as_deref(), &opts, None, renderer.as_deref_mut())?;
+    warn_dedup(err, &ws, &mut seen_warnings);
     Ok(())
 }
 
@@ -75,6 +78,8 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
+    policy.apply_to_headless(&mut h);
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
     let mut reported_fonts = std::collections::HashSet::<String>::new();
@@ -121,6 +126,9 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         let ws: Vec<String> = ws.into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
         warn_all(err, &ws);
     }
+    let diags = h.drain_diagnostics();
+    let diags: Vec<String> = diags.into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
+    warn_all(err, &diags);
     Ok(())
 }
 
