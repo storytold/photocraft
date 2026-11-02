@@ -182,7 +182,7 @@ macro_rules! clipping_event {
     };
 }
 
-/// Group F validates the outer descriptor before every converter, including empty events.
+/// Group F routes every event through `steps_selection::from`; the outer header (name, class) is not checked.
 macro_rules! selection_event {
     ($code:literal, $name:literal, $label:literal, $ids:expr, $from:expr, $to:expr) => {
         Event { code: $code, name: $name, label: $label, ids: $ids, from: |d| super::steps_selection::from(d, $from), to: $to }
@@ -199,7 +199,7 @@ pub(super) const EVENTS: &[Event] = &[
     }),
     selection_event!(
         "IntW",
-        "interfaceWhite",
+        "intersectWith",
         "Intersect with Selection",
         &["select.rect"],
         |d| super::steps_selection::selection_from(d, "intersect"),
@@ -225,7 +225,7 @@ pub(super) const EVENTS: &[Event] = &[
     selection_event!("", "linkSelectedLayers", "Link Layers", &["layer.linkLayers"], super::steps_selection::link_from, super::steps_selection::link_to),
     selection_event!(
         "Dstr",
-        "distort",
+        "distribute",
         "Distribute",
         &[
             "layer.distribute.leftEdges",
@@ -256,7 +256,7 @@ pub(super) const EVENTS: &[Event] = &[
     ),
     selection_event!(
         "MrgL",
-        "",
+        "mergeLayers",
         "Merge Layers",
         &["layer.mergeLayers"],
         |d| super::steps_selection::empty_from(d, "layer.mergeLayers", Some("MrgL")),

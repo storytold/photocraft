@@ -5,16 +5,9 @@ use super::fields::{Mapped, step};
 use super::tables::{ALIGN, blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, ReferenceItem, Value, json};
 
-/// Exported headers use an empty name and the four-byte class identifier.
-fn canonical_header(d: &Descriptor, class: &str) -> bool {
-    d.name == Default::default() && d.class_id == code(class)
-}
-
-/// Group F checks the outer header before every converter, including empty events.
+/// Group F converters ignore the outer header, like every other event: the reference application
+/// records the localized step name (with its NUL) as the name and the event code as the class.
 pub(super) fn from(d: &Descriptor, convert: fn(&Descriptor) -> Mapped) -> Mapped {
-    if !canonical_header(d, "null") {
-        return Mapped::Unsupported { harmless: false };
-    }
     convert(d)
 }
 
@@ -69,7 +62,7 @@ pub(super) fn selection_from(d: &Descriptor, mode: &str) -> Mapped {
         }
         let D::Descriptor(shape) = d.get("T   ")? else { return None };
         let ellipse = shape.class_id.is("Elps");
-        if !canonical_header(shape, if ellipse { "Elps" } else { "Rctn" }) || (ellipse && mode != "add") || !keys(shape, &["Top ", "Left", "Btom", "Rght"]) {
+        if (!ellipse && !shape.class_id.is("Rctn")) || (ellipse && mode != "add") || !keys(shape, &["Top ", "Left", "Btom", "Rght"]) {
             return None;
         }
         let [top, left, bottom, right] =

@@ -38,15 +38,15 @@ fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
         ("AddT", Some("addTo"), rectangle([30.0, 30.0, 90.0, 90.0], false)),
         ("AddT", Some("addTo"), rectangle([30.0, 30.0, 90.0, 90.0], true)),
         ("SbtF", Some("subtractFrom"), rectangle([30.0, 30.0, 60.0, 60.0], false)),
-        ("IntW", Some("interfaceWhite"), rectangle([30.0, 30.0, 120.0, 120.0], false)),
+        ("IntW", Some("intersectWith"), rectangle([30.0, 30.0, 120.0, 120.0], false)),
         ("PstI", Some("pasteInto"), desc("null").with("AntA", enm("Annt", "Anno")).with("As  ", D::Class(class("Pxel")))),
         ("PstO", Some("pasteOutside"), desc("null").with("AntA", enm("Annt", "Anno")).with("As  ", D::Class(class("Pxel")))),
         ("Fade", Some("fade"), desc("null").with("Opct", pct(50.0)).with("Md  ", enm("BlnM", "Mltp"))),
         ("", Some("linkSelectedLayers"), desc("null").with("null", target_ref("Lyr "))),
-        ("Dstr", Some("distort"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "AdLf"))),
+        ("Dstr", Some("distribute"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "AdLf"))),
         ("RmvL", Some("removeLayerMask"), desc("null")),
         ("DfnP", Some("definePattern"), desc("null")),
-        ("MrgL", None, desc("null")),
+        ("MrgL", Some("mergeLayers"), desc("null")),
     ];
     // Opposite-signed fractions can lose an endpoint through x+(right-x); preserve it explicitly.
     for mode in ["AddT", "SbtF", "IntW"] {
@@ -59,7 +59,7 @@ fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
         cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.5)).with("Md  ", enm("BlnM", mode))));
     }
     for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
-        cases.push(("Dstr", Some("distort"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
+        cases.push(("Dstr", Some("distribute"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
     }
     cases
 }
@@ -90,8 +90,7 @@ fn group_f_load_save_preserves_recorded_descriptors() {
 
 /// A kept step retains its descriptor bytes, event identity and playback flags.
 fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
-    let event = if id.is_empty() { AtnEvent::name(name.unwrap()) } else { AtnEvent::Code(id.as_bytes().try_into().unwrap()) };
-    let mut original = atn::parse(&file(event, descriptor.clone())).unwrap();
+    let mut original = atn::parse(&file(fixture_event(id, name), descriptor.clone())).unwrap();
     original.actions[0].items[0].enabled = false;
     original.actions[0].items[0].with_dialog = true;
     original.actions[0].items[0].dialog_options = 2;
@@ -112,10 +111,19 @@ fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
     assert_eq!(saved.descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
 }
 
-/// Outer and nested shape metadata stay kept, including headers on empty Group F events.
+/// The event of a fixture, in its code form where it has one.
+fn fixture_event(id: &str, name: Option<&str>) -> AtnEvent {
+    if id.is_empty() { AtnEvent::name(name.unwrap()) } else { AtnEvent::Code(id.as_bytes().try_into().unwrap()) }
+}
+
+/// The outer name and class and the nested shape's name and class encoding do not gate mapping:
+/// such a step maps to the same command and params as the empty-name `null` header.
 #[test]
-fn noncanonical_group_f_headers_keep_their_bytes_and_flags() {
+fn noncanonical_group_f_headers_map_like_the_canonical_form() {
     for (id, name, d) in fixtures() {
+        let event = fixture_event(id, name);
+        let canonical = import(&file(event.clone(), d.clone())).unwrap();
+        assert!(canonical.unsupported.is_empty(), "{id}");
         for variant in 0..5 {
             let mut descriptor = d.clone();
             match variant {
@@ -131,8 +139,65 @@ fn noncanonical_group_f_headers_keep_their_bytes_and_flags() {
                     }
                 }
             }
-            assert_kept(id, name, descriptor);
+            let loaded = import(&file(event.clone(), descriptor.clone())).unwrap();
+            assert!(loaded.unsupported.is_empty(), "{id}/{name:?}/{variant}");
+            assert_eq!(loaded.actions[0].steps, canonical.actions[0].steps, "{id}/{name:?}/{variant}");
         }
+    }
+}
+
+/// The reference application names each step descriptor after the localized step (with a NUL),
+/// gives it the event code as its class and names nested shapes too (synthetic descriptors).
+#[test]
+fn group_f_maps_steps_recorded_with_the_application_header() {
+    let mut shape = Descriptor { name: UnicodeString::new_nul(""), class_id: code("Rctn"), items: Vec::new() };
+    for (key, value) in ["Top ", "Left", "Btom", "Rght"].into_iter().zip([30.0, 30.0, 90.0, 90.0]) {
+        shape = shape.with(key, px(value));
+    }
+    let cases = [
+        (
+            AtnEvent::name("fade"),
+            Descriptor {
+                name: UnicodeString::new_nul("Fade"),
+                class_id: code("Fade"),
+                items: vec![(code("Opct"), pct(50.0)), (code("Md  "), enm("BlnM", "Nrml"))],
+            },
+            ("edit.fade", json!({"opacity":50,"mode":"Normal"})),
+        ),
+        (
+            AtnEvent::name("addTo"),
+            Descriptor {
+                name: UnicodeString::new_nul("Add To"),
+                class_id: code("AddT"),
+                items: vec![(code("null"), selection()), (code("T   "), D::Descriptor(shape))],
+            },
+            ("select.rect", json!({"x":30,"y":30,"width":60,"height":60,"mode":"add"})),
+        ),
+        (
+            AtnEvent::Code(*b"MrgL"),
+            Descriptor { name: UnicodeString::new_nul("Merge Layers"), class_id: code("MrgL"), items: Vec::new() },
+            ("layer.mergeLayers", json!({"_atnEvent":"MrgL"})),
+        ),
+    ];
+    for (event, d, (command, params)) in cases {
+        let loaded = import(&file(event, d)).unwrap();
+        assert!(loaded.unsupported.is_empty(), "{command}");
+        assert_eq!(loaded.actions[0].steps, vec![(command.to_string(), params)]);
+    }
+}
+
+/// Steps recorded with the reference application's string IDs map like their four-character codes.
+#[test]
+fn group_f_string_ids_map_like_their_codes() {
+    for (id, name, d) in [
+        ("IntW", "intersectWith", rectangle([30.0, 30.0, 120.0, 120.0], false)),
+        ("Dstr", "distribute", desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "AdLf"))),
+        ("MrgL", "mergeLayers", desc("null")),
+    ] {
+        let by_code = import(&file(AtnEvent::Code(id.as_bytes().try_into().unwrap()), d.clone())).unwrap();
+        let by_name = import(&file(AtnEvent::name(name), d)).unwrap();
+        assert!(by_code.unsupported.is_empty() && by_name.unsupported.is_empty(), "{name}");
+        assert_eq!(by_name.actions[0].steps, by_code.actions[0].steps, "{name}");
     }
 }
 

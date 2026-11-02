@@ -22,15 +22,15 @@ does not map yet, with everything needed to implement them without the reference
 |---|---|---|---|
 | `AddT` | addTo | Add to Selection | `select.rect` (add rectangle or ellipse) |
 | `SbtF` | subtractFrom | Subtract from Selection | `select.rect` (subtract rectangle) |
-| `IntW` | interfaceWhite | Intersect with Selection | `select.rect` (intersect rectangle) |
+| `IntW` | intersectWith | Intersect with Selection | `select.rect` (intersect rectangle) |
 | `PstI` | pasteInto | Paste Into | `edit.pasteSpecial.pasteInto` |
 | `PstO` | pasteOutside | Paste Outside | `edit.pasteSpecial.pasteOutside` |
 | `Fade` | fade | Fade | `edit.fade` |
 | (string ID only) | linkSelectedLayers | Link Layers | `layer.linkLayers` |
-| `Dstr` | distort | Distribute | `layer.distribute.leftEdges`, `layer.distribute.horizontalCenters`, `layer.distribute.rightEdges`, `layer.distribute.topEdges`, `layer.distribute.verticalCenters`, `layer.distribute.bottomEdges` |
+| `Dstr` | distribute | Distribute | `layer.distribute.leftEdges`, `layer.distribute.horizontalCenters`, `layer.distribute.rightEdges`, `layer.distribute.topEdges`, `layer.distribute.verticalCenters`, `layer.distribute.bottomEdges` |
 | `RmvL` | removeLayerMask | Remove Layer Mask (older files) | `layer.layerMask.delete` |
 | `DfnP` | definePattern | Define Pattern | `edit.definePattern` |
-| `MrgL` | (code only) | Merge Layers (older files) | `layer.mergeLayers` |
+| `MrgL` | mergeLayers | Merge Layers (older files) | `layer.mergeLayers` |
 | `AdNs` | addNoise | Add Noise | `filter.noise.addNoise` |
 | `Algn` | align | Align | `layer.align.leftEdges`, `layer.align.horizontalCenters`, `layer.align.rightEdges`, `layer.align.topEdges`, `layer.align.verticalCenters`, `layer.align.bottomEdges` |
 | `AppI` | applyImageEvent | Apply Image | `image.applyImage` |
@@ -214,7 +214,7 @@ Nested values as recorded (example values):
 
 #### Intersect with Selection
 
-- Event: `IntW` / `interfaceWhite`
+- Event: `IntW` / `intersectWith`
 - PhotoCraft command: `select.rect {"mode":"intersect"}`
 - Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
@@ -277,7 +277,7 @@ Nested values as recorded (example values):
 
 #### Distribute
 
-- Event: `Dstr` / `distort`
+- Event: `Dstr` / `distribute`
 - PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
 - `Usng` selects the edge or centre; one enum value per Distribute menu item.
 - Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
@@ -305,12 +305,12 @@ No parameters: the step carries an empty descriptor.
 
 #### Merge Layers (older files)
 
-- Event: `MrgL` (no string ID)
+- Event: `MrgL` / `mergeLayers`
 - PhotoCraft command: `layer.mergeLayers`
 
 No parameters: the step carries an empty descriptor.
 
-The prepared-document values in this group are required inputs, rather than factory defaults. Unknown settings stay kept steps. Paste uses the current clipboard and selection; Fade uses the preceding edit. Link Layers uses the existing selected-layer toggle. Native exports retain their current Delete Mask and Merge Layers events; imported older events retain their original IDs.
+The prepared-document values in this group are required inputs, rather than factory defaults. Unknown settings stay kept steps; the descriptor name and class (the reference application records the localized step name and the event code there) do not matter. Paste uses the current clipboard and selection; Fade uses the preceding edit. Link Layers uses the existing selected-layer toggle. Native exports retain their current Delete Mask and Merge Layers events; imported older events retain their original IDs.
 
 
 ## Recognized steps kept disabled
