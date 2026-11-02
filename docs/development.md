@@ -36,6 +36,8 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
+On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
@@ -113,7 +115,7 @@ Rust test and variable work on Windows with the native shell's environment-varia
 
 ## Fonts (craft-fonts)
 
-Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts). The rules are in `craftrules/standards/fonts.md` in a sibling `craftrules` checkout (see below); that repository is not public, so outside contributors can ask a maintainer for the rules that apply to their change.
+Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts).
 
 craft-fonts is an **optional build input**, never a Cargo dependency:
 
@@ -631,6 +633,10 @@ PhotoCraft equivalent.
 Events outside the table load as `actions.photoshopStep` steps that keep the descriptor
 verbatim (so Save Actions writes them back) and fail at playback with the step's Photoshop name.
 
+`crates/psd/tests/it/atn_contract.rs` checks the parser's public API against four small,
+independently encoded fixtures in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
+its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+
 ## Remove Tool quality
 
 `cargo run --release -p photocraft-engine --example remove_quality -- <dir> [out dir]` fills
@@ -651,6 +657,40 @@ photos are public domain, not committed; download them at 1920 px wide into `<di
 `https://commons.wikimedia.org/wiki/Special:FilePath/<file name>?width=1600` serves each at the
 size the cases were placed for (Commons rounds it to 1920). Timing on a 24 MP document through the
 command: `cargo run --release -p photocraft-engine --example remove_bench`.
+
+## PSD import pixel memory limits
+
+PSD/PSB imports preflight layer, user-mask, merged-image, extra-channel and pattern pixel storage
+before merged-image validation or decoding. The conservative estimate sums retained tile
+storage (including padding and negative offsets) and the largest decode/conversion workspace.
+It does not credit uniform-tile sharing or pruning, so some files that could fit after decoding
+are refused. Valid off-canvas pixels are preserved; oversized layers are rejected rather than
+clipped. Defaults are 2 GiB on native targets and 1 GiB on wasm. Applications can lower the
+allowance with `ImportOptions::psd_max_pixel_bytes`; values above the default are capped.
+The source-only convenience API uses the default; `import_file_for_open_with` honours options.
+
+An over-budget ordinary or interactive import returns `IoError::PsdImportBudget` with the
+estimated and allowed byte counts; damaged-file recovery never bypasses that error. The legacy
+`psd_to_document` conversion APIs cannot return an error, so they return an empty document and
+an explicit warning on preflight refusal. Layer and mask pixel allocation failures also fail
+ordinary imports instead of opening partial content.
+
+User and real masks decode into tiles one tile row at a time, converting sample byte order
+in place. Raw and RLE source-backed masks read only the current band (plus the RLE row index);
+ZIP still inflates one whole plane before handing out bands. No full-mask interleave copy is
+needed. A damaged later band discards all previously written bands of that mask.
+
+Pattern block headers are inspected without decoding pixels. The same allowance includes
+all decoded pattern planes, padded tiles, bitmap/indexed expansion and conversion copies,
+including earlier records in a block that later proves malformed. Pattern conversion reserves
+pixel buffers fallibly. Multichannel conversion uses one tile-row buffer and applies alpha/ink
+polarity before writing tiles, without a full-plane float buffer or alpha readback.
+
+The #8593 allowance covers these pixel paths, not total process
+RSS: encoded input, parser metadata, smart-filter caches, embedded smart-object
+contents, generated vector caches, and text preparation are outside it and retain their
+existing limits. Joining these paths to a shared budget and streaming ZIP inflation are follow-up work. An accepted
+estimate does not guarantee allocation success on a memory-constrained host.
 
 ## Test corpora
 
