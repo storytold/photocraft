@@ -25,6 +25,8 @@
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
+//! * PDF files open as a flattened raster of their first page via the pure-Rust Hayro renderer;
+//!   additional pages and lost vector/text editability are reported as warnings.
 //! * Every other format goes through `photocraft-codecs` as a single layer
 //!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
 //!   image is opaque, a normal "Layer 0" when it has transparency.
@@ -61,6 +63,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -137,6 +140,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// A PDF that does not parse, has no pages, or exceeds the raster import limits.
+    #[error("PDF: {0}")]
+    Pdf(String),
     /// The file could not be read.
     #[error("{0}")]
     Read(String),
@@ -540,6 +546,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
     }
+    if is_pdf_input(name, bytes) {
+        return pdf_import::import(name, bytes, ctl);
+    }
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
@@ -560,6 +569,12 @@ fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     svg::is_svg(bytes)
         || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
         || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
+}
+
+/// PDF magic wins over a misleading extension; a `.pdf` name still gets a useful PDF error
+/// when its contents are malformed or truncated.
+fn is_pdf_input(name: &str, bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-") || (has_extension(name, "pdf") && photocraft_codecs::detect(bytes).is_none())
 }
 
 fn extension(name_or_ext: &str) -> String {

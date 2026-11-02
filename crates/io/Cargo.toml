@@ -42,6 +42,8 @@ flate2 = { workspace = true }
 roxmltree = "0.21"
 # Reuse usvg's locked header reader to bound embedded SVG raster data before decoding.
 imagesize = "0.13"
+# Pure-Rust CPU PDF page rasterizer (works on desktop and wasm without a system PDF library).
+hayro = { version = "=0.8.0", features = ["embed-fonts"] }
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
