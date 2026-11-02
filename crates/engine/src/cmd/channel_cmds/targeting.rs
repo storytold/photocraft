@@ -1,5 +1,5 @@
 use super::manage::fix_view_now;
-use super::planes::{color_count, materialize};
+use super::planes::{GraySurface, color_count, materialize};
 use super::refs::{ChanRef, bad, parse_ref};
 use super::view::{ChannelTarget, touch};
 use super::{ColorMode, Document, EngineError, Layer, LayerId, Rect, Result, Session, Surface, Value, from_rgba, json, list};
@@ -35,6 +35,18 @@ pub(crate) fn target_of(p: &Value) -> Target {
 /// The target is an alpha channel or the Quick Mask (no layer involved).
 pub(crate) fn is_channel_target(p: &Value) -> bool {
     matches!(target_of(p), Target::Alpha(_) | Target::QuickMask)
+}
+
+/// The grayscale plane named by an explicit pixel-command target. Unlike the dialog metadata,
+/// this also identifies missing targets, so preview dispatch can report the command's error.
+pub fn gray_target(p: &Value) -> Option<GraySurface> {
+    match target_of(p) {
+        Target::Mask => Some(GraySurface::LayerMask),
+        Target::FilterMask => Some(GraySurface::FilterMask),
+        Target::Alpha(i) => Some(GraySurface::Alpha(i)),
+        Target::QuickMask => Some(GraySurface::QuickMask),
+        Target::Pixels => None,
+    }
 }
 
 /// The target is a spot channel: it stores ink but takes tone, as it reads.

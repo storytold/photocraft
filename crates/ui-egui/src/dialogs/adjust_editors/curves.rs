@@ -70,7 +70,7 @@ pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &
 
 /// The popup, with `translate` for whether the built-in labels follow the interface language;
 /// a user-typed channel name is shown exactly as entered (#5335).
-fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
+pub(super) fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
     let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
     if ch >= opts.len() {
         ch = 0;

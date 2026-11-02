@@ -119,7 +119,7 @@ pub struct EditorCx {
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
     /// (off: the plain track).
     pub dynamic_color_sliders: bool,
-    /// Image › Curves with a single Channels-panel target: that channel only (#5335).
+    /// Image › Levels/Curves with a single Channels-panel target: that channel only (#5335).
     pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
 }
 

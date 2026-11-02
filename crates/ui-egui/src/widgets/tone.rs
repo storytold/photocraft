@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Rect};
 use photocraft_doc::adjust::ToneSpace;
-use photocraft_doc::{Document, Layer, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
@@ -166,6 +166,15 @@ pub fn compute_histograms_at(doc: &Document, source: HistSource, space: ToneSpac
                 && let Some(bin) = h.first_mut()
             {
                 *bin = gray_bins(s, doc.bounds());
+            } else if surface == photocraft_engine::channel_cmds::GraySurface::FilterMask
+                && doc.layer(layer).is_some_and(|l| matches!(&l.content, LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
+                && let Some(white) = h.first_mut().and_then(|bin| bin.get_mut(255))
+            {
+                // An uncreated filter mask is Reveal All. Count its samples without scanning pixels.
+                let area = doc.bounds();
+                let step = gray_sample_step(area);
+                let count = u64::from(area.width().div_ceil(step)) * u64::from(area.height().div_ceil(step));
+                *white = count.min(u64::from(u32::MAX)) as u32;
             }
         }
         HistSource::BelowLayer(_) | HistSource::Layer(_) | HistSource::UpTo(_) => {
@@ -321,6 +330,11 @@ fn count_pixels(px: &[[f32; 4]], space: ToneSpace, h: &mut [[u32; 256]]) {
     }
 }
 
+/// Sampling interval shared by stored gray planes and implicit constant filter masks.
+fn gray_sample_step(area: photocraft_geom::Rect) -> u32 {
+    ((u64::from(area.width()) * u64::from(area.height())) / 1_000_000).max(1).isqrt().max(1) as u32
+}
+
 /// 256-bin histogram of a gray plane: its levels in 0–255, sampled like the engine's auto-tone
 /// histograms so a big canvas costs no more than about a megapixel here (#5335).
 fn component_bins(surface: &photocraft_raster::Surface, area: photocraft_geom::Rect, component: usize) -> [u32; 256] {
@@ -348,7 +362,7 @@ fn component_bins(surface: &photocraft_raster::Surface, area: photocraft_geom::R
 
 fn gray_bins(surf: &photocraft_raster::Surface, area: photocraft_geom::Rect) -> [u32; 256] {
     let mut h = [0u32; 256];
-    let step = ((u64::from(area.width()) * u64::from(area.height())) / 1_000_000).max(1).isqrt().max(1) as i32;
+    let step = gray_sample_step(area) as i32;
     let mut y = area.y0;
     while y < area.y1 {
         let mut x = area.x0;

@@ -150,12 +150,20 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
         if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
             let label = label_of(id);
-            let dialog = crate::dialogs::open_command_dialog(app, id, &label);
+            let mut values = p.clone();
+            if let Some(o) = values.as_object_mut() {
+                // Private keys belong to the dialog, not the recorded Action step.
+                o.retain(|key, _| !key.starts_with("__"));
+            }
+            let dialog = crate::adjust_dialog::open_with_params(app, id, &values).unwrap_or_else(|| crate::dialogs::open_command_dialog(app, id, &label));
             let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
             if let Some(d) = app.ui.dialog_mut(dialog) {
-                if let Some(o) = p.as_object() {
-                    // `__` keys are the dialog's own markers (`params_of` drops them), not step values.
-                    d.fields.extend(o.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));
+                // Adjustment dialogs already normalized values for their effective target.
+                // Extending them again would restore discarded Lab/CMYK keys.
+                if !crate::adjust_dialog::has_dialog(id)
+                    && let Some(o) = values.as_object()
+                {
+                    d.fields.extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
                 }
                 d.fields.insert(RESUME.into(), json!(token));
             }

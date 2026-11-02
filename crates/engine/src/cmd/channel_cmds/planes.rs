@@ -1,7 +1,8 @@
+use super::targeting::{Target, target_of};
 use super::view::{ChannelTarget, color_names};
-use super::{ColorMode, DocState, Document, PixelFormat, Rect, Surface};
+use super::{ColorMode, DocState, Document, PixelFormat, Rect, Surface, Value};
 
-/// The Curves dialog's Channel popup lists only this channel when the Channels panel has a
+/// The Levels/Curves Channel popup lists only this channel when the Channels panel has a
 /// single non-composite target (a colour component, layer mask, saved channel or Quick Mask).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IsolatedCurveChannel {
@@ -23,7 +24,7 @@ pub struct IsolatedCurveChannel {
     pub gray: Option<GraySurface>,
 }
 
-/// A grayscale plane Curves can target: the dialog parses and previews its curves in gray levels
+/// A grayscale plane Levels/Curves can target: the dialog parses and previews gray levels
 /// even in Lab and CMYK documents (#5335).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraySurface {
@@ -46,7 +47,42 @@ pub fn isolated_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
 /// thumbnail targets it without touching the Channels panel, and both ways of selecting the mask
 /// must give the same Curves dropdown (#5335).
 pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Option<IsolatedCurveChannel> {
+    isolated_curve_channel_with_params(st, layers_panel_mask, &Value::Null)
+}
+
+/// The channel a tone dialog edits, with an explicit command target taking precedence over
+/// panel state (notably when an Action opens a recorded step's dialog).
+pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool, params: &Value) -> Option<IsolatedCurveChannel> {
     let doc = &st.doc;
+    if params.get("target").is_some() {
+        if let Some(colors) = crate::color_channels::explicit(params, color_count(doc)).ok().flatten() {
+            return curve_channel_for_colors(doc, colors);
+        }
+        return match target_of(params) {
+            Target::Mask => layer_mask_curve_channel(st),
+            Target::FilterMask => filter_mask_curve_channel(st),
+            Target::Alpha(i) => doc.channels.get(i).map(|c| IsolatedCurveChannel {
+                name: c.name.clone(),
+                components: None,
+                key: "",
+                hist: 0,
+                tint: false,
+                translate: false,
+                gray: Some(GraySurface::Alpha(i)),
+            }),
+            Target::QuickMask => doc.quick_mask.as_ref().map(|_| IsolatedCurveChannel {
+                name: "Quick Mask".into(),
+                components: None,
+                key: "",
+                hist: 0,
+                tint: false,
+                translate: true,
+                gray: Some(GraySurface::QuickMask),
+            }),
+            // An explicit pixel target bypasses the Channels panel, including its colour set.
+            Target::Pixels => None,
+        };
+    }
     if (matches!(st.channel_view.target, ChannelTarget::Color(_)) || (st.channel_view.target == ChannelTarget::Composite && doc.quick_mask.is_none()))
         && crate::mask_view_cmds::current(st).is_some_and(|v| v.filter)
     {
