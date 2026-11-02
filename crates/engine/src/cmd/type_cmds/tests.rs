@@ -862,15 +862,16 @@ fn typing_without_recording_keeps_the_journal_as_it_ran() {
 }
 
 /// CodeRabbit on #10730: typing in a type layer of another document, switched to as a tab is
-/// (no step), after a recorded `type.create` is no part of that step, even with the same layer id.
+/// (no step), after a recorded `type.create` is no part of that step, though that layer is the
+/// newest of its own document.
 #[test]
 fn typing_in_another_document_is_not_folded_into_the_layer_made_in_the_first() {
     let mut s = session();
     let other = s.execute("type.create", json!({"x": 10, "y": 40, "text": "Old", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
     s.execute("actions.record", json!({"name": "Two"})).unwrap();
-    let made = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
-    assert_eq!(made, other, "the setup gives both layers one id");
+    s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap();
+    // Back in the first document, its own type layer is its newest layer.
     assert!(s.set_active(0));
     type_in(&mut s, other, 3, "!", "s4");
     s.execute("actions.stop", json!({})).unwrap();
