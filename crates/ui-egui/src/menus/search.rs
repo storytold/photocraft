@@ -63,7 +63,12 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
     let reopened = ctx.data(|d| d.get_temp::<u64>(pass_id)).is_none_or(|p| p + 1 < pass);
     ctx.data_mut(|d| d.insert_temp(pass_id, pass));
     let mut query: String = if reopened { String::new() } else { ctx.data(|d| d.get_temp(text_id)).unwrap_or_default() };
+    let before = query.clone();
     let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
+    // The results shift the rows below them: a highlight would land on another row, and ↩ run it.
+    if query != before {
+        nav.clear_highlight();
+    }
     // The menu opens on the press; the release a frame later completes a click on the title,
     // outside the field, and egui takes the focus away from it again (#1447, #1438).
     if (reopened || opening) && !crate::zoom_field::editing(&ctx) {
@@ -78,6 +83,7 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
         ui.close();
     }
     ctx.data_mut(|d| d.insert_temp(text_id, query.clone()));
+    nav.search_text = !query.is_empty();
     if !query.trim().is_empty() {
         if results.is_empty() {
             ui.weak(crate::i18n::tr(lang, "No matching commands"));
