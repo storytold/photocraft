@@ -663,6 +663,8 @@ mod shell_id_map_tests {
         let occupancy = topology.occupancy_mask(&scene, 8192, 8192, 0, [0, 0]).unwrap();
         assert!(occupancy.contains(10, 8000));
         assert!(!occupancy.contains(8000, 10));
+        assert!(occupancy.contains(2000, 6000));
+        assert!(!occupancy.contains(6000, 2000));
     }
     #[test]
     fn shell_id_grid_matches_occupancy_convention_and_resolves_overlaps_by_lowest_id() {
