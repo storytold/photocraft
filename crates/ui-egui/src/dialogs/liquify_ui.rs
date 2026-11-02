@@ -607,6 +607,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     open_on(app, ctx, layer, surf, strokes, cell, Some(index))
 }
 
+/// Open a captured layer or Smart Filter source with the canvas's display conversion and fallback.
 fn open_on(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,

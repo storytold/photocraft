@@ -123,6 +123,7 @@ fn linear_code(t: &[u8], v: f32) -> u8 {
     t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255)
 }
 
+/// Encode straight linear-light RGB through the shared lookup table, keeping alpha linear.
 fn encode_rgba8(buf: &Buffer) -> Rgba8Image {
     let t = encode_table();
     let mut img = Rgba8Image::new(buf.rect.width(), buf.rect.height());
