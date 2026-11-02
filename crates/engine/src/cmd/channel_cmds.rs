@@ -46,7 +46,13 @@ fn has_spot(s: &Session) -> std::result::Result<(), String> {
 }
 fn can_split(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    if color_count(&d.doc) + d.doc.channels.len() < 2 { Err("only one channel to split".into()) } else { Ok(()) }
+    if !is_flat(&d.doc) {
+        Err(spot::NOT_FLAT.into())
+    } else if color_count(&d.doc) + d.doc.channels.len() < 2 {
+        Err("only one channel to split".into())
+    } else {
+        Ok(())
+    }
 }
 fn can_merge(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
@@ -122,7 +128,7 @@ pub use planes::{
 pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
 use selection::{load_selection, quick_mask, save_selection};
-use spot::{merge, merge_spot, mergeable, split};
+use spot::{is_flat, merge, merge_spot, mergeable, split};
 use targeting::{SLOT_KEY, target_cmd, target_slot};
 pub(crate) use targeting::{
     Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target, invert_region,

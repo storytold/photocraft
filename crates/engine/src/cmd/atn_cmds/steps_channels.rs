@@ -67,15 +67,16 @@ fn pixels(v: &D) -> Option<f64> {
     }
 }
 
-/// Trap (`Trap`): `Wdth` in pixels. A width that isn't a number of pixels, or is below
-/// `MIN_TRAP`, keeps the Photoshop step.
+/// Trap (`Trap`): `Wdth` in pixels. A step without `Wdth` plays the command's 1 px, written
+/// out so it saves back as the width it plays. A width that isn't a number of pixels, or is
+/// below `MIN_TRAP`, keeps the Photoshop step.
 pub(super) fn trap_from(d: &Descriptor) -> Mapped {
     if !only_keys(d, &["Wdth"]) {
         return Mapped::Unsupported { harmless: false };
     }
     match setting(d, "Wdth", |v| pixels(v).map(Some), None) {
         Some(Some(w)) if w >= MIN_TRAP => step("image.trap", json!({"width": w.min(MAX_TRAP)})),
-        Some(None) => step("image.trap", json!({})),
+        Some(None) => step("image.trap", json!({"width": MIN_TRAP})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
@@ -128,11 +129,15 @@ fn match_color_params(d: &Descriptor) -> Option<serde_json::Map<String, Value>> 
 
 /// Every key in recorded order. A source document or layer, Neutralize or a selection option
 /// has no key in the event, so such a step is refused; the integers refuse a fraction or a
-/// value outside the command's range, which it plays clamped.
+/// value outside the command's range, which it plays clamped. A negative `source` is the
+/// dialog's Source "None", which the command plays without a source, so it is written as one
+/// (as is a `sourceLayer` with it, which the command then ignores).
 pub(super) fn match_color_to(_: &str, p: &Value) -> Option<Descriptor> {
     let off = |k: &str| p.get(k).is_none_or(|v| v.is_null() || *v == Value::Bool(false));
-    if !pixel_target(p)
-        || !sets_only(p, &["target", "luminance", "intensity", "fade", "neutralize", "useSelectionInSource", "useSelectionInTarget"])
+    let no_source = p.get("source").is_none_or(|v| v.is_null() || v.as_i64().is_some_and(|i| i < 0));
+    if !no_source
+        || !pixel_target(p)
+        || !sets_only(p, &["target", "source", "sourceLayer", "luminance", "intensity", "fade", "neutralize", "useSelectionInSource", "useSelectionInTarget"])
         || !["neutralize", "useSelectionInSource", "useSelectionInTarget"].iter().all(|k| off(k))
     {
         return None;

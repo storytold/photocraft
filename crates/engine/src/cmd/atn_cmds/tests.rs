@@ -3388,3 +3388,36 @@ fn match_color_with_a_source_is_kept() {
         }
     }
 }
+
+/// A Trap step recorded without `Wdth` plays the command's 1 px and saves back as `Wdth` 1 px,
+/// so it must load as that width too: load, save and load give the same step.
+#[test]
+fn trap_step_without_a_width_saves_back_the_same() {
+    let file = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("T"), items: vec![item("Trap", "Trap", Some(desc("null")))], ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
+    let loaded = s.actions.list.clone();
+    assert_eq!(loaded[0].steps, vec![("image.trap".to_string(), json!({"width": 1}))]);
+    let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
+    let mut t = Session::new();
+    t.execute("actions.load", json!({"data": saved["data"].as_str().unwrap()})).unwrap();
+    assert_eq!(t.actions.list, loaded);
+}
+
+/// The Match Color dialog records Source "None" as `"source": -1`, which the command plays
+/// without a source: such a step saves, while a real source document is still refused.
+#[test]
+fn match_color_recorded_with_source_none_saves() {
+    let none = json!({"source": -1, "luminance": 100.0, "intensity": 100.0, "fade": 0.0, "neutralize": false, "useSelectionInSource": false, "useSelectionInTarget": false});
+    let d = export_item("image.adjustments.matchColor", &none, "S").unwrap().descriptor.unwrap();
+    let expected = desc("null").with("Lght", D::Integer(100)).with("ClrR", D::Integer(100)).with("Fade", D::Integer(0)).with("noReference", D::Boolean(true));
+    assert_eq!(d.items, expected.items);
+    assert!(export_item("image.adjustments.matchColor", &json!({"source": -1, "sourceLayer": 4}), "S").is_some());
+    for source in [json!({"source": 0}), json!({"source": 0, "sourceLayer": 4}), json!({"source": "x"}), json!({"source": -1, "neutralize": true})] {
+        assert!(export_item("image.adjustments.matchColor", &source, "S").is_none(), "{source} exported");
+    }
+}
