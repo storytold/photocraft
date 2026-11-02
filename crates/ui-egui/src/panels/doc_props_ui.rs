@@ -344,6 +344,40 @@ mod tests {
         assert_eq!(st.history.entries().len(), undo, "no history step");
     }
 
+    /// #10784 review: a percentage typed into Canvas Width is of the current width, in whatever
+    /// unit the rulers show.
+    #[test]
+    fn canvas_width_takes_a_typed_percentage() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use photocraft_engine::prefs::Unit;
+        for (unit, text, want) in [(Unit::Pixels, "50%", 200), (Unit::Centimeters, "50%", 200), (Unit::Inches, "150%", 600), (Unit::Pixels, "100*3", 300)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 400, "height": 200, "resolution": 72, "background": "white"})).unwrap();
+            app.session.prefs.edit(|p| p.units_and_rulers.rulers = unit);
+            let mut h = Harness::builder().with_size(vec2(320.0, 600.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        properties(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(3);
+            h.get_all_by_label("Width").find(|n| n.accesskit_node().role() == egui::accesskit::Role::SpinButton).expect("the Width field").click();
+            h.run();
+            for c in text.chars() {
+                h.event(egui::Event::Text(c.to_string()));
+                h.run();
+            }
+            h.key_press(egui::Key::Enter);
+            h.run_steps(3);
+            let width = h.state().session.active().unwrap().doc.size.width;
+            assert_eq!(width, want, "{unit:?} {text}");
+        }
+    }
+
     /// Horizontal centre of every single-letter label the panel drew, by letter.
     fn letter_centres(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<(String, f32)> {
         h.output()
