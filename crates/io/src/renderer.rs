@@ -71,7 +71,7 @@ impl RenderError {
 }
 
 /// A provider of rendered composite bands for flat export.
-pub trait BandRenderer {
+pub trait BandRenderer: Send {
     /// Renders `doc` over `rect` in horizontal bands, passing each band to `sink`.
     /// `band_rows`: preferred rows per band (0 to let provider choose).
     fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError>;

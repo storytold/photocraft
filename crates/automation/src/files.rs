@@ -150,11 +150,11 @@ pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationEr
 }
 
 /// [`render_png`] with an optional custom [`BandRenderer`].
-pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
+pub fn render_png_with_renderer(doc: &Document, max_side: u32, renderer: Option<&mut dyn BandRenderer>) -> Result<Vec<u8>, AutomationError> {
     let side = if max_side == 0 { doc.size.width.max(doc.size.height) } else { max_side };
     let (target_w, target_h) = photocraft_compose::thumbnail_size(doc, side.max(1));
 
-    if let Some(r) = renderer.as_deref_mut() {
+    if let Some(r) = renderer {
         if (target_w, target_h) == (doc.size.width, doc.size.height) {
             let res = photocraft_io::export_flat_with_renderer(
                 doc,
@@ -166,7 +166,7 @@ pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Opt
             match res {
                 Ok(res) => return Ok(res.bytes),
                 Err(photocraft_io::IoError::Cancelled) => return Err(AutomationError::Other("rendering was cancelled".into())),
-                Err(_) => {}
+                Err(e) => return Err(e.into()),
             }
         }
     }

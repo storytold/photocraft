@@ -105,6 +105,7 @@ pub fn render_to_vec_stats(
 /// one band of rows at a time, so arbitrarily large documents can be exported without
 /// unbounded staging allocation.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub fn render_bands<E>(
     comp: &mut Compositor,
     device: &wgpu::Device,

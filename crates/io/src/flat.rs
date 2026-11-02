@@ -525,11 +525,6 @@ pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String
     document_to_image_for_with_renderer(doc, warnings, true, false, renderer)
 }
 
-/// `cmyk_target` / `lab_target`: the format stores CMYK / Lab pixels.
-fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target: bool, lab_target: bool) -> Result<Image, IoError> {
-    document_to_image_for_with_renderer(doc, warnings, cmyk_target, lab_target, None)
-}
-
 fn document_to_image_for_with_renderer(
     doc: &Document,
     warnings: &mut Vec<String>,
@@ -657,7 +652,7 @@ impl<'a> FlatSource<'a> {
     fn bands(
         &self,
         alpha: bool,
-        mut renderer: Option<&mut dyn BandRenderer>,
+        renderer: Option<&mut dyn BandRenderer>,
         mut sink: impl FnMut(u32, Vec<u8>, bool) -> Result<(), IoError>,
     ) -> Result<(), IoError> {
         let doc = self.doc;
@@ -765,7 +760,7 @@ impl<'a> FlatSource<'a> {
             emit(rect.height(), parts, translucent)
         };
 
-        if let Some(r) = renderer.as_deref_mut() {
+        if let Some(r) = renderer {
             r.render_bands(doc, doc.bounds(), self.rows, &mut |band| render_one_band(band.rect, band.pixels))?;
         } else {
             photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.px))?;
@@ -851,7 +846,7 @@ pub fn export_flat_with_renderer(
     format: Format,
     opts: &ExportOptions,
     ctl: &photocraft_raster::Interrupt,
-    mut renderer: Option<&mut dyn BandRenderer>,
+    renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
     if let Some(r) = export_mode_specific(doc, format, opts)? {
         return Ok(r);
@@ -860,11 +855,11 @@ pub fn export_flat_with_renderer(
         return export_png_streamed_with_renderer(doc, opts, ctl, 0, renderer);
     }
 
-    if renderer.is_some() {
+    if let Some(r) = renderer {
         let mut warnings = Vec::new();
         let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
         let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, renderer) {
+        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, Some(r)) {
             Ok(mut img) => {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 ctl.progress(composite_share(format));
@@ -997,20 +992,20 @@ pub fn export_png_streamed_with_renderer(
     opts: &ExportOptions,
     ctl: &photocraft_raster::Interrupt,
     rows: i32,
-    mut renderer: Option<&mut dyn BandRenderer>,
+    renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if renderer.is_some() {
+    if let Some(r) = renderer {
         let opaque = match single_layer(doc) {
             Some(s) => opaque_surface(s, doc.bounds()),
             None => opaque_bottom(doc),
         };
         let mut progress = 0.0;
-        let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, renderer.as_deref_mut());
+        let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, Some(&mut *r));
         let attempt = match first_try {
             Ok(Some(r)) => Ok(Some(r)),
             Ok(None) => {
                 // Alpha was mispredicted: retry with alpha enabled, retaining the GPU provider!
-                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, renderer.as_deref_mut())
+                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, Some(r))
             }
             Err(e) => Err(e),
         };
