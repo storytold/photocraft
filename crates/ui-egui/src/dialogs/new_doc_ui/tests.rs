@@ -903,6 +903,7 @@ mod dialog {
         }
     }
 
+    /// Widths of the entries currently recorded in `recent_documents`, newest first.
     fn recent_widths(h: &Harness<'static, PhotocraftApp>) -> Vec<u32> {
         h.state().session.presets.recent_documents.iter().map(|r| r.width).collect()
     }
@@ -918,6 +919,7 @@ mod dialog {
         h.run_steps(2);
     }
 
+    /// Deleting or clearing Recent cards from their right-click context menu updates the list without creating a document.
     #[test]
     fn recent_cards_can_be_deleted_or_cleared_from_their_context_menu() {
         let mut h = harness();

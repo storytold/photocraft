@@ -304,6 +304,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted":name}))
 }
 
+/// Command specifications for saved document presets and Recent document settings.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -612,6 +613,7 @@ mod tests {
         assert!(next.documents().is_empty(), "recording never creates a document");
     }
 
+    /// Removing one Recent entry or clearing the list persists across preference reloads and leaves saved presets intact.
     #[test]
     fn recent_entries_can_be_removed_one_at_a_time_or_cleared_and_stay_gone_after_reload() {
         let mut s = Session::new();
