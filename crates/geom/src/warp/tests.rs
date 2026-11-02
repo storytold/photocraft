@@ -457,3 +457,22 @@ fn locate_binary_search_matches_linear_scan() {
     }
     assert_eq!(BezierMesh::locate(&knots, f64::NAN), linear(f64::NAN));
 }
+
+#[test]
+fn split_edits_reject_incomplete_mesh_without_changes() {
+    for vertical in [false, true] {
+        for remove in [false, true] {
+            let mut mesh = BezierMesh::identity(B, 2, 2);
+            mesh.points.pop();
+            let before = mesh.clone();
+            let accepted = match (vertical, remove) {
+                (false, false) => mesh.split_u(0.25),
+                (true, false) => mesh.split_v(0.25),
+                (false, true) => mesh.remove_split_u(1),
+                (true, true) => mesh.remove_split_v(1),
+            };
+            assert!(!accepted);
+            assert_eq!(mesh, before);
+        }
+    }
+}
