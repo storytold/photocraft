@@ -154,4 +154,10 @@ fn a_selection_beyond_reach_leaves_the_corner_cut() {
     let near = (49 + r + 1, 49 + r);
     let m = mask(n, n, |x, y| (rect.0..=rect.1).contains(&x) && (rect.2..=rect.3).contains(&y) || (x, y) == near);
     assert!(bevelled(&m, n, n, r)[(49 + 11) * n + 49 + 11] > 0.0);
+    // So does one exactly r px past the box (gap² = 400 < (r + 1)² = 441): its own grow reaches
+    // (69, 69) in the quadrant, which a cut would clear, as would a gate narrowed to `< r`.
+    let edge = (49 + 2 * r, 49 + r);
+    let m = mask(n, n, |x, y| (rect.0..=rect.1).contains(&x) && (rect.2..=rect.3).contains(&y) || (x, y) == edge);
+    let g = bevelled(&m, n, n, r);
+    assert_eq!((g[(49 + 11) * n + 49 + 11], g[(49 + r) * n + 49 + r]), (1.0, 1.0));
 }
