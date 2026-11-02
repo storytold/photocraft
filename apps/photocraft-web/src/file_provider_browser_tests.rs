@@ -267,7 +267,9 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
         assert_eq!(Reflect::get(&cancelled, &"requestId".into())?.as_string().as_deref(), Some(request_id.as_str()));
         assert_eq!(Reflect::get(&cancelled, &"resourceId".into())?.as_string().as_deref(), Some("file-99"));
         assert!(!host.busy());
-        assert!(host.take_commands().is_empty(), "a cancelled read must not enqueue application admission");
+        let mut empty_app = PhotocraftApp::new(photocraft_engine::Session::new(), Services { file_provider: Some(host.clone()), ..Default::default() });
+        file_providers::tick(&mut empty_app, &egui::Context::default());
+        assert!(empty_app.session.active().is_none(), "a cancelled read must not create an application document");
         crate::file_providers::publish(&host);
         assert_eq!(published.events.length(), 2, "the cancelled read's terminal event is not replayed");
     }
