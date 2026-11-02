@@ -171,9 +171,15 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
-    let mut out = Vec::new();
-    // Iterative, so no document's nesting can make this recurse.
-    let mut stack: Vec<&Layer> = doc.layers.iter().rev().collect();
+    let mut out: Vec<String> = Vec::new();
+    // Iterative, so no document's nesting can make this recurse. The timeline's base and baked
+    // trees render when its marker moves there, so they are checked too.
+    let mut stack: Vec<&Layer> = Vec::new();
+    if let Some(t) = doc.design_timeline.as_deref() {
+        stack.extend(t.steps.iter().rev().filter_map(|st| st.baked.as_deref()).flat_map(|b| b.layers.iter().rev()));
+        stack.extend(t.base.layers.iter().rev());
+    }
+    stack.extend(doc.layers.iter().rev());
     while let Some(l) = stack.pop() {
         if let LayerContent::Adjustment(Adjustment::ColorLookup { name: _, size, lut, .. }) = &l.content {
             match lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)) {
@@ -192,6 +198,9 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
             stack.extend(children.iter().rev());
         }
     }
+    // A layer the timeline left unchanged is in several trees: name it once.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|w| seen.insert(w.clone()));
     out
 }
 
@@ -780,6 +789,33 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
 mod tests {
     use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
+
+    /// A damaged lookup that only the timeline's base holds is reported once, as is one in both.
+    #[test]
+    fn open_warnings_cover_the_design_timeline_trees() {
+        use photocraft_doc::adjust::Adjustment;
+        use photocraft_doc::{Document, Layer, LayerContent, Size, design::DesignTimeline};
+        let lookup = |name: &str| {
+            let mut l = Layer::raster(name, photocraft_color::PixelFormat::RGBA8);
+            l.content = LayerContent::Adjustment(Adjustment::ColorLookup {
+                name: "x".into(),
+                lut: Some(std::sync::Arc::new(vec![0.0; 3])),
+                size: 2,
+                tetrahedral: false,
+                dither: false,
+                source: None,
+            });
+            l
+        };
+        let mut base = Document::new("d", Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        base.layers = vec![lookup("both"), lookup("old")];
+        let mut doc = base.clone();
+        doc.layers.truncate(1);
+        doc.design_timeline = Some(std::sync::Arc::new(DesignTimeline::new(std::sync::Arc::new(base))));
+        let w = super::open_warnings(&doc);
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w.iter().any(|w| w.contains("\"old\"")), "{w:?}");
+    }
 
     /// Verifies a valid PSD remains editable after import.
     #[test]

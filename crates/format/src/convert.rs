@@ -661,7 +661,13 @@ impl Loader<'_> {
         let mut doc = self.document_only(m)?;
         // Loaded without its ids (embedded as a smart object's contents, say), it has no timeline.
         if let Some(t) = m.design_timeline.as_deref().filter(|_| self.preserve_ids) {
-            doc.design_timeline = Some(Arc::new(self.design_timeline(t, &doc)?));
+            // Steps are named by number: a damaged file repeating one would edit the wrong step.
+            let mut seen = std::collections::HashSet::new();
+            if t.steps.iter().all(|st| seen.insert(st.step.step)) {
+                doc.design_timeline = Some(Arc::new(self.design_timeline(t, &doc)?));
+            } else {
+                self.warnings.push("its design timeline repeats a step number; the image opened without its history, and saving it removes the history from the file".into());
+            }
         }
         Ok(doc)
     }

@@ -100,3 +100,30 @@ fn a_saved_timeline_replays_in_another_session() {
     let ids: Vec<u64> = tl.steps.iter().map(|st| st.step).collect();
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "new steps get ids past the saved ones: {ids:?}");
 }
+
+#[test]
+fn playing_an_action_is_one_baked_step_that_replays_without_the_action() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("actions.record", json!({"name": "Red"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "R"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("actions.play", json!({"action": "Red"})).unwrap();
+    let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
+    assert_eq!(tl.steps.iter().map(|st| st.command.as_str()).collect::<Vec<_>>(), ["actions.play"]);
+    assert!(tl.steps[0].baked.is_some(), "the playback's result is kept");
+    // Another session has no "Red" action: the step replays from its stored result.
+    let doc = (*s.active().unwrap().doc).clone();
+    let bytes = photocraft_format::save_to_bytes(&doc, &photocraft_format::SaveOptions::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    let content = |s: &Session| photocraft_doc::Document { design_timeline: None, ..(*s.active().unwrap().doc).clone() };
+    let before = content(&r);
+    r.execute("design.replay", json!({})).unwrap();
+    let tl = r.active().unwrap().doc.design_timeline.clone().unwrap();
+    assert!(!tl.steps[0].state.is_failure(), "{:?}", tl.steps[0].state);
+    assert_eq!(content(&r), before);
+}

@@ -1989,3 +1989,25 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
         assert_eq!(sanitize(name), name);
     }
 }
+
+#[test]
+fn a_batch_records_its_steps_in_an_inputs_design_timeline() {
+    let dir = tmp("batch-timeline");
+    let path = join(&dir, "in.pcraft");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    src.execute("design.start", json!({})).unwrap();
+    src.execute("layer.new.layer", json!({"name": "Saved"})).unwrap();
+    std::fs::write(&path, photocraft_format::save_to_bytes(doc(&src), &Default::default()).unwrap()).unwrap();
+    let out = join(&dir, "out");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let r = s.execute("file.automate.batch", json!({"steps": [["layer.new.layer", {"name": "Batch"}]], "input": [path], "output": out})).unwrap();
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{r}");
+    let saved = photocraft_format::load_from_bytes(&std::fs::read(files[0].as_str().unwrap()).unwrap()).unwrap();
+    let tl = saved.design_timeline.clone().unwrap();
+    assert_eq!(tl.steps.iter().map(|st| st.command.as_str()).collect::<Vec<_>>(), ["layer.new.layer", "layer.new.layer"], "the batch's edit is a step");
+    let ids: Vec<_> = saved.walk().iter().map(|(_, _, l)| l.id).collect();
+    assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "no id is reissued: {ids:?}");
+}

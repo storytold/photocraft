@@ -80,6 +80,19 @@ fn a_file_without_a_timeline_stays_format_1() {
 }
 
 #[test]
+fn a_timeline_repeating_a_step_number_opens_without_it_and_says_so() {
+    let mut doc = with_timeline();
+    let mut tl = (**doc.design_timeline.as_ref().unwrap()).clone();
+    tl.steps[1].step = tl.steps[0].step;
+    doc.design_timeline = Some(Arc::new(tl));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let (back, warnings) = load_from_bytes_reporting(&bytes, &LoadOptions::default()).unwrap();
+    assert!(back.design_timeline.is_none());
+    assert!(warnings.iter().any(|w| w.contains("repeats a step number")), "{warnings:?}");
+    assert!(matches!(load_from_bytes(&bytes), Err(FormatError::Unsupported(_))));
+}
+
+#[test]
 fn a_timeline_whose_ids_cannot_be_kept_opens_without_it_and_says_so() {
     let mut doc = with_timeline();
     let mut tl = (**doc.design_timeline.as_ref().unwrap()).clone();

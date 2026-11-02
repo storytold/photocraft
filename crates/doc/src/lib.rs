@@ -101,6 +101,12 @@ impl IdScope {
         IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))))
     }
 
+    /// Install no scope until the guard drops: a scratch session inside a command keeps its own
+    /// steps rather than minting ids in the command's.
+    pub fn detach() -> IdScopeGuard {
+        IdScopeGuard(ID_SCOPE.with(|s| s.replace(None)))
+    }
+
     /// The next id of this step, or `None` once the step or its counter is out of range.
     fn mint(&self) -> Option<u64> {
         let n = self.next.fetch_add(1, Ordering::Relaxed);
@@ -147,17 +153,24 @@ pub fn reserve_unscoped_id(id: u64) -> bool {
 /// The first step id after every step that minted a layer or smart-contents id in `doc`, and
 /// every step of its design timeline (which may have minted none).
 pub fn next_step_after(doc: &Document) -> u64 {
-    let minted = doc
-        .walk()
-        .into_iter()
-        .flat_map(|(_, _, l)| {
-            let contents = if let LayerContent::Smart(sm) = &l.content { Some(sm.contents_id.0) } else { None };
-            [Some(l.id.0), contents]
-        })
-        .flatten()
-        .filter_map(id_step)
-        .max();
-    let steps = doc.design_timeline.as_ref().and_then(|t| t.steps.iter().map(|st| st.step).max());
+    let tl = doc.design_timeline.as_deref();
+    // The timeline's base and baked trees hold layers a replay brings back: their ids count too.
+    let mut stack: Vec<&Layer> = doc.layers.iter().collect();
+    if let Some(t) = tl {
+        stack.extend(&t.base.layers);
+        stack.extend(t.steps.iter().filter_map(|st| st.baked.as_deref()).flat_map(|b| &b.layers));
+    }
+    let mut minted = None;
+    while let Some(l) = stack.pop() {
+        let contents = if let LayerContent::Smart(sm) = &l.content { Some(sm.contents_id.0) } else { None };
+        for id in [Some(l.id.0), contents].into_iter().flatten() {
+            minted = minted.max(id_step(id));
+        }
+        if let Some(children) = l.children() {
+            stack.extend(children);
+        }
+    }
+    let steps = tl.and_then(|t| t.steps.iter().map(|st| st.step).max());
     minted.max(steps).map_or(0, |s| s.saturating_add(1))
 }
 
@@ -1697,6 +1710,44 @@ mod id_tests {
             d
         };
         assert_eq!(super::next_step_after(&doc), 10);
+    }
+
+    #[test]
+    fn next_step_after_covers_timeline_base_and_baked_layers() {
+        use super::design::{Baked, DesignStep, DesignTimeline};
+        let new_doc = || super::Document::new("d", super::Size::new(1, 1), super::ColorMode::Rgb, super::SampleType::U8);
+        let layer_in = |step| {
+            let _g = IdScope::new(step).enter();
+            super::Layer::raster("l", super::PixelFormat::RGBA8)
+        };
+        let mut base = new_doc();
+        base.layers.push(layer_in(7));
+        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None };
+        let step = DesignStep {
+            step: 3,
+            command: "x".into(),
+            params: serde_json::Value::Null,
+            label: "x".into(),
+            prelude: vec![],
+            active: None,
+            selected: vec![],
+            created: vec![],
+            changed: vec![],
+            suppressed: false,
+            joins_previous: false,
+            baked: Some(std::sync::Arc::new(baked)),
+            rerecord: false,
+            state: Default::default(),
+            checkpoint: Default::default(),
+        };
+        let mut doc = new_doc();
+        let mut tl = DesignTimeline::new(std::sync::Arc::new(base));
+        tl.steps.push(step.clone());
+        doc.design_timeline = Some(std::sync::Arc::new(tl.clone()));
+        assert_eq!(super::next_step_after(&doc), 13, "a baked layer's step counts");
+        tl.steps[0].baked = None;
+        doc.design_timeline = Some(std::sync::Arc::new(tl));
+        assert_eq!(super::next_step_after(&doc), 8, "a layer only the base holds counts");
     }
 
     #[test]

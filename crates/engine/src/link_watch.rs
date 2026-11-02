@@ -157,13 +157,16 @@ impl Session {
         }
         let mut updated = Vec::new();
         for (path, ids) in changed {
-            let r = self.edit("Update Modified Content", |d, _| {
-                for id in &ids {
-                    if !crate::smart_cmds::refresh(d, LayerId(*id))? {
-                        return Err(EngineError::Other(format!("{path} can't be read")));
+            // A design-timeline step keeping the new contents: a replay can't read the file as it was.
+            let r = self.record_outside("layer.smartObjects.updateChanged", json!({}), |s| {
+                s.edit("Update Modified Content", |d, _| {
+                    for id in &ids {
+                        if !crate::smart_cmds::refresh(d, LayerId(*id))? {
+                            return Err(EngineError::Other(format!("{path} can't be read")));
+                        }
                     }
-                }
-                Ok(())
+                    Ok(())
+                })
             });
             // Not readable (still being written, or not a format smart objects read): the edit left
             // nothing behind, and the file is tried again once it changes again, not on every look.
@@ -304,6 +307,35 @@ mod tests {
         assert_eq!(look(&mut s), json!({"updated": [id]}));
         assert!(is(centre(&s), BLUE));
         assert!(s.link_scan.is_none());
+    }
+
+    #[test]
+    fn a_background_refresh_is_a_baked_design_timeline_step() {
+        let d = dir("timeline");
+        let path = d.join("art.png");
+        std::fs::write(&path, png(10, 10, "#ff0000")).unwrap();
+        let (mut s, _) = placed(&path);
+        s.execute("design.start", json!({})).unwrap();
+        let look = |s: &mut Session| {
+            s.start_link_scan();
+            let t0 = std::time::Instant::now();
+            loop {
+                if let Some(r) = s.poll_link_scan() {
+                    return r.unwrap();
+                }
+                assert!(t0.elapsed().as_secs() < 10, "the look never finished");
+                std::thread::yield_now();
+            }
+        };
+        look(&mut s);
+        save(&path, &png(10, 10, "#0000ff"));
+        look(&mut s);
+        let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
+        assert_eq!(tl.steps.len(), 1, "{:?}", tl.steps.iter().map(|st| &st.command).collect::<Vec<_>>());
+        assert!(tl.steps[0].baked.is_some(), "a replay can't read the file as it was");
+        // A full replay keeps the refreshed contents.
+        s.execute("design.replay", json!({})).unwrap();
+        assert!(is(centre(&s), BLUE), "{:?}", centre(&s));
     }
 
     #[test]
