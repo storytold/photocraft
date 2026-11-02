@@ -1018,7 +1018,8 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
 
-// #10847: inspect actual CPU texture uploads, without a renderer or graphics device.
+/// Compare real preview texture uploads with the CPU canvas across profiles, depths and alpha.
+/// Check dirty updates and verify Cancel and an empty commit leave the document unchanged.
 fn managed_preview_texture(path: &str) {
     use photocraft_cms::Builtin;
     for profile in [Builtin::Srgb, Builtin::ProPhotoCompat, Builtin::LinearSrgb] {

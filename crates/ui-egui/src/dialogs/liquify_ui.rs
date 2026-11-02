@@ -1089,6 +1089,7 @@ fn refresh_display(app: &mut PhotocraftApp) {
     }
 }
 
+/// Draw the modal workspace, refresh its display textures and handle the current frame's controls.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     refresh_display(app);
     let t = Tokens::get(ctx);
