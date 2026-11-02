@@ -54,7 +54,7 @@
 # Strings added on main after this catalog was written (2026-10).
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 # Layer Style > Blending Options (Advanced Blending)
 
 # Swatches panel
@@ -4289,17 +4289,8 @@ navigator	Zoom	Zoom
 	Kept {name}: written by another application	{name} mantenuto: scritto da un’altra applicazione
 	Shadow Tint	Tinta ombre
 	Check for Updates…	Cerca aggiornamenti…
-	PhotoCraft Updates	Aggiornamenti di PhotoCraft
-	Checking for updates…	Ricerca aggiornamenti…
 	Open the release page to choose an installer for your system.	Apri la pagina della versione per scegliere un programma di installazione per il tuo sistema.
-	Open Download Page	Apri pagina di download
-	PhotoCraft is up to date.	PhotoCraft è aggiornato.
-	Could not check for updates.	Impossibile cercare aggiornamenti.
-	Updates have not been checked yet.	Gli aggiornamenti non sono ancora stati verificati.
-	Check Again	Controlla di nuovo
 	Automatically Check for Updates	Cerca automaticamente aggiornamenti
-	Installed version: {version}	Versione installata: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} è disponibile.
 	Paints from the History panel's source state	Dipinge dallo stato di origine del pannello Cronologia
 	Sets the source for the history brush	Imposta l'origine del pennello storia
 	Highlight Mode	Metodo luci
@@ -4560,6 +4551,9 @@ shape	Appearance	Aspetto
 	There is no color table to save.	Non c'è alcuna tabella colori da salvare.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Salvato {n} colore in {file}|Salvati {n} colori in {file}
 	GPU adapter	Adattatore GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Il contenuto AI/PDF/EPS verrà modificato come SVG. Il salvataggio sostituisce la sorgente incorporata; le caratteristiche specifiche del formato potrebbero cambiare.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…
 	Export Selected Styles…	Esporta stili selezionati…
 	Export Styles…	Esporta stili…
@@ -4609,6 +4603,7 @@ shape	Appearance	Aspetto
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Valore numerico non valido. È richiesto un numero intero compreso tra {min}% e {max}%. È stato inserito il valore precedente.
 	Color Aware	In base al colore
 	Decontaminate Colors	Decontamina colori
 	Edge Detection	Rilevamento bordi
@@ -4625,4 +4620,9 @@ shape	Appearance	Aspetto
 	Refine Hair needs hair detection, which isn't available yet	Migliora capelli richiede il rilevamento dei capelli, non ancora disponibile
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Colori usati di recente
+	Stop Color	Colore del punto
+	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…

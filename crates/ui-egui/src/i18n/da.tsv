@@ -2629,7 +2629,7 @@ cameraRaw	Roughness	Ruhed
 	Frequency	Frekvens
 	Use tablet pressure to change pen width	Brug tablettryk til at ændre penbredden
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 	About	Om
 	Contributors	Bidragydere
 	Models	Modeller
@@ -3278,17 +3278,8 @@ curves	Smooth	Udjævn
 	Shadow Opacity	Skyggeopacitet
 # PhotoCraft release checks.
 	Check for Updates…	Søg efter opdateringer…
-	PhotoCraft Updates	PhotoCraft-opdateringer
-	Checking for updates…	Søger efter opdateringer…
 	Open the release page to choose an installer for your system.	Åbn udgivelsessiden for at vælge et installationsprogram til dit system.
-	Open Download Page	Åbn downloadsiden
-	PhotoCraft is up to date.	PhotoCraft er opdateret.
-	Could not check for updates.	Kunne ikke søge efter opdateringer.
-	Updates have not been checked yet.	Der er endnu ikke søgt efter opdateringer.
-	Check Again	Søg igen
 	Automatically Check for Updates	Søg automatisk efter opdateringer
-	Installed version: {version}	Installeret version: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} er tilgængelig.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Brug den indlejrede profil ({profile})
 	Convert to the working space ({profile})	Konvertér til arbejdsfarverummet ({profile})
@@ -4723,7 +4714,6 @@ shape	Appearance	Udseende
 	Level:	Niveau:
 	Percentile:	Percentil:
 	Refine Edge…	Forfin kant…
-	Release Notes	Udgivelsesnoter
 	Remember Settings	Husk indstillinger
 	Reset Essentials	Nulstil Grundlæggende
 	Rounded Rectangle Tool	Afrundet rektangelværktøj
@@ -4734,7 +4724,6 @@ shape	Appearance	Udseende
 	Tile Horizontally	Side om side vandret
 	Tile Vertically	Side om side lodret
 	Uncached Refresh	Opdatering uden cache
-	Update and Restart	Opdatér og genstart
 	Warming Filter (81)	Opvarmningsfilter (81)
 	Warming Filter (LBA)	Opvarmningsfilter (LBA)
 @plural	{n} document|{n} documents	{n} dokument|{n} dokumenter

@@ -4085,17 +4085,8 @@ curves	Smooth	Vloeiend maken
 	Kept {name}: written by another application	{name} behouden: geschreven door een andere toepassing
 	Shadow Tint	Schaduwtint
 	Check for Updates…	Controleren op updates…
-	PhotoCraft Updates	PhotoCraft-updates
-	Checking for updates…	Controleren op updates…
 	Open the release page to choose an installer for your system.	Open de releasepagina om een installatieprogramma voor uw systeem te kiezen.
-	Open Download Page	Downloadpagina openen
-	PhotoCraft is up to date.	PhotoCraft is bijgewerkt.
-	Could not check for updates.	Kan niet controleren op updates.
-	Updates have not been checked yet.	Er is nog niet op updates gecontroleerd.
-	Check Again	Opnieuw controleren
 	Automatically Check for Updates	Automatisch op updates controleren
-	Installed version: {version}	Geïnstalleerde versie: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} is beschikbaar.
 	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
 	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
 	Highlight Mode	Hooglichtmodus
@@ -4204,6 +4195,9 @@ curves	Smooth	Vloeiend maken
 	There is no color table to save.	Er is geen kleurtabel om op te slaan.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} kleur opgeslagen in {file}|{n} kleuren opgeslagen in {file}
 	GPU adapter	GPU-adapter
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS-inhoud wordt als SVG bewerkt. Opslaan vervangt de ingesloten bron; formaatspecifieke eigenschappen kunnen veranderen.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stijlen importeren…
 	Export Selected Styles…	Geselecteerde stijlen exporteren…
 	Export Styles…	Stijlen exporteren…
@@ -4253,6 +4247,7 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ongeldige numerieke invoer. Er is een geheel getal tussen {min}% en {max}% vereist. De vorige waarde is ingevoegd.
 	Color Aware	Kleurbewust
 	Decontaminate Colors	Kleuren zuiveren
 	Edge Detection	Randdetectie
@@ -4270,4 +4265,9 @@ curves	Smooth	Vloeiend maken
 	Select and Mask was closed: its document is no longer the active one	Selecteren en maskeren is gesloten: het document is niet meer het actieve document
 	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 	Select Layer Under Cursor	Laag onder cursor selecteren
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Recent gebruikte kleuren
+	Stop Color	Kleur van het punt
+	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
