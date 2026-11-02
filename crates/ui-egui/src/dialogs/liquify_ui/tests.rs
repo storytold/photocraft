@@ -1212,6 +1212,7 @@ fn premultiplied_preview_samples_match_the_straight_canvas_display() {
             })
             // Full transparent batches and a short tail, even with nonzero working alpha.
             .chain(std::iter::repeat_n([4.0, -0.5, 0.25, 0.0001], 512))
+            .chain(std::iter::repeat_n([4.0, -0.5, 0.25, 0.37], 5))
             .collect();
         let image = display.to_rgba8(&photocraft_compose::Buffer { rect: Rect::new(0, 0, pixels.len() as i32, 1), px: pixels.clone() });
         let samples: Vec<_> = pixels.iter().map(|p| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]).collect();
