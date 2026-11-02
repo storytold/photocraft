@@ -3213,14 +3213,18 @@ fn select_color_components_preserve_unsupported_selection_shapes() {
         ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Chnl"), value: code("Cyn") },
         ReferenceItem::Identifier { class: class("Dcmn"), id: 7 },
     ];
-    for selection in [
-        desc("null").with("null", channel_ord("Xxxx")),
-        desc("null").with("null", channel_ref(Some("cyan"))).with("selectionModifier", enm("selectionModifierType", "addToSelection")),
-        desc("null").with("null", D::Reference(chained)),
-        desc("null").with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Ordn"), value: code("Cyn") }])),
+    for (mode, selection) in [
+        ("cmyk", desc("null").with("null", channel_ord("Xxxx"))),
+        ("cmyk", desc("null").with("null", channel_ref(Some("cyan"))).with("selectionModifier", enm("selectionModifierType", "addToSelection"))),
+        ("cmyk", desc("null").with("null", D::Reference(chained))),
+        ("cmyk", desc("null").with("null", D::Reference(vec![ReferenceItem::Enumerated { class: class("Chnl"), type_id: code("Ordn"), value: code("Cyn") }]))),
+        // Shift-click adds the channel to the selection; playing it as a plain select would lose that.
+        ("cmyk", desc("null").with("null", channel_ref(Some("cyan"))).with("Extd", D::Boolean(true))),
+        // The legacy `Lmnc` code would otherwise target Lightness and save back as `Lght`.
+        ("lab", desc("null").with("null", channel_ord("Lmnc"))),
     ] {
         let mut s = Session::new();
-        s.execute("file.new", json!({"width": 2, "height": 1, "mode": "cmyk"})).unwrap();
+        s.execute("file.new", json!({"width": 2, "height": 1, "mode": mode})).unwrap();
         let data = set_of("Unknown", vec![("Pick", vec![item("select", "Select", Some(selection.clone()))])]);
         let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1);
@@ -3247,6 +3251,13 @@ fn select_color_components_preserve_unsupported_selection_shapes() {
     let gray = set_of("Gray", vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ord("Gry"))))])]);
     let bytes = photocraft_paint::tile::b64_decode(&gray).unwrap();
     assert_eq!(import(&bytes).unwrap().actions[0].steps[0], ("channel.target".into(), json!({"channel": "composite"})));
+    // A plain click (`Extd` false) is still an ordinary single-channel select.
+    let plain = set_of(
+        "Plain",
+        vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ref(Some("cyan"))).with("Extd", D::Boolean(false))))])],
+    );
+    let bytes = photocraft_paint::tile::b64_decode(&plain).unwrap();
+    assert_eq!(import(&bytes).unwrap().actions[0].steps[0], ("channel.target".into(), json!({"channel": {"color": "cyan"}})));
 }
 
 /// A CMYK component cannot retarget a same-named alpha channel when replayed on RGB.

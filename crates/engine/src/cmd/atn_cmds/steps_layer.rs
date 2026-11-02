@@ -6,7 +6,7 @@ use super::descriptors::{
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
 use super::steps_make::is_tool_class;
-use super::tables::{CHANNELS, FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, channel_of, lookup, lookup_back};
+use super::tables::{CHANNELS, FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, Id, Map, ReferenceItem, UnicodeString, Value, json};
 
 /// Translate supported selection targets, retaining unknown references as Photoshop steps.
@@ -32,9 +32,12 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
             "Trgt" => Mapped::Unsupported { harmless: true },
             _ if r.len() == 1
                 && d.get("selectionModifier").is_none()
+                // Shift-click (`Extd` true) adds the channel to the selection: kept verbatim.
+                && !matches!(d.get("Extd"), Some(v) if v != &D::Boolean(false))
                 && matches!(r.first(), Some(ReferenceItem::Enumerated { type_id, .. }) if type_id.is("Chnl")) =>
             {
-                channel_of(&o).map_or(Mapped::Unsupported { harmless: false }, |channel| step("channel.target", json!({"channel": {"color": channel}})))
+                // The exact code only: the legacy `Lmnc` would save back as `Lght`.
+                lookup(CHANNELS, &o).map_or(Mapped::Unsupported { harmless: false }, |channel| step("channel.target", json!({"channel": {"color": channel}})))
             }
             _ => Mapped::Unsupported { harmless: false },
         },
