@@ -2,7 +2,7 @@ use super::lower::{
     Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths, style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskFillUse, MaskSource, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
-use super::*;
+use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerContent, LayerId, Plan, Rect, Slot, Surface, bounds, has_effects};
 
 pub(super) struct Planner<'a> {
     passes: Vec<Pass<'a>>,

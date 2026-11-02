@@ -366,7 +366,7 @@ fn refresh_region_with_shell_ids(mask: &mut LayerMask, bounds: Rect, shell_ids: 
                     })
                     .max()
                     .unwrap_or(0);
-                let memory_workers = if largest_region_bytes == 0 { worker_count } else { (WORKING_SET_BUDGET_BYTES / largest_region_bytes).max(1) };
+                let memory_workers = WORKING_SET_BUDGET_BYTES.checked_div(largest_region_bytes).unwrap_or(worker_count).max(1);
                 let batch_size = worker_count.min(memory_workers).max(1);
                 for batch in bands.chunks(batch_size) {
                     let composed =
@@ -418,7 +418,7 @@ fn refresh_region_with_shell_ids(mask: &mut LayerMask, bounds: Rect, shell_ids: 
                 })
                 .max()
                 .unwrap_or(0);
-            let memory_workers = if largest_region_bytes == 0 { worker_count } else { (WORKING_SET_BUDGET_BYTES / largest_region_bytes).max(1) };
+            let memory_workers = WORKING_SET_BUDGET_BYTES.checked_div(largest_region_bytes).unwrap_or(worker_count).max(1);
             let batch_size = worker_count.min(memory_workers).max(1);
             for batch in bands.chunks(batch_size) {
                 let composed = batch.par_iter().map(|band| compose_stack_region_impl(stack, stack.layers.len(), *band, shell_ids)).collect::<Vec<_>>();
@@ -1052,21 +1052,38 @@ fn gaussian_blur_region_with_shell_ids(input: &[f32], region: Rect, radius: u8, 
 
     let output_width = usize::try_from(output.width()).ok()?;
     let output_height = usize::try_from(output.height()).ok()?;
-    let horizontal_len = output_width.checked_mul(height)?;
-    let mut shell_values = Vec::new();
-    shell_values.try_reserve_exact(horizontal_len).ok()?;
-    shell_values.resize(horizontal_len, 0.0f32);
-    let mut shell_weights = Vec::new();
-    shell_weights.try_reserve_exact(horizontal_len).ok()?;
-    shell_weights.resize(horizontal_len, 0.0f32);
-    let mut outward_values = Vec::new();
-    outward_values.try_reserve_exact(horizontal_len).ok()?;
-    outward_values.resize(horizontal_len, 0.0f32);
+    let geometry = ShellBlurGeometry { region, width, height, output_width, output_height, radius: r };
+    let intermediate = horizontal_shell_blur(input, geometry, &kernel, shell_ids)?;
+    let output_pixels = vertical_shell_blur(geometry, &kernel, shell_ids, &intermediate)?;
+    Some((output_pixels, output))
+}
 
+#[derive(Clone, Copy)]
+struct ShellBlurGeometry {
+    region: Rect,
+    width: usize,
+    height: usize,
+    output_width: usize,
+    output_height: usize,
+    radius: i32,
+}
+
+struct ShellBlurBuffers {
+    shell_values: Vec<f32>,
+    shell_weights: Vec<f32>,
+    outward_values: Vec<f32>,
+}
+
+fn horizontal_shell_blur(input: &[f32], geometry: ShellBlurGeometry, kernel: &[f32], shell_ids: ShellIdMap<'_>) -> Option<ShellBlurBuffers> {
+    let ShellBlurGeometry { region, width, height, output_width, radius, .. } = geometry;
+    let length = output_width.checked_mul(height)?;
+    let mut shell_values = zeroed_f32_buffer(length)?;
+    let mut shell_weights = zeroed_f32_buffer(length)?;
+    let mut outward_values = zeroed_f32_buffer(length)?;
     for y in 0..height {
         let absolute_y = region.y0.saturating_add(i32::try_from(y).ok()?);
         for x in 0..output_width {
-            let qx = region.x0.saturating_add(r).saturating_add(i32::try_from(x).ok()?);
+            let qx = region.x0.saturating_add(radius).saturating_add(i32::try_from(x).ok()?);
             let q_shell = shell_ids.id_at(qx, absolute_y);
             let output_index = y.checked_mul(output_width)?.checked_add(x)?;
             for (kernel_index, weight) in kernel.iter().copied().enumerate() {
@@ -1084,14 +1101,17 @@ fn gaussian_blur_region_with_shell_ids(input: &[f32], region: Rect, radius: u8, 
             }
         }
     }
+    Some(ShellBlurBuffers { shell_values, shell_weights, outward_values })
+}
 
-    let mut output_pixels = Vec::new();
-    output_pixels.try_reserve_exact(output_width.checked_mul(output_height)?).ok()?;
-    output_pixels.resize(output_width.checked_mul(output_height)?, 0.0f32);
+fn vertical_shell_blur(geometry: ShellBlurGeometry, kernel: &[f32], shell_ids: ShellIdMap<'_>, buffers: &ShellBlurBuffers) -> Option<Vec<f32>> {
+    let ShellBlurGeometry { region, output_width, output_height, radius, .. } = geometry;
+    let length = output_width.checked_mul(output_height)?;
+    let mut output_pixels = zeroed_f32_buffer(length)?;
     for y in 0..output_height {
-        let py = region.y0.saturating_add(r).saturating_add(i32::try_from(y).ok()?);
+        let py = region.y0.saturating_add(radius).saturating_add(i32::try_from(y).ok()?);
         for x in 0..output_width {
-            let px = region.x0.saturating_add(r).saturating_add(i32::try_from(x).ok()?);
+            let px = region.x0.saturating_add(radius).saturating_add(i32::try_from(x).ok()?);
             let p_shell = shell_ids.id_at(px, py);
             let mut value = 0.0f32;
             let mut support = 0.0f32;
@@ -1100,10 +1120,10 @@ fn gaussian_blur_region_with_shell_ids(input: &[f32], region: Rect, radius: u8, 
                 let qy = region.y0.saturating_add(i32::try_from(sy).ok()?);
                 let index = sy.checked_mul(output_width)?.checked_add(x)?;
                 if p_shell == 0 {
-                    value += *outward_values.get(index)? * weight;
+                    value += *buffers.outward_values.get(index)? * weight;
                 } else if shell_ids.id_at(px, qy) == p_shell {
-                    value += *shell_values.get(index)? * weight;
-                    support += *shell_weights.get(index)? * weight;
+                    value += *buffers.shell_values.get(index)? * weight;
+                    support += *buffers.shell_weights.get(index)? * weight;
                 }
             }
             let output_index = y.checked_mul(output_width)?.checked_add(x)?;
@@ -1116,7 +1136,14 @@ fn gaussian_blur_region_with_shell_ids(input: &[f32], region: Rect, radius: u8, 
             };
         }
     }
-    Some((output_pixels, output))
+    Some(output_pixels)
+}
+
+fn zeroed_f32_buffer(length: usize) -> Option<Vec<f32>> {
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(length).ok()?;
+    buffer.resize(length, 0.0);
+    Some(buffer)
 }
 
 /// Compose a mask stack into a small preview grid. Spatial Blur radii are scaled to the

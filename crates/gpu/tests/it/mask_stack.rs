@@ -1,7 +1,7 @@
 use photocraft_color::PixelFormat;
 use photocraft_doc::mask_paint::{EffectKind, Paint, Stack};
 use photocraft_geom::Rect;
-use photocraft_gpu::{MaskBrushSettings, MaskRoundDab, MaskStackRenderer};
+use photocraft_gpu::{MaskBrushPreviewRequest, MaskBrushSettings, MaskBrushStackRenderRequest, MaskRoundDab, MaskStackRenderRequest, MaskStackRenderer};
 use photocraft_raster::Surface;
 
 use crate::GPU_LOCK;
@@ -60,7 +60,13 @@ fn gpu_spatial_and_legacy_image_fill_match_cpu_stack() {
         let stack = Stack { base: Surface::with_default(PixelFormat::GRAY8, &[0.6]), layers: vec![layer], active: 0 };
         let target = create_test_target(&device, size);
         let mut renderer = MaskStackRenderer::new(&device);
-        renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 100 + index as u64, 1, &target).unwrap();
+        renderer
+            .render_cached(
+                &device,
+                &queue,
+                MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 100 + index as u64, shell_key: 1, target: &target },
+            )
+            .unwrap();
         let actual = read_gray(&device, &queue, &target, size);
         let shell_map = photocraft_compose::mask_paint::ShellIdMap::new(rect, &shell_ids).unwrap();
         let expected = photocraft_compose::mask_paint::compose_stack_region_with_shell_ids(&stack, stack.layers.len(), rect, shell_map).unwrap();
@@ -103,7 +109,13 @@ fn gpu_mask_fill_blend_modes_match_cpu_semantics() {
         };
         let target = create_test_target(&device, size);
         let mut renderer = MaskStackRenderer::new(&device);
-        renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 700 + index as u64, 1, &target).unwrap();
+        renderer
+            .render_cached(
+                &device,
+                &queue,
+                MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 700 + index as u64, shell_key: 1, target: &target },
+            )
+            .unwrap();
         let actual = read_gray(&device, &queue, &target, size);
         let shell_map = photocraft_compose::mask_paint::ShellIdMap::new(rect, &shell_ids).unwrap();
         let expected = photocraft_compose::mask_paint::compose_stack_region_with_shell_ids(&stack, stack.layers.len(), rect, shell_map).unwrap();
@@ -156,11 +168,13 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
         .begin_round_mask_brush_preview(
             &device,
             &queue,
-            991,
-            size,
-            &stack,
-            &base,
-            MaskBrushSettings { hardness: brush.hardness, stroke_opacity: brush.opacity, color: brush.color },
+            MaskBrushPreviewRequest {
+                owner_key: 991,
+                size,
+                stack: &stack,
+                base_paint: &base,
+                settings: MaskBrushSettings { hardness: brush.hardness, stroke_opacity: brush.opacity, color: brush.color },
+            },
         )
         .unwrap();
     let split = gpu_dabs.len() / 2;
@@ -177,7 +191,7 @@ fn gpu_round_dab_preview_and_release_patches_match_cpu_stroke() {
     photocraft_paint::render_stroke(&mut canonical, &brush, &points, None, false, 1.0);
     for patch in patches {
         let expected = canonical.try_read_region(patch.rect).unwrap();
-        for (pixel_index, (actual, expected)) in patch.pixels_rgba8.chunks_exact(4).zip(expected.chunks_exact(4)).enumerate() {
+        for (pixel_index, (actual, expected)) in patch.pixels_rgba8.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0.iter()).enumerate() {
             for channel in 0..4 {
                 let actual = f32::from(actual[channel]) / 255.0;
                 assert!(
@@ -241,16 +255,20 @@ fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
     };
     let target = create_test_target(&device, size);
     let mut renderer = MaskStackRenderer::new(&device);
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 818, 14, &target).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 818, shell_key: 14, target: &target })
+        .unwrap();
     renderer
         .begin_round_mask_brush_preview(
             &device,
             &queue,
-            818,
-            size,
-            &stack,
-            &base,
-            MaskBrushSettings { hardness: 0.7, stroke_opacity: 0.8, color: [1.0, 1.0, 1.0, 1.0] },
+            MaskBrushPreviewRequest {
+                owner_key: 818,
+                size,
+                stack: &stack,
+                base_paint: &base,
+                settings: MaskBrushSettings { hardness: 0.7, stroke_opacity: 0.8, color: [1.0, 1.0, 1.0, 1.0] },
+            },
         )
         .unwrap();
     renderer
@@ -265,7 +283,21 @@ fn gpu_brush_preview_recomposes_downstream_blur_and_matches_full_stack() {
         .unwrap();
     let dirty = renderer.take_mask_brush_dirty_regions();
     assert!(!dirty.is_empty());
-    renderer.render_cached_with_brush_preview(&device, &queue, &stack, size, &shell_ids, 14, 0, &dirty, &target).unwrap();
+    renderer
+        .render_cached_with_brush_preview(
+            &device,
+            &queue,
+            MaskBrushStackRenderRequest {
+                stack: &stack,
+                size,
+                shell_ids: &shell_ids,
+                shell_key: 14,
+                paint_layer_index: 0,
+                dirty_regions: &dirty,
+                target: &target,
+            },
+        )
+        .unwrap();
     let actual = read_gray(&device, &queue, &target, size);
 
     for patch in renderer.read_mask_brush_patches(&device, &queue).unwrap() {
@@ -481,7 +513,7 @@ fn incremental_paint_tile_upload_matches_fresh_render_through_multiple_blurs() {
     let mut base = Surface::with_default(PixelFormat::GRAY8, &[0.5]);
     base.fill_rect(rect, &[0.5]);
     let mut paint = Surface::new(PixelFormat::RGBA8);
-    paint.write_region(Rect::new(8, 3, 10, 5), &[0.0, 0.0, 0.0, 1.0].repeat(4).as_slice());
+    paint.write_region(Rect::new(8, 3, 10, 5), [0.0, 0.0, 0.0, 1.0].repeat(4).as_slice());
     let make_layer = |name: &str, kind| Paint {
         name: name.into(),
         visible: true,
@@ -514,16 +546,22 @@ fn incremental_paint_tile_upload_matches_fresh_render_through_multiple_blurs() {
     };
     let target = create_test_target(&device, size);
     let mut renderer = MaskStackRenderer::new(&device);
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 77, 9, &target).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 77, shell_key: 9, target: &target })
+        .unwrap();
 
     // This edit allocates/changes one surface tile in the adjacent tile column.
-    stack.layers[0].surface.write_region(Rect::new(270, 4, 273, 7), &[0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 77, 9, &target).unwrap();
+    stack.layers[0].surface.write_region(Rect::new(270, 4, 273, 7), [0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 77, shell_key: 9, target: &target })
+        .unwrap();
     let incremental = read_gray(&device, &queue, &target, size);
 
     let fresh = create_test_target(&device, size);
     let mut fresh_renderer = MaskStackRenderer::new(&device);
-    fresh_renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 77, 9, &fresh).unwrap();
+    fresh_renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 77, shell_key: 9, target: &fresh })
+        .unwrap();
     let full = read_gray(&device, &queue, &fresh, size);
     assert_eq!(incremental.len(), full.len());
     for (index, (incremental, full)) in incremental.iter().zip(full.iter()).enumerate() {
@@ -562,14 +600,20 @@ fn paint_only_change_recomposites_dirty_region_and_matches_full_render() {
     let shell_ids = vec![1; (size[0] * size[1]) as usize];
     let output = create_test_target(&device, size);
     let mut renderer = MaskStackRenderer::new(&device);
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 78, 9, &output).unwrap();
-    stack.layers[0].surface.write_region(Rect::new(270, 4, 273, 7), &[0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 78, 9, &output).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 78, shell_key: 9, target: &output })
+        .unwrap();
+    stack.layers[0].surface.write_region(Rect::new(270, 4, 273, 7), [0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 78, shell_key: 9, target: &output })
+        .unwrap();
     let incremental = read_gray(&device, &queue, &output, size);
 
     let expected = create_test_target(&device, size);
     let mut full_renderer = MaskStackRenderer::new(&device);
-    full_renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 78, 9, &expected).unwrap();
+    full_renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 78, shell_key: 9, target: &expected })
+        .unwrap();
     let full = read_gray(&device, &queue, &expected, size);
     for (index, (incremental, full)) in incremental.iter().zip(full.iter()).enumerate() {
         assert!((incremental - full).abs() < 0.001, "pixel {index}: partial={incremental}, full={full}");
@@ -593,7 +637,9 @@ fn unchanged_stack_reuses_the_caller_target_without_full_replay() {
     let shells = vec![1; (size[0] * size[1]) as usize];
     let output = create_test_target(&device, size);
     let mut renderer = MaskStackRenderer::new(&device);
-    renderer.render_cached(&device, &queue, &stack, size, &shells, 901, 1, &output).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shells, owner_key: 901, shell_key: 1, target: &output })
+        .unwrap();
     let sentinel = half::f16::from_f32(0.9375).to_le_bytes();
     let alpha = half::f16::from_f32(1.0).to_le_bytes();
     let pixel = [sentinel[0], sentinel[1], 0, 0, 0, 0, alpha[0], alpha[1]];
@@ -603,7 +649,9 @@ fn unchanged_stack_reuses_the_caller_target_without_full_replay() {
         wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
         wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
     );
-    renderer.render_cached(&device, &queue, &stack, size, &shells, 901, 1, &output).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shells, owner_key: 901, shell_key: 1, target: &output })
+        .unwrap();
     let actual = read_gray(&device, &queue, &output, size);
     assert!((actual[2 * size[0] as usize + 3] - 0.9375).abs() < 0.001);
 }
@@ -622,7 +670,7 @@ fn paint_above_blur_reuses_blur_prefix_and_matches_full_render() {
     };
     let size = [64, 32];
     let mut seed = Surface::new(PixelFormat::RGBA8);
-    seed.write_region(Rect::new(24, 10, 32, 18), &[0.0, 0.0, 0.0, 1.0].repeat(64).as_slice());
+    seed.write_region(Rect::new(24, 10, 32, 18), [0.0, 0.0, 0.0, 1.0].repeat(64).as_slice());
     let layer = |name: &str, surface, kind| Paint {
         name: name.into(),
         visible: true,
@@ -646,14 +694,20 @@ fn paint_above_blur_reuses_blur_prefix_and_matches_full_render() {
     let shell_ids = vec![1; (size[0] * size[1]) as usize];
     let output = create_test_target(&device, size);
     let mut renderer = MaskStackRenderer::new(&device);
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 79, 9, &output).unwrap();
-    stack.layers[1].surface.write_region(Rect::new(42, 8, 45, 11), &[0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
-    renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 79, 9, &output).unwrap();
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 79, shell_key: 9, target: &output })
+        .unwrap();
+    stack.layers[1].surface.write_region(Rect::new(42, 8, 45, 11), [0.0, 0.0, 0.0, 1.0].repeat(9).as_slice());
+    renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 79, shell_key: 9, target: &output })
+        .unwrap();
     let incremental = read_gray(&device, &queue, &output, size);
 
     let expected = create_test_target(&device, size);
     let mut full_renderer = MaskStackRenderer::new(&device);
-    full_renderer.render_cached(&device, &queue, &stack, size, &shell_ids, 79, 9, &expected).unwrap();
+    full_renderer
+        .render_cached(&device, &queue, MaskStackRenderRequest { stack: &stack, size, shell_ids: &shell_ids, owner_key: 79, shell_key: 9, target: &expected })
+        .unwrap();
     let full = read_gray(&device, &queue, &expected, size);
     for (index, (incremental, full)) in incremental.iter().zip(full.iter()).enumerate() {
         assert!((incremental - full).abs() < 0.001, "pixel {index}: resumed={incremental}, full={full}");

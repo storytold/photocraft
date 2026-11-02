@@ -46,6 +46,70 @@ pub struct MaskBrushSettings {
     pub color: [f32; 4],
 }
 
+/// Inputs for starting a temporary GPU mask-brush preview.
+pub struct MaskBrushPreviewRequest<'a> {
+    pub owner_key: u64,
+    pub size: [u32; 2],
+    pub stack: &'a Stack,
+    pub base_paint: &'a Surface,
+    pub settings: MaskBrushSettings,
+}
+
+/// Inputs for a cached mask-stack render.
+pub struct MaskStackRenderRequest<'a> {
+    pub stack: &'a Stack,
+    pub size: [u32; 2],
+    pub shell_ids: &'a [u32],
+    pub owner_key: u64,
+    pub shell_key: u64,
+    pub target: &'a wgpu::Texture,
+}
+
+/// Inputs for recomposing a mask stack with a live GPU brush preview.
+pub struct MaskBrushStackRenderRequest<'a> {
+    pub stack: &'a Stack,
+    pub size: [u32; 2],
+    pub shell_ids: &'a [u32],
+    pub shell_key: u64,
+    pub paint_layer_index: usize,
+    pub dirty_regions: &'a [Rect],
+    pub target: &'a wgpu::Texture,
+}
+
+struct CachedRender<'a> {
+    stack: &'a Stack,
+    size: [u32; 2],
+    shell_ids: &'a [u32],
+    owner_key: u64,
+    shell_key: u64,
+    target: &'a wgpu::Texture,
+    brush_override: Option<(usize, &'a wgpu::Texture, &'a [Rect])>,
+    force_render: bool,
+}
+
+struct DrawStageInputs<'a> {
+    source: &'a wgpu::TextureView,
+    auxiliary: &'a wgpu::TextureView,
+    shells: &'a wgpu::TextureView,
+    target: &'a wgpu::TextureView,
+    size: [u32; 2],
+    params: [u8; 80],
+    damage: Option<&'a [Rect]>,
+    kernel_weights: &'a wgpu::Buffer,
+    coverage_buffer: &'a wgpu::Buffer,
+}
+
+struct FillParams {
+    size: [u32; 2],
+    opacity: f32,
+    blend: i32,
+    value: f32,
+    bounds: [i32; 4],
+    rotation: f32,
+    map_size: [u32; 2],
+    flags: u32,
+}
+
 /// One dirty canonical Paint patch read back when the gesture ends. Pixels are packed row-major
 /// straight RGBA8; the patch origin is `rect.(x0,y0)` and row stride is `rect.width() * 4`.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,16 +252,8 @@ impl MaskStackRenderer {
     /// Start a temporary GPU preview stroke over an existing four-channel Paint surface. This
     /// preview is separate from the canonical Surface; callers commit the final dirty patches via
     /// the existing CPU command/Undo path, or discard it with `cancel_mask_brush_preview`.
-    pub fn begin_round_mask_brush_preview(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        owner_key: u64,
-        size: [u32; 2],
-        stack: &Stack,
-        base_paint: &Surface,
-        settings: MaskBrushSettings,
-    ) -> Result<(), String> {
+    pub fn begin_round_mask_brush_preview(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, request: MaskBrushPreviewRequest<'_>) -> Result<(), String> {
+        let MaskBrushPreviewRequest { owner_key, size, stack, base_paint, settings } = request;
         if size.contains(&0)
             || size.iter().any(|side| *side > device.limits().max_texture_dimension_2d)
             || !rgba8_compatible(base_paint)
@@ -213,7 +269,7 @@ impl MaskStackRenderer {
         validate_brush_preview_budget(stack, size, rgba8_compatible(base_paint))?;
         let coverage_bytes =
             u64::from(size[0]).checked_mul(u64::from(size[1])).and_then(|pixels| pixels.checked_mul(4)).ok_or("GPU mask brush coverage size overflow")?;
-        if coverage_bytes > u64::from(device.limits().max_storage_buffer_binding_size) || coverage_bytes > device.limits().max_buffer_size {
+        if coverage_bytes > device.limits().max_storage_buffer_binding_size || coverage_bytes > device.limits().max_buffer_size {
             return Err("GPU mask brush coverage exceeds the storage-buffer limit".into());
         }
         let base = create_cached_surface(device, queue, size, base_paint, "pc_mask_brush_base")?;
@@ -239,15 +295,17 @@ impl MaskStackRenderer {
             &self.textures_layout,
             device,
             &mut encoder,
-            &base_view,
-            &dummy_view,
-            &shell_view,
-            &output_view,
-            size,
-            brush_composite_params(size, settings),
-            None,
-            &self.kernel_weights,
-            &preview.coverage,
+            DrawStageInputs {
+                source: &base_view,
+                auxiliary: &dummy_view,
+                shells: &shell_view,
+                target: &output_view,
+                size,
+                params: brush_composite_params(size, settings),
+                damage: None,
+                kernel_weights: &self.kernel_weights,
+                coverage_buffer: &preview.coverage,
+            },
         )?;
         queue.submit([encoder.finish()]);
         self.brush_preview = Some(preview);
@@ -312,15 +370,17 @@ impl MaskStackRenderer {
             &self.textures_layout,
             device,
             &mut encoder,
-            &base_view,
-            &dummy_view,
-            &shell_view,
-            &output_view,
-            preview.size,
-            brush_composite_params(preview.size, preview.settings),
-            Some(&damage),
-            &self.kernel_weights,
-            &preview.coverage,
+            DrawStageInputs {
+                source: &base_view,
+                auxiliary: &dummy_view,
+                shells: &shell_view,
+                target: &output_view,
+                size: preview.size,
+                params: brush_composite_params(preview.size, preview.settings),
+                damage: Some(&damage),
+                kernel_weights: &self.kernel_weights,
+                coverage_buffer: &preview.coverage,
+            },
         )?;
         queue.submit([encoder.finish()]);
         for rect in &damage {
@@ -551,24 +611,23 @@ impl MaskStackRenderer {
         shell_ids: &[u32],
         target: &wgpu::Texture,
     ) -> Result<(), String> {
-        self.render_cached_internal(device, queue, stack, size, shell_ids, 0, 0, target, None, true)
+        self.render_cached_internal(
+            device,
+            queue,
+            CachedRender { stack, size, shell_ids, owner_key: 0, shell_key: 0, target, brush_override: None, force_render: true },
+        )
     }
 
     /// Reuse same-size input and intermediate textures. `owner_key` identifies a mask stack;
     /// `shell_key` identifies the topology/material ownership map. The caller must keep the
     /// target texture stable while reusing an owner key, because unchanged frames are skipped.
-    pub fn render_cached(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        stack: &Stack,
-        size: [u32; 2],
-        shell_ids: &[u32],
-        owner_key: u64,
-        shell_key: u64,
-        target: &wgpu::Texture,
-    ) -> Result<(), String> {
-        self.render_cached_internal(device, queue, stack, size, shell_ids, owner_key, shell_key, target, None, false)
+    pub fn render_cached(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, request: MaskStackRenderRequest<'_>) -> Result<(), String> {
+        let MaskStackRenderRequest { stack, size, shell_ids, owner_key, shell_key, target } = request;
+        self.render_cached_internal(
+            device,
+            queue,
+            CachedRender { stack, size, shell_ids, owner_key, shell_key, target, brush_override: None, force_render: false },
+        )
     }
 
     /// Recompose the stack with a transient live GPU Paint map. The brush renderer must have been
@@ -577,14 +636,9 @@ impl MaskStackRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        stack: &Stack,
-        size: [u32; 2],
-        shell_ids: &[u32],
-        shell_key: u64,
-        paint_layer_index: usize,
-        dirty_regions: &[Rect],
-        target: &wgpu::Texture,
+        request: MaskBrushStackRenderRequest<'_>,
     ) -> Result<(), String> {
+        let MaskBrushStackRenderRequest { stack, size, shell_ids, shell_key, paint_layer_index, dirty_regions, target } = request;
         let (owner_key, output) = {
             let preview = self.brush_preview.as_ref().ok_or("No active GPU mask brush preview")?;
             if preview.size != size || stack.layers.get(paint_layer_index).is_none_or(|layer| !matches!(&layer.kind, EffectKind::Paint)) {
@@ -595,59 +649,22 @@ impl MaskStackRenderer {
         self.render_cached_internal(
             device,
             queue,
-            stack,
-            size,
-            shell_ids,
-            owner_key,
-            shell_key,
-            target,
-            Some((paint_layer_index, output.as_ref(), dirty_regions)),
-            false,
+            CachedRender {
+                stack,
+                size,
+                shell_ids,
+                owner_key,
+                shell_key,
+                target,
+                brush_override: Some((paint_layer_index, output.as_ref(), dirty_regions)),
+                force_render: false,
+            },
         )
     }
 
-    fn render_cached_internal(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        stack: &Stack,
-        size: [u32; 2],
-        shell_ids: &[u32],
-        owner_key: u64,
-        shell_key: u64,
-        target: &wgpu::Texture,
-        brush_override: Option<(usize, &wgpu::Texture, &[Rect])>,
-        force_render: bool,
-    ) -> Result<(), String> {
-        let count = usize::try_from(size[0]).ok().and_then(|w| usize::try_from(size[1]).ok().and_then(|h| w.checked_mul(h)));
-        if size.contains(&0)
-            || size.iter().any(|side| *side > device.limits().max_texture_dimension_2d)
-            || count != Some(shell_ids.len())
-            || target.size().width != size[0]
-            || target.size().height != size[1]
-            || target.format() != wgpu::TextureFormat::Rgba16Float
-        {
-            return Err("Mask-stack target or shell map has an invalid size/format".into());
-        }
-        Self::validate(stack)?;
-        for layer in &stack.layers {
-            if !layer.visible || layer.opacity <= 0.0 {
-                continue;
-            }
-            if matches!(&layer.kind, EffectKind::Fill { .. })
-                && let Some([width, height]) = layer.fill_map.as_ref().map(|_| layer.fill_map_size)
-            {
-                let bytes = u64::from(width).checked_mul(u64::from(height)).and_then(|pixels| pixels.checked_mul(4));
-                if width == 0
-                    || height == 0
-                    || width > device.limits().max_texture_dimension_2d
-                    || height > device.limits().max_texture_dimension_2d
-                    || bytes.is_none_or(|bytes| bytes > MAX_MASK_FILL_MAP_BYTES)
-                {
-                    return Err("Mask Fill image exceeds the GPU preview allocation limit".into());
-                }
-            }
-        }
+    fn render_cached_internal(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, request: CachedRender<'_>) -> Result<(), String> {
+        validate_render_inputs(device, &request)?;
+        let CachedRender { stack, size, shell_ids, owner_key, shell_key, target, brush_override, force_render } = request;
         let has_blur =
             stack.layers.iter().any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { radius } if *radius > 0));
         Self::validate_allocation_budget(stack, size)?;
@@ -664,123 +681,7 @@ impl MaskStackRenderer {
             cache.shell = Some(upload_shell_ids(device, queue, size, shell_ids));
             cache.shell_key = Some(shell_key);
         }
-        let mut layers = Vec::new();
-        let mut changed_regions = Vec::new();
-        let mut changed_layer_index = None;
-        let mut paint_index = 0usize;
-        let mut fill_index = 0usize;
-        for (layer_index, layer) in stack.layers.iter().enumerate() {
-            if !layer.visible || layer.opacity <= 0.0 {
-                continue;
-            }
-            if !layer.opacity.is_finite() || !(0.0..=1.0).contains(&layer.opacity) {
-                return Err("Mask-stack layer has invalid opacity".into());
-            }
-            let mode = mask_blend_code(layer.blend).ok_or_else(|| "Mask-stack blend mode is unsupported by the GPU preview".to_string())?;
-            match &layer.kind {
-                EffectKind::Paint => {
-                    if layer.surface.channels() != 4 {
-                        return Err("Mask Paint surface must have four channels".into());
-                    }
-                    while cache.paints.len() <= paint_index {
-                        cache.paints.push(None);
-                    }
-                    let paint = &mut cache.paints[paint_index];
-                    if paint.is_none() {
-                        *paint = Some(create_cached_surface(device, queue, size, &layer.surface, "pc_mask_paint_input")?);
-                        changed_regions = vec![full_bounds(size)];
-                        changed_layer_index = Some(layer_index);
-                    } else if let Some(paint) = paint {
-                        let dirty = sync_cached_surface(device, queue, size, &layer.surface, paint, true)?;
-                        if !dirty.is_empty() {
-                            for rect in dirty {
-                                add_regions(&mut changed_regions, rect);
-                            }
-                            changed_layer_index = Some(changed_layer_index.map_or(layer_index, |current: usize| current.min(layer_index)));
-                        }
-                    }
-                    layers.push((layer_index, layer.opacity, mode, MaskLayer::Paint(paint_index)));
-                    paint_index += 1;
-                }
-                EffectKind::Fill { value, rotation, repeat_u, repeat_v, mirror_u, mirror_v } => {
-                    if !value.is_finite() || !(0.0..=1.0).contains(value) {
-                        return Err("Mask Fill value is invalid".into());
-                    }
-                    let mut map_index = None;
-                    if let Some(map) = &layer.fill_map {
-                        let [map_width, map_height] = layer.fill_map_size;
-                        if map_width == 0
-                            || map_height == 0
-                            || map_width > device.limits().max_texture_dimension_2d
-                            || map_height > device.limits().max_texture_dimension_2d
-                        {
-                            return Err("Mask Fill image has an invalid size".into());
-                        }
-                        while cache.fills.len() <= fill_index {
-                            cache.fills.push(None);
-                        }
-                        let cached = &mut cache.fills[fill_index];
-                        if cached.as_ref().is_none_or(|cached| cached.size != [map_width, map_height]) {
-                            *cached = Some(create_cached_fill(device, queue, [map_width, map_height], map)?);
-                            changed_regions = vec![full_bounds(size)];
-                            changed_layer_index = Some(layer_index);
-                        } else if let Some(cached) = cached {
-                            let dirty = sync_cached_fill(queue, map, cached)?;
-                            if !dirty.is_empty() {
-                                // A Fill image change can affect the full destination bounds.
-                                changed_regions = vec![full_bounds(size)];
-                                changed_layer_index = Some(changed_layer_index.map_or(layer_index, |current: usize| current.min(layer_index)));
-                            }
-                        }
-                        map_index = Some(fill_index);
-                        fill_index += 1;
-                    }
-                    let bounds = layer.fill_bounds.unwrap_or([0; 4]);
-                    layers.push((
-                        layer_index,
-                        layer.opacity,
-                        mode,
-                        MaskLayer::Fill {
-                            value: *value,
-                            bounds,
-                            has_bounds: layer.fill_bounds.is_some(),
-                            rotation: *rotation,
-                            repeat_u: *repeat_u,
-                            repeat_v: *repeat_v,
-                            mirror_u: *mirror_u,
-                            mirror_v: *mirror_v,
-                            map_index,
-                        },
-                    ));
-                }
-                EffectKind::Levels { input_black, gamma, input_white, output_black, output_white } => {
-                    if !input_black.is_finite()
-                        || !gamma.is_finite()
-                        || !input_white.is_finite()
-                        || !output_black.is_finite()
-                        || !output_white.is_finite()
-                        || !(0.0..=1.0).contains(input_black)
-                        || !(0.01..=100.0).contains(gamma)
-                        || !(0.0..=1.0).contains(input_white)
-                        || !(0.0..=1.0).contains(output_black)
-                        || !(0.0..=1.0).contains(output_white)
-                        || input_black >= input_white
-                        || output_black > output_white
-                    {
-                        return Err("Mask Levels settings are invalid".into());
-                    }
-                    layers.push((layer_index, layer.opacity, mode, MaskLayer::Levels([*input_black, *gamma, *input_white, *output_black, *output_white])));
-                }
-                EffectKind::Blur { radius } => {
-                    if *radius > 64 {
-                        return Err("Mask Blur radius exceeds the GPU preview limit of 64".into());
-                    }
-                    layers.push((layer_index, layer.opacity, mode, MaskLayer::Blur(*radius)));
-                }
-            }
-        }
-        cache.paints.truncate(paint_index);
-        cache.fills.truncate(fill_index);
+        let PreparedMaskLayers { layers, mut changed_regions, mut changed_layer_index, .. } = prepare_mask_layers(device, queue, stack, size, cache)?;
 
         if let Some((layer_index, texture, override_damage)) = brush_override {
             if texture.size().width != size[0]
@@ -822,7 +723,7 @@ impl MaskStackRenderer {
         let config_changed = cache.stack_key != Some(stack_key);
         // `render_cached` keeps the caller's material target stable for the same owner key.
         // Avoid replaying the entire GPU stack when neither inputs nor configuration changed.
-        if !force_render && !config_changed && !base_changed && !shell_changed && changed_regions.is_empty() {
+        if should_skip_render(force_render, config_changed, base_changed, shell_changed, changed_regions.is_empty()) {
             return Ok(());
         }
         let can_resume_blur_prefix = !config_changed
@@ -882,15 +783,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[current],
-                        &paint_view,
-                        &shell_view,
-                        &scratch_views[dst],
-                        size,
-                        params(size, 0, 0, opacity, mode, [0.0; 6]),
-                        layer_damage,
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[current],
+                            auxiliary: &paint_view,
+                            shells: &shell_view,
+                            target: &scratch_views[dst],
+                            size,
+                            params: params(size, 0, 0, opacity, mode, [0.0; 6]),
+                            damage: layer_damage,
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     current = dst;
                 }
@@ -913,15 +816,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[current],
-                        fill_view,
-                        &shell_view,
-                        &scratch_views[dst],
-                        size,
-                        fill_params(size, opacity, mode, value, bounds, rotation, fill_size, flags),
-                        layer_damage,
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[current],
+                            auxiliary: fill_view,
+                            shells: &shell_view,
+                            target: &scratch_views[dst],
+                            size,
+                            params: fill_params(FillParams { size, opacity, blend: mode, value, bounds, rotation, map_size: fill_size, flags }),
+                            damage: layer_damage,
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     current = dst;
                 }
@@ -933,15 +838,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[current],
-                        &dummy_view,
-                        &shell_view,
-                        &scratch_views[dst],
-                        size,
-                        params(size, 2, 0, opacity, mode, [0.0, levels[0], levels[1], levels[2], levels[3], levels[4]]),
-                        layer_damage,
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[current],
+                            auxiliary: &dummy_view,
+                            shells: &shell_view,
+                            target: &scratch_views[dst],
+                            size,
+                            params: params(size, 2, 0, opacity, mode, [0.0, levels[0], levels[1], levels[2], levels[3], levels[4]]),
+                            damage: layer_damage,
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     current = dst;
                 }
@@ -956,15 +863,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[original],
-                        &dummy_view,
-                        &shell_view,
-                        &scratch_views[horizontal],
-                        size,
-                        params(size, 3, u32::from(radius), opacity, mode, [0.0; 6]),
-                        horizontal_damage.as_deref(),
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[original],
+                            auxiliary: &dummy_view,
+                            shells: &shell_view,
+                            target: &scratch_views[horizontal],
+                            size,
+                            params: params(size, 3, u32::from(radius), opacity, mode, [0.0; 6]),
+                            damage: horizontal_damage.as_deref(),
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     let vertical = next_slot(&[original, horizontal]);
                     Self::draw_stage(
@@ -973,15 +882,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[horizontal],
-                        &dummy_view,
-                        &shell_view,
-                        &scratch_views[vertical],
-                        size,
-                        params(size, 4, u32::from(radius), opacity, mode, [0.0; 6]),
-                        blur_region,
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[horizontal],
+                            auxiliary: &dummy_view,
+                            shells: &shell_view,
+                            target: &scratch_views[vertical],
+                            size,
+                            params: params(size, 4, u32::from(radius), opacity, mode, [0.0; 6]),
+                            damage: blur_region,
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     let mixed = next_slot(&[original, horizontal, vertical]);
                     Self::draw_stage(
@@ -990,15 +901,17 @@ impl MaskStackRenderer {
                         &self.textures_layout,
                         device,
                         &mut encoder,
-                        &scratch_views[vertical],
-                        &scratch_views[original],
-                        &shell_view,
-                        &scratch_views[mixed],
-                        size,
-                        params(size, 5, 0, opacity, mode, [0.0; 6]),
-                        blur_region,
-                        &self.kernel_weights,
-                        &self.dummy_coverage,
+                        DrawStageInputs {
+                            source: &scratch_views[vertical],
+                            auxiliary: &scratch_views[original],
+                            shells: &shell_view,
+                            target: &scratch_views[mixed],
+                            size,
+                            params: params(size, 5, 0, opacity, mode, [0.0; 6]),
+                            damage: blur_region,
+                            kernel_weights: &self.kernel_weights,
+                            coverage_buffer: &self.dummy_coverage,
+                        },
                     )?;
                     current = mixed;
                 }
@@ -1026,16 +939,9 @@ impl MaskStackRenderer {
         textures_layout: &wgpu::BindGroupLayout,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
-        auxiliary: &wgpu::TextureView,
-        shells: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        size: [u32; 2],
-        params: [u8; 80],
-        damage: Option<&[Rect]>,
-        kernel_weights: &wgpu::Buffer,
-        coverage_buffer: &wgpu::Buffer,
+        inputs: DrawStageInputs<'_>,
     ) -> Result<(), String> {
+        let DrawStageInputs { source, auxiliary, shells, target, size, params, damage, kernel_weights, coverage_buffer } = inputs;
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("pc_mask_stack_params"),
             contents: &params,
@@ -1089,6 +995,44 @@ impl MaskStackRenderer {
         let _ = size;
         Ok(())
     }
+}
+
+fn validate_render_inputs(device: &wgpu::Device, request: &CachedRender<'_>) -> Result<(), String> {
+    let CachedRender { stack, size, shell_ids, target, .. } = request;
+    let count = usize::try_from(size[0]).ok().and_then(|w| usize::try_from(size[1]).ok().and_then(|h| w.checked_mul(h)));
+    if size.contains(&0)
+        || size.iter().any(|side| *side > device.limits().max_texture_dimension_2d)
+        || count != Some(shell_ids.len())
+        || target.size().width != size[0]
+        || target.size().height != size[1]
+        || target.format() != wgpu::TextureFormat::Rgba16Float
+    {
+        return Err("Mask-stack target or shell map has an invalid size/format".into());
+    }
+    MaskStackRenderer::validate(stack)?;
+    for layer in &stack.layers {
+        if !layer.visible || layer.opacity <= 0.0 {
+            continue;
+        }
+        if let EffectKind::Fill { .. } = &layer.kind
+            && let Some([width, height]) = layer.fill_map.as_ref().map(|_| layer.fill_map_size)
+        {
+            let bytes = u64::from(width).checked_mul(u64::from(height)).and_then(|pixels| pixels.checked_mul(4));
+            if width == 0
+                || height == 0
+                || width > device.limits().max_texture_dimension_2d
+                || height > device.limits().max_texture_dimension_2d
+                || bytes.is_none_or(|bytes| bytes > MAX_MASK_FILL_MAP_BYTES)
+            {
+                return Err("Mask Fill image exceeds the GPU preview allocation limit".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn should_skip_render(force_render: bool, config_changed: bool, base_changed: bool, shell_changed: bool, no_changed_regions: bool) -> bool {
+    !force_render && !config_changed && !base_changed && !shell_changed && no_changed_regions
 }
 
 fn validate_stack_allocation_budget(stack: &Stack, size: [u32; 2]) -> Result<(), String> {
@@ -1190,6 +1134,140 @@ enum MaskLayer {
     Blur(u8),
 }
 
+struct PreparedMaskLayers {
+    layers: Vec<(usize, f32, i32, MaskLayer)>,
+    changed_regions: Vec<Rect>,
+    changed_layer_index: Option<usize>,
+}
+
+fn prepare_mask_layers(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    stack: &Stack,
+    size: [u32; 2],
+    cache: &mut RenderCache,
+) -> Result<PreparedMaskLayers, String> {
+    let mut layers = Vec::new();
+    let mut changed_regions = Vec::new();
+    let mut changed_layer_index = None;
+    let mut paint_index = 0usize;
+    let mut fill_index = 0usize;
+    for (layer_index, layer) in stack.layers.iter().enumerate() {
+        if !layer.visible || layer.opacity <= 0.0 {
+            continue;
+        }
+        if !layer.opacity.is_finite() || !(0.0..=1.0).contains(&layer.opacity) {
+            return Err("Mask-stack layer has invalid opacity".into());
+        }
+        let mode = mask_blend_code(layer.blend).ok_or_else(|| "Mask-stack blend mode is unsupported by the GPU preview".to_string())?;
+        match &layer.kind {
+            EffectKind::Paint => {
+                if layer.surface.channels() != 4 {
+                    return Err("Mask Paint surface must have four channels".into());
+                }
+                while cache.paints.len() <= paint_index {
+                    cache.paints.push(None);
+                }
+                let paint = &mut cache.paints[paint_index];
+                if paint.is_none() {
+                    *paint = Some(create_cached_surface(device, queue, size, &layer.surface, "pc_mask_paint_input")?);
+                    changed_regions = vec![full_bounds(size)];
+                    changed_layer_index = Some(layer_index);
+                } else if let Some(paint) = paint {
+                    let dirty = sync_cached_surface(device, queue, size, &layer.surface, paint, true)?;
+                    if !dirty.is_empty() {
+                        for rect in dirty {
+                            add_regions(&mut changed_regions, rect);
+                        }
+                        changed_layer_index = Some(changed_layer_index.map_or(layer_index, |current: usize| current.min(layer_index)));
+                    }
+                }
+                layers.push((layer_index, layer.opacity, mode, MaskLayer::Paint(paint_index)));
+                paint_index += 1;
+            }
+            EffectKind::Fill { value, rotation, repeat_u, repeat_v, mirror_u, mirror_v } => {
+                if !value.is_finite() || !(0.0..=1.0).contains(value) {
+                    return Err("Mask Fill value is invalid".into());
+                }
+                let mut map_index = None;
+                if let Some(map) = &layer.fill_map {
+                    let [map_width, map_height] = layer.fill_map_size;
+                    if map_width == 0
+                        || map_height == 0
+                        || map_width > device.limits().max_texture_dimension_2d
+                        || map_height > device.limits().max_texture_dimension_2d
+                    {
+                        return Err("Mask Fill image has an invalid size".into());
+                    }
+                    while cache.fills.len() <= fill_index {
+                        cache.fills.push(None);
+                    }
+                    let cached = &mut cache.fills[fill_index];
+                    if cached.as_ref().is_none_or(|cached| cached.size != [map_width, map_height]) {
+                        *cached = Some(create_cached_fill(device, queue, [map_width, map_height], map)?);
+                        changed_regions = vec![full_bounds(size)];
+                        changed_layer_index = Some(layer_index);
+                    } else if let Some(cached) = cached {
+                        let dirty = sync_cached_fill(queue, map, cached)?;
+                        if !dirty.is_empty() {
+                            // A Fill image change can affect the full destination bounds.
+                            changed_regions = vec![full_bounds(size)];
+                            changed_layer_index = Some(changed_layer_index.map_or(layer_index, |current: usize| current.min(layer_index)));
+                        }
+                    }
+                    map_index = Some(fill_index);
+                    fill_index += 1;
+                }
+                let bounds = layer.fill_bounds.unwrap_or([0; 4]);
+                layers.push((
+                    layer_index,
+                    layer.opacity,
+                    mode,
+                    MaskLayer::Fill {
+                        value: *value,
+                        bounds,
+                        has_bounds: layer.fill_bounds.is_some(),
+                        rotation: *rotation,
+                        repeat_u: *repeat_u,
+                        repeat_v: *repeat_v,
+                        mirror_u: *mirror_u,
+                        mirror_v: *mirror_v,
+                        map_index,
+                    },
+                ));
+            }
+            EffectKind::Levels { input_black, gamma, input_white, output_black, output_white } => {
+                if !input_black.is_finite()
+                    || !gamma.is_finite()
+                    || !input_white.is_finite()
+                    || !output_black.is_finite()
+                    || !output_white.is_finite()
+                    || !(0.0..=1.0).contains(input_black)
+                    || !(0.01..=100.0).contains(gamma)
+                    || !(0.0..=1.0).contains(input_white)
+                    || !(0.0..=1.0).contains(output_black)
+                    || !(0.0..=1.0).contains(output_white)
+                    || input_black >= input_white
+                    || output_black > output_white
+                {
+                    return Err("Mask Levels settings are invalid".into());
+                }
+                layers.push((layer_index, layer.opacity, mode, MaskLayer::Levels([*input_black, *gamma, *input_white, *output_black, *output_white])));
+            }
+            EffectKind::Blur { radius } => {
+                if *radius > 64 {
+                    return Err("Mask Blur radius exceeds the GPU preview limit of 64".into());
+                }
+                layers.push((layer_index, layer.opacity, mode, MaskLayer::Blur(*radius)));
+            }
+        }
+    }
+    cache.paints.truncate(paint_index);
+    cache.fills.truncate(fill_index);
+
+    Ok(PreparedMaskLayers { layers, changed_regions, changed_layer_index })
+}
+
 fn create_render_cache(device: &wgpu::Device, size: [u32; 2], owner_key: u64) -> RenderCache {
     RenderCache {
         owner_key,
@@ -1289,8 +1367,8 @@ fn write_fill_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &Sur
             aspect: wgpu::TextureAspect::All,
         },
         &bytes,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() as u32 * 4), rows_per_image: Some(rect.height() as u32) },
-        wgpu::Extent3d { width: rect.width() as u32, height: rect.height() as u32, depth_or_array_layers: 1 },
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() * 4), rows_per_image: Some(rect.height()) },
+        wgpu::Extent3d { width: rect.width(), height: rect.height(), depth_or_array_layers: 1 },
     );
     Ok(())
 }
@@ -1538,7 +1616,7 @@ fn write_surface_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &
             (rect.width() as usize).checked_mul(rect.height() as usize).and_then(|pixels| pixels.checked_mul(4)).ok_or("Mask Paint upload size overflow")?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(byte_len).map_err(|_| "Not enough memory for Mask Paint upload")?;
-        for pixel in values.chunks_exact(4) {
+        for pixel in values.as_chunks::<4>().0 {
             bytes.extend(pixel.iter().map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8));
         }
         queue.write_texture(
@@ -1549,8 +1627,8 @@ fn write_surface_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &
                 aspect: wgpu::TextureAspect::All,
             },
             &bytes,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() as u32 * 4), rows_per_image: Some(rect.height() as u32) },
-            wgpu::Extent3d { width: rect.width() as u32, height: rect.height() as u32, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() * 4), rows_per_image: Some(rect.height()) },
+            wgpu::Extent3d { width: rect.width(), height: rect.height(), depth_or_array_layers: 1 },
         );
         return Ok(());
     }
@@ -1571,8 +1649,8 @@ fn write_surface_region(queue: &wgpu::Queue, texture: &wgpu::Texture, surface: &
             aspect: wgpu::TextureAspect::All,
         },
         &bytes,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() as u32 * 8), rows_per_image: Some(rect.height() as u32) },
-        wgpu::Extent3d { width: rect.width() as u32, height: rect.height() as u32, depth_or_array_layers: 1 },
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rect.width() * 8), rows_per_image: Some(rect.height()) },
+        wgpu::Extent3d { width: rect.width(), height: rect.height(), depth_or_array_layers: 1 },
     );
     Ok(())
 }
@@ -1611,62 +1689,8 @@ fn params(size: [u32; 2], stage: u32, radius: u32, opacity: f32, blend: i32, val
     bytes
 }
 
-#[cfg(test)]
-mod mask_stack_gpu_tests {
-    use super::*;
-
-    #[test]
-    fn allocation_budget_rejects_oversized_canvas_before_gpu_setup() {
-        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
-        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [16_384, 16_384]).is_err());
-    }
-
-    #[test]
-    fn allocation_budget_does_not_count_a_fill_cache_as_a_full_canvas_texture() {
-        let stack = Stack {
-            base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]),
-            layers: vec![photocraft_doc::mask_paint::Paint {
-                name: "Fill".into(),
-                visible: true,
-                opacity: 1.0,
-                blend: photocraft_color::BlendMode::Normal,
-                surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
-                fill_map: None,
-                fill_map_size: [0, 0],
-                fill_bounds: None,
-                kind: EffectKind::Fill { value: 0.5, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false },
-            }],
-            active: 0,
-        };
-        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [6_000, 6_000]).is_ok());
-    }
-
-    #[test]
-    fn brush_preview_is_included_in_the_stack_aggregate_budget() {
-        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
-        let size = [5_600, 5_600];
-        assert!(MaskStackRenderer::validate_allocation_budget(&stack, size).is_ok(), "the persistent stack fits by itself");
-        assert!(validate_brush_preview_budget(&stack, size, true).is_err(), "the three full-canvas preview resources exceed the aggregate limit");
-    }
-
-    #[test]
-    fn disjoint_damage_regions_stay_separate_until_blur_halos_overlap() {
-        let bounds = Rect::new(0, 0, 1024, 256);
-        let a = Rect::new(0, 0, 256, 256);
-        let b = Rect::new(768, 0, 1024, 256);
-        let mut regions = Vec::new();
-        add_regions(&mut regions, a);
-        add_regions(&mut regions, b);
-        assert_eq!(regions.len(), 2);
-        let expanded = expanded_regions(&regions, 32, 32, bounds);
-        assert_eq!(expanded.len(), 2);
-        let touching = expanded_regions(&regions, 257, 0, bounds);
-        assert_eq!(touching.len(), 1);
-        assert_eq!(touching[0], bounds);
-    }
-}
-
-fn fill_params(size: [u32; 2], opacity: f32, blend: i32, value: f32, bounds: [i32; 4], rotation: f32, map_size: [u32; 2], flags: u32) -> [u8; 80] {
+fn fill_params(input: FillParams) -> [u8; 80] {
+    let FillParams { size, opacity, blend, value, bounds, rotation, map_size, flags } = input;
     let mut bytes = params(size, 6, 0, opacity, blend, [value, 0.0, 0.0, 0.0, 0.0, 0.0]);
     for (index, bound) in bounds.into_iter().enumerate() {
         let offset = 48 + index * 4;
@@ -1806,4 +1830,59 @@ fn rgba32u_texture(device: &wgpu::Device, size: [u32; 2], label: &str) -> wgpu::
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod mask_stack_gpu_tests {
+    use super::*;
+
+    #[test]
+    fn allocation_budget_rejects_oversized_canvas_before_gpu_setup() {
+        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [16_384, 16_384]).is_err());
+    }
+
+    #[test]
+    fn allocation_budget_does_not_count_a_fill_cache_as_a_full_canvas_texture() {
+        let stack = Stack {
+            base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]),
+            layers: vec![photocraft_doc::mask_paint::Paint {
+                name: "Fill".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::new(photocraft_color::PixelFormat::RGBA8),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Fill { value: 0.5, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false },
+            }],
+            active: 0,
+        };
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, [6_000, 6_000]).is_ok());
+    }
+
+    #[test]
+    fn brush_preview_is_included_in_the_stack_aggregate_budget() {
+        let stack = Stack { base: Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.5]), layers: Vec::new(), active: 0 };
+        let size = [5_600, 5_600];
+        assert!(MaskStackRenderer::validate_allocation_budget(&stack, size).is_ok(), "the persistent stack fits by itself");
+        assert!(validate_brush_preview_budget(&stack, size, true).is_err(), "the three full-canvas preview resources exceed the aggregate limit");
+    }
+
+    #[test]
+    fn disjoint_damage_regions_stay_separate_until_blur_halos_overlap() {
+        let bounds = Rect::new(0, 0, 1024, 256);
+        let a = Rect::new(0, 0, 256, 256);
+        let b = Rect::new(768, 0, 1024, 256);
+        let mut regions = Vec::new();
+        add_regions(&mut regions, a);
+        add_regions(&mut regions, b);
+        assert_eq!(regions.len(), 2);
+        let expanded = expanded_regions(&regions, 32, 32, bounds);
+        assert_eq!(expanded.len(), 2);
+        let touching = expanded_regions(&regions, 257, 0, bounds);
+        assert_eq!(touching.len(), 1);
+        assert_eq!(touching[0], bounds);
+    }
 }

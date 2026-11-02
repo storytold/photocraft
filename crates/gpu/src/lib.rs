@@ -154,7 +154,9 @@ use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gr
 pub use convert::{f16_to_f32, f32_to_f16};
 pub use kit::SHADER;
 use kit::{Kit, tex_entry};
-pub use mask_stack_gpu::{MaskBrushPatch, MaskBrushSettings, MaskRoundDab, MaskStackRenderer};
+pub use mask_stack_gpu::{
+    MaskBrushPatch, MaskBrushPreviewRequest, MaskBrushSettings, MaskBrushStackRenderRequest, MaskRoundDab, MaskStackRenderRequest, MaskStackRenderer,
+};
 pub use paging::OVER_BUDGET;
 use paging::first_error;
 #[cfg(test)]

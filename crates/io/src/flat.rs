@@ -1583,6 +1583,7 @@ mod streamed_png_tests {
         let mut bottom = layer(&doc, &[(doc.bounds(), &[0.2, 0.4, 0.6, 1.0])]);
         bottom.mask = Some(photocraft_doc::LayerMask {
             surface: Surface::with_default(PixelFormat::GRAY8, &[1.0]),
+            paint: None,
             enabled: true,
             linked: true,
             density: 1.0,

@@ -474,12 +474,14 @@ impl Renderer {
             if let Err(error) = self.mask_stack_renderer.render_cached(
                 &self.rs.device,
                 &self.rs.queue,
-                stack,
-                size,
-                &source.shell_ids,
-                source.owner_key,
-                source.shell_key,
-                &map.texture,
+                photocraft_gpu::MaskStackRenderRequest {
+                    stack,
+                    size,
+                    shell_ids: &source.shell_ids,
+                    owner_key: source.owner_key,
+                    shell_key: source.shell_key,
+                    target: &map.texture,
+                },
             ) {
                 log::warn!("GPU Gray mask preview fell back to its CPU cache: {error}");
                 if let Some(input) = source.brush_preview.as_ref() {
@@ -508,12 +510,14 @@ impl Renderer {
             if let Err(error) = self.mask_stack_renderer.render_cached(
                 &self.rs.device,
                 &self.rs.queue,
-                stack,
-                size,
-                &source.shell_ids,
-                source.owner_key,
-                source.shell_key,
-                &texture,
+                photocraft_gpu::MaskStackRenderRequest {
+                    stack,
+                    size,
+                    shell_ids: &source.shell_ids,
+                    owner_key: source.owner_key,
+                    shell_key: source.shell_key,
+                    target: &texture,
+                },
             ) {
                 log::warn!("GPU Gray mask preview fell back to its CPU cache: {error}");
                 if let Some(input) = source.brush_preview.as_ref() {
@@ -575,9 +579,11 @@ impl Renderer {
                 self.gray_mask_brush_identity = None;
                 return;
             };
-            if let Err(error) =
-                self.mask_stack_renderer.begin_round_mask_brush_preview(&self.rs.device, &self.rs.queue, input.stroke_key, size, stack, base, *settings)
-            {
+            if let Err(error) = self.mask_stack_renderer.begin_round_mask_brush_preview(
+                &self.rs.device,
+                &self.rs.queue,
+                photocraft_gpu::MaskBrushPreviewRequest { owner_key: input.stroke_key, size, stack, base_paint: base, settings: *settings },
+            ) {
                 log::warn!("Could not start GPU Gray mask brush preview; using CPU stroke path: {error}");
                 Self::fail_gray_mask_brush_input(input, error);
                 self.mask_stack_renderer.cancel_mask_brush_preview();
@@ -690,13 +696,15 @@ impl Renderer {
         self.mask_stack_renderer.render_cached_with_brush_preview(
             &self.rs.device,
             &self.rs.queue,
-            stack,
-            size,
-            &source.shell_ids,
-            source.shell_key,
-            paint_layer_index,
-            dirty_regions,
-            &map.texture,
+            photocraft_gpu::MaskBrushStackRenderRequest {
+                stack,
+                size,
+                shell_ids: &source.shell_ids,
+                shell_key: source.shell_key,
+                paint_layer_index,
+                dirty_regions,
+                target: &map.texture,
+            },
         )?;
         self.last = None;
         Ok(())

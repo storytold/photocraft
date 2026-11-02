@@ -38,6 +38,13 @@ use crate::{EngineError, Result, Session};
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+type MaskPreviewComposedRegions = Vec<(Rect, Vec<f32>)>;
+#[cfg(not(target_arch = "wasm32"))]
+type MaskPreviewComposition = (f32, MaskPreviewComposedRegions);
+#[cfg(not(target_arch = "wasm32"))]
+type SharedMaskPreviewWorker = std::sync::Arc<(std::sync::Mutex<MaskPreviewWorkerState>, std::sync::Condvar)>;
 fn num(p: &Value, k: &str) -> Option<f32> {
     p.get(k).and_then(Value::as_f64).map(|v| v as f32)
 }
@@ -725,7 +732,7 @@ struct MaskPreviewTilePatch {
 struct MaskPreviewResult {
     client: u64,
     generation: u64,
-    composed: Option<(f32, Vec<(Rect, Vec<f32>)>)>,
+    composed: Option<MaskPreviewComposition>,
     metrics: MaskPreviewMetrics,
 }
 
@@ -859,7 +866,7 @@ fn mask_preview_damage_bounds(regions: &[Rect]) -> Rect {
 /// one result.
 #[cfg(not(target_arch = "wasm32"))]
 struct MaskPreviewWorker {
-    state: std::sync::Arc<(std::sync::Mutex<MaskPreviewWorkerState>, std::sync::Condvar)>,
+    state: SharedMaskPreviewWorker,
     client: u64,
 }
 
@@ -867,8 +874,7 @@ struct MaskPreviewWorker {
 static MASK_PREVIEW_CLIENT: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(not(target_arch = "wasm32"))]
-static MASK_PREVIEW_WORKER: std::sync::OnceLock<Option<std::sync::Arc<(std::sync::Mutex<MaskPreviewWorkerState>, std::sync::Condvar)>>> =
-    std::sync::OnceLock::new();
+static MASK_PREVIEW_WORKER: std::sync::OnceLock<Option<SharedMaskPreviewWorker>> = std::sync::OnceLock::new();
 
 #[cfg(not(target_arch = "wasm32"))]
 impl MaskPreviewWorker {
@@ -1552,7 +1558,7 @@ impl LiveStroke {
             self.mask_preview_last_refresh = Some(Instant::now());
             self.mask_preview_last_submit = None;
             self.mask_preview_unsupported = None;
-            return true;
+            true
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1591,11 +1597,11 @@ impl LiveStroke {
         {
             let mut published = None;
             let result = self.mask_preview_worker.as_ref()?.take_result();
-            if let Some(result) = result {
-                if result.generation <= self.mask_preview_generation {
-                    self.mask_preview_last_metrics = Some(result.metrics);
-                    published = self.publish_mask_preview_result(result, false);
-                }
+            if let Some(result) = result
+                && result.generation <= self.mask_preview_generation
+            {
+                self.mask_preview_last_metrics = Some(result.metrics);
+                published = self.publish_mask_preview_result(result, false);
             }
             if !self.mask_preview_pending.is_empty()
                 && self.mask_preview_submitted < self.mask_preview_generation
@@ -1652,14 +1658,14 @@ impl LiveStroke {
             }
             let deadline = Instant::now() + Duration::from_secs(2);
             while Instant::now() < deadline {
-                if let Some(result) = self.mask_preview_worker.as_ref().and_then(MaskPreviewWorker::take_result) {
-                    if result.generation <= self.mask_preview_generation {
-                        let is_current = result.generation == self.mask_preview_generation;
-                        self.mask_preview_last_metrics = Some(result.metrics);
-                        let published = self.publish_mask_preview_result(result, is_current);
-                        if is_current && published.is_some() {
-                            return published;
-                        }
+                if let Some(result) = self.mask_preview_worker.as_ref().and_then(MaskPreviewWorker::take_result)
+                    && result.generation <= self.mask_preview_generation
+                {
+                    let is_current = result.generation == self.mask_preview_generation;
+                    self.mask_preview_last_metrics = Some(result.metrics);
+                    let published = self.publish_mask_preview_result(result, is_current);
+                    if is_current && let Some(published) = published {
+                        return Some(published);
                     }
                 }
                 if self.mask_preview_submitted < self.mask_preview_generation {
@@ -1986,7 +1992,7 @@ impl LiveStroke {
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
             let (surface, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            let ends = self.breaks.iter().copied().collect::<Vec<_>>();
+            let ends = self.breaks.to_vec();
             let mut start = 0;
             let mut damage = Rect::EMPTY;
             for end in ends {

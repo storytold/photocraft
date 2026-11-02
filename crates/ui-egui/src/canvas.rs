@@ -1805,6 +1805,40 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+fn handle_canvas_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, response: &egui::Response, xf: &ViewXform) {
+    let ctx = ui.ctx().clone();
+    let mask_picker = {
+        #[cfg(feature = "uv-workbench")]
+        {
+            crate::uv_mask_paint::levels_picker_active(app, &ctx)
+        }
+        #[cfg(not(feature = "uv-workbench"))]
+        {
+            false
+        }
+    };
+    if mask_picker {
+        if response.hovered()
+            && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+        {
+            if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+            } else {
+                ctx.set_cursor_icon(pipette_cursor(&ctx, p));
+            }
+        }
+        #[cfg(feature = "uv-workbench")]
+        if response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_pressed())
+            && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+        {
+            crate::uv_mask_paint::sample_levels_at(app, &ctx, xf.to_doc(p));
+        }
+    } else {
+        layer_picker_eyedropper(app, ui, &ctx, response, xf);
+    }
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
@@ -2079,36 +2113,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             }
         })
     {
-        let mask_picker = {
-            #[cfg(feature = "uv-workbench")]
-            {
-                crate::uv_mask_paint::levels_picker_active(app, &ctx)
-            }
-            #[cfg(not(feature = "uv-workbench"))]
-            {
-                false
-            }
-        };
-        if mask_picker {
-            if response.hovered()
-                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
-            {
-                if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
-                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
-                } else {
-                    ctx.set_cursor_icon(pipette_cursor(&ctx, p));
-                }
-            }
-            #[cfg(feature = "uv-workbench")]
-            if response.is_pointer_button_down_on()
-                && ui.input(|i| i.pointer.primary_pressed())
-                && let Some(p) = ui.input(|i| i.pointer.interact_pos())
-            {
-                crate::uv_mask_paint::sample_levels_at(app, &ctx, xf.to_doc(p));
-            }
-        } else {
-            layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
-        }
+        handle_canvas_picker(app, ui, &response, &xf);
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && {
         #[cfg(feature = "uv-workbench")]
         {

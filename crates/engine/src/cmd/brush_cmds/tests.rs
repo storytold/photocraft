@@ -672,12 +672,7 @@ fn live_mask_paint_with_downstream_blur_matches_full_cache_across_tiles_and_visi
 }
 
 #[test]
-fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
-    use photocraft_color::PixelFormat;
-    use photocraft_doc::{
-        LayerMask,
-        mask_paint::{EffectKind, Paint, Stack},
-    };
+fn mask_preview_cadence_coalesces_until_elapsed_intervals() {
     use std::time::{Duration, Instant};
 
     let start = Instant::now();
@@ -696,7 +691,16 @@ fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
         }
     }
     assert_eq!(flushes, 2, "a 33 ms cadence flushes at most once per elapsed interval");
+}
 
+#[test]
+fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use std::time::Duration;
     let mut s = session(640, 320);
     let id = s.active().unwrap().active_layer.unwrap();
     let base = Surface::with_default(PixelFormat::GRAY8, &[0.12]);
@@ -844,7 +848,13 @@ fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
     assert_ne!(worker_commit.bounds, worker_bounds, "commit damage includes downstream Blur reach beyond source Paint dabs");
     assert!(worker_commit.bounds.contains_rect(&worker_bounds), "expanded commit damage still contains every painted pixel");
 
-    let mut unsupported = LiveStroke::begin_with_mask_preview_worker(&s, "paint.stroke", &params, Duration::from_secs(60)).unwrap();
+    assert_mask_preview_failure_paths(&mut s, id, &params);
+}
+
+fn assert_mask_preview_failure_paths(s: &mut Session, id: photocraft_doc::LayerId, params: &Value) {
+    use std::time::Duration;
+
+    let mut unsupported = LiveStroke::begin_with_mask_preview_worker(s, "paint.stroke", params, Duration::from_secs(60)).unwrap();
     unsupported.push(&[StrokePoint::new(256.5, 64.5, 1.0)]).unwrap();
     unsupported.mask_preview_unsupported = Some(unsupported.mask_preview_generation);
     assert!(!unsupported.mask_preview_pending(), "an unsupported preview does not schedule repeated frame polls");
@@ -853,7 +863,7 @@ fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
     // Dropping an interrupted live stroke cancels publication for its worker client. Its immutable
     // snapshot can finish on the shared thread, but cannot mutate the canonical Session document.
     let original_cache = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.clone();
-    let mut cancelled = LiveStroke::begin_with_mask_preview_worker(&s, "paint.stroke", &params, Duration::ZERO).unwrap();
+    let mut cancelled = LiveStroke::begin_with_mask_preview_worker(s, "paint.stroke", params, Duration::ZERO).unwrap();
     assert!(cancelled.mask_preview_pending(), "cancel fixture starts with an active async preview");
     cancelled.push(&[StrokePoint::new(255.5, 64.5, 1.0)]).unwrap();
     drop(cancelled);
@@ -864,7 +874,7 @@ fn throttled_live_mask_cache_coalesces_damage_and_commit_flushes_blur_halos() {
         Ok(())
     })
     .unwrap();
-    let non_blur = LiveStroke::begin_with_mask_preview_worker(&s, "paint.stroke", &params, Duration::from_secs(60)).unwrap();
+    let non_blur = LiveStroke::begin_with_mask_preview_worker(s, "paint.stroke", params, Duration::from_secs(60)).unwrap();
     assert!(non_blur.mask_preview_worker.is_some(), "native sublayer stacks defer cache composition even without downstream Blur");
 }
 
