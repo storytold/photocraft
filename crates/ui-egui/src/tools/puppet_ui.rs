@@ -324,8 +324,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
                 s.record(before);
             }
         }
+        // A pin hidden mid-drag (Edit Pins or Extras turned off) stays where the drag left it;
+        // the release still ends the drag and records what it moved.
         ToolEvent::Move { x, y, .. } => {
-            if let Some(i) = s.drag
+            if let Some(i) = s.drag.filter(|_| pins_shown)
                 && let Some(pin) = s.warp.pins.get_mut(i)
                 && pin.dst != [x, y]
             {
@@ -336,7 +338,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
         ToolEvent::Up { x, y } => {
             if let Some(i) = s.drag.take() {
                 // A release usually repeats the last Move, but can carry a new position.
-                if let Some(pin) = s.warp.pins.get_mut(i)
+                if let Some(pin) = s.warp.pins.get_mut(i).filter(|_| pins_shown)
                     && pin.dst != [x, y]
                 {
                     pin.dst = [x, y];

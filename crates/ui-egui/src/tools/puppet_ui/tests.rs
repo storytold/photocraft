@@ -475,14 +475,49 @@ fn a_hidden_pin_cannot_be_dragged_or_deleted() {
     gesture(&mut app, [25.0, 40.0], [40.0, 40.0]);
     assert_eq!(dst(&app), [25.0, 40.0], "the hidden pin did not move");
     assert_eq!(count(&app), 2, "the press placed a new pin, as one on the mesh does");
-    // Alt-clicking it does not delete it either.
+    // Alt-clicking it does not delete it either, nor select it.
+    let selected = |app: &PhotocraftApp| app.distort.puppet.as_ref().unwrap().selected;
+    let before = selected(&app);
     pointer(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::ALT);
     pointer(&mut app, ToolEvent::Up { x: 25.0, y: 40.0 }, egui::Modifiers::ALT);
     assert_eq!(count(&app), 2, "nothing deleted while the pins are hidden");
+    assert_eq!(selected(&app), before, "the selection is as it was");
 
     // Shown again, the first pin drags as ever.
     app.ui.view.show.edit_pins = true;
     gesture(&mut app, [25.0, 40.0], [35.0, 45.0]);
     assert_eq!(dst(&app), [35.0, 45.0], "the shown pin moves again");
     assert_eq!(count(&app), 2, "and no pin was added");
+}
+
+/// CodeRabbit on #10551: View › Extras off hides the pins from the pointer too: a press on one
+/// leaves it where it is and places a new pin, as a press on the mesh does.
+#[test]
+fn a_pin_hidden_by_extras_cannot_be_dragged() {
+    let ctx = egui::Context::default();
+    let mut app = puppet_app(&ctx);
+    gesture(&mut app, [25.0, 40.0], [25.0, 40.0]);
+    app.ui.view.extras = false;
+    gesture(&mut app, [25.0, 40.0], [40.0, 40.0]);
+    let s = app.distort.puppet.as_ref().unwrap();
+    assert_eq!(s.warp.pins[0].dst, [25.0, 40.0], "the hidden pin did not move");
+    assert_eq!(s.warp.pins.len(), 2, "the press placed a new pin");
+}
+
+/// CodeRabbit on #10551: a pin hidden mid-drag (Edit Pins turned off) stops where it was: the
+/// moves and the release after that leave it there, and the drag is still one undoable step.
+#[test]
+fn a_pin_hidden_mid_drag_stays_where_it_was() {
+    let ctx = egui::Context::default();
+    let mut app = puppet_app(&ctx);
+    gesture(&mut app, [25.0, 40.0], [25.0, 40.0]);
+    let dst = |app: &PhotocraftApp| app.distort.puppet.as_ref().unwrap().warp.pins[0].dst;
+    pointer(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, ToolEvent::Move { x: 30.0, y: 40.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    app.ui.view.show.edit_pins = false;
+    pointer(&mut app, ToolEvent::Move { x: 45.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert_eq!(dst(&app), [30.0, 40.0], "a move after the pins hid leaves the pin");
+    pointer(&mut app, ToolEvent::Up { x: 50.0, y: 55.0 }, egui::Modifiers::NONE);
+    assert_eq!(dst(&app), [30.0, 40.0], "so does the release");
+    assert!(app.distort.puppet.as_ref().unwrap().drag.is_none(), "the release ends the drag");
 }
