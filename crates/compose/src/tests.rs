@@ -4230,6 +4230,7 @@ fn reduction_decoration(layer: &mut Layer, kind: usize, enabled: bool) {
     }
 }
 
+/// Checks disabled-decoration reduction and damage pixels against the regular compositor.
 #[test]
 fn disabled_decorations_keep_sparse_reduction_and_damage_pixels() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -4251,6 +4252,12 @@ fn disabled_decorations_keep_sparse_reduction_and_damage_pixels() {
             assert_eq!(all.px, absent.px, "{depth:?}, decoration {kind}");
             let reference = render_reduced_with(&decorated, decorated.bounds(), 51, 37, None, 256, false, &mut ReducedStats::default());
             assert_eq!(all.to_rgba8().pixels, reference.to_rgba8().pixels, "production quantization: {depth:?}, decoration {kind}");
+            assert_eq!(all.rect, reference.rect);
+            assert_eq!(all.px.len(), reference.px.len());
+            assert!(
+                all.px.iter().zip(&reference.px).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)),
+                "float shortcut vs per-pixel: {depth:?}, decoration {kind}"
+            );
             let damage = Rect::new(250, 110, 288, 144);
             let part = render_reduced_with(&decorated, decorated.bounds(), 51, 37, Some(damage), 256, true, &mut ReducedStats::default());
             for y in part.rect.y0..part.rect.y1 {
