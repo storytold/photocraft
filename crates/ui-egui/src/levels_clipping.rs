@@ -49,6 +49,7 @@ pub enum ClipEnd {
 }
 
 impl ClipEnd {
+    /// The [`FIELD`] value that asks for this end.
     fn name(self) -> &'static str {
         match self {
             ClipEnd::Shadows => "shadows",
@@ -270,7 +271,7 @@ pub fn image(stats: &Stats, thresholds: &Thresholds, end: ClipEnd) -> Vec<Color3
 }
 
 /// What the display needs from the app: the end shown and the Levels adjustment, for the active
-/// document `idx`'s target. None when no Levels dialog shows clipping or the document can't.
+/// document's target layer.
 struct Request {
     end: ClipEnd,
     adj: Adjustment,
@@ -284,6 +285,9 @@ fn dialog(app: &PhotocraftApp) -> Option<&Map<String, Value>> {
     app.ui.dialogs.iter().map(|d| &d.fields).find(|f| f.get("__adjust").and_then(Value::as_str) == Some("levels"))
 }
 
+/// The display the open Levels dialog asks for on document `idx`. None when no Levels dialog
+/// shows clipping, `idx` isn't the active document, or the document can't show it: CMYK and Lab,
+/// a channel, mask or Quick Mask target, or a target that isn't a pixel layer.
 fn request(app: &PhotocraftApp, idx: usize) -> Option<Request> {
     let fields = dialog(app)?;
     let end = ClipEnd::parse(fields.get(FIELD))?;
@@ -333,7 +337,8 @@ fn view_area(xf: &ViewXform, bounds: Rect, ppp: f32, max_side: u32) -> Option<(R
 }
 
 /// Draw the Levels clipping display over the image in canvas view `xf` of document `idx`, if one
-/// is asked for. Drops the cache once no Levels dialog is open.
+/// is asked for. Drops the cache once no Levels dialog is open. Only the main canvas calls it:
+/// the one cache follows that view.
 pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, idx: usize) {
     if dialog(app).is_none() {
         app.levels_clipping = None;
