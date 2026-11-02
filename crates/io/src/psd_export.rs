@@ -322,9 +322,9 @@ impl Ex {
             channels.retain(|c| c.id != -1);
         }
         // As Photoshop writes them: bit 4 is meaningful, and set for layers whose pixels don't
-        // show (adjustment layers).
+        // show (adjustment layers and shapes).
         let mut flags = LayerFlags(LayerFlags::BIT4_USEFUL);
-        if matches!(l.content, LayerContent::Adjustment(_)) {
+        if matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Shape(_)) {
             flags.0 |= LayerFlags::PIXEL_DATA_IRRELEVANT;
         }
         flags.set_hidden(!l.visible);
