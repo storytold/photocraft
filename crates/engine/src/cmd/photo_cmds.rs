@@ -21,7 +21,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, flattened, import, list_images, read_file};
+use crate::file_cmds::{file_name, flattened, flattened_checked, import, list_images, read_file};
 use crate::{EngineError, Result, Session};
 
 /// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
@@ -64,11 +64,30 @@ pub(crate) struct Source {
 /// Loaded sources, the common pixel format and the first source's ICC profile.
 type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 
+/// Flattens the open documents and files named by `p` into common-format sources.
 fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
-    let mut docs: Vec<(String, Document)> = Vec::new();
+    let mut out = Vec::new();
+    let (mut fmt, mut icc) = (None, None);
+    let mut add = |name: String, d: &Document| -> Result<()> {
+        let source_fmt = d.pixel_format();
+        // Registration and blending work in RGB, so the result is RGB.
+        let output_fmt = *fmt.get_or_insert_with(|| {
+            if matches!(source_fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
+                PixelFormat::new(ColorMode::Rgb, source_fmt.sample, true)
+            } else {
+                source_fmt
+            }
+        });
+        if out.is_empty() && source_fmt.mode == output_fmt.mode {
+            icc = d.icc_profile.clone();
+        }
+        let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
+        out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w: d.size.width as usize, h: d.size.height as usize, exif: info });
+        Ok(())
+    };
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
-            docs.push((d.doc.name.clone(), (*d.doc).clone()));
+            add(d.doc.name.clone(), &d.doc)?;
         }
     }
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -78,25 +97,13 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     };
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import(&file_name(path), &bytes)?));
+        let name = file_name(path);
+        add(name.clone(), &import(&name, &bytes)?)?;
     }
-    if docs.is_empty() {
+    if out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }
-    let first = &docs[0].1;
-    let mut fmt = first.pixel_format();
-    if matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
-        // Registration and blending work in RGB; like Photoshop, the result is RGB.
-        fmt = PixelFormat::new(ColorMode::Rgb, fmt.sample, true);
-    }
-    let icc = (first.pixel_format().mode == fmt.mode).then(|| first.icc_profile.clone()).flatten();
-    let out = docs
-        .into_iter()
-        .map(|(name, d)| {
-            let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-            Source { name, surf: flattened(&d, fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info }
-        })
-        .collect();
+    let Some(fmt) = fmt else { return Err(bad(cmd, "no readable image sources")) };
     Ok((out, fmt, icc))
 }
 
@@ -259,20 +266,103 @@ pub(crate) fn plane_matrix(pl: &Placement, origin: (f64, f64)) -> Option<Homogra
     })
 }
 
+/// Photomerge's working-memory budget in bytes, from [`budget_from`]: the `memoryBudget` param,
+/// else `PHOTOCRAFT_PHOTOMERGE_BUDGET_MB`, else half of the machine's physical memory.
+fn photomerge_memory_budget(p: &Value) -> usize {
+    let env_mb = std::env::var("PHOTOCRAFT_PHOTOMERGE_BUDGET_MB").ok();
+    budget_from(p.get("memoryBudget").and_then(Value::as_u64), env_mb.as_deref(), crate::memory::physical_memory())
+}
+
+/// The budget: `param` (bytes) wins, then `env_mb` (a budget in MiB), then half of `ram` bytes
+/// (4 GiB assumed when unknown) but at least 1 GiB.
+fn budget_from(param: Option<u64>, env_mb: Option<&str>, ram: Option<u64>) -> usize {
+    if let Some(b) = param {
+        return usize::try_from(b).unwrap_or(usize::MAX);
+    }
+    if let Some(mb) = env_mb.and_then(|v| v.trim().parse::<u64>().ok()) {
+        return usize::try_from(mb.saturating_mul(1 << 20)).unwrap_or(usize::MAX);
+    }
+    let ram = ram.unwrap_or(4 << 30);
+    usize::try_from((ram / 2).max(1 << 30)).unwrap_or(usize::MAX)
+}
+
+/// Estimated peak working memory of a Photomerge and the part of it that stays allocated while
+/// bands are built (the ROIs, weights and accumulators; what is left of the budget goes to the
+/// bands, see [`panorama::band_bytes_bound`]). `source_sizes` and `placed_sizes` are the source
+/// and warped sizes of the placed images, `cw` × `ch` the canvas, `cc` its colour channels and
+/// `bpp` its bytes per pixel.
+///
+/// The peak is the largest of the phases, since each frees what the next no longer needs: warping
+/// (sources and warped images), ROI conversion (ROIs, weights, warped images), the bands (ROIs,
+/// accumulators and the largest band), the collapse (ROIs, accumulators and the running result),
+/// the output (ROIs, blended colour, composite and output layers) and the fill (layers, composite
+/// and the fill's own planes).
+#[allow(clippy::too_many_arguments)]
+fn estimate_photomerge_memory(
+    source_sizes: &[(usize, usize)],
+    placed_sizes: &[(usize, usize)],
+    cw: usize,
+    ch: usize,
+    cc: usize,
+    bpp: usize,
+    blend: bool,
+    fill: bool,
+) -> (usize, usize) {
+    let px_sum = |sizes: &[(usize, usize)]| sizes.iter().map(|&(w, h)| w.saturating_mul(h)).fold(0usize, usize::saturating_add);
+    let sources = px_sum(source_sizes).saturating_mul(bpp);
+    let roi_px = px_sum(placed_sizes);
+    let warped = roi_px.saturating_mul(bpp);
+    if !blend {
+        return (sources.saturating_add(warped).max(warped), 0);
+    }
+    // ROI colours, alpha and the seam weights (f32 each).
+    let rois_weights = roi_px.saturating_mul((cc + 2) * 4);
+    let canvas_px = cw.saturating_mul(ch);
+    // The accumulator and weight-sum pyramids (4/3 of a plane each).
+    let accumulators = canvas_px.saturating_mul((cc + 1) * 4 * 4 / 3);
+    let blend_out = canvas_px.saturating_mul((cc + 1) * 4);
+    let output_layers = roi_px.saturating_mul(bpp + 1);
+    let composite = canvas_px.saturating_mul(bpp);
+    let fill_bytes = if fill { composite.saturating_add(24 << 20) } else { 0 };
+
+    // The levels `seam_blend` blends with.
+    let levels = panorama::blend_levels(cw, ch).min(7);
+    let max_band_cost = placed_sizes.iter().map(|&(w, h)| panorama::band_bytes_bound(w, h, cc, levels, cw, ch)).max().unwrap_or(0);
+
+    let fixed_during_bands = rois_weights.saturating_add(accumulators);
+    let phases = [
+        sources.saturating_add(warped),
+        rois_weights.saturating_add(warped),
+        fixed_during_bands.saturating_add(max_band_cost),
+        fixed_during_bands.saturating_add(canvas_px.saturating_mul(cc * 4)),
+        rois_weights.saturating_add(blend_out).saturating_add(composite).saturating_add(output_layers),
+        output_layers.saturating_add(composite).saturating_add(fill_bytes),
+    ];
+    (phases.into_iter().max().unwrap_or(0), fixed_during_bands)
+}
+
 /// Splits a surface region into colour channels and coverage.
-fn roi_of(surf: &Surface, area: Rect) -> RoiImage {
+fn roi_of(surf: &Surface, area: Rect) -> Result<RoiImage> {
     let fmt = surf.format();
     let n = fmt.channels();
     let cc = fmt.mode.color_channels();
-    let raw = surf.read_region(area);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut px = Vec::with_capacity(w * h * cc);
-    let mut alpha = Vec::with_capacity(w * h);
-    for q in raw.chunks_exact(n) {
-        px.extend_from_slice(&q[..cc]);
-        alpha.push(if fmt.alpha { q[n - 1] } else { 1.0 });
+    let total_px = w.checked_mul(h).and_then(|v| v.checked_mul(cc)).ok_or_else(|| crate::allocation::error("Photomerge", "ROI size overflowed"))?;
+    let total_alpha = w.checked_mul(h).ok_or_else(|| crate::allocation::error("Photomerge", "ROI size overflowed"))?;
+    let mut px = crate::allocation::capacity(total_px, "Photomerge ROI")?;
+    let mut alpha = crate::allocation::capacity(total_alpha, "Photomerge alpha")?;
+    if w > 0 && h > 0 {
+        let mut row = vec![0.0f32; w * n];
+        for y in 0..h {
+            let row_rect = Rect::new(area.x0, area.y0 + y as i32, area.x1, area.y0 + y as i32 + 1);
+            surf.read_region_into(row_rect, &mut row);
+            for q in row.chunks_exact(n) {
+                px.extend_from_slice(&q[..cc]);
+                alpha.push(if fmt.alpha { q[n - 1] } else { 1.0 });
+            }
+        }
     }
-    RoiImage { x0: area.x0, y0: area.y0, w, h, ch: cc, px, alpha }
+    Ok(RoiImage { x0: area.x0, y0: area.y0, w, h, ch: cc, px, alpha })
 }
 
 /// Placements, source sizes and the panorama offset (for vignette removal).
@@ -287,25 +377,26 @@ pub(crate) struct Blended {
     pub vignette: [f64; 2],
 }
 
-/// Gain compensation (+ optional vignetting), seams in `order`, multi-band blending. Inputs are
-/// surfaces already in panorama coordinates with alpha. `geometry` enables vignette removal.
-pub(crate) fn seam_blend(warped: &[Surface], canvas: Rect, order: &[usize], seamless: bool, gains: bool, geometry: Option<BlendGeometry>) -> Blended {
-    let n = warped.len();
-    let fmt = warped.first().map_or(PixelFormat::RGBA8, Surface::format);
-    let mut rois: Vec<RoiImage> = warped
-        .iter()
-        .map(|s| {
-            let b = s.content_bounds().intersect(&canvas);
-            if b.is_empty() { RoiImage { x0: 0, y0: 0, w: 0, h: 0, ch: fmt.mode.color_channels(), px: Vec::new(), alpha: Vec::new() } } else { roi_of(s, b) }
-        })
-        .collect();
+/// How [`seam_blend`] blends: `seamless` blends the bands (else hard seams), `gains` compensates
+/// exposure and colour, `geometry` enables vignette removal. `budget` is the bytes of bands built
+/// at a time and the cap on any single band (an error beyond it); `None` is 5 GiB batches with
+/// no cap.
+pub(crate) struct BlendOptions<'a> {
+    pub seamless: bool,
+    pub gains: bool,
+    pub geometry: Option<BlendGeometry<'a>>,
+    pub budget: Option<usize>,
+}
+
+/// Applies the photometric model (gains, vignetting) to `rois`; returns the gains and the vignette.
+fn apply_photometric(rois: &mut [RoiImage], fmt: PixelFormat, geometry: Option<BlendGeometry<'_>>, seamless: bool, gains: bool) -> (Vec<Vec<f32>>, [f64; 2]) {
     // Photometric model in panorama coordinates relative to the canvas origin used by placements.
     let shifted: Option<Vec<Placement>> = geometry.map(|(pl, _, off)| pl.iter().map(|p| p.translated(off.0, off.1)).collect());
     let geo = match (&shifted, geometry) {
         (Some(pl), Some((_, sizes, _))) => Some((pl.as_slice(), sizes)),
         _ => None,
     };
-    let photo = panorama::photometric(&rois, geo, seamless && gains, geo.is_some());
+    let photo = panorama::photometric(rois, geo, seamless && gains, geo.is_some());
     let vig = photo.vignette != [0.0, 0.0];
     for (i, roi) in rois.iter_mut().enumerate() {
         let ch = roi.ch;
@@ -335,6 +426,12 @@ pub(crate) fn seam_blend(warped: &[Surface], canvas: Rect, order: &[usize], seam
             }
         }
     }
+    (photo.gains, photo.vignette)
+}
+
+/// Per-image seam weights (1 inside an image's seam region, else 0) over each ROI.
+fn compute_seam_weights(rois: &[RoiImage], canvas: Rect, order: &[usize]) -> Vec<Vec<f32>> {
+    let n = rois.len();
     // Seams on a ≤ 1000 px grid.
     let (cw, chh) = (canvas.width().max(1) as usize, canvas.height().max(1) as usize);
     let s = cw.max(chh).div_ceil(1000).max(1);
@@ -377,8 +474,7 @@ pub(crate) fn seam_blend(warped: &[Surface], canvas: Rect, order: &[usize], seam
         let (lx, ly) = (x - r.x0, y - r.y0);
         if lx < 0 || ly < 0 || lx as usize >= r.w || ly as usize >= r.h { 0.0 } else { r.alpha[ly as usize * r.w + lx as usize] }
     };
-    let weights: Vec<Vec<f32>> = rois
-        .iter()
+    rois.iter()
         .enumerate()
         .map(|(i, roi)| {
             (0..roi.w * roi.h)
@@ -401,65 +497,131 @@ pub(crate) fn seam_blend(warped: &[Surface], canvas: Rect, order: &[usize], seam
                 })
                 .collect()
         })
-        .collect();
+        .collect()
+}
+
+/// The blended composite over `canvas`, its alpha the coverage.
+fn build_composite(canvas: Rect, fmt: PixelFormat, blend: &[f32], cov: &[f32]) -> Surface {
+    let (cw, chh) = (canvas.width().max(1) as usize, canvas.height().max(1) as usize);
+    let cc = fmt.mode.color_channels();
+    let nch = fmt.channels();
+    let mut composite = Surface::new(fmt);
+    if cw > 0 && chh > 0 {
+        let mut row_comp = vec![0.0f32; cw * nch];
+        for y in 0..chh {
+            for x in 0..cw {
+                let i = y * cw + x;
+                for c in 0..cc {
+                    let v = blend[i * cc + c];
+                    row_comp[x * nch + c] = if fmt.sample == SampleType::F32 { v } else { v.clamp(0.0, 1.0) };
+                }
+                row_comp[x * nch + nch - 1] = cov[i];
+            }
+            let row_area = Rect::new(canvas.x0, canvas.y0 + y as i32, canvas.x1, canvas.y0 + y as i32 + 1);
+            composite.write_region(row_area, &row_comp);
+        }
+        composite.prune();
+    }
+    composite
+}
+
+/// Per input, its pixels (blended inside its seam region when `seamless`) and its seam mask.
+fn build_layers(
+    rois: &[RoiImage],
+    weights: &[Vec<f32>],
+    canvas: Rect,
+    fmt: PixelFormat,
+    blend: &[f32],
+    seamless: bool,
+    check_cancel: Option<&dyn Fn() -> Result<()>>,
+) -> Result<Vec<(Surface, Surface)>> {
+    let cw = canvas.width().max(1) as usize;
+    let cc = fmt.mode.color_channels();
+    let nch = fmt.channels();
+    let mut layers = Vec::with_capacity(rois.len());
+    for (roi, wt) in rois.iter().zip(weights) {
+        if let Some(check) = check_cancel {
+            check()?;
+        }
+        let area = Rect::new(roi.x0, roi.y0, roi.x0 + roi.w as i32, roi.y0 + roi.h as i32);
+        let mut ls = Surface::new(fmt);
+        let mut ms = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+        if !area.is_empty() && roi.w > 0 && roi.h > 0 {
+            let mut row_px = vec![0.0f32; roi.w * nch];
+            let mut row_mask = vec![0.0f32; roi.w];
+            for y in 0..roi.h {
+                let v = (roi.y0 - canvas.y0) as usize + y;
+                for x in 0..roi.w {
+                    let u = (roi.x0 - canvas.x0) as usize + x;
+                    let k = y * roi.w + x;
+                    let g = v * cw + u;
+                    let inside = wt[k] > 0.5;
+                    for c in 0..cc {
+                        row_px[x * nch + c] = if inside && seamless { data_clamp(blend[g * cc + c], fmt) } else { roi.px[k * cc + c] };
+                    }
+                    row_px[x * nch + nch - 1] = roi.alpha[k];
+                    row_mask[x] = wt[k];
+                }
+                let row_area = Rect::new(roi.x0, roi.y0 + y as i32, roi.x0 + roi.w as i32, roi.y0 + y as i32 + 1);
+                ls.write_region(row_area, &row_px);
+                ms.write_region(row_area, &row_mask);
+            }
+        }
+        ls.prune();
+        ms.prune();
+        layers.push((ls, ms));
+    }
+    Ok(layers)
+}
+
+/// Gain compensation (+ optional vignetting), seams in `order`, multi-band blending. Inputs are
+/// surfaces already in panorama coordinates with alpha. `geometry` enables vignette removal.
+pub(crate) fn seam_blend(
+    warped: Vec<Surface>,
+    canvas: Rect,
+    order: &[usize],
+    opt: BlendOptions<'_>,
+    check_cancel: Option<&dyn Fn() -> Result<()>>,
+) -> Result<Blended> {
+    let n = warped.len();
+    let fmt = warped.first().map_or(PixelFormat::RGBA8, Surface::format);
+    let mut rois: Vec<RoiImage> = Vec::with_capacity(n);
+    for s in warped {
+        if let Some(check) = check_cancel {
+            check()?;
+        }
+        let b = s.content_bounds().intersect(&canvas);
+        if b.is_empty() {
+            rois.push(RoiImage { x0: 0, y0: 0, w: 0, h: 0, ch: fmt.mode.color_channels(), px: Vec::new(), alpha: Vec::new() });
+        } else {
+            rois.push(roi_of(&s, b)?);
+        }
+    }
+    let (gains, vignette) = apply_photometric(&mut rois, fmt, opt.geometry, opt.seamless, opt.gains);
+    let weights = compute_seam_weights(&rois, canvas, order);
     // Shift ROIs to canvas-relative coordinates for the blend, and back after: a shifted copy
     // would hold every source's pixels twice (#7758).
     for r in &mut rois {
         r.x0 -= canvas.x0;
         r.y0 -= canvas.y0;
     }
-    let levels = if seamless { panorama::blend_levels(cw, chh).min(7) } else { 1 };
-    let (blend, cov) = panorama::multiband(cw, chh, &rois, &weights, levels);
+    if let Some(check) = check_cancel {
+        check()?;
+    }
+    let (cw, chh) = (canvas.width().max(1) as usize, canvas.height().max(1) as usize);
+    let levels = if opt.seamless { panorama::blend_levels(cw, chh).min(7) } else { 1 };
+    let band_budget = opt.budget.unwrap_or(panorama::BAND_BUDGET);
+    let (blend, cov) = panorama::try_multiband_batched(cw, chh, &rois, &weights, levels, band_budget, opt.budget)?;
     for r in &mut rois {
         r.x0 += canvas.x0;
         r.y0 += canvas.y0;
     }
-    let cc = fmt.mode.color_channels();
-    let nch = fmt.channels();
-    let mut composite = Surface::new(fmt);
-    {
-        let mut data = vec![0.0f32; cw * chh * nch];
-        for i in 0..cw * chh {
-            for c in 0..cc {
-                let v = blend[i * cc + c];
-                data[i * nch + c] = if fmt.sample == SampleType::F32 { v } else { v.clamp(0.0, 1.0) };
-            }
-            data[i * nch + nch - 1] = cov[i];
-        }
-        composite.write_region(canvas, &data);
-        composite.prune();
+    if let Some(check) = check_cancel {
+        check()?;
     }
-    let layers = rois
-        .iter()
-        .zip(&weights)
-        .map(|(roi, wt)| {
-            let area = Rect::new(roi.x0, roi.y0, roi.x0 + roi.w as i32, roi.y0 + roi.h as i32);
-            let mut px = vec![0.0f32; roi.w * roi.h * nch];
-            let mut mask = vec![0.0f32; roi.w * roi.h];
-            for k in 0..roi.w * roi.h {
-                let (u, v) = ((roi.x0 - canvas.x0) as usize + k % roi.w, (roi.y0 - canvas.y0) as usize + k / roi.w);
-                let g = v * cw + u;
-                let inside = wt[k] > 0.5;
-                for c in 0..cc {
-                    px[k * nch + c] = if inside && seamless { data_clamp(blend[g * cc + c], fmt) } else { roi.px[k * cc + c] };
-                }
-                px[k * nch + nch - 1] = roi.alpha[k];
-                mask[k] = wt[k];
-            }
-            let mut ls = Surface::new(fmt);
-            if !area.is_empty() {
-                ls.write_region(area, &px);
-            }
-            ls.prune();
-            let mut ms = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
-            if !area.is_empty() {
-                ms.write_region(area, &mask);
-            }
-            ms.prune();
-            (ls, ms)
-        })
-        .collect();
-    Blended { layers, composite, gains: photo.gains, vignette: photo.vignette }
+    let composite = build_composite(canvas, fmt, &blend, &cov);
+    let layers = build_layers(&rois, &weights, canvas, fmt, &blend, opt.seamless, check_cancel)?;
+    Ok(Blended { layers, composite, gains, vignette })
 }
 
 fn data_clamp(v: f32, fmt: PixelFormat) -> f32 {
@@ -494,10 +656,11 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
     let vignette = p.get("vignetteRemoval").and_then(Value::as_bool).unwrap_or(false);
     let geometric = p.get("geometricCorrection").and_then(Value::as_bool).unwrap_or(false);
     let fill = p.get("contentAwareFill").and_then(Value::as_bool).unwrap_or(false);
-    let (srcs, fmt, icc) = load_sources(s, p, cmd)?;
+    let (mut srcs, fmt, icc) = load_sources(s, p, cmd)?;
     if srcs.len() < 2 {
         return Err(bad(cmd, "Photomerge needs two or more images"));
     }
+    let budget = photomerge_memory_budget(p);
     let focal_param = p.get("focalLength").and_then(Value::as_f64).filter(|f| *f > 0.0);
     let doc_name = format!("Untitled_Panorama{}", s.documents().len() + 1);
     // A background job when started with `Session::start` (#210): alignment, warping and
@@ -515,37 +678,54 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let t_reg = t0.ms() / 1000.0;
             ctx.check()?;
             ctx.progress(0.35, "Photomerge: warping images");
-            let placed: Vec<usize> = (0..srcs.len()).filter(|&i| al.placements[i].is_some()).collect();
+            let placed: Vec<usize> = (0..srcs.len()).filter(|&i| al.placements.get(i).is_some_and(Option::is_some)).collect();
             // Parallel to `placed`.
-            let placements: Vec<&Placement> = placed.iter().filter_map(|&i| al.placements[i].as_ref()).collect();
-            let failed: Vec<String> = (0..srcs.len()).filter(|&i| al.placements[i].is_none()).map(|i| srcs[i].name.clone()).collect();
+            let placements: Vec<&Placement> = placed.iter().filter_map(|&i| al.placements.get(i).and_then(Option::as_ref)).collect();
+            let failed: Vec<String> = (0..srcs.len()).filter(|&i| al.placements.get(i).is_none_or(Option::is_none)).map(|i| srcs[i].name.clone()).collect();
             // Canvas: union of the placed images.
             let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            // Each placed image's warped extent (the bounds of its placement).
+            let mut extents: Vec<(f64, f64)> = Vec::with_capacity(placed.len());
             for (&i, pl) in placed.iter().zip(&placements) {
                 let b = pl.bounds(srcs[i].w as f64, srcs[i].h as f64);
+                extents.push((b[2] - b[0], b[3] - b[1]));
                 x0 = x0.min(b[0]);
                 y0 = y0.min(b[1]);
                 x1 = x1.max(b[2]);
                 y1 = y1.max(b[3]);
             }
             let (cw, ch) = ((x1 - x0).ceil(), (y1 - y0).ceil());
-            if !(cw.is_finite() && ch.is_finite()) || cw > 30_000.0 || ch > 30_000.0 || cw * ch > 6.0e8 {
+            if !(cw.is_finite() && ch.is_finite()) || cw <= 0.0 || ch <= 0.0 || cw > 30_000.0 || ch > 30_000.0 || cw * ch > 6.0e8 {
                 return Err(EngineError::Other(format!("the panorama would be {cw}×{ch} px; try another layout")));
             }
             let canvas = Rect::new(0, 0, cw as i32, ch as i32);
             let offset = (-x0.floor(), -y0.floor());
-            let warped: Vec<Surface> = {
-                placed
-                    .iter()
-                    .zip(&placements)
-                    .enumerate()
-                    .map(|(k, (&i, pl))| {
-                        ctx.check()?;
-                        ctx.progress(0.35 + 0.25 * k as f32 / placed.len().max(1) as f32, "");
-                        warp_placed(&srcs[i].surf, Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32), (0.0, 0.0), pl, offset, Interp::Bicubic)
-                    })
-                    .collect::<Result<Vec<Surface>>>()?
-            };
+            let sizes: Vec<(usize, usize)> = placed.iter().map(|&i| (srcs[i].w, srcs[i].h)).collect();
+            let cc = fmt.mode.color_channels();
+            let bpp = fmt.bytes_per_pixel();
+            // The estimate follows the warped images (one pixel of slack for sub-pixel bounds), clipped to the canvas.
+            let warped_sizes: Vec<(usize, usize)> =
+                extents.iter().map(|&(w, h)| ((w.ceil() + 1.0).max(0.0).min(cw) as usize, (h.ceil() + 1.0).max(0.0).min(ch) as usize)).collect();
+            let (est_needed, fixed_during_bands) = estimate_photomerge_memory(&sizes, &warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
+            if est_needed > budget {
+                let mb_est = est_needed / (1 << 20);
+                let mb_budget = budget / (1 << 20);
+                return Err(crate::allocation::error("Photomerge", &format!("estimated memory of {mb_est} MiB exceeds budget of {mb_budget} MiB")));
+            }
+            for (i, s) in srcs.iter_mut().enumerate() {
+                if al.placements.get(i).is_none_or(Option::is_none) {
+                    s.surf = Surface::new(fmt);
+                }
+            }
+            let mut warped: Vec<Surface> = Vec::with_capacity(placed.len());
+            for (k, (&i, pl)) in placed.iter().zip(&placements).enumerate() {
+                ctx.check()?;
+                ctx.progress(0.35 + 0.25 * k as f32 / placed.len().max(1) as f32, "");
+                let src_rect = Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32);
+                let w = warp_placed(&srcs[i].surf, src_rect, (0.0, 0.0), pl, offset, Interp::Bicubic)?;
+                srcs[i].surf = Surface::new(fmt);
+                warped.push(w);
+            }
             let t_warp = t0.ms() / 1000.0;
             ctx.check()?;
             ctx.progress(0.6, "Photomerge: blending images");
@@ -555,10 +735,12 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let ref_pos = placed.iter().position(|&i| i == al.reference).unwrap_or(0);
             if blend {
                 let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
-                let sizes: Vec<(usize, usize)> = placed.iter().map(|&i| (srcs[i].w, srcs[i].h)).collect();
                 let order = seam_order(&warped, ref_pos);
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
-                let b = seam_blend(&warped, canvas, &order, true, true, geo);
+                let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
+                let check_cancel = || ctx.check();
+                let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
+                let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
                 for (k, (px, mask)) in b.layers.into_iter().enumerate() {
                     let mut l = Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px));
                     let mut m = LayerMask::hide_all();
@@ -617,16 +799,16 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
     let (w, h) = (canvas.width() as usize, canvas.height() as usize);
     let k = ((w * h) as f64 / 1.5e6).sqrt().ceil().max(1.0) as usize;
     let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
-    let full = comp.read_region(canvas);
     let cc = n - 1;
     let mut small = vec![0.0f32; sw * sh * cc];
     let mut hole = vec![false; sw * sh];
     let mut acc_a = vec![0.0f32; sw * sh];
     let mut cnt = vec![0.0f32; sw * sh];
     for y in 0..h {
+        let row = comp.read_region(Rect::new(canvas.x0, canvas.y0 + y as i32, canvas.x1, canvas.y0 + y as i32 + 1));
         for x in 0..w {
             let i = (y / k) * sw + x / k;
-            let px = &full[(y * w + x) * n..(y * w + x + 1) * n];
+            let px = &row[x * n..(x + 1) * n];
             let a = px[cc];
             for c in 0..cc {
                 small[i * cc + c] += px[c] * a;
@@ -644,10 +826,13 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
     }
     let source: Vec<bool> = hole.iter().map(|h| !h).collect();
     let filled = fill(sw, sh, cc, &small, &hole, &source, &FillOptions::default());
-    let mut out = vec![0.0f32; w * h * n];
+    let mut s = Surface::new(fmt);
     for y in 0..h {
+        let area = Rect::new(canvas.x0, canvas.y0 + y as i32, canvas.x1, canvas.y0 + y as i32 + 1);
+        let full = comp.read_region(area);
+        let mut out = vec![0.0f32; w * n];
         for x in 0..w {
-            let o = (y * w + x) * n;
+            let o = x * n;
             let a = full[o + cc];
             let i = (y / k) * sw + x / k;
             for c in 0..cc {
@@ -664,9 +849,8 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
             }
             out[o + cc] = 1.0;
         }
+        s.write_region(area, &out);
     }
-    let mut s = Surface::new(fmt);
-    s.write_region(canvas, &out);
     s.prune();
     s
 }
@@ -962,7 +1146,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Photomerge…",
             menu: &["File", "Automate"],
             shortcut: None,
-            params: r##"{"paths":[str]|folder,"useOpenDocuments":bool=false,"layout":"auto|perspective|cylindrical|spherical|collage|reposition","blend":bool=true,"vignetteRemoval":bool=false,"geometricCorrection":bool=false,"contentAwareFill":bool=false,"focalLength":mm=0 (35 mm equivalent; 0 = EXIF or estimated)} → new document, one masked layer per image"##,
+            params: r##"{"paths":[str]|folder,"useOpenDocuments":bool=false,"layout":"auto|perspective|cylindrical|spherical|collage|reposition","blend":bool=true,"vignetteRemoval":bool=false,"geometricCorrection":bool=false,"contentAwareFill":bool=false,"focalLength":mm=0 (35 mm equivalent; 0 = EXIF or estimated),"memoryBudget":bytes?=half of RAM} → new document, one masked layer per image"##,
             enabled: always,
             run: photomerge,
             journal: true,
