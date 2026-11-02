@@ -60,6 +60,7 @@ fn bytes(event: [u8; 4], descriptor: Descriptor) -> Vec<u8> {
             ..Default::default()
         }],
         warnings: vec![],
+        ..Default::default()
     })
     .unwrap()
 }
