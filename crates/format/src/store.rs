@@ -708,22 +708,19 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
             Err(e) => return Err(e.into()),
         }
     }
-    let (tmp, file) = temporary.ok_or_else(|| {
+    let (tmp, mut file) = temporary.ok_or_else(|| {
         FormatError::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("could not create a temporary file beside {}", path.display())))
     })?;
     let result = (|| -> Result<()> {
-        // Close the native handle before publishing, including when writing fails.
-        {
-            let mut file = file;
-            // The parent may have changed between validation and create_new. Check the new file's
-            // resolved location before putting document bytes into it.
-            if std::fs::canonicalize(&tmp)? != tmp {
-                return Err(unsafe_bundle_entry(&tmp));
-            }
-            validate_bundle_file(root, path)?;
-            file.write_all(data)?;
-            file.sync_all()?;
+        // The parent may have changed between validation and create_new. Check the new file's
+        // resolved location before putting document bytes into it.
+        if std::fs::canonicalize(&tmp)? != tmp {
+            return Err(unsafe_bundle_entry(&tmp));
         }
+        validate_bundle_file(root, path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
         // Preserve the existing mode where possible, as the generic atomic writer does.
         if let Ok(permissions) = std::fs::metadata(path).map(|m| m.permissions()) {
             let _ = std::fs::set_permissions(&tmp, permissions);
