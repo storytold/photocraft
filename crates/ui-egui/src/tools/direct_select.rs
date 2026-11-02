@@ -85,6 +85,12 @@ pub struct DirectSelection {
     pub(crate) owner: Option<Owner>,
     #[serde(skip)]
     pub(crate) cancelled_drag: bool,
+    /// Path Selection only: knot count per subpath of the target path when the selection was
+    /// made — a structural identity that survives history revisions (a click activates the
+    /// layer, colours change, components move), so the component selection lives until the
+    /// path's structure changes (#10854).
+    #[serde(skip)]
+    pub(crate) signature: Option<Vec<usize>>,
 }
 
 /// Runtime selection ownership is never restored from settings onto another document.
@@ -148,6 +154,34 @@ impl Owner {
 /// drag keeps its own tool.
 pub(crate) fn still_valid(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
     ds.owner.as_ref().is_some_and(|owner| owner.valid(app) || (ds.drag.is_none() && owns(owner.tool) && owns(app.ui.tool) && owner.valid_path(app)))
+        || component_selection_matches(app, ds)
+}
+
+/// A Path Selection component selection outlives history revisions: the path's structure (its
+/// knot counts) is what the stored indices address. Valid while the target path still exists on
+/// the same document and carries the same signature.
+fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> bool {
+    if ds.drag.is_some() || app.ui.tool != Tool::PathSelection {
+        return false;
+    }
+    let (Some(owner), Some(target), Some(sig)) = (ds.owner.as_ref(), ds.target.as_ref(), ds.signature.as_ref()) else { return false };
+    if owner.tool != Tool::PathSelection {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    if st.doc.id != owner.document {
+        return false;
+    }
+    let path = match target {
+        PathRef::Layer(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
+            photocraft_doc::LayerContent::Shape(sh) => Some(sh.path.clone()),
+            _ => l.vector_mask.as_ref().map(|m| m.path.clone()),
+        }),
+        PathRef::Work => st.doc.work_path.clone(),
+        PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
+        PathRef::TypePath(_) | PathRef::Pen => None,
+    };
+    path.is_some_and(|p| crate::path_components::knot_signature(&p) == *sig)
 }
 
 /// Clear stale anchors and gestures, keeping the pointer until the old release arrives. True

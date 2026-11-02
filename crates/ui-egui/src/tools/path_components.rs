@@ -125,6 +125,11 @@ fn crossings(pts: &[(f64, f64)], at: [f64; 2]) -> usize {
         .count()
 }
 
+/// Knot count per subpath: the structure a component selection's indices address.
+pub(crate) fn knot_signature(path: &photocraft_doc::Path) -> Vec<usize> {
+    path.subpaths.iter().map(|s| s.knots.len()).collect()
+}
+
 /// Path Selection's press at `at`: selects the component there (⇧ adds or removes it). Pressing a
 /// selected component keeps the selection, so the drag moves all of it; pressing off every
 /// component deselects, unless ⇧ is held.
@@ -158,7 +163,13 @@ pub(crate) fn press(app: &mut PhotocraftApp, at: [f64; 2], shift: bool) {
     app.ui.direct_selection = if anchors.is_empty() {
         DirectSelection::default()
     } else {
-        DirectSelection { target: Some(r), anchors, owner: crate::direct_select::Owner::current(app), ..Default::default() }
+        DirectSelection {
+            target: Some(r),
+            anchors,
+            owner: crate::direct_select::Owner::current(app),
+            signature: Some(knot_signature(&path)),
+            ..Default::default()
+        }
     };
 }
 

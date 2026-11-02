@@ -322,3 +322,116 @@ fn the_pen_carries_on_a_vector_masks_open_subpath() {
     assert_eq!(mask.path.subpaths[0].knots.len(), 3);
     assert!(st.doc.work_path.is_none());
 }
+
+/// The component selection a press creates must survive the frame tick (`sync_views`) — it is
+/// structural (the path's shape), not bound to a history revision (#10854).
+#[test]
+fn a_pressed_component_selection_survives_the_frame_tick() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    assert!(super::selected(&app).is_some(), "the press selects the inner square");
+    app.sync_views();
+    assert!(super::selected(&app).is_some(), "the selection survives the frame tick");
+}
+
+/// ⇧-click adds components, and the accumulated selection survives the tick too.
+#[test]
+fn shift_add_accumulates_and_survives_the_frame_tick() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    crate::path_components::press(&mut app, [30.0, 30.0], true);
+    assert_eq!(super::selected(&app).map(|(.., heads)| heads), Some(vec![0, 1]), "⇧-click adds the outer square");
+    app.sync_views();
+    assert_eq!(super::selected(&app).map(|(.., heads)| heads), Some(vec![0, 1]), "the multi-selection survives the tick");
+}
+
+/// Edits that do not restructure the path (an operation change, a colour edit) keep the
+/// selection; a structural edit (an added anchor) clears it — the stored indices must not go
+/// stale.
+#[test]
+fn the_selection_survives_unrelated_edits_and_dies_on_restructure() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("path.setOperation", json!({"name": "layer", "layer": id.0, "subpaths": [1], "op": "subtract"})).unwrap();
+    assert!(super::selected(&app).is_some(), "an operation change keeps the selection");
+    app.run("shape.edit", json!({"layer": id.0, "fill": "#0000ff"})).unwrap();
+    assert!(super::selected(&app).is_some(), "a colour edit keeps it too");
+    app.run("path.addAnchor", json!({"name": "layer", "layer": id.0, "subpath": 0, "knot": 0, "t": 0.5})).unwrap();
+    assert!(super::selected(&app).is_none(), "adding an anchor changes the structure: the selection clears");
+}
+
+/// The real click is press + release, and the release activates the shape's layer — an engine
+/// edit. The component selection must survive that (it is structural, not revision-bound).
+#[test]
+fn the_selection_survives_the_layer_activation_of_the_click() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run("layer.select", json!({"layer": id.0})).unwrap();
+    assert!(super::selected(&app).is_some(), "activating the shape's layer keeps the selection");
+}
+
+/// The clicked component's anchors render filled — and the unselected component's stay hollow —
+/// right after the press, no drag needed (#10854).
+#[test]
+fn a_pressed_component_marks_itself_on_the_canvas() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    assert!(super::selected(&app).is_some());
+    app.sync_views();
+    assert!(super::selected(&app).is_some(), "the frame tick keeps the press selection");
+
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(6);
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        v.zoom = 2.0;
+        v.center = [100.0, 100.0];
+        v.fit_pending = false;
+    }
+    h.run_steps(3);
+    let accent = crate::theme::Tokens::get(&h.ctx).accent;
+    let xf = crate::canvas::ViewXform::active(h.state()).expect("active document view");
+    let ppp = h.ctx.pixels_per_point();
+    let img = h.render().unwrap();
+    let px = |at: egui::Pos2| {
+        let x = (at.x * ppp).round() as u32;
+        let y = (at.y * ppp).round() as u32;
+        img.get_pixel(x, y).0
+    };
+    // The pressed inner square's anchor (60, 60) is filled with the accent…
+    assert_eq!(&px(xf.to_screen(60.0, 60.0))[..3], &[accent.r(), accent.g(), accent.b()], "the pressed component's anchor is filled");
+    // …the unselected component's anchor (20, 20) stays a hollow (white) square.
+    assert_eq!(&px(xf.to_screen(20.0, 20.0))[..3], &[255, 255, 255], "the unselected component's anchor is hollow");
+}
