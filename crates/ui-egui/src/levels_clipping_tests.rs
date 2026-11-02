@@ -234,6 +234,44 @@ fn paint_view(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> O
     Some(image(&c.stats, &thr, end))
 }
 
+/// How many meshes among `shapes` (shape lists included) draw texture `tex`.
+fn meshes_with(shapes: &[egui::epaint::ClippedShape], tex: egui::TextureId) -> usize {
+    fn count(s: &egui::Shape, tex: egui::TextureId) -> usize {
+        match s {
+            egui::Shape::Mesh(m) => usize::from(m.texture_id == tex),
+            egui::Shape::Vec(v) => v.iter().map(|s| count(s, tex)).sum(),
+            _ => 0,
+        }
+    }
+    shapes.iter().map(|c| count(&c.shape, tex)).sum()
+}
+
+/// The display keeps one cache, sized to the main canvas's view: an extra document window's
+/// canvas (not primary) neither draws it nor replaces that cache with its own view.
+#[test]
+fn only_the_main_canvas_draws_the_display() {
+    let ctx = egui::Context::default();
+    let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
+    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    app.sync_views();
+    let main = crate::state::View { zoom: 10.0, center: [8.0, 4.0], fit_pending: false, fill_pending: false, ..app.ui.views[0].clone() };
+    let other = crate::state::View { zoom: 0.25, ..main.clone() };
+    let frame = |app: &mut PhotocraftApp, view: &crate::state::View, primary: bool| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::canvas::canvas_view(app, ui, 0, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), view.clone(), primary);
+        });
+        out.textures_delta.clear();
+        out.shapes
+    };
+    let shapes = frame(&mut app, &main, true);
+    let cache = app.levels_clipping.as_ref().expect("the main canvas builds the display");
+    let (key, tex) = (cache.key, cache.tex.as_ref().map(egui::TextureHandle::id).expect("its texture"));
+    assert_eq!(meshes_with(&shapes, tex), 1, "the main canvas draws the display");
+    let shapes = frame(&mut app, &other, false);
+    assert_eq!(meshes_with(&shapes, tex), 0, "an extra window doesn't draw it");
+    assert_eq!(app.levels_clipping.as_ref().map(|c| c.key), Some(key), "nor replaces the main canvas's cache");
+}
+
 /// The display covers the view at about one texel per screen pixel, in every depth and in Gray,
 /// and goes away with the dialog.
 #[test]
