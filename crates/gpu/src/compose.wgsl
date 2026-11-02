@@ -73,12 +73,14 @@ const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its co
 @group(1) @binding(6) var map_tex: texture_2d<f32>;
 @group(1) @binding(7) var pat_tex: texture_2d<f32>;
 
-struct VOut { @builtin(position) pos: vec4<f32> };
-
+// A vertex shader whose output struct holds only `@builtin(position)` makes naga emit
+// `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows OpenGL driver rejects
+// outright (`GLSL compile failed`, empty log) — every compositor pipeline then fails to build and
+// the canvas falls back to the CPU (#7331). A plain position return avoids that code path.
 @vertex
-fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }
 
 fn local(pos: vec4<f32>) -> vec2<i32> { return vec2<i32>(floor(pos.xy)); }
@@ -858,8 +860,8 @@ fn layer_texel(d: vec2<i32>) -> vec4<f32> {
 
 // A layer's own pixels (raster / fill), times its mask.
 @fragment
-fn fs_content(in: VOut) -> @location(0) vec4<f32> {
-    let d = doc_px(local(in.pos));
+fn fs_content(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let d = doc_px(local(pos));
     var c = layer_texel(d);
     c.a = c.a * mask_value(d);
     return c;
@@ -867,8 +869,8 @@ fn fs_content(in: VOut) -> @location(0) vec4<f32> {
 
 // Multiply alpha of A by the mask (isolated group content).
 @fragment
-fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mask(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     var c = textureLoad(tex_a, p, 0);
     c.a = c.a * mask_value(doc_px(p));
     return c;
@@ -887,16 +889,16 @@ fn blend_px(p: vec2<i32>, b: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
 
 // blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
 @fragment
-fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_blend(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     return blend_px(p, textureLoad(tex_a, p, 0), textureLoad(tex_b, p, 0));
 }
 
 // fs_content then fs_blend in one pass: the layer's own pixels (times its mask) blended straight
 // onto A, without writing them to a chunk texture and reading them back.
 @fragment
-fn fs_layerblend(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_layerblend(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let d = doc_px(p);
     var s = layer_texel(d);
     s.a = s.a * mask_value(d);
@@ -937,8 +939,8 @@ fn batch_layer_normal(t: i32, d: vec2<i32>, b: vec4<f32>, geo: vec4<f32>, color:
 // fs_layerblend of this pass's layer, then `op.kind` (at most 3) more plain layers: consecutive
 // LayerBlend passes the executor draws as one, reading and writing the chunk once for all of them.
 @fragment
-fn fs_layerbatch(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_layerbatch(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let d = doc_px(p);
     var s = layer_texel(d);
     s.a = s.a * mask_value(d);
@@ -951,8 +953,8 @@ fn fs_layerbatch(in: VOut) -> @location(0) vec4<f32> {
 
 // fs_layerbatch for a run of Normal layers without text gamma, outside Lab documents.
 @fragment
-fn fs_layerbatch_normal(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_layerbatch_normal(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let d = doc_px(p);
     var s = layer_texel(d);
     s.a = s.a * mask_value(d);
@@ -966,8 +968,8 @@ fn fs_layerbatch_normal(in: VOut) -> @location(0) vec4<f32> {
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.
 @fragment
-fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_atop(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let base = textureLoad(tex_a, p, 0);
     if (base.a <= 0.0) { return base; }
     let s = textureLoad(tex_b, p, 0);
@@ -980,8 +982,8 @@ fn fs_atop(in: VOut) -> @location(0) vec4<f32> {
 
 // Adjustment applied to A (transparent pixels untouched).
 @fragment
-fn fs_adjust(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_adjust(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let c = textureLoad(tex_a, p, 0);
     if (c.a <= 0.0) { return c; }
     adj_px = doc_px(p);
@@ -991,8 +993,8 @@ fn fs_adjust(in: VOut) -> @location(0) vec4<f32> {
 // Mix an adjusted result B back over the original A with blend mode, opacity and mask.
 // Both ordinary and clipped adjustments use this pass, retaining the original alpha.
 @fragment
-fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_adjmix(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let b = textureLoad(tex_a, p, 0);
     let k = op.opacity * mask_value(doc_px(p));
     if (k <= 0.0) { return b; }
@@ -1019,8 +1021,8 @@ fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
 
 // Pass-through group coverage mixes premultiplied colour, then returns straight alpha.
 @fragment
-fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_lerp(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let a = textureLoad(tex_a, p, 0);
     let b = textureLoad(tex_b, p, 0);
     if ((op.flags & F_QUANT) != 0u) {
@@ -1212,8 +1214,8 @@ fn fx_composite(d: vec2<i32>, dst: vec4<f32>, s: vec4<f32>) -> vec4<f32> {
 // `opacity` × A's alpha relative to B's (the layer within a filled shape's outline); 6 the
 // outside-stroke coverage seed (0, A's alpha); 7 A with alpha joined with the effect shape (map).
 @fragment
-fn fs_fxinit(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_fxinit(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let c = textureLoad(tex_a, p, 0);
     switch op.kind {
         case 1: { return vec4(c.rgb, 1.0); }
@@ -1252,8 +1254,8 @@ fn outline_share(cov: f32, l: f32) -> f32 {
 // F_GATE inside ? m : 0, F_REL inside ? min(m / a, 1) : 0, F_STROKE_OUT inside ? (vector ? 0 : 1)
 // : m.
 @fragment
-fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_fxpaint(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let d = doc_px(p);
     let dst = textureLoad(tex_a, p, 0);
     let a = textureLoad(tex_b, p, 0).a;
@@ -1287,8 +1289,8 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
 // covered above it; `kind` 0 accumulates that share of the stroke blended over A at full
 // coverage, `kind` 1 the coverage.
 @fragment
-fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_fxstroke(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let d = doc_px(p);
     let a = textureLoad(tex_b, p, 0).a;
     let outline = (op.flags & F_OUTLINE) != 0u;
@@ -1336,8 +1338,8 @@ fn fs_fxstroke(in: VOut) -> @location(0) vec4<f32> {
 
 // Resolve outside strokes: A = exterior result, B = accumulated colour, C = coverage.
 @fragment
-fn fs_fxstrokeend(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_fxstrokeend(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let w = textureLoad(tex_a, p, 0);
     let cover = textureLoad(tex_c, p, 0).r;
     if (cover <= 0.0) { return w; }
@@ -1358,8 +1360,8 @@ fn mix_premul(a: vec4<f32>, b: vec4<f32>, k: f32) -> vec4<f32> {
 // layer opacity against the backdrop C. F_ATOP: C is a clipping base: effects were painted over
 // it as if opaque and the base keeps its alpha.
 @fragment
-fn fs_fxmerge(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_fxmerge(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     var w = textureLoad(tex_a, p, 0);
     var l = textureLoad(tex_b, p, 0);
     let c = textureLoad(tex_c, p, 0);
@@ -1400,8 +1402,8 @@ fn mout(v: f32) -> vec4<f32> { return vec4(v, 0.0, 0.0, 1.0); }
 
 // Map::shifted by whole pixels: p0 = (dx, dy, outside, invert (1 - a before shifting)).
 @fragment
-fn fs_mshift(in: VOut) -> @location(0) vec4<f32> {
-    let s = local(in.pos) - vec2<i32>(i32(op.p0.x), i32(op.p0.y));
+fn fs_mshift(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let s = local(pos) - vec2<i32>(i32(op.p0.x), i32(op.p0.y));
     if (!inside(s, chunk.size)) { return mout(op.p0.z); }
     var v = textureLoad(tex_a, s, 0).r;
     if (op.p0.w > 0.5) { v = 1.0 - v; }
@@ -1411,8 +1413,8 @@ fn fs_mshift(in: VOut) -> @location(0) vec4<f32> {
 // effects::dilate: inside (distance < 0) min(A + r, 1), else max(A, clamp(r + 0.5 - dist_outside));
 // B = distances, p0.x = r.
 @fragment
-fn fs_mdilate(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mdilate(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let a = textureLoad(tex_a, p, 0).r;
     let d = textureLoad(tex_b, p, 0).r;
     if (d < 0.0) { return mout(min(a + op.p0.x, 1.0)); }
@@ -1422,8 +1424,8 @@ fn fs_mdilate(in: VOut) -> @location(0) vec4<f32> {
 // effects::blur, one separable pass: p0 = (vertical, radius); weights in LUT row 0; zero outside
 // the region.
 @fragment
-fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mblur(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let r = i32(op.p0.y);
     var step = vec2(1, 0);
     var n = chunk.size.x;
@@ -1447,8 +1449,8 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
 // the edge falling to 0 at `size + 1` px centre to centre (the field is 0.5 px short of that),
 // solid within the spread / choke.
 @fragment
-fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
-    let d = textureLoad(tex_a, local(in.pos), 0).r + 0.5;
+fn fs_mglow(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let d = textureLoad(tex_a, local(pos), 0).r + 0.5;
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
     if (d <= op.p0.x) { m = 1.0; }
     return mout(m);
@@ -1457,8 +1459,8 @@ fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v (1: before the contour, 2: after it,
 // as a centre-source inner glow), contour (LUT row 0), × shape (`layer_tex`)).
 @fragment
-fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mfinish(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     var v = textureLoad(tex_a, p, 0).r;
     if (op.p0.x > 0.5) { v = abs(v - textureLoad(tex_b, p, 0).r); }
     if (op.p0.y > 0.5 && op.p0.y < 1.5) { v = 1.0 - v; }
@@ -1471,8 +1473,8 @@ fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
 // Chiselled bevel height from A = dist_inside, B = dist_outside (`effects::bevel_chisel_h`):
 // p0 = (paint (0 outer, 1 both / emboss, 2 inner), size, Chisel Soft).
 @fragment
-fn fs_mbevelh(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mbevelh(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let din = textureLoad(tex_a, p, 0).r;
     let dout = textureLoad(tex_b, p, 0).r;
     let size = op.p0.y;
@@ -1511,8 +1513,8 @@ fn fs_mbevelh(in: VOut) -> @location(0) vec4<f32> {
 // Bevel shading of the blurred height map A over shape S (`layer_tex`): p0 = light vector,
 // sin(altitude); p1 = (depth, outer, shadow (else highlight), contour (LUT row 0)).
 @fragment
-fn fs_mbevelshade(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mbevelshade(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let s = textureLoad(layer_tex, p, 0).r;
     // effects::bevel_maps' on_bevel: the height above BEVEL_H_EPS (emboss styles: or a
     // 4-neighbour's).
@@ -1556,8 +1558,8 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
 // Bevel texture (`effects::bevel_height`): A + k × luminance of the pattern (× its alpha; 1 −
 // that when inverted); p0 = (k, invert), placement in p3 / p4 as for pattern paints.
 @fragment
-fn fs_mbeveltex(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
+fn fs_mbeveltex(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = local(pos);
     let c = pattern_sample(doc_px(p));
     var l = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) * c.a;
     if (op.p0.y > 0.5) { l = 1.0 - l; }
@@ -1566,7 +1568,7 @@ fn fs_mbeveltex(in: VOut) -> @location(0) vec4<f32> {
 
 // Stroke band from a distance map: clamp(width + 0.5 - d), p0.x = width.
 @fragment
-fn fs_mstroke(in: VOut) -> @location(0) vec4<f32> {
-    let d = textureLoad(tex_a, local(in.pos), 0).r;
+fn fs_mstroke(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let d = textureLoad(tex_a, local(pos), 0).r;
     return mout(clamp(op.p0.x + 0.5 - d, 0.0, 1.0));
 }

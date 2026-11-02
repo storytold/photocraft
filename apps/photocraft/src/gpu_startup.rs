@@ -17,6 +17,10 @@
 //! start doesn't load the Intel Vulkan driver either. `WGPU_BACKEND` still overrides everything,
 //! and `--safe-gpu` forces the CPU path for one launch.
 //!
+//! On Windows a hardware adapter always beats the software WARP adapter: DX12 or Vulkan when the
+//! driver has them, else GL, which is the only hardware backend left on an old GPU (#7331). GL on a
+//! virtual GPU (VMware's SVGA3D) still ranks last: it drew a black window (#5191, #1788).
+//!
 //! "CPU" composites on the CPU and draws the window with a software adapter where the platform
 //! has one (WARP on Windows, llvmpipe over GL elsewhere). On Linux a GL adapter that can't present
 //! (NVIDIA's EGL, which also hides llvmpipe) falls back to a Vulkan adapter for the window only
@@ -117,7 +121,8 @@ pub struct Plan {
     pub remember: bool,
 }
 
-/// A backend the platform has (others fall back to `auto`).
+/// A backend the platform has (others fall back to `auto`). Windows has GL: it is the only
+/// hardware backend left on a machine whose GPU driver offers no DX12 or Vulkan (#7331).
 pub fn sanitize(pref: GpuBackend, os: Os) -> GpuBackend {
     use GpuBackend::*;
     match (os, pref) {
@@ -270,16 +275,66 @@ pub struct Candidate {
     pub surface_ok: bool,
     /// Its name matches the adapter the user asked for ([`adapter_matches`]).
     pub wanted: bool,
+    /// What its name says it is ([`kind`]).
+    pub kind: Kind,
+}
+
+/// What an adapter's name says it is. wgpu's GL backend classifies only integrated GPUs (by vendor
+/// or renderer name) and three software renderers, so everything else — a real NVIDIA or AMD card,
+/// a VM's emulated GPU, Mesa's softpipe — arrives as `DeviceType::Other`, and the name decides
+/// (#7331, #5191, #1788).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A real GPU.
+    Gpu,
+    /// A VM's emulated GPU, whose Windows GL drew a black window (#5191, #1788).
+    Virtual,
+    /// A software rasterizer.
+    Software,
+}
+
+/// What `name` says the adapter is.
+fn kind(name: &str) -> Kind {
+    let name = name.to_ascii_lowercase();
+    let virtual_gpu = ["svga", "vmware", "virtualbox", "vbox", "parallels", "qemu", "virgl"];
+    // wgpu knows llvmpipe, swiftshader and mesa offscreen; the rest are the same kind of renderer.
+    let software = ["llvmpipe", "softpipe", "swrast", "swiftshader", "mesa offscreen", "gdi generic"];
+    if virtual_gpu.iter().any(|s| name.contains(s)) {
+        Kind::Virtual
+    } else if software.iter().any(|s| name.contains(s)) {
+        Kind::Software
+    } else {
+        Kind::Gpu
+    }
+}
+
+/// Whether `a` is a real GPU, not a VM's adapter or a software renderer. The device type alone is
+/// not enough: wgpu's GL backend calls a real NVIDIA or AMD card `Other`, and calls a VM's emulated
+/// Intel GPU `IntegratedGpu` because the renderer name contains "intel" (virgl).
+fn hardware(a: &Candidate) -> bool {
+    matches!(a.device_type, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Other) && a.kind == Kind::Gpu
 }
 
 /// Rank of an adapter (lower is better): high-performance device types first (egui's power
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
 /// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
-/// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
-/// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
-/// old GPUs) drew a black window (#5191, #1788).
+/// before Vulkan, which is only the fallback for presenting the window (see [`backends`]).
+///
+/// A real GPU on a real graphics API comes first. On Windows, GL is the compatibility path, so a
+/// real GPU's GL adapter ranks after the other backends but before software WARP: that is what
+/// #7331 asks for, and it keeps a hardware Vulkan or DX12 adapter ahead of an integrated GL one.
+/// A VM's GL (VMware's SVGA3D drew a black window, #5191, #1788) and a software rasterizer stay
+/// last, behind WARP.
 fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
-    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
+    let tier = if backend == GpuBackend::Cpu {
+        u8::from(a.backend == wgpu::Backend::Vulkan)
+    } else if !hardware(a) {
+        if os == Os::Windows && a.backend == wgpu::Backend::Gl { 3 } else { 2 }
+    } else if os == Os::Windows && a.backend == wgpu::Backend::Gl {
+        1
+    } else {
+        0
+    };
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -299,7 +354,7 @@ fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
         wgpu::Backend::Gl => 3,
         wgpu::Backend::BrowserWebGpu | wgpu::Backend::Noop => 4,
     };
-    (fallback, ty, be)
+    (tier, ty, be)
 }
 
 /// The adapter to use among `adapters` (`None` when there is none). Adapters the user asked for
@@ -404,6 +459,7 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                             backend: i.backend,
                             surface_ok: surface.is_none_or(|s| a.is_surface_supported(s)),
                             wanted: wanted.as_deref().is_some_and(|w| adapter_matches(&i.name, w)),
+                            kind: kind(&i.name),
                         }
                     })
                     .collect();

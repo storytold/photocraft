@@ -388,3 +388,25 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
 }
+
+#[test]
+fn gl_builds_its_pipelines_on_one_thread() {
+    // wgpu-hal's GL device takes one context lock around every call and panics after a second
+    // ("Could not lock adapter context. This is most-likely a deadlock"), so two threads creating
+    // pipelines abort the process; every other backend keeps the parallel build (#6419).
+    assert!(!super::setup::parallel_pipelines(wgpu::Backend::Gl));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Vulkan));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Dx12));
+    assert!(super::setup::parallel_pipelines(wgpu::Backend::Metal));
+}
+
+/// Guards the shader pattern behind #10636: naga turns a vertex output struct that holds only
+/// `@builtin(position)` into GLSL Intel's Windows OpenGL driver rejects, which fails every pipeline
+/// and silently costs the whole GPU canvas, so both entry points return the position itself.
+#[test]
+fn the_vertex_shaders_return_the_position_directly() {
+    for (name, src) in [("compose", super::kit::SHADER), ("camera raw", super::camera_raw::CAMERA_RAW_SHADER)] {
+        assert!(src.contains("-> @builtin(position) vec4<f32>"), "{name}: the vertex shader must return the position");
+        assert!(!src.contains("struct VOut"), "{name}: a position-only output struct breaks Intel's GL driver");
+    }
+}

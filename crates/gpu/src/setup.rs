@@ -46,7 +46,10 @@ impl Compositor {
     /// The compositor and the first error raised building its (non-map) pipelines. They are
     /// built in parallel, each inside its own error scope on the thread that builds it (wgpu's
     /// scopes are per thread): on DX12, FXC compiles one shader at a time and the ~30 pipelines
-    /// took about 8 s on one core (#6419).
+    /// took about 8 s on one core (#6419). Not on GL: wgpu-hal's GL device puts every call behind
+    /// one context lock that panics after a second ("Could not lock adapter context. This is
+    /// most-likely a deadlock"), and that panic while another thread drops a pipeline aborts the
+    /// process, so GL builds them on one thread.
     fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> (Self, Option<wgpu::Error>) {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -86,10 +89,11 @@ impl Compositor {
         // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
         let keys = Kernel::DRAWN.iter().filter(|k| !k.is_map()).map(|&k| (k, acc_format));
         let keys: Vec<_> = keys.chain(Kernel::DRAWN.iter().filter(|k| k.is_map()).flat_map(|&k| [(k, MAP32), (k, MAP16)])).collect();
-        let built = fx::par_map(keys, |key| {
+        let build = |key: (Kernel, wgpu::TextureFormat)| {
             let (built, error) = first_error(device, || pipeline(key.0, key.1));
             (key, built, error)
-        });
+        };
+        let built: Vec<_> = if parallel_pipelines(device.adapter_info().backend) { fx::par_map(keys, build) } else { keys.into_iter().map(build).collect() };
         let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
         let (mut error, mut map_error) = (None, None);
         for (key, built, e) in built {
@@ -506,4 +510,15 @@ impl Compositor {
     pub fn take_gpu_timing(&mut self) -> Option<timing::GpuTiming> {
         self.timer.as_mut().and_then(timing::GpuTimer::take)
     }
+}
+
+/// Whether [`Compositor::build`] may create its pipelines from several threads on `backend`.
+///
+/// Not on GL: wgpu-hal's GL device puts every call behind one context lock that gives up after a
+/// second ("Could not lock adapter context. This is most-likely a deadlock"), so a second thread
+/// creating a pipeline panics — and that panic while another thread drops a pipeline aborts the
+/// process. Elsewhere the parallelism is what keeps startup short: on DX12, FXC compiles one shader
+/// at a time and the ~30 pipelines took about 8 s on one core (#6419).
+pub(crate) fn parallel_pipelines(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::Gl
 }

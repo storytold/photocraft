@@ -49,14 +49,12 @@ const CURVE_LUT: i32 = 1024;
 const WB_STEPS: i32 = 33;
 const TAU: f32 = 6.2831855;
 
-struct VOut {
-    @builtin(position) pos: vec4<f32>,
-}
-
+// A position-only output struct makes naga emit a temporary struct that Intel's Windows OpenGL
+// driver rejects; returning the position directly avoids it (see compose.wgsl).
 @vertex
-fn vs(@builtin(vertex_index) vi: u32) -> VOut {
+fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }
 
 fn on(flag: u32) -> bool {
