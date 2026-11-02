@@ -200,8 +200,8 @@ mod missing_font_warning_tests {
         let Invoke { code, stderr, .. } = invoke(&["convert", &ora, &png]);
         assert_eq!(code, 0, "{stderr}");
         assert!(is_input(std::path::Path::new(&ora)));
-        // Krita documents are batch inputs too (import-only).
-        for name in ["sketch.kra", "old.KRZ"] {
+        // Krita and VectorCraft documents are batch inputs too (import-only).
+        for name in ["sketch.kra", "old.KRZ", "logo.vectorcraft", "old.DRAWCRAFT"] {
             std::fs::write(folder.join(name), b"").unwrap();
             assert!(is_input(&folder.join(name)), "{name}");
         }

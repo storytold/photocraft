@@ -25,6 +25,9 @@
 //! * Affinity documents (`.af`, `.afdesign`, `.afphoto`, `.afpub`) open natively
 //!   with no source save path, what isn't imported listed in the warnings; a file
 //!   whose native data can't be read opens as its embedded preview; see `affinity`.
+//! * VectorCraft documents (`.vectorcraft`, `.drawcraft`) open and place as their first artboard, drawn from
+//!   the PDF the file carries when saved with Create PDF-Compatible File (import only); see
+//!   `vectorcraft`.
 //! * Every other format goes through `photocraft-codecs` as a single layer
 //!   (depth and Gray/RGB/CMYK model preserved): a locked "Background" when the
 //!   image is opaque, a normal "Layer 0" when it has transparency.
@@ -78,6 +81,7 @@ pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
 pub mod vector_preview;
+pub mod vectorcraft;
 mod xcf;
 pub mod xml;
 
@@ -109,6 +113,9 @@ pub enum IoError {
     /// A GIMP XCF file that could not be read.
     #[error("XCF: {0}")]
     Xcf(String),
+    /// A VectorCraft document that could not be read, or one saved without its PDF.
+    #[error("VectorCraft: {0}")]
+    VectorCraft(String),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -514,6 +521,10 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
+    }
+    // As with SVG, a recognized raster signature still wins over a misleading .vectorcraft suffix.
+    if vectorcraft::is_vectorcraft(bytes) || (vectorcraft::has_extension(name) && photocraft_codecs::detect(bytes).is_none()) {
+        return vectorcraft::import(name, bytes, ctl);
     }
     if ora::is_ora(bytes) || has_extension(name, "ora") {
         return ora::import(name, bytes, ctl);

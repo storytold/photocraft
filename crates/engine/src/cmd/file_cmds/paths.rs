@@ -62,6 +62,7 @@ pub fn list_images(dir: &str) -> Result<Vec<String>> {
 pub(super) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
     lower.ends_with(".xcf.gz")
+        || photocraft_io::vectorcraft::has_extension(&lower)
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 

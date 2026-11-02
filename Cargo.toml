@@ -42,7 +42,11 @@ photocraft-ipp = { path = "crates/ipp" }
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
-craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "b8f7d93b00dfb8f172938f3d2d796ae62dcfe123" }
+craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+# Reads .vectorcraft files (photocraft-io's `vectorcraft`); its craft-pcraft-format is the one above.
+craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+# Draws the PDF a .vectorcraft file carries. Its Hayro crates are patched below at the same revision.
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba", features = ["raster"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 thiserror = "2"
@@ -203,3 +207,10 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968157
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+# craft-pdf's patched Hayro readers (crates/pdf/README.md in craft-libs), at craft-pdf's revision.
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+hayro-cmap = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+hayro-postscript = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }

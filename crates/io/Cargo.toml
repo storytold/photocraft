@@ -32,6 +32,9 @@ photocraft-paint = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-format = { path = "../format" }
 craft-docpath = { workspace = true }
+# vectorcraft.rs: reads the .vectorcraft file and draws the PDF it carries.
+craft-doc = { workspace = true }
+craft-pdf = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }

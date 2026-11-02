@@ -147,7 +147,8 @@ pub(super) fn same_format(path: &str) -> String {
         &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
+    let import_only = IMPORT_ONLY.contains(&ext.as_str()) || photocraft_io::vectorcraft::EXTENSIONS.contains(&ext.as_str());
+    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || import_only || no_writer { "psd".into() } else { ext }
 }
 
 #[cfg(test)]
@@ -163,6 +164,8 @@ fn same_format_takes_the_file_names_extension() {
     for name in ["/in/scan.dcm", "/in/scan.DICOM", "/in/scan.dc3", "/in/page.xcf", "/in/page.xcf.gz", "/in/page.xcfgz", "/in/card.psdt"] {
         assert_eq!(same_format(name), "psd", "{name}");
     }
+    assert_eq!(same_format("/in/logo.vectorcraft"), "psd");
+    assert_eq!(same_format("/in/logo.DRAWCRAFT"), "psd");
     for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read && !f.caps().write) {
         for ext in f.extensions() {
             assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");

@@ -501,6 +501,103 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// A `.vectorcraft` file carrying a one-page PDF of `w` × `h` points, its left half filled with
+/// the RGB color `rgb` (PDF operands, such as `0 0 1` for blue).
+fn vectorcraft_file(w: u32, h: u32, rgb: &str) -> Vec<u8> {
+    let content = format!("{rgb} rg 0 0 {} {h} re f", w / 2);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let mut file = format!(
+        r#"{{"format":"vectorcraft","version":4,"generator":"VectorCraft 0.1.0","pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    file.extend_from_slice(b"\n\0VCBLOBS\0");
+    file.extend_from_slice(pdf.as_bytes());
+    file
+}
+
+/// A `.vectorcraft` file saved with Create PDF-Compatible File places as a smart object of the
+/// file, drawn from the PDF it carries, and draws again from its embedded bytes.
+#[test]
+fn place_vectorcraft_draws_the_carried_pdf() {
+    let dir = tmp("place-vectorcraft");
+    let file = vectorcraft_file(40, 20, "0 0 1");
+    let path = join(&dir, "Logo.vectorcraft");
+    std::fs::write(&path, &file).unwrap();
+    let mut s = session(100, 100, 8);
+    let r = s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
+    assert_eq!(r["smartObject"], json!(true));
+    assert_eq!(r["bounds"], json!([30.0, 40.0, 70.0, 60.0]));
+    let d = s.active().unwrap();
+    let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    assert_eq!(l.name, "Logo");
+    let LayerContent::Smart(so) = &l.content else { panic!("smart object expected") };
+    assert!(matches!(&so.source, SmartSource::Embedded { file_name, bytes } if file_name == "Logo.vectorcraft" && bytes.as_slice() == file.as_slice()));
+    // Blue on the left half of the placed artboard, the white background on its right half.
+    assert!(composite(&s, 35, 50)[2] > 0.99 && composite(&s, 35, 50)[0] < 0.01);
+    assert!(composite(&s, 65, 50)[0] > 0.99);
+    let drawn = crate::smart_cmds::render(&d.doc, so).unwrap().expect("drawn from the embedded file");
+    let px = drawn.pixel(35, 50);
+    assert!(px[2] > 0.99 && px[3] > 0.99, "{px:?}");
+    // Placed at 400%, the artboard is drawn again at that scale: the edge of the fill stays sharp.
+    let mut s = session(300, 300, 8);
+    s.execute("file.placeEmbedded", json!({"path": path, "scale": 400})).unwrap();
+    let (inside, outside) = (composite(&s, 149, 150), composite(&s, 150, 150));
+    assert!(inside[2] > 0.99 && inside[0] < 0.01, "{inside:?}");
+    assert!(outside[0] > 0.99 && outside[2] > 0.99, "{outside:?}");
+    // An artboard past the PDF raster limits opens smaller than one pixel per point; drawn again
+    // for its placement, it keeps the size it was placed at.
+    let banner = join(&dir, "Banner.vectorcraft");
+    std::fs::write(&banner, vectorcraft_file(20_000, 2_000, "0 0 1")).unwrap();
+    let mut s = session(200, 200, 8);
+    let r = s.execute("file.placeEmbedded", json!({"path": banner})).unwrap();
+    let b: Vec<f64> = r["bounds"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!((b[2] - b[0] - 200.0).abs() < 1e-6, "fitted to the canvas width: {b:?}");
+    let (left, right) = (composite(&s, 95, 100), composite(&s, 105, 100));
+    assert!(left[2] > 0.99 && left[0] < 0.01, "{left:?}");
+    assert!(right[0] > 0.99 && right[2] > 0.99, "{right:?}");
+    // Without the PDF, Place says which VectorCraft option to turn on.
+    let bare = join(&dir, "Bare.vectorcraft");
+    std::fs::write(&bare, br#"{"format":"vectorcraft","version":4,"document":{"artboards":[],"layers":[]}}"#).unwrap();
+    let e = s.execute("file.placeEmbedded", json!({"path": bare})).unwrap_err();
+    assert!(e.to_string().contains("Create PDF-Compatible File"), "{e}");
+}
+
+/// A VectorCraft smart object's sRGB colors are converted into the document's profile when it is
+/// drawn again for its placement, and each profile keeps its own drawing.
+#[test]
+fn vectorcraft_smart_render_converts_into_the_document_profile() {
+    let s = session(40, 40, 8);
+    let srgb = (*s.active().unwrap().doc).clone();
+    let mut linear = srgb.clone();
+    linear.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    let bytes = Arc::new(vectorcraft_file(20, 20, "0.5 0.5 0.5"));
+    let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "Gray.vectorcraft".into(), bytes }, Affine { m: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0] }, None);
+    let original = crate::smart_cmds::render(&srgb, &smart).unwrap().unwrap();
+    let corrected = crate::smart_cmds::render(&linear, &smart).unwrap().unwrap();
+    assert!((original.pixel(5, 20)[0] - 0.5).abs() < 0.01, "{:?}", original.pixel(5, 20));
+    assert!((corrected.pixel(5, 20)[0] - 0.214).abs() < 0.01, "{:?}", corrected.pixel(5, 20));
+    assert_eq!(crate::smart_cmds::render(&srgb, &smart).unwrap().unwrap(), original);
+    // A warp draws from the artboard at its own size, with the same conversion.
+    let bounds = [0.0, 0.0, 20.0, 20.0];
+    smart.warp = Some(photocraft_geom::warp::Warp::custom(photocraft_geom::warp::BezierMesh::identity(bounds, 1, 1), bounds));
+    let warped = crate::smart_cmds::render(&linear, &smart).unwrap().unwrap();
+    assert!((warped.pixel(5, 20)[0] - 0.214).abs() < 0.01, "{:?}", warped.pixel(5, 20));
+}
+
+/// Stack Mode on a VectorCraft smart object: a small artboard stacks; one drawn near the PDF
+/// rasterizer's 64-million-pixel limit is refused before its frames are made.
+#[test]
+fn vectorcraft_stack_mode_refuses_artboards_past_its_budget() {
+    let mean = photocraft_doc::StackMode::Mean;
+    assert!(crate::smart_cmds::stack_image("Small.vectorcraft", &vectorcraft_file(20, 20, "0 0 1"), PixelFormat::RGBA8, mean).is_ok());
+    let e = crate::smart_cmds::stack_image("Large.vectorcraft", &vectorcraft_file(8_000, 8_000, "0 0 1"), PixelFormat::RGBA8, mean).unwrap_err();
+    assert!(e.to_string().contains("Stack Mode"), "{e}");
+}
+
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
 /// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
 #[test]
@@ -1908,6 +2005,8 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
     assert!(super::openable_name("C:\\scans\\PAGE.XCF.GZ"));
     assert!(super::openable_name("page.xcfgz"));
     assert!(super::openable_name("page.PNG"));
+    assert!(super::openable_name("/art/Logo.vectorcraft"));
+    assert!(super::openable_name("C:\\art\\LOGO.DRAWCRAFT"));
     assert!(!super::openable_name("archive.tar.gz"));
     assert!(!super::openable_name("notes.txt"));
 }

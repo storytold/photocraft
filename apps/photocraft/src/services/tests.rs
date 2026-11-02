@@ -164,7 +164,7 @@ fn every_open_format_has_its_own_filter() {
     all.sort_unstable();
     assert_eq!(named, all, "the named filters cover All Formats exactly");
     let names: Vec<&str> = filters.iter().map(|(name, _)| *name).collect();
-    for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
+    for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET", "VectorCraft"] {
         assert!(names.contains(&name), "{name}");
     }
 }

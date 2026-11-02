@@ -1,6 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_image, source_surface_from_buffer, svg_source_image_in,
+    vector_scale, vectorcraft_source_image_in,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -16,6 +17,14 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
     key.0 = *blake3::hash(&[&key.0[..], b"stack:", mode.id().as_bytes()].concat()).as_bytes();
     if let Some(img) = cache_get(&key) {
         return Ok(img);
+    }
+    // A VectorCraft artboard opens as one layer, drawn at up to 64 million pixels: its float frame
+    // and the combined one are checked against 1 GiB from the PDF's page size, before it is drawn.
+    if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
+        let (w, h) = photocraft_io::vectorcraft::drawn_size(bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))?;
+        if u64::from(w).saturating_mul(u64::from(h)).saturating_mul(32) > 1 << 30 {
+            return Err(EngineError::Other("the VectorCraft artboard is too large for Stack Mode".into()));
+        }
     }
     let doc = decode_source(file_name, bytes)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
@@ -169,9 +178,21 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
+    // A VectorCraft source is drawn again from its PDF the same way, relative to the size it opens
+    // at (the source's own frame), at most at the scale the PDF rasterizer can draw it at.
+    let scaled = if sm.stack_mode.is_some() || sm.warp.is_some() {
+        None
+    } else if photocraft_io::svg::is_svg(bytes) {
         let k = vector_scale(sm);
-        let img = svg_source_image_in(bytes, doc, k)?;
+        Some((svg_source_image_in(bytes, doc, k)?, k))
+    } else if photocraft_io::vectorcraft::is_vectorcraft(bytes) {
+        let limit = photocraft_io::vectorcraft::scale_limit(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
+        let k = vector_scale(sm).min(f64::from(limit));
+        Some((vectorcraft_source_image_in(name, bytes, doc, k)?, k))
+    } else {
+        None
+    };
+    if let Some((img, k)) = scaled {
         return Ok(match &sm.perspective {
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
@@ -188,6 +209,8 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     let img = match sm.stack_mode {
         Some(mode) if photocraft_io::svg::is_svg(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA32F, mode)?, doc)?,
         None if photocraft_io::svg::is_svg(bytes) => svg_source_image_in(bytes, doc, 1.0)?,
+        Some(mode) if photocraft_io::vectorcraft::is_vectorcraft(bytes) => convert_svg_source(stack_image(name, bytes, PixelFormat::RGBA8, mode)?, doc)?,
+        None if photocraft_io::vectorcraft::is_vectorcraft(bytes) => vectorcraft_source_image_in(name, bytes, doc, 1.0)?,
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };
@@ -317,7 +340,7 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
     let bytes = display_source(sm, &bytes);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
-    if photocraft_io::svg::is_svg(&bytes) {
+    if photocraft_io::svg::is_svg(&bytes) || photocraft_io::vectorcraft::is_vectorcraft(&bytes) {
         let mut h = blake3::Hasher::new();
         h.update(&placed_key);
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());

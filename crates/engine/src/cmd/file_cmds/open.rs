@@ -158,7 +158,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
-    let vector = photocraft_io::svg::is_svg(&bytes);
+    let vector = photocraft_io::svg::is_svg(&bytes) || photocraft_io::vectorcraft::is_vectorcraft(&bytes);
     let opts = crate::jobs::import_options(s.prefs());
     let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
     if imported.preview_only {
@@ -197,7 +197,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let id = s.edit(label, |doc, active| {
         let layer = if smart {
             let mut so = SmartObject::new(source, Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, Some(px));
-            // A vector source (SVG) renders at its placement scale instead of as a resampled raster.
+            // A vector source (SVG, VectorCraft) renders at its placement scale instead of as a resampled raster.
             if vector && let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
                 so.cache = Some(sharp);
             }
