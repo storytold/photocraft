@@ -655,6 +655,15 @@ mod shell_id_map_tests {
         assert_eq!(ids.len(), 8192 * 8192);
         assert!(ids.iter().any(|&id| id != 0));
     }
+
+    #[test]
+    fn dense_8k_occupancy_is_within_the_scaled_budget() {
+        let scene = overlapping_scene(false);
+        let topology = Topology::build(&scene).unwrap();
+        let occupancy = topology.occupancy_mask(&scene, 8192, 8192, 0, [0, 0]).unwrap();
+        assert!(occupancy.contains(10, 8000));
+        assert!(!occupancy.contains(8000, 10));
+    }
     #[test]
     fn shell_id_grid_matches_occupancy_convention_and_resolves_overlaps_by_lowest_id() {
         let scene = overlapping_scene(false);

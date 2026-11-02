@@ -116,4 +116,34 @@ mod tests {
         assert_eq!(session.documents().len(), 1);
         assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
     }
+
+    #[test]
+    fn close_allows_unsaved_project_metadata_when_texture_documents_are_clean() {
+        let mut session = Session::new();
+        session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.active().map(|state| state.doc.id).expect("ordinary document was added");
+        let texture = DocState::new(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let texture_id = texture.doc.id;
+        let saved_content_revision = texture.revision.saturating_sub(texture.view_revision);
+        session.uv_workspace.parked.push(texture);
+        session.uv_workspace.initialized = true;
+        session.uv_workspace.active = false;
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        session.uv.project_path = "saved-project.pcuv".into();
+        session.uv.saved_revisions.insert(texture_id, saved_content_revision);
+        session.uv.saved_generation = session.uv.generation;
+        assert!(!session.uv.has_unsaved_project(session.uv_documents()), "fixture starts as a saved project");
+
+        // Metadata edits belong to the project save state; texture documents stay clean.
+        session.uv.generation += 1;
+        assert!(session.uv.has_unsaved_project(session.uv_documents()));
+        assert!(!session.uv_documents()[0].is_dirty());
+
+        close(&mut session, &json!({"discard":false})).expect("engine close permits metadata-only unsaved state; UI prompts separately");
+
+        assert!(!session.uv_workspace.active);
+        assert!(session.uv.scene.is_none());
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+    }
 }
