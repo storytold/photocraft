@@ -532,6 +532,9 @@ fn sandboxed_pick_save_never_writes_a_rewritten_name() {
     let ctx = egui::Context::default();
     for (answered, granted) in [("/run/user/1000/doc/id/CAT.PSD", false), ("/run/user/1000/doc/id/cat", false), ("/run/user/1000/doc/id/cat.psd", true)] {
         let (mut app, open, written) = app();
+        // The name the app would rewrite it to exists: refusing comes before asking to replace it.
+        let disk = on_disk(&mut app);
+        changed_by_another_app(&disk, "/run/user/1000/doc/id/cat.psd");
         app.pick_save_in(true, "/run/user/1000/doc/id/cat.psd", |app, path| {
             let write = app.services.write.as_mut().ok_or("no writer")?;
             write(&path, b"out")?;
@@ -541,6 +544,7 @@ fn sandboxed_pick_save_never_writes_a_rewritten_name() {
         app.poll_file_dialog(&ctx, None);
         answer(&open, Some(FileDialogAnswer::SaveTo(answered.into())));
         app.poll_file_dialog(&ctx, None);
+        assert!(!app.ui.dialogs.iter().any(|d| crate::replace_prompt::owns(&d.fields)), "{answered}: no replace question");
         if granted {
             assert_eq!(*written.borrow(), [answered], "{answered}");
         } else {

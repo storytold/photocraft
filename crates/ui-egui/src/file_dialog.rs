@@ -190,7 +190,10 @@ impl PhotocraftApp {
             _ => Err(UNEXPECTED.into()),
         })?;
         if let Some(p) = self.file_dialog.as_mut() {
-            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
+            // A sandbox never writes a rewritten name (`checked_saved_path` refuses it), so there is no
+            // other file to ask about: refuse first, instead of asking to replace a file the save
+            // then won't touch.
+            p.saved_path = Some(Box::new(move |app, path| if sandboxed { path.to_string() } else { saved_path(app, path, ext.as_deref()) }));
         }
         Ok(asked)
     }
