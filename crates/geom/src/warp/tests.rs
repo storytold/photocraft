@@ -476,3 +476,24 @@ fn split_edits_reject_incomplete_mesh_without_changes() {
         }
     }
 }
+
+#[test]
+fn pulling_malformed_mesh_leaves_it_unchanged() {
+    let empty = BezierMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() };
+    let mut incomplete = BezierMesh::identity(B, 2, 2);
+    incomplete.points.truncate(1);
+    for mut mesh in [empty, incomplete] {
+        let before = mesh.clone();
+        mesh.pull(&before.points, 0.5, 0.5, [5.0, -3.0]);
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn dragging_point_on_incomplete_mesh_leaves_it_unchanged() {
+    let mut mesh = BezierMesh::identity(B, 2, 2);
+    mesh.points.truncate(1);
+    let before = mesh.clone();
+    mesh.drag_point(&before.points, 0, [5.0, -3.0]);
+    assert_eq!(mesh, before);
+}
