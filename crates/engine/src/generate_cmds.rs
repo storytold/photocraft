@@ -3533,7 +3533,7 @@ struct Pads {
 const EXPAND_DEFAULT_PROMPT: &str = "extend the scene beyond its original edges, continuing it naturally";
 const MAX_EXPAND_SIDE: u32 = 16_384;
 
-fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), f64)> {
+fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32))> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let side = |key: &str| -> Result<u32> {
@@ -3620,10 +3620,20 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), f6
     // it, see `Meta::expand_margin`), else a quarter of the longer side.
     let margin = opt_num(EXPAND, p, "margin", 0.0, 1.0)?.unwrap_or_else(|| template.meta.expand_margin.map_or(0.25, |m| f64::from(m.clamp(0.0, 1.0))));
     let edge = parse_edge(EXPAND, p)?;
-    // The largest request of the run: the last pass's (see [`expand_passes`]); one pass when the
-    // canvas grows by at most [`MAX_EXPAND_GROWTH`] on each side.
-    let passes = expand_passes((ow, oh), &pads);
-    let rect = passes.last().map_or(Rect::new(0, 0, nw as i32, nh as i32), |(size, pass)| expand_rect(*size, pass, margin));
+    // The request: the bounding box of the added canvas (an L or a frame when more than one
+    // side grows) plus `margin` of the picture next to it, on the new canvas.
+    let canvas = Rect::new(0, 0, nw as i32, nh as i32);
+    let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
+    let longer = i64::from(nw.max(nh));
+    let m = (margin * longer as f64).round().clamp(0.0, 65_536.0) as i32;
+    let (l, t, r, b) = (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0);
+    let added = Rect::new(
+        if l || t || b { 0 } else { old.x1.saturating_sub(m) },
+        if t || l || r { 0 } else { old.y1.saturating_sub(m) },
+        if r || t || b { canvas.x1 } else { old.x0.saturating_add(m) },
+        if b || l || r { canvas.y1 } else { old.y0.saturating_add(m) },
+    );
+    let rect = align_to_grid(added.intersect(&canvas), canvas);
     let pixels = u64::from(rect.width()) * u64::from(rect.height());
     if pixels > MAX_REQUEST_PIXELS {
         return Err(EngineError::Other(format!(
@@ -3657,103 +3667,7 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), f6
         },
         pads,
         (nw, nh),
-        margin,
     ))
-}
-
-/// How much one expand pass may grow the canvas along a side: by half. Shown a picture that
-/// covers less of the canvas than that, Qwen-Image-2.1 stopped continuing it and drew the
-/// subject again at full size (Cody's 452×678 portrait with 500 px on every side, 13 % of the
-/// canvas, came back with a second, taller copy of her above the original, 2026-11-02). A larger
-/// expand runs in passes, each continuing the picture the one before made.
-const MAX_EXPAND_GROWTH: f64 = 1.5;
-/// The most passes an expand takes; a canvas that has further to grow grows faster per pass.
-const MAX_EXPAND_PASSES: usize = 4;
-
-/// The canvas size before a pass and the pads the pass adds.
-type ExpandPass = ((u32, u32), Pads);
-
-/// The passes an expand of a `size` canvas by `pads` takes: at most [`MAX_EXPAND_GROWTH`] per
-/// axis each (more when that would take over [`MAX_EXPAND_PASSES`]), the growth shared between
-/// the two sides of an axis in proportion to what each still has to add.
-fn expand_passes((w, h): (u32, u32), pads: &Pads) -> Vec<ExpandPass> {
-    let axis = |size: u32, a: u32, b: u32| -> Vec<(u32, u32)> {
-        let total = f64::from(size) + f64::from(a) + f64::from(b);
-        let factor = MAX_EXPAND_GROWTH.max((total / f64::from(size.max(1))).powf(1.0 / MAX_EXPAND_PASSES as f64));
-        let (mut size, mut a, mut b) = (size, a, b);
-        let mut out = Vec::new();
-        while a + b > 0 {
-            let room = ((f64::from(size) * (factor - 1.0)).floor() as u32).max(16);
-            let (da, db) = if a + b <= room || out.len() + 1 >= MAX_EXPAND_PASSES {
-                (a, b)
-            } else {
-                // floor and ceil of each side's share: neither passes what that side has left.
-                let da = (u64::from(a) * u64::from(room) / u64::from(a + b)) as u32;
-                (da, room - da)
-            };
-            out.push((da, db));
-            size += da + db;
-            a -= da;
-            b -= db;
-        }
-        out
-    };
-    let (xs, ys) = (axis(w, pads.left, pads.right), axis(h, pads.top, pads.bottom));
-    let (mut size, mut out) = ((w, h), Vec::new());
-    for i in 0..xs.len().max(ys.len()) {
-        let (left, right) = xs.get(i).copied().unwrap_or((0, 0));
-        let (top, bottom) = ys.get(i).copied().unwrap_or((0, 0));
-        out.push((size, Pads { left, top, right, bottom }));
-        size = (size.0 + left + right, size.1 + top + bottom);
-    }
-    out
-}
-
-/// One pass's request on its grown canvas: the bounding box of the added canvas (an L or a
-/// frame when more than one side grows) plus `margin` of the picture next to it.
-fn expand_rect((ow, oh): (u32, u32), pads: &Pads, margin: f64) -> Rect {
-    let (nw, nh) = (ow + pads.left + pads.right, oh + pads.top + pads.bottom);
-    let canvas = Rect::new(0, 0, nw as i32, nh as i32);
-    let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
-    let longer = i64::from(nw.max(nh));
-    let m = (margin * longer as f64).round().clamp(0.0, 65_536.0) as i32;
-    let (l, t, r, b) = (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0);
-    let added = Rect::new(
-        if l || t || b { 0 } else { old.x1.saturating_sub(m) },
-        if t || l || r { 0 } else { old.y1.saturating_sub(m) },
-        if r || t || b { canvas.x1 } else { old.x0.saturating_add(m) },
-        if b || l || r { canvas.y1 } else { old.y0.saturating_add(m) },
-    );
-    align_to_grid(added.intersect(&canvas), canvas)
-}
-
-/// The earlier passes' layers of a multi-pass expand folded into each of the last pass's
-/// layers (its variations), so the result is one layer per variation as after a single pass;
-/// the pass layers go.
-fn fold_expand_passes(doc: &mut Document, passes: &[LayerId], made: &Made) -> Result<()> {
-    let shown = |doc: &Document, id: &LayerId| {
-        doc.layer(*id).cloned().map(|mut l| {
-            l.visible = true;
-            l
-        })
-    };
-    let Some(mut under) = passes.first().and_then(|id| shown(doc, id)) else { return Ok(()) };
-    for id in passes.iter().skip(1) {
-        if let Some(l) = shown(doc, id) {
-            under = crate::pixels::merge_down(doc, &under, &l);
-        }
-    }
-    for (id, ..) in made {
-        let Some(top) = shown(doc, id) else { continue };
-        let merged = crate::pixels::merge_down(doc, &under, &top);
-        let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
-        l.content = merged.content;
-        l.mask = None;
-    }
-    for id in passes {
-        doc.remove(*id);
-    }
-    Ok(())
 }
 
 fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
@@ -3763,38 +3677,34 @@ fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// `generate.expand`: grow the canvas and have the model paint the new area, as one undo step.
 fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
-    let (plan, pads, (nw, nh), margin) = plan_expand(s, p)?;
+    let (plan, pads, (nw, nh)) = plan_expand(s, p)?;
     let backend = backend(s)?;
-    let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect: _, variations, auto, edge, enhance, refs, grow, erase, tuning } =
-        plan;
+    let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect, variations, auto, edge, enhance, refs, grow, erase, tuning } = plan;
     let label = name.clone();
-    let template_id = template.meta.id.clone();
-    let auto_order = auto_order(EXPAND, quality(s));
-    // One job per pass; the earlier passes make one picture each, the last the variations.
-    let job = move |variations: u32| FillJob {
+    let job = FillJob {
         thinker: Arc::clone(&backend),
-        backend: Arc::clone(&backend),
+        backend,
         command: EXPAND,
-        template_id: template_id.clone(),
+        template_id: template.meta.id.clone(),
         auto,
-        auto_order,
-        prompt: prompt.clone(),
-        negative: negative.clone(),
+        auto_order: auto_order(EXPAND, quality(s)),
+        prompt,
+        negative,
         seed,
         steps,
         guidance,
-        name: name.clone(),
-        models: models.clone(),
+        name,
+        models,
         variations,
         edge,
         enhance,
-        refs: refs.clone(),
+        refs,
         grow,
         erase,
         rewritten: None,
         removal: false,
         prefill: false,
-        tuning: tuning.clone(),
+        tuning,
         object: None,
     };
     crate::jobs::edit_job(
@@ -3803,65 +3713,30 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
         move |doc, active, ctx| {
             // Canvas Size with a transparent extension: the picture moves by the left/top pads.
             let (ow, oh) = (doc.size.width, doc.size.height);
-            let passes = expand_passes((ow, oh), &pads);
-            let count = passes.len();
-            // Where the pictures of a pass land on the document on screen, which keeps its size
-            // and origin until the result lands: the pads so far, undone.
-            let (mut shift_x, mut shift_y) = (0i32, 0i32);
-            let mut pass_layers: Vec<LayerId> = Vec::new();
-            let mut pass_ms = 0u64;
-            let mut last = None;
-            for (i, ((cw, ch), pass)) in passes.iter().enumerate() {
-                let final_pass = i + 1 == count;
-                let rect = expand_rect((*cw, *ch), pass, margin);
-                shift_x += pass.left as i32;
-                shift_y += pass.top as i32;
-                if count > 1 {
-                    ctx.progress(0.0, &format!("Expanding, pass {} of {count}", i + 1));
-                }
-                ctx.preview_at(rect.translate(-shift_x, -shift_y));
-                crate::image_cmds::translate_doc(doc, EXPAND, pass.left as i32, pass.top as i32)?;
-                doc.size = Size::new(cw + pass.left + pass.right, ch + pass.top + pass.bottom);
-                crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
-                let old = Rect::new(pass.left as i32, pass.top as i32, (pass.left + cw) as i32, (pass.top + ch) as i32);
-                // Everything in the request that is not the picture so far is to be painted.
-                let (w, h) = (rect.width() as usize, rect.height() as usize);
-                let mut coverage = vec![1.0f32; w * h];
-                for y in 0..h {
-                    for x in 0..w {
-                        let (cx, cy) = (rect.x0 + x as i32, rect.y0 + y as i32);
-                        if cx >= old.x0
-                            && cx < old.x1
-                            && cy >= old.y0
-                            && cy < old.y1
-                            && let Some(c) = coverage.get_mut(y * w + x)
-                        {
-                            *c = 0.0;
-                        }
+            // The document on screen keeps its size and origin until the result lands: the
+            // pictures of the run go on the request area moved back by the pads, past the canvas.
+            ctx.preview_at(rect.translate(-(pads.left as i32), -(pads.top as i32)));
+            crate::image_cmds::translate_doc(doc, EXPAND, pads.left as i32, pads.top as i32)?;
+            doc.size = Size::new(nw, nh);
+            crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+            let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
+            // Everything in the request that is not the old picture is to be painted.
+            let (w, h) = (rect.width() as usize, rect.height() as usize);
+            let mut coverage = vec![1.0f32; w * h];
+            for y in 0..h {
+                for x in 0..w {
+                    let (cx, cy) = (rect.x0 + x as i32, rect.y0 + y as i32);
+                    if cx >= old.x0
+                        && cx < old.x1
+                        && cy >= old.y0
+                        && cy < old.y1
+                        && let Some(c) = coverage.get_mut(y * w + x)
+                    {
+                        *c = 0.0;
                     }
                 }
-                let filled = fill_region(
-                    doc,
-                    active,
-                    ctx,
-                    job(if final_pass { variations } else { 1 }),
-                    rect,
-                    coverage,
-                    Some(Outpaint { picture: old.intersect(&rect) }),
-                )?;
-                if final_pass {
-                    last = Some(filled);
-                } else {
-                    pass_ms += filled.0.iter().map(|m| m.3).sum::<u64>();
-                    pass_layers.extend(filled.0.iter().map(|m| m.0));
-                }
             }
-            let (mut made, rw, rh, request, template_id) = last.ok_or_else(|| EngineError::Other("internal error: an expand without a pass".into()))?;
-            fold_expand_passes(doc, &pass_layers, &made)?;
-            for m in &mut made {
-                m.3 += pass_ms;
-            }
-            let old = Rect::new(pads.left as i32, pads.top as i32, (pads.left + ow) as i32, (pads.top + oh) as i32);
+            let (made, rw, rh, request, template_id) = fill_region(doc, active, ctx, job, rect, coverage, Some(Outpaint { picture: old.intersect(&rect) }))?;
             Ok((made, rw, rh, request, template_id, old))
         },
         move |(made, w, h, request, template_id, old)| {
@@ -4954,7 +4829,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // Placed by the menu catalogue under Edit.
             menu: &[],
             shortcut: None,
-            params: r#"{"prompt":text,"left":int=0,"top":int=0,"right":int=0,"bottom":int=0,"width":int=0,"height":int=0,"negative":text,"steps":0..250=0,"guidance":0..30=0,"edge":"soft|hard","variations":int=1,"margin":{0..1=0.25},"anchor":{str?=center},"seed":{u64?=random},"template":{id?="auto": the Lightning expand tier when its LoRA is installed, else the 40-step one},"model":{file?=Preferences},"name":{str?}} → {"layer","layers":[id],"seed","seeds":[u64],"template","canvas":[w,h],"offset":[x,y],"width","height","requestWidth","requestHeight","ms","timings"} (adds canvas (left/top/right/bottom in pixels, or a larger width/height placed by anchor: topLeft, top, topRight, left, center, right, bottomLeft, bottom, bottomRight) and has the model paint it, as one undo step: the picture moves by the left/top pads, the result is a new layer over the added area; a canvas growing by more than half on an axis runs in up to four passes of at most 1.5× each, every pass continuing the one before, folded into that one layer; edge soft = its mask fades across the re-rendered band just inside the old edge (8 % of the picture's longer side), dithered; hard = exactly the added area; an empty prompt continues the scene; otherwise as generate.fill; needs the native worker)"#,
+            params: r#"{"prompt":text,"left":int=0,"top":int=0,"right":int=0,"bottom":int=0,"width":int=0,"height":int=0,"negative":text,"steps":0..250=0,"guidance":0..30=0,"edge":"soft|hard","variations":int=1,"margin":{0..1=0.25},"anchor":{str?=center},"seed":{u64?=random},"template":{id?="auto": the Lightning expand tier when its LoRA is installed, else the 40-step one},"model":{file?=Preferences},"name":{str?}} → {"layer","layers":[id],"seed","seeds":[u64],"template","canvas":[w,h],"offset":[x,y],"width","height","requestWidth","requestHeight","ms","timings"} (adds canvas (left/top/right/bottom in pixels, or a larger width/height placed by anchor: topLeft, top, topRight, left, center, right, bottomLeft, bottom, bottomRight) and has the model paint it, as one undo step: the picture moves by the left/top pads, the result is a new layer over the added area; edge soft = its mask fades across the re-rendered band just inside the old edge (8 % of the picture's longer side), dithered; hard = exactly the added area; an empty prompt continues the scene; otherwise as generate.fill; needs the native worker)"#,
             enabled: expand_enabled,
             run: run_expand,
             journal: true,
