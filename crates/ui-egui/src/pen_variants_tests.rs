@@ -310,8 +310,9 @@ fn a_smooth_endpoint_carried_on_stays_smooth() {
     assert!((a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "in line: {knots:?}");
 }
 
-/// CodeRabbit on #10744: in Path mode, an endpoint selected on a shape layer is not one a Pen path
-/// carries on, even with the work path ending on the same point: the press starts a new path.
+/// CodeRabbit on #10744: in Shape mode the Pen carries on the selected shape layer's path, so an
+/// endpoint selected on the work path, even one on the same point as the shape's, is not carried
+/// on: the press starts a new path.
 #[test]
 fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
     use photocraft_doc::vector::Subpath;
@@ -320,10 +321,9 @@ fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
     click(&mut app, 20.0, 20.0);
     click(&mut app, 80.0, 80.0);
     crate::vector_ui::pen_commit(&mut app, false);
-    let shape = app.session.active().and_then(|st| st.active_layer).expect("a shape layer").0;
-    app.ui.tool_options.vector_mode = "path".into();
+    assert!(app.session.active().and_then(|st| st.active_layer).is_some(), "a shape layer");
     set_work_path(&mut app, vec![Subpath::polyline(&[(200.0, 20.0), (80.0, 80.0)])]);
-    select_anchor(&mut app, crate::direct_select::PathRef::Layer(shape), [0, 1]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 1]);
     app.ui.tool = Tool::CurvaturePen;
     click(&mut app, 140.0, 150.0);
     let pen = app.ui.pen.as_ref().expect("a new path");
