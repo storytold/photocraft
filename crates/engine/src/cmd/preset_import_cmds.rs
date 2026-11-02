@@ -676,6 +676,11 @@ mod tests {
         assert_eq!(snapshot(&s), before, "nothing was imported");
         let r = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap();
         assert_eq!(r["group"].as_str().map(str::len), Some(255));
+        // The limit counts characters, as the group commands do.
+        let accented = "é".repeat(255);
+        let r = s.execute(CMD, json!({"data": data, "group": accented})).unwrap();
+        assert_eq!(r["group"].as_str().map(|g| g.chars().count()), Some(255));
+        s.execute("brush.presets.deleteGroup", json!({"group": accented})).unwrap();
         // A clash would number it past what the group commands accept. The edit shows up a replaced group.
         s.tools.presets.iter_mut().find(|p| p.group == "g".repeat(255)).unwrap().brush.size = 77.0;
         let before = snapshot(&s);
