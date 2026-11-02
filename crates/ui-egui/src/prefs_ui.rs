@@ -240,6 +240,7 @@ pub fn load(app: &mut PhotocraftApp) {
         app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
     }
     crate::dock::restore(app);
+    crate::pickers::picker_state::restore(app);
     crate::pickers::brush_picker::restore(app);
     crate::last_brush::restore(app);
     sync_rulers(app);
@@ -446,6 +447,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_display_scale(app, ctx);
     sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
+    crate::pickers::picker_state::persist(app, ctx);
     presets_store(app);
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);

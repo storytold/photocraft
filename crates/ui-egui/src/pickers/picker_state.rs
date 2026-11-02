@@ -79,6 +79,33 @@ pub struct PresetUi {
     pub(crate) item_renaming: Option<ItemRenameState>,
 }
 
+/// Preferences key for the shared picker-browser state. The browser hierarchy lives in `UiState`
+/// for the control channel, but that state is not itself part of the preferences file.
+const PERSISTED_PICKER_UI: &str = "pickerBrowserUi";
+
+/// Save the serializable picker-browser state after pointer gestures finish. This covers every
+/// adapter using the shared browser, including reorder and nesting operations.
+pub(crate) fn persist(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
+    if ctx.input(|input| input.pointer.any_down()) {
+        return;
+    }
+    let Ok(now) = serde_json::to_value(&app.ui.presets_ui) else { return };
+    if app.session.prefs().dialogs.get(PERSISTED_PICKER_UI) != Some(&now) {
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert(PERSISTED_PICKER_UI.into(), now);
+        });
+    }
+}
+
+/// Restore the shared picker-browser state from preferences. Transient rename editors remain
+/// excluded by `PresetUi`'s serde contract.
+pub(crate) fn restore(app: &mut crate::PhotocraftApp) {
+    let Some(saved) = app.session.prefs().dialogs.get(PERSISTED_PICKER_UI) else { return };
+    if let Ok(state) = serde_json::from_value(saved.clone()) {
+        app.ui.presets_ui = state;
+    }
+}
+
 impl std::ops::Deref for PresetUi {
     type Target = PickerBrowserData;
 
@@ -683,6 +710,21 @@ pub(crate) fn escape_hierarchy_key_part(part: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{HierarchyOrderEntry, PresetUi};
+
+    #[test]
+    fn picker_hierarchy_order_survives_preferences_restart() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.set_hierarchy_order("swatches", "", vec![HierarchyOrderEntry::Group("Second".into()), HierarchyOrderEntry::Group("First".into())]);
+        app.ui.presets_ui.set_hierarchy_order("swatches", "Second", vec![HierarchyOrderEntry::Item("Blue".into()), HierarchyOrderEntry::Item("Red".into())]);
+
+        super::persist(&mut app, &egui::Context::default());
+        let saved = app.session.prefs_to_json();
+        let mut restarted = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        restarted.session.load_prefs_json(&saved).unwrap();
+        super::restore(&mut restarted);
+
+        assert_eq!(restarted.ui.presets_ui.hierarchy_order, app.ui.presets_ui.hierarchy_order);
+    }
 
     fn names(values: &[&str]) -> Vec<String> {
         values.iter().map(|name| (*name).to_string()).collect()
