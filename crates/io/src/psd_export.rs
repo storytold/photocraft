@@ -171,8 +171,20 @@ fn to_psd_rect(r: photocraft_geom::Rect) -> PsdRect {
     PsdRect { top: r.y0, left: r.x0, bottom: r.y1, right: r.x1 }
 }
 
+/// A 0..1 value as the byte PSD stores it, clamped: a mask density, a layer opacity. A value that
+/// is not a number counts as full, so a layer whose opacity arrived broken is saved visible; `as
+/// u8` alone would turn NaN into 0 and hide it without a word (#8612 review).
 fn q255(v: f32) -> u8 {
+    if v.is_nan() {
+        return 255;
+    }
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Whether a layer or mask rect is within what a PSD layer may span (the reader's limit, so a
+/// written layer reopens with its pixels).
+fn within_psd_limit(r: photocraft_geom::Rect) -> bool {
+    r.width() <= photocraft_psd::header::MAX_DIMENSION && r.height() <= photocraft_psd::header::MAX_DIMENSION
 }
 
 impl Ex {
@@ -180,7 +192,10 @@ impl Ex {
         if self.fmt.sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle }
     }
 
-    fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> ChannelData {
+    /// One channel, compressed, else raw. An error when even raw encoding fails: writing the
+    /// plane anyway would store a channel this reader rejects, so the layer would reopen empty
+    /// without a word (#8612).
+    fn encode(&self, id: i16, plane: &[u8], w: usize, h: usize) -> Result<ChannelData, String> {
         let depth = psd_depth(self.fmt.sample);
         // Photoshop writes empty layer/mask channels as just the raw compression code.
         // A ZIP stream for a zero-sized channel makes readers try to decompress an
@@ -188,13 +203,17 @@ impl Ex {
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
         ChannelData::encode(id, compression, plane, w, h, depth, self.version)
             .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()))
+            .map_err(|e| e.to_string())
     }
 
     fn empty_channels(&self) -> Vec<ChannelData> {
-        (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
+        // A zero-sized channel is just its compression code: nothing to encode, nothing to fail.
+        (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0).unwrap_or_else(|_| ChannelData::new(id, Some(Compression::Raw), Vec::new()))).collect()
     }
 
+    /// A layer's pixels as PSD channels: the rect its content spans, one encoded plane per
+    /// channel, and the warnings to show the user (a rect past what a PSD layer may span, or a
+    /// plane that would not encode, writes an empty layer and says why — #8612).
     fn pixel_channels(&self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
         let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
@@ -210,7 +229,9 @@ impl Ex {
         // A layer record is one dense rectangle, so a few pixels far apart make a box of mostly
         // nothing, gathered and then copied again. Past the cap the layer is saved empty, said so.
         let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
-        if dense > MAX_LAYER_GATHER_BYTES {
+        // Nor wider or taller than a PSD layer may be: the reader refuses such a rect, so the
+        // layer would reopen empty (#8612).
+        if dense > MAX_LAYER_GATHER_BYTES || !within_psd_limit(r) {
             warnings.push(format!("layer \"{name}\" spans {}×{} px, too large to write: saved without its pixels", r.width(), r.height()));
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
@@ -236,13 +257,31 @@ impl Ex {
         let order: Vec<(i16, &Vec<u8>)> =
             std::iter::once((-1, &planes[self.cc])).chain(planes.iter().take(self.cc).enumerate().map(|(c, p)| (c as i16, p))).collect();
         let ch = crate::pixels::par_map(order, |(id, plane)| self.encode(id, plane, w, h));
-        (to_psd_rect(r), ch, warnings)
+        match ch.into_iter().collect::<Result<Vec<_>, _>>() {
+            Ok(ch) => (to_psd_rect(r), ch, warnings),
+            Err(e) => {
+                warnings.push(format!("layer \"{name}\": its pixels could not be encoded ({e}): saved without its pixels"));
+                (PsdRect::default(), self.empty_channels(), warnings)
+            }
+        }
     }
 
-    fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> (MaskData, Option<ChannelData>) {
+    /// A layer mask as PSD writes it: its rect and the encoded plane, or the vector mask's
+    /// density and feather where it has one. An error when the plane will not encode, so the
+    /// caller can say so instead of writing a mask that reopens empty (#8612).
+    fn mask(&self, m: &LayerMask, vector: Option<(f32, f32)>) -> Result<(MaskData, Option<ChannelData>), String> {
         let s = if m.surface.format() != self.mask_fmt { m.surface.convert(self.mask_fmt) } else { m.surface.clone() };
         let default = s.default_pixel().first().copied().unwrap_or(0.0);
         let r = s.content_bounds();
+        if !within_psd_limit(r) {
+            return Err(format!("it spans {}×{} px, past the PSD limit of {} px", r.width(), r.height(), photocraft_psd::header::MAX_DIMENSION));
+        }
+        // The mask is gathered as one dense rectangle too: a few pixels far apart within the
+        // limit can still make a box too large to gather, as a layer's can.
+        let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
+        if dense > MAX_LAYER_GATHER_BYTES {
+            return Err(format!("it spans {}×{} px, too large to write", r.width(), r.height()));
+        }
         let (w, h) = (r.width() as usize, r.height() as usize);
         let plane = if r.is_empty() { Vec::new() } else { deinterleave(&s.to_interleaved(r), 1, self.mask_fmt.sample, &[false]).remove(0) };
         let mut flags = 0u8;
@@ -265,7 +304,7 @@ impl Ex {
             real: None,
             real_first: true,
         };
-        (MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)))
+        Ok((MaskData::Mask(pm), Some(self.encode(-2, &plane, w, h)?)))
     }
 
     /// Prefer numbers above imported layer IDs, wrapping safely at u32::MAX.
@@ -299,11 +338,20 @@ impl Ex {
             LayerContent::Shape(sh) if l.vector_mask.is_none() => Some((sh.density, sh.feather)),
             _ => l.vector_mask.as_ref().map(|vm| (vm.density, vm.feather)),
         };
+        let mut user_mask = false;
         if let Some(m) = &l.mask {
-            let (md, ch) = self.mask(m, vector);
-            mask = md;
-            channels.extend(ch);
-        } else if let Some(parameters) = mask_parameters(None, vector) {
+            match self.mask(m, vector) {
+                Ok((md, ch)) => {
+                    mask = md;
+                    channels.extend(ch);
+                    user_mask = true;
+                }
+                Err(e) => self.warnings.push(format!("layer \"{}\": its layer mask could not be encoded ({e}): saved without it", l.name)),
+            }
+        }
+        // No user mask written (none, or one that couldn't be encoded): the vector mask's density
+        // and feather still go in as parameters.
+        if !user_mask && let Some(parameters) = mask_parameters(None, vector) {
             // Parameters only: no user mask channel, so nothing hides on re-import.
             mask = MaskData::Mask(PsdMask {
                 rect: PsdRect::default(),
