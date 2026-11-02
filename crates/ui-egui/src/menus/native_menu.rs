@@ -711,6 +711,11 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// document or selection changed, or the user clicked or pressed a key. Building the rows walks
 /// every command's enabled state, so it doesn't run on frames that only animate or scroll.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.services.native_menu.is_none() {
+        return;
+    }
+    // Before the hash check, so a renamed workspace is in the menu on this refresh.
+    crate::workspace_ui::migrate_preset_collisions(app);
     let Some(menu) = app.services.native_menu.as_ref() else { return };
     let state = state_hash(app, had_input(ctx).then_some(app.frame));
     if menu.state == Some(state) && !menu.dirty {

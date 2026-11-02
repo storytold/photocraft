@@ -758,6 +758,17 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
             f.write_all(text.as_bytes()).map_err(|e| e.to_string())
         })),
+        scan_list: Some(Box::new(|timeout| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                photocraft_scan::list_devices(timeout)
+                    .map(|devices| devices.into_iter().map(|d| photocraft_ui_egui::ScanDevice { id: d.id, name: d.name }).collect())
+                    .map_err(|e| e.to_string())
+            }))
+            .unwrap_or_else(|_| Err("the scanner stopped unexpectedly".into()))
+        })),
+        scan_acquire: Some(Box::new(|req| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| acquire_scan(req))).unwrap_or_else(|_| Err("the scanner stopped unexpectedly".into()))
+        })),
         // Set by main once the Apple-event handlers are connected (macOS).
         os_events: None,
         // Set by main, which starts loading the store before the window opens.
@@ -765,6 +776,22 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         is_wayland: false,
         ..recovery_services(recovery_dir())
     }
+}
+
+fn acquire_scan(req: photocraft_ui_egui::ScanRequest) -> Result<photocraft_ui_egui::ScanBuffer, String> {
+    let mode = match req.mode.as_str() {
+        "gray" => photocraft_scan::Mode::Gray,
+        "bw" => photocraft_scan::Mode::BlackAndWhite,
+        _ => photocraft_scan::Mode::Color,
+    };
+    let scanned = photocraft_scan::acquire(photocraft_scan::ScanRequest {
+        device_id: req.device_id,
+        resolution: req.resolution,
+        mode,
+        timeout: std::time::Duration::from_secs(120),
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(photocraft_ui_egui::ScanBuffer { width: scanned.width, height: scanned.height, rgba: scanned.rgba, resolution: scanned.dpi, pages: scanned.pages })
 }
 
 /// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.

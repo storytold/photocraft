@@ -301,7 +301,8 @@ just presence.
 - **Data-driven graphics (5):** Variables › Define / Data Sets, Apply Data Set, Export Data Sets as
   Files, Import Variable Data Sets. A template-binding model over layers + a CSV/data-set engine.
 - **Niche / platform (7):** Trap (prepress ink spread), Frame from Layers, Migrate Presets, WIA
-  Support (Windows scanners), and two already-adjacent items.
+  Support (Windows scanners; the menu is still a stub). macOS File › Import › Scan… talks to Image
+  Capture (2026-10-31). Two already-adjacent items remain.
 
 ### Effort to parity (Opus 5.5)
 

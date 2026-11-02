@@ -46,8 +46,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("raw", Class::Standalone),
     ("affinity", Class::Standalone),
     ("adobe-assets", Class::Standalone),
-    // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).
+    // Pen tablet input (an isolated `unsafe` helper: AppKit interop on macOS and Windows).
     ("tablet", Class::Standalone),
+    // Scanner import (an isolated `unsafe` helper: Image Capture on macOS).
+    ("scan", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("ops", Class::Layer(2)),
     ("paint", Class::Layer(2)),

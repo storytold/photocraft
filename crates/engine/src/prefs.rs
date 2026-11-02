@@ -56,10 +56,10 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
-choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
+choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Cs4 = "cs4", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
 choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark" } default ProMedium);
-choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
+choice!(LightTheme { ProLight = "proLight", ProLightGray = "proLightGray", Cs4 = "cs4", StudioLight = "studioLight", Classic = "classic", Adwaita = "adwaita", BreezeLight = "breezeLight", SoftLight = "softLight" } default ProLight);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P80 = "80", P85 = "85", P90 = "90", P95 = "95", P100 = "100", P105 = "105", P110 = "110", P115 = "115", P120 = "120", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -1388,9 +1388,14 @@ impl Session {
                 Theme::Pro | Theme::ProMedium | Theme::Studio | Theme::SolarizedDark | Theme::AdwaitaDark | Theme::BreezeDark | Theme::SoftDark => {
                     ("dark", "darkTheme")
                 }
-                Theme::StudioLight | Theme::ProLightGray | Theme::ProLight | Theme::Classic | Theme::Adwaita | Theme::BreezeLight | Theme::SoftLight => {
-                    ("light", "lightTheme")
-                }
+                Theme::StudioLight
+                | Theme::ProLightGray
+                | Theme::ProLight
+                | Theme::Cs4
+                | Theme::Classic
+                | Theme::Adwaita
+                | Theme::BreezeLight
+                | Theme::SoftLight => ("light", "lightTheme"),
             };
             interface.insert("appearanceMode".into(), json!(mode));
             // A partially migrated file may already contain a newer theme selection (#5139).
@@ -1498,6 +1503,10 @@ impl Session {
                 }
                 Theme::ProLight => {
                     next.interface.light_theme = LightTheme::ProLight;
+                    next.interface.appearance_mode = AppearanceMode::Light;
+                }
+                Theme::Cs4 => {
+                    next.interface.light_theme = LightTheme::Cs4;
                     next.interface.appearance_mode = AppearanceMode::Light;
                 }
                 Theme::Classic => {

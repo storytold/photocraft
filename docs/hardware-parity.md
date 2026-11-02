@@ -56,7 +56,7 @@ HDR display to verify.
 | Touch Bar | yes (Intel Macs) | no | missing (low value) |
 | Touch screens (Windows) | yes | basic pointer only | partial |
 | 3D mouse, MIDI, Surface Dial | Surface Dial on Windows | no | missing (low value) |
-| Scanners (WIA / TWAIN) | WIA menu (Windows) | menu item live; no driver integration | partial |
+| Scanners (WIA / TWAIN / Image Capture) | WIA menu (Windows); TWAIN; macOS Image Capture | File › Import › Scan… on macOS (Image Capture: USB and network scanners, one page, 75–600 dpi). WIA menu still has no driver | partial |
 
 ## Revision history
 
@@ -65,3 +65,4 @@ HDR display to verify.
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
+| 2026-10-31 | minor | macOS File › Import › Scan… via Image Capture. WIA is still a menu stub |

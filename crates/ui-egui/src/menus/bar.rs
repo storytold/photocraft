@@ -8,6 +8,7 @@ use super::{PhotocraftApp, TOP_MENUS, Value, json};
 /// (the right edge of the last title, or its left edge in a right-to-left UI, where File is at the
 /// right). The bar itself fills the row.
 pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
+    crate::workspace_ui::migrate_preset_collisions(app);
     // Built only while a menu is open: every item's enabled/checked state scales with the
     // document (layer lookups), which cost milliseconds per frame on large layouts (#125). While
     // one stays open, the items are reused until what they depend on changes.
