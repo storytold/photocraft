@@ -4255,6 +4255,44 @@ struct SplitPlan {
     max_pixels: Option<u64>,
     /// `integrations.fastDraft`: the worker's step cache ([`FAST_DRAFT_SPLIT_STEP_CACHE`]).
     fast_draft: bool,
+    /// `tries`: seeds run, the best-separated split kept ([`split_separation`]).
+    tries: u32,
+}
+
+/// Most seeds one Split tries (`tries`).
+const MAX_SPLIT_TRIES: u32 = 4;
+/// Seeds a Split tries unless told otherwise: one, the owner's choice (2026-11-01), with Tries in
+/// the dialog for more. On his picture three seeds in a row gave at least one foreground layer
+/// every time, one seed at 7 of 10, at about 8 s a further try.
+const DEFAULT_SPLIT_TRIES: u32 = 1;
+
+/// How well a split separates the picture, for choosing between seeds: each layer above the
+/// background (the first) whose opaque share (alpha above half) is neither nearly none nor
+/// nearly all counts 1, plus its share up to a half, so of two splits with as many layers the
+/// one whose layers hold more of the picture wins. Qwen-Image-Layered leaves the whole picture
+/// on one layer at many seeds, the same through ComfyUI's own graph (the owner's portrait: a
+/// foreground layer at 2 of 10 seeds there, 7 of 10 here; 2026-11-01).
+pub(crate) fn split_separation(layers: &[Rgba8]) -> f64 {
+    layers
+        .iter()
+        .skip(1)
+        .map(|l| {
+            let px = l.data.len() / 4;
+            if px == 0 {
+                return 0.0;
+            }
+            let step = (px / 65_536).max(1);
+            let (mut on, mut n) = (0usize, 0usize);
+            for i in (0..px).step_by(step) {
+                n += 1;
+                if l.data.get(i * 4 + 3).is_some_and(|a| *a > 127) {
+                    on += 1;
+                }
+            }
+            let share = on as f64 / n.max(1) as f64;
+            if (0.02..=0.97).contains(&share) { 1.0 + share.min(0.5) } else { 0.0 }
+        })
+        .sum()
 }
 
 fn plan_split(s: &Session, p: &Value) -> Result<SplitPlan> {
@@ -4273,7 +4311,12 @@ fn plan_split(s: &Session, p: &Value) -> Result<SplitPlan> {
     };
     let all_layers = opt_bool(SPLIT, p, "sampleAllLayers", true)?;
     let max_pixels = opt_num(SPLIT, p, "maxPixels", 4096.0, 4_194_304.0)?.map(|m| m as u64);
-    Ok(SplitPlan { common, layers, all_layers, max_pixels, fast_draft: s.prefs().integrations.fast_draft })
+    let tries = match opt_num(SPLIT, p, "tries", 1.0, f64::from(MAX_SPLIT_TRIES))? {
+        None => DEFAULT_SPLIT_TRIES,
+        Some(x) if x.fract() == 0.0 => x as u32,
+        Some(_) => return Err(bad(SPLIT, format!("`tries` must be a whole number from 1 to {MAX_SPLIT_TRIES}"))),
+    };
+    Ok(SplitPlan { common, layers, all_layers, max_pixels, fast_draft: s.prefs().integrations.fast_draft, tries })
 }
 
 fn split_enabled(s: &Session) -> std::result::Result<(), String> {
@@ -4288,7 +4331,7 @@ fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
     let plan = plan_split(s, p)?;
     // The worker serves it when it has the files (Qwen-Image-Layered is Apache-2.0: no opt-in).
     let backend = backend(s)?;
-    let SplitPlan { common, layers, all_layers, max_pixels, fast_draft } = plan;
+    let SplitPlan { common, layers, all_layers, max_pixels, fast_draft, tries } = plan;
     let Common { template, prompt, negative, seed, steps, guidance, models, name } = common;
     let tid = template.meta.id.clone();
     let tid_out = tid.clone();
@@ -4341,8 +4384,26 @@ fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
                 params,
                 references: Vec::new(),
             };
-            let resp = backend.as_ref().run(&req, &JobProgress::new(ctx)).map_err(gen_err)?;
-            ctx.check()?;
+            // `tries` seeds in a row (the prompt's conditioning and the model stay resident in
+            // the worker, so each further try costs its sampling); the best-separated is kept.
+            let mut req = req;
+            let mut best: Option<(f64, photocraft_genai::Response)> = None;
+            let mut scores = Vec::with_capacity(tries as usize);
+            for t in 0..tries {
+                req.seed = seed.wrapping_add(u64::from(t)) % MAX_SEED;
+                let (lo, hi) = (0.9 * t as f32 / tries as f32, 0.9 * (t + 1) as f32 / tries as f32);
+                if tries > 1 {
+                    ctx.progress(lo, &format!("Try {}/{tries}", t + 1));
+                }
+                let resp = backend.as_ref().run(&req, &JobProgress::span(ctx, lo, hi)).map_err(gen_err)?;
+                ctx.check()?;
+                let score = split_separation(&resp.images);
+                scores.push(score);
+                if best.as_ref().is_none_or(|(b, _)| score > *b) {
+                    best = Some((score, resp));
+                }
+            }
+            let Some((_, resp)) = best else { return Err(EngineError::Other("the backend returned no layers".into())) };
             ctx.progress(0.95, "Placing");
             if resp.images.is_empty() {
                 return Err(EngineError::Other("the backend returned no layers".into()));
@@ -4373,13 +4434,13 @@ fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
                 *active = Some(nid);
                 made.push(nid);
             }
-            Ok((made, resp.seed, resp.run_id, resp.elapsed_ms, resp.timings, (rw, rh), (w, h)))
+            Ok((made, resp.seed, resp.run_id, resp.elapsed_ms, resp.timings, (rw, rh), (w, h), scores))
         },
-        move |(made, seed, run_id, ms, timings, (rw, rh), (w, h))| {
+        move |(made, seed, run_id, ms, timings, (rw, rh), (w, h), scores)| {
             json!({
                 "layers": made.iter().map(|l| l.0).collect::<Vec<_>>(), "count": made.len(), "seed": seed, "template": tid_out,
                 "runId": run_id, "width": w, "height": h, "requestWidth": rw, "requestHeight": rh,
-                "ms": ms, "timings": [serde_json::to_value(timings).unwrap_or(Value::Null)],
+                "ms": ms, "timings": [serde_json::to_value(timings).unwrap_or(Value::Null)], "separation": scores,
             })
         },
     )
@@ -4823,7 +4884,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // Placed by the menu catalogue under Edit, with the other generative items.
             menu: &[],
             shortcut: None,
-            params: r#"{"layers":int=3,"prompt":text,"negative":text,"sampleAllLayers":bool=true,"maxPixels":{4096..4194304?=the 640-px working size},"steps":0..250=0,"guidance":0..30=0,"seed":{u64?=random},"template":{id?=qwen-layered/split},"model":{file?},"name":{str?}} → {"layers":[id],"count","seed","template","runId","width","height","requestWidth","requestHeight","ms","timings"} (a layered model (Qwen-Image-Layered, Apache-2.0) decomposes the picture into `layers` RGBA layers, the background first, each a new layer above the active one with the alpha the model gave it; prompt = a description of the picture, empty = a generic instruction; sampleAllLayers false sends the active layer alone; the picture goes out at 640 px on its longer side, or at maxPixels pixels (1000000 = 864x1152 at 3:4), and the layers come back resampled; a background job; needs the native worker with the layered model's files)"#,
+            params: r#"{"layers":int=3,"prompt":text,"negative":text,"sampleAllLayers":bool=true,"maxPixels":{4096..4194304?=the 640-px working size},"tries":1..4=1,"steps":0..250=0,"guidance":0..30=0,"seed":{u64?=random},"template":{id?=qwen-layered/split},"model":{file?},"name":{str?}} → {"layers":[id],"count","seed","template","runId","width","height","requestWidth","requestHeight","ms","timings"} (a layered model (Qwen-Image-Layered, Apache-2.0) decomposes the picture into `layers` RGBA layers, the background first, each a new layer above the active one with the alpha the model gave it; prompt = a description of the picture, empty = a generic instruction; sampleAllLayers false sends the active layer alone; the picture goes out at 640 px on its longer side, or at maxPixels pixels (1000000 = 864x1152 at 3:4), and the layers come back resampled; tries = seeds run in a row (seed, seed+1, …), the split whose layers above the background hold the most of the picture kept (`separation` in the result: each try's score), each further try about one sampling more; a background job; needs the native worker with the layered model's files)"#,
             enabled: split_enabled,
             run: run_split,
             journal: true,

@@ -34,7 +34,7 @@ fn split_lays_the_models_layers_above_the_active_one_background_first() {
         let d = s.active().unwrap();
         (d.doc.layers.len(), d.active_layer.unwrap(), d.history.past_len())
     };
-    let r = s.execute(SPLIT, json!({"layers": 3, "seed": 5})).unwrap();
+    let r = s.execute(SPLIT, json!({"layers": 3, "seed": 5, "tries": 1})).unwrap();
     assert_eq!(r["count"], 3);
     assert_eq!(r["template"], DEFAULT_LAYERS_TEMPLATE);
     assert_eq!((r["requestWidth"].as_u64(), r["requestHeight"].as_u64()), (Some(64), Some(48)), "small pictures go as they are");
@@ -106,11 +106,31 @@ fn split_sizes_validates_and_has_no_similar() {
 fn fast_draft_sets_the_splits_step_cache() {
     let fake = FakeNative::start().unwrap();
     let mut s = session(&fake.url);
-    s.execute(SPLIT, json!({"layers": 2, "seed": 5})).unwrap();
+    s.execute(SPLIT, json!({"layers": 2, "seed": 5, "tries": 1})).unwrap();
     s.edit_prefs(|p| p.integrations.fast_draft = true);
-    s.execute(SPLIT, json!({"layers": 2, "seed": 5})).unwrap();
+    s.execute(SPLIT, json!({"layers": 2, "seed": 5, "tries": 1})).unwrap();
     let st = fake.state();
     let cache = |i: usize| st.runs[i].run.params.get("step_cache").cloned();
     assert_eq!(cache(0), None, "off by default");
     assert_eq!(cache(1), Some(json!(FAST_DRAFT_SPLIT_STEP_CACHE)));
+}
+
+#[test]
+fn split_tries_runs_that_many_seeds_and_keeps_the_best_separated() {
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    let r = s.execute(SPLIT, json!({"layers": 3, "seed": 10, "tries": 3})).unwrap();
+    assert_eq!(r["separation"].as_array().map(Vec::len), Some(3), "{r}");
+    let st = fake.state();
+    assert_eq!(st.runs.len(), 3, "one run per try");
+    let seeds: Vec<u64> = st.runs.iter().filter_map(|run| run.request["seed"].as_u64()).collect();
+    assert_eq!(seeds, vec![10, 11, 12], "consecutive seeds");
+    assert!(r["seed"].as_u64().is_some_and(|seed| (10..13).contains(&seed)), "{r}");
+    assert_eq!(r["count"], 3, "one split's layers placed, not every try's");
+    drop(st);
+    // One try is the default (the owner's choice); more than four, or a fraction, is refused.
+    let one = s.execute(SPLIT, json!({"seed": 1})).unwrap();
+    assert_eq!(one["separation"].as_array().map(Vec::len), Some(1));
+    assert!(s.execute(SPLIT, json!({"tries": 5})).is_err());
+    assert!(s.execute(SPLIT, json!({"tries": 1.5})).is_err());
 }

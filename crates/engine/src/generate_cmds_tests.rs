@@ -963,3 +963,19 @@ fn fast_draft_sets_the_step_cache_on_a_2511_full_edit_only() {
     assert_eq!(cache(1), Some(json!(FAST_DRAFT_STEP_CACHE)));
     assert_eq!(cache(2), None, "not on the 8-step tier");
 }
+
+#[test]
+fn the_split_kept_is_the_one_whose_layers_hold_the_picture() {
+    // A 10x10 layer with `on` of its 100 pixels opaque.
+    let layer = |on: usize| Rgba8::new(10, 10, (0..100).flat_map(|i| [9, 9, 9, if i < on { 255 } else { 0 }]).collect()).unwrap();
+    let full = || layer(100);
+    // The background (first) never counts; an empty or a whole-picture layer above it neither.
+    assert_eq!(split_separation(&[full(), layer(0), full()]), 0.0);
+    assert_eq!(split_separation(&[layer(0), layer(1), layer(98)]), 0.0);
+    // A layer holding part of the picture counts 1 plus its share up to a half.
+    assert!((split_separation(&[full(), layer(30), layer(0)]) - 1.3).abs() < 1e-9);
+    assert!((split_separation(&[full(), layer(80), layer(0)]) - 1.5).abs() < 1e-9);
+    // Two such layers beat one, and of two with one each the fuller wins.
+    assert!(split_separation(&[full(), layer(10), layer(20)]) > split_separation(&[full(), layer(50), layer(0)]));
+    assert!(split_separation(&[full(), layer(40), layer(0)]) > split_separation(&[full(), layer(5), layer(0)]));
+}
