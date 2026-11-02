@@ -144,212 +144,144 @@ fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, 
     (elapsed_us, output.platform_output.cursor_image)
 }
 
-fn run_visual_oracle(save_dir: Option<&Path>) -> (Vec<CursorVisualComparison>, Option<String>) {
+fn run_visual_oracle(save_dir: Option<&Path>) -> Result<(Vec<CursorVisualComparison>, String), Box<dyn std::error::Error>> {
     let _gpu = gpu_lock();
-
-    let scales = [1.0f32, 1.25, 1.5, 2.0];
-    let variants = PenVariant::all();
-    let backgrounds = [
-        ("light_240", egui::Color32::from_rgb(240, 240, 240)),
-        ("midgrey_128", egui::Color32::from_rgb(128, 128, 128)),
-        ("dark_15", egui::Color32::from_rgb(15, 15, 15)),
-    ];
-
+    let backgrounds = [("light_240", 240u8), ("midgrey_128", 128), ("dark_15", 15)];
     let mut comparisons = Vec::new();
-    let mut rendered_scale_images: Vec<(f32, Vec<u8>, u32, u32)> = Vec::new();
-
-    for &scale in &scales {
-        let canvas_w = 640.0;
-        let canvas_h = 320.0;
-
-        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(canvas_w, canvas_h)).with_pixels_per_point(scale).wgpu().build_ui(|ui| {
-                ui.painter().rect_filled(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(canvas_w, canvas_h)), 0.0, egui::Color32::from_rgb(40, 40, 40));
-
-                for (bg_idx, (_bg_name, bg_color)) in backgrounds.iter().enumerate() {
-                    let y_top = 25.0 + (bg_idx as f32) * 95.0;
-                    let bg_rect = egui::Rect::from_min_size(egui::pos2(10.0, y_top), egui::vec2(canvas_w - 20.0, 90.0));
-                    ui.painter().rect_filled(bg_rect, 0.0, *bg_color);
-
-                    for (var_idx, variant) in variants.iter().enumerate() {
-                        let cell_x = 20.0 + (var_idx as f32) * 100.0;
-                        let y_center = y_top + 45.0;
-
-                        // Left: Painted baseline
-                        let p_painted = egui::pos2(cell_x + 24.0, y_center);
-                        icons::cursor(ui.ctx(), variant.icon_name(), p_painted, variant.hotspot_in_box() / 24.0, 22.0);
-
-                        // Right: Native cursor bitmap displayed at 1:1 pixel scale
-                        if let Some(native_img) = rasterize_pen(*variant, scale) {
-                            let [w, h] = native_img.size;
-                            let [hx, hy] = native_img.hotspot;
-                            let color_img = egui::ColorImage::from_rgba_unmultiplied([usize::from(w), usize::from(h)], &native_img.rgba);
-                            let tex = ui.ctx().load_texture(
-                                format!("bench_native_{}_{scale}_{bg_idx}", variant.icon_name()),
-                                color_img,
-                                egui::TextureOptions::NEAREST,
-                            );
-                            let p_native = egui::pos2(cell_x + 68.0, y_center);
-                            let native_rect = egui::Rect::from_min_size(
-                                p_native - egui::vec2(hx as f32 / scale, hy as f32 / scale),
-                                egui::vec2(w as f32 / scale, h as f32 / scale),
-                            );
-                            ui.painter().image(tex.id(), native_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    let mut sheets = Vec::new();
+    for scale in [1.0f32, 1.25, 1.5, 2.0] {
+        // The production fallback uses one fixed Area id. Render only one pair per
+        // frame, reusing the harness across variants/backgrounds to avoid id collisions.
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(128.0, 64.0))
+            .with_pixels_per_point(scale)
+            .with_context_setup(egui_extras::install_image_loaders)
+            .wgpu()
+            .build_ui_state(
+                |ui, state: &mut (PenVariant, u8)| {
+                    let (variant, background) = *state;
+                    ui.painter().rect_filled(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(128.0, 64.0)), 0.0, egui::Color32::from_gray(background));
+                    ui.painter().text(
+                        pos2(2.0, 2.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("{} {scale}x: old / new", variant.icon_name()),
+                        egui::FontId::monospace(6.0),
+                        egui::Color32::from_gray(if background < 100 { 210 } else { 30 }),
+                    );
+                    icons::cursor(ui.ctx(), variant.icon_name(), pos2(32.0, 32.0), variant.hotspot_in_box() / 24.0, 22.0);
+                    if let Some(bitmap) = rasterize_pen(variant, scale) {
+                        let [w, h] = bitmap.size;
+                        let [hx, hy] = bitmap.hotspot;
+                        let image = egui::ColorImage::from_rgba_unmultiplied([usize::from(w), usize::from(h)], &bitmap.rgba);
+                        let texture = ui.ctx().load_texture("native-pen-reference", image, egui::TextureOptions::NEAREST);
+                        let rect = egui::Rect::from_min_size(
+                            pos2(96.0, 32.0) - egui::vec2(f32::from(hx), f32::from(hy)) / scale,
+                            egui::vec2(f32::from(w), f32::from(h)) / scale,
+                        );
+                        ui.painter().image(texture.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    }
+                },
+                (PenVariant::Standard, 240u8),
+            );
+        let cell_w = (128.0 * scale).round() as usize;
+        let cell_h = (64.0 * scale).round() as usize;
+        let sheet_w = cell_w * 6;
+        let sheet_h = cell_h * 3;
+        let mut sheet = vec![255u8; sheet_w * sheet_h * 4];
+        for (bg_index, (background_name, background)) in backgrounds.iter().enumerate() {
+            for (variant_index, variant) in PenVariant::all().into_iter().enumerate() {
+                *harness.state_mut() = (variant, *background);
+                harness.run_steps(3);
+                let rendered = harness.render().map_err(|e| format!("cursor reference render: {e}"))?;
+                if rendered.width() as usize != cell_w || rendered.height() as usize != cell_h {
+                    return Err("cursor reference dimensions differ from requested display scale".into());
+                }
+                let raw = rendered.as_raw();
+                for row in 0..cell_h {
+                    let src = row * cell_w * 4;
+                    let dst = ((bg_index * cell_h + row) * sheet_w + variant_index * cell_w) * 4;
+                    sheet[dst..dst + cell_w * 4].copy_from_slice(&raw[src..src + cell_w * 4]);
+                }
+                let bitmap = rasterize_pen(variant, scale).ok_or("missing comparison bitmap")?;
+                let [w, h] = bitmap.size;
+                let [hx, hy] = bitmap.hotspot;
+                let old_x = (32.0 * scale).round() as usize - usize::from(hx);
+                let new_x = (96.0 * scale).round() as usize - usize::from(hx);
+                let top = (32.0 * scale).round() as usize - usize::from(hy);
+                let mut sum = 0.0f64;
+                let mut squared = 0.0f64;
+                let mut maximum = 0;
+                let mut exact = 0;
+                let mut gt2 = 0;
+                let mut gt5 = 0;
+                let mut gt15 = 0;
+                let mut old_ink = 0;
+                let mut new_ink = 0;
+                for y in 0..usize::from(h) {
+                    for x in 0..usize::from(w) {
+                        let a = ((top + y) * cell_w + old_x + x) * 4;
+                        let b = ((top + y) * cell_w + new_x + x) * 4;
+                        let old = raw.get(a..a + 3).ok_or("painted crop outside render")?;
+                        let new = raw.get(b..b + 3).ok_or("native crop outside render")?;
+                        old_ink += usize::from(old.iter().any(|c| c.abs_diff(*background) > 10));
+                        new_ink += usize::from(new.iter().any(|c| c.abs_diff(*background) > 10));
+                        let mut pixel_max = 0;
+                        for (a, b) in old.iter().zip(new) {
+                            let d = a.abs_diff(*b);
+                            pixel_max = pixel_max.max(d);
+                            sum += f64::from(d) / 3.0;
+                            squared += f64::from(d).powi(2) / 3.0;
                         }
+                        maximum = maximum.max(pixel_max);
+                        exact += usize::from(pixel_max == 0);
+                        gt2 += usize::from(pixel_max > 2);
+                        gt5 += usize::from(pixel_max > 5);
+                        gt15 += usize::from(pixel_max > 15);
                     }
                 }
-            });
-            h.run_steps(3);
-            h.render()
-        }));
-
-        let Ok(Ok(rendered_img)) = built else {
-            eprintln!("wgpu rendering unavailable on this platform; skipping visual reference generation");
-            return (Vec::new(), None);
-        };
-
-        let img_w = rendered_img.width();
-        let img_h = rendered_img.height();
-        let raw_pixels = rendered_img.into_raw();
-
-        // Compute compare metrics for each variant and background
-        for (bg_idx, (bg_name, _)) in backgrounds.iter().enumerate() {
-            let y_top = 25.0 + (bg_idx as f32) * 95.0;
-            let y_center = y_top + 45.0;
-
-            for (var_idx, variant) in variants.iter().enumerate() {
-                let cell_x = 20.0 + (var_idx as f32) * 100.0;
-                let p_painted = egui::pos2(cell_x + 24.0, y_center);
-                let p_native = egui::pos2(cell_x + 68.0, y_center);
-
-                let Some(native_img) = rasterize_pen(*variant, scale) else {
-                    continue;
-                };
-                let [w, h] = native_img.size;
-                let [hx, hy] = native_img.hotspot;
-
-                let px_hot_painted = (p_painted.x * scale).round() as i32;
-                let py_hot_painted = (p_painted.y * scale).round() as i32;
-                let px_hot_native = (p_native.x * scale).round() as i32;
-                let py_hot_native = (p_native.y * scale).round() as i32;
-
-                let mut sum_abs_diff = 0.0f64;
-                let mut sum_sq_diff = 0.0f64;
-                let mut max_diff: u8 = 0;
-                let mut exact_matches = 0;
-                let mut diff_gt_2 = 0;
-                let mut diff_gt_5 = 0;
-                let mut diff_gt_15 = 0;
-                let total_pixels = usize::from(w) * usize::from(h);
-
-                for dy in 0..(h as i32) {
-                    let rel_y = dy - (hy as i32);
-                    let y_p = py_hot_painted + rel_y;
-                    let y_n = py_hot_native + rel_y;
-
-                    for dx in 0..(w as i32) {
-                        let rel_x = dx - (hx as i32);
-                        let x_p = px_hot_painted + rel_x;
-                        let x_n = px_hot_native + rel_x;
-
-                        if x_p >= 0 && x_p < img_w as i32 && y_p >= 0 && y_p < img_h as i32 && x_n >= 0 && x_n < img_w as i32 && y_n >= 0 && y_n < img_h as i32
-                        {
-                            let idx_p = ((y_p as u32 * img_w + x_p as u32) * 4) as usize;
-                            let idx_n = ((y_n as u32 * img_w + x_n as u32) * 4) as usize;
-
-                            let dr = (raw_pixels[idx_p] as i16 - raw_pixels[idx_n] as i16).unsigned_abs() as u8;
-                            let dg = (raw_pixels[idx_p + 1] as i16 - raw_pixels[idx_n + 1] as i16).unsigned_abs() as u8;
-                            let db = (raw_pixels[idx_p + 2] as i16 - raw_pixels[idx_n + 2] as i16).unsigned_abs() as u8;
-
-                            let pixel_max = dr.max(dg).max(db);
-                            let avg_diff = (dr as f64 + dg as f64 + db as f64) / 3.0;
-                            sum_abs_diff += avg_diff;
-                            sum_sq_diff += ((dr as f64).powi(2) + (dg as f64).powi(2) + (db as f64).powi(2)) / 3.0;
-
-                            if pixel_max > max_diff {
-                                max_diff = pixel_max;
-                            }
-                            if pixel_max == 0 {
-                                exact_matches += 1;
-                            }
-                            if pixel_max > 2 {
-                                diff_gt_2 += 1;
-                            }
-                            if pixel_max > 5 {
-                                diff_gt_5 += 1;
-                            }
-                            if pixel_max > 15 {
-                                diff_gt_15 += 1;
-                            }
-                        }
-                    }
+                if old_ink < 10 || new_ink < 10 {
+                    return Err(format!("cursor reference missing visible ink: {variant:?} {scale}x {background_name}, old={old_ink} new={new_ink}").into());
                 }
-
-                let mae = if total_pixels > 0 { sum_abs_diff / (total_pixels as f64) } else { 0.0 };
-                let rmse = if total_pixels > 0 { (sum_sq_diff / (total_pixels as f64)).sqrt() } else { 0.0 };
-                let match_pct = if total_pixels > 0 { (exact_matches as f64 / total_pixels as f64) * 100.0 } else { 0.0 };
-
+                let total = usize::from(w) * usize::from(h);
                 comparisons.push(CursorVisualComparison {
-                    variant: variant.icon_name().to_string(),
+                    variant: variant.icon_name().to_owned(),
                     scale,
-                    background: bg_name.to_string(),
+                    background: (*background_name).to_owned(),
                     dimensions: [u32::from(w), u32::from(h)],
                     hotspot: [u32::from(hx), u32::from(hy)],
-                    mae_rgb: mae,
-                    max_abs_diff_rgb: max_diff,
-                    rmse_rgb: rmse,
-                    exact_match_pixels: exact_matches,
-                    total_pixels,
-                    match_percentage: match_pct,
-                    pixels_diff_gt_2: diff_gt_2,
-                    pixels_diff_gt_5: diff_gt_5,
-                    pixels_diff_gt_15: diff_gt_15,
+                    mae_rgb: sum / total as f64,
+                    max_abs_diff_rgb: maximum,
+                    rmse_rgb: (squared / total as f64).sqrt(),
+                    exact_match_pixels: exact,
+                    total_pixels: total,
+                    match_percentage: exact as f64 / total as f64 * 100.0,
+                    pixels_diff_gt_2: gt2,
+                    pixels_diff_gt_5: gt5,
+                    pixels_diff_gt_15: gt15,
                 });
             }
         }
-
-        rendered_scale_images.push((scale, raw_pixels, img_w, img_h));
+        sheets.push((sheet, sheet_w, sheet_h));
     }
-
-    // Stitch rendered scales into a contact-sheet PNG
-    let max_w = rendered_scale_images.iter().map(|(_, _, w, _)| *w).max().unwrap_or(0);
-    let total_h: u32 = rendered_scale_images.iter().map(|(_, _, _, h)| *h + 10).sum();
-
-    if max_w == 0 || total_h == 0 {
-        return (comparisons, None);
-    }
-
-    let mut contact_sheet = vec![30u8; (max_w * total_h * 4) as usize];
-    let mut curr_y = 0u32;
-    for (_, pixels, w, h) in &rendered_scale_images {
-        for row in 0..*h {
-            let src_start = ((row * w) * 4) as usize;
-            let src_end = src_start + (*w * 4) as usize;
-            let dst_start = (((curr_y + row) * max_w) * 4) as usize;
-            let dst_end = dst_start + (*w * 4) as usize;
-            if dst_end <= contact_sheet.len() && src_end <= pixels.len() {
-                contact_sheet[dst_start..dst_end].copy_from_slice(&pixels[src_start..src_end]);
-            }
+    let width = sheets.iter().map(|(_, w, _)| *w).max().ok_or("no cursor renders")?;
+    let height: usize = sheets.iter().map(|(_, _, h)| h).sum();
+    let mut contact = vec![255u8; width * height * 4];
+    let mut top = 0;
+    for (pixels, w, h) in sheets {
+        for row in 0..h {
+            let src = row * w * 4;
+            let dst = (top + row) * width * 4;
+            contact[dst..dst + w * 4].copy_from_slice(&pixels[src..src + w * 4]);
         }
-        curr_y += *h + 10;
+        top += h;
     }
-
-    let img = match Image::from_raw(max_w, total_h, ChannelLayout::Rgba, SampleType::U8, contact_sheet) {
-        Ok(i) => i,
-        Err(_) => return (comparisons, None),
-    };
-    let encoded = match encode(&img, Format::Png, &EncodeOptions::default()) {
-        Ok(e) => e,
-        Err(_) => return (comparisons, None),
-    };
-
+    let image = Image::from_raw(width as u32, height as u32, ChannelLayout::Rgba, SampleType::U8, contact)?;
+    let png = encode(&image, Format::Png, &EncodeOptions::default())?;
     if let Some(dir) = save_dir {
-        let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(dir.join("pen_cursor_contact_sheet.png"), &encoded);
+        std::fs::create_dir_all(dir)?;
+        std::fs::write(dir.join("pen_cursor_contact_sheet.png"), &png)?;
     }
-
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&encoded);
-    (comparisons, Some(b64))
+    Ok((comparisons, base64::engine::general_purpose::STANDARD.encode(png)))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -527,7 +459,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Run visual consistency oracle and render contact sheet outside timing samples
-    let (visual_comparisons, contact_sheet_b64) = run_visual_oracle(save_dir.as_deref().map(Path::new));
+    let (visual_comparisons, contact_sheet_b64) = run_visual_oracle(save_dir.as_deref().map(Path::new))?;
 
     if json_output {
         let perf_report = PerfReport {
@@ -540,7 +472,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rows: perf_rows,
             results: results.clone(),
             visual_comparisons: visual_comparisons.clone(),
-            contact_sheet_png_base64: contact_sheet_b64,
+            contact_sheet_png_base64: Some(contact_sheet_b64),
         };
         let json_str = serde_json::to_string_pretty(&perf_report)?;
         if let Some(path) = json_file_path {
