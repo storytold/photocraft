@@ -1581,6 +1581,65 @@ fn pause_child(app: &mut PhotocraftApp) -> u64 {
     v["paused"]["dialog"].as_u64().unwrap()
 }
 
+/// A delayed picker cannot replace the action that owns a suspended call; OK and Cancel still
+/// restore that recording and journal the call exactly once.
+#[test]
+fn bulk_load_reply_cannot_replace_a_suspended_recording() {
+    use crate::file_dialog::{FileDialogAnswer, FileDialogReply};
+    use std::{cell::RefCell, rc::Rc};
+
+    for confirm in [false, true] {
+        let mut app = recording_with_dialog_child();
+        for action in &mut app.session.actions.list {
+            action.set = Some("Shared".into());
+        }
+        let waiting: Rc<RefCell<Option<FileDialogReply>>> = Default::default();
+        let reply = waiting.clone();
+        app.services.file_dialog = Some(Box::new(move |_, _, answer| *reply.borrow_mut() = Some(answer)));
+        let ctx = egui::Context::default();
+        load_dialog(&mut app).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(waiting.borrow().is_some(), "the picker is already awaiting an answer");
+
+        let dialog = pause_child(&mut app);
+        let before = app.session.actions.clone();
+        let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
+        let record = app.paused_playbacks.paused.values().next().unwrap().record.clone();
+        let journal = app.session.journal.clone();
+        let panel = app.ui.actions.clone();
+        assert!(before.recording.is_none() && record.is_some());
+        waiting
+            .borrow_mut()
+            .take()
+            .unwrap()
+            .send(Some(FileDialogAnswer::ContentsMany(vec![("replacement.atn".into(), action_set_bytes("Shared", "Replacement"))])));
+        app.poll_file_dialog(&ctx, None);
+
+        assert!(app.ui.status_error);
+        let refusal = crate::i18n::t("Confirm or cancel the open action step dialog first").to_string();
+        assert!(app.ui.status.contains(refusal.as_str()), "{}", app.ui.status);
+        assert!(!app.file_dialog_open());
+        assert_eq!(app.session.actions, before, "a refused same-set load cannot replace the library or recording state");
+        assert_eq!(app.ui.actions, panel);
+        assert_eq!(app.session.journal, journal);
+        assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields, fields);
+        assert_eq!(app.paused_playbacks.paused.len(), 1);
+        assert_eq!(app.paused_playbacks.paused.values().next().unwrap().record, record);
+
+        if confirm {
+            crate::dialogs::confirm(&mut app, dialog).unwrap();
+        } else {
+            crate::dialogs::cancel(&mut app, dialog).unwrap();
+        }
+        assert!(app.session.actions.recording.is_some());
+        assert!(app.paused_playbacks.paused.is_empty());
+        app.run("actions.stop", json!({})).unwrap();
+        assert_eq!(app.session.actions.list[1].name, "Owner");
+        assert_eq!(app.session.actions.list[1].steps, child_call());
+        assert_eq!(suffixes(&app), usize::from(confirm));
+    }
+}
+
 #[test]
 fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     let mut app = recording_with_dialog_child();

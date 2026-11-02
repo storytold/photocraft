@@ -814,6 +814,7 @@ pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), Strin
             | "actions.duplicate"
             | "actions.clearAll"
             | "actions.replace"
+            | "actions.load"
             | "actions.recordAgain"
             | "actions.reset"
     ) && suspended(app)
