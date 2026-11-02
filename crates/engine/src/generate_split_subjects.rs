@@ -96,8 +96,13 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             layers.push((Rgba8::new(w, h, background).map_err(gen_err)?, format!("{base} 1/{count}")));
             // The largest subject lowest: the furthest back, as a rule.
             for (i, alpha) in alphas.iter().enumerate() {
-                let px: Vec<u8> =
-                    picture.chunks_exact(4).zip(alpha).flat_map(|(p, a)| [p[0], p[1], p[2], (f32::from(p[3]) * a.clamp(0.0, 1.0)).round() as u8]).collect();
+                let px: Vec<u8> = picture
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(alpha)
+                    .flat_map(|(p, a)| [p[0], p[1], p[2], (f32::from(p[3]) * a.clamp(0.0, 1.0)).round() as u8])
+                    .collect();
                 layers.push((Rgba8::new(w, h, px).map_err(gen_err)?, format!("{base} {}/{count}", i + 2)));
             }
             let mut ids = Vec::with_capacity(count);
