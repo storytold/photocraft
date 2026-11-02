@@ -1088,11 +1088,11 @@ fn a_chain_of_uses_with_clip_paths_inside_a_clip_path_is_refused() {
     assert!(!err.complex && err.message.contains("deeply"), "{err:?}");
 }
 
-/// Thousands of paths sharing one pattern and one clip are walked once, not once per use.
+/// Seven thousand paths sharing one pattern and one clip are walked once, not once per use.
 #[test]
 fn many_paths_sharing_a_pattern_are_accepted() {
     let tile: String = (0..300).map(|i| format!("<rect x=\"{i}\" width=\"1\" height=\"1\"/>")).collect();
-    let paths: String = (0..3000).map(|i| format!("<rect x=\"{}\" width=\"2\" height=\"2\" fill=\"url(#q)\" clip-path=\"url(#c)\"/>", i % 400)).collect();
+    let paths: String = (0..7000).map(|i| format!("<rect x=\"{}\" width=\"2\" height=\"2\" fill=\"url(#q)\" clip-path=\"url(#c)\"/>", i % 400)).collect();
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"500\" height=\"500\"><defs><pattern id=\"q\" patternUnits=\"userSpaceOnUse\" width=\"300\" height=\"2\">{tile}</pattern><clipPath id=\"c\"><rect width=\"500\" height=\"500\"/></clipPath></defs>{paths}</svg>"
     );
@@ -1116,4 +1116,115 @@ fn realistic_effects_on_a_24_megapixel_canvas_are_accepted() {
         "{shadow}<clipPath id=\"c\"><rect width=\"5000\" height=\"3000\"/></clipPath><mask id=\"m\"><rect width=\"6000\" height=\"4000\" fill=\"#fff\"/></mask>"
     );
     check_only(&drawing(&defs, &format!("<g filter=\"url(#s)\" clip-path=\"url(#c)\" mask=\"url(#m)\">{full}</g>")), 6000, 4000).unwrap();
+}
+
+const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
+
+/// A shared userSpaceOnUse pattern is one definition: the same filter inside it costs far more
+/// when it is used at scale 300 than at scale 1, and the second use must not be skipped.
+#[test]
+fn a_shared_pattern_used_again_at_a_larger_scale_is_refused() {
+    let floods = "<feFlood/>".repeat(64);
+    let svg = format!(
+        "<svg {NS} width=\"6000\" height=\"4000\"><defs><filter id=\"f\" x=\"-10\" y=\"-10\" width=\"20\" height=\"20\" filterUnits=\"userSpaceOnUse\">{floods}</filter><pattern id=\"P\" patternUnits=\"userSpaceOnUse\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" filter=\"url(#f)\"/></pattern></defs><rect width=\"10\" height=\"10\" fill=\"url(#P)\"/><g transform=\"scale(300)\"><rect width=\"0.01\" height=\"0.01\" fill=\"url(#P)\"/></g></svg>"
+    );
+    let err = check_only(&svg, 6000, 4000).unwrap_err();
+    assert!(err.message.contains("a filter with 64 primitives"), "{err:?}");
+}
+
+/// Patterns inside patterns, each with 190 nested layers, referenced deepest first: every
+/// definition is walked once, but the depth adds up where they are used.
+#[test]
+fn nested_shared_patterns_add_up_their_depth() {
+    let k = 50;
+    let mut defs = String::new();
+    for i in 0..k {
+        let fill = if i + 1 < k { format!("url(#D{})", i + 1) } else { "#000".to_string() };
+        defs.push_str(&format!(
+            "<pattern id=\"D{i}\" patternUnits=\"userSpaceOnUse\" width=\"4\" height=\"4\">{}<rect width=\"4\" height=\"4\" fill=\"{fill}\"/>{}</pattern>",
+            "<g opacity=\"0.5\">".repeat(190),
+            "</g>".repeat(190)
+        ));
+    }
+    let body: String = (0..k).rev().map(|i| format!("<rect width=\"10\" height=\"10\" fill=\"url(#D{i})\"/>")).collect();
+    let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{defs}</defs>{body}</svg>");
+    let err = check_only(&svg, 100, 100).unwrap_err();
+    assert!(err.message.contains("deeply"), "{err:?}");
+}
+
+/// usvg makes the layer the union of a group's filter regions and every unary primitive on it keeps
+/// a layer-sized result, however small its own region is.
+#[test]
+fn a_small_filter_after_a_big_one_is_charged_at_the_layer_size() {
+    let matrices = "<feColorMatrix in=\"SourceGraphic\" type=\"saturate\" values=\"0.5\"/>".repeat(64);
+    let svg = format!(
+        "<svg {NS} width=\"6000\" height=\"4000\"><defs><filter id=\"big\" x=\"0\" y=\"0\" width=\"6000\" height=\"4000\" filterUnits=\"userSpaceOnUse\"><feOffset dx=\"1\"/></filter><filter id=\"small\" x=\"0\" y=\"0\" width=\"1\" height=\"1\" filterUnits=\"userSpaceOnUse\">{matrices}</filter></defs><rect width=\"6000\" height=\"4000\" filter=\"url(#big) url(#small)\"/></svg>"
+    );
+    let err = check_only(&svg, 6000, 4000).unwrap_err();
+    assert!(err.message.contains("filter"), "{err:?}");
+}
+
+/// What an feImage draws sees the results the filter kept before it: 20 floods and an feImage
+/// whose pattern tile fits on its own.
+#[test]
+fn fe_image_content_sees_the_results_kept_before_it() {
+    let floods = "<feFlood/>".repeat(20);
+    let svg = format!(
+        "<svg {NS} width=\"4000\" height=\"4000\"><defs><pattern id=\"p\" patternUnits=\"userSpaceOnUse\" width=\"7000\" height=\"7000\"><rect width=\"4\" height=\"4\"/></pattern><g id=\"g\"><rect width=\"100\" height=\"100\" fill=\"url(#p)\"/></g><filter id=\"i\" x=\"0\" y=\"0\" width=\"4000\" height=\"4000\" filterUnits=\"userSpaceOnUse\">{floods}<feImage href=\"#g\"/></filter></defs><rect width=\"10\" height=\"10\" filter=\"url(#i)\"/></svg>"
+    );
+    let err = check_only(&svg, 4000, 4000).unwrap_err();
+    assert!(err.message.contains("pattern tile"), "{err:?}");
+}
+
+/// Mask content is drawn while the group's layer, the mask pixmap and its 1 byte per pixel mask are alive.
+#[test]
+fn mask_content_is_charged_with_the_mask_buffers() {
+    let svg = format!(
+        "<svg {NS} width=\"2000\" height=\"2000\"><defs><filter id=\"b\" x=\"0\" y=\"0\" width=\"9740\" height=\"9740\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"8\"/></filter><mask id=\"m\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"2000\" height=\"2000\"><g filter=\"url(#b)\"><rect width=\"100\" height=\"100\"/></g></mask></defs><rect width=\"100000\" height=\"100000\" mask=\"url(#m)\"/></svg>"
+    );
+    assert!(check_only(&svg, 2000, 2000).is_err());
+}
+
+/// A blur under 2 px sigma is an IIR blur with f64 scratch, charged one buffer more than a box blur.
+#[test]
+fn an_iir_blur_is_charged_more_than_a_box_blur() {
+    let blur = |sigma: &str| {
+        format!(
+            "<svg {NS} width=\"4000\" height=\"4000\"><defs><filter id=\"b\" x=\"0\" y=\"0\" width=\"10480\" height=\"10480\" filterUnits=\"userSpaceOnUse\"><feGaussianBlur stdDeviation=\"{sigma}\"/></filter></defs><rect width=\"10\" height=\"10\" filter=\"url(#b)\"/></svg>"
+        )
+    };
+    check_only(&blur("8"), 4000, 4000).unwrap();
+    assert!(check_only(&blur("1"), 4000, 4000).is_err());
+}
+
+/// usvg expands a chain of `use` elements into nested groups (it refuses 1,000 of them: "nodes limit
+/// reached"); walking 300 must not need more stack than a test thread has.
+#[test]
+fn a_deep_use_chain_does_not_overflow_the_walk() {
+    let mut body = String::from("<g id=\"u0\"><rect width=\"10\" height=\"10\"/></g>");
+    for i in 1..300 {
+        body.push_str(&format!("<use id=\"u{i}\" href=\"#u{}\"/>", i - 1));
+    }
+    let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{body}</defs><use href=\"#u299\"/></svg>");
+    std::thread::Builder::new().spawn(move || check_only(&svg, 100, 100).unwrap()).unwrap().join().unwrap();
+}
+
+/// A hostile element no longer takes the rest of the drawing with it.
+#[test]
+fn a_refused_element_leaves_its_siblings_drawn() {
+    let svg =
+        tile_svg("100000", "<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/><g><rect x=\"10\" y=\"10\" width=\"20\" height=\"20\" fill=\"#f00\"/></g>");
+    let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
+    assert!(buf.px[20 * 100 + 20][3] > 0.99);
+    assert!(buf.px[60 * 100 + 60][3] < 0.01);
+}
+
+/// The one-pixel-layer fallback for drawings with more than 2,000 elements does the same, and says so.
+#[test]
+fn the_fallback_layer_leaves_out_only_the_refused_elements() {
+    let rects: String = (0..2100).map(|i| format!("<rect x=\"{}\" y=\"{}\" width=\"1\" height=\"1\"/>", i % 90, i / 90)).collect();
+    let svg = tile_svg("100000", &format!("{rects}<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/>"));
+    let r = import_svg("many", svg.as_bytes()).unwrap();
+    assert_eq!(pixel_layers(&r), 1, "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|w| w.contains("left out because they need too much memory")), "{:?}", r.warnings);
 }

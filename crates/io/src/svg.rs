@@ -1042,8 +1042,10 @@ fn import_parsed_with_limits(
         }
         let (w, h) = (cv.size.width, cv.size.height);
         if let Some(mut pixmap) = pixmap(w, h) {
-            check_render_memory(&tree, global, w, h)?;
-            resvg::render(&tree, global, &mut pixmap.as_mut());
+            let dropped = draw_checked(&tree, global, &mut pixmap)?;
+            if dropped != 0 {
+                conv.warnings.push(format!("SVG: {dropped} elements were left out because they need too much memory to rasterise"));
+            }
             doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&pixmap, doc.bounds(), fmt))));
         }
     } else {
@@ -1121,14 +1123,54 @@ fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
     let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
     let ts = tiny_skia::Transform::from_scale(k, k);
-    check_render_memory(tree, ts, w, h)?;
-    resvg::render(tree, ts, &mut pixmap.as_mut());
+    draw_checked(tree, ts, &mut pixmap)?;
     Ok(pixmap)
 }
 
-/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would break a [`limits`] cap.
-fn check_render_memory(tree: &usvg::Tree, ts: tiny_skia::Transform, w: u32, h: u32) -> Result<(), IoError> {
-    limits::check(tree.root().children(), ts, w, h, 0).map_err(|r| IoError::Svg(format!("can't rasterise this drawing: {}", r.message)))
+/// Draw `tree` at `ts` on `pixmap`. When a [`limits`] cap would be broken, resvg is not asked to draw
+/// the whole tree: its top-level elements (through plain groups, which are no layers) are checked and
+/// drawn one by one, as resvg itself draws siblings, and the ones that break a cap are left out.
+/// Returns how many were left out; it is an error when none could be drawn or the drawing is too
+/// complex to check at all.
+fn draw_checked(tree: &usvg::Tree, ts: tiny_skia::Transform, pixmap: &mut tiny_skia::Pixmap) -> Result<usize, IoError> {
+    let (w, h) = (pixmap.width(), pixmap.height());
+    let fail = |r: limits::Refusal| IoError::Svg(format!("can't rasterise this drawing: {}", r.message));
+    let first = match limits::check(tree.root().children(), ts, w, h, 0) {
+        Ok(()) => {
+            resvg::render(tree, ts, &mut pixmap.as_mut());
+            return Ok(0);
+        }
+        Err(r) if r.complex => return Err(fail(r)),
+        Err(r) => r,
+    };
+    fn units<'a>(group: &'a usvg::Group, out: &mut Vec<(&'a usvg::Node, tiny_skia::Transform)>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(g) if !g.should_isolate() => units(g, out),
+                _ => out.push((node, group.abs_transform())),
+            }
+        }
+    }
+    let mut list = Vec::new();
+    units(tree.root(), &mut list);
+    let (mut drawn, mut dropped) = (0, 0);
+    for (node, parent) in list {
+        // As `raster_layer` does: resvg shifts the node by its absolute layer box before drawing it.
+        let Some(shift) = node.abs_layer_bounding_box() else { continue };
+        let at = ts.pre_concat(parent).pre_translate(shift.x(), shift.y());
+        match limits::check(std::slice::from_ref(node), at, w, h, 0) {
+            Ok(()) => {
+                drawn += 1;
+                resvg::render_node(node, at, &mut pixmap.as_mut());
+            }
+            Err(r) if r.complex => return Err(fail(r)),
+            Err(_) => dropped += 1,
+        }
+    }
+    if drawn == 0 {
+        return Err(fail(first));
+    }
+    Ok(dropped)
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].

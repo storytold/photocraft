@@ -15,7 +15,7 @@
 //! the layers of its ancestors (which are alive while it is drawn) and nothing else, and each
 //! shared definition is walked once per size class, so the walk is linear in the file.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use resvg::tiny_skia;
 use resvg::usvg;
@@ -28,9 +28,6 @@ const BUDGET: f64 = MAX_PEAK_PIXEL_BYTES as f64;
 /// Filter primitives per filter. A result of every primitive is kept; real filters have 1 to 12
 /// (Inkscape's drop shadow has 5), and 64 leaves headroom for generated ones.
 const MAX_PRIMITIVES: usize = 64;
-/// Region-sized buffers charged for a filter with a drop shadow on top of its results: it holds the
-/// input, its blur and the shadow at once (`apply_drop_shadow`).
-const DROP_SHADOW_EXTRA: f64 = 2.0;
 /// Links of one clip-path chain, mask-on-mask chain or nested clip children with their own
 /// clip-path. Each link keeps a layer-sized buffer alive while the next is applied; real files use
 /// one or two, and 16 layers of a 24 MP canvas (1.5 GiB) is the whole budget anyway.
@@ -44,6 +41,10 @@ const MAX_IMAGE_DEPTH: usize = super::MAX_EMBEDDED_SVG_DEPTH;
 /// Nested isolated groups, patterns, embedded images and filter images followed. It keeps this
 /// walk, and resvg's own recursion, far from a stack overflow; real drawings stay under a few dozen.
 const MAX_DEPTH: usize = 200;
+/// Nested groups of any kind. usvg expands `<use>` chains up to its own 1024-level limit, possibly
+/// two groups per level; resvg recurses three frames per level too, so a walk that stops here is
+/// lighter on the stack than the drawing it guards.
+const MAX_NEST: usize = 2_100;
 /// Nodes the walk visits before it gives up as too complex to check. A node costs a few
 /// nanoseconds, so this bounds the walk to well under a second.
 const MAX_NODES: usize = 2_000_000;
@@ -83,15 +84,62 @@ struct Cx {
     layer: f64,
     /// Pixels of the largest group layer resvg makes in it (5 × 5 times its first target).
     cap: f64,
+    /// Nested layers (isolated groups, patterns, embedded images, filter images).
     depth: usize,
     patterns: usize,
     images: usize,
+    /// Nested groups of any kind: resvg and this walk recurse once per level.
+    nest: usize,
+}
+
+/// What a subtree needs, relative to what is alive where it starts. A shared definition is walked
+/// once per transform and size, and every later reference re-checks its profile against where it
+/// is used, so nothing is skipped and the walk stays linear.
+#[derive(Clone, Copy, Default)]
+struct Profile {
+    /// Most bytes it holds beyond the incoming live bytes.
+    extra: f64,
+    /// Most extra levels of nested layers, patterns, embedded images and groups below it.
+    depth: usize,
+    patterns: usize,
+    images: usize,
+    nest: usize,
+}
+
+impl Profile {
+    fn max(self, o: Self) -> Self {
+        Self {
+            extra: self.extra.max(o.extra),
+            depth: self.depth.max(o.depth),
+            patterns: self.patterns.max(o.patterns),
+            images: self.images.max(o.images),
+            nest: self.nest.max(o.nest),
+        }
+    }
+
+    /// This profile seen from a parent that adds `bytes` and one level of each kind in `levels`
+    /// (layers, patterns, images, groups).
+    fn under(self, bytes: f64, levels: [usize; 4]) -> Self {
+        Self {
+            extra: self.extra + bytes,
+            depth: self.depth + levels[0],
+            patterns: self.patterns + levels[1],
+            images: self.images + levels[2],
+            nest: self.nest + levels[3],
+        }
+    }
+}
+
+/// A shared definition at one linear transform, layer size and clamp.
+type Key = (usize, [u32; 4], u64, u64);
+
+fn key(ptr: usize, ts: tiny_skia::Transform, cx: Cx) -> Key {
+    (ptr, [ts.sx.to_bits(), ts.kx.to_bits(), ts.ky.to_bits(), ts.sy.to_bits()], cx.layer.to_bits(), cx.cap.to_bits())
 }
 
 struct Walk {
-    nodes: usize,
-    /// Definitions already walked at a size: pointer and a size class (about 19 % wide).
-    seen: HashSet<(usize, u32)>,
+    visited: usize,
+    shared: HashMap<Key, Profile>,
     clips: HashMap<usize, usize>,
     masks: HashMap<usize, usize>,
 }
@@ -100,91 +148,120 @@ struct Walk {
 /// `held` bytes already in use (the target itself and anything the caller keeps).
 pub(super) fn check(nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32, held: u64) -> Result<(), Refusal> {
     let target = f64::from(w) * f64::from(h);
-    let cx = Cx { live: held as f64 + target * 4.0, layer: target, cap: 25.0 * target, depth: 0, patterns: 0, images: 0 };
-    let mut walk = Walk { nodes: 0, seen: HashSet::new(), clips: HashMap::new(), masks: HashMap::new() };
-    walk.nodes(nodes, ts, cx)
+    let cx = Cx { live: held as f64 + target * 4.0, layer: target, cap: 25.0 * target, depth: 0, patterns: 0, images: 0, nest: 0 };
+    let mut walk = Walk { visited: 0, shared: HashMap::new(), clips: HashMap::new(), masks: HashMap::new() };
+    walk.nodes(nodes, ts, cx).map(|_| ())
 }
 
-fn class(live: f64) -> u32 {
-    (live.max(1.0).log2() * 4.0) as u32
+fn need(live: f64, what: impl FnOnce() -> String) -> Result<(), Refusal> {
+    if live > BUDGET { Err(memory(&what(), live)) } else { Ok(()) }
 }
 
 impl Walk {
-    fn nodes(&mut self, nodes: &[usvg::Node], ts: tiny_skia::Transform, cx: Cx) -> Result<(), Refusal> {
-        nodes.iter().try_for_each(|n| self.node(n, ts, cx))
+    fn nodes(&mut self, nodes: &[usvg::Node], ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        let mut profile = Profile::default();
+        for n in nodes {
+            profile = profile.max(self.node(n, ts, cx)?);
+        }
+        Ok(profile)
     }
 
-    fn node(&mut self, node: &usvg::Node, ts: tiny_skia::Transform, cx: Cx) -> Result<(), Refusal> {
-        self.nodes += 1;
-        if self.nodes > MAX_NODES {
+    fn node(&mut self, node: &usvg::Node, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        self.visited += 1;
+        if self.visited > MAX_NODES {
             return Err(Refusal { complex: true, message: format!("the drawing has more than {MAX_NODES} elements to check") });
         }
         match node {
             usvg::Node::Group(g) => self.group(g, ts, cx),
             usvg::Node::Text(t) => self.group(t.flattened(), ts, cx),
             usvg::Node::Path(p) if p.is_visible() => {
+                let mut profile = Profile::default();
                 for paint in p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint())) {
                     if let usvg::Paint::Pattern(pattern) = paint {
-                        self.pattern(pattern, ts, cx)?;
+                        profile = profile.max(self.pattern(pattern, ts, cx)?);
                     }
                 }
-                Ok(())
+                Ok(profile)
             }
-            usvg::Node::Path(_) => Ok(()),
+            usvg::Node::Path(_) => Ok(Profile::default()),
             // resvg draws an embedded SVG on a pixmap the size of the current one, with its own 5 × 5 clamp.
             usvg::Node::Image(image) => {
-                let usvg::ImageKind::SVG(tree) = image.kind() else { return Ok(()) };
+                let usvg::ImageKind::SVG(tree) = image.kind() else { return Ok(Profile::default()) };
                 if cx.images >= MAX_IMAGE_DEPTH {
                     return Err(limit("embedded SVG images are nested too deeply", MAX_IMAGE_DEPTH));
                 }
-                let live = cx.live + cx.layer * 4.0;
-                if live > BUDGET {
-                    return Err(memory("an embedded SVG image", live));
-                }
-                let nested = Cx { live, cap: 25.0 * cx.layer, depth: cx.depth + 1, images: cx.images + 1, ..cx };
-                self.deeper(nested)?;
-                self.nodes(tree.root().children(), ts, nested)
+                let bytes = cx.layer * 4.0;
+                need(cx.live + bytes, || "an embedded SVG image".to_string())?;
+                let nested = Cx { live: cx.live + bytes, cap: 25.0 * cx.layer, depth: cx.depth + 1, images: cx.images + 1, nest: cx.nest + 1, ..cx };
+                deeper(nested)?;
+                let inside = self.nodes(tree.root().children(), ts, nested)?;
+                Ok(Profile { extra: bytes, ..Profile::default() }.max(inside.under(bytes, [1, 0, 1, 1])))
             }
         }
     }
 
-    fn deeper(&self, cx: Cx) -> Result<(), Refusal> {
-        if cx.depth > MAX_DEPTH {
+    /// Walk a definition shared by reference (pattern, mask, filter image) once per transform and
+    /// size; a repeat only re-checks its profile where it is used now.
+    fn shared(&mut self, key: Key, cx: Cx, walk: impl FnOnce(&mut Self) -> Result<Profile, Refusal>) -> Result<Profile, Refusal> {
+        let Some(p) = self.shared.get(&key).copied() else {
+            let p = walk(self)?;
+            self.shared.insert(key, p);
+            return Ok(p);
+        };
+        need(cx.live + p.extra, || "a shared definition used here".to_string())?;
+        if cx.depth + p.depth > MAX_DEPTH {
             return Err(limit("layers are nested too deeply", MAX_DEPTH));
         }
-        Ok(())
+        if cx.patterns + p.patterns > MAX_PATTERN_DEPTH {
+            return Err(limit("patterns are nested too deeply", MAX_PATTERN_DEPTH));
+        }
+        if cx.images + p.images > MAX_IMAGE_DEPTH {
+            return Err(limit("embedded SVG images are nested too deeply", MAX_IMAGE_DEPTH));
+        }
+        if cx.nest + p.nest > MAX_NEST {
+            return Err(limit("groups are nested too deeply", MAX_NEST));
+        }
+        Ok(p)
     }
 
-    fn group(&mut self, g: &usvg::Group, ts: tiny_skia::Transform, cx: Cx) -> Result<(), Refusal> {
+    fn group(&mut self, g: &usvg::Group, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
         let ts = ts.pre_concat(g.transform());
-        // A plain group is no layer, and nests at most as deep as the XML.
-        if !g.should_isolate() {
-            return self.nodes(g.children(), ts, cx);
+        if cx.nest >= MAX_NEST {
+            return Err(limit("groups are nested too deeply", MAX_NEST));
         }
-        let Some(bb) = g.layer_bounding_box().transform(ts) else { return Ok(()) };
+        // A plain group is no layer.
+        if !g.should_isolate() {
+            let inside = self.nodes(g.children(), ts, Cx { nest: cx.nest + 1, ..cx })?;
+            return Ok(inside.under(0.0, [0, 0, 0, 1]));
+        }
+        let Some(bb) = g.layer_bounding_box().transform(ts) else { return Ok(Profile::default()) };
         let own = px((f64::from(bb.width()).ceil() + 4.0) * (f64::from(bb.height()).ceil() + 4.0)).min(cx.cap);
-        let inner = Cx { live: cx.live + own * 4.0, layer: own, depth: cx.depth + 1, ..cx };
-        self.deeper(inner)?;
+        let inner = Cx { live: cx.live + own * 4.0, layer: own, depth: cx.depth + 1, nest: cx.nest + 1, ..cx };
+        deeper(inner)?;
         // Filter, clip and mask are applied one after another; each needs its own extra buffers
-        // beside the group's layer.
+        // beside the group's layer. A clip or mask link is a 4 B/px pixmap and a 1 B/px mask.
         let clip = g.clip_path().map_or(Ok(0), |c| self.clip_links(c, 0))?;
         let mask = g.mask().map_or(Ok(0), |m| self.mask_links(m, 0))?;
-        let layers = 1 + clip.max(mask);
-        if cx.live + own * 4.0 * layers as f64 > BUDGET {
-            return Err(memory(&format!("a group with {layers} layers of {} px", own as u64), cx.live + own * 4.0 * layers as f64));
-        }
+        let links = clip.max(mask);
+        let layers = own * 4.0 + own * 5.0 * links as f64;
+        need(cx.live + layers, || format!("a group with {links} clip or mask layers of {} px", own as u64))?;
+        let mut profile = Profile { extra: layers, ..Profile::default() };
         for filter in g.filters() {
-            self.filter(filter, ts, cx, own)?;
+            profile = profile.max(self.filter(filter, ts, cx, own)?);
         }
         let mut mask_ref = g.mask();
+        let mut link = 1.0;
         while let Some(mask) = mask_ref {
-            let key = (std::ptr::from_ref(mask) as usize, class(inner.live));
-            if self.seen.insert(key) {
-                self.nodes(mask.root().children(), ts, inner)?;
-            }
+            // The mask content is drawn while this and every earlier link's pixmap and mask are alive.
+            let bytes = own * 4.0 + own * 5.0 * link;
+            let content = Cx { live: cx.live + bytes, ..inner };
+            let inside = self.shared(key(std::ptr::from_ref(mask) as usize, ts, content), content, |w| w.nodes(mask.root().children(), ts, content))?;
+            profile = profile.max(inside.under(bytes, [1, 0, 0, 1]));
             mask_ref = mask.mask();
+            link += 1.0;
         }
-        self.nodes(g.children(), ts, inner)
+        let inside = self.nodes(g.children(), ts, inner)?;
+        Ok(profile.max(inside.under(own * 4.0, [1, 0, 0, 1])))
     }
 
     /// Layers a clip-path keeps alive: its own, the deepest clip child with a clip-path of its own,
@@ -246,59 +323,74 @@ impl Walk {
         Ok(n)
     }
 
-    /// A filter keeps a result per primitive, each as large as the filter region (or smaller), plus
-    /// transients. `own` is the size of the layer it filters.
-    fn filter(&mut self, f: &usvg::filter::Filter, ts: tiny_skia::Transform, cx: Cx, own: f64) -> Result<(), Refusal> {
+    /// A filter keeps a result per primitive, each as large as the filter region or the layer it
+    /// filters, whichever is larger (usvg makes the layer the union of all of a group's filter
+    /// regions, and `SourceGraphic` clones the whole layer). `own` is the size of that layer.
+    fn filter(&mut self, f: &usvg::filter::Filter, ts: tiny_skia::Transform, cx: Cx, own: f64) -> Result<Profile, Refusal> {
+        use usvg::filter::Kind;
         let prims = f.primitives().len();
         if prims > MAX_PRIMITIVES {
             return Err(limit("a filter has too many primitives", MAX_PRIMITIVES));
         }
-        let Some(region) = f.rect().transform(ts) else { return Ok(()) };
+        let Some(region) = f.rect().transform(ts) else { return Ok(Profile::default()) };
         let region = px(f64::from(region.width()).ceil() * f64::from(region.height()).ceil());
-        let shadow = f.primitives().iter().any(|p| matches!(p.kind(), usvg::filter::Kind::DropShadow(_)));
-        let extra = if shadow { DROP_SHADOW_EXTRA } else { 0.0 };
-        // The group's layer and the clone of it that `SourceGraphic` makes (`get_input`) are layer
-        // sized; every primitive's result stays alive until the filter ends. A colour space
-        // conversion only copies a result a later primitive still shares, which is counted already.
-        let bytes = cx.live + own * 4.0 * 2.0 + region * 4.0 * (prims as f64 + extra);
-        if bytes > BUDGET {
-            return Err(memory(&format!("a filter with {prims} primitives over a region of {} px", region.min(1e18) as u64), bytes));
-        }
-        for primitive in f.primitives() {
-            if let usvg::filter::Kind::Image(fe) = primitive.kind() {
-                let live = cx.live + own * 4.0 + region * 4.0;
-                let nested = Cx { live, layer: region, cap: 25.0 * region, depth: cx.depth + 1, ..cx };
-                self.deeper(nested)?;
-                if self.seen.insert((std::ptr::from_ref(fe) as usize, class(live))) {
-                    self.nodes(fe.root().children(), ts, nested)?;
-                }
+        let slot = region.max(own) * 4.0;
+        // Buffers a primitive allocates beside its result (resvg 0.45.1 `filter/`): a blur works
+        // on one copy, an IIR blur (sigma under 2 after scaling) also on f64 scratch; blend,
+        // composite and displacement map convert two inputs; a drop shadow holds the input, its
+        // blur, the shadow and the result.
+        let (sx, sy) = ts.get_scale();
+        let transient = |kind: &Kind| match kind {
+            Kind::GaussianBlur(b) if b.std_dev_x().get() * sx >= 2.0 || b.std_dev_y().get() * sy >= 2.0 => 1.0,
+            Kind::GaussianBlur(_) => 2.0,
+            Kind::Blend(_) | Kind::Composite(_) | Kind::DisplacementMap(_) => 2.0,
+            Kind::DropShadow(_) => 4.0,
+            _ => 1.0,
+        };
+        let most = f.primitives().iter().map(|p| transient(p.kind())).fold(0.0, f64::max);
+        let extra = own * 4.0 + slot * (prims as f64 + most);
+        need(cx.live + extra, || format!("a filter with {prims} primitives over a region of {} px", region.min(1e18) as u64))?;
+        let mut profile = Profile { extra, ..Profile::default() };
+        for (i, primitive) in f.primitives().iter().enumerate() {
+            if let Kind::Image(fe) = primitive.kind() {
+                // What an feImage draws sees the results kept so far.
+                let bytes = own * 4.0 + slot * (i + 1) as f64;
+                let nested = Cx { live: cx.live + bytes, layer: region, cap: 25.0 * region, depth: cx.depth + 1, nest: cx.nest + 1, ..cx };
+                deeper(nested)?;
+                let inside = self.shared(key(std::ptr::from_ref(fe) as usize, ts, nested), nested, |w| w.nodes(fe.root().children(), ts, nested))?;
+                profile = profile.max(inside.under(bytes, [1, 0, 0, 1]));
             }
         }
-        Ok(())
+        Ok(profile)
     }
 
     /// A pattern tile is `width × height × scale` pixels, whatever the target.
-    fn pattern(&mut self, pattern: &usvg::Pattern, ts: tiny_skia::Transform, cx: Cx) -> Result<(), Refusal> {
+    fn pattern(&mut self, pattern: &usvg::Pattern, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
         let (sx, sy) = ts.pre_concat(pattern.transform()).get_scale();
         let rect = pattern.rect();
         let (tw, th) = (f64::from(rect.width() * sx).round(), f64::from(rect.height() * sy).round());
         // resvg draws no tile smaller than a pixel (or not a number).
         if !(tw >= 1.0 && th >= 1.0) {
-            return Ok(());
+            return Ok(Profile::default());
         }
         let tile = tw * th;
-        let live = cx.live + tile * 4.0;
-        if live > BUDGET {
-            return Err(memory(&format!("a pattern tile of {tw} × {th} px"), live));
-        }
+        let bytes = tile * 4.0;
+        need(cx.live + bytes, || format!("a pattern tile of {tw} × {th} px"))?;
         if cx.patterns >= MAX_PATTERN_DEPTH {
             return Err(limit("patterns are nested too deeply", MAX_PATTERN_DEPTH));
         }
-        let nested = Cx { live, layer: tile, depth: cx.depth + 1, patterns: cx.patterns + 1, ..cx };
-        self.deeper(nested)?;
-        if self.seen.insert((std::ptr::from_ref(pattern) as usize, class(live))) {
-            self.nodes(pattern.root().children(), tiny_skia::Transform::from_scale(sx, sy), nested)?;
-        }
-        Ok(())
+        let nested = Cx { live: cx.live + bytes, layer: tile, depth: cx.depth + 1, patterns: cx.patterns + 1, nest: cx.nest + 1, ..cx };
+        deeper(nested)?;
+        let inner_ts = tiny_skia::Transform::from_scale(sx, sy);
+        let inside =
+            self.shared(key(std::ptr::from_ref(pattern) as usize, inner_ts, nested), nested, |w| w.nodes(pattern.root().children(), inner_ts, nested))?;
+        Ok(Profile { extra: bytes, ..Profile::default() }.max(inside.under(bytes, [1, 1, 0, 1])))
     }
+}
+
+fn deeper(cx: Cx) -> Result<(), Refusal> {
+    if cx.depth > MAX_DEPTH {
+        return Err(limit("layers are nested too deeply", MAX_DEPTH));
+    }
+    Ok(())
 }
