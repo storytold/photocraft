@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use super::picker_browser_model::MAX_GROUP_DEPTH;
 pub(crate) use super::picker_browser_data::HierarchyOrderEntry;
 use super::picker_browser_data::PickerBrowserData;
+pub(crate) use super::picker_browser_model::MAX_GROUP_DEPTH;
 
 /// Transient rename target for a nested group. Kept separate from the legacy string-keyed rename
 /// state so arbitrary group labels remain lossless.
@@ -43,6 +43,10 @@ pub struct PresetUi {
     pub shapes: bool,
     pub tool_presets: bool,
     pub clone_source: bool,
+    /// Brush-picker card presentation. Rendering remains brush-adapter-specific; its preferences
+    /// live with the common picker state so the browser has one persistence owner.
+    #[serde(default, rename = "brushPicker", skip_serializing_if = "BrushPickerView::is_default")]
+    pub brush_picker: BrushPickerView,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
     /// Selected preset per panel (by name / pattern id).
@@ -79,6 +83,28 @@ pub struct PresetUi {
     pub(crate) item_renaming: Option<ItemRenameState>,
 }
 
+/// Brush adapter presentation options stored alongside the shared asset-browser state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BrushPickerView {
+    pub show_name: bool,
+    pub show_stroke: bool,
+    pub show_tip: bool,
+    pub scale: f32,
+}
+
+impl Default for BrushPickerView {
+    fn default() -> Self {
+        Self { show_name: true, show_stroke: true, show_tip: true, scale: 1.0 }
+    }
+}
+
+impl BrushPickerView {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 /// Preferences key for the shared picker-browser state. The browser hierarchy lives in `UiState`
 /// for the control channel, but that state is not itself part of the preferences file.
 const PERSISTED_PICKER_UI: &str = "pickerBrowserUi";
@@ -100,9 +126,41 @@ pub(crate) fn persist(app: &mut crate::PhotocraftApp, ctx: &egui::Context) {
 /// Restore the shared picker-browser state from preferences. Transient rename editors remain
 /// excluded by `PresetUi`'s serde contract.
 pub(crate) fn restore(app: &mut crate::PhotocraftApp) {
-    let Some(saved) = app.session.prefs().dialogs.get(PERSISTED_PICKER_UI) else { return };
-    if let Ok(state) = serde_json::from_value(saved.clone()) {
+    let mut has_saved_brush_view = false;
+    if let Some(saved) = app.session.prefs().dialogs.get(PERSISTED_PICKER_UI)
+        && let Ok(state) = serde_json::from_value(saved.clone())
+    {
+        has_saved_brush_view = saved.get("brushPicker").is_some();
         app.ui.presets_ui = state;
+    }
+
+    // Migrate the former standalone brush-picker preference into the common picker state once.
+    let legacy = app.session.prefs().brush_picker.clone();
+    if legacy.is_object() {
+        if !has_saved_brush_view {
+            let mut view = BrushPickerView::default();
+            if let Some(value) = legacy.get("showName").and_then(serde_json::Value::as_bool) {
+                view.show_name = value;
+            }
+            if let Some(value) = legacy.get("showStroke").and_then(serde_json::Value::as_bool) {
+                view.show_stroke = value;
+            }
+            if let Some(value) = legacy.get("showTip").and_then(serde_json::Value::as_bool) {
+                view.show_tip = value;
+            }
+            if let Some(value) = legacy.get("scale").and_then(serde_json::Value::as_f64)
+                && value.is_finite()
+            {
+                view.scale = value as f32;
+            }
+            app.ui.presets_ui.brush_picker = view;
+        }
+        app.session.prefs.edit(|prefs| prefs.brush_picker = serde_json::Value::Null);
+    }
+    let view = &mut app.ui.presets_ui.brush_picker;
+    view.scale = if view.scale.is_finite() { view.scale.clamp(0.15, 2.0) } else { 1.0 };
+    if ![view.show_name, view.show_stroke, view.show_tip].into_iter().any(|shown| shown) {
+        view.show_tip = true;
     }
 }
 
@@ -223,7 +281,8 @@ impl PresetUi {
 
     /// Persist a complete canonical sibling sequence.
     pub(crate) fn set_hierarchy_order(&mut self, panel: &str, parent: &str, entries: Vec<HierarchyOrderEntry>) {
-        let entries = if parent.is_empty() { entries } else { entries.into_iter().filter(|entry| !matches!(entry, HierarchyOrderEntry::RootItem { .. })).collect() };
+        let entries =
+            if parent.is_empty() { entries } else { entries.into_iter().filter(|entry| !matches!(entry, HierarchyOrderEntry::RootItem { .. })).collect() };
         self.hierarchy_order.entry(panel.to_string()).or_default().insert(parent.to_string(), entries);
     }
 
@@ -284,15 +343,23 @@ impl PresetUi {
 
     /// Rename one item identity without touching same-key cards in sibling domain groups.
     pub(crate) fn rename_hierarchy_item_in_group(&mut self, panel: &str, group: &str, from: &str, to: &str) {
-        if from == to { return; }
+        if from == to {
+            return;
+        }
         let parents = self.group_parents(panel);
         let belongs_to_group = |parent: &str| {
-            if parent.is_empty() { return false; }
+            if parent.is_empty() {
+                return false;
+            }
             let mut current = parent;
             let mut seen = BTreeSet::new();
             loop {
-                if current == group { return true; }
-                if !seen.insert(current.to_string()) { return false; }
+                if current == group {
+                    return true;
+                }
+                if !seen.insert(current.to_string()) {
+                    return false;
+                }
                 let Some(next) = parents.get(current) else { return false };
                 current = next;
             }
@@ -301,12 +368,21 @@ impl PresetUi {
             for (parent, entries) in orders.iter_mut() {
                 if belongs_to_group(parent) {
                     for entry in entries.iter_mut() {
-                        if let HierarchyOrderEntry::Item(key) = entry && key == from { *key = to.to_string(); }
+                        if let HierarchyOrderEntry::Item(key) = entry
+                            && key == from
+                        {
+                            *key = to.to_string();
+                        }
                     }
                 }
                 if parent.is_empty() {
                     for entry in entries.iter_mut() {
-                        if let HierarchyOrderEntry::RootItem { group: owner, key } = entry && owner == group && key == from { *key = to.to_string(); }
+                        if let HierarchyOrderEntry::RootItem { group: owner, key } = entry
+                            && owner == group
+                            && key == from
+                        {
+                            *key = to.to_string();
+                        }
                     }
                 }
             }
@@ -344,14 +420,19 @@ impl PresetUi {
             for (parent, entries) in orders.iter_mut() {
                 if parent_matches(parent) {
                     for entry in entries.iter_mut() {
-                        if let HierarchyOrderEntry::Item(key) = entry && key == from {
+                        if let HierarchyOrderEntry::Item(key) = entry
+                            && key == from
+                        {
                             *key = to.to_string();
                         }
                     }
                 }
                 if group_path.is_empty() && parent.is_empty() {
                     for entry in entries.iter_mut() {
-                        if let HierarchyOrderEntry::RootItem { group: owner, key } = entry && owner == group && key == from {
+                        if let HierarchyOrderEntry::RootItem { group: owner, key } = entry
+                            && owner == group
+                            && key == from
+                        {
                             *key = to.to_string();
                         }
                     }
@@ -384,12 +465,18 @@ impl PresetUi {
     pub(crate) fn delete_hierarchy_item_in_group(&mut self, panel: &str, group: &str, key: &str) {
         let parents = self.group_parents(panel);
         let belongs_to_group = |parent: &str| {
-            if parent.is_empty() { return false; }
+            if parent.is_empty() {
+                return false;
+            }
             let mut current = parent;
             let mut seen = BTreeSet::new();
             loop {
-                if current == group { return true; }
-                if !seen.insert(current.to_string()) { return false; }
+                if current == group {
+                    return true;
+                }
+                if !seen.insert(current.to_string()) {
+                    return false;
+                }
                 let Some(next) = parents.get(current) else { return false };
                 current = next;
             }
@@ -404,7 +491,9 @@ impl PresetUi {
                 }
             }
             orders.retain(|_, entries| !entries.is_empty());
-            if orders.is_empty() { self.hierarchy_order.remove(panel); }
+            if orders.is_empty() {
+                self.hierarchy_order.remove(panel);
+            }
         }
     }
 
@@ -454,11 +543,8 @@ impl PresetUi {
         }
         let valid_names: BTreeSet<&str> = names.iter().map(String::as_str).collect();
         let parents = self.group_parents(panel);
-        let root_names: Vec<String> = names
-            .iter()
-            .filter(|name| parents.get(*name).is_none_or(|parent| !valid_names.contains(parent.as_str())))
-            .cloned()
-            .collect();
+        let root_names: Vec<String> =
+            names.iter().filter(|name| parents.get(*name).is_none_or(|parent| !valid_names.contains(parent.as_str()))).cloned().collect();
         for name in &root_names {
             if let Some(parent) = parents.get(name).filter(|parent| !valid_names.contains(parent.as_str())) {
                 self.remove_hierarchy_entry(panel, parent, &HierarchyOrderEntry::Group(name.clone()));
@@ -471,21 +557,26 @@ impl PresetUi {
         });
         for name in self.display_order(panel, &root_names).into_iter().filter_map(|index| root_names.get(index)) {
             let entry = HierarchyOrderEntry::Group(name.clone());
-            if !entries.contains(&entry) { entries.push(entry); }
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
         }
         let moving = HierarchyOrderEntry::Group(from.to_string());
-        if !entries.contains(&moving) { return; }
+        if !entries.contains(&moving) {
+            return;
+        }
         entries.retain(|entry| entry != &moving);
         let at = before.and_then(|name| entries.iter().position(|entry| entry == &HierarchyOrderEntry::Group(name.to_string()))).unwrap_or(entries.len());
         entries.insert(at, moving);
         let has_root_items = entries.iter().any(|entry| matches!(entry, HierarchyOrderEntry::Item(_) | HierarchyOrderEntry::RootItem { .. }));
-        let group_order: Vec<&str> = entries.iter().filter_map(|entry| {
-            if let HierarchyOrderEntry::Group(name) = entry { Some(name.as_str()) } else { None }
-        }).collect();
+        let group_order: Vec<&str> =
+            entries.iter().filter_map(|entry| if let HierarchyOrderEntry::Group(name) = entry { Some(name.as_str()) } else { None }).collect();
         if !has_root_items && group_order.iter().copied().eq(root_names.iter().map(String::as_str)) {
             if let Some(orders) = self.hierarchy_order.get_mut(panel) {
                 orders.remove("");
-                if orders.is_empty() { self.hierarchy_order.remove(panel); }
+                if orders.is_empty() {
+                    self.hierarchy_order.remove(panel);
+                }
             }
         } else {
             self.set_hierarchy_order(panel, "", entries);
@@ -518,7 +609,9 @@ impl PresetUi {
         let moving = HierarchyOrderEntry::Group(child.to_string());
         self.remove_hierarchy_entry(panel, &old_parent, &moving);
         let mut destination = self.hierarchy_order.get(panel).and_then(|orders| orders.get(new_parent)).cloned().unwrap_or_default();
-        if !destination.contains(&moving) { destination.push(moving); }
+        if !destination.contains(&moving) {
+            destination.push(moving);
+        }
         self.set_hierarchy_order(panel, new_parent, destination);
     }
 
@@ -561,7 +654,8 @@ impl PresetUi {
     /// Detach children of a removed group and discard its ordering/expansion entries.
     pub(crate) fn delete_group(&mut self, panel: &str, name: &str) {
         if let Some(orders) = self.hierarchy_order.get_mut(panel) {
-            let promoted: Vec<HierarchyOrderEntry> = orders.get(name).into_iter().flatten().filter(|entry| matches!(entry, HierarchyOrderEntry::Group(_))).cloned().collect();
+            let promoted: Vec<HierarchyOrderEntry> =
+                orders.get(name).into_iter().flatten().filter(|entry| matches!(entry, HierarchyOrderEntry::Group(_))).cloned().collect();
             orders.remove(name);
             for entries in orders.values_mut() {
                 entries.retain(|entry| match entry {
@@ -573,7 +667,9 @@ impl PresetUi {
             if !promoted.is_empty() {
                 let root = orders.entry(String::new()).or_default();
                 for entry in promoted {
-                    if !root.contains(&entry) { root.push(entry); }
+                    if !root.contains(&entry) {
+                        root.push(entry);
+                    }
                 }
             }
             orders.retain(|_, entries| !entries.is_empty());
@@ -615,9 +711,7 @@ impl PresetUi {
         let parents = self.group_parents(panel);
         let siblings: Vec<String> = names
             .iter()
-            .filter(|name| {
-                parents.get(*name).map(String::as_str).filter(|parent| valid_names.contains(parent)).unwrap_or("") == destination_parent
-            })
+            .filter(|name| parents.get(*name).map(String::as_str).filter(|parent| valid_names.contains(parent)).unwrap_or("") == destination_parent)
             .cloned()
             .collect();
         let item_keys: Vec<String> = self
@@ -793,7 +887,8 @@ mod tests {
     fn display_order_keeps_saved_order_and_appends_unlisted_names() {
         let state: PresetUi = serde_json::from_value(serde_json::json!({
             "groupOrder": {"panel": ["gone", "third", "third", "first"]}
-        })).unwrap();
+        }))
+        .unwrap();
 
         assert_eq!(state.display_order("panel", &names(&["first", "second", "third"])), vec![2, 0, 1]);
     }
@@ -805,7 +900,8 @@ mod tests {
             "toggled": ["panel/Parent"],
             "groupOrder": {"panel": ["Parent", "Child"]},
             "groupParent": {"panel": {"Child": "Parent"}}
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(restored.parent_of("panel", "Child"), Some("Parent"));
         assert_eq!(restored.sizes["panel"], 42.0);
 
@@ -822,7 +918,8 @@ mod tests {
         let state: PresetUi = serde_json::from_value(serde_json::json!({
             "groupOrder": {"panel": ["root-b", "child", "root-a", "cycle-a", "cycle-b"]},
             "groupParent": {"panel": {"child": "root-a", "cycle-a": "cycle-b", "cycle-b": "cycle-a"}}
-        })).unwrap();
+        }))
+        .unwrap();
         let names = names(&["root-b", "child", "root-a", "cycle-a", "cycle-b"]);
 
         assert_eq!(state.nested_display_order("panel", &names), vec![(0, 0), (2, 0), (1, 1), (3, 0), (4, 0)]);
@@ -902,18 +999,18 @@ mod tests {
         state.move_group("panel", &names(&["A", "B"]), "B", Some("A"));
         assert_eq!(
             state.hierarchy_order["panel"][""],
-            [HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }]
+            [
+                HierarchyOrderEntry::Group("B".into()),
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }
+            ]
         );
     }
 
     #[test]
     fn moving_back_to_default_root_order_elides_only_group_only_sequences() {
         let mut groups_only = PresetUi::default();
-        groups_only.set_hierarchy_order(
-            "panel",
-            "",
-            vec![HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("A".into())],
-        );
+        groups_only.set_hierarchy_order("panel", "", vec![HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("A".into())]);
         groups_only.move_group("panel", &names(&["A", "B"]), "B", None);
         assert!(!groups_only.hierarchy_order.get("panel").is_some_and(|orders| orders.contains_key("")));
 
@@ -921,12 +1018,20 @@ mod tests {
         mixed.set_hierarchy_order(
             "panel",
             "",
-            vec![HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }, HierarchyOrderEntry::Group("A".into())],
+            vec![
+                HierarchyOrderEntry::Group("B".into()),
+                HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() },
+                HierarchyOrderEntry::Group("A".into()),
+            ],
         );
         mixed.move_group("panel", &names(&["A", "B"]), "B", None);
         assert_eq!(
             mixed.hierarchy_order["panel"][""],
-            [HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }, HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("B".into())]
+            [
+                HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() },
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::Group("B".into())
+            ]
         );
     }
 
@@ -937,7 +1042,11 @@ mod tests {
         state.set_hierarchy_order(
             "panel",
             "",
-            vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }, HierarchyOrderEntry::Group("B".into())],
+            vec![
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() },
+                HierarchyOrderEntry::Group("B".into()),
+            ],
         );
         state.nest_group("panel", &names, "C", Some("A"));
         state.drop_group_on_header("panel", &names, "C", "B", true);
@@ -945,7 +1054,12 @@ mod tests {
         assert_eq!(state.parent_of("panel", "C"), None);
         assert_eq!(
             state.hierarchy_order["panel"][""],
-            [HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() }, HierarchyOrderEntry::Group("C".into()), HierarchyOrderEntry::Group("B".into())]
+            [
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::RootItem { group: "Original".into(), key: "root-card".into() },
+                HierarchyOrderEntry::Group("C".into()),
+                HierarchyOrderEntry::Group("B".into())
+            ]
         );
     }
 
@@ -955,7 +1069,8 @@ mod tests {
         let mut state: PresetUi = serde_json::from_value(serde_json::json!({
             "groupOrder": {"panel": ["A", "B", "C"]},
             "groupParent": {"panel": {"A": "B", "B": "A"}}
-        })).unwrap();
+        }))
+        .unwrap();
 
         state.nest_group("panel", &names, "C", Some("A"));
         state.drop_group_on_header("panel", &names, "C", "A", true);
@@ -965,11 +1080,7 @@ mod tests {
     #[test]
     fn deleting_group_promotes_direct_children_to_root_in_their_previous_order() {
         let mut state = PresetUi::default();
-        state.set_hierarchy_order(
-            "panel",
-            "",
-            vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("Sibling".into())],
-        );
+        state.set_hierarchy_order("panel", "", vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("Sibling".into())]);
         state.set_hierarchy_order(
             "panel",
             "A",
@@ -1010,12 +1121,20 @@ mod tests {
         assert_eq!(state.hierarchy_order["panel"][""], [HierarchyOrderEntry::RootItem { group: "Renamed".into(), key: "after".into() }]);
 
         state.delete_hierarchy_item_in_group("panel", "Renamed", "after");
-        assert!(!state.hierarchy_order.get("panel").is_some_and(|parents| parents.get("").is_some_and(|entries| entries.iter().any(|entry| matches!(entry, HierarchyOrderEntry::RootItem { .. })))));
+        assert!(
+            !state.hierarchy_order.get("panel").is_some_and(|parents| parents
+                .get("")
+                .is_some_and(|entries| entries.iter().any(|entry| matches!(entry, HierarchyOrderEntry::RootItem { .. }))))
+        );
 
-        state.set_hierarchy_order("panel", "", vec![
-            HierarchyOrderEntry::RootItem { group: "Renamed".into(), key: "another".into() },
-            HierarchyOrderEntry::RootItem { group: "Keep".into(), key: "keep".into() },
-        ]);
+        state.set_hierarchy_order(
+            "panel",
+            "",
+            vec![
+                HierarchyOrderEntry::RootItem { group: "Renamed".into(), key: "another".into() },
+                HierarchyOrderEntry::RootItem { group: "Keep".into(), key: "keep".into() },
+            ],
+        );
         state.delete_group("panel", "Renamed");
         assert_eq!(state.hierarchy_order["panel"][""], [HierarchyOrderEntry::RootItem { group: "Keep".into(), key: "keep".into() }]);
     }
@@ -1034,12 +1153,16 @@ mod tests {
     #[test]
     fn group_scoped_item_rename_and_delete_preserve_duplicate_keys_in_other_groups() {
         let mut state = PresetUi::default();
-        state.set_hierarchy_order("panel", "", vec![
-            HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() },
-            HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },
-            HierarchyOrderEntry::Group("A".into()),
-            HierarchyOrderEntry::Group("B".into()),
-        ]);
+        state.set_hierarchy_order(
+            "panel",
+            "",
+            vec![
+                HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() },
+                HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::Group("B".into()),
+            ],
+        );
         state.set_hierarchy_order("panel", "A", vec![HierarchyOrderEntry::Group("A nested".into())]);
         state.set_hierarchy_order("panel", "A nested", vec![HierarchyOrderEntry::Item("same".into())]);
         state.set_hierarchy_order("panel", "B", vec![HierarchyOrderEntry::Item("same".into())]);
@@ -1060,16 +1183,20 @@ mod tests {
     #[test]
     fn legacy_key_only_item_mutations_leave_lifted_root_items_untouched() {
         let mut state = PresetUi::default();
-        state.set_hierarchy_order("panel", "", vec![
-            HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() },
-            HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },
-        ]);
+        state.set_hierarchy_order(
+            "panel",
+            "",
+            vec![
+                HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() },
+                HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },
+            ],
+        );
 
         state.rename_hierarchy_item("panel", "same", "renamed");
         state.delete_hierarchy_item("panel", "same");
-        assert_eq!(state.hierarchy_order["panel"][""], [
-            HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() },
-            HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },
-        ]);
+        assert_eq!(
+            state.hierarchy_order["panel"][""],
+            [HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() }, HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },]
+        );
     }
 }

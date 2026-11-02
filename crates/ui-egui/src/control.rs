@@ -614,9 +614,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let brush_picker_tip = bool_field(p, "brushPickerTip")?;
                 if [brush_picker_name, brush_picker_stroke, brush_picker_tip].iter().any(Option::is_some) {
                     let on = [
-                        brush_picker_name.unwrap_or(app.ui.brush_picker_list.show_name),
-                        brush_picker_stroke.unwrap_or(app.ui.brush_picker_list.show_stroke),
-                        brush_picker_tip.unwrap_or(app.ui.brush_picker_list.show_tip),
+                        brush_picker_name.unwrap_or(app.ui.presets_ui.brush_picker.show_name),
+                        brush_picker_stroke.unwrap_or(app.ui.presets_ui.brush_picker.show_stroke),
+                        brush_picker_tip.unwrap_or(app.ui.presets_ui.brush_picker.show_tip),
                     ];
                     if !on.iter().any(|b| *b) {
                         return Err("brushPickerName, brushPickerStroke and brushPickerTip: at least one must stay on".into());
@@ -787,16 +787,16 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.brushes_panel.view = v;
                 }
                 if let Some(v) = brush_picker_name {
-                    app.ui.brush_picker_list.show_name = v;
+                    app.ui.presets_ui.brush_picker.show_name = v;
                 }
                 if let Some(v) = brush_picker_stroke {
-                    app.ui.brush_picker_list.show_stroke = v;
+                    app.ui.presets_ui.brush_picker.show_stroke = v;
                 }
                 if let Some(v) = brush_picker_tip {
-                    app.ui.brush_picker_list.show_tip = v;
+                    app.ui.presets_ui.brush_picker.show_tip = v;
                 }
                 if let Some(v) = brush_picker_scale {
-                    app.ui.brush_picker_list.scale = v;
+                    app.ui.presets_ui.brush_picker.scale = v;
                 }
                 if let Some(at) = brush_picker {
                     if at.is_none() {
@@ -1326,8 +1326,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             // The picker's content size once its corner grip was dragged (null: the default).
             "size": app.ui.brush_picker_size,
             "list": {
-                "collapsed": app.ui.brush_picker_list.collapsed,
-                "filter": app.ui.brush_picker_list.filter,
+                "collapsed": app.ui.presets_ui.toggled.iter().filter_map(|key| key.strip_prefix("brush-picker/").map(str::to_owned)).collect::<Vec<_>>(),
+                "filter": app.ui.presets_ui.search.get("brush-picker").cloned().unwrap_or_default(),
                 "renaming": app.ui.presets_ui.renaming.as_ref().filter(|(panel, _, _)| panel == "brush-picker").map(|(_, key, text)| {
                     let group_name = key.strip_prefix("group:");
                     let name = crate::pickers::brush_browser::preset_by_identity(&app.session.tools.presets, key)
@@ -1339,11 +1339,11 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                     json!({"group": true, "name": rename.group, "folder": rename.group_path, "text": rename.text})
                 })),
                 // The card's parts (`view` is the Brushes panel's listing and doesn't apply).
-                "showName": app.ui.brush_picker_list.show_name,
-                "showStroke": app.ui.brush_picker_list.show_stroke,
-                "showTip": app.ui.brush_picker_list.show_tip,
+                "showName": app.ui.presets_ui.brush_picker.show_name,
+                "showStroke": app.ui.presets_ui.brush_picker.show_stroke,
+                "showTip": app.ui.presets_ui.brush_picker.show_tip,
                 // The footer slider: the cards' width scale.
-                "scale": app.ui.brush_picker_list.scale,
+                "scale": app.ui.presets_ui.brush_picker.scale,
             },
         })),
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
@@ -2184,12 +2184,12 @@ mod tests {
     fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
-        let list = &app.ui.brush_picker_list;
+        let list = &app.ui.presets_ui.brush_picker;
         assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
         let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
-        assert!(!app.ui.brush_picker_list.show_stroke);
+        assert!(!app.ui.presets_ui.brush_picker.show_stroke);
         for bad in [
             json!({"brushPicker": [1]}),
             json!({"brushPicker": "here"}),
@@ -2199,7 +2199,7 @@ mod tests {
             assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
         }
         assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]), "a bad value leaves the picker alone");
-        assert!(app.ui.brush_picker_list.show_name, "a rejected call leaves the card parts alone");
+        assert!(app.ui.presets_ui.brush_picker.show_name, "a rejected call leaves the card parts alone");
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
         assert_eq!(app.ui.brush_picker, None);
     }
@@ -2252,8 +2252,6 @@ mod tests {
             .map(|preset| (crate::pickers::brush_browser::preview_identity(preset), preset.name.clone()))
             .expect("session has brush presets");
         app.ui.brush_picker = Some([20.0, 30.0]);
-        app.ui.brush_picker_list.renaming =
-            Some(crate::brush_panel::Renaming { group: false, name: "Legacy stale".into(), folder: Vec::new(), text: "Legacy stale".into() });
         app.ui.presets_ui.renaming = Some(("patterns".into(), "Pattern A".into(), "Pattern B".into()));
         let unrelated = call(&mut app, &ctx, "ui.inspect", json!({}));
         assert!(unrelated["result"]["brushPicker"]["list"]["renaming"].is_null(), "other panel rename must be filtered: {unrelated}");

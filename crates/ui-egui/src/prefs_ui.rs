@@ -241,7 +241,6 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     crate::dock::restore(app);
     crate::pickers::picker_state::restore(app);
-    crate::pickers::brush_picker::restore(app);
     crate::last_brush::restore(app);
     sync_rulers(app);
     crate::tool_memory::restore(app);
@@ -3267,25 +3266,37 @@ mod tests {
         let (mut app, store) = app_with_store();
         let ctx = egui::Context::default();
         tick(&mut app, &ctx);
-        app.ui.brush_picker_list.show_stroke = false;
-        app.ui.brush_picker_list.scale = 0.4;
-        crate::pickers::brush_picker::persist(&mut app, &ctx);
+        app.ui.presets_ui.brush_picker.show_stroke = false;
+        app.ui.presets_ui.brush_picker.scale = 0.4;
         tick(&mut app, &ctx);
-        assert_eq!(stored(&store)["brushPicker"]["showStroke"], json!(false));
+        assert_eq!(stored(&store)["dialogs"]["pickerBrowserUi"]["brushPicker"]["showStroke"], json!(false));
         // A restart gets the view back at startup, before the picker is ever opened.
         let saved = store.lock().unwrap().clone().unwrap();
         let (mut app2, _) = app_with_saved(Some(saved));
         tick(&mut app2, &ctx);
-        assert!(!app2.ui.brush_picker_list.show_stroke);
-        assert!(app2.ui.brush_picker_list.show_name && app2.ui.brush_picker_list.show_tip);
-        assert!((app2.ui.brush_picker_list.scale - 0.4).abs() < 1e-6);
+        assert!(!app2.ui.presets_ui.brush_picker.show_stroke);
+        assert!(app2.ui.presets_ui.brush_picker.show_name && app2.ui.presets_ui.brush_picker.show_tip);
+        assert!((app2.ui.presets_ui.brush_picker.scale - 0.4).abs() < 1e-6);
         // A hand-edited file: the scale is clamped to the slider's range and the last part comes
         // back on — an empty card would show no brush at all.
         let bad = json!({"brushPicker": {"showName": false, "showStroke": false, "showTip": false, "scale": 9.0}}).to_string();
         let (mut app3, _) = app_with_saved(Some(bad));
+        load(&mut app3);
+        assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::brush_picker::SCALE_RANGE.end(), "legacy preference after restore: {:?}", app3.session.prefs().brush_picker);
         tick(&mut app3, &ctx);
-        assert_eq!(app3.ui.brush_picker_list.scale, *crate::pickers::brush_picker::SCALE_RANGE.end());
-        assert!(app3.ui.brush_picker_list.show_name && app3.ui.brush_picker_list.show_stroke && app3.ui.brush_picker_list.show_tip);
+        assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::brush_picker::SCALE_RANGE.end());
+        assert!(!app3.ui.presets_ui.brush_picker.show_name && !app3.ui.presets_ui.brush_picker.show_stroke && app3.ui.presets_ui.brush_picker.show_tip);
+        assert!(app3.session.prefs().brush_picker.is_null(), "the legacy preference is consumed by the common picker-state migration");
+
+        let newer = json!({
+            "brushPicker": {"showName": false, "showStroke": false, "showTip": true, "scale": 1.8},
+            "dialogs": {"pickerBrowserUi": {"brushPicker": {"showName": true, "showStroke": false, "showTip": true, "scale": 0.6}}}
+        })
+        .to_string();
+        let (mut app4, _) = app_with_saved(Some(newer));
+        load(&mut app4);
+        assert!((app4.ui.presets_ui.brush_picker.scale - 0.6).abs() < 1e-6, "the common picker state wins over a stale legacy value");
+        assert!(app4.session.prefs().brush_picker.is_null(), "the stale legacy field is still consumed");
     }
 
     #[test]

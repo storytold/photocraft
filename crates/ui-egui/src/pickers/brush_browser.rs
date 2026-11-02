@@ -13,9 +13,9 @@ use crate::pickers::asset_browser::{self, BrowserAction, BrowserAdapter, Browser
 use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
 pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
 use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, NodeId};
 use crate::pickers::picker_browser_dragging::DropMoveIntent;
 use crate::pickers::picker_browser_hierarchy::HierarchyIdentity;
+use crate::pickers::picker_browser_model::{ContainerId, DropPosition, NodeId};
 use crate::pickers::picker_state::{NestedGroupRenameState, PresetUi};
 use crate::theme::Tokens;
 
@@ -90,33 +90,11 @@ pub struct BrushesPanelState {
     pub filter: String,
     pub view: BrushesView,
     pub renaming: Option<Renaming>,
-    /// The Brush Preset picker's cards: show the preset's name. At least one of the three parts
-    /// is always on, and the picker's cards never go empty (see [`crate::pickers::brush_picker`]).
-    pub show_name: bool,
-    /// The Brush Preset picker's cards: show the stroke preview.
-    pub show_stroke: bool,
-    /// The Brush Preset picker's cards: show the tip thumbnail.
-    pub show_tip: bool,
-    /// The Brush Preset picker's cards: their size scale, from the picker's footer slider
-    /// (`crate::pickers::brush_picker::body`). 1 is the standard size; the cards' width, height and
-    /// insides multiply by it (`crate::brushes_tab`) — the height down to a 0.50 floor, the
-    /// width all the way — the text holds its 1.0 size, and at or below the compact threshold
-    /// the tips drop the size number under them and take their cell whole.
-    pub scale: f32,
 }
 
 impl Default for BrushesPanelState {
     fn default() -> Self {
-        Self {
-            collapsed: Vec::new(),
-            filter: String::new(),
-            view: BrushesView::default(),
-            renaming: None,
-            show_name: true,
-            show_stroke: true,
-            show_tip: true,
-            scale: 1.0,
-        }
+        Self { collapsed: Vec::new(), filter: String::new(), view: BrushesView::default(), renaming: None }
     }
 }
 
@@ -285,27 +263,23 @@ fn brush_next_sibling_after_folder(
 }
 
 fn brush_item_index(presets: &[BrushPreset], group: &str, before_index: usize, source_key: &str) -> usize {
-    presets[..before_index].iter()
-        .filter(|preset| preset.group == group && preview_identity(preset) != source_key)
-        .count()
+    presets[..before_index].iter().filter(|preset| preset.group == group && preview_identity(preset) != source_key).count()
 }
 
 /// Translate one validated canonical move into an existing authoritative Brush command action.
 /// Moves that the name/path command API cannot express exactly are rejected rather than persisted
 /// into the generic picker hierarchy.
-fn brush_drop_intent_to_action(
-    presets: &[BrushPreset],
-    identities: &BTreeMap<NodeId, HierarchyIdentity>,
-    intent: &DropMoveIntent,
-) -> Result<Action, String> {
+fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<NodeId, HierarchyIdentity>, intent: &DropMoveIntent) -> Result<Action, String> {
     let source = identities.get(&intent.source).ok_or_else(|| "The dragged Brush no longer exists.".to_owned())?;
     let source_item = match source {
         HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => Some(key.as_str()),
         _ => None,
     };
     let source_group = match source {
-        HierarchyIdentity::Item { group, .. } | HierarchyIdentity::FolderItem { group, .. }
-        | HierarchyIdentity::Group(group) | HierarchyIdentity::Folder { group, .. } => group,
+        HierarchyIdentity::Item { group, .. }
+        | HierarchyIdentity::FolderItem { group, .. }
+        | HierarchyIdentity::Group(group)
+        | HierarchyIdentity::Folder { group, .. } => group,
     };
     let source_folder = match source {
         HierarchyIdentity::FolderItem { path, .. } | HierarchyIdentity::Folder { path, .. } => path.clone(),
@@ -325,7 +299,9 @@ fn brush_drop_intent_to_action(
             Some(HierarchyIdentity::Item { group, key }) => Ok((group.clone(), Vec::new(), Some(("item", key.clone())))),
             Some(HierarchyIdentity::FolderItem { group, path, key }) => Ok((group.clone(), path.clone(), Some(("item", key.clone())))),
             Some(HierarchyIdentity::Group(group)) => Ok((group.clone(), Vec::new(), Some(("group", group.clone())))),
-            Some(HierarchyIdentity::Folder { group, path }) => Ok((group.clone(), path[..path.len().saturating_sub(1)].to_vec(), Some(("folder", path.last().cloned().unwrap_or_default())))),
+            Some(HierarchyIdentity::Folder { group, path }) => {
+                Ok((group.clone(), path[..path.len().saturating_sub(1)].to_vec(), Some(("folder", path.last().cloned().unwrap_or_default()))))
+            }
             None => Err("The Brush drop target no longer exists.".to_owned()),
         }
     };
@@ -348,7 +324,9 @@ fn brush_drop_intent_to_action(
                 let index = first
                     .map(|(index, _)| brush_item_index(presets, &group, index, source_item.unwrap_or_default()))
                     .or_else(|| {
-                        presets.iter().position(|preset| preview_identity(preset) == source_item.unwrap_or_default())
+                        presets
+                            .iter()
+                            .position(|preset| preview_identity(preset) == source_item.unwrap_or_default())
                             .map(|index| brush_item_index(presets, &group, index, source_item.unwrap_or_default()))
                     })
                     .unwrap_or_else(|| presets.iter().filter(|preset| preset.group == group).count());
@@ -360,11 +338,7 @@ fn brush_drop_intent_to_action(
                         && !((source_group == &group && !source_folder.is_empty()) && preset.folder.starts_with(&source_folder))
                 });
                 let (before, before_item) = first.map_or((None, None), |preset| {
-                    if preset.folder == path {
-                        (None, Some(preset.name.clone()))
-                    } else {
-                        (preset.folder.get(path.len()).cloned(), None)
-                    }
+                    if preset.folder == path { (None, Some(preset.name.clone())) } else { (preset.folder.get(path.len()).cloned(), None) }
                 });
                 Ok(Action::MoveInto { group: source_group_name, folder: source_folder, into: Some((group_name, path)), before, before_item })
             }
@@ -404,8 +378,19 @@ fn brush_drop_intent_to_action(
                             let before = resolve_before_item_name(presets, &key)?;
                             Ok(Action::MoveBefore { name, group: target_group_name, folder: Some(target_parent), before })
                         } else {
-                            let target_index = presets.iter().position(|preset| preview_identity(preset) == key).ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
-                            let index = brush_item_index(presets, &target_group, target_index + 1, match source { HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key, _ => unreachable!() });
+                            let target_index = presets
+                                .iter()
+                                .position(|preset| preview_identity(preset) == key)
+                                .ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
+                            let index = brush_item_index(
+                                presets,
+                                &target_group,
+                                target_index + 1,
+                                match source {
+                                    HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key,
+                                    _ => unreachable!(),
+                                },
+                            );
                             Ok(Action::Move { name, group: target_group_name, folder: Some(target_parent), index: Some(index) })
                         }
                     }
@@ -414,39 +399,66 @@ fn brush_drop_intent_to_action(
                         let before_index = if after {
                             match brush_next_sibling_after_folder(presets, &target_group, &target_parent, &leaf, None) {
                                 Some(BrushSiblingAnchor::Folder(next)) => {
-                                    let mut path = target_parent.clone(); path.push(next);
+                                    let mut path = target_parent.clone();
+                                    path.push(next);
                                     presets.iter().position(|preset| preset.group == target_group && preset.folder.starts_with(&path))
                                 }
                                 Some(BrushSiblingAnchor::Item { index, .. }) => Some(index),
                                 None => None,
                             }
                         } else {
-                            let mut path = target_parent.clone(); path.push(leaf);
+                            let mut path = target_parent.clone();
+                            path.push(leaf);
                             presets.iter().position(|preset| preset.group == target_group && preset.folder.starts_with(&path))
                         };
-                        let index = before_index.map(|index| brush_item_index(presets, &target_group, index, match source { HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key, _ => unreachable!() }));
+                        let index = before_index.map(|index| {
+                            brush_item_index(
+                                presets,
+                                &target_group,
+                                index,
+                                match source {
+                                    HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key,
+                                    _ => unreachable!(),
+                                },
+                            )
+                        });
                         Ok(Action::Move { name, group: target_group_name, folder: Some(target_parent), index })
                     }
                     _ => Err("A Brush preset cannot be inserted at the top-level group boundary.".to_owned()),
                 }
             } else {
                 let move_group = |before: Option<String>| Action::MoveGroup { group: source_group_name.clone(), folder: source_folder.clone(), before };
-                let move_into = |into: Option<(String, Vec<String>)>, before: Option<String>, before_item: Option<String>| {
-                    Action::MoveInto { group: source_group_name.clone(), folder: source_folder.clone(), into, before, before_item }
+                let move_into = |into: Option<(String, Vec<String>)>, before: Option<String>, before_item: Option<String>| Action::MoveInto {
+                    group: source_group_name.clone(),
+                    folder: source_folder.clone(),
+                    into,
+                    before,
+                    before_item,
                 };
                 match target_kind.as_ref().map(|(kind, _)| *kind) {
                     Some("group") if source_folder.is_empty() => {
                         let before = if after {
                             let labels: Vec<String> = grouped_presets(presets).into_iter().map(|(label, _)| label).collect();
-                            labels.iter().position(|label| group_key(presets, label) == target_group_name).and_then(|index| labels.iter().skip(index + 1).map(|label| group_key(presets, label)).find(|label| label != &source_group_name))
-                        } else { Some(target_group_name) };
+                            labels.iter().position(|label| group_key(presets, label) == target_group_name).and_then(|index| {
+                                labels.iter().skip(index + 1).map(|label| group_key(presets, label)).find(|label| label != &source_group_name)
+                            })
+                        } else {
+                            Some(target_group_name)
+                        };
                         Ok(move_group(before))
                     }
                     Some("group") => {
                         let before = if after {
                             let labels: Vec<String> = grouped_presets(presets).into_iter().map(|(label, _)| label).collect();
-                            labels.iter().position(|label| group_key(presets, label) == target_group_name).and_then(|index| labels.get(index + 1)).cloned().map(|label| group_key(presets, &label))
-                        } else { Some(target_group_name) };
+                            labels
+                                .iter()
+                                .position(|label| group_key(presets, label) == target_group_name)
+                                .and_then(|index| labels.get(index + 1))
+                                .cloned()
+                                .map(|label| group_key(presets, &label))
+                        } else {
+                            Some(target_group_name)
+                        };
                         Ok(move_into(None, before, None))
                     }
                     Some("folder") => {
@@ -471,11 +483,20 @@ fn brush_drop_intent_to_action(
                     Some("item") => {
                         let (_, key) = target_kind.expect("item target");
                         let source_is_preset = |preset: &&BrushPreset| {
-                            if source_folder.is_empty() { preset.group == *source_group } else { preset.group == *source_group && preset.folder.starts_with(&source_folder) }
+                            if source_folder.is_empty() {
+                                preset.group == *source_group
+                            } else {
+                                preset.group == *source_group && preset.folder.starts_with(&source_folder)
+                            }
                         };
                         let (before, before_item) = if after {
-                            let after_index = presets.iter().position(|preset| preview_identity(preset) == key).ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
-                            match presets.iter().skip(after_index + 1)
+                            let after_index = presets
+                                .iter()
+                                .position(|preset| preview_identity(preset) == key)
+                                .ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
+                            match presets
+                                .iter()
+                                .skip(after_index + 1)
                                 .filter(|preset| preset.group == target_group && preset.folder.starts_with(&target_parent) && !source_is_preset(preset))
                                 .next()
                             {
@@ -503,16 +524,13 @@ pub(crate) fn browser_group_views(presets: &[BrushPreset]) -> Vec<GroupView> {
 }
 
 /// Render the right-click picker's library through the shared browser. Generic search, expansion,
-/// selection and rename state live in the namespaced `PresetUi`. The separate `BrushesPanelState`
-/// passed here supplies only the picker's brush-specific card parts and scale; its filter, rename,
-/// and collapse fields belong to the Brushes tab and are deliberately not bridged into picker state.
+/// selection, rename and brush-specific presentation state live in the namespaced `PresetUi`.
 /// Occurrence keys remain separate from display names because imported libraries can contain
 /// duplicate names even though engine commands still address presets by name.
 pub(crate) fn picker_browser(
     ui: &mut egui::Ui,
     presets: &[BrushPreset],
     current: Option<&str>,
-    brush_state: &mut BrushesPanelState,
     preset_ui: &mut PresetUi,
     allocated_height: f32,
 ) -> Vec<Action> {
@@ -556,14 +574,15 @@ pub(crate) fn picker_browser(
             preset_ui.clear_selected(PANEL);
         }
     }
+    let brush_state = &mut preset_ui.brush_picker;
     // The footer slider is bounded by the browser's actual width. Otherwise a large scale makes
     // a single card wider than the scroll area's clip region, and the item can spill into the
     // picker frame. Keep the same cap in the slider so it stops at the container edge.
-    let scale_max = max_picker_card_scale(ui.available_width(), show_parts(brush_state));
+    let show = (brush_state.show_name, brush_state.show_stroke, brush_state.show_tip);
+    let scale_max = max_picker_card_scale(ui.available_width(), show);
     let scale = brush_state.scale.clamp(*SCALE_RANGE.start(), scale_max);
     brush_state.scale = scale;
     let scale_h = scale.max(CARD_MIN_H_SCALE);
-    let show = (brush_state.show_name, brush_state.show_stroke, brush_state.show_tip);
     let (card_w, card_h) = if tip_only(show) {
         (CARD_TIP_ONLY_W * scale, CARD_TIP_ONLY_H * scale_h)
     } else if tip_and_name(show) {
@@ -601,7 +620,14 @@ pub(crate) fn picker_browser(
         // Brush folders are projected from each item's full `group_path` by the canonical tree.
         // The shared resolver emits path-aware domain actions; Brush dispatches those through its
         // engine commands rather than persisting folder structure in generic `PresetUi` state.
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
+        capabilities: BrowserCapabilities {
+            item_drag: true,
+            item_drop: true,
+            group_drag: true,
+            selection: true,
+            activation: true,
+            canonical_hierarchy_drag: true,
+        },
         item_context_menu: Some(brush_item_context_menu),
         group_context_menu: Some(brush_group_context_menu),
         nested_group_context_menu: Some(brush_nested_group_context_menu),
@@ -633,8 +659,9 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::Rename(key, text) => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: Vec::new(), text }))
             }
-            BrowserAction::RenameItem { group: _, group_path, key, text } => occurrence_name(presets, &key)
-                .map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text })),
+            BrowserAction::RenameItem { group: _, group_path, key, text } => {
+                occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text }))
+            }
             BrowserAction::Delete(key) => occurrence_name(presets, &key).map(Action::Delete),
             BrowserAction::DeleteItem { key, .. } => occurrence_name(presets, &key).map(Action::Delete),
             BrowserAction::Move(key, group) => {
@@ -696,9 +723,17 @@ fn brush_item_context_menu(
             if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
                 st.group_renaming = None;
             }
-            st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState { panel: panel.to_string(), group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone(), text: item.name.clone() });
+            st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState {
+                panel: panel.to_string(),
+                group: group.name.clone(),
+                group_path: item.group_path.clone(),
+                key: item.key.clone(),
+                text: item.name.clone(),
+            });
         }
-        Some(ContextMenuAction::Delete) => actions.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() }),
+        Some(ContextMenuAction::Delete) => {
+            actions.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() })
+        }
         Some(ContextMenuAction::MoveTo(_)) | None => {}
     }
 }
@@ -1201,10 +1236,6 @@ fn picker_stroke_texture(ctx: &egui::Context, identity: &str, brush: &photocraft
     brush_preview::stroke_texture(ctx, &format!("brushes-stroke:{identity}"), brush, 260, 36, color)
 }
 
-fn show_parts(state: &BrushesPanelState) -> (bool, bool, bool) {
-    (state.show_name, state.show_stroke, state.show_tip)
-}
-
 /// The picker's cards in a list `width` points wide, `indent` past its left edge: how wide each
 /// card is and how many sit in a row. A lone card fills the room up to [`CARD_MAX_W`] × `scale`
 /// (wider lists leave the rest empty); from two columns on, the cards share the room, filling it
@@ -1328,7 +1359,14 @@ pub fn preset_list(
             root_item_group: None,
         },
         // Use the same canonical path-aware hierarchy as the floating Brush picker.
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
+        capabilities: BrowserCapabilities {
+            item_drag: true,
+            item_drop: true,
+            group_drag: true,
+            selection: true,
+            activation: true,
+            canonical_hierarchy_drag: true,
+        },
         item_context_menu: Some(brush_item_context_menu),
         group_context_menu: Some(brush_group_context_menu),
         nested_group_context_menu: Some(brush_nested_group_context_menu),
@@ -1512,9 +1550,8 @@ mod preview_regression_tests {
 
 #[cfg(test)]
 mod hierarchy_anchor_identity_tests {
-    use super::{Action, HierarchyIdentity, Renaming, brush_drop_intent_to_action, browser_actions_to_actions, picker_browser, preview_identity};
+    use super::{Action, HierarchyIdentity, Renaming, browser_actions_to_actions, brush_drop_intent_to_action, picker_browser, preview_identity};
     use crate::PhotocraftApp;
-    use crate::brush_panel::BrushesPanelState;
     use crate::pickers::asset_browser::BrowserAction;
     use crate::pickers::picker_browser_dragging::DropMoveIntent;
     use crate::pickers::picker_browser_model::{DropPosition, NodeId};
@@ -1588,7 +1625,9 @@ mod hierarchy_anchor_identity_tests {
         let identities = [
             (source.clone(), HierarchyIdentity::FolderItem { group: "Kit".into(), path: vec!["Source".into()], key: source_key }),
             (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
         let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::After { target } }).unwrap();
         assert!(matches!(action, Action::Move { name, folder: Some(path), index: Some(1), .. } if name == "Moving brush" && path.is_empty()));
@@ -1607,7 +1646,9 @@ mod hierarchy_anchor_identity_tests {
         let identities = [
             (source.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["Source".into()] }),
             (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
         let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::After { target } }).unwrap();
         assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }
@@ -1620,37 +1661,33 @@ mod hierarchy_anchor_identity_tests {
         let source_key = preview_identity(&presets[2]);
         let source = NodeId::item("Other", source_key.clone());
         let target = NodeId::group("Kit");
-        let identities = [
-            (source.clone(), HierarchyIdentity::Item { group: "Other".into(), key: source_key }),
-            (target.clone(), HierarchyIdentity::Group("Kit".into())),
-        ].into_iter().collect();
+        let identities =
+            [(source.clone(), HierarchyIdentity::Item { group: "Other".into(), key: source_key }), (target.clone(), HierarchyIdentity::Group("Kit".into()))]
+                .into_iter()
+                .collect();
 
-        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
-            source,
-            position: DropPosition::PrependTo { group: target },
-        }).unwrap();
+        let action =
+            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
         assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
             if name == "Moving" && group == "Kit" && path.is_empty()));
     }
 
     #[test]
     fn dropping_a_brush_onto_its_own_folder_moves_it_to_the_first_child_slot() {
-        let presets = [
-            BrushPreset { folder: vec!["Folder".into()], ..preset("First", "Kit") },
-            BrushPreset { folder: vec!["Folder".into()], ..preset("Moving", "Kit") },
-        ];
+        let presets =
+            [BrushPreset { folder: vec!["Folder".into()], ..preset("First", "Kit") }, BrushPreset { folder: vec!["Folder".into()], ..preset("Moving", "Kit") }];
         let source_key = preview_identity(&presets[1]);
         let source = NodeId::item_in_path(["Kit", "Folder"], source_key.clone());
         let target = NodeId::group_path(["Kit"], "Folder");
         let identities = [
             (source.clone(), HierarchyIdentity::FolderItem { group: "Kit".into(), path: vec!["Folder".into()], key: source_key }),
             (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["Folder".into()] }),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
-        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
-            source,
-            position: DropPosition::PrependTo { group: target },
-        }).unwrap();
+        let action =
+            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
         assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
             if name == "Moving" && group == "Kit" && path == vec!["Folder".to_string()]));
     }
@@ -1667,12 +1704,12 @@ mod hierarchy_anchor_identity_tests {
         let identities = [
             (source.clone(), HierarchyIdentity::Folder { group: "Other".into(), path: vec!["Source".into()] }),
             (target.clone(), HierarchyIdentity::Group("Kit".into())),
-        ].into_iter().collect();
+        ]
+        .into_iter()
+        .collect();
 
-        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
-            source,
-            position: DropPosition::PrependTo { group: target },
-        }).unwrap();
+        let action =
+            brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::PrependTo { group: target } }).unwrap();
         assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: Some(before), before_item: None }
             if group == "Other" && folder == vec!["Source".to_string()] && target == "Kit" && path.is_empty() && before == "First folder"));
     }
@@ -1701,12 +1738,12 @@ mod hierarchy_anchor_identity_tests {
             },
         ];
         let mut h = Harness::builder().with_size(vec2(420.0, 520.0)).build_ui_state(
-            move |ui, state: &mut (BrushesPanelState, PresetUi, Vec<Action>)| {
+            move |ui, state: &mut (PresetUi, Vec<Action>)| {
                 if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
-                    state.2.extend(picker_browser(ui, &presets, None, &mut state.0, &mut state.1, 500.0));
+                    state.1.extend(picker_browser(ui, &presets, None, &mut state.0, 500.0));
                 }
             },
-            (BrushesPanelState::default(), PresetUi::default(), Vec::new()),
+            (PresetUi::default(), Vec::new()),
         );
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
@@ -1729,10 +1766,10 @@ mod hierarchy_anchor_identity_tests {
         h.run_steps(3);
 
         assert!(matches!(
-            h.state().2.as_slice(),
-            [Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: None }]
-                if group == "Group B" && folder.is_empty() && target == "Group A" && path == &["Nested".to_string()]
-        ));
-        assert_eq!(h.state().2.len(), 1, "the nested header resolves exactly one group move");
+            h.state().1.as_slice(),
+            [Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }]
+                if group == "Group B" && folder.is_empty() && target == "Group A" && path == &["Nested".to_string()] && anchor == "Nested brush"
+        ), "unexpected brush browser actions: {:?}", h.state().1);
+        assert_eq!(h.state().1.len(), 1, "the nested header resolves exactly one group move");
     }
 }

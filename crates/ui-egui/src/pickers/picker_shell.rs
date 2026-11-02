@@ -109,7 +109,19 @@ pub(crate) fn picker_shell_custom<R>(
     let footer_h = shell.footer.as_ref().map_or(0.0, |(_, h)| *h + 4.0);
     let browser_budget = shell.max_total_height.map_or(max_h, |total_h| (total_h - controls_h - footer_h).max(0.0));
     let allocated_h = browser_budget.min((ui.available_height() - footer_h).max(0.0));
-    let result = draw_browser(ui, allocated_h);
+    // Give the renderer a child whose allocated rectangle is the browser viewport. Passing a
+    // height alone is advisory: a renderer that asks for more can otherwise grow the picker past
+    // its window and push the footer out of the shell.
+    let browser_size = egui::vec2(ui.max_rect().width(), allocated_h);
+    let browser_rect = egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(), ui.cursor().min.y), browser_size);
+    let result = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(browser_rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            ui.set_min_size(browser_size);
+            ui.set_max_size(browser_size);
+            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+            draw_browser(ui, allocated_h)
+        })
+        .inner;
     if let Some((footer, _)) = shell.footer {
         ui.add_space(4.0);
         footer(ui);

@@ -970,9 +970,8 @@ pub struct Preferences {
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,
-    /// The Brush Preset picker's remembered view: which card parts show (name, stroke, tip) and
-    /// the footer slider's card scale, saved as the user changes them and restored at launch.
-    /// JSON owned by the shell.
+    /// Legacy Brush Preset picker view, migrated by `ui-egui` into `dialogs.pickerBrowserUi`.
+    /// Retained only to read existing preference files; new state is never written here.
     pub brush_picker: Value,
     /// The brush the tool was last using (settings and tip references, never the full bitmaps;
     /// shaped by `brush_cmds::remembered_brush`), restored at launch so the tool starts where it

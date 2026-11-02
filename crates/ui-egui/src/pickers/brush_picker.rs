@@ -9,12 +9,8 @@
 //! the top left, stroke preview at the top right and the name in the merged bottom row (or in the
 //! stroke's cell when only the tip and the name show) — and the gear's three boxes ([`body`]'s
 //! Brush Name/Brush Stroke/Brush Tip) hide its parts, at least one always on; the footer slider
-//! scales the cards. Its view state (search, collapsed groups, the card's parts, the footer
-//! scale) is `UiState::brush_picker_list`; shared browser rename state is namespaced in
-//! `UiState::presets_ui` under `brush-picker`, so the control channel can inspect it consistently.
-//! The gear's parts and the footer scale are remembered across restarts
-//! ([`persist`]/[`restore`], `Preferences::brush_picker`); the search, collapsed groups and a
-//! rename in progress are not.
+//! scales the cards. Presentation preferences live alongside the shared browser state in
+//! `UiState::presets_ui`; search, expansion, selection and presentation share one persistence path.
 //!
 //! The picker edits a copy of the brush; the caller sends the size and hardness edits through
 //! `tools.setBrush` ([`crate::brush_panel::commit_gesture`]) and applies the returned [`Pick`]s
@@ -23,11 +19,11 @@
 use egui::{CursorIcon, RichText, Stroke, vec2};
 use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::brush_panel::BrushesPanelState;
 use crate::brushes_tab::{self, Action};
 pub(crate) use crate::pickers::brush_browser::SCALE_RANGE;
+use crate::pickers::picker_state::BrushPickerView;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -109,57 +105,6 @@ pub(crate) fn begin_rename(preset_ui: &mut crate::pickers::picker_state::PresetU
     preset_ui.renaming = Some(("brush-picker".to_string(), crate::pickers::brush_browser::preview_identity(preset), preset.name.clone()));
 }
 
-/// The state the picker's preset list starts from: every card part on (tip, stroke and name).
-pub fn list_state() -> BrushesPanelState {
-    BrushesPanelState::default()
-}
-
-/// The picker's view remembered across restarts: the gear's three card parts and the footer
-/// scale (`Preferences::brush_picker`).
-fn view(app: &PhotocraftApp) -> Value {
-    let st = &app.ui.brush_picker_list;
-    json!({"showName": st.show_name, "showStroke": st.show_stroke, "showTip": st.show_tip, "scale": st.scale})
-}
-
-/// Remember the picker's view in the preferences once the user lets go of the pointer: the
-/// gear's card parts and the footer scale. Cheap: a small JSON compare per frame. Run every
-/// frame (not from the picker's own code) so a view set while the picker is closed — by the
-/// control channel — is remembered too.
-pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if ctx.input(|i| i.pointer.any_down()) {
-        return;
-    }
-    let now = view(app);
-    if app.session.prefs().brush_picker != now {
-        app.session.prefs.edit(|p| p.brush_picker = now);
-    }
-}
-
-/// Restore the picker's remembered view at launch. A missing or malformed part keeps its
-/// default, the scale is clamped to the slider's range, and the three parts can't all come
-/// back off (an empty card would show no brush at all).
-pub fn restore(app: &mut PhotocraftApp) {
-    let saved = app.session.prefs().brush_picker.clone();
-    let st = &mut app.ui.brush_picker_list;
-    if let Some(v) = saved.get("showName").and_then(Value::as_bool) {
-        st.show_name = v;
-    }
-    if let Some(v) = saved.get("showStroke").and_then(Value::as_bool) {
-        st.show_stroke = v;
-    }
-    if let Some(v) = saved.get("showTip").and_then(Value::as_bool) {
-        st.show_tip = v;
-    }
-    if let Some(v) = saved.get("scale").and_then(Value::as_f64)
-        && v.is_finite()
-    {
-        st.scale = (v as f32).clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
-    }
-    if ![st.show_name, st.show_stroke, st.show_tip].into_iter().any(|b| b) {
-        (st.show_name, st.show_stroke, st.show_tip) = (true, true, true);
-    }
-}
-
 /// Run what the picker asked for.
 pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
     for pick in picks {
@@ -221,12 +166,10 @@ pub fn body(
     b: &mut BrushSettings,
     presets: &[BrushPreset],
     current: Option<&str>,
-    st: &mut BrushesPanelState,
     preset_ui: &mut crate::pickers::picker_state::PresetUi,
     size: egui::Vec2,
 ) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
-    let state = std::cell::RefCell::new(st);
     let preset_ui = std::cell::RefCell::new(preset_ui);
     let picks = std::cell::RefCell::new(Vec::new());
     // The picker is its dragged (or remembered) size: at least that tall even when every group
@@ -265,7 +208,7 @@ pub fn body(
     let controls_h = (ui.cursor().min.y - top).max(0.0);
     let mut menu = |ui: &mut egui::Ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            gear_menu(ui, current, presets, &mut state.borrow_mut(), &mut preset_ui.borrow_mut(), &mut picks.borrow_mut());
+            gear_menu(ui, current, presets, &mut preset_ui.borrow_mut(), &mut picks.borrow_mut());
             let new_tip = "Create new brush preset from the current settings";
             let settings_tip = "Brush Settings…  (F5): every option of this brush";
             if named(icons::button(ui, "square-plus", 24.0, false, tl!(new_tip)), "New Brush Preset").clicked() {
@@ -294,7 +237,7 @@ pub fn body(
         ui.add_space((size.y - (ui.cursor().min.y - top) - SLIDER_H).max(FOOTER_GAP));
         // The browser is inset inside the picker shell; subtract that inset so the slider's cap
         // matches the width available to its cards rather than the outer frame.
-        scale_slider(ui, &mut state.borrow_mut(), (size.x - 16.0).max(0.0));
+        scale_slider(ui, &mut preset_ui.borrow_mut().brush_picker, (size.x - 16.0).max(0.0));
     };
     let show_search = { preset_ui.borrow().search_visible.get("brush-picker").copied().unwrap_or(true) };
 
@@ -309,17 +252,7 @@ pub fn body(
             ..Default::default()
         },
         |ui, allocated_h| {
-            let actions = {
-                let mut brush_state = state.borrow_mut();
-                crate::pickers::brush_browser::picker_browser(
-                    ui,
-                    presets,
-                    current,
-                    &mut brush_state,
-                    &mut preset_ui.borrow_mut(),
-                    (allocated_h - 4.0).max(80.0),
-                )
-            };
+            let actions = { crate::pickers::brush_browser::picker_browser(ui, presets, current, &mut preset_ui.borrow_mut(), (allocated_h - 4.0).max(0.0)) };
             actions.into_iter().map(Pick::List).collect::<Vec<_>>()
         },
     );
@@ -333,7 +266,7 @@ pub fn body(
 /// under which the cards' padding and rows stop making sense; 0.40 and below is where
 /// [`brushes_tab`]'s cards go compact, the tips dropping their size numbers (the text itself
 /// holds its size at every scale).
-fn scale_slider(ui: &mut egui::Ui, st: &mut BrushesPanelState, container_width: f32) {
+fn scale_slider(ui: &mut egui::Ui, st: &mut BrushPickerView, container_width: f32) {
     let w = (ui.available_width() - GRIP_ROOM).max(60.0);
     ui.allocate_ui_with_layout(vec2(w, SLIDER_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         let show = (st.show_name, st.show_stroke, st.show_tip);
@@ -404,14 +337,7 @@ pub fn resize_grip(ui: &mut egui::Ui, frame: egui::Rect, content: egui::Vec2) ->
 
 /// The gear: Photoshop's picker menu. A new preset, rename or delete the current one, the list's
 /// view, and Import Brushes.
-fn gear_menu(
-    ui: &mut egui::Ui,
-    current: Option<&str>,
-    presets: &[BrushPreset],
-    st: &mut BrushesPanelState,
-    preset_ui: &mut crate::pickers::picker_state::PresetUi,
-    picks: &mut Vec<Pick>,
-) {
+fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], preset_ui: &mut crate::pickers::picker_state::PresetUi, picks: &mut Vec<Pick>) {
     let gear = named(crate::pickers::picker_shell::picker_menu_button(ui, "Brush Preset Options"), "Brush Preset Options");
     // The menu hangs 30 pt right of the gear, off the button's own edge; the align fallbacks still
     // keep it on screen near the window's edge.
@@ -450,8 +376,12 @@ fn gear_menu(
         ui.separator();
         // What a preset's card shows: a checkbox per part. At least one stays on — clicking the
         // last checked box does nothing, since an empty card would show no brush at all.
-        let on = [st.show_name, st.show_stroke, st.show_tip].into_iter().filter(|b| *b).count();
-        for (flag, label) in [(&mut st.show_name, tl!("Brush Name")), (&mut st.show_stroke, tl!("Brush Stroke")), (&mut st.show_tip, tl!("Brush Tip"))] {
+        let on = [preset_ui.brush_picker.show_name, preset_ui.brush_picker.show_stroke, preset_ui.brush_picker.show_tip].into_iter().filter(|b| *b).count();
+        for (flag, label) in [
+            (&mut preset_ui.brush_picker.show_name, tl!("Brush Name")),
+            (&mut preset_ui.brush_picker.show_stroke, tl!("Brush Stroke")),
+            (&mut preset_ui.brush_picker.show_tip, tl!("Brush Tip")),
+        ] {
             let was = *flag;
             if ui.checkbox(flag, label).changed() && was && on == 1 {
                 *flag = true;

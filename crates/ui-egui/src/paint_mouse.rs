@@ -191,14 +191,12 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
-        let list = &mut app.ui.brush_picker_list;
         let frame = egui::Frame::popup(ui.style()).show(ui, |ui| {
             crate::pickers::brush_picker::body(
                 ui,
                 &mut b,
                 &app.session.tools.presets,
                 app.session.tools.current_preset.as_deref(),
-                list,
                 &mut app.ui.presets_ui,
                 content,
             )
@@ -418,7 +416,7 @@ mod tests {
 
         // Filter each target into the visible part of the scroll area. Library order and grouping
         // don't imply visibility: group headers and earlier rows can push a card below the clip.
-        h.state_mut().ui.brush_picker_list.filter = names[0].clone();
+        h.state_mut().ui.presets_ui.search.insert("brush-picker".into(), names[0].clone());
         h.run_steps(3);
         let first_rect = h.get_by_label(&names[0]).rect();
         assert!(picker_rect().contains(first_rect.center()), "first card is outside the picker: {first_rect:?}");
@@ -428,7 +426,7 @@ mod tests {
         assert_eq!(picks(&h, &names[0]), first_before + 1, "single-click selection for {:?}", names[0]);
         assert!(h.state().ui.brush_picker.is_some(), "a click keeps the picker open");
 
-        h.state_mut().ui.brush_picker_list.filter = names[1].clone();
+        h.state_mut().ui.presets_ui.search.insert("brush-picker".into(), names[1].clone());
         h.run_steps(3);
         let second_before = picks(&h, &names[1]);
         let second_rect = h.get_by_label(&names[1]).rect();
@@ -591,7 +589,7 @@ mod tests {
         press(&mut h, brush_tip, PointerButton::Primary, true);
         press(&mut h, brush_tip, PointerButton::Primary, false);
         h.run_steps(2);
-        assert!(!h.state().ui.brush_picker_list.show_tip);
+        assert!(!h.state().ui.presets_ui.brush_picker.show_tip);
         let brush_stroke = h.get_by_label("Brush Stroke").rect().center();
         press(&mut h, brush_stroke, PointerButton::Primary, true);
         press(&mut h, brush_stroke, PointerButton::Primary, false);
@@ -600,8 +598,8 @@ mod tests {
         press(&mut h, brush_name, PointerButton::Primary, true);
         press(&mut h, brush_name, PointerButton::Primary, false);
         h.run_steps(2);
-        assert!(h.state().ui.brush_picker_list.show_name, "the last part on stays on");
-        assert!(!h.state().ui.brush_picker_list.show_stroke && !h.state().ui.brush_picker_list.show_tip);
+        assert!(h.state().ui.presets_ui.brush_picker.show_name, "the last part on stays on");
+        assert!(!h.state().ui.presets_ui.brush_picker.show_stroke && !h.state().ui.presets_ui.brush_picker.show_tip);
         assert!(h.state().ui.brush_picker.is_some());
         // A rename left open goes with the picker.
         let identity = h

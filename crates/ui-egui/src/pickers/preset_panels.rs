@@ -978,8 +978,12 @@ mod tests {
 
         let calls = Rc::new(Cell::new(0));
         let observed_height = Rc::new(Cell::new(0.0_f32));
+        let observed_clip_height = Rc::new(Cell::new(0.0_f32));
+        let observed_content_height = Rc::new(Cell::new(0.0_f32));
         let call_count = Rc::clone(&calls);
         let height = Rc::clone(&observed_height);
+        let clip_height = Rc::clone(&observed_clip_height);
+        let content_height = Rc::clone(&observed_content_height);
         let mut search = move |ui: &mut egui::Ui| {
             call_count.set(call_count.get() + 1);
             ui.label("Brush search");
@@ -989,7 +993,9 @@ mod tests {
             |ui, _app: &mut PhotocraftApp| {
                 picker_shell_custom(ui, 260.0, CustomShellOptions { search: Some(&mut search), ..Default::default() }, |ui, allocated_h| {
                     height.set(allocated_h);
-                    ui.allocate_exact_size(vec2(ui.available_width(), allocated_h.min(50.0)), Sense::hover());
+                    clip_height.set(ui.clip_rect().height());
+                    ui.allocate_exact_size(vec2(ui.available_width(), allocated_h + 80.0), Sense::hover());
+                    content_height.set(ui.min_rect().height());
                 });
             },
             app,
@@ -998,6 +1004,8 @@ mod tests {
         assert!(calls.get() > 0, "the shared shell renders enabled search controls");
         assert!(observed_height.get() > 100.0, "the custom renderer receives the space remaining after shell controls");
         assert!(observed_height.get() <= 260.0, "the custom renderer respects its consumer height cap");
+        assert!(observed_clip_height.get() <= observed_height.get(), "the renderer is clipped to its allocated browser viewport");
+        assert!(observed_content_height.get() <= observed_height.get(), "an oversized renderer cannot grow beyond the browser viewport");
     }
 
     #[test]

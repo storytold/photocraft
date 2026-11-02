@@ -2096,10 +2096,6 @@ impl eframe::App for PhotocraftApp {
         }
         // A device lost while drawing this frame: switch to the CPU canvas before the next one.
         gpu_status::check(self, &ctx);
-        // The Brush Preset picker's view (its gear's card parts and the footer scale) is
-        // remembered once the pointer is up. Here, after every panel, rather than in the
-        // picker's own code: the control channel can set it while the picker is closed.
-        pickers::brush_picker::persist(self, &ctx);
         // The tool's brush (settings and tip references) is remembered the same way. Like the
         // picker's view, in the frame loop, so the control channel can set it with the panels
         // closed; the engine's revision counter keeps an unchanged brush free.

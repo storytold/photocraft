@@ -1129,9 +1129,6 @@ pub struct UiState {
     /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
-    /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
-    #[serde(default = "crate::pickers::brush_picker::list_state")]
-    pub brush_picker_list: crate::brush_panel::BrushesPanelState,
     /// The Brush Preset picker's content size, once its corner grip was dragged
     /// ([`crate::pickers::brush_picker::DEFAULT_SIZE`] before that).
     #[serde(default)]
@@ -1326,7 +1323,6 @@ impl Default for UiState {
             vector_mask_target: false,
             properties_layer: None,
             brush_picker: None,
-            brush_picker_list: crate::pickers::brush_picker::list_state(),
             brush_picker_size: None,
             layer_menu: None,
             canvas_tool_menu: None,
