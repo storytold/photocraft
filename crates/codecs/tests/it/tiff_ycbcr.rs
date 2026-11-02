@@ -141,10 +141,11 @@ fn sixteen_bit_ycbcr_bands_match_whole_decode_with_a_missing_last_strip() {
     let icc = sample_icc(512);
     for little in [true, false] {
         for missing in [false, true] {
-            let dir = strips(w, h, 16, 3, 6, rows, &u16s(&samples, little))
-                .tag(SUBSAMPLING, SHORT, &[1, 1])
-                .tag(YCBCR_COEFFICIENTS, RATIONAL, &weights)
-                .bytes(ICC_PROFILE, UNDEFINED, &icc);
+            let dir = strips(w, h, 16, 3, 6, rows, &u16s(&samples, little)).tag(SUBSAMPLING, SHORT, &[1, 1]).tag(YCBCR_COEFFICIENTS, RATIONAL, &weights).bytes(
+                ICC_PROFILE,
+                UNDEFINED,
+                &icc,
+            );
             let mut file = build(little, false, &[dir], &[0]);
             if missing {
                 let past = file.bytes.len() as u64 + 4096;
@@ -156,14 +157,15 @@ fn sixteen_bit_ycbcr_bands_match_whole_decode_with_a_missing_last_strip() {
             assert_eq!((bands.dimensions(), bands.layout(), bands.sample_type()), ((w, h), ChannelLayout::Rgb, SampleType::U16));
             let mut got = Image::new(w, h, bands.layout(), bands.sample_type()).unwrap();
             let mut positions = Vec::new();
-            bands.decode(|x, y, group: &Image| -> Result<(), CodecError> {
-                positions.push((x, y, group.height()));
-                assert_eq!((x, group.width(), group.layout(), group.sample_type()), (0, w, ChannelLayout::Rgb, SampleType::U16));
-                let at = y as usize * w as usize * 3 * 2;
-                got.data_mut()[at..at + group.data().len()].copy_from_slice(group.data());
-                Ok(())
-            })
-            .unwrap();
+            bands
+                .decode(|x, y, group: &Image| -> Result<(), CodecError> {
+                    positions.push((x, y, group.height()));
+                    assert_eq!((x, group.width(), group.layout(), group.sample_type()), (0, w, ChannelLayout::Rgb, SampleType::U16));
+                    let at = y as usize * w as usize * 3 * 2;
+                    got.data_mut()[at..at + group.data().len()].copy_from_slice(group.data());
+                    Ok(())
+                })
+                .unwrap();
             assert_eq!(positions, [(0, 0, 2), (0, 2, 2), (0, 4, 1)], "one output group per strip, including the short last strip");
             assert_eq!(got.data(), want.data(), "little endian: {little}, missing last strip: {missing}");
             assert_eq!(bands.icc, want.icc);
