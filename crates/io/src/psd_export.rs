@@ -41,10 +41,26 @@ const PSD_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
 /// Room kept under [`PSD_MAX_FILE_SIZE`] for what the save adds after the conversion (the image
 /// preview resource, a few KB).
 const PSD_SAVE_HEADROOM: u64 = 1024 * 1024;
-/// Most bytes of one layer's interleaved samples the exporter gathers. The interleaved bytes and
-/// the channel planes made from them (or the band parts and the joined buffer) are alive together,
-/// so the peak is about twice this; it is also what fits in a file of at most [`PSD_MAX_FILE_SIZE`].
-const MAX_LAYER_GATHER_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
+/// Most bytes of one layer's interleaved samples the exporter gathers: on 64-bit, four channels of
+/// what the reader decodes in one ([`photocraft_psd::compression::MAX_DECODED_BYTES`]), since a
+/// file past [`PSD_MAX_FILE_SIZE`] becomes a PSB. The interleaved bytes and the channel planes made
+/// from them (or the band parts and the joined buffer) are alive together, so the peak is about
+/// twice this, which [`gather_fits`] checks for.
+const MAX_LAYER_GATHER_BYTES: u64 = if cfg!(target_pointer_width = "64") { 32 << 30 } else { 256 << 20 };
+/// Ends the warning of a layer that couldn't be gathered, which [`lost_pixels`] finds.
+const LOST_PIXELS: &str = "too large to save";
+
+/// Can `bytes` of samples be gathered: within the cap, with the peak's memory to be had? Asked
+/// first because the gather allocates infallibly, and running out there would end the app.
+fn gather_fits(bytes: u64) -> bool {
+    bytes <= MAX_LAYER_GATHER_BYTES && usize::try_from(bytes.saturating_mul(2)).is_ok_and(|peak| Vec::<u8>::new().try_reserve_exact(peak).is_ok())
+}
+
+/// The warning of a layer whose pixels the file wouldn't hold. A save stops on it: a layer written
+/// empty looks saved, and the pixels are gone on reopening.
+pub(crate) fn lost_pixels(warnings: &[String]) -> Option<&String> {
+    warnings.iter().find(|w| w.ends_with(LOST_PIXELS))
+}
 
 /// Options for [`document_to_psd_with`].
 #[derive(Debug, Clone)]
@@ -208,10 +224,11 @@ impl Ex {
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
         // A layer record is one dense rectangle, so a few pixels far apart make a box of mostly
-        // nothing, gathered and then copied again. Past the cap the layer is saved empty, said so.
+        // nothing, gathered and then copied again. Past the cap there's no layer to write, and
+        // saves stop on the warning ([`lost_pixels`]).
         let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
-        if dense > MAX_LAYER_GATHER_BYTES {
-            warnings.push(format!("layer \"{name}\" spans {}×{} px, too large to write: saved without its pixels", r.width(), r.height()));
+        if !gather_fits(dense) {
+            warnings.push(format!("layer \"{name}\" spans {}×{} px, {LOST_PIXELS}", r.width(), r.height()));
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
         // The interleaved gather is the sequential pass for full-canvas layers, so it runs

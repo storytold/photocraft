@@ -281,6 +281,9 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
+    if let Some(lost) = crate::psd_export::lost_pixels(&warnings) {
+        return Err(IoError::Unsupported(lost.clone()));
+    }
     let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
     let (layers, w) = match tiff_image_source(doc, &file).to_bytes(order) {
         Err(photocraft_psd::PsdError::LimitExceeded(_)) if !force_psb => {

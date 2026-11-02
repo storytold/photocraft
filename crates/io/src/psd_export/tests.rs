@@ -619,3 +619,52 @@ fn a_linked_fifo_is_not_read() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(warnings.iter().any(|w| w.contains("smart object written as pixels") && w.contains("not a regular file")), "{warnings:?}");
 }
+
+/// A small canvas with a layer whose two pixels span `width` × `height`: the gather sizes itself
+/// from the layer's bounds, and the merged image stays the canvas's size.
+fn layer_spanning(width: i32, height: i32) -> Document {
+    let mut doc = document(64, 64);
+    let mut s = Surface::new(doc.pixel_format());
+    s.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+    s.write_pixel(width - 1, height - 1, &[0.0, 1.0, 0.0, 1.0]);
+    doc.layers.push(Layer::new("Wide", LayerContent::Raster(s)));
+    doc
+}
+
+/// #10760: a layer past 1 GiB was saved empty, with only a warning, though the reader takes it.
+/// 20000 × 14000 RGBA is 1.12 GB.
+#[test]
+fn a_layer_past_1_gib_keeps_its_pixels() {
+    let (w, h) = (20_000, 14_000);
+    let doc = layer_spanning(w as i32, h as i32);
+    let result = crate::export(&doc, "wide.psb", &crate::ExportOptions::default()).unwrap();
+    assert!(crate::psd_export::lost_pixels(&result.warnings).is_none(), "{:?}", result.warnings);
+    // The file itself, as the import budget doesn't take a layer this size.
+    let file = PsdFile::from_bytes(&result.bytes).unwrap();
+    let layers = &file.layer_info.as_ref().unwrap().layers;
+    let layer = layers.iter().find(|l| l.channels.len() > 3 && l.rect.right - l.rect.left == w as i32).expect("the wide layer");
+    assert_eq!(layer.rect.bottom - layer.rect.top, h as i32);
+    let plane = |id: i16| layer.channels.iter().find(|c| c.id == id).unwrap().decode(w, h, 8, file.header.version).unwrap();
+    assert_eq!(plane(0)[0], 255, "the near corner's red");
+    assert_eq!(*plane(1).last().unwrap(), 255, "the far corner's green");
+}
+
+/// Past what a save can gather, it fails: a layer written empty would lose the pixels on reopening.
+/// 100000 × 90000 RGBA is 36 GB, and nothing that size is allocated to find out.
+#[test]
+fn a_layer_too_large_to_save_fails_the_save() {
+    let doc = layer_spanning(100_000, 90_000);
+    for name in ["wide.psd", "wide.psb"] {
+        let Err(e) = crate::export(&doc, name, &crate::ExportOptions::default()) else { panic!("{name} saved") };
+        assert!(e.to_string().contains("\"Wide\""), "the error names the layer: {e}");
+    }
+    let tiff = crate::ExportOptions { tiff_layers: true, ..Default::default() };
+    assert!(crate::export(&doc, "wide.tif", &tiff).is_err());
+}
+
+#[test]
+fn a_gather_is_refused_past_the_cap_or_the_memory() {
+    assert!(gather_fits(1 << 30));
+    assert!(!gather_fits(MAX_LAYER_GATHER_BYTES + 1));
+    assert!(!gather_fits(u64::MAX));
+}
