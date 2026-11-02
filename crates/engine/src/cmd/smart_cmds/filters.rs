@@ -131,6 +131,15 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.smartFilter.setParams";
     let new = p.get("params").cloned().ok_or_else(|| bad(CMD, "pass `params` (merged into the filter's parameters)"))?;
     let authorize = s.authorize;
+    // A dialog holding the filter's complete settings replaces them, so a key its editor dropped
+    // (a Channel Mixer's gray row once Monochrome is off) doesn't linger from the old ones.
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    // `replace` sets the filter's whole settings, so they must be an object (without `replace`, a
+    // non-object `params` still takes the slot, as before).
+    if replace && !new.is_object() {
+        return Err(bad(CMD, "`replace` needs `params` to be an object holding the filter's complete settings"));
+    }
+    let mode = s.active().ok_or(EngineError::NoDocument)?.doc.mode;
     // A Displace given another open document as its map embeds that one in place of the old
     // (#7423). It is read here, before the edit, from the session; the request is authorized
     // first, as the merged params are below. A new `mapPath` stays a path (read next to the
@@ -164,8 +173,13 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
             return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
+        if replace {
+            // The settings stand alone, so they must read as this filter's: a key left out takes its
+            // default, a wrong type or out-of-range value is refused before the filter is changed.
+            validate_replacement(CMD, &f.command, &f.params, &new, mode)?;
+        }
         match (&mut f.params, new) {
-            (Value::Object(old), Value::Object(n)) => old.extend(n),
+            (Value::Object(old), Value::Object(n)) if !replace => old.extend(n),
             (slot, n) => *slot = n,
         }
         if f.command == DISPLACE {
@@ -183,6 +197,19 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })
+}
+
+/// Checks that `new` can stand alone as the settings of smart filter `command` (see `replace`).
+/// Adjustments are read as the renderer reads them; any other filter that read its old settings must
+/// read the new ones (a filter we can't read at all is kept as is, so it isn't judged).
+fn validate_replacement(cmd: &str, command: &str, old: &Value, new: &Value, mode: photocraft_doc::ColorMode) -> Result<()> {
+    if let Some(kind) = command.strip_prefix("image.adjustments.") {
+        return crate::adjust_params::from_params(kind, new, None, mode).map(drop);
+    }
+    if crate::filters::params_for(command, old).is_some() && crate::filters::params_for(command, new).is_none() {
+        return Err(bad(cmd, format!("the new settings aren't valid for {command}")));
+    }
+    Ok(())
 }
 
 pub(super) fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {

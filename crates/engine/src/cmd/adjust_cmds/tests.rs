@@ -532,6 +532,46 @@ fn adjustments_on_a_smart_object_record_a_smart_filter() {
     assert_eq!(flatten(&s), original);
 }
 
+/// `setParams` merges, so a key the new params leave out stays; with `replace` the new params
+/// are the filter's complete settings. A Channel Mixer turned off Monochrome keeps its gray row
+/// when merged (still mixing red from it) and is back to the identity mix when replaced.
+#[test]
+fn smart_filter_params_merge_or_replace() {
+    let mut s = smart_session();
+    let original = flatten(&s);
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [50, 30, 20, 0]})).unwrap();
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}})).unwrap();
+    assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "merged: the gray row stays");
+    assert!(max_diff(&flatten(&s), &original) > 0.05, "and still mixes the red channel");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}, "replace": true})).unwrap();
+    assert_eq!(smart_filters_of(&s)[0].params, json!({"monochrome": false}));
+    assert!(max_diff(&flatten(&s), &original) < 1e-6, "the identity mix");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+    s.undo();
+    assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "undo brings the old params back");
+}
+
+/// `replace` takes the filter's complete settings: they must be an object, and must read as this
+/// filter's (a wrong type or out-of-range value is refused, a missing key takes its default); a
+/// refused edit leaves the filter and the history as they were.
+#[test]
+fn smart_filter_replace_validates_the_new_params() {
+    let mut s = smart_session();
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [50, 30, 20, 0]})).unwrap();
+    let before = smart_filters_of(&s)[0].params.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [json!(5), json!([1, 2]), json!({"monochrome": "yes"}), json!({"red": "x"})] {
+        let r = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": bad, "replace": true}));
+        assert!(r.is_err(), "{bad} is refused");
+    }
+    assert_eq!(smart_filters_of(&s)[0].params, before, "a refused edit changes nothing");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "and adds no history step");
+    // Without `replace` a non-object still takes the slot (as before); an empty object takes the defaults.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {}, "replace": true})).unwrap();
+    assert_eq!(smart_filters_of(&s)[0].params, json!({}));
+}
+
 /// A selection becomes the smart filter's mask, and the adjustment with its own command
 /// (Shadows/Highlights) records a filter too.
 #[test]
