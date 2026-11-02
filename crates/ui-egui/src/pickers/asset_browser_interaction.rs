@@ -149,32 +149,30 @@ pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: Node
     }
 }
 
-/// Split the twelve-pixel gap before every group into upper- and lower-level drop targets.
-/// The upper half inserts after the deepest visible group above the gap (as its sibling),
-/// falling back naturally to the outer group when no nested level precedes the gap.
+/// Split the six-pixel separation before a group into upper- and lower-level drop targets.
+/// The upper half appends after the last direct child of the preceding group; the lower half
+/// inserts before the following group. Each half paints over its own adjacent element's width.
 pub(crate) fn group_gap_drop_hits(
     rect: Rect,
     upper: NodeId,
     lower: NodeId,
+    upper_bounds: Rect,
+    lower_bounds: Rect,
     upper_depth: usize,
     lower_depth: usize,
     order: usize,
 ) -> Vec<DropHitRegion> {
-    // Both semantic halves share one visual marker, aligned to the narrow visible gap at
-    // the bottom of the larger invisible hit target.
-    let line_center_y = rect.max.y - 1.0;
-    let line = Rect::from_min_max(
-        Pos2::new(rect.left(), line_center_y - 2.0),
-        Pos2::new(rect.right(), line_center_y + 2.0),
-    );
+    debug_assert!((rect.height() - 6.0).abs() < f32::EPSILON);
     let middle = rect.center().y;
+    let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), rect.top()), Pos2::new(upper_bounds.right(), middle));
+    let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), middle), Pos2::new(lower_bounds.right(), rect.bottom()));
     vec![
             DropHitRegion {
                 target: Some(upper),
                 container: None,
                 region: PointerRegion::TrailingEdge,
                 hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
-                indicator_rect: line,
+                indicator_rect: upper_line,
                 depth: upper_depth,
                 order,
             },
@@ -183,7 +181,7 @@ pub(crate) fn group_gap_drop_hits(
                 container: None,
                 region: PointerRegion::LeadingEdge,
                 hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
-                indicator_rect: line,
+                indicator_rect: lower_line,
                 depth: lower_depth,
                 order: order.saturating_add(1),
             },
@@ -211,24 +209,6 @@ pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, upper_g
         HierarchyNode::Item(id) => Some((id.clone(), depth + 1)),
         HierarchyNode::Group { .. } => None,
     }).unwrap_or((upper_group.clone(), depth))
-}
-
-/// Return the last sibling immediately preceding a visible group in its actual parent sequence.
-/// The preceding visible header may be an ancestor/descendant rather than a sibling, and a group's
-/// own cards are children of that group, not siblings of its header.
-pub(crate) fn group_gap_sibling_anchor(hierarchy: &PickerBrowserHierarchy, lower_group: &NodeId) -> Option<(NodeId, usize)> {
-    let parent = hierarchy.parent_of(lower_group)?;
-    let siblings = hierarchy.children_of(&parent)?;
-    let lower_index = siblings.iter().position(|node| node.id() == lower_group)?;
-    let anchor = siblings.get(lower_index.checked_sub(1)?)?;
-    let mut group_ancestors = 0;
-    let mut ancestor = hierarchy.parent_of(anchor.id()).unwrap_or(ContainerId::Root);
-    while let ContainerId::Group(id) = ancestor {
-        group_ancestors += 1;
-        ancestor = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
-    }
-    let depth = if anchor.is_group() { group_ancestors } else { group_ancestors.max(1) };
-    Some((anchor.id().clone(), depth))
 }
 
 /// Capture the explicit end of the root sibling sequence, including an empty browser's drop area.
@@ -304,7 +284,7 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{card_drop_hit, card_drop_hits, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_sibling_anchor, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
+    use super::{card_drop_hit, card_drop_hits, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
     use egui::{Pos2, Rect};
@@ -386,12 +366,16 @@ mod insertion_marker_tests {
     }
 
     #[test]
-    fn group_gap_upper_half_inserts_after_upper_sibling_and_lower_half_precedes_lower_group() {
-        let gap = Rect::from_min_max(Pos2::new(10.0, 100.0), Pos2::new(210.0, 112.0));
+    fn group_gap_halves_use_the_adjacent_elements_widths() {
+        let gap = Rect::from_min_max(Pos2::new(10.0, 100.0), Pos2::new(210.0, 106.0));
+        let upper_bounds = Rect::from_min_max(Pos2::new(31.0, 40.0), Pos2::new(131.0, 80.0));
+        let lower_bounds = Rect::from_min_max(Pos2::new(31.0, 106.0), Pos2::new(231.0, 135.0));
         let split = group_gap_drop_hits(
             gap,
             NodeId::from("upper"),
             NodeId::from("lower"),
+            upper_bounds,
+            lower_bounds,
             0,
             1,
             4,
@@ -403,16 +387,20 @@ mod insertion_marker_tests {
         assert!(split[0].hit_rect.is_positive());
         assert_eq!(split[0].hit_rect.min, gap.min);
         assert_eq!(split[0].hit_rect.max, Pos2::new(gap.right(), gap.center().y));
-        assert_eq!(split[0].hit_rect.height(), 6.0);
+        assert_eq!(split[0].hit_rect.height(), 3.0);
         assert_eq!(split[1].region, PointerRegion::LeadingEdge);
         assert_eq!(split[1].target, Some(NodeId::from("lower")));
-        assert_eq!(split[1].hit_rect.height(), 6.0);
+        assert_eq!(split[1].hit_rect.height(), 3.0);
+        assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 100.0), Pos2::new(131.0, 103.0)));
+        assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 103.0), Pos2::new(231.0, 106.0)));
 
         for (upper_depth, lower_depth) in [(0, 1), (0, 0), (1, 0)] {
             let split = group_gap_drop_hits(
                 gap,
                 NodeId::from("upper"),
                 NodeId::from("lower"),
+                upper_bounds,
+                lower_bounds,
                 upper_depth,
                 lower_depth,
                 4,
@@ -425,12 +413,13 @@ mod insertion_marker_tests {
             assert_eq!(split[1].target, Some(NodeId::from("lower")));
         }
 
-        // When the nearest visible row above the gap is nested, place after that nested row
-        // at its own sibling level. A depth-zero upper row is already the outer-sibling fallback.
+        // Nested groups use the same child-level append anchor.
         let nested = group_gap_drop_hits(
             gap,
             NodeId::from("upper-folder"),
             NodeId::from("child-folder"),
+            upper_bounds,
+            lower_bounds,
             1,
             2,
             4,
@@ -441,18 +430,21 @@ mod insertion_marker_tests {
     }
 
     #[test]
-    fn twelve_pixel_append_gap_resolves_both_six_pixel_zones_for_many_positions_and_widths() {
+    fn six_pixel_append_gap_resolves_two_exact_three_pixel_zones() {
         for left in [0.0, 13.0, 127.0] {
             for top in [0.0, 41.0, 900.0] {
                 for width in [1.0, 64.0, 200.0, 1024.0] {
-                    let gap = Rect::from_min_size(Pos2::new(left, top), egui::vec2(width, 12.0));
-                    let hits = group_gap_drop_hits(gap, NodeId::from("upper"), NodeId::from("lower"), 0, 1, 8);
+                    let gap = Rect::from_min_size(Pos2::new(left, top), egui::vec2(width, 6.0));
+                    let upper_bounds = Rect::from_min_size(Pos2::new(left + 3.0, top - 40.0), egui::vec2(width * 0.4, 30.0));
+                    let lower_bounds = Rect::from_min_size(Pos2::new(left + 3.0, top + 6.0), egui::vec2(width * 0.8, 29.0));
+                    let hits = group_gap_drop_hits(gap, NodeId::from("upper"), NodeId::from("lower"), upper_bounds, lower_bounds, 0, 1, 8);
                     assert_eq!(hits.len(), 2);
-                    assert_eq!(hits[0].hit_rect, Rect::from_min_max(gap.min, Pos2::new(gap.right(), top + 6.0)));
-                    assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 6.0), gap.max));
-                    let centered_line = Rect::from_min_max(Pos2::new(left, top + 9.0), Pos2::new(gap.right(), top + 13.0));
-                    assert_eq!(hits[0].indicator_rect, centered_line);
-                    assert_eq!(hits[1].indicator_rect, centered_line);
+                    assert_eq!(hits[0].hit_rect, Rect::from_min_max(gap.min, Pos2::new(gap.right(), top + 3.0)));
+                    assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 3.0), gap.max));
+                    assert_eq!(hits[0].hit_rect.height(), 3.0);
+                    assert_eq!(hits[1].hit_rect.height(), 3.0);
+                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top), Pos2::new(left + 3.0 + width * 0.4, top + 3.0)));
+                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 3.0), Pos2::new(left + 3.0 + width * 0.8, top + 6.0)));
                     assert_eq!(hits[0].depth, 0);
                     assert_eq!(hits[1].depth, 1);
                     assert_eq!(hits[0].order + 1, hits[1].order);
@@ -506,23 +498,6 @@ mod insertion_marker_tests {
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("root")), (NodeId::from("root-last"), 1));
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("nested")), (NodeId::from("nested-last"), 2));
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("deep")), (NodeId::from("deep"), 2));
-    }
-
-    #[test]
-    fn group_gap_sibling_anchor_uses_the_previous_node_in_the_lower_groups_parent_sequence() {
-        use crate::pickers::picker_browser_model::HierarchyNode as Node;
-
-        let root = PickerBrowserHierarchy::new(vec![
-            Node::group("upper", vec![Node::item("upper-card")]),
-            Node::item("root-card"),
-            Node::group("lower", vec![Node::item("lower-card")]),
-        ]).unwrap();
-        assert_eq!(group_gap_sibling_anchor(&root, &NodeId::from("lower")), Some((NodeId::from("root-card"), 1)));
-
-        let nested = PickerBrowserHierarchy::new(vec![
-            Node::group("parent", vec![Node::item("first"), Node::group("upper", vec![]), Node::item("between"), Node::group("lower", vec![])]),
-        ]).unwrap();
-        assert_eq!(group_gap_sibling_anchor(&nested, &NodeId::from("lower")), Some((NodeId::from("between"), 1)));
     }
 
     #[test]

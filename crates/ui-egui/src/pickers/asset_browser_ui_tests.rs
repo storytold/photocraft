@@ -244,19 +244,20 @@ fn actual_card_edge_drop_reorders_mixed_siblings_at_both_halves_across_many_card
 }
 
 #[test]
-fn actual_twelve_pixel_group_gap_selects_upper_and_lower_sibling_levels() {
+fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
     for offset in [-2.5, -1.0, 1.0, 2.5] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
         let lower_header = h.get_by_label("B").rect();
-        let point = pos2(lower_header.center().x, lower_header.top() - 6.0 + offset);
+        let point = pos2(lower_header.center().x, lower_header.top() + offset);
         pointer_drag(&mut h, source, point);
         let a = &h.state().0.hierarchy_order[PANEL]["A"];
         assert_eq!(a.iter().filter(|entry| **entry == HierarchyOrderEntry::Group("C".into())).count(), 1);
         let c_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
         let b_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
         if offset < 0.0 {
-            assert!(c_index > b_index, "upper gap half appends after the upper group's last direct child: {a:?}");
+            let last_inner_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a3".into())).unwrap();
+            assert!(c_index > last_inner_index, "upper gap half appends after the upper group's last direct child: {a:?}");
         } else {
             assert!(c_index < b_index, "lower gap half inserts before the lower group: {a:?}");
         }

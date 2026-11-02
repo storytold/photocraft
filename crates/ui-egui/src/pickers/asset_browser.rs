@@ -15,7 +15,7 @@ use crate::pickers::asset_browser_interaction::{
     asset_browser_take_release,
     asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_header_drop_hit, header_drop_before, hierarchy_group_drop,
-    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_sibling_anchor, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
     root_prepend_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
@@ -30,8 +30,8 @@ pub(crate) const MIN_THUMB: f32 = 20.0;
 // 27px of header content plus a one-pixel border on each vertical edge.
 const GROUP_HEADER_HEIGHT: f32 = 29.0;
 const GROUP_LAYOUT_GAP: f32 = 0.0;
-// Keep a forgiving drag target even though the visible group separation is only two pixels.
-const GROUP_GAP_DROP_HEIGHT: f32 = 12.0;
+// The append line is split into two exact three-pixel targets around the group boundary.
+const GROUP_GAP_DROP_HEIGHT: f32 = 6.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
 const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
@@ -844,6 +844,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let mut indent_release: Option<(String, String)> = None;
     let mut group_content_areas: Vec<(String, Rect)> = Vec::new();
     let mut gap_headers: Vec<(NodeId, Rect, usize, bool)> = Vec::new();
+    let canonical_node_bounds = std::cell::RefCell::new(std::collections::BTreeMap::<NodeId, Rect>::new());
     let mut expanded_groups = BTreeSet::new();
     let mut dropped: Option<(String, Pos2)> = None;
     let mut browser_item_drop = false;
@@ -987,6 +988,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
                 let header_rect = inset_row_rect(hr, depth);
                 gap_headers.push((NodeId::group(&g.name), header_rect, depth, open));
+                canonical_node_bounds.borrow_mut().insert(NodeId::group(&g.name), header_rect);
                 let header_released = if canonical_hierarchy_drag {
                     if capabilities.group_drag {
                         asset_browser_header_drag_source_with_id(&hresp, panel, NodeId::group(&g.name));
@@ -1128,6 +1130,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 name.to_owned(),
                             );
                             gap_headers.push((node_id.clone(), inset_row_rect(fr, row_depth), row_depth, group_open));
+                            canonical_node_bounds.borrow_mut().insert(node_id.clone(), inset_row_rect(fr, row_depth));
                             if canonical_hierarchy_drag {
                                 if capabilities.group_drag {
                                     asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone());
@@ -1284,6 +1287,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                         }
                                     }
                                     if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
+                                        canonical_node_bounds.borrow_mut().insert(target_id.clone(), r);
                                         let hit_index = canonical_drop_hits.borrow().len();
                                         for hit in card_drop_hits(r, !list, target_id, depth + it.group_path.len() + 1, hit_index) {
                                             canonical_drop_hits.borrow_mut().push((hit, resp.clone()));
@@ -1576,38 +1580,32 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     }
                 }
             }
-            // Each adjacent visible group pair has no layout gap and a forgiving twelve-pixel
-            // invisible drop target aligned to the lower group's border. The upper half inserts
-            // after the last node in the lower group's parent sequence that precedes it. This is
-            // important when the preceding visible header is not a sibling of the lower header.
+            // Each adjacent visible group pair gets a six-pixel target centered on the exact
+            // boundary at the lower header's top. The upper half appends within the preceding
+            // group after its last direct child; the lower half inserts before the lower group.
             if canonical_hierarchy_drag {
                 for pair in gap_headers.windows(2) {
                     let (upper_id, _upper_rect, upper_depth, _upper_open) = &pair[0];
                     let (lower_id, lower_rect, lower_depth, _) = &pair[1];
                     let gap_rect = Rect::from_min_max(
-                        pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_DROP_HEIGHT),
-                        // Include the lower header's one-pixel top border so the target reaches
-                        // the visual boundary despite the two-pixel layout separation.
-                        pos2(lower_rect.right(), lower_rect.top() + 1.0),
+                        pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_DROP_HEIGHT * 0.5),
+                        pos2(lower_rect.right(), lower_rect.top() + GROUP_GAP_DROP_HEIGHT * 0.5),
                     );
-                    // The drop target extends twelve pixels before every visible header after
-                    // the first, independently of layout spacing. Do not infer it from the upper group's content bounds: a
-                    // mixed sibling sequence can render cards from that group after a child
-                    // header, and nested descendants can extend beyond the upper group's own
-                    // card area. The twelve pixels immediately preceding the lower header are the
-                    // authoritative target regardless of that content ordering.
                     if gap_rect.is_positive() {
                         let response = ui.interact(
                             gap_rect,
                             ui.id().with(("group-gap", panel, upper_id, lower_id)),
                             Sense::hover(),
                         );
-                        let (upper_anchor, upper_anchor_depth) =
-                            group_gap_sibling_anchor(&hierarchy, lower_id).unwrap_or_else(|| group_gap_upper_anchor(&hierarchy, upper_id));
+                        let (upper_anchor, upper_anchor_depth) = group_gap_upper_anchor(&hierarchy, upper_id);
+                        let upper_bounds = canonical_node_bounds.borrow().get(&upper_anchor).copied().unwrap_or(*_upper_rect);
+                        let lower_bounds = canonical_node_bounds.borrow().get(lower_id).copied().unwrap_or(*lower_rect);
                         let mut hits = group_gap_drop_hits(
                             gap_rect,
                             upper_anchor,
                             lower_id.clone(),
+                            upper_bounds,
+                            lower_bounds,
                             upper_anchor_depth.max(*upper_depth),
                             *lower_depth,
                             canonical_drop_hits.borrow().len(),
@@ -2069,6 +2067,8 @@ mod filter_tests {
             gap,
             crate::pickers::picker_browser_model::NodeId::from("upper"),
             crate::pickers::picker_browser_model::NodeId::from("lower"),
+            egui::Rect::from_min_max(egui::pos2(20.0, 60.0), egui::pos2(120.0, 90.0)),
+            egui::Rect::from_min_max(egui::pos2(20.0, 106.0), egui::pos2(210.0, 135.0)),
             0,
             1,
             0,
