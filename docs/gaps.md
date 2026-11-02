@@ -199,6 +199,7 @@ what an agent can't finish alone.
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has
   a Neural Filters taskspace; users ask for local models (#2313, #1996, #2682).
 - **Progress (2026-10-17):** classical Object Finder no longer rejects a foreground solely for covering over 60% of the canvas (#6548); canvas-boundary coverage distinguishes it from the surrounding backdrop. This does not add semantic recognition or close #2788.
+- **Progress (2026-11-02):** Image › Generative Expand through a local IOPaint/LaMa helper, behind the provider interface in `crates/ml` ([generative-expand](generative-expand.md)): off by default, privacy notice, background job, one undo step. Generative Fill, prompts and the other items above remain open.
 - **Estimate:** 300–600 h. **Human:** owner decision #41 (model licences, local vs remote).
 
 ### G16. Plug-in compatibility

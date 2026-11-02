@@ -640,6 +640,19 @@ fn update_transport(flatpak_id: Option<&std::ffi::OsStr>) -> Option<photocraft_e
     flatpak_id.is_none().then(crate::updates::service)
 }
 
+/// Image › Generative Expand's provider: the IOPaint helper at `endpoint` over plain HTTP (the
+/// helper runs on this machine; the transport has no TLS, so an `https://` address is refused
+/// with a clear message instead of failing at the first request). A CPU generation can take
+/// minutes on a large image, so the request timeout is generous.
+fn generative_provider(endpoint: &str) -> Result<Arc<dyn photocraft_ml::GenerativeProvider>, String> {
+    let endpoint = endpoint.trim();
+    if !endpoint.starts_with("http://") {
+        return Err(format!("the helper address must start with http:// (got {endpoint})"));
+    }
+    let transport = photocraft_ml::UreqTransport::new(std::time::Duration::from_secs(600));
+    Ok(Arc::new(photocraft_ml::IoPaintProvider::new(endpoint, Box::new(transport))))
+}
+
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
@@ -705,6 +718,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
         check_updates: update_transport(std::env::var_os("FLATPAK_ID").as_deref()),
+        generative_factory: Some(Box::new(generative_provider)),
         clipboard_set_image: Some({
             let clip = clip.clone();
             guarded_clipboard_set(move |w: u32, h: u32, px: &[u8]| {

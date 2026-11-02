@@ -22,7 +22,7 @@ What exists on `main` today. The numbered sections below are the original design
 - **Files:** own PSD/PSB crate (`psd`), flat codecs (`codecs`), camera raw (`raw`), HEIF (`heif`),
   Affinity (`affinity`), document mapping (`io`), native `.pcraft` (`format`, atomic saves).
   Coverage: [`file-format-parity.md`](file-format-parity.md).
-- **Not built (yet) from the plan:** the `ml` crate (no ML runtime; see gap G15), plug-in ABI v2.
+- **Not built (yet) from the plan:** the `ml` crate's model runtime (see gap G15; today `ml` holds only the generative provider interface and a local-helper provider, [generative-expand.md](generative-expand.md)), plug-in ABI v2.
 - **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
   (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
   is superseded by [`roadmap.md`](roadmap.md).
@@ -133,7 +133,7 @@ photocraft/
 │  ├─ format/                  photocraft-format    native document format (.pcraft bundle): manifest + content-addressed tiles
 │  ├─ io/                      photocraft-io        import/export orchestration; doc ⇄ PSD mapping; PDF/SVG import (features)
 │  │  ── intelligence ──
-│  ├─ ml/                      photocraft-ml        model registry + InferenceBackend trait (ort native / burn|candle web); SAM2, matting, depth, sky
+│  ├─ ml/                      photocraft-ml        GenerativeProvider + Transport traits, local IOPaint provider (today); planned: model registry + InferenceBackend trait (ort native / burn|candle web); SAM2, matting, depth, sky
 │  ├─ plugins/                 photocraft-plugins   sandboxed WebAssembly filter plug-ins (wasmi host, limits, ABI v1, registry)
 │  │  ── the façade every frontend talks to ──
 │  ├─ tools/                   photocraft-tools     tool state machines (move, marquee, lasso, brush, clone, gradient, crop, transform, pen, text…)
@@ -431,7 +431,7 @@ psd/src/
 | Paint (`paint`) | dab generation (hardness, roundness, angle, spacing, scatter), dynamics from pressure/tilt/velocity, smoothing (pulled string / lazy mouse), wet edges, airbrush, eraser, clone/heal sources, blend modes per stroke, `.abr` import | CPU first, GPU later |
 | Text (`text`) | font DB trait (system fonts native, bundled fonts on web), parley layout, per-run styles, paragraph options, warp; renders to a raster cache | — |
 | Vector (`vector`) | shapes, bezier paths, pen tool geometry, strokes (dash, align, caps), boolean ops → coverage via vello_cpu | — |
-| ML (`ml`) | `InferenceBackend` trait; tasks: `segment_point/box` (SAM2), `matte_subject` (background removal), `depth`, `sky`; model registry with SHA-256 verification and on-demand download | backend-dependent |
+| ML (`ml`) | Today: `GenerativeProvider` trait (pixels + mask in, pixels out) over a `Transport` trait, with a local IOPaint/LaMa provider ([generative-expand.md](generative-expand.md)). Planned: `InferenceBackend` trait; tasks: `segment_point/box` (SAM2), `matte_subject` (background removal), `depth`, `sky`; model registry with SHA-256 verification and on-demand download | backend-dependent |
 
 **Rules for every algorithm:**
 - **Signature:** a pure function `fn(input: &SurfaceView, params: &P, region: Rect, cancel: &CancelToken) -> Surface`.

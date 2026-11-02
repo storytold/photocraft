@@ -237,6 +237,10 @@ pub struct Session {
     pub preset_store: Option<preset_store::PresetStore>,
     /// Window › Actions. The list persists with the preset store when one is attached.
     pub actions: actions_cmds::ActionState,
+    /// The generative provider (Image › Generative Expand), injected by the app once the user has
+    /// configured and accepted one (`photocraft_ml`). `None` = the feature is absent: its
+    /// commands report "not configured" and the UI shows no menu item.
+    pub generative: Option<std::sync::Arc<dyn photocraft_ml::GenerativeProvider>>,
     /// Gate for every command the session runs, including the ones a command runs on its own
     /// behalf and `actions.play` steps. Untrusted sessions (MCP, the control channel) install
     /// the same check a top-level request sees. `None` runs everything, which is what a local

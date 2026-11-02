@@ -1,0 +1,29 @@
+[package]
+name = "photocraft-ml"
+description = "Generative provider interface: pixels in, pixels out, over a swappable transport (local IOPaint helper first)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# The real HTTP transport (`UreqTransport`). The engine builds without it: only the app that
+# configures a provider links an HTTP client.
+http = ["dep:ureq"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# PNG is the wire format to and from the helper (MIT OR Apache-2.0; already in the tree via codecs).
+png = "0.18"
+# Base64 for the JSON payload (MIT OR Apache-2.0; already in the tree via sigstore).
+base64 = "0.22"
+
+# The real HTTP transport is native only; the wasm build gets the trait and the fake.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Blocking HTTP client (MIT OR Apache-2.0; already in the tree via craft-update). Plain HTTP only:
+# the helper lives on this machine, and no TLS keeps the certificate stores out of the build.
+ureq = { version = "3.5", default-features = false, optional = true }

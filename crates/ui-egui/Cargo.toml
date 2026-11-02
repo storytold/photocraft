@@ -18,6 +18,9 @@ photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-gpu = { workspace = true }
 photocraft-engine = { workspace = true }
+# Image › Generative Expand's provider trait and the fake transport for tests (`generative_ui`);
+# the HTTP client stays in the app that configures a provider.
+photocraft-ml = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-plugins = { workspace = true }
 photocraft-algo = { workspace = true }

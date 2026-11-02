@@ -43,6 +43,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("image.generativeExpand", "image.canvasSize"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
@@ -99,6 +100,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             let at = after.or_else(|| items.iter().rposition(|i| i.path.first() == top.as_ref())).map_or(items.len(), |p| p + 1);
             items.insert(at, e);
         }
+    }
+    // Image › Generative Expand exists only while a provider is configured (Preferences › AI
+    // Integrations); no placeholder item otherwise (upstream issue #41).
+    if app.session.generative.is_none() {
+        items.retain(|i| i.id != "image.generativeExpand");
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
     if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())

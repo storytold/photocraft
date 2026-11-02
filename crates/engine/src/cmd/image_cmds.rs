@@ -522,35 +522,42 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let dy = ((nh as f64 - oh) * ay).round() as i32;
     let ext = extension_color(s, p);
     s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
-    s.edit("Canvas Size", |doc, _| {
-        translate_doc(doc, "image.canvasSize", dx, dy)?;
-        doc.size = Size::new(nw, nh);
-        if nw > ow as u32 || nh > oh as u32 {
-            drop_fill_caches(&mut doc.layers);
-        }
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
-        let canvas = doc.bounds();
-        let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
-        // A Background cannot contain transparent pixels. When a transparent
-        // extension adds canvas area, make it a normal paintable layer first.
-        // A shrink or no-op resize must not silently convert the Background.
-        if ext[3] == 0.0
-            && (nw > ow as u32 || nh > oh as u32)
-            && let Some(bg) = doc.background_mut()
-        {
-            crate::extra_cmds::unlock_background(bg);
-        }
-        // The locked Background layer is extended with the extension colour.
-        if ext[3] > 0.0
-            && let Some(bg) = doc.background_mut()
-            && let LayerContent::Raster(surf) = &mut bg.content
-        {
-            let px = photocraft_raster::from_rgba(&surf.format(), ext);
-            fill_background_extension(surf, canvas, old, &px);
-        }
-        Ok(())
-    })?;
+    s.edit("Canvas Size", |doc, _| resize_canvas(doc, "image.canvasSize", nw, nh, dx, dy, ext))?;
     Ok(json!({ "width": nw, "height": nh, "offset": [dx, dy] }))
+}
+
+/// Canvas Size's edit: the canvas becomes `nw` × `nh` with the old image moved to `(dx, dy)` and
+/// any added area in the extension colour `ext` (transparent when its alpha is 0). Generative
+/// Expand grows the canvas transparently through this before it adds its layer. Call inside a
+/// `Session::edit` after `set_sampler_map` with the same translation.
+pub(crate) fn resize_canvas(doc: &mut Document, cmd: &str, nw: u32, nh: u32, dx: i32, dy: i32, ext: [f32; 4]) -> Result<()> {
+    let (ow, oh) = (doc.size.width, doc.size.height);
+    translate_doc(doc, cmd, dx, dy)?;
+    doc.size = Size::new(nw, nh);
+    if nw > ow || nh > oh {
+        drop_fill_caches(&mut doc.layers);
+    }
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+    let canvas = doc.bounds();
+    let old = Rect::from_xywh(dx, dy, ow, oh);
+    // A Background cannot contain transparent pixels. When a transparent
+    // extension adds canvas area, make it a normal paintable layer first.
+    // A shrink or no-op resize must not silently convert the Background.
+    if ext[3] == 0.0
+        && (nw > ow || nh > oh)
+        && let Some(bg) = doc.background_mut()
+    {
+        crate::extra_cmds::unlock_background(bg);
+    }
+    // The locked Background layer is extended with the extension colour.
+    if ext[3] > 0.0
+        && let Some(bg) = doc.background_mut()
+        && let LayerContent::Raster(surf) = &mut bg.content
+    {
+        let px = photocraft_raster::from_rgba(&surf.format(), ext);
+        fill_background_extension(surf, canvas, old, &px);
+    }
+    Ok(())
 }
 
 /// The largest side an explicit crop may give the canvas (the `file.new` and Canvas Size limit).

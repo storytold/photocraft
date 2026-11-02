@@ -74,6 +74,16 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();
     }
+    // AI Integrations: Image › Generative Expand (`generative_ui`).
+    if key == "generativeEnabled" {
+        return "Enable Generative Expand".into();
+    }
+    if key == "generativeEndpoint" {
+        return "Generative Helper Address".into();
+    }
+    if key == "generativePrivacyAccepted" {
+        return "I have read the privacy notice below and accept it".into();
+    }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
         if i == 0 {
@@ -400,6 +410,10 @@ pub(super) fn section_fields(
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+    // The privacy notice the acceptance checkbox refers to, with the address it applies to.
+    if section == "integrations" && (query.is_empty() || preference_matches(section, "generativePrivacyAccepted", &query)) {
+        crate::generative_ui::privacy_rows(ui, obj);
+    }
 }
 
 /// One grid row per setting in `keys` (already filtered by `field_visible`).

@@ -4990,6 +4990,7 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
+ "photocraft-ml",
  "photocraft-raster",
  "photocraft-tablet",
  "photocraft-ui-egui",
@@ -5162,6 +5163,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-ipp",
+ "photocraft-ml",
  "photocraft-ops",
  "photocraft-paint",
  "photocraft-plugins",
@@ -5278,6 +5280,17 @@ dependencies = [
 [[package]]
 name = "photocraft-ipp"
 version = "0.17.0"
+
+[[package]]
+name = "photocraft-ml"
+version = "0.17.0"
+dependencies = [
+ "base64 0.22.1",
+ "png 0.18.1",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
+]
 
 [[package]]
 name = "photocraft-ops"
@@ -5413,6 +5426,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-gpu",
  "photocraft-io",
+ "photocraft-ml",
  "photocraft-paint",
  "photocraft-plugins",
  "photocraft-psd",

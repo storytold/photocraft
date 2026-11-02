@@ -87,6 +87,7 @@ pub(super) mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod generative_cmds;
 pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod history_cmds;
@@ -1242,6 +1243,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::retouch_cmds::specs());
     v.extend(crate::redeye_cmds::specs());
     v.extend(crate::image_cmds::specs());
+    v.extend(crate::cmd::generative_cmds::specs());
     v.extend(crate::perspective_crop_cmds::specs());
     v.extend(crate::selection_cmds::specs());
     v.extend(crate::magnetic_cmds::specs());

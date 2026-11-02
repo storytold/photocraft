@@ -275,6 +275,27 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     let dialog = |app: &mut PhotocraftApp, fields: Value, choices: Value| Some(Ok(json!({"dialog": form(app, id, label, fields, choices)})));
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
+        "image.generativeExpand" => {
+            let Some(provider) = app.session.generative.clone() else {
+                return Some(Err(crate::generative_ui::not_configured()));
+            };
+            let mut fields = json!({
+                "left": 0, "right": 0, "top": 0, "bottom": 0,
+                "__order": ["left", "right", "top", "bottom", "prompt"],
+                "__labels": {
+                    "left": tl!("Left (pixels)"),
+                    "right": tl!("Right (pixels)"),
+                    "top": tl!("Top (pixels)"),
+                    "bottom": tl!("Bottom (pixels)"),
+                    "prompt": tl!("Prompt"),
+                },
+            });
+            // LaMa takes no prompt; a provider that does gets a text field.
+            if provider.accepts_prompt() {
+                fields["prompt"] = json!("");
+            }
+            dialog(app, fields, json!({}))
+        }
         "file.openExrParts" => open_exr_parts_dialog(app),
         "file.saveACopy" => Some(save_a_copy(app)),
         "file.placeEmbedded" | "file.placeLinked" => {

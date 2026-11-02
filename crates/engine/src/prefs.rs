@@ -995,11 +995,35 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Image › Generative Expand: fill the new canvas area with a local AI helper. Off by default
+    /// (upstream issue #41); the menu item exists only while this, the privacy acceptance and an
+    /// address are all set (`photocraft_ml`).
+    pub generative_enabled: bool,
+    /// Where the helper listens, e.g. IOPaint's default `http://127.0.0.1:8080`.
+    pub generative_endpoint: String,
+    /// The user has read the privacy notice (pixels of the document go to the helper address)
+    /// and accepted it. Reset it to be asked again.
+    pub generative_privacy_accepted: bool,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            generative_enabled: false,
+            generative_endpoint: photocraft_ml::DEFAULT_ENDPOINT.to_string(),
+            generative_privacy_accepted: false,
+        }
+    }
+}
+
+impl Integrations {
+    /// The helper address Generative Expand should use, when the user has turned the feature on
+    /// and accepted the privacy notice; `None` means no provider (the feature is absent).
+    pub fn generative_endpoint(&self) -> Option<&str> {
+        let endpoint = self.generative_endpoint.trim();
+        (self.generative_enabled && self.generative_privacy_accepted && !endpoint.is_empty()).then_some(endpoint)
     }
 }
 

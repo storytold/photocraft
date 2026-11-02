@@ -319,6 +319,11 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Builds Image › Generative Expand's provider for a helper address (Preferences › AI
+/// Integrations), or says why it can't (`generative_ui`). `None` where no provider can run: the
+/// web build and tests.
+pub type GenerativeFactoryFn = Box<dyn Fn(&str) -> Result<std::sync::Arc<dyn photocraft_ml::GenerativeProvider>, String>>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -370,6 +375,9 @@ pub struct Services {
     pub beep: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// Image › Generative Expand's provider for the address in Preferences › AI Integrations
+    /// (`generative_ui::sync`). `None` = the feature is absent (web build, tests).
+    pub generative_factory: Option<GenerativeFactoryFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

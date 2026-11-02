@@ -32,3 +32,31 @@ documents `ERROR_UNABLE_TO_MOVE_REPLACEMENT` as leaving the replaced file delete
 replacement under its temporary name — a failed save that loses the user's document. With a
 backup name the same failure leaves both files alone, and the one failure that does move things
 (`ERROR_UNABLE_TO_MOVE_REPLACEMENT_2`) is unwound in `atomic/meta.rs`.
+
+## 2026-11-02: Generative Expand through a local helper, behind a provider interface (#41)
+
+The first generative feature is Image › Generative Expand, and it ships no model. A
+`GenerativeProvider` trait in `crates/ml` takes an RGBA image and a mask and returns pixels;
+the engine command, the dialog and the preferences only know that trait. Every provider goes
+through a `Transport` trait, so the engine and the web build compile without an HTTP client,
+tests use a fake, and the one real transport (plain HTTP over `ureq`, loopback) lives behind a
+cargo feature only the desktop app turns on.
+
+**Why a helper program and not an in-process runtime.** Running a model in Rust means picking
+an inference runtime (ort, burn, candle), bundling weights and a licence review per model, and
+a GPU story per platform. A local [IOPaint](https://github.com/Sanster/IOPaint) process already
+serves LaMa and a dozen other models behind one small HTTP API, is Apache-2.0, runs on a CPU,
+and keeps the pixels on the user's machine. The provider interface is the part that lasts; the
+helper is the cheapest first backend, and a remote or in-process one is one more `impl`.
+
+**Why LaMa first and no prompt.** It is small (about 200 MB), free, runs in seconds on a CPU,
+and continues textures and simple structures well enough for the common "more sky, more
+floor" use. Diffusion models with prompts are slower than most laptops tolerate and raise
+licence questions; the trait carries `prompt` and `accepts_prompt()` so they slot in later,
+and the dialog shows a Prompt field only when the provider says it uses one.
+
+**Why the feature is absent, not greyed out, until configured.** Issue #41's rules: off by
+default, a privacy notice before the first request, no placeholder menus. The session's
+provider is `Option`; `None` means no menu item and "not configured" from the commands. The
+three preferences (on/off, address, privacy accepted) live on the existing AI Integrations
+page rather than a new section.
