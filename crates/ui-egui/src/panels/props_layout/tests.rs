@@ -381,3 +381,38 @@ fn shape_properties_uses_vector_shape_icon() {
         }
     }
 }
+
+#[test]
+fn shape_header_paints_18px_icon() {
+    let (session, layers) = kinds();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+
+    for (kind, id) in layers {
+        let layer = layer_of(&app, id);
+        let mut ready = false;
+        let mut h = Harness::new_ui(move |ui| {
+            if !ready {
+                crate::theme::install_fonts(ui.ctx());
+                egui_extras::install_image_loaders(ui.ctx());
+                ready = true;
+                return;
+            }
+            header(ui, &layer);
+        });
+        h.run_steps(4);
+
+        let icon_sizes: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect.rect.size()),
+                _ => None,
+            })
+            .collect();
+
+        let expected = if kind == "shape" { 18.0 } else { 15.0 };
+
+        assert_eq!(icon_sizes, vec![vec2(expected, expected)], "{kind}: Properties header icon size");
+    }
+}
