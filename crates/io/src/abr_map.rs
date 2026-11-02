@@ -530,7 +530,7 @@ fn mask_blend_is_set(to: &Descriptor) -> bool {
 }
 
 /// Box-downsample a `w × h` plane so neither side exceeds `max`.
-fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
+pub(crate) fn fit(w: u32, h: u32, v: Vec<f32>, max: u32) -> (u32, u32, Vec<f32>) {
     if w <= max && h <= max {
         return (w, h, v);
     }

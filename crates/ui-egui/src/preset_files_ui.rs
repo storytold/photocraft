@@ -1,6 +1,7 @@
 //! Preset files opened like documents (File › Open, drag-and-drop, the Brushes panel's
 //! Import Brushes…, the Preset Manager's Load…): Photoshop brushes (`.abr`) go to the brush
-//! library through `brush.presets.importAbr`, gradients (`.grd`) to the Gradients panel through
+//! library through `brush.presets.importAbr` and Procreate brushes (`.brush`, `.brushset`)
+//! through `brush.presets.importProcreate`, gradients (`.grd`) to the Gradients panel through
 //! `gradient.presets.importGrd`, layer styles (`.asl`) to the Styles panel through
 //! `style.presets.importAsl`, swatches (`.aco`, `.act`, `.ase`) to the Swatches panel through
 //! `swatches.import`, patterns (`.pat`) to the Patterns panel through `pattern.import`, keyboard
@@ -16,7 +17,7 @@ use crate::PhotocraftApp;
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
 /// `.psp` is Photoshop's live `Keyboard Shortcuts.psp` (the same XML as a `.kys`); other `.psp`
 /// settings files are refused with a clear message.
-pub const PRESET_EXTS: &[&str] = &["abr", "grd", "asl", "pat", "aco", "act", "ase", "kys", "psp"];
+pub const PRESET_EXTS: &[&str] = &["abr", "brush", "brushset", "grd", "asl", "pat", "aco", "act", "ase", "kys", "psp"];
 
 fn ext(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
@@ -27,13 +28,14 @@ pub fn is_preset_file(name: &str) -> bool {
     PRESET_EXTS.contains(&ext(name).as_str())
 }
 
-/// Image files Import Brushes… offers besides `.abr`: each becomes a sampled brush tip.
+/// Image files Import Brushes… offers besides brush files: each becomes a sampled brush tip.
 pub const BRUSH_IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "psd", "psb", "bmp", "gif", "webp", "tga"];
 
-/// Brushes panel / brush preset picker › Import Brushes…: an `.abr` joins the brush library as a
-/// group (as File › Open does), an image file becomes a new brush preset with that image as its tip.
+/// Brushes panel / brush preset picker › Import Brushes…: an `.abr`, `.brush` or `.brushset` joins
+/// the brush library as a group (as File › Open does), an image file becomes a new brush preset
+/// with that image as its tip.
 pub fn import_brushes(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let exts: Vec<&str> = std::iter::once("abr").chain(BRUSH_IMAGE_EXTS.iter().copied()).collect();
+    let exts: Vec<&str> = ["abr", "brushset", "brush"].into_iter().chain(BRUSH_IMAGE_EXTS.iter().copied()).collect();
     app.pick_file_bytes_filtered(&exts, |app, name, bytes| match open(app, &name, &bytes) {
         Some(r) => r.map(|()| Value::Null),
         None => import_brush_image(app, &name, &bytes),
@@ -88,6 +90,7 @@ fn source(name: &str, bytes: &[u8]) -> Value {
 pub fn open(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
     let (cmd, what) = match ext(name).as_str() {
         "abr" => ("brush.presets.importAbr", "brushes"),
+        "brush" | "brushset" => ("brush.presets.importProcreate", "brushes"),
         "grd" => ("gradient.presets.importGrd", "gradients"),
         "asl" => ("style.presets.importAsl", "styles"),
         "pat" => ("pattern.import", "patterns"),
@@ -173,6 +176,7 @@ mod tests {
         assert!(is_preset_file("Brand.ACO"));
         assert!(is_preset_file("exchange.ase"));
         assert!(is_preset_file("Debaser-ColourLibrary-Part6.PAT"));
+        assert!(is_preset_file("Cat's Basics.brushset") && is_preset_file("Plain_Stitch.BRUSH"));
         assert!(!is_preset_file("photo.psd"));
         assert!(!is_preset_file("abr"));
     }
@@ -239,6 +243,43 @@ mod tests {
     /// The same prompt guards a gradient group: `Fire.grd` again asks, Cancel imports nothing,
     /// Import as New Group adds "Fire (2)", Replace swaps "Fire" alone (#10640).
     #[test]
+    fn reimporting_a_procreate_file_asks_before_touching_its_group() {
+        use photocraft_io::procreate::{Field, write_archive, write_brushset};
+        let brush = |name: &str| write_archive(&[("name", Field::Text(name.into())), ("paintSize", Field::Num(0.02))]);
+        let set = write_brushset("Kit", &[(brush("Chalk"), None, None), (brush("Ink"), None, None)]);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let in_group = |app: &PhotocraftApp, g: &str| app.session.tools.presets.iter().filter(|p| p.group == g).count();
+        let prompt = |app: &PhotocraftApp| app.ui.dialogs.iter().find(|d| crate::preset_group_prompt::owns(&d.fields)).map(|d| d.id);
+        open(&mut app, "Kit.brushset", &set).unwrap().unwrap();
+        assert_eq!(in_group(&app, "Kit"), 2);
+        assert!(prompt(&app).is_none(), "a new group imports without asking");
+        let edited = app.session.tools.presets.iter_mut().find(|p| p.group == "Kit").unwrap();
+        edited.brush.size = 77.0;
+        let edited = edited.name.clone();
+        let size = |app: &PhotocraftApp| app.session.tools.presets.iter().find(|p| p.name == edited).map(|p| p.brush.size);
+
+        open(&mut app, "Kit.brushset", &set).unwrap().unwrap();
+        let id = prompt(&app).expect("the prompt is open");
+        crate::dialogs::cancel(&mut app, id).unwrap();
+        assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 0));
+
+        open(&mut app, "Kit.brushset", &set).unwrap().unwrap();
+        let id = prompt(&app).expect("the prompt is open");
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 2));
+        assert_eq!(size(&app), Some(77.0));
+
+        open(&mut app, "Kit.brushset", &set).unwrap().unwrap();
+        let id = prompt(&app).expect("the prompt is open");
+        if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
+            d.fields.insert("choice".into(), json!("replace"));
+        }
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 2));
+        assert_ne!(app.session.tools.presets.iter().find(|p| p.group == "Kit").map(|p| p.brush.size), Some(77.0), "replace dropped the edit");
+    }
+
+    #[test]
     fn reimporting_a_gradient_file_asks_before_touching_its_group() {
         use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let stop = |location: f32, color| GrdStop { location, midpoint: 0.5, color };
@@ -290,7 +331,7 @@ mod tests {
         app.poll_file_dialog(&egui::Context::default(), None);
         match asked.borrow().first() {
             Some(crate::file_dialog::FileDialogRequest::Open { extensions: Some(e), .. }) => {
-                assert!(e.iter().any(|x| x == "abr") && e.iter().any(|x| x == "png"), "{e:?}")
+                assert!(["abr", "brushset", "brush", "png"].iter().all(|ext| e.iter().any(|x| x == ext)), "{e:?}")
             }
             other => panic!("expected a filtered open dialog, got {other:?}"),
         }

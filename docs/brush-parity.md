@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (Procreate `.brush`/`.brushset` import, #7364; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -111,6 +111,7 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | .abr import (v1/v2/v6) and export, persistent presets, folders | done | `psd/src/abr.rs` |
+| Procreate `.brush`/`.brushset` import | partial | `io/src/procreate.rs`, #7364: shape and grain, spacing (matches Procreate's previews within 7 %), size, rotation, scatter, count, pressure and colour jitter; size and jitter scales not measured against Procreate; taper, wet mix, speed and tilt dynamics listed as left out |
 | Brushes panel: drag a folder into a folder | missing | #2014 |
 | Dragged brush preset preview | done | Cached, translucent tip thumbnail plus name in panel list/grid and the preset picker; `ui-egui/src/brushes_tab.rs`, real pointer-drag test in `brushes_tab_tests.rs` (#4225, partial) |
 | Tool presets (.tpl) | partial | Tool Presets panel exists; .tpl import not found |
@@ -120,6 +121,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Procreate brushes import (#7364); no readiness percentage or estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
 | 2026-10-23 | minor | Hard-round built-in presets use 5% spacing (#8842); rendered large-tip outline and pressure-opacity continuity tests cover 8/16/32-bit and 0/49% smoothing. Other presets and user settings retain their spacing; percentages and estimates unchanged. |
 | 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |

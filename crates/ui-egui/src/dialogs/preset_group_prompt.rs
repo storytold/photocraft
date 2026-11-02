@@ -1,4 +1,4 @@
-//! Importing a brush (`.abr`) or gradient (`.grd`) file asks first when the library already has
+//! Importing a brush (`.abr`, `.brush`, `.brushset`) or gradient (`.grd`) file asks first when the library already has
 //! a group of the file's name with presets of the user's (#10640). The group key is only the file
 //! name, so it can be another author's set, or hold brushes the user edited or moved there, and
 //! the preset libraries are outside document history.
@@ -34,7 +34,7 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 /// (built-in brushes are never replaced, so they don't count).
 fn clashing(app: &PhotocraftApp, cmd: &str, group: &str) -> usize {
     match cmd {
-        "brush.presets.importAbr" => app.session.tools.presets.iter().filter(|x| !x.builtin && x.group == group).count(),
+        "brush.presets.importAbr" | "brush.presets.importProcreate" => app.session.tools.presets.iter().filter(|x| !x.builtin && x.group == group).count(),
         "gradient.presets.importGrd" => app.session.presets.gradients.iter().filter(|g| g.name == group).map(|g| g.items.len()).sum(),
         _ => 0,
     }

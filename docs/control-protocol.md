@@ -250,7 +250,7 @@ The shape is pinned by a test in `crates/automation/src/rpc.rs` (#3684).
 
 ### Background jobs (#210)
 
-Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`), file opens and interactive saves (File › Save, Save As and the TIFF Options continuation, #2017) run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute`, `ui.menu.invoke`, `ui.dialog.confirm` and `app.save` still wait for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files, saving files). Set `PHOTOCRAFT_INLINE_JOBS=1` to run everything inline.
+Long commands (every `filter.*`, `edit.contentAwareFill`, `edit.contentAwareScale`, `file.automate.photomerge`, `brush.presets.importAbr`, `brush.presets.importProcreate`), file opens and interactive saves (File › Save, Save As and the TIFF Options continuation, #2017) run as background jobs in the desktop app: the window keeps drawing, the status bar shows progress with a Cancel button, and jobs that lock the active document show a modal progress dialog (Esc cancels). `engine.execute`, `ui.menu.invoke`, `ui.dialog.confirm` and `app.save` still wait for the result by default; pass `"wait": false` to get `{job, pending: true}` at once, then poll `jobs.list` (`state`: running, done, failed, cancelled; `progress` 0–1; the result or error) and stop it with `jobs.cancel {job}`. A cancelled or failed job leaves the document unchanged. While a job runs, commands that would edit its document fail with "… is still running on this document". `ui.inspect` reports `jobs` (running jobs, opening files, saving files). Set `PHOTOCRAFT_INLINE_JOBS=1` to run everything inline.
 
 ## Preferences
 
@@ -309,8 +309,8 @@ Headless CLI/MCP sessions and the web build keep brush presets and the action li
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
 
-`brush.presets.importAbr` and `gradient.presets.importGrd` never overwrite a group by default: a
-file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
+`brush.presets.importAbr`, `brush.presets.importProcreate` and `gradient.presets.importGrd` never
+overwrite a group by default: a file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
 result's `group` names the one it landed in. Pass `"replace": true` to delete that group's own
 presets first (built-in brushes are kept); the preset libraries are outside document history, so
 this can't be undone (#10640). In the app, opening such a file (`app.open`, File › Open,
