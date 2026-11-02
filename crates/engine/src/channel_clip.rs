@@ -33,7 +33,7 @@ pub(crate) fn paste_color_target(s: &Session, p: &Value) -> Option<usize> {
 /// Copy the targeted colour or alpha channel as a grayscale clip, inside the selection (or the
 /// whole canvas). `Ok(None)` when no single channel is targeted: Copy copies the layer.
 pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
-    if let Some(colors) = crate::color_channels::target(s, p)?.filter(|c| c.len() > 1 || p.get("target").is_some() || p.get("layer").is_some()) {
+    if let Some(colors) = crate::color_channels::clip_colors(s, p)? {
         return copy_colors(s, p, colors).map(Some);
     }
     let Some(d) = s.active() else { return Ok(None) };

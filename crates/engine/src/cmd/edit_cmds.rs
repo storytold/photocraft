@@ -1047,7 +1047,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Ok(result);
                 }
                 // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
-                let colors = crate::color_channels::target(s, p)?.filter(|c| c.len() > 1 || p.get("target").is_some() || p.get("layer").is_some());
+                let colors = crate::color_channels::clip_colors(s, p)?;
                 // Composite Cut retains Copy's active-layer semantics. A native colour target uses
                 // the same resolved destination for both the copied planes and the cleared samples.
                 let id = if colors.is_some() { crate::commands::layer_param(s, p)? } else { active_id(s)? };

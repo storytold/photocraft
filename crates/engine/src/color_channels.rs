@@ -80,6 +80,13 @@ pub fn target(s: &Session, p: &Value) -> Result<Option<ColorChannels>> {
     if p.get("target").is_some() { explicit(p, count) } else { Ok(selected(s)) }
 }
 
+/// The colour channels Cut and Copy work on for this call, or `None` for the composite path. One
+/// targeted colour channel alone is the Channels panel's own state, which Cut and Copy follow
+/// only when the call says so by naming a target or a layer.
+pub(crate) fn clip_colors(s: &Session, p: &Value) -> Result<Option<ColorChannels>> {
+    Ok(target(s, p)?.filter(|c| c.len() > 1 || p.get("target").is_some() || p.get("layer").is_some()))
+}
+
 /// Protect unsupported operations before either the UI or automation can edit a whole layer.
 pub(crate) fn refusal(s: &Session, id: &str, p: &Value) -> Option<String> {
     let colors = match target(s, p) {
