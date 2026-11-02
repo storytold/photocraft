@@ -4441,3 +4441,249 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Cor da parada
 	Shapes can't use patterns yet	Formas ainda não podem usar padrões
 	Edit Brush…	Editar pincel…
+# Strings the sibling catalogs translate that pt-BR did not yet cover (translated 2026-10-31).
+	A:	A:
+	Adobe-rgb-compat	Compatível com Adobe RGB
+	Adwaita (Dark)	Adwaita (escuro)
+	Adwaita (Light)	Adwaita (claro)
+	All shortcuts reset to Photoshop defaults.	Todos os atalhos foram redefinidos para os padrões do Photoshop.
+	Any	Qualquer
+shape	Appearance	Aparência
+	Arc Lower	Arco inferior
+	Arc Upper	Arco superior
+	Arrows	Setas
+	Ask On Mismatch	Perguntar quando não corresponder
+	Ask On Missing	Perguntar quando ausente
+	Ask On Paste	Perguntar ao colar
+	Author Title	Cargo do autor
+	auto	automático
+cameraRaw	Balance	Equilíbrio
+	Based On	Com base em
+	Basic Latin	Latim básico
+cameraRaw	Before (Y)	Antes (Y)
+	Bend	Curvatura
+	Blend Text Gamma	Mesclar gama do texto
+	blue	azul
+	Bpc	Compensação de ponto preto
+	Breeze Dark	Breeze escuro
+	Breeze Light	Breeze claro
+	Calculating…	Calculando…
+cameraRaw	Camera Raw ({name})	Camera Raw ({name})
+cameraRaw	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+cameraRaw	Camera Raw isn't open	Camera Raw não está aberto
+cameraRaw	Cancel	Cancelar
+	Cancel transform	Cancelar transformação
+cameraRaw	Cancelled opening {name}	Abertura de {name} cancelada
+cameraRaw	Cancelled {label}	{label} cancelado
+	Case Sensitive	Diferenciar maiúsculas de minúsculas
+	Ccw	Anti-horário
+	Change Find	Alterar/localizar
+	Checkerboard	Xadrez
+smartSvg	Choose executable…	Escolher executável…
+smartSvg	Choose the application used to edit this SVG:	Escolha o aplicativo usado para editar este SVG:
+cameraRaw	Clarity	Claridade
+	Click to refresh histogram with uncached data	Clique para atualizar o histograma com dados sem cache
+	Cmyk	CMYK
+	Coated-cmyk	CMYK para papel revestido
+cameraRaw	Color Mixer	Misturador de cores
+cameraRaw	Color Priority	Prioridade de cor
+	Color Sampler Tool	Ferramenta Amostrador de cores
+	Commit transform	Confirmar transformação
+cameraRaw	Contrast	Contraste
+	Convert	Converter
+	Convert to Shape…	Converter em forma…
+	Cooling Filter (80)	Filtro de resfriamento (80)
+	Cooling Filter (82)	Filtro de resfriamento (82)
+	Cooling Filter (LBB)	Filtro de resfriamento (LBB)
+	Copyright Url	URL de direitos autorais
+	Count:	Contagem:
+	CPU Rendering	Renderização por CPU
+	Currency	Moeda
+cameraRaw	Curve	Curva
+	Cw	Horário
+	Cyrillic	Cirílico
+	Decrease Type Size	Diminuir tamanho do texto
+	Decrease Type Size by 10	Diminuir tamanho do texto em 10
+	Default Photoshop Size	Tamanho padrão do Photoshop
+cameraRaw	Dehaze	Remover névoa
+	Delete Hidden Layers	Excluir camadas ocultas
+cameraRaw	Detail	Detalhe
+cameraRaw	Developing {name}	Revelando {name}
+	Display-p3	Display P3
+	Dont Enlarge	Não ampliar
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	Arraste uma caixa de corte · arraste dentro para mover · as bordas redimensionam ({ratio} proporção, {centre} centro) · Espaço move durante o desenho · {commit} confirma · Esc cancela
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Arraste sobre a imagem para adicionar uma restrição; Shift para horizontal/vertical; clique com o botão direito para excluir.
+	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
+	Drag: draw freehand · Release on the start point: close	Arrastar: desenhar à mão livre · Soltar no ponto inicial: fechar
+	Drawn on the CPU: {reason}. Click for System Info.	Desenhado na CPU: {reason}. Clique para Informações do sistema.
+smartSvg	Edit SVG Smart Object	Editar objeto inteligente SVG
+@id	edit.clear	Limpar
+cameraRaw	Effects	Efeitos
+	Erase with Brush or Pencil (hold)	Apagar com Pincel ou Lápis (segure)
+	Export As: {name}	Exportar como: {name}
+	Exported {n} files	{n} arquivos exportados
+cameraRaw	Exposure	Exposição
+	fallback	alternativa
+cameraRaw	Feather	Difusão
+@id	file.close	Fechar
+layers	Fill	Preenchimento
+	Fill with Background Color	Preencher com a cor de fundo
+	Fill with Background Color, Preserve Transparency	Preencher com a cor de fundo, preservar transparência
+	Fill with Foreground Color	Preencher com a cor de primeiro plano
+	Fill with Foreground Color, Preserve Transparency	Preencher com a cor de primeiro plano, preservar transparência
+layers	Fill:	Preenchimento:
+	Fit Layer on Screen	Ajustar camada à tela
+	Flow:	Fluxo:
+	Forward	Avançar
+	Freeze Lasso	Laço de congelamento
+cameraRaw	Full-resolution preview unavailable	Pré-visualização em resolução total indisponível
+cameraRaw	Grain	Granulação
+	gray	cinza
+	Gray-gamma-2.2	Cinza gama 2.2
+	Greek	Grego
+	green	verde
+	Hand Tool (hold)	Ferramenta Mão (segure)
+cameraRaw	Highlight Clipping Warning (O)	Aviso de corte de realces (O)
+cameraRaw	Highlight Priority	Prioridade de realces
+cameraRaw	Highlights	Realces
+	Horizontal Distortion	Distorção horizontal
+	Import Brushes… (.abr)	Importar pincéis… (.abr)
+	Import Photoshop brushes (.abr)	Importar pincéis do Photoshop (.abr)
+@plural	Imported {n} brush from {file}|Imported {n} brushes from {file}	{n} pincel importado de {file}|{n} pincéis importados de {file}
+@plural	Imported {n} gradient from {file}|Imported {n} gradients from {file}	{n} degradê importado de {file}|{n} degradês importados de {file}
+@plural	Imported {n} pattern from {file}|Imported {n} patterns from {file}	{n} padrão importado de {file}|{n} padrões importados de {file}
+	Increase Type Size	Aumentar tamanho do texto
+	Increase Type Size by 10	Aumentar tamanho do texto em 10
+	Intent	Intenção
+colorRange	Invert	Inverter
+	Join the ArtCraft Discord ({url})	Participe do Discord do ArtCraft ({url})
+	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	Kerning: métrico, óptico ou um valor em 1/1000 em (Alt+←/→ no cursor)
+	Latin 1	Latim 1
+	Latin Extended-A	Latim estendido-A
+	Latin Extended-B	Latim estendido-B
+	layer mask	máscara de camada
+@id	layer.layerMask.apply	Aplicar máscara de camada
+	Level:	Nível:
+	Linear-srgb	sRGB linear
+	Link	Vincular
+cameraRaw	Load settings from a Camera Raw .xmp file	Carregar configurações de um arquivo .xmp do Camera Raw
+cameraRaw	Load Settings…	Carregar configurações…
+cameraRaw	Loaded Camera Raw settings from {file}	Configurações do Camera Raw carregadas de {file}
+layerLabel	Magenta	Cor magenta
+	Make Selection from Path	Criar seleção a partir do demarcador
+	manual	Manual
+	Mask Channel	Canal da máscara
+	Mask None	Sem máscara
+	Math Symbols	Símbolos matemáticos
+cameraRaw	Midpoint	Ponto médio
+cameraRaw	Midtones	Meios-tons
+	Monitor Profile	Perfil do monitor
+	Move Down	Mover para baixo
+	Move Up	Mover para cima
+	Nearest	Vizinho mais próximo
+cameraRaw	Noise Reduction	Redução de ruído
+	none	nenhum
+	Numbers	Números
+cameraRaw	OK	OK
+cameraRaw	Open	Abrir
+cameraRaw	Opened {name}	Aberto {name}
+	orange	laranja
+document	Orientation	Orientação
+smartSvg	Other application	Outro aplicativo
+cameraRaw	Paint Overlay	Sobreposição de pintura
+	Pattern Fill…	Preenchimento com padrão…
+	Percentile:	Percentil:
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (editor interno)
+	Policy Cmyk	Política de gerenciamento de cores para CMYK
+	Policy Gray	Política de gerenciamento de cores para cinza
+	Policy Rgb	Política de gerenciamento de cores para RGB
+	Proof Setup…	Configuração de prova…
+	Prophoto-compat	Compatível com ProPhoto
+	R G B	RGB
+	R g b	RGB
+cameraRaw	Radius	Raio
+	Rec2020	Rec. 2020
+	Reconstruct All	Reconstruir tudo
+layerLabel	Red	Vermelho
+	red	vermelho
+	Refine Edge…	Refinar borda…
+	Reset Essentials	Redefinir Essenciais
+	Rounded Rectangle Tool	Ferramenta Retângulo arredondado
+cameraRaw	Roundness	Arredondamento
+cameraRaw	Saturation	Saturação
+	Save Path	Salvar demarcador
+cameraRaw	Save Settings…	Salvar configurações…
+cameraRaw	Save these settings as a Camera Raw .xmp file	Salvar estas configurações como arquivo .xmp do Camera Raw
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Salvar no arquivo SVG aberto. Cada alteração salva vira uma etapa de desfazer no PhotoCraft.
+	Select Layer Under Cursor	Selecionar camada sob o cursor
+	Sgray	sGray
+cameraRaw	Shadow Clipping Warning (U)	Aviso de corte de sombras (U)
+cameraRaw	Shadows	Sombras
+cameraRaw	Sharpening	Nitidez
+	Show Channels in Color	Mostrar canais em cores
+cameraRaw	Show Lab Color Readouts	Mostrar leituras de cor Lab
+cameraRaw	Show Red at 3 o'clock	Mostrar vermelho na posição de 3 horas
+cameraRaw	Show Selected Region	Mostrar região selecionada
+cameraRaw	Show Skin Tone Indicator	Mostrar indicador de tom de pele
+	Show Statistics	Mostrar estatísticas
+cameraRaw	Show Vectorscope	Mostrar vetorscópio
+	Simulate Paper	Simular papel
+cameraRaw	Size	Tamanho
+	Solarized Dark	Solarized escuro
+	Source Channel	Canal de origem
+	Source Invert	Inverter origem
+	Source1 Channel	Canal da origem 1
+	Source1 Invert	Inverter origem 1
+	Source2 Channel	Canal da origem 2
+	Source2 Invert	Inverter origem 2
+	Source:	Origem:
+	Space	Espaço
+	Status Bar	Barra de status
+smartSvg	Stop syncing this Smart Object	Parar de sincronizar este objeto inteligente
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	Editor de SVG aberto. Salve o SVG para atualizar este objeto inteligente.
+	Target Channel 3	Canal de destino 3
+	Target Channel 4	Canal de destino 4
+	Target Channel 5	Canal de destino 5
+	Target Channel 6	Canal de destino 6
+	Target Channel 7	Canal de destino 7
+	Target Channel 8	Canal de destino 8
+	Target Channel 9	Canal de destino 9
+	Target Composite Channel	Canal composto de destino
+	Temporary	Temporário
+cameraRaw	Texture	Textura
+	The document does not have an embedded colour profile. Working space: {working}.	O documento não tem um perfil de cores incorporado. Espaço de trabalho: {working}.
+	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	O documento tem um perfil de cores incorporado que não corresponde ao espaço de trabalho.\nIncorporado: {embedded}\nEspaço de trabalho: {working}
+	Tile Horizontally	Lado a lado horizontalmente
+	Tile Vertically	Lado a lado verticalmente
+	Title	Título
+	To	Até
+	Toggle Layer Mask Overlay	Alternar sobreposição da máscara de camada
+cameraRaw	Tone Histogram	Histograma de tons
+	Uncached Refresh	Atualizar sem cache
+	unknown	desconhecido
+	Unlink	Desvincular
+	Up	Para cima
+smartSvg	Updates wait while another document or an editing dialog is active.	As atualizações aguardam enquanto outro documento ou uma caixa de diálogo de edição estiver ativo.
+	vector mask	máscara vetorial
+	Vertical Distortion	Distorção vertical
+cameraRaw	Vignetting	Vinheta
+	violet	violeta
+	W:	L:
+	Warming Filter (81)	Filtro de aquecimento (81)
+	Warming Filter (85)	Filtro de aquecimento (85)
+	Warming Filter (LBA)	Filtro de aquecimento (LBA)
+cameraRaw	White Balance: As Shot	Equilíbrio de branco: como fotografado
+	Whole Word	Palavra inteira
+	Working Cmyk	CMYK de trabalho
+	Working Gray	Cinza de trabalho
+	Working Rgb	RGB de trabalho
+	Working-cmyk	CMYK de trabalho
+	yellow	amarelo
+navigator	Zoom	Ampliação
+	Zoom In (hold, drag to scrub)	Aumentar zoom (segure, arraste para ajustar)
+	Zoom Out (hold)	Diminuir zoom (segure)
+@plural	{n} document|{n} documents	{n} documento|{n} documentos
+@plural	{n} pixel|{n} pixels	{n} pixel|{n} pixels
+	{verb} {mask} {layer}	{verb} {mask} {layer}
+	✓ Color Indicates Masked Areas	✓ A cor indica áreas mascaradas
+	✓ Color Indicates Selected Areas	✓ A cor indica áreas selecionadas
