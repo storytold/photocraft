@@ -122,6 +122,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
+| 2026-10-21 | Linux can use font-free Adwaita controls when System Title Bar is selected, while the integrated CSD title bar remains the default (as in #4439). Saved preferences are respected; startup and preference-dialog regressions cover both choices (#6266). |
 | 2026-10-22 | Vertical type (tategaki) gets JIS X 4051 line-start prohibition (行頭禁則): a column no longer begins with a small kana (ぁぃっゃゅょ…, ァィッャュョ…, half-width forms), the long-vowel mark (ー/ｰ), a closing bracket (」』）…), sentence punctuation (、。，．・：；？！) or an iteration/voiced-sound mark (々 ヽ ゛…); the break moves one character earlier, and a forced line break is still respected. Horizontal type keeps its Unicode UAX #14 breaks. Line-end prohibition (行末禁則), hanging punctuation (ぶら下げ) and full mojikumi remain. |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
 | 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
