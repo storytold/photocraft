@@ -134,3 +134,37 @@ fn split_tries_runs_that_many_seeds_and_keeps_the_best_separated() {
     assert!(s.execute(SPLIT, json!({"tries": 5})).is_err());
     assert!(s.execute(SPLIT, json!({"tries": 1.5})).is_err());
 }
+
+#[test]
+fn a_split_that_hides_the_picture_tries_further_seeds_and_says_so_when_none_separates() {
+    // Seeds 20 and 21 come back as the whole picture on every layer; 22 separates.
+    let fake = FakeNative::start_with(photocraft_genai::fake::Options { covering_split_seeds: vec![20, 21], ..Default::default() }).unwrap();
+    let mut s = session(&fake.url);
+    let before = s.active().unwrap().doc.layers.len();
+    let r = s.execute(SPLIT, json!({"layers": 3, "seed": 20, "tries": 1})).unwrap();
+    assert_eq!(r["seed"], 22, "the first seed that separated: {r}");
+    let scores: Vec<f64> = r["separation"].as_array().unwrap().iter().filter_map(Value::as_f64).collect();
+    assert_eq!(scores.len(), 3, "{r}");
+    assert_eq!((scores[0], scores[1]), (0.0, 0.0));
+    assert!(scores[2] > 0.0);
+    assert_eq!(s.active().unwrap().doc.layers.len(), before + 3, "one split placed");
+    drop(fake);
+
+    // No seed separates: an error, and the document is left as it was.
+    let fake = FakeNative::start_with(photocraft_genai::fake::Options { covering_split_seeds: (30..40).collect(), ..Default::default() }).unwrap();
+    let mut s = session(&fake.url);
+    let before = s.active().unwrap().doc.layers.len();
+    let e = s.execute(SPLIT, json!({"layers": 3, "seed": 30, "tries": 2})).unwrap_err().to_string();
+    assert!(e.contains("whole picture on one layer"), "{e}");
+    assert_eq!(fake.state().runs.len(), MAX_SPLIT_TRIES as usize, "every seed it may try");
+    assert_eq!(s.active().unwrap().doc.layers.len(), before);
+
+    // A split that separates at the first seed runs once, as asked.
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    s.execute(SPLIT, json!({"layers": 3, "seed": 5})).unwrap();
+    assert_eq!(fake.state().runs.len(), 1);
+    // One layer has nothing to separate and is placed as it comes.
+    s.execute(SPLIT, json!({"layers": 1, "seed": 6})).unwrap();
+    assert_eq!(fake.state().runs.len(), 2);
+}

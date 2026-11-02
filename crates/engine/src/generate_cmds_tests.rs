@@ -978,4 +978,9 @@ fn the_split_kept_is_the_one_whose_layers_hold_the_picture() {
     // Two such layers beat one, and of two with one each the fuller wins.
     assert!(split_separation(&[full(), layer(10), layer(20)]) > split_separation(&[full(), layer(50), layer(0)]));
     assert!(split_separation(&[full(), layer(40), layer(0)]) > split_separation(&[full(), layer(5), layer(0)]));
+    // A layer above the background that covers the picture hides the rest: the owner's split of
+    // 2026-11-02 (100/76/100 % opaque) looked like nothing had happened.
+    assert_eq!(split_separation(&[full(), layer(76), full()]), 0.0);
+    assert_eq!(split_separation(&[full(), layer(98), layer(30)]), 0.0);
+    assert!(split_separation(&[full(), layer(97), layer(0)]) > 0.0, "nearly all, not all");
 }

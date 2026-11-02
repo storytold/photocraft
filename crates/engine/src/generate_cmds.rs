@@ -4269,30 +4269,38 @@ const DEFAULT_SPLIT_TRIES: u32 = 1;
 /// How well a split separates the picture, for choosing between seeds: each layer above the
 /// background (the first) whose opaque share (alpha above half) is neither nearly none nor
 /// nearly all counts 1, plus its share up to a half, so of two splits with as many layers the
-/// one whose layers hold more of the picture wins. Qwen-Image-Layered leaves the whole picture
-/// on one layer at many seeds, the same through ComfyUI's own graph (the owner's portrait: a
-/// foreground layer at 2 of 10 seeds there, 7 of 10 here; 2026-11-01).
+/// one whose layers hold more of the picture wins. A layer above the background that is
+/// nearly all opaque hides every layer under it, so such a split scores 0 whatever else it
+/// holds: the owner's split of 2026-11-02 came back 100/76/100 % opaque (bottom to top), the
+/// whole picture again on top, and looked like nothing had happened. Qwen-Image-Layered leaves
+/// the whole picture on one layer at many seeds, the same through ComfyUI's own graph (the
+/// owner's portrait: a foreground layer at 2 of 10 seeds there, 7 of 10 here; 2026-11-01).
 pub(crate) fn split_separation(layers: &[Rgba8]) -> f64 {
-    layers
-        .iter()
-        .skip(1)
-        .map(|l| {
-            let px = l.data.len() / 4;
-            if px == 0 {
-                return 0.0;
-            }
-            let step = (px / 65_536).max(1);
-            let (mut on, mut n) = (0usize, 0usize);
-            for i in (0..px).step_by(step) {
-                n += 1;
-                if l.data.get(i * 4 + 3).is_some_and(|a| *a > 127) {
-                    on += 1;
-                }
-            }
-            let share = on as f64 / n.max(1) as f64;
-            if (0.02..=0.97).contains(&share) { 1.0 + share.min(0.5) } else { 0.0 }
-        })
-        .sum()
+    let shares: Vec<f64> = layers.iter().skip(1).map(opaque_share).collect();
+    if shares.iter().any(|s| *s > SPLIT_COVERING_SHARE) {
+        return 0.0;
+    }
+    shares.iter().map(|&share| if share >= 0.02 { 1.0 + share.min(0.5) } else { 0.0 }).sum()
+}
+
+/// An upper layer more opaque than this covers the picture ([`split_separation`]).
+const SPLIT_COVERING_SHARE: f64 = 0.97;
+
+/// The share of a layer's pixels with alpha above half (sampled to about 65 536 pixels).
+fn opaque_share(l: &Rgba8) -> f64 {
+    let px = l.data.len() / 4;
+    if px == 0 {
+        return 0.0;
+    }
+    let step = (px / 65_536).max(1);
+    let (mut on, mut n) = (0usize, 0usize);
+    for i in (0..px).step_by(step) {
+        n += 1;
+        if l.data.get(i * 4 + 3).is_some_and(|a| *a > 127) {
+            on += 1;
+        }
+    }
+    on as f64 / n.max(1) as f64
 }
 
 fn plan_split(s: &Session, p: &Value) -> Result<SplitPlan> {
@@ -4386,24 +4394,43 @@ fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
             };
             // `tries` seeds in a row (the prompt's conditioning and the model stay resident in
             // the worker, so each further try costs its sampling); the best-separated is kept.
+            // While no try has separated anything (score 0: nothing apart, or a layer covering
+            // the rest), further seeds run, up to [`MAX_SPLIT_TRIES`] in all: a split that
+            // looks like nothing happened is never the answer when another seed may do.
             let mut req = req;
             let mut best: Option<(f64, photocraft_genai::Response)> = None;
             let mut scores = Vec::with_capacity(tries as usize);
-            for t in 0..tries {
+            for t in 0..MAX_SPLIT_TRIES {
+                let separated = best.as_ref().is_some_and(|(b, _)| *b > 0.0);
+                if t >= tries && separated {
+                    break;
+                }
                 req.seed = seed.wrapping_add(u64::from(t)) % MAX_SEED;
-                let (lo, hi) = (0.9 * t as f32 / tries as f32, 0.9 * (t + 1) as f32 / tries as f32);
-                if tries > 1 {
+                let planned = if t < tries { tries } else { MAX_SPLIT_TRIES };
+                let (lo, hi) = (0.9 * t as f32 / planned as f32, 0.9 * (t + 1) as f32 / planned as f32);
+                if t >= tries {
+                    ctx.progress(lo, &format!("Nothing separated, trying another seed ({}/{MAX_SPLIT_TRIES})", t + 1));
+                } else if tries > 1 {
                     ctx.progress(lo, &format!("Try {}/{tries}", t + 1));
                 }
                 let resp = backend.as_ref().run(&req, &JobProgress::span(ctx, lo, hi)).map_err(gen_err)?;
                 ctx.check()?;
-                let score = split_separation(&resp.images);
+                // One layer is the picture itself: nothing to separate, nothing to retry.
+                let score = if resp.images.len() > 1 { split_separation(&resp.images) } else { 1.0 };
                 scores.push(score);
                 if best.as_ref().is_none_or(|(b, _)| score > *b) {
                     best = Some((score, resp));
                 }
             }
-            let Some((_, resp)) = best else { return Err(EngineError::Other("the backend returned no layers".into())) };
+            let Some((best_score, resp)) = best else { return Err(EngineError::Other("the backend returned no layers".into())) };
+            if best_score <= 0.0 {
+                // Every seed left the picture whole: placing those layers would change nothing
+                // the user can see, so say so instead.
+                return Err(EngineError::Other(format!(
+                    "the model left the whole picture on one layer at {} seeds; try another seed, a description of the picture as the prompt, or more layers",
+                    scores.len()
+                )));
+            }
             ctx.progress(0.95, "Placing");
             if resp.images.is_empty() {
                 return Err(EngineError::Other("the backend returned no layers".into()));
