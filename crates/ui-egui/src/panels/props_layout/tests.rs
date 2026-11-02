@@ -374,11 +374,14 @@ fn shape_properties_uses_vector_shape_icon() {
         let layer = layer_of(&app, id);
         let icon = kind_icon(&layer.content);
 
-        if kind == "shape" {
-            assert_eq!(icon, "vector-shape");
-        } else {
-            assert_ne!(icon, "vector-shape");
-        }
+        let expected_icon = match kind {
+            "pixel" => "image",
+            "shape" => "vector-shape",
+            "type" => "type",
+            _ => panic!("Unexpected layer kind: {kind}"),
+        };
+
+        assert_eq!(icon, expected_icon, "{kind}: Properties icon");
     }
 }
 
