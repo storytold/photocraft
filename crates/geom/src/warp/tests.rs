@@ -497,3 +497,29 @@ fn dragging_point_on_incomplete_mesh_leaves_it_unchanged() {
     mesh.drag_point(&before.points, 0, [5.0, -3.0]);
     assert_eq!(mesh, before);
 }
+
+#[test]
+fn split_rejects_patch_limit_without_invalidating_mesh() {
+    for vertical in [false, true] {
+        let mut mesh = if vertical { BezierMesh::identity(B, 1, 64) } else { BezierMesh::identity(B, 64, 1) };
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.split_v(0.5 / 64.0) } else { mesh.split_u(0.5 / 64.0) };
+        assert!(!accepted, "must reject a 65th patch on axis {vertical}");
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn split_can_reach_patch_limit_and_still_edit_other_axis() {
+    let mut mesh = BezierMesh::identity(B, 63, 63);
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.is_valid());
+    assert!(mesh.split_v(0.5 / 63.0));
+    assert!(mesh.is_valid());
+    assert_eq!((mesh.us.len(), mesh.vs.len()), (65, 65));
+    assert!(mesh.remove_split_u(1));
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.is_valid());
+}
