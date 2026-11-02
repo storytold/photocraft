@@ -34,8 +34,13 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let automated = app.automation_input || gate.is_some();
-    super::authorize_owned(app, COMMAND, &json!({"mode":"append","confirm":true}), gate, automated)?;
-    let fields = json!({MARK:true,"__command":COMMAND,"__label":"Reset Actions","mode":"append"});
+    let mode = if super::authorize_owned(app, COMMAND, &json!({"mode":"append","confirm":true}), gate, automated).is_ok() {
+        "append"
+    } else {
+        super::authorize_owned(app, COMMAND, &json!({"mode":"replace","confirm":true}), gate, automated)?;
+        "replace"
+    };
+    let fields = json!({MARK:true,"__command":COMMAND,"__label":"Reset Actions","mode":mode});
     let dialog = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     app.held_actions_reset = Some(Held { dialog, revision: app.session.actions.rev, gate, automated });
     Ok(json!({"dialog":dialog}))

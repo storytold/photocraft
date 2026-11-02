@@ -120,3 +120,24 @@ fn stale_denied_or_retargeted_confirmations_never_clear_the_library() {
         assert_eq!(h.state().session.active().unwrap().revision, revision, "{mode}");
     }
 }
+
+/// Suspended recording, rather than a stale warning revision, prevents Clear All from losing a call.
+#[test]
+fn clear_confirmation_refuses_a_recording_suspended_at_a_step_dialog() {
+    let mut h = harness();
+    h.state_mut().background_jobs = false;
+    let a = &mut h.state_mut().session.actions.list[0];
+    a.steps = vec![("filter.blur.gaussianBlur".into(), json!({"radius":1}))];
+    a.dialogs.insert(0);
+    let warning = open(&mut h);
+    let revision = h.state().session.actions.rev;
+    h.state_mut().run("actions.record", json!({"action":"B"})).unwrap();
+    let paused = h.state_mut().run("actions.play", json!({"action":"A"})).unwrap();
+    assert!(paused["paused"]["dialog"].is_u64());
+    assert!(h.state().session.actions.recording.is_none());
+    assert_eq!(h.state().session.actions.rev, revision, "the original warning is still current");
+    let library = h.state().session.actions.list.clone();
+    let error = dialogs::confirm(h.state_mut(), warning).unwrap_err();
+    assert!(error.contains("step dialog"), "{error}");
+    assert_eq!(h.state().session.actions.list, library);
+}

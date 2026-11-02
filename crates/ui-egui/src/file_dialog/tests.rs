@@ -1484,3 +1484,44 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
 }
+
+/// A tiny caller cap rejects picked paths and existing byte payloads before their callback runs.
+#[test]
+fn picked_file_limit_refuses_before_callback_and_keeps_other_callers_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let exact = dir.path().join("exact.atn");
+    let over = dir.path().join("over.atn");
+    std::fs::write(&exact, b"1234").unwrap();
+    std::fs::write(&over, b"12345").unwrap();
+    for (chosen, max, allowed) in [
+        (FileDialogAnswer::Paths(vec![exact.to_str().unwrap().into()]), Some(4), true),
+        (FileDialogAnswer::Paths(vec![over.to_str().unwrap().into()]), Some(4), false),
+        (FileDialogAnswer::Contents("exact.atn".into(), b"1234".to_vec()), Some(4), true),
+        (FileDialogAnswer::Contents("over.atn".into(), b"12345".to_vec()), Some(4), false),
+        (FileDialogAnswer::ContentsMany(vec![("over.atn".into(), b"12345".to_vec())]), Some(4), false),
+        (FileDialogAnswer::Paths(vec![over.to_str().unwrap().into()]), None, true),
+        (FileDialogAnswer::Contents("over.atn".into(), b"12345".to_vec()), None, true),
+    ] {
+        let (mut app, open, _) = app();
+        let ctx = egui::Context::default();
+        let called = Rc::new(std::cell::Cell::new(false));
+        let callback = called.clone();
+        let then = move |_: &mut PhotocraftApp, _: String, bytes: Vec<u8>| {
+            callback.set(true);
+            Ok(json!({"bytes":bytes.len()}))
+        };
+        if let Some(max) = max {
+            app.pick_file_bytes_with_limit(&["atn"], Some(max), then).unwrap();
+        } else {
+            app.pick_file_bytes_filtered(&["atn"], then).unwrap();
+        }
+        app.poll_file_dialog(&ctx, None);
+        answer(&open, Some(chosen));
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(called.get(), allowed);
+        if !allowed {
+            assert!(app.ui.status_error);
+            assert!(app.ui.status.contains("larger"), "{}", app.ui.status);
+        }
+    }
+}

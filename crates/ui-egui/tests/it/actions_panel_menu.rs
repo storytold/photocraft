@@ -92,6 +92,20 @@ fn insert_menu_item_chooser_cancels_or_records_descriptor_free_filter_event() {
     let dialog = played["paused"]["dialog"].as_u64().unwrap();
     assert_eq!(h.state_mut().ui.dialog_mut(dialog).unwrap().fields["__command"], "filter.blur.gaussianBlur");
     dialogs::cancel(h.state_mut(), dialog).unwrap();
+    h.state_mut().run("paint.stroke", json!({"points":[[6,6]],"size":3,"hardness":1,"color":"#000000"})).unwrap();
+    let original = photocraft_compose::flatten(&h.state().session.active().unwrap().doc).into_px();
+    let mut expected = Session::new();
+    expected.add_document((*h.state().session.active().unwrap().doc).clone(), None);
+    expected.execute("filter.blur.gaussianBlur", json!({"radius":2})).unwrap();
+    let expected = photocraft_compose::flatten(&expected.active().unwrap().doc).into_px();
+    assert_ne!(expected, original, "the Gaussian fixture has a visible effect");
+    h.state_mut().session.actions.list[0].steps.push(("select.all".into(), json!({})));
+    let paused = h.state_mut().run("actions.play", json!({"action":"A"})).unwrap();
+    let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("radius".into(), json!(2));
+    dialogs::confirm(h.state_mut(), dialog).unwrap();
+    assert_eq!(photocraft_compose::flatten(&h.state().session.active().unwrap().doc).into_px(), expected);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "confirmation resumes the following step");
 }
 
 /// The selected path is snapshotted without applying it to the document.
@@ -214,4 +228,42 @@ fn paused_menu_previews_and_picker_callbacks_keep_the_requesting_gate() {
     assert!(h.state().ui.status.contains("map path denied"), "{}", h.state().ui.status);
     assert_eq!(h.state().session.active().unwrap().revision, revision);
     assert_eq!(h.state().session.actions.list[0].steps[0].1, json!({}));
+}
+
+/// Policy may permit the chosen filter while refusing Image Size and append mode.
+fn chosen_only(id: &str, p: &Value) -> photocraft_engine::Result<()> {
+    if id == "image.imageSize"
+        || id == "actions.insertMenuItem" && p.get("id").is_some_and(|v| v == "image.imageSize")
+        || id == "actions.reset" && p.get("mode").is_some_and(|v| v == "append")
+    {
+        Err(EngineError::Other("choice denied".into()))
+    } else {
+        Ok(())
+    }
+}
+
+/// The chooser is not pre-authorized as the default command the user might never select.
+#[test]
+fn menu_chooser_authorizes_the_selected_command_without_default_probe() {
+    let mut h = harness();
+    h.state_mut().session.authorize = Some(chosen_only);
+    let dialog = open(&mut h, "Insert Menu Item…");
+    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("id".into(), json!("filter.blur.gaussianBlur"));
+    dialogs::confirm(h.state_mut(), dialog).unwrap();
+    assert_eq!(h.state().session.actions.list[0].steps.len(), 1);
+    let dialog = open(&mut h, "Insert Menu Item…");
+    assert!(dialogs::confirm(h.state_mut(), dialog).is_err());
+    assert_eq!(h.state().session.actions.list[0].steps.len(), 1);
+}
+
+/// Replace must remain reachable when the policy refuses Reset's append option.
+#[test]
+fn reset_offers_allowed_replace_when_append_is_denied() {
+    let mut h = harness();
+    h.state_mut().session.authorize = Some(chosen_only);
+    let dialog = open(&mut h, "Reset Actions…");
+    assert_eq!(h.state_mut().ui.dialog_mut(dialog).unwrap().fields["mode"], "replace");
+    dialogs::confirm(h.state_mut(), dialog).unwrap();
+    assert!(h.state().session.actions.list.is_empty());
+    assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_PLACEHOLDER]);
 }

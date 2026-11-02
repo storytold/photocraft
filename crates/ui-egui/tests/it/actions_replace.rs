@@ -177,3 +177,18 @@ fn another_dialog_cannot_consume_the_pending_replacement() {
     assert_eq!(h.state().session.actions.list[0].name, "New");
     assert_eq!(h.state().session.actions.list.len(), 1);
 }
+
+/// Replacing a library removes its collapsed set names even when the replacement reuses one.
+#[test]
+fn replacing_library_reveals_reused_set_names() {
+    let (mut h, picker) = harness();
+    h.state_mut().ui.actions.collapsed_sets = vec!["One".into(), "Two".into(), "Old Empty".into(), "Remember".into()];
+    pick(&mut h, &picker);
+    let action = Action::new("New", vec![("select.all".into(), json!({}))]);
+    let bytes = atn_cmds::export("One", &[&action], &[], false).unwrap().0;
+    answer(&mut h, &picker, Some(FileDialogAnswer::Contents("Replacement.atn".into(), bytes)));
+    let dialog = h.state().ui.dialogs.last().unwrap().id;
+    dialogs::confirm(h.state_mut(), dialog).unwrap();
+    assert_eq!(h.state().session.actions.list[0].set.as_deref(), Some("One"));
+    assert_eq!(h.state().ui.actions.collapsed_sets, ["Remember"]);
+}

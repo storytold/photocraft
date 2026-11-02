@@ -46,13 +46,10 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let automated = app.automation_input || gate.is_some();
     authorize(app, &json!({"confirm": true}), gate, automated)?;
-    app.pick_file_bytes_filtered(&["atn"], move |app, name, bytes| {
+    app.pick_file_bytes_with_limit(&["atn"], Some(photocraft_engine::preset_import_cmds::MAX_FILE_BYTES), move |app, name, bytes| {
         idle(app)?;
         if app.session.actions.rev != revision || app.held_actions_replace.is_some() {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());
-        }
-        if bytes.len() as u64 > photocraft_engine::preset_import_cmds::MAX_FILE_BYTES {
-            return Err(tl!("The Actions file is too large.").into());
         }
         // Validate before asking to discard the library. The normal command parses this
         // same immutable input again on confirmation, keeping dispatch authoritative.
@@ -87,11 +84,13 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     }
     idle(app)?;
     authorize(app, &held.params, held.gate, held.automated)?;
+    let replaced_sets = photocraft_engine::actions_edit_cmds::set_names(&app.session);
     let saved = app.session.authorize;
     app.session.authorize = saved.or(held.gate);
     let result = app.run(COMMAND, held.params);
     app.session.authorize = saved;
     let result = result?;
+    app.ui.actions.collapsed_sets.retain(|set| !replaced_sets.contains(set));
     app.ui.actions.selected = (!app.session.actions.list.is_empty()).then_some(0);
     app.ui.actions.selected_set = if app.session.actions.list.is_empty() {
         result.get("set").and_then(Value::as_str).filter(|set| app.session.actions.sets.iter().any(|s| s == set)).map(str::to_string)

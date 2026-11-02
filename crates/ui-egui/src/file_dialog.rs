@@ -232,10 +232,20 @@ impl PhotocraftApp {
         extensions: &[&str],
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
+        self.pick_file_bytes_with_limit(extensions, None, then)
+    }
+
+    /// Pick a file with an optional caller limit; other pickers retain their existing read limit.
+    pub(crate) fn pick_file_bytes_with_limit(
+        &mut self,
+        extensions: &[&str],
+        max: Option<u64>,
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
         self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
-            let (name, bytes) = read_picked(answer)?;
+            let (name, bytes) = read_picked(answer, max)?;
             then(app, name, bytes)
         })
     }
@@ -377,18 +387,31 @@ pub(crate) fn last_used_dir(recent: &[String]) -> Option<String> {
 }
 
 /// The name and bytes of the single file an open dialog answered with.
-fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
-    match answer {
+fn read_picked(answer: FileDialogAnswer, max: Option<u64>) -> Result<(String, Vec<u8>), String> {
+    let picked: Result<(String, Vec<u8>), String> = match answer {
         FileDialogAnswer::Contents(name, bytes) => Ok((name, bytes)),
         FileDialogAnswer::ContentsMany(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
         FileDialogAnswer::Paths(paths) => {
             let path = paths.into_iter().next().ok_or(CANCELLED)?;
-            let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
+            let file = std::path::Path::new(&path);
+            let bytes = match max {
+                Some(max) => photocraft_format::read::read_file_limited(file, max),
+                None => photocraft_format::read_file(file),
+            }
+            .map_err(|e| format!("{}: {e}", display_name(&path)))?;
             Ok((path, bytes))
         }
         FileDialogAnswer::FolderTo(_) => Err(UNEXPECTED.into()),
         FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => Err(UNEXPECTED.into()),
+    };
+    let (name, bytes) = picked?;
+    // Web answers already own their platform-provided bytes: refuse before callbacks can parse or copy them.
+    if let Some(max) = max
+        && bytes.len() as u64 > max
+    {
+        return Err(format!("{}: the file is larger than {} bytes", display_name(&name), max));
     }
+    Ok((name, bytes))
 }
 
 /// A fake dialog service for tests: answers each request with the next of `answers` (`None`:

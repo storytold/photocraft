@@ -272,7 +272,8 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             } else {
                 crate::dialogs::open_command_dialog(app, id, &label)
             };
-            let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
+            let document = app.session.active().map(|st| st.doc.id);
+            let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize, document);
             if let Some(paused) = app.paused_playbacks.paused.get_mut(&token) {
                 paused.editor = Some((dialog, id.to_string()));
             }
@@ -771,6 +772,8 @@ pub(crate) struct PausedPlayback {
     action: String,
     from: usize,
     gate: Option<Gate>,
+    /// Stable document identity captured before this command's editor is shown.
+    document: Option<photocraft_doc::DocId>,
     /// The real editor and fixed command; editable fields hold only its read-only resume token.
     editor: Option<(u64, String)>,
     /// The recording the paused call suspended: `{index, into, action, from}` (`into` is the
@@ -797,9 +800,9 @@ pub(crate) struct PausedPlaybacks {
 }
 
 impl PausedPlaybacks {
-    fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
+    fn pause(&mut self, action: String, from: usize, gate: Option<Gate>, document: Option<photocraft_doc::DocId>) -> u64 {
         self.last = self.last.wrapping_add(1);
-        self.paused.insert(self.last, PausedPlayback { action, from, gate, editor: None, record: None, then: Vec::new(), ran: 0 });
+        self.paused.insert(self.last, PausedPlayback { action, from, gate, document, editor: None, record: None, then: Vec::new(), ran: 0 });
         self.last
     }
 
@@ -813,8 +816,19 @@ fn playback_editor(app: &PhotocraftApp, dialog: u64) -> Option<&PausedPlayback> 
     app.paused_playbacks.paused.values().find(|p| p.editor.as_ref().is_some_and(|(id, _)| *id == dialog))
 }
 
+/// A paused editor may evaluate and resume only on the document that opened it.
+fn validate_playback_document(app: &PhotocraftApp, owner: &PausedPlayback) -> Result<(), String> {
+    if app.session.active().map(|st| st.doc.id) != owner.document {
+        return Err("the paused action belongs to a different document".into());
+    }
+    Ok(())
+}
+
 /// The read-only resume token may only settle its own real command editor.
 pub(crate) fn validate_editor(app: &PhotocraftApp, dialog: u64, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
+    if let Some(owner) = playback_editor(app, dialog) {
+        validate_playback_document(app, owner)?;
+    }
     let Some(token) = fields.get(RESUME) else { return Ok(()) };
     let owner = token
         .as_u64()
@@ -834,6 +848,7 @@ pub(crate) fn validate_editor(app: &PhotocraftApp, dialog: u64, fields: &serde_j
 pub(crate) fn authorize_preview(app: &PhotocraftApp, dialog: u64, command: &str, params: &Value) -> Result<(), String> {
     record_again::authorize_preview(app, dialog, command, params)?;
     if let Some(owner) = playback_editor(app, dialog) {
+        validate_playback_document(app, owner)?;
         if owner.editor.as_ref().is_none_or(|(_, id)| id != command) {
             return Err("the paused action preview command changed".into());
         }
@@ -904,6 +919,8 @@ pub(crate) fn confirm_owned_dialog(app: &mut PhotocraftApp, dialog: u64, fields:
 /// confirmed: a control request, synthetic Enter or OK, or a click.
 pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
     let Some(token) = fields.get(RESUME) else { return Ok(()) };
+    let owner = token.as_u64().and_then(|t| app.paused_playbacks.paused.get(&t)).ok_or("this dialog doesn't belong to a paused action")?;
+    validate_playback_document(app, owner)?;
     let Some(paused) = app.paused_playbacks.take(token) else {
         return Err("this dialog doesn't belong to a paused action".into());
     };

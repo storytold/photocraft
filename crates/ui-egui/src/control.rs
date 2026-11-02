@@ -170,12 +170,16 @@ fn run_waiting(app: &mut PhotocraftApp, wait: bool, run: impl FnOnce(&mut Photoc
 const SHELL_DIALOG: &str = "shell";
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    // Request identity, rather than an optional gate, determines programmatic playback.
+    let input = app.automation_input;
+    app.automation_input |= req.method == "engine.execute";
     let saved = app.session.authorize;
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
     }
     let outcome = dispatch(app, ctx, req);
     app.session.authorize = saved;
+    app.automation_input = input;
     outcome
 }
 

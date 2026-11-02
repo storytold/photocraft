@@ -27,9 +27,6 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     let target = json!({"action":action,"at":app.ui.actions.selected_step.map(|i|i.saturating_add(1))});
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let automated = app.automation_input || gate.is_some();
-    let mut params = target.clone();
-    params["id"] = json!("image.imageSize");
-    super::authorize_owned(app, COMMAND, &params, gate, automated)?;
     let fields = json!({MARK:true,"__command":COMMAND,"__label":"Insert Menu Item","id":"image.imageSize"});
     let dialog = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     app.held_insert_menu = Some(Held { dialog, revision: app.session.actions.rev, target, gate, automated });

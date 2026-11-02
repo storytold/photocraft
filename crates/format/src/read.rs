@@ -35,6 +35,12 @@ pub fn read_file_with(path: &Path, chunk: usize) -> io::Result<Vec<u8>> {
     read_path(path, chunk, MAX_OPEN_BYTES)
 }
 
+/// Read a picked file within the caller's limit, before allocation and throughout any growth.
+/// The global [`MAX_OPEN_BYTES`] ceiling and regular-file checks still apply.
+pub fn read_file_limited(path: &Path, max: u64) -> io::Result<Vec<u8>> {
+    read_path(path, READ_CHUNK, max.min(MAX_OPEN_BYTES))
+}
+
 /// [`read_file_with`] with a chosen total limit (tests use small ones).
 fn read_path(path: &Path, chunk: usize, max: u64) -> io::Result<Vec<u8>> {
     #[cfg(unix)]
