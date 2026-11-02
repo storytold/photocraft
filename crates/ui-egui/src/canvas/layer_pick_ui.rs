@@ -364,7 +364,7 @@ mod tests {
         assert!(width(&h) > short + 20.0, "the menu widened for the longer name: {short} to {}", width(&h));
         // CodeRabbit on #10498: as wide as the new name needs, laid out in the buttons' font with
         // their padding, up to the menu's widest.
-        let style = h.ctx.style();
+        let style = h.ctx.global_style();
         let text = h.ctx.fonts_mut(|f| f.layout_no_wrap(long, egui::TextStyle::Button.resolve(&style), Color32::WHITE).size().x);
         let needed = (text + 2.0 * style.spacing.button_padding.x).min(360.0);
         assert!(width(&h) >= needed, "{} wide for a name that needs {needed}", width(&h));
