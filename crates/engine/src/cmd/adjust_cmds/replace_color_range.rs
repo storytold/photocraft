@@ -1,8 +1,8 @@
 //! Recorded Replace Color samples are a Lab box, not a single RGB colour.
 use photocraft_algo::{selection, tone};
 use photocraft_cms::{Builtin, TransformOptions};
-use photocraft_doc::SampleType;
-use photocraft_geom::Rect;
+use photocraft_doc::{PixelFormat, SampleType};
+use photocraft_geom::{Rect, TileCoord};
 use photocraft_raster::Surface;
 use serde_json::Value;
 
@@ -28,6 +28,47 @@ fn bound(p: &Value, key: &str) -> Result<[f64; 3]> {
         *out = n;
     }
     Ok(result)
+}
+
+/// Apply the same Lab match, tone shift and selection mix to stored and implicit pixels.
+fn replace_sample(format: &PixelFormat, pixel: &mut [f32], sample: &[f32; 4], range: &selection::LabRange, fuzz: f32, shift: [f32; 3], selected: f32) -> bool {
+    if sample[3].is_nan() || sample[3] <= 0.0 || selected <= 0.0 {
+        return false;
+    }
+    let value = [sample[0] * 100.0, sample[1] * 255.0 - 128.0, sample[2] * 255.0 - 128.0];
+    let coverage = if format.sample == SampleType::U8 {
+        selection::lab_range_coverage_8bit(selection::quantize_lab8(value), range, fuzz)
+    } else {
+        selection::lab_range_coverage(value, range, fuzz)
+    };
+    if coverage <= 0.0 {
+        return false;
+    }
+    let original = photocraft_raster::to_rgba(format, pixel);
+    let mut edited = [original];
+    tone::replace_color_masked(&mut edited, &[coverage], shift[0], shift[1], shift[2]);
+    // Unchanged native samples must not take an incidental RGB roundtrip.
+    if edited[0] == original {
+        return false;
+    }
+    let mixed = std::array::from_fn(|c| original[c] * (1.0 - selected) + edited[0][c] * selected);
+    photocraft_raster::from_rgba_into(format, mixed, pixel);
+    true
+}
+
+/// A zero-default selection or an unchanged source default needs only stored tiles.
+/// Otherwise retain the full edit rectangle, subject to the existing adjustment storage budget.
+fn work_tiles(surface: &Surface, selected: Option<&Surface>, bounds: Rect, default_changes: bool) -> Result<Option<Vec<TileCoord>>> {
+    let sparse = selected.filter(|mask| mask.default_pixel().first() == Some(&0.0)).or_else(|| (!default_changes).then_some(surface));
+    if let Some(sparse) = sparse {
+        let coords = || sparse.tiles().map(|(tile, _)| *tile).filter(|tile| !tile.rect().intersect(&bounds).is_empty());
+        let mut tiles = crate::allocation::capacity(coords().count(), "Replace Color tile coordinates")?;
+        tiles.extend(coords());
+        return Ok(Some(tiles));
+    }
+    let stored = surface.tiles().filter(|(tile, _)| !tile.rect().intersect(&bounds).is_empty()).count();
+    crate::pixels::check_adjustment_tile_budget(bounds, stored, &surface.format()).map_err(EngineError::Other)?;
+    Ok(None)
 }
 
 /// Apply explicit recorded bounds; `None` leaves the legacy RGB/sample path alone.
@@ -88,18 +129,14 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
         // A nontransparent default is visible across the canvas even without stored tiles.
         let extent = if transparent_default { content } else { content.union(&canvas) };
         let bounds = edit_bounds(extent, selected.as_ref());
-        // Transparent gaps cannot match. Visit stored tiles instead of the possibly
-        // enormous rectangle between two distant pixels.
-        let stored = if transparent_default {
-            let mut tiles = crate::allocation::capacity(surface.tiles().count(), "Replace Color tile coordinates")?;
-            tiles.extend(surface.tiles().map(|(tile, _)| *tile));
-            Some(tiles)
-        } else {
-            None
-        };
-        // Matching and tone changes are pointwise. Tile-sized work also bounds buffers
-        // for full-layer edits, without imposing a new image-size limit.
-        let mut process_tile = |tile: photocraft_geom::TileCoord| -> Result<()> {
+        let mut default = surface.default_pixel();
+        let mut default_lab = [[0.0, 0.0, 0.0, 1.0]];
+        transform.convert_f32(&default, format.channels(), default_lab.as_flattened_mut(), 4, true);
+        let default_selected = selected.as_ref().map_or(1.0, |mask| mask.default_pixel()[0]);
+        let default_changes = replace_sample(&format, &mut default, &default_lab[0], &range, fuzz, [h, sat, l], default_selected);
+        let tiles = work_tiles(surface, selected.as_ref(), bounds, default_changes)?;
+        // Matching and tone changes are pointwise, so pixel work stays tile-sized.
+        let mut process_tile = |tile: TileCoord| -> Result<()> {
             let rect = tile.rect().intersect(&bounds);
             if rect.is_empty() {
                 return Ok(());
@@ -115,28 +152,7 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
                     selected.sample_row_strided(rect.y0.saturating_add(y as i32), rect.x0, 1, 0, &mut selection_row);
                 }
                 for ((pixel, sample), selected) in row.chunks_exact_mut(format.channels()).zip(lab_row).zip(&selection_row) {
-                    if sample[3].is_nan() || sample[3] <= 0.0 || *selected <= 0.0 {
-                        continue;
-                    }
-                    let value = [sample[0] * 100.0, sample[1] * 255.0 - 128.0, sample[2] * 255.0 - 128.0];
-                    let coverage = if grid {
-                        selection::lab_range_coverage_8bit(selection::quantize_lab8(value), &range, fuzz)
-                    } else {
-                        selection::lab_range_coverage(value, &range, fuzz)
-                    };
-                    if coverage <= 0.0 {
-                        continue;
-                    }
-                    let original = photocraft_raster::to_rgba(&format, pixel);
-                    let mut edited = [original];
-                    tone::replace_color_masked(&mut edited, &[coverage], h, sat, l);
-                    // Unchanged native samples must not take an incidental RGB roundtrip.
-                    if edited[0] == original {
-                        continue;
-                    }
-                    let mixed = std::array::from_fn(|c| original[c] * (1.0 - selected) + edited[0][c] * selected);
-                    photocraft_raster::from_rgba_into(&format, mixed, pixel);
-                    changed = true;
+                    changed |= replace_sample(&format, pixel, sample, &range, fuzz, [h, sat, l], *selected);
                 }
             }
             if changed {
@@ -144,7 +160,7 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Option<Value>> {
             }
             Ok(())
         };
-        if let Some(tiles) = stored {
+        if let Some(tiles) = tiles {
             for tile in tiles {
                 process_tile(tile)?;
             }
@@ -177,5 +193,51 @@ mod tests {
             mask.fill_rect(Rect::new(2, 2, 3, 3), &[0.0]);
             assert_eq!(edit_bounds(content, Some(&mask)), content, "stored holes do not bound selected pixels");
         }
+    }
+
+    /// The work list follows stored source or selection tiles rather than their distant bounds.
+    #[test]
+    fn sparse_work_tiles_follow_pixels_that_can_change() {
+        let near = Rect::new(0, 0, 1, 1);
+        let far = Rect::new(100_000, 100_000, 100_001, 100_001);
+        let bounds = near.union(&far);
+        for format in [PixelFormat::RGB8, PixelFormat::RGBA8] {
+            let mut surface = Surface::with_default(format, &[1.0; 4][..format.channels()]);
+            surface.fill_rect(far, &[0.0; 4][..format.channels()]);
+            assert_eq!(work_tiles(&surface, None, bounds, false).unwrap(), Some(vec![TileCoord::containing(far.x0, far.y0)]));
+            let mut mask = Surface::new(PixelFormat::GRAY8);
+            mask.fill_rect(near, &[1.0]);
+            mask.fill_rect(far, &[1.0]);
+            assert_eq!(
+                work_tiles(&surface, Some(&mask), bounds, true).unwrap(),
+                Some(vec![TileCoord::containing(0, 0), TileCoord::containing(far.x0, far.y0)])
+            );
+            assert!(work_tiles(&surface, None, near, true).unwrap().is_none(), "a small default-only area remains editable");
+        }
+    }
+
+    /// A matching opaque default cannot allocate gap tiles beyond the existing adjustment budget.
+    #[test]
+    fn opaque_gap_budget_refuses_before_pixel_allocation_or_edit() {
+        let mut s = Session::new();
+        s.execute("file.new", serde_json::json!({"width":4,"height":2,"mode":"lab","depth":32,"background":"transparent"})).unwrap();
+        s.edit("Distant opaque exception", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            *surface = Surface::with_default(surface.format(), &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+            surface.fill_rect(Rect::new(100_000, 100_000, 100_001, 100_001), &[0.25, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        crate::allocation::fail_next_for_test();
+        let result = s.execute(CMD, serde_json::json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100}));
+        // Drain the probe even on failure so another test cannot inherit it. A skipped probe
+        // proves that the resource check ran before any fallible tile-buffer allocation.
+        let probe_unused = crate::allocation::capacity::<u8>(0, "allocation probe").is_err();
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("too large an area")), "{result:?}");
+        assert!(probe_unused);
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
     }
 }

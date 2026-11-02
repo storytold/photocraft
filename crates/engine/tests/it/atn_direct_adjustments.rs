@@ -474,59 +474,128 @@ fn lab_replace_crosses_tile_edges_without_changing_unselected_native_pixels() {
     }
 }
 
-/// Sparse off-canvas content must not materialize or scan the large transparent gap between its tiles.
+/// Matching stored pixels change without materializing gaps whose default does not change.
 #[test]
-fn lab_replace_visits_only_stored_tiles_when_the_default_is_transparent() {
-    let mut s = fixture("lab", 32);
-    let far = photocraft_doc::Rect::new(100_000, 100_000, 100_001, 100_001);
-    s.edit("Distant Lab pixel", |doc, active| {
-        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(far, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
-        Ok(())
-    })
-    .unwrap();
-    let before = s.active().unwrap().doc.clone();
-    let layer = s.active().unwrap().active_layer.unwrap();
-    let count = before.layer(layer).unwrap().surface().unwrap().tiles().count();
-    s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
-    let surface = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
-    assert!(surface.read_region(far)[0] > 0.99);
-    assert_eq!(surface.tiles().count(), count);
-    assert!(s.undo());
-    assert_eq!(s.active().unwrap().doc, before);
+fn lab_replace_sparse_pixels_preserve_unstored_gaps() {
+    let tile = photocraft_geom::TILE_SIZE;
+    let far = photocraft_doc::Rect::new(4 * tile, 4 * tile, 4 * tile + 1, 4 * tile + 1);
+    let second = far.translate(2 * tile, 0);
+    let gap = far.translate(tile, 0);
+    for (alpha, opacity) in [(true, 0.0), (true, 1.0), (false, 1.0)] {
+        let mut s = fixture("lab", 32);
+        s.edit("Two distant Lab pixels", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let format = photocraft_doc::PixelFormat { alpha, ..surface.format() };
+            let channels = format.channels();
+            *surface = photocraft_raster::Surface::with_default(format, &[0.25, 128.0 / 255.0, 128.0 / 255.0, opacity][..channels]);
+            for rect in [far, second] {
+                surface.fill_rect(rect, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
+            }
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let original = before.layer(layer).unwrap().surface().unwrap();
+        assert_eq!(original.tile_count(), 2);
+        s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+        let surface = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+        for rect in [far, second] {
+            assert!(surface.read_region(rect)[0] > 0.99);
+        }
+        assert_eq!(surface.read_region(gap), original.read_region(gap));
+        assert_eq!(surface.default_pixel(), original.default_pixel());
+        assert_eq!(surface.tile_count(), 2);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
 }
 
 /// Opaque defaults remain visible when the surface has no tiles or only a small exception.
 #[test]
 fn lab_replace_includes_visible_default_pixels_with_and_without_alpha() {
+    let tile = photocraft_geom::TILE_SIZE;
+    let far = photocraft_doc::Rect::new(2 * tile + 1, 2 * tile + 1, 2 * tile + 2, 2 * tile + 2);
     for depth in [8, 16, 32] {
-        for (alpha, exception) in [(false, false), (false, true), (true, false), (true, true)] {
-            let mut s = fixture("lab", depth);
-            s.edit("Opaque default Lab", |doc, active| {
-                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-                let format = photocraft_doc::PixelFormat { alpha, ..surface.format() };
-                let channels = format.channels();
-                *surface = photocraft_raster::Surface::with_default(format, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
-                if exception {
-                    surface.fill_rect(photocraft_doc::Rect::new(1, 0, 2, 1), &[0.25, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
-                } else {
-                    assert!(surface.content_bounds().is_empty());
+        for alpha in [false, true] {
+            for exception in [None, Some(photocraft_doc::Rect::new(1, 0, 2, 1)), Some(far)] {
+                let mut s = fixture("lab", depth);
+                s.edit("Opaque default Lab", |doc, active| {
+                    let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    let format = photocraft_doc::PixelFormat { alpha, ..surface.format() };
+                    let channels = format.channels();
+                    *surface = photocraft_raster::Surface::with_default(format, &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
+                    if let Some(rect) = exception {
+                        surface.fill_rect(rect, &[0.25, 128.0 / 255.0, 128.0 / 255.0, 1.0][..channels]);
+                    } else {
+                        assert!(surface.content_bounds().is_empty());
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let original = raw(&s);
+                s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+                for (i, (pixel, original)) in raw(&s).chunks_exact(3 + usize::from(alpha)).zip(original.chunks_exact(3 + usize::from(alpha))).enumerate() {
+                    if exception == Some(photocraft_doc::Rect::new(1, 0, 2, 1)) && i == 1 {
+                        assert_eq!(pixel, original);
+                    } else {
+                        assert!(pixel[0] > 0.99, "{depth}/{alpha}/{exception:?} pixel {i}: {pixel:?}");
+                    }
                 }
-                Ok(())
-            })
-            .unwrap();
-            let before = s.active().unwrap().doc.clone();
-            let original = raw(&s);
-            s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
-            for (i, (pixel, original)) in raw(&s).chunks_exact(3 + usize::from(alpha)).zip(original.chunks_exact(3 + usize::from(alpha))).enumerate() {
-                if exception && i == 1 {
-                    assert_eq!(pixel, original);
-                } else {
-                    assert!(pixel[0] > 0.99, "{depth}/{alpha}/{exception} pixel {i}: {pixel:?}");
+                if exception == Some(far) {
+                    let layer = s.active().unwrap().active_layer.unwrap();
+                    let surface = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+                    assert!(surface.read_region(far.translate(-tile, 0))[0] > 0.99, "off-canvas defaults inside the edit extent change too");
+                    assert_eq!(surface.read_region(far), before.layer(layer).unwrap().surface().unwrap().read_region(far));
+                    assert_eq!(surface.read_region(far.translate(2, 2)), surface.default_pixel(), "pixels outside the extent stay unchanged");
                 }
+                assert!(s.undo());
+                assert_eq!(s.active().unwrap().doc, before);
             }
-            assert!(s.undo());
-            assert_eq!(s.active().unwrap().doc, before);
         }
+    }
+}
+
+/// Selection islands and holes retain their coverage over unstored opaque pixels.
+#[test]
+fn lab_replace_selection_controls_opaque_gap_pixels() {
+    let tile = photocraft_geom::TILE_SIZE;
+    let far = photocraft_doc::Rect::new(2 * tile, 2 * tile, 2 * tile + 1, 2 * tile + 1);
+    let gap = far.translate(-tile, -tile);
+    for implicit in [false, true] {
+        let mut s = fixture("lab", 32);
+        s.edit("Selected opaque gap", |doc, active| {
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            *surface = photocraft_raster::Surface::with_default(surface.format(), &[0.5, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+            surface.fill_rect(far, &[0.25, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+            let coverage = if implicit { 1.0 } else { 0.0 };
+            let mut mask = photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[coverage]);
+            mask.fill_rect(gap, &[1.0 - coverage]);
+            doc.selection = Some(mask);
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let original = before.layer(layer).unwrap().surface().unwrap();
+        s.execute("image.adjustments.replaceColor", json!({"labMinimum":[49,0,0],"labMaximum":[51,0,0],"fuzziness":0,"lightness":100})).unwrap();
+        let surface = s.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+        let canvas_pixel = photocraft_doc::Rect::new(0, 0, 1, 1);
+        for (rect, changed) in [(gap, !implicit), (canvas_pixel, implicit)] {
+            if changed {
+                assert!(surface.read_region(rect)[0] > 0.99);
+            } else {
+                assert_eq!(surface.read_region(rect), original.read_region(rect));
+            }
+        }
+        assert_eq!(surface.read_region(far), original.read_region(far));
+        assert_eq!(surface.default_pixel(), original.default_pixel());
+        if !implicit {
+            assert_eq!(surface.tile_count(), 2, "only the selected gap tile is added");
+        }
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
     }
 }
 
