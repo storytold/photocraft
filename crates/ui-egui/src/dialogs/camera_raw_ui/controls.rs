@@ -186,6 +186,60 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
     rect
 }
 
+/// Camera Raw's window when nothing usable was saved, and the smallest it may be.
+const DEFAULT_SIZE: [f32; 2] = [1360.0, 900.0];
+const MIN_SIZE: [f32; 2] = [900.0, 600.0];
+/// A saved side or coordinate past this is corrupt, not a real window.
+const MAX_COORD: f32 = 1.0e5;
+
+/// Where the window opens: its outer position, when it is kept, and its inner size.
+type WindowGeometry = (Option<egui::Pos2>, egui::Vec2);
+
+/// Where Camera Raw's window was last, `[x, y, width, height]` in points (outer position, inner
+/// size): egui's persisted memory, saved with the window layout (#10102).
+fn geometry_id() -> egui::Id {
+    egui::Id::unique("camera-raw-window-geometry")
+}
+
+/// The geometry the open window started from, read once per opening.
+fn opening_id() -> egui::Id {
+    egui::Id::unique("camera-raw-window-opening")
+}
+
+/// How much of the window has to be on the monitor for the saved position to be used: enough to
+/// grab and move it, not the whole window (one deliberately half off-screen keeps its place).
+const MIN_ON_SCREEN: f32 = 120.0;
+
+/// The opening geometry from what was saved: the size, at least [`MIN_SIZE`]; the position only
+/// where enough of the window would be on the main window's monitor (a monitor since unplugged, or
+/// a window saved against the far edge, would leave it out of reach — #10102 review). A missing or
+/// corrupt value opens at [`DEFAULT_SIZE`] where the platform puts it.
+fn opening_geometry(saved: Option<[f32; 4]>, monitor: Option<egui::Vec2>) -> WindowGeometry {
+    let Some([x, y, w, h]) = saved.filter(|v| v.iter().all(|c| c.is_finite() && c.abs() <= MAX_COORD)) else {
+        return (None, DEFAULT_SIZE.into());
+    };
+    let size = egui::vec2(w.clamp(MIN_SIZE[0], MAX_COORD), h.clamp(MIN_SIZE[1], MAX_COORD));
+    // The visible strip of the window across the screen, with the size it will actually open at.
+    let shown = |pos: f32, extent: f32, screen: f32| (pos + extent).min(screen) - pos.max(0.0);
+    let on_screen = monitor.is_some_and(|m| {
+        // The title bar sits at the top, so a window reaching above the monitor cannot be dragged
+        // back: that edge has to be on it, with room below to take hold of (#10400 review). Left
+        // and right may hang over, as long as enough of the window is still there.
+        (0.0..=(m.y - MIN_ON_SCREEN.min(size.y))).contains(&y) && shown(x, size.x, m.x) >= MIN_ON_SCREEN.min(size.x)
+    });
+    (on_screen.then(|| egui::pos2(x, y)), size)
+}
+
+/// Keeps the open window's geometry for the next opening; a minimised window keeps what it had.
+fn remember_geometry(ctx: &egui::Context, outer: Option<egui::Rect>, inner: Option<egui::Rect>, minimized: bool) {
+    if let (Some(o), Some(i), false) = (outer, inner, minimized)
+        && i.width() > 0.0
+        && i.height() > 0.0
+    {
+        ctx.data_mut(|m| m.insert_persisted(geometry_id(), [o.min.x, o.min.y, i.width(), i.height()]));
+    }
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.camera_raw.is_none()
         && let Some(raw) = app.pending_raw_open.take()
@@ -195,7 +249,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let Some(d) = app.camera_raw.as_ref() else { return };
+    let Some(d) = app.camera_raw.as_ref() else {
+        // Closed: the next opening reads the saved geometry afresh.
+        ctx.data_mut(|m| m.remove_temp::<WindowGeometry>(opening_id()));
+        return;
+    };
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
@@ -210,11 +268,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    // It opens where it was last left (#10102). The geometry is read once per opening: a builder
+    // that followed every move would send the window back to where the drag started.
+    let (position, size) = ctx.data_mut(|m| m.get_temp::<WindowGeometry>(opening_id())).unwrap_or_else(|| {
+        let saved = ctx.data_mut(|m| m.get_persisted::<[f32; 4]>(geometry_id()));
+        let g = opening_geometry(saved, ctx.input(|i| i.viewport().monitor_size));
+        ctx.data_mut(|m| m.insert_temp(opening_id(), g));
+        g
+    });
+    let mut builder = crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size(MIN_SIZE);
+    if let Some(p) = position {
+        builder = builder.with_position(p);
+    }
     let mut close = false;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
+        }
+        if class != egui::ViewportClass::EmbeddedWindow {
+            let (outer, inner, minimized) = ui.ctx().input(|i| (i.viewport().outer_rect, i.viewport().inner_rect, i.viewport().minimized));
+            remember_geometry(ui.ctx(), outer, inner, minimized == Some(true));
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
     });
@@ -520,5 +593,69 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             report_file_error(app, r);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod window_geometry_tests {
+    use super::*;
+
+    /// #10102: Camera Raw reopens where its window was left, within limits a corrupt or stale
+    /// saved value can't escape.
+    #[test]
+    fn the_window_opens_where_it_was_left() {
+        let monitor = Some(egui::vec2(1920.0, 1080.0));
+        assert_eq!(opening_geometry(None, monitor), (None, egui::vec2(1360.0, 900.0)), "nothing saved: the default");
+        assert_eq!(opening_geometry(Some([100.0, 50.0, 1000.0, 700.0]), monitor), (Some(egui::pos2(100.0, 50.0)), egui::vec2(1000.0, 700.0)));
+        assert_eq!(opening_geometry(Some([100.0, 50.0, 300.0, 200.0]), monitor).1, egui::vec2(900.0, 600.0), "never under the minimum");
+        assert_eq!(opening_geometry(Some([2500.0, 50.0, 1000.0, 700.0]), monitor), (None, egui::vec2(1000.0, 700.0)), "off the monitor: size only");
+        assert_eq!(opening_geometry(Some([-1000.0, 50.0, 1000.0, 700.0]), monitor).0, None, "left of it too");
+        assert_eq!(opening_geometry(Some([100.0, 50.0, 1000.0, 700.0]), None).0, None, "no monitor known: size only");
+        for bad in [
+            [f32::NAN, 0.0, 1000.0, 700.0],
+            [0.0, f32::NAN, 1000.0, 700.0],
+            [0.0, 0.0, f32::NAN, 700.0],
+            [0.0, 0.0, 1000.0, f32::NAN],
+            [0.0, 0.0, f32::INFINITY, 700.0],
+            [f32::NEG_INFINITY, 0.0, 1000.0, 700.0],
+            [0.0, 0.0, 1.0e9, 700.0],
+        ] {
+            assert_eq!(opening_geometry(Some(bad), monitor), (None, egui::vec2(1360.0, 900.0)), "corrupt {bad:?}: the default");
+        }
+        // A negative size is a number, so it is not corrupt — it just cannot be smaller than the
+        // minimum (#10400 review).
+        assert_eq!(opening_geometry(Some([100.0, 50.0, -500.0, -1.0]), monitor), (Some(egui::pos2(100.0, 50.0)), egui::vec2(900.0, 600.0)));
+        // Review on #10400: a position on the monitor by its corner alone is out of reach — the
+        // window that would open there is dropped back to the platform's own placement.
+        assert_eq!(opening_geometry(Some([1910.0, 1070.0, 1200.0, 800.0]), monitor).0, None, "a sliver at the bottom right");
+        assert_eq!(opening_geometry(Some([-1150.0, 50.0, 1200.0, 800.0]), monitor).0, None, "and at the left edge");
+        assert_eq!(opening_geometry(Some([50.0, -760.0, 1200.0, 800.0]), monitor).0, None, "and at the top");
+        // Review on #10400: the title bar is at the top, so any window reaching above the monitor
+        // is out of reach, however much of it is visible further down.
+        assert_eq!(opening_geometry(Some([-1000.0, -600.0, 1200.0, 800.0]), monitor).0, None, "its title bar is off-screen");
+        assert_eq!(opening_geometry(Some([100.0, -1.0, 1200.0, 800.0]), monitor).0, None, "even by a pixel");
+        // Enough of it to grab: kept, however far over the left or right edge the rest hangs.
+        assert_eq!(opening_geometry(Some([1700.0, 900.0, 1200.0, 800.0]), monitor).0, Some(egui::pos2(1700.0, 900.0)));
+        assert_eq!(opening_geometry(Some([-1000.0, 50.0, 1200.0, 800.0]), monitor).0, Some(egui::pos2(-1000.0, 50.0)));
+        assert_eq!(opening_geometry(Some([100.0, 0.0, 1200.0, 800.0]), monitor).0, Some(egui::pos2(100.0, 0.0)), "the very top is fine");
+    }
+
+    /// #10102: each frame keeps the open window's outer position and inner size for the next
+    /// opening, except while it is minimised, where the platform reports nothing worth keeping.
+    #[test]
+    fn the_open_window_s_geometry_is_kept_unless_minimised() {
+        let ctx = egui::Context::default();
+        let saved = |ctx: &egui::Context| ctx.data_mut(|m| m.get_persisted::<[f32; 4]>(geometry_id()));
+        let outer = Some(egui::Rect::from_min_size(egui::pos2(120.0, 80.0), egui::vec2(1010.0, 740.0)));
+        let inner = Some(egui::Rect::from_min_size(egui::pos2(125.0, 110.0), egui::vec2(1000.0, 700.0)));
+        remember_geometry(&ctx, outer, inner, false);
+        assert_eq!(saved(&ctx), Some([120.0, 80.0, 1000.0, 700.0]), "outer position, inner size");
+        // Windows parks a minimised window far off-screen, at a size of its own.
+        let parked = Some(egui::Rect::from_min_size(egui::pos2(-32000.0, -32000.0), egui::vec2(160.0, 28.0)));
+        remember_geometry(&ctx, parked, parked, true);
+        let empty = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 0.0)));
+        remember_geometry(&ctx, empty, empty, false);
+        remember_geometry(&ctx, None, inner, false);
+        assert_eq!(saved(&ctx), Some([120.0, 80.0, 1000.0, 700.0]), "a minimised, empty or unknown window keeps the last one");
     }
 }
