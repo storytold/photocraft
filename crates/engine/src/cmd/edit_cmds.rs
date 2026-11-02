@@ -22,6 +22,8 @@ pub(crate) use paste_target;
 /// Pixels on the session clipboard, with where they came from (for Paste in Place).
 #[derive(Clone, Debug)]
 pub struct Clip {
+    /// Original SVG snapshot, when available. The raster mirror belongs to the same source.
+    pub svg: Option<std::sync::Arc<Vec<u8>>>,
     /// Native colour indices for a multi-component clip, in channel order. Singletons are grayscale.
     pub components: Option<Vec<usize>>,
     pub surface: Surface,
@@ -40,6 +42,13 @@ pub struct Clip {
     /// from one: Paste into another board of the same document keeps their place on the board
     /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
     pub board: Option<(LayerId, Rect)>,
+}
+
+impl Clip {
+    /// Prepare bounded original SVG and its raster mirror before installing the clipboard.
+    pub fn from_svg(bytes: &[u8]) -> Result<Self> {
+        super::vector_clipboard::from_svg(bytes)
+    }
 }
 
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
@@ -204,7 +213,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, board: None });
+        return Ok(Clip { svg: None, components: None, surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, board: None });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
@@ -226,7 +235,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     out.put_tiles(shared);
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
+    Ok(Clip { svg: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
 }
 
 /// [`lift`] over one rectangle: `src`'s pixels with alpha (`n` channels), the selection
@@ -439,7 +448,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
-    s.clipboard = Some(Clip { components: None, surface, bounds: b, layers: None, resolution, source, board: None });
+    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
@@ -477,20 +486,32 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
+    let mode = super::vector_clipboard::mode(p)?;
+    if let Some(mode) = mode {
+        super::vector_clipboard::validate(s, p, in_place)?;
+        if mode != super::vector_clipboard::Mode::Pixels || s.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some()) {
+            return super::vector_clipboard::paste(s, p, mode);
+        }
+        super::vector_clipboard::layer_target(s)?;
+    }
     crate::allocation::checkpoint("pasting pixels")?;
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let Some(d) = s.active() else {
         // Nothing open to paste into: the clipboard becomes a document of its own (#368).
         return new_from_clipboard(s);
     };
-    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+    if mode.is_none() && crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return paste_to_target(s, p, in_place, None, "Paste");
     }
-    if let Some(colors) = crate::color_channels::target(s, p)?.filter(|c| c.len() > 1 || p.get("target").is_some() || clip.components.is_some()) {
+    if mode.is_none()
+        && let Some(colors) = crate::color_channels::target(s, p)?.filter(|c| c.len() > 1 || p.get("target").is_some() || clip.components.is_some())
+    {
         return crate::channel_clip::paste_colors(s, p, colors, in_place, None, "Paste");
     }
     // A targeted colour channel takes the paste instead of a new layer (#2307).
-    if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
+    if mode.is_none()
+        && let Some(k) = crate::channel_clip::paste_color_target(s, p)
+    {
         return crate::channel_clip::paste(s, p, k, in_place, None, "Paste");
     }
     let canvas = d.doc.bounds();
@@ -498,7 +519,9 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     let shift = board_shift(&clip, &d.doc, d.active_layer, p);
     let board = shift.map(|(_, _, b)| b);
     let (dx, dy) = shift.map(|(dx, dy, _)| (dx, dy)).unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
-    if let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode)) {
+    if mode.is_none()
+        && let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode))
+    {
         return paste_layers(s, layers, dx, dy, board);
     }
     let moved = shifted(&clip.surface, dx, dy);
@@ -1202,7 +1225,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["Edit"],
             Some("Cmd+V"),
             concat!(
-                r#"{"center":[x,y]? (view centre; default keeps the position when it overlaps the canvas),"clampToCanvas":bool=true (keep the paste on the canvas, or at its top-left when larger),"#,
+                r#"{"as":"pixels|path|shape"? (explicit mode: active layered document/composite only; SVG canvas is centred, Path/Shape require retained vector source),"center":[x,y]? (finite explicit coordinates within ±10 million; default keeps raster position when it overlaps the canvas),"clampToCanvas":bool=true (legacy mode only; keep the paste on the canvas, or at its top-left when larger),"#,
                 paste_target!(),
                 "} (with no document open: a new document from the clipboard)"
             ),
