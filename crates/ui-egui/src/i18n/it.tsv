@@ -4551,6 +4551,9 @@ shape	Appearance	Aspetto
 	There is no color table to save.	Non c'è alcuna tabella colori da salvare.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Salvato {n} colore in {file}|Salvati {n} colori in {file}
 	GPU adapter	Adattatore GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Il contenuto AI/PDF/EPS verrà modificato come SVG. Il salvataggio sostituisce la sorgente incorporata; le caratteristiche specifiche del formato potrebbero cambiare.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importa stili…
 	Export Selected Styles…	Esporta stili selezionati…
 	Export Styles…	Esporta stili…
@@ -4600,6 +4603,7 @@ shape	Appearance	Aspetto
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Valore numerico non valido. È richiesto un numero intero compreso tra {min}% e {max}%. È stato inserito il valore precedente.
 	Color Aware	In base al colore
 	Decontaminate Colors	Decontamina colori
 	Edge Detection	Rilevamento bordi
@@ -4616,4 +4620,9 @@ shape	Appearance	Aspetto
 	Refine Hair needs hair detection, which isn't available yet	Migliora capelli richiede il rilevamento dei capelli, non ancora disponibile
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Colori usati di recente
+	Stop Color	Colore del punto
+	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…

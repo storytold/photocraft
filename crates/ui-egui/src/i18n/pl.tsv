@@ -4054,6 +4054,9 @@ curves	Smooth	Wygładź
 	There is no color table to save.	Brak tabeli kolorów do zapisania.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Zapisano {n} kolor do {file}|Zapisano {n} kolory do {file}|Zapisano {n} kolorów do {file}
 	GPU adapter	Karta GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Zawartość AI/PDF/EPS będzie edytowana jako SVG. Zapisanie zastąpi osadzone źródło; właściwości specyficzne dla formatu mogą się zmienić.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importuj style…
 	Export Selected Styles…	Eksportuj zaznaczone style…
 	Export Styles…	Eksportuj style…
@@ -4104,6 +4107,7 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Nieprawidłowa wartość liczbowa. Wymagana jest liczba całkowita od {min}% do {max}%. Wstawiono poprzednią wartość.
 	Clear Selection	Wyczyść zaznaczenie
 	Color Aware	Według kolorów
 	Decontaminate Colors	Odkażanie kolorów
@@ -4122,4 +4126,10 @@ curves	Smooth	Wygładź
 	Select and Mask was closed: its document is no longer the active one	Zamknięto Zaznacz i maskuj: jego dokument nie jest już aktywny
 	Select and Mask was closed: another layer was selected	Zamknięto Zaznacz i maskuj: wybrano inną warstwę
 	Select Layer Under Cursor	Zaznacz warstwę pod kursorem
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Próbnik kolorów
+	Recently Used Colors	Ostatnio używane kolory
+	Stop Color	Kolor punktu
+	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…

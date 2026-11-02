@@ -3452,6 +3452,9 @@ curves	Smooth	Haluskan
 	There is no color table to save.	Tidak ada tabel warna untuk disimpan.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} warna disimpan ke {file}
 	GPU adapter	Adaptor GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Konten AI/PDF/EPS akan diedit sebagai SVG. Menyimpan akan mengganti sumber tersemat; fitur khusus format mungkin berubah.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Impor Gaya…
 	Export Selected Styles…	Ekspor Gaya Terpilih…
 	Export Styles…	Ekspor Gaya…
@@ -3506,6 +3509,7 @@ curves	Smooth	Haluskan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entri numerik tidak valid. Diperlukan bilangan bulat antara {min}% dan {max}%. Nilai sebelumnya telah disisipkan.
 	Clear Selection	Hapus Seleksi
 	Color Aware	Berbasis Warna
 	Decontaminate Colors	Dekontaminasi Warna
@@ -3524,4 +3528,12 @@ curves	Smooth	Haluskan
 	Select and Mask was closed: its document is no longer the active one	Seleksi dan Mask ditutup: dokumennya tidak lagi aktif
 	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Pemilih Warna
+	Recently Used Colors	Warna yang Baru Digunakan
+	Stop Color	Warna Titik
+	Shapes can't use patterns yet	Bentuk belum dapat memakai pola
+	Solid Color	Warna Solid
+	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…

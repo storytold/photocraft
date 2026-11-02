@@ -96,8 +96,12 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
+| `docs/images/embedded-vector-editor-en.png` | Embedded AI/PDF/EPS conversion warning and editor chooser (no artwork) | Don Omondi | Offscreen `smart_svg_ui::tests::capture_embedded_vector_conversion_prompt` with authored bytes and mock services | MIT OR Apache-2.0 |
+| `docs/images/embedded-vector-tabs-linux.png` | Shared VectorCraft window after a portal editor save and ordinary document launch | Don Omondi | Local Linux GUI acceptance with authored orange rectangle/blue circle SVGs; no private artwork | MIT OR Apache-2.0 |
 | `docs/images/gradient-overlay-method-*.png` | Gradient Overlay Method selector, before and after (synthetic gradient) | @oRE-o | Rendered offscreen with the `snapshot` example; no external artwork | MIT OR Apache-2.0 |
 | `docs/images/cpu-pixel-alignment/*.png` | CPU canvas pixel alignment, before and after #8321 | PhotoCraft contributors | Original synthetic noise rendered with the offscreen `snapshot` example; see the adjacent README | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/multi-channel-editing/{curves,curves-choices,levels,drawing,mask-view-before,mask-view-after}.png` | Selected colour channel editing (synthetic gradient) | @hidoba | Original synthetic gradient rendered with the offscreen `snapshot` example; adjacent JSON scripts | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/multi-channel-editing/great-wave.jpg`, `rgb.png`, `cmyk.png`, `lab.png`, `gallery-channel-preview-{before,after}.png` | *The Great Wave off Kanagawa*, c. 1830–1832, and PhotoCraft channel-selection captures | Katsushika Hokusai (artwork); PhotoCraft contributors (UI) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Tsunami_by_hokusai_19th_century.jpg), Metropolitan Museum reproduction; adjacent JSON capture scripts | Public domain artwork (PD-Art), adjacent `LICENSE-PUBLIC-DOMAIN.txt`; UI/scripts MIT OR Apache-2.0 |
 
 Artwork shown in the screenshots (all public domain, via Wikimedia Commons; details in
 [`docs/images/SOURCES.md`](docs/images/SOURCES.md)):
@@ -116,7 +120,8 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+`corpus/` is gitignored and no test fixtures are committed to the repository, except the small
+synthetic parser fixtures listed under *Synthetic parser test fixtures* below.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:
@@ -135,3 +140,18 @@ next to the files:
 | `corpus/pixls/` (11 files) | Real camera raws, one per decode path: Canon PowerShot SX50 HS (CR2 and its DNG conversion), Nikon D3 uncompressed NEF and Z6 paired 12/14-bit lossy and packed NEFs, Sony DSC-RX0 cRAW ARW, Panasonic DC-G9 high-res RW2, Olympus E-1 GRBG ORF, plus the E-5 packed ORF as the documented known-unsupported case. Per file (each CC0, per its database entry): [IMG_4059.CR2](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/IMG_4059.CR2), [CRW_4061.DNG](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/CRW_4061.DNG), [JD1_8203.NEF](https://raw.pixls.us/data/Nikon/D3/JD1_8203.NEF), [DSC00009.ARW](https://raw.pixls.us/data/Sony/DSC-RX0/DSC00009.ARW), [P1000475.RW2](https://raw.pixls.us/data/Panasonic/DC-G9/P1000475.RW2), [E_1__C106743_gredos.ORF](https://raw.pixls.us/data/Olympus/E-1/E_1__C106743_gredos.ORF), [_7061961_copy.ORF](https://raw.pixls.us/data/Olympus/E-5/_7061961_copy.ORF), [DSC_0750.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0750.NEF), [DSC_0751.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0751.NEF), [DSC_0753.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0753.NEF), [DSC_0754.NEF](https://raw.pixls.us/data/Nikon/Z%206/DSC_0754.NEF) | The photographers of the pixls.us raw samples database | [raw.pixls.us](https://raw.pixls.us) `data/`, fetched per [xtask/src/corpus_pins.rs](xtask/src/corpus_pins.rs) | CC0 / public domain, per file as linked |
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
+
+## Synthetic parser test fixtures
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/psd/tests/fixtures/atn/*.atn` | Independently encoded ATN version-16 parser fixtures | PhotoCraft contributors | Original synthetic test data; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+
+## Embedded-vector editor source
+
+The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change
+are adapted from Skyfuller1303’s MIT OR Apache-2.0 implementation in
+[PhotoCraft #3409](https://github.com/storytold/photocraft/pull/3409), commit
+`897f20072762fdf0eb688adcdb8d8cda7b38ce66`. Don Omondi’s embedded AI/PDF/EPS
+extension and current-main integration build on that source. Clipboard and unrelated
+Shape Tools changes from that branch are not included.

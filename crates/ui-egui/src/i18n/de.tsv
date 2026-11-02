@@ -3448,6 +3448,18 @@ curves	Smooth	Glätten
 	There is no color table to save.	Es gibt keine Farbtabelle zum Speichern.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} Farbe in {file} gespeichert|{n} Farben in {file} gespeichert
 	GPU adapter	GPU-Adapter
+smartSvg	Edit SVG Smart Object	SVG-Smart-Objekt bearbeiten
+smartSvg	Choose the application used to edit this SVG:	Wählen Sie die Anwendung zum Bearbeiten dieses SVG:
+smartSvg	Other application	Andere Anwendung
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (interner Editor)
+smartSvg	Choose executable…	Programm auswählen…
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Speichern Sie die geöffnete SVG-Datei. Jede gespeicherte Änderung wird in PhotoCraft zu einem Rückgängig-Schritt.
+smartSvg	Updates wait while another document or an editing dialog is active.	Aktualisierungen warten, während ein anderes Dokument oder ein Bearbeitungsdialog aktiv ist.
+smartSvg	Stop syncing this Smart Object	Synchronisierung dieses Smart-Objekts beenden
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-Editor geöffnet. Speichern Sie das SVG, um dieses Smart-Objekt zu aktualisieren.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS-Inhalte werden als SVG bearbeitet. Speichern ersetzt die eingebettete Quelle; formatspezifische Eigenschaften können sich ändern.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stile importieren…
 	Export Selected Styles…	Ausgewählte Stile exportieren…
 	Export Styles…	Stile exportieren…
@@ -3506,6 +3518,7 @@ curves	Smooth	Glätten
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ungültige Zahleneingabe. Es ist eine ganze Zahl zwischen {min}% und {max}% erforderlich. Der vorherige Wert wurde eingesetzt.
 	Clear Selection	Auswahl löschen
 	Color Aware	Farbbezogen
 	Decontaminate Colors	Farben dekontaminieren
@@ -3523,4 +3536,12 @@ curves	Smooth	Glätten
 	Refine Hair needs hair detection, which isn't available yet	Haare verbessern benötigt eine Haarerkennung, die noch nicht verfügbar ist
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Farbwähler
+	Recently Used Colors	Zuletzt verwendete Farben
+	Stop Color	Farbe der Farbunterbrechung
+	Shapes can't use patterns yet	Formen können noch keine Muster verwenden
+	Solid Color	Volltonfarbe
+	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…

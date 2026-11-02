@@ -4158,6 +4158,18 @@ cameraData	Lens	Lens
 	There is no color table to save.	Kaydedilecek renk tablosu yok.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} renk {file} konumuna kaydedildi
 	GPU adapter	GPU bağdaştırıcısı
+smartSvg	Choose executable…	Çalıştırılabilir dosya seç…
+smartSvg	Choose the application used to edit this SVG:	Bu SVG'yi düzenlemek için kullanılacak uygulamayı seçin:
+smartSvg	Edit SVG Smart Object	SVG Akıllı Nesnesini Düzenle
+smartSvg	Other application	Diğer uygulama
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (dahili düzenleyici)
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG düzenleyicisi açıldı. Bu Akıllı Nesneyi güncellemek için SVG'yi kaydedin.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Açılan SVG dosyasına kaydedin. Kaydedilen her değişiklik PhotoCraft'ta bir geri alma adımı olur.
+smartSvg	Stop syncing this Smart Object	Bu Akıllı Nesnenin eşitlemesini durdur
+smartSvg	Updates wait while another document or an editing dialog is active.	Başka bir belge veya düzenleme iletişim kutusu etkin olduğunda güncellemeler bekler.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS içeriği SVG olarak düzenlenecek. Kaydetmek gömülü kaynağı değiştirir; biçime özgü özellikler değişebilir.
+
+# Styles panel: Import / Export Styles (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} dosyasından {n} stil içe aktarıldı
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stil {file} dosyasına dışa aktarıldı
 	Import Styles…	Stilleri İçe Aktar…
@@ -4207,6 +4219,7 @@ cameraData	Lens	Lens
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Geçersiz sayısal giriş. {min}% ile {max}% arasında bir tam sayı gerekiyor. Önceki değer eklendi.
 	Color Aware	Renge Duyarlı
 	Decontaminate Colors	Renkleri Arındır
 	Edge Detection	Kenar Algılama
@@ -4229,4 +4242,9 @@ cameraData	Lens	Lens
 	Current Layer:	Geçerli Katman:
 	Underlying Layer:	Alttaki Katman:
 	Drag to move the selected path	Seçili yolu taşımak için sürükleyin
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Son Kullanılan Renkler
+	Stop Color	Durak Rengi
+	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…

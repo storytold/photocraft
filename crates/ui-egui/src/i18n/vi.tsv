@@ -3931,6 +3931,18 @@ curves	Smooth	Làm mượt
 	There is no color table to save.	Không có bảng màu nào để lưu.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Đã lưu {n} màu vào {file}
 	GPU adapter	Bộ điều hợp GPU
+smartSvg	Choose executable…	Chọn tệp thực thi…
+smartSvg	Choose the application used to edit this SVG:	Chọn ứng dụng dùng để chỉnh sửa SVG này:
+smartSvg	Edit SVG Smart Object	Chỉnh sửa Đối tượng thông minh SVG
+smartSvg	Other application	Ứng dụng khác
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (trình chỉnh sửa nội bộ)
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	Đã mở trình chỉnh sửa SVG. Lưu SVG để cập nhật Đối tượng thông minh này.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Lưu vào tệp SVG đã mở. Mỗi lần lưu thay đổi tạo một bước hoàn tác trong PhotoCraft.
+smartSvg	Stop syncing this Smart Object	Dừng đồng bộ Đối tượng thông minh này
+smartSvg	Updates wait while another document or an editing dialog is active.	Các cập nhật sẽ chờ khi tài liệu khác hoặc hộp thoại chỉnh sửa đang hoạt động.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Nội dung AI/PDF/EPS sẽ được chỉnh sửa dưới dạng SVG. Lưu sẽ thay thế nguồn nhúng; các tính năng riêng của định dạng có thể thay đổi.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Nhập kiểu…
 	Export Selected Styles…	Xuất các kiểu đã chọn…
 	Export Styles…	Xuất kiểu…
@@ -3983,6 +3995,7 @@ curves	Smooth	Làm mượt
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Giá trị số không hợp lệ. Cần một số nguyên từ {min}% đến {max}%. Đã chèn giá trị trước đó.
 	Clear Selection	Xóa vùng chọn
 	Color Aware	Nhận biết màu
 	Decontaminate Colors	Khử nhiễm màu
@@ -4001,4 +4014,10 @@ curves	Smooth	Làm mượt
 	Select and Mask was closed: its document is no longer the active one	Đã đóng Chọn và Mặt nạ: tài liệu của nó không còn là tài liệu đang hoạt động
 	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
 	Select Layer Under Cursor	Chọn lớp dưới con trỏ
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Bộ chọn màu
+	Recently Used Colors	Màu dùng gần đây
+	Stop Color	Màu điểm dừng
+	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
