@@ -171,7 +171,6 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
                             .map(|p| p[3])
                             .collect(),
                     ],
-                    LayerContent::Group(_) => return Err(EngineError::Other("group transparency sources are not supported".into())),
                     // Adjustment and fill layers cover the whole canvas.
                     _ => vec![vec![1.0; area.width() as usize * area.height() as usize]],
                 },

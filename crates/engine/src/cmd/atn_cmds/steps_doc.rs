@@ -131,6 +131,7 @@ pub(super) fn close_to(_: &str, p: &Value) -> Option<Descriptor> {
     }
     match p.get("save").filter(|v| !v.is_null()) {
         Some(v) if v == "ask" => Some(desc("null")),
+        Some(Value::Bool(false)) => Some(desc("null").with("Svng", enm("YsN ", "N   "))),
         Some(v) if v != "discard" => None,
         _ => Some(desc("null").with("Svng", enm("YsN ", "N   "))),
     }

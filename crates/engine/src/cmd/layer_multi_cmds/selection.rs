@@ -159,6 +159,29 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
         }
         return p;
     }
+    if id == "select.loadSelection" {
+        return recorded_source_layer(s, p, layer_id);
+    }
+    p
+}
+
+/// ⌘-clicking another layer's thumbnail loads that layer's transparency. The step refers to the
+/// layer the way the reference application records it, by name (or as the Background), so it
+/// replays in another document and saves to `.atn`. A layer that the name would not find (a
+/// same-named layer above it) keeps its id.
+fn recorded_source_layer(s: &Session, mut p: Value, id: LayerId) -> Value {
+    let Some(doc) = s.active().map(|st| &st.doc) else { return p };
+    let Some(layer) = doc.layer(id) else { return p };
+    let reference = if doc.background().is_some_and(|b| b.id == id) {
+        json!({"background": true})
+    } else if doc.walk().into_iter().rev().find(|(_, _, l)| l.name == layer.name).is_some_and(|(_, _, l)| l.id == id) {
+        json!({"name": layer.name})
+    } else {
+        return p;
+    };
+    if let Some(fields) = p.as_object_mut() {
+        fields.insert("layer".into(), reference);
+    }
     p
 }
 

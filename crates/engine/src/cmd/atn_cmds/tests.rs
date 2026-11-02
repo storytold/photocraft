@@ -3237,14 +3237,13 @@ fn mapped_transform_reference_points_round_trip() {
     for (code, reference) in [
         ("Qcsa", "center"),
         ("Qcs0", "topLeft"),
-        ("Qcs1", "top"),
-        ("Qcs2", "topRight"),
-        ("Qcs3", "left"),
-        ("Qcs4", "center"),
+        ("Qcs4", "top"),
+        ("Qcs1", "topRight"),
+        ("Qcs7", "left"),
         ("Qcs5", "right"),
-        ("Qcs6", "bottomLeft"),
-        ("Qcs7", "bottom"),
-        ("Qcs8", "bottomRight"),
+        ("Qcs3", "bottomLeft"),
+        ("Qcs6", "bottom"),
+        ("Qcs2", "bottomRight"),
     ] {
         for target in [target_ref("Lyr "), D::Reference(vec![ReferenceItem::Property { class: class("Chnl"), key: Id::new("fsel") }])] {
             let d = desc("null")
@@ -3268,8 +3267,19 @@ fn mapped_transform_reference_points_round_trip() {
             }
         }
     }
-    let d = desc("null").with("null", target_ref("Lyr ")).with("FTcs", enm("QCSt", "unknown")).with("Wdth", pct(50.0));
-    assert_eq!(mapped_recording("Trnf", d).actions[0].steps[0].0, PHOTOSHOP_STEP);
+    // The reference application never records `Qcs8` or `Qcsi` (independent): kept steps.
+    for code in ["unknown", "Qcs8", "Qcsi"] {
+        let d = desc("null").with("null", target_ref("Lyr ")).with("FTcs", enm("QCSt", code)).with("Wdth", pct(50.0));
+        assert_eq!(mapped_recording("Trnf", d).actions[0].steps[0].0, PHOTOSHOP_STEP, "{code}");
+    }
+    // A native anchor saves as the reference application's code; nothing writes `Qcs8`.
+    for (reference, code) in [("top", "Qcs4"), ("topRight", "Qcs1"), ("bottom", "Qcs6"), ("bottomRight", "Qcs2")] {
+        let native = Action::new("Native", vec![("edit.transform".into(), json!({"scaleX":50,"scaleY":50,"reference":reference}))]);
+        let (bytes, _) = export("Anchors", &[&native], &[], false).unwrap();
+        let saved = atn::parse(&bytes).unwrap();
+        let d = saved.actions[0].items[0].descriptor.as_ref().unwrap();
+        assert!(matches!(d.get("FTcs"), Some(D::Enumerated { value, .. }) if value.is(code)), "{reference}: {:?}", d.get("FTcs"));
+    }
 }
 
 /// Alt-clicking an eye twice must isolate and then restore visibility, not just show a layer.
@@ -3448,6 +3458,25 @@ fn mapped_close_keeps_ask_and_discard_distinct() {
     s.execute("file.new", json!({"width":4,"height":4})).unwrap();
     s.execute(id, p.clone()).unwrap();
     assert!(s.documents().is_empty());
+}
+
+/// `"save": false` is the older spelling of discard: it closes a changed document and saves as
+/// "don't save" (`Svng N`); `true` and other values stay refused.
+#[test]
+fn close_save_false_discards_and_saves_as_dont_save() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":4,"height":4})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    for refused in [json!(true), json!("yes"), json!(0)] {
+        assert!(s.execute("file.close", json!({"save": refused})).is_err(), "{refused}");
+        assert_eq!(s.documents().len(), 1);
+    }
+    s.execute("file.close", json!({"save": false})).unwrap();
+    assert!(s.documents().is_empty());
+    let native = Action::new("Close", vec![("file.close".into(), json!({"save": false}))]);
+    let (bytes, _) = export("Close", &[&native], &[], false).unwrap();
+    let d = atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.clone().unwrap();
+    assert!(matches!(d.get("Svng"), Some(D::Enumerated { type_id, value }) if type_id.is("YsN ") && value.is("N   ")), "{:?}", d.get("Svng"));
 }
 
 /// Lab Photo Filter colours use the CMS conversion and remain mapped after saving as RGB.

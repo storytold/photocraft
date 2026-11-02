@@ -7,18 +7,19 @@ use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
 use super::tables::{CHANNELS, INTERPOLATION, RADIAL_METHOD, RADIAL_QUALITY, channel_of, lookup, lookup_back};
 use super::{D, Descriptor, Map, ReferenceItem, UnicodeString, Value, json};
 
-/// Photoshop's nine frame anchors and the average/centre anchor.
+/// The reference point of a Free Transform (`QCSt`): `Qcsa` the centre (average), `Qcs0`..`Qcs3`
+/// the corners clockwise from the top left, `Qcs4`..`Qcs7` the sides top, right, bottom, left.
+/// `Qcsi` (independent) and unknown codes have no mapping and stay kept steps.
 const TRANSFORM_REFERENCE: &[(&str, &str)] = &[
     ("Qcsa", "center"),
     ("Qcs0", "topLeft"),
-    ("Qcs1", "top"),
-    ("Qcs2", "topRight"),
-    ("Qcs3", "left"),
-    ("Qcs4", "center"),
+    ("Qcs4", "top"),
+    ("Qcs1", "topRight"),
+    ("Qcs7", "left"),
     ("Qcs5", "right"),
-    ("Qcs6", "bottomLeft"),
-    ("Qcs7", "bottom"),
-    ("Qcs8", "bottomRight"),
+    ("Qcs3", "bottomLeft"),
+    ("Qcs6", "bottom"),
+    ("Qcs2", "bottomRight"),
 ];
 
 /// `transform`: Photoshop records a Free Transform relative to the frame (offset of its centre,

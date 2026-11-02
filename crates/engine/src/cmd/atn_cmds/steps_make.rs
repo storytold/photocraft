@@ -279,6 +279,16 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// The percent to save for an adjustment layer's opacity. Loading quantises a recorded percent
+/// to 8 bits (70 % becomes 179/255); a whole percent that quantises to that same level is the
+/// one that was recorded, so it is saved back (load then save keeps `70`, not `70.196`).
+fn recorded_percent(opacity: f64) -> f64 {
+    let level = opacity * 255.0;
+    let percent = opacity * 100.0;
+    let whole = percent.round();
+    if (level - level.round()).abs() < 1e-6 && (whole * 255.0 / 100.0).round() == level.round() { whole } else { percent }
+}
+
 /// Write a creation step, refusing native options the target descriptor cannot carry.
 pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     let with_name = |cls: &str| {
@@ -425,7 +435,7 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
             };
             let mut using = desc("AdjL").with("Type", D::Descriptor(t));
             if let Some(opacity) = opacity {
-                using = using.with("Opct", pct(opacity * 100.0));
+                using = using.with("Opct", pct(recorded_percent(opacity)));
             }
             desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(using))
         }

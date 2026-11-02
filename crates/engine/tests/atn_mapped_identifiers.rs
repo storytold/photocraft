@@ -150,7 +150,7 @@ fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
 fn review_layer_transform_uses_the_recorded_anchor() {
     for depth in [8, 16, 32] {
         for (code, fx, fy) in
-            [("Qcs0", 0, 0), ("Qcs1", 1, 0), ("Qcs2", 2, 0), ("Qcs3", 0, 1), ("Qcs4", 1, 1), ("Qcs5", 2, 1), ("Qcs6", 0, 2), ("Qcs7", 1, 2), ("Qcs8", 2, 2)]
+            [("Qcs0", 0, 0), ("Qcs4", 1, 0), ("Qcs1", 2, 0), ("Qcs7", 0, 1), ("Qcsa", 1, 1), ("Qcs5", 2, 1), ("Qcs3", 0, 2), ("Qcs6", 1, 2), ("Qcs2", 2, 2)]
         {
             let d = Descriptor::new("null")
                 .with("FTcs", enm("QCSt", code))
@@ -176,11 +176,15 @@ fn review_layer_transform_uses_the_recorded_anchor() {
             .unwrap();
             replay_saved(&mut s, &action);
             let state = s.active().unwrap();
-            assert_eq!(
-                state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(),
-                photocraft_geom::Rect::new(20 + 5 * fx, 20 + 5 * fy, 30 + 5 * fx, 30 + 5 * fy),
-                "{code}, depth {depth}"
-            );
+            let bounds = state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+            assert_eq!(bounds, photocraft_geom::Rect::new(20 + 5 * fx, 20 + 5 * fy, 30 + 5 * fx, 30 + 5 * fy), "{code}, depth {depth}");
+            // Measured in the reference application: Qcs6 keeps the bottom centre fixed, Qcs1 the
+            // top-right corner.
+            match code {
+                "Qcs6" => assert_eq!(bounds, photocraft_geom::Rect::new(25, 30, 35, 40), "depth {depth}"),
+                "Qcs1" => assert_eq!(bounds, photocraft_geom::Rect::new(30, 20, 40, 30), "depth {depth}"),
+                _ => {}
+            }
             s.execute("edit.undo", json!({})).unwrap();
             if code == "Qcs0" {
                 s.edit("Mark rotation", |doc, active| {
@@ -377,9 +381,10 @@ fn review_10702_transparency_names_resolve_at_playback() {
     }
 }
 
-/// A group has no supported transparency plane and must not overwrite a real selection.
+/// A group's transparency loads the whole canvas, as ⌘-clicking its thumbnail always did (the
+/// group's combined transparency is not composited yet), rather than failing.
 #[test]
-fn group_transparency_sources_fail_without_changing_selection() {
+fn group_transparency_sources_load_the_canvas() {
     use photocraft_doc::LayerId;
     use photocraft_geom::Rect;
 
@@ -409,19 +414,21 @@ fn group_transparency_sources_fail_without_changing_selection() {
             ]),
         );
         let action = recorded(AtnEvent::Code(*b"setd"), descriptor.clone());
-        let before = s.active().unwrap().doc.clone();
-        let revision = s.active().unwrap().revision;
-        let history = s.active().unwrap().history.past_len();
         let (id, params) = &action.steps[0];
         let result = s.execute(id, params.clone());
-        let alpha = s.active().unwrap().doc.selection.as_ref().map(|mask| mask.read_region(Rect::from_xywh(0, 0, 2, 1)));
-        assert!(result.is_err(), "group {name:?} returned {result:?} with selection {alpha:?}");
-        assert_eq!(s.active().unwrap().doc, before);
-        assert_eq!(s.active().unwrap().revision, revision);
-        assert_eq!(s.active().unwrap().history.past_len(), history);
+        let doc = &s.active().unwrap().doc;
+        let alpha = doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]);
+        assert!(result.is_ok(), "group {name:?} returned {result:?}");
+        assert_eq!(alpha, vec![1.0, 1.0], "group {name:?}");
+        // ⌘-click on the group's thumbnail (by id) loads the same.
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"channel":"transparency","layer":group.0})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.selection.as_ref().map(|mask| mask.read_region(doc.bounds())).unwrap_or(vec![1.0; 2]), vec![1.0, 1.0]);
         assert_eq!(saved(&action).descriptor, Some(descriptor));
 
         // The group's explicit mask remains a valid source.
+        s.execute("select.loadSelection", json!({"channel":"transparency","layer":"Child"})).unwrap();
         s.execute("layer.layerMask.revealSelection", json!({"layer":group.0})).unwrap();
         assert!(s.active().unwrap().doc.selection.is_none());
         s.execute("select.loadSelection", json!({"channel":"mask","layer":params["layer"]})).unwrap();
@@ -557,7 +564,8 @@ fn recorded_adjustment_opacity_keeps_gradient_settings_and_defaults() {
         }
         let written = saved(&action).descriptor.unwrap();
         let Some(D::Descriptor(using)) = written.get("Usng") else { panic!("missing adjustment metadata") };
-        assert!(matches!(using.get("Opct"),Some(D::UnitFloat{unit,value}) if unit==b"#Prc" && (*value-179.0/255.0*100.0).abs()<1e-10));
+        // The recorded 70 % saves back as 70 %, not as the 8-bit level 179/255 (70.196 %).
+        assert!(matches!(using.get("Opct"), Some(D::UnitFloat { unit, value }) if unit == b"#Prc" && *value == 70.0), "{:?}", using.get("Opct"));
         for depth in [8, 16, 32] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width":4,"height":3,"depth":depth})).unwrap();
