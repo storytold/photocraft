@@ -986,9 +986,10 @@ fn ui_set_drives_the_path_options() {
         assert_eq!(r["ok"], false, "{bad}: {r}");
     }
     // A rejected call applies none of its fields.
-    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "anchorSize": 99}));
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "pathThickness": 1.0, "pathMarkStart": false, "anchorSize": 99}));
     assert_eq!(r["ok"], false, "{r}");
-    assert_eq!(app.ui.tool_options.path_color, "red");
+    let o = &app.ui.tool_options;
+    assert_eq!((o.path_color.as_str(), o.path_thickness, o.path_mark_start, o.anchor_size), ("red", 2.5, true, 7));
 }
 
 /// #1046: the Color Sampler tool is selectable over the control channel and reported as active.
