@@ -468,10 +468,8 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     )?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let layer = p.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer);
-    if let Some(planes) = crate::channel_transform::planes(&st.doc, layer, p, s.tools.background)? {
-        let plane = &planes.first().ok_or_else(|| bad(cmd, "no transform channels"))?.1;
-        crate::channel_transform::check_locks(&st.doc, layer, p)?;
-        let bounds = crate::channel_transform::bounds(&st.doc, plane, p)?;
+    let isolated_bounds = if p["target"] == "pixels" { None } else { crate::channel_transform::source_bounds(&st.doc, layer, p)? };
+    if let Some(bounds) = isolated_bounds {
         let mut rect = match p.get("rect") {
             Some(r) => {
                 let r: [f64; 4] = serde_json::from_value(r.clone()).map_err(|_| bad(cmd, "rect must contain four numbers"))?;
@@ -482,9 +480,6 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             }
             None => rect_f(bounds),
         };
-        for (_, plane) in &planes {
-            crate::channel_transform::validate_area(plane.content_bounds())?;
-        }
         if let Some(sel) = &st.doc.selection {
             crate::channel_transform::validate_area(sel.content_bounds())?;
         }
@@ -510,17 +505,29 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             return Ok(json!({"changed": false}));
         }
         let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
-        s.edit("Warp", |doc, _| {
-            for (target, plane) in &planes {
-                let moved = warp_scalar(plane, doc.selection.as_ref(), frame, &w, interp, &Interrupt::NONE)?;
-                crate::channel_transform::write_plane(doc, layer, target, moved)?;
-            }
-            if let Some(sel) = &doc.selection {
-                doc.selection = Some(warp_scalar(sel, None, frame, &w, Interp::Bilinear, &Interrupt::NONE)?).filter(|s| !s.content_bounds().is_empty());
-            }
-            Ok(())
-        })?;
-        return Ok(json!({"changed": true, "rect": rect}));
+        let params = p.clone();
+        let background = s.tools.background;
+        return crate::jobs::edit_job(
+            s,
+            "Warp",
+            move |doc, _, ctx| {
+                ctx.stage(0.0, 1.0, "Warping channels", |ctl| {
+                    cancelled(ctl)?;
+                    let planes = crate::channel_transform::planes_with_interrupt(doc, layer, &params, background, ctl)?
+                        .ok_or_else(|| bad("edit.transform.warp", "missing transform channels"))?;
+                    for plane in &planes {
+                        cancelled(ctl)?;
+                        let moved = warp_scalar(&plane.surface, doc.selection.as_ref(), frame, &w, interp, ctl)?;
+                        plane.write(doc, layer, moved, ctl)?;
+                    }
+                    if let Some(sel) = &doc.selection {
+                        doc.selection = Some(warp_scalar(sel, None, frame, &w, Interp::Bilinear, ctl)?).filter(|s| !s.content_bounds().is_empty());
+                    }
+                    cancelled(ctl)
+                })
+            },
+            move |()| json!({"changed":true, "rect":rect}),
+        );
     }
     let (id, rect) = target(s, cmd, p)?;
     let w = warp_from_params(cmd, p, rect_f(rect))?;

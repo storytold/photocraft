@@ -65,7 +65,8 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
     // Channel visibility and the active mask can change without a document revision. Both the
     // original (press-and-hold) and filtered textures must follow the canvas's current view.
-    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
+    let (_, display_key) = crate::canvas::canvas_display(app, &st.doc, None);
+    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer, display_key);
     if cache.view.as_ref() != Some(&view) {
         cache = Cache { view: Some(view), ..Default::default() };
     }
@@ -278,12 +279,51 @@ struct CachedTex {
 struct Cache {
     filtered: Option<CachedTex>,
     original: Option<CachedTex>,
-    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>)>,
+    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>, u64)>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_filter_window_refreshes_when_its_display_profile_changes() {
+        use photocraft_engine::color_cmds::resolve_profile;
+        use photocraft_engine::display_color::Display;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        app.run("edit.fill", json!({"color":"#4080c0"})).unwrap();
+        app.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        let revision = app.session.active().unwrap().revision;
+        let ctx = egui::Context::default();
+        let dialog = 78;
+        let id = egui::Id::unique(("filter-preview-ui", dialog));
+        let mut fields = json!({"__command":"filter.blur.gaussianBlur","__preview":false}).as_object().unwrap().clone();
+        let mut old = None;
+        for profile in ["srgb", "display-p3"] {
+            let icc = resolve_profile(profile, None, None).unwrap().to_bytes();
+            app.session.color.set_displays(Ok(vec![Display {
+                id: 4,
+                name: "Display".into(),
+                frame: [0.0, 0.0, 100.0, 100.0],
+                profile_name: None,
+                icc: Some(icc),
+            }]));
+            app.session.color.main_display = Some(4);
+            let mut output = ctx.run_ui(Default::default(), |ui| window(&app, dialog, ui, &mut fields));
+            output.textures_delta.clear();
+            let cache = ctx.data(|d| d.get_temp::<Cache>(id)).unwrap();
+            let tex = cache.original.unwrap().tex;
+            if let Some(previous) = old {
+                assert_ne!(tex.id(), previous, "monitor changes must invalidate the retained channel preview");
+            }
+            old = Some(tex.id());
+            // Keep the previous allocation alive so a new texture cannot reuse its ID.
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(profile), tex));
+            assert_eq!(app.session.active().unwrap().revision, revision);
+        }
+    }
 
     #[test]
     fn solo_channel_filter_preview_matches_the_colour_managed_canvas() {

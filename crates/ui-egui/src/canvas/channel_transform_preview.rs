@@ -50,6 +50,10 @@ impl Preview {
         }
     }
 
+    pub(crate) fn guard(&self, target: Value) -> photocraft_engine::channel_transform::Guard {
+        photocraft_engine::channel_transform::Guard { layer: self.layer, target }
+    }
+
     pub(crate) fn background(&self) -> [f32; 4] {
         self.background
     }
@@ -174,7 +178,7 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     {
         if !preview.gpu_attempted {
             preview.gpu = crate::channel_transform_gpu::Preview::new(gpu, &preview.base, preview.layer, preview.background);
-            preview.gpu_attempted = true;
+            preview.gpu_attempted = preview.gpu.is_some() || !crate::channel_transform_gpu::validation_pending(gpu);
         }
         if let Some(tex) = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor)) {
             return Some(tex);
@@ -834,6 +838,136 @@ mod tests {
     }
 
     #[test]
+    fn gpu_linear_channel_views_match_the_cpu_display_for_affine_and_warp() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = gpu_oracle_document(depth, 0);
+            doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            let mut a = app();
+            a.session.add_document(doc, None);
+            a.run("channel.target", json!({"channel":"green"})).unwrap();
+            crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+            let st = a.session.active().unwrap();
+            let doc = st.doc.clone();
+            let layer = st.active_layer;
+            let (display, _) = crate::canvas::canvas_display(&a, &doc, None);
+            assert!(display.as_ref().unwrap().encode_srgb);
+            assert!(display.as_ref().unwrap().transform.is_none());
+            let mut gpu_preview = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).unwrap();
+            for warp in [false, true] {
+                let mut t = a.ui.transform.clone().unwrap();
+                t.interpolation = "bilinear".into();
+                if warp {
+                    t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
+                } else {
+                    t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+                }
+                let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
+                cpu.update(&t).unwrap();
+                for eyes in [vec![1], vec![0, 1]] {
+                    let mut view = st.channel_view.clone();
+                    view.color_hidden = (0..3).map(|c| !eyes.contains(&c)).collect();
+                    for in_color in [false, true] {
+                        assert!(gpu_preview.texture(&t, &view, in_color, true, 1).is_some());
+                        let expected = cpu.image(&view, crate::channel_view::Look { in_color, ..Default::default() }, display.as_deref());
+                        let actual = gpu_preview.readback();
+                        let max = actual
+                            .iter()
+                            .zip(expected.pixels)
+                            .flat_map(|(a, b)| a.to_array().into_iter().zip(b.to_array()).map(|(a, b)| a.abs_diff(b)))
+                            .max()
+                            .unwrap();
+                        assert!(max <= 2, "{depth:?}, warp={warp}, eyes={eyes:?}, in_color={in_color}: {max}");
+                    }
+                }
+            }
+        }
+        assert!(gpu.health().is_ok());
+    }
+
+    #[test]
+    fn gpu_rejects_a_perspective_horizon_outside_the_box_but_inside_the_source() {
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        for faint_selection in [false, true] {
+            let mut a = app();
+            if faint_selection {
+                let mut doc = Document::with_background("faint selection", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+                doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(2, 2, 8, 8), &[0.2, 0.4, 0.6, 1.0]);
+                let mut selection = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                selection.fill_rect(Rect::new(2, 2, 30, 10), &[1e-8]);
+                selection.fill_rect(Rect::new(2, 2, 8, 8), &[1.0]);
+                doc.selection = Some(selection);
+                a.session.add_document(doc, None);
+            }
+            a.run("channel.target", json!({"channel":"red"})).unwrap();
+            crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+            let st = a.session.active().unwrap();
+            let doc = st.doc.clone();
+            let layer = st.active_layer;
+            let view = st.channel_view.clone();
+            let mut t = a.ui.transform.clone().unwrap();
+            // Nearest already falls back for projective maps, independently of the horizon.
+            t.interpolation = "bilinear".into();
+            t.rect = [2.0, 2.0, 10.0, 10.0];
+            let h = photocraft_algo::transform::Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.05, 0.0, 1.0]);
+            t.quad = crate::transform_tool::corners(t.rect).map(|[x, y]| {
+                let (x, y) = h.apply(x, y);
+                [x, y]
+            });
+            let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4]).unwrap();
+            assert!(fast.texture(&t, &view, false, false, 1).is_none(), "faint_selection={faint_selection}");
+            let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
+            assert!(cpu.update(&t).unwrap_err().contains("horizon"));
+        }
+    }
+
+    #[test]
+    fn isolated_transform_captures_the_selection_after_a_type_mask_commit() {
+        for hidden in [false, true] {
+            let mut a = app();
+            a.run("channel.new", json!({"name":"saved"})).unwrap();
+            a.run("channel.target", json!({"channel":"saved"})).unwrap();
+            let text = a.run("type.create", json!({"text":"I","size":10,"x":5,"y":16})).unwrap()["layer"].as_u64().unwrap();
+            crate::type_tool::edit_active(&mut a).unwrap();
+            let ed = a.ui.text_edit.as_mut().unwrap();
+            ed.mask = true;
+            ed.created = true;
+            if hidden {
+                a.run("channel.setVisible", json!({"channel":"saved","visible":false})).unwrap();
+            }
+            let before = a.session.active().unwrap().doc.clone();
+            let result = crate::transform_tool::begin(&mut a, &egui::Context::default());
+            if hidden {
+                assert!(result.unwrap_err().contains(photocraft_engine::channel_transform::HIDDEN));
+                assert!(a.ui.text_edit.is_some());
+                assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+            } else {
+                result.unwrap();
+                let doc = &a.session.active().unwrap().doc;
+                assert!(a.ui.text_edit.is_none());
+                assert!(doc.layer(LayerId(text)).is_none());
+                assert!(doc.selection.is_some());
+                let preview = a.transform_preview.as_ref().unwrap();
+                assert!(Arc::ptr_eq(&preview.doc, doc));
+                let b = doc.selection.as_ref().unwrap().content_bounds();
+                assert_eq!(a.ui.transform.as_ref().unwrap().rect, [b.x0, b.y0, b.x1, b.y1].map(f64::from));
+            }
+        }
+    }
+
+    #[test]
     fn invalid_preview_geometry_is_cached_until_the_geometry_changes() {
         let mut a = app();
         a.run("channel.target", json!({"channel":"green"})).unwrap();
@@ -1284,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_commit_and_document_switch_release_target_and_preserve_pixels() {
+    fn refused_channel_commit_keeps_its_box_and_document_switch_releases_it() {
         let mut a = app();
         a.run("channel.target", json!({"channel":"red"})).unwrap();
         let before = a.session.active().unwrap().doc.clone();
@@ -1294,9 +1428,18 @@ mod tests {
         a.session.tools.background = [0.25, 0.5, 0.75, 1.0];
         crate::transform_tool::commit(&mut a);
         assert!(a.ui.status_error);
-        assert!(a.session.active().unwrap().channel_transform.is_none());
+        assert!(a.session.active().unwrap().channel_transform.is_some());
+        assert_eq!(a.ui.transform.as_ref().unwrap().quad, [[0.0; 2]; 4]);
+        assert!(a.run("channel.target", json!({"channel":"blue"})).is_err());
         assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
         assert_eq!(a.session.tools.background, [0.25, 0.5, 0.75, 1.0]);
+        let t = a.ui.transform.as_mut().unwrap();
+        t.quad = crate::transform_tool::corners(t.rect).map(|[x, y]| [x + 1.0, y]);
+        crate::transform_tool::commit(&mut a);
+        assert!(a.ui.transform.is_none());
+        assert!(a.session.active().unwrap().channel_transform.is_none());
+        assert!(a.session.undo());
+        let before = a.session.active().unwrap().doc.clone();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         a.session.add_document(Document::new("other", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
         crate::transform_tool::end_if_left(&mut a);

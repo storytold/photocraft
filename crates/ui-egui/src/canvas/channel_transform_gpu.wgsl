@@ -121,9 +121,12 @@ fn finish(at: vec2<i32>, transformed: Sample) -> vec4<f32> {
         var rgb = rgba.rgb * rgba.a + vec3(1.0-rgba.a);
         if visible == 0u { return vec4(1.0); }
         if countOneBits(visible) == 1u && p.view.y == 0.0 {
-            return vec4(vec3(rgb[firstTrailingBit(visible)]), 1.0);
+            rgb = vec3(rgb[firstTrailingBit(visible)]);
+            if p.view.w != 0.0 { rgb = srgb(rgb); }
+            return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), 1.0);
         }
         for (var i = 0u; i < 3u; i++) { if (visible & (1u << i)) == 0u { rgb[i] = 0.0; } }
+        if p.view.w != 0.0 { rgb = srgb(rgb); }
         return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), 1.0);
     }
     if p.view.w != 0.0 { rgba = vec4(srgb(rgba.rgb), rgba.a); }

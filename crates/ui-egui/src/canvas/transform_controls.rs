@@ -55,7 +55,7 @@ pub(super) fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Op
         let LayerContent::Raster(plane) = &st.doc.layer(st.active_layer?)?.content else { return None };
         // The same scalar frame `source_bounds` opens, without extracting planes or running
         // allocation preflights each frame. Native samples include default-valued areas too.
-        photocraft_engine::channel_transform::bounds(&st.doc, plane, &serde_json::json!({"target": colors.params()})).ok()?
+        photocraft_engine::channel_transform::bounds(&st.doc, st.active_layer, plane, &serde_json::json!({"target": colors.params()})).ok()?
     } else {
         layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?
     };

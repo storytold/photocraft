@@ -186,6 +186,45 @@ fn dragging_a_layer_larger_than_the_canvas_redraws_what_comes_in_from_beyond_the
     assert_eq!(r, Rect::new(0, 0, 64, 64));
 }
 
+#[test]
+fn channel_move_repaints_a_stationary_drag_after_changing_the_background() {
+    for colors in [vec![0], vec![0, 2]] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":32,"height":16,"background":"transparent"})).unwrap();
+        app.run("edit.fill", json!({"color":"#804020"})).unwrap();
+        app.run("channel.target", json!({"colors":colors})).unwrap();
+        app.run("tools.setColors", json!({"background":"#000000"})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::Move;
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        let m = egui::Modifiers::NONE;
+        crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, m);
+        crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 12.0, y: 8.0, pressure: 1.0 }, m);
+        let (old, old_key) = super::display_doc(&mut app, 0).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.run("tools.setColors", json!({"background":"#ffffff"})).unwrap();
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        let (shown, key) = super::display_doc(&mut app, 0).unwrap();
+        let mut expected = (*before).clone();
+        let target = photocraft_engine::color_channels::selected(&app.session).unwrap();
+        photocraft_engine::channel_cmds::move_color_channels(&mut expected, layer, target, 4, 0, app.session.tools.background).unwrap();
+        assert!(shown.layer(layer).unwrap().surface() == expected.layer(layer).unwrap().surface(), "changed background must reach the preview");
+        assert!(!std::sync::Arc::ptr_eq(&old, &shown));
+        assert_ne!(old_key, key, "the canvas needs a fresh preview key even when the pointer stays still");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert!(super::damage(&app, before.id, revision, old_key, key).is_some());
+        crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 12.0, y: 8.0 }, m);
+        assert!(
+            app.session.active().unwrap().doc.layer(layer).unwrap().surface() == expected.layer(layer).unwrap().surface(),
+            "preview must match the committed move"
+        );
+    }
+}
+
 /// The Move tool shows how far it has moved the layer, ΔX/ΔY in whole pixels, as Photoshop
 /// and Free Transform do (#5727): once the pointer moves, until the release.
 #[test]
@@ -769,6 +808,7 @@ fn selecting_several_colours_releases_a_retained_single_channel_gpu_preview() {
         factor: 1,
         bounds: st.doc.bounds(),
         gpu: None,
+        pending: false,
         shown: true,
     });
     app.session.execute("channel.target", json!({"colors":[0,2]})).unwrap();

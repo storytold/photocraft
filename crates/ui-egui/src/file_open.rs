@@ -36,10 +36,10 @@ pub enum DropTarget {
 /// A file dropped on the canvas, waiting its turn to be placed.
 pub(crate) enum DropPlace {
     /// Dropped onto the window (desktop): read from its path, or through egui.
-    File(egui::DroppedFileHandle),
+    File(photocraft_doc::DocId, egui::DroppedFileHandle),
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
-    Bytes(String, Vec<u8>),
+    Bytes(photocraft_doc::DocId, String, Vec<u8>),
 }
 
 /// `warnings` from an import, plus one for each font family the active document's type uses that
@@ -244,7 +244,9 @@ impl PhotocraftApp {
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
-                self.drop_places.push_back(DropPlace::File(f));
+                if let Some(st) = self.session.active() {
+                    self.drop_places.push_back(DropPlace::File(st.doc.id, f));
+                }
                 continue;
             }
             match self.open_dropped_file(&f, &name, slot) {
@@ -312,16 +314,23 @@ impl PhotocraftApp {
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         while self.ui.transform.is_none() {
             let Some(next) = self.drop_places.pop_front() else { return };
+            let document = match &next {
+                DropPlace::File(document, _) | DropPlace::Bytes(document, _, _) => *document,
+            };
+            // A queued drop belongs to the canvas it landed on, including asynchronous reads.
+            if self.session.active().is_none_or(|st| st.doc.id != document) {
+                continue;
+            }
             let (name, placed) = match next {
-                DropPlace::File(f) if f.path().is_absolute() => {
+                DropPlace::File(_, f) if f.path().is_absolute() => {
                     (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
                 }
-                DropPlace::File(f) => {
+                DropPlace::File(_, f) => {
                     let name = dropped_name(&f);
                     let placed = crate::read_dropped(&*f).and_then(|bytes| self.place_bytes(&name, bytes, None));
                     (name, placed)
                 }
-                DropPlace::Bytes(name, bytes) => {
+                DropPlace::Bytes(_, name, bytes) => {
                     let placed = self.place_bytes(&name, bytes, None);
                     (name, placed)
                 }

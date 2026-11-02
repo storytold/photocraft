@@ -34,25 +34,37 @@ fn colour_set_geometry_matches_independent_scalar_oracles_at_native_depth() {
                     let before = actual.active().unwrap().doc.clone();
                     let history = actual.active().unwrap().history.past_len();
                     let (command, params) = geometry(case);
-                    let mut oracle = Session::new();
-                    oracle.tools.background = actual.tools.background;
-                    oracle.add_document((*before).clone(), None);
+                    let mut references = Vec::new();
                     let mut outline = None;
                     for &k in &colors {
-                        // Each scalar reference uses the same initial selection. Samples from
-                        // earlier components stay in place while this component is transformed.
-                        oracle.active_mut().unwrap().doc = {
-                            let mut d = (*oracle.active().unwrap().doc).clone();
-                            d.selection = before.selection.clone();
-                            std::sync::Arc::new(d)
-                        };
+                        // Independent immutable sources: one component's off-canvas result
+                        // must not enlarge the next reference's native source/frame.
+                        let mut oracle = Session::new();
+                        oracle.tools.background = actual.tools.background;
+                        oracle.add_document((*before).clone(), None);
                         let mut p = params.clone();
                         p["target"] = json!({"color":k});
                         oracle.execute(command, p).unwrap();
                         outline = oracle.active().unwrap().doc.selection.clone();
+                        references.push((k, surface(&oracle).clone()));
                     }
                     actual.execute(command, params).unwrap();
-                    assert_eq!(surface(&actual), surface(&oracle), "{mode:?}/{depth:?}/selection={kind}/case={case}");
+                    let original = before.layers[0].surface().unwrap();
+                    let area =
+                        references.iter().fold(surface(&actual).content_bounds().union(&original.content_bounds()), |b, (_, s)| b.union(&s.content_bounds()));
+                    let fmt = original.format();
+                    let bytes = fmt.sample.bytes();
+                    let got = surface(&actual).try_to_interleaved(area).unwrap();
+                    for c in 0..fmt.channels() {
+                        let reference = references.iter().find(|(k, _)| *k == c).map_or(original, |(_, s)| s).try_to_interleaved(area).unwrap();
+                        for (a, b) in got.chunks_exact(fmt.bytes_per_pixel()).zip(reference.chunks_exact(fmt.bytes_per_pixel())) {
+                            assert_eq!(
+                                &a[c * bytes..(c + 1) * bytes],
+                                &b[c * bytes..(c + 1) * bytes],
+                                "{mode:?}/{depth:?}/selection={kind}/case={case}/component={c}"
+                            );
+                        }
+                    }
                     assert_eq!(actual.active().unwrap().doc.selection, outline, "outline moves once");
                     assert_eq!(actual.active().unwrap().history.past_len(), history + 1);
                     let got = surface(&actual).clone();

@@ -3457,3 +3457,39 @@ fn selected_layers_keep_a_channel_transform_isolated_and_warp_available() {
     assert!(!app.session.active().unwrap().channel_view.color_visible(1));
     assert_eq!(app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64)), before);
 }
+
+#[test]
+fn channel_jobs_restore_the_guard_but_cancelled_jobs_close_the_box() {
+    use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
+    for cancelled in [false, true] {
+        let mut a = app_with_square(64, photocraft_geom::Rect::new(4, 4, 28, 28));
+        a.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+        let t = a.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+        let geometry = t.clone();
+        let before = a.session.active().unwrap().doc.clone();
+        a.run("channel.setVisible", json!({"channel":"blue","visible":false})).unwrap();
+        let eyes = a.session.active().unwrap().channel_view.clone();
+        a.session.active_mut().unwrap().channel_transform = None;
+        a.transform_preview.as_mut().unwrap().committing = Some(JobId(123));
+        let event = JobEvent {
+            id: JobId(123),
+            command: "edit.transform.warp".into(),
+            label: "Warp".into(),
+            document: Some(before.id),
+            outcome: if cancelled { JobOutcome::Cancelled } else { JobOutcome::Failed("synthetic refusal".into()) },
+        };
+        crate::transform_tool::on_job_event(&mut a, &event);
+        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+        assert_eq!(a.session.active().unwrap().channel_view, eyes);
+        assert_eq!(a.ui.transform.is_none(), cancelled);
+        assert_eq!(photocraft_engine::channel_transform::locked(&a.session), !cancelled);
+        if !cancelled {
+            assert_eq!(a.ui.transform, Some(geometry));
+            assert!(a.run("channel.target", json!({"channel":"green"})).is_err());
+            crate::transform_tool::cancel(&mut a);
+            assert!(!photocraft_engine::channel_transform::locked(&a.session));
+        }
+    }
+}

@@ -782,3 +782,74 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
         assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
     }
 }
+
+#[test]
+fn isolated_channel_warp_runs_as_a_locked_job_with_the_inline_result() {
+    for colors in [vec![0], vec![0, 2]] {
+        let mut inline = session(48, 32);
+        let mut s = session(48, 32);
+        let p = json!({"target":{"colors":colors},"style":"arc","bend":20});
+        inline.execute("edit.transform.warp", p.clone()).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        let id = job(s.start("edit.transform.warp", p).unwrap());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(crate::channel_transform::locked(&s));
+        assert!(s.execute("channel.target", json!({"channel":"green"})).is_err());
+        s.execute("channel.setVisible", json!({"channel":"red","visible":false})).unwrap();
+        let eyes = s.active().unwrap().channel_view.clone();
+        let event = wait_event(&mut s, id);
+        assert!(matches!(event.outcome, JobOutcome::Done(_)), "{event:?}");
+        assert_eq!(pixels(&s), pixels(&inline));
+        assert_eq!(s.active().unwrap().channel_view, eyes);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert!(!crate::channel_transform::locked(&s));
+        assert!(s.undo());
+        assert!(s.active().unwrap().doc.layers == before.layers);
+    }
+}
+
+#[test]
+fn cancelling_an_isolated_colour_set_warp_discards_all_planes() {
+    let mut s = session(300, 200);
+    let before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("edit.transform.warp", json!({"target":{"colors":[0,2]},"style":"flag","bend":40})).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    assert!(!crate::channel_transform::locked(&s));
+}
+
+#[test]
+fn raster_mask_alpha_and_quick_mask_warp_use_the_same_job_path() {
+    for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+        let mut s = session(48, 32);
+        if target == "mask" {
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        } else if target == "quickMask" {
+            s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+        } else {
+            s.execute("channel.new", json!({"fill":"white"})).unwrap();
+        }
+        let before = s.active().unwrap().doc.clone();
+        let mut inline = Session::new();
+        inline.add_document((*before).clone(), None);
+        let p = json!({"target":target,"style":"arc","bend":20});
+        inline.execute("edit.transform.warp", p.clone()).unwrap();
+        let id = job(s.start("edit.transform.warp", p).unwrap());
+        assert!(crate::channel_transform::locked(&s));
+        assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+        let a = &s.active().unwrap().doc;
+        let b = &inline.active().unwrap().doc;
+        assert!(a.layers == b.layers && a.channels == b.channels && a.quick_mask == b.quick_mask && a.selection == b.selection);
+        assert!(s.undo());
+        assert!(
+            s.active().unwrap().doc.layers == before.layers
+                && s.active().unwrap().doc.channels == before.channels
+                && s.active().unwrap().doc.quick_mask == before.quick_mask
+        );
+    }
+}

@@ -197,11 +197,10 @@ pub(super) fn fix_view_now(s: &mut Session) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
     let quick = st.doc.quick_mask.is_some();
-    let active = st.active_layer;
     let shown = {
         let doc = &st.doc;
         let v = &st.channel_view;
-        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
+        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || v.shown_layer_mask(doc).is_some()
     };
     if st.channel_view.visible_colors(colors) == 0 && !shown && !transform_locked {
         st.channel_view.color_hidden.clear();

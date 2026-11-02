@@ -204,6 +204,11 @@ fn magic_wand_selects_the_visible_alpha_or_mask_not_the_rgb() {
         s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
     }
     s.execute("select.magicWand", json!({"x": 7, "y": 7, "tolerance": 0, "antiAlias": false})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 3, "an undisplayed mask cannot suppress empty-view recovery");
+    assert_eq!(coverage(&s, 2, 2), 0.0, "the hidden mask must not replace RGB sampling");
+    s.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
+    s.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+    s.execute("select.magicWand", json!({"x":7,"y":7,"tolerance":0,"antiAlias":false})).unwrap();
     assert_eq!(coverage(&s, 2, 2), 1.0, "a layer mask shown alone is what the wand reads");
     assert_eq!(coverage(&s, 30, 10), 0.0);
 }

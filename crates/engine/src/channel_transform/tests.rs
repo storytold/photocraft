@@ -967,3 +967,89 @@ fn explicit_layer_move_bypasses_a_colour_set_and_a_singleton_set_moves_one_compo
         assert_eq!(a[2..], b[2..]);
     }
 }
+
+#[test]
+fn off_canvas_colour_samples_move_in_and_out_without_clipping_or_changing_other_samples() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for colors in [vec![0], vec![0, 2]] {
+                for selected in [false, true] {
+                    for warp in [false, true] {
+                        let mut s = session(mode, depth);
+                        s.edit("off canvas", |doc, active| {
+                            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                            let n = surf.channels();
+                            let mut samples = vec![0.4; n];
+                            samples[n - 1] = 0.0; // hidden native samples count too
+                            surf.write_pixel(-1, 3, &samples);
+                            surf.write_pixel(12, 3, &samples);
+                            Ok(())
+                        })
+                        .unwrap();
+                        if selected {
+                            s.edit("off-canvas selection", |doc, _| {
+                                let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                                selection.fill_rect(Rect::new(-1, 2, 13, 5), &[1.0]);
+                                doc.selection = Some(selection);
+                                Ok(())
+                            })
+                            .unwrap();
+                        }
+                        let before = s.active().unwrap().doc.clone();
+                        let original = surface(&s).clone();
+                        let b = source_bounds(&before, s.active().unwrap().active_layer, &json!({"target":{"colors":colors}})).unwrap().unwrap();
+                        assert_eq!((b.x0, b.x1), (-1, 13));
+                        let p = if warp {
+                            let rect = [b.x0, b.y0, b.x1, b.y1].map(f64::from);
+                            json!({"target":{"colors":colors},"warp":Warp::custom(BezierMesh::identity(rect,1,1).map_points(|p|[p[0]+1.0,p[1]]),rect),"interpolation":"nearest"})
+                        } else {
+                            json!({"target":{"colors":colors},"dx":1,"interpolation":"nearest"})
+                        };
+                        s.execute(if warp { "edit.transform.warp" } else { "edit.transform" }, p).unwrap();
+                        let fmt = original.format();
+                        let bytes = depth.bytes();
+                        let area = Rect::new(-2, 0, 15, 8);
+                        let old = original.try_to_interleaved(area).unwrap();
+                        let after = surface(&s).try_to_interleaved(area).unwrap();
+                        for (a, b) in after.chunks_exact(fmt.bytes_per_pixel()).zip(old.chunks_exact(fmt.bytes_per_pixel())) {
+                            for c in 0..fmt.channels() {
+                                if !colors.contains(&c) {
+                                    assert_eq!(&a[c * bytes..(c + 1) * bytes], &b[c * bytes..(c + 1) * bytes]);
+                                }
+                            }
+                        }
+                        for c in &colors {
+                            assert_eq!(
+                                surface(&s).sample_channel(0, 3, *c),
+                                original.sample_channel(-1, 3, *c),
+                                "incoming {mode:?} {depth:?} {selected} {warp}"
+                            );
+                            assert_eq!(
+                                surface(&s).sample_channel(13, 3, *c),
+                                original.sample_channel(12, 3, *c),
+                                "outgoing {mode:?} {depth:?} {selected} {warp}"
+                            );
+                        }
+                        assert!(s.undo());
+                        assert!(surface(&s) == &original);
+                        assert!(s.redo());
+                        assert_eq!(surface(&s).try_to_interleaved(area).unwrap(), after);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn remote_sparse_colour_samples_are_rejected_before_extraction() {
+    let mut s = session(ColorMode::Rgb, SampleType::F32);
+    s.edit("remote sample", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().write_pixel(100_000_000, 0, &[0.5; 4]);
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    assert!(s.execute("edit.transform", json!({"target":{"color":0},"dx":1})).is_err());
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}

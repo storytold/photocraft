@@ -149,11 +149,17 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
 /// was, with the reason in the status bar, so the transform can be changed or cancelled. A copy or
 /// a placed layer it made goes only when it is cancelled.
 fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<TransformPreview>, e: String) {
-    if preview.as_ref().is_some_and(|pv| pv.channel.is_some()) {
-        release_channel_guard(app);
-        finish(app, preview.as_ref().map(|pv| pv.doc.id), LayerId(t.layer), t.made, false);
-        app.ui.status = e;
-        return;
+    if let Some(pv) = preview.as_ref().filter(|pv| pv.channel.is_some()) {
+        if let Some(st) = app.session.active_mut().filter(|st| st.doc.id == pv.doc.id) {
+            if let (Some(channel), Some(target)) = (&pv.channel, &t.target) {
+                st.channel_transform = Some(channel.guard(target.clone()));
+            }
+        } else {
+            release_channel_guard(app);
+            finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, false);
+            app.ui.status = e;
+            return;
+        }
     }
     app.ui.transform = Some(t);
     app.transform_preview = preview;

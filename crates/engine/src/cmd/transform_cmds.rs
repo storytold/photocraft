@@ -794,7 +794,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     let id = explicit.or(st.active_layer);
     crate::channel_transform::check_locks(&st.doc, id, p)?;
     let planes = if many.is_some() { None } else { crate::channel_transform::planes(&st.doc, id, p, s.tools.background)? };
-    let lone = planes.as_ref().and_then(|planes| planes.first()).map(|(_, surface)| surface);
+    let lone = planes.as_ref().and_then(|planes| planes.first()).map(|plane| &plane.surface);
     let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
         (_, true) => None,
         (Some(id), false) => Some(id),
@@ -818,7 +818,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => {
             let b = match lone {
-                Some(surf) => crate::channel_transform::bounds(&st.doc, surf, p)?,
+                Some(surf) => crate::channel_transform::bounds(&st.doc, id, surf, p)?,
                 None => transform_bounds_of(&st.doc, &ids),
             };
             if b.is_empty() {
@@ -844,7 +844,8 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
-    for (_, surface) in planes.iter().flatten() {
+    for plane in planes.iter().flatten() {
+        let surface = &plane.surface;
         let source = st.doc.selection.as_ref().map_or_else(|| surface.content_bounds(), Surface::content_bounds);
         crate::channel_transform::validate_area(source)?;
         let source_corners = [
@@ -890,7 +891,7 @@ fn transform_doc(
     doc: &mut Document,
     id: Option<LayerId>,
     ids: &[LayerId],
-    planes: Option<&[(Value, Surface)]>,
+    planes: Option<&[crate::channel_transform::Plane]>,
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
@@ -903,7 +904,8 @@ fn transform_doc(
     }
     if let Some(planes) = planes {
         if !h.is_identity() {
-            for (target, surf) in planes {
+            for plane in planes {
+                let surf = &plane.surface;
                 if ctl.cancelled() {
                     return Err(EngineError::Cancelled);
                 }
@@ -913,7 +915,7 @@ fn transform_doc(
                     Some(sel) => warp_gray_selected(surf, sel, h, interp)?,
                     None => warp_gray(surf, h, interp)?,
                 };
-                crate::channel_transform::write_plane(doc, id, target, moved)?;
+                plane.write(doc, id, moved, ctl)?;
             }
             // Move the outline once, after every plane used the original coverage.
             if let Some(sel) = &doc.selection {

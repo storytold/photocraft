@@ -189,8 +189,8 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     at.set(egui::pos2(20.0, 20.0));
     assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
     let layers = layer_count(&app);
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
+    app.drop_places.push_back(crate::file_open::DropPlace::Bytes(app.session.active().unwrap().doc.id, "photo.png".into(), png_bytes(4, 3)));
+    app.drop_places.push_back(crate::file_open::DropPlace::Bytes(app.session.active().unwrap().doc.id, "bad.png".into(), b"bad".to_vec()));
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -224,7 +224,7 @@ fn web_drop_does_not_commit_an_isolated_channel_transform() {
     assert_eq!(app.session.active().unwrap().channel_view, view);
     assert_eq!(app.ui.transform, captured);
     assert!(photocraft_engine::channel_transform::locked(&app.session));
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("next.png".into(), png_bytes(2, 2)));
+    app.drop_places.push_back(crate::file_open::DropPlace::Bytes(app.session.active().unwrap().doc.id, "next.png".into(), png_bytes(2, 2)));
     app.place_next_dropped(&ctx);
     assert_eq!(app.drop_places.len(), 1);
     crate::transform_tool::cancel(&mut app);
@@ -1197,4 +1197,39 @@ fn opening_an_open_file_again_shows_its_tab() {
     for d in [dir, dir2, dir3, dir4] {
         let _ = std::fs::remove_dir_all(&d);
     }
+}
+
+#[test]
+fn delayed_canvas_drop_never_places_into_a_different_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", serde_json::json!({"width":32,"height":32})).unwrap();
+    let origin = app.session.active().unwrap().doc.id;
+    app.run("file.new", serde_json::json!({"width":32,"height":32})).unwrap();
+    let documents: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
+    app.drop_places.push_back(crate::file_open::DropPlace::Bytes(origin, "late.png".into(), png_bytes(2, 2)));
+    app.place_next_dropped(&egui::Context::default());
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_none());
+    assert!(app.session.documents().iter().zip(documents).all(|(st, doc)| std::sync::Arc::ptr_eq(&st.doc, &doc)));
+}
+
+#[test]
+fn native_canvas_drop_queued_during_a_channel_transform_does_not_follow_a_tab_switch() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#123456"})).unwrap();
+    app.run("channel.target", json!({"channel":"green"})).unwrap();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    app.open_dropped(&ctx, vec![dropped("queued.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    assert_eq!(app.drop_places.len(), 1);
+    let original = app.session.active().unwrap().doc.clone();
+    app.session.add_document(Document::new("other", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+    let other = app.session.active().unwrap().doc.clone();
+    crate::transform_tool::end_if_left(&mut app);
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_none());
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.documents()[0].doc));
+    assert!(std::sync::Arc::ptr_eq(&other, &app.session.active().unwrap().doc));
 }

@@ -332,6 +332,7 @@ fn quick_mask_and_a_layer_mask_can_be_the_only_visible_channel() {
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    s.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
     for name in ["red", "green", "blue"] {
         s.execute("channel.setVisible", json!({"channel": name, "visible": false})).unwrap();
     }
@@ -1107,6 +1108,19 @@ fn nonexistent_quick_mask_eye_preserves_view_and_revision() {
         assert_eq!(st.revision, revision);
         assert_eq!(st.history.past_len(), steps);
     }
+}
+
+#[test]
+fn channel_eye_recovery_ignores_an_undisplayed_layer_mask() {
+    let mut s = session();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    assert!(s.active().unwrap().channel_view.shown_layer_mask(&s.active().unwrap().doc).is_none());
+    let before = s.active().unwrap().doc.clone();
+    s.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+    let st = s.active().unwrap();
+    assert_eq!(st.channel_view.visible_colors(3), 3, "an undisplayed mask cannot keep an otherwise empty view alive");
+    assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
 }
 
 #[test]

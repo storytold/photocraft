@@ -94,7 +94,12 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
     use photocraft_doc::{Document, Size};
     use photocraft_geom::Rect;
     let _lock = photocraft_testkit::gpu_lock();
-    let rs = egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default());
+    let Ok(rs) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())))
+    else {
+        eprintln!("No GPU adapter available; skipping GPU oracle comparison");
+        return;
+    };
     let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
     let mut doc = Document::with_background("different scalar outlines", Size::new(32, 24), ColorMode::Rgb, SampleType::F32, Color::WHITE);
     doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(2, 2, 8, 8), &[0.2, 1.0, 1.0, 1.0]);

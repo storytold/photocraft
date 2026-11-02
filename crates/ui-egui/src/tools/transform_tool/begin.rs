@@ -46,7 +46,7 @@ fn begin_with_params(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde
         if !photocraft_engine::channel_transform::visible(&app.session, &params).map_err(|e| e.to_string())? {
             return Err(photocraft_engine::channel_transform::HIDDEN.into());
         }
-        return begin_lone(app, ctx, doc, bounds, target);
+        return begin_lone(app, ctx, bounds, target);
     }
     let id = st.active_layer.ok_or("no active layer")?;
     // Several layers selected: one box moves them all, as in Photoshop (#6501).
@@ -454,13 +454,23 @@ pub(super) fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId
 }
 
 /// Capture a scalar channel and its target without changing any channel eyes.
-fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, b: photocraft_geom::Rect, target: serde_json::Value) -> Result<(), String> {
+fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, b: photocraft_geom::Rect, target: serde_json::Value) -> Result<(), String> {
     if b.is_empty() {
         return Err("Could not transform: nothing is selected".into());
     }
     crate::type_tool::commit(app);
-    let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
-    let active = app.session.active().and_then(|st| st.active_layer);
+    // Type Mask commit can remove its working layer and create a selection. Capture both
+    // source pixels and frame from that committed state, after the non-mutating preflight.
+    let st = app.session.active().ok_or("no document")?;
+    let doc = st.doc.clone();
+    let active = st.active_layer;
+    let b = photocraft_engine::channel_transform::source_bounds(&doc, active, &json!({"target":target}))
+        .map_err(|e| e.to_string())?
+        .ok_or("no isolated transform target")?;
+    if b.is_empty() {
+        return Err("Could not transform: nothing is selected".into());
+    }
+    let layer = active.map_or(0, |l| l.0);
     let channel = crate::channel_transform_preview::Preview::new(&doc, active, app.session.tools.background, crate::proxy::reduced_previews(app));
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();

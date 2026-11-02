@@ -403,3 +403,16 @@ Subsequent reviews corrected outline offsets, selection snapping, temporary-Move
 mask dispatch, copy guards and transform-control frames without changing those pixel kernels.
 The table retains the recorded build's provenance; the later dispatch and frame fixes are
 validated separately, rather than presented as another 24 MP measurement of the current head.
+
+## 2026-11-02: transform review follow-ups
+
+Native colour geometry includes off-canvas samples and preserves other encoded components,
+including transparency. Default frames include the canvas and stored native extent; source
+and writeback allocations remain bounded. Isolated Warp commits run through cancellable jobs.
+A refused interactive commit keeps its box and captured target available for retry.
+
+GPU previews retain pending WebGPU validation until both scopes settle, reject the same
+perspective horizons as commit, and apply display encoding to partial linear-RGB views.
+Unsupported sources use the CPU preview. Display-profile and background-colour changes
+invalidate the corresponding view caches. Deferred native and web canvas drops retain their
+original destination document.

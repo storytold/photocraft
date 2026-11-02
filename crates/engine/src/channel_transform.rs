@@ -116,32 +116,65 @@ fn canonical_target(colors: crate::color_channels::ColorChannels) -> Value {
     if colors.len() == 1 { json!({"color": colors.indices().next().unwrap_or(0)}) } else { colors.params() }
 }
 
+/// Native stored samples can extend beyond the canvas. Use raw sample bounds, including
+/// colour hidden under transparent alpha; compositing bounds would discard those samples.
+fn native_area(doc: &Document, layer: Option<LayerId>) -> Result<Rect> {
+    let id = layer.ok_or_else(|| bad("no active layer"))?;
+    let surface = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?;
+    Ok(doc.bounds().union(&surface.content_bounds()))
+}
+
 /// Bound the aggregate native source buffers before extraction or opening an interactive box.
 fn source_budget(doc: &Document, layer: Option<LayerId>, colors: crate::color_channels::ColorChannels) -> Result<()> {
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let fmt = doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("colour transforms require a raster layer"))?.format();
-    let bytes = tiled_pixels(doc.bounds()).and_then(|n| n.checked_mul(fmt.sample.bytes() as u64)).and_then(|n| n.checked_mul(colors.len() as u64));
+    let bytes = tiled_pixels(native_area(doc, layer)?).and_then(|n| n.checked_mul(fmt.sample.bytes() as u64)).and_then(|n| n.checked_mul(colors.len() as u64));
     if bytes.is_none_or(|n| n > 512 * 1024 * 1024) {
         return Err(bad("channel transform sources exceed the 512 MiB working buffer limit"));
     }
     Ok(())
 }
 
+/// A captured scalar source and its original native extent. Writes of earlier components
+/// must not enlarge later components' write regions within the same transaction.
+pub(crate) struct Plane {
+    pub surface: Surface,
+    params: Value,
+    area: Option<Rect>,
+}
+
+impl Plane {
+    pub(crate) fn write(&self, doc: &mut Document, layer: Option<LayerId>, moved: Surface, ctl: &photocraft_raster::Interrupt) -> Result<()> {
+        write_plane_with_interrupt(doc, layer, &self.params, moved, self.area, ctl)
+    }
+}
+
 /// Captured scalar sources share geometry and the original selection; the edit transaction
 /// publishes their writes together or discards them all on failure.
-pub(crate) fn planes(doc: &Document, layer: Option<LayerId>, p: &Value, background: [f32; 4]) -> Result<Option<Vec<(Value, Surface)>>> {
+pub(crate) fn planes(doc: &Document, layer: Option<LayerId>, p: &Value, background: [f32; 4]) -> Result<Option<Vec<Plane>>> {
+    planes_with_interrupt(doc, layer, p, background, &photocraft_raster::Interrupt::NONE)
+}
+
+pub(crate) fn planes_with_interrupt(
+    doc: &Document,
+    layer: Option<LayerId>,
+    p: &Value,
+    background: [f32; 4],
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Option<Vec<Plane>>> {
     if let Some(colors) = crate::color_channels::explicit(p, crate::channel_cmds::color_count(doc))? {
         source_budget(doc, layer, colors)?;
+        let area = Some(native_area(doc, layer)?);
         let mut out = Vec::new();
         for k in colors.indices() {
             let mut target = p.clone();
             target["target"] = json!({"color": k});
-            let source = plane(doc, layer, &target, background)?.ok_or_else(|| bad("missing transform channel"))?;
-            out.push((target, source));
+            let source = plane_with_interrupt(doc, layer, &target, background, ctl)?.ok_or_else(|| bad("missing transform channel"))?;
+            out.push(Plane { params: target, surface: source, area });
         }
         Ok(Some(out))
     } else {
-        Ok(plane(doc, layer, p, background)?.map(|source| vec![(p.clone(), source)]))
+        Ok(plane_with_interrupt(doc, layer, p, background, ctl)?.map(|source| vec![Plane { params: p.clone(), surface: source, area: None }]))
     }
 }
 
@@ -166,9 +199,9 @@ pub(crate) fn move_selected_colors(
         return Err(bad("selected channel move coordinates are out of range"));
     }
     let h = photocraft_algo::transform::Homography([1.0, 0.0, f64::from(dx), 0.0, 1.0, f64::from(dy), 0.0, 0.0, 1.0]);
-    for (target, plane) in planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))? {
-        let moved = crate::transform_cmds::warp_gray_selected(&plane, &selection, &h, photocraft_algo::transform::Interp::Nearest)?;
-        write_plane(doc, Some(layer), &target, moved)?;
+    for plane in planes(doc, Some(layer), &params, background)?.ok_or_else(|| bad("no selected colour channels"))? {
+        let moved = crate::transform_cmds::warp_gray_selected(&plane.surface, &selection, &h, photocraft_algo::transform::Interp::Nearest)?;
+        plane.write(doc, Some(layer), moved, &photocraft_raster::Interrupt::NONE)?;
     }
     doc.selection = Some(selection.translated(dx, dy, bounds));
     Ok(())
@@ -202,6 +235,19 @@ pub fn visible(s: &Session, p: &Value) -> Result<bool> {
 
 /// Scalar source at the document's native sample depth; None means an ordinary layer transform.
 pub fn plane(doc: &Document, layer: Option<LayerId>, p: &Value, background: [f32; 4]) -> Result<Option<Surface>> {
+    plane_with_interrupt(doc, layer, p, background, &photocraft_raster::Interrupt::NONE)
+}
+
+fn plane_with_interrupt(
+    doc: &Document,
+    layer: Option<LayerId>,
+    p: &Value,
+    background: [f32; 4],
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Option<Surface>> {
+    if ctl.cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     let Some(k) = color_index(p)? else {
         return crate::transform_cmds::lone_target(doc, layer, p).map(|s| s.cloned());
     };
@@ -218,9 +264,12 @@ pub fn plane(doc: &Document, layer: Option<LayerId>, p: &Value, background: [f32
     let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&fmt, background));
     let fill = native.get(k).copied().ok_or_else(|| bad("missing background component"))?;
     let mut out = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, fmt.sample, false), &[fill]);
-    let area = doc.bounds();
+    let area = native_area(doc, layer)?;
     validate_area(area)?;
     for tile in area.tiles() {
+        if ctl.cancelled() {
+            return Err(EngineError::Cancelled);
+        }
         let r = tile.rect().intersect(&area);
         let values = crate::allocation::read_region(source, r, "extracting a transform channel")?;
         let mut gray = crate::allocation::capacity(values.len() / fmt.channels(), "extracting a transform channel")?;
@@ -248,13 +297,13 @@ pub fn source_bounds(doc: &Document, layer: Option<LayerId>, p: &Value) -> Resul
         if colors.indices().any(|k| k >= surface.format().mode.color_channels()) {
             return Err(bad("colour channel index is out of range"));
         }
-        validate_area(doc.bounds())?;
-        return bounds(doc, surface, p).map(Some);
+        validate_area(native_area(doc, layer)?)?;
+        return bounds(doc, layer, surface, p).map(Some);
     }
     crate::transform_cmds::lone_target(doc, layer, p)?
         .map(|surface| {
             validate_area(surface.content_bounds())?;
-            bounds(doc, surface, p)
+            bounds(doc, layer, surface, p)
         })
         .transpose()
 }
@@ -282,9 +331,10 @@ pub(crate) fn validate_area(r: Rect) -> Result<()> {
     Ok(())
 }
 
-pub fn bounds(doc: &Document, plane: &Surface, p: &Value) -> Result<Rect> {
+pub fn bounds(doc: &Document, layer: Option<LayerId>, plane: &Surface, p: &Value) -> Result<Rect> {
     Ok(if is_color(p) {
-        doc.selection.as_ref().map_or(doc.bounds(), |s| s.content_bounds().intersect(&doc.bounds()))
+        let area = native_area(doc, layer)?;
+        doc.selection.as_ref().map_or(area, |s| s.content_bounds().intersect(&area))
     } else if let Some(selection) = &doc.selection {
         // Default-valued selected mask/channel samples move too, so the frame must contain them.
         selection.content_bounds()
@@ -310,13 +360,32 @@ pub fn check_locks(doc: &Document, layer: Option<LayerId>, p: &Value) -> Result<
 
 /// Replace only the native encoded bytes of the edited component. Other components stay bit-exact.
 pub fn write_plane(doc: &mut Document, layer: Option<LayerId>, p: &Value, plane: Surface) -> Result<()> {
+    write_plane_with_interrupt(doc, layer, p, plane, None, &photocraft_raster::Interrupt::NONE)
+}
+
+fn write_plane_with_interrupt(
+    doc: &mut Document,
+    layer: Option<LayerId>,
+    p: &Value,
+    plane: Surface,
+    source_area: Option<Rect>,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<()> {
+    if ctl.cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     check_locks(doc, layer, p)?;
     let Some(k) = color_index(p)? else {
         let (dst, _) = crate::channel_cmds::target_surface(doc, layer, p)?;
         *dst = plane;
         return Ok(());
     };
-    let area = doc.bounds();
+    let original = match source_area {
+        Some(area) => area,
+        None => native_area(doc, layer)?,
+    };
+    let area = original.union(&plane.content_bounds());
+    validate_area(area)?;
     let id = layer.ok_or_else(|| bad("no active layer"))?;
     let dst = doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or(EngineError::NoLayer(id))?;
     let fmt = dst.format();
@@ -326,6 +395,9 @@ pub fn write_plane(doc: &mut Document, layer: Option<LayerId>, p: &Value, plane:
     let bytes = fmt.sample.bytes();
     let offset = k.checked_mul(bytes).ok_or_else(|| bad("colour offset overflow"))?;
     for tile in area.tiles() {
+        if ctl.cancelled() {
+            return Err(EngineError::Cancelled);
+        }
         let r = tile.rect().intersect(&area);
         let mut pixels = dst.try_to_interleaved(r)?;
         let values = plane.try_to_interleaved(r)?;

@@ -380,6 +380,9 @@ fn paint_canvas(
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
     let channel_texture = crate::channel_transform_preview::texture(app, ctx, idx, output).or_else(|| crate::move_ui::channel_texture(app, idx, output));
+    if app.gpu.as_ref().is_some_and(crate::channel_transform_gpu::poll_validation) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);

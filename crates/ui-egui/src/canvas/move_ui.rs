@@ -190,6 +190,7 @@ pub(crate) struct MovePreview {
     /// Native component edits keep transparency in place, so their original extent can change
     /// between offsets too (selected default samples can replace a vacated background value).
     stationary: bool,
+    background: [f32; 4],
     canvas: Rect,
     /// Offsets shown so far, by preview key (`BASE + index`).
     offsets: Vec<(i32, i32)>,
@@ -216,6 +217,7 @@ pub(crate) struct MoveGpuPreview {
     factor: u32,
     bounds: Rect,
     gpu: Option<crate::channel_transform_gpu::Preview>,
+    pending: bool,
     shown: bool,
 }
 
@@ -260,6 +262,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
     let gpu = app.gpu.as_ref().filter(|g| g.health().is_ok())?;
     let fresh = app.move_gpu_preview.as_ref().is_some_and(|p| {
         p.doc == doc.id
+            && !p.pending
             && p.snapshot.ptr_eq(&Arc::downgrade(&doc))
             && p.layer == layer
             && p.colors == colors
@@ -278,8 +281,18 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             let preview = crate::channel_transform_gpu::Preview::new(gpu, &proxy, Some(layer), background);
             (bounds, preview)
         };
-        app.move_gpu_preview =
-            Some(MoveGpuPreview { doc: doc.id, snapshot: Arc::downgrade(&doc), layer, colors, background, factor, bounds, gpu: preview, shown: false });
+        app.move_gpu_preview = Some(MoveGpuPreview {
+            doc: doc.id,
+            snapshot: Arc::downgrade(&doc),
+            layer,
+            colors,
+            background,
+            factor,
+            bounds,
+            pending: preview.is_none() && crate::channel_transform_gpu::validation_pending(gpu),
+            gpu: preview,
+            shown: false,
+        });
     }
     let p = app.move_gpu_preview.as_mut()?;
     let rect = [p.bounds.x0, p.bounds.y0, p.bounds.x1, p.bounds.y1].map(|v| f64::from(v) * f64::from(factor));
@@ -411,6 +424,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
             moving,
             bounds,
             stationary: channel.is_some(),
+            background,
             canvas,
             offsets: Vec::new(),
             shown: None,
@@ -425,7 +439,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if offset == (0, 0) && p.offsets.is_empty() {
         return None;
     }
-    if p.offsets.last() != Some(&offset) {
+    if p.offsets.last() != Some(&offset) || (channel.is_some() && p.background != background) {
         let t0 = crate::gpu_canvas::now_ms();
         let moved = match channel {
             Some((id, colors)) => {
@@ -440,6 +454,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
                 p.shown = Some(Arc::new(d));
                 p.offsets.push(offset);
+                p.background = background;
             }
             Err(_) => {
                 p.shown = None;
@@ -506,6 +521,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             moving: Vec::new(),
             bounds,
             stationary: false,
+            background: app.session.tools.background,
             canvas,
             offsets: Vec::new(),
             shown: None,
@@ -574,7 +590,10 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     app.move_gpu_preview = None;
     // Only when the canvas shows this very offset (else it recomposites everything once).
     let at = (dx as i32, dy as i32);
-    let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
+    let shown = app
+        .move_preview
+        .take()
+        .filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at) && (!p.stationary || p.background == app.session.tools.background));
     if dx == 0.0 && dy == 0.0 {
         return;
     }

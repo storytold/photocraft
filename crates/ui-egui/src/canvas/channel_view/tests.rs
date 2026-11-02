@@ -469,13 +469,14 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     m.execute("layer.new.layer", json!({})).unwrap();
     m.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     m.execute("layer.layerMask.hideAll", json!({})).unwrap();
-    m.execute("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+    m.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+    let st = m.active().unwrap();
+    assert_eq!(st.channel_view.visible_colors(3), 3, "an undisplayed mask cannot prevent empty-view recovery");
+    assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).is_none(), "the plain composite needs no mask overlay");
+    m.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
+    m.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
     let st = m.active().unwrap();
     assert_eq!(st.channel_view.visible_colors(3), 0);
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
-    assert_eq!(px[0], Color32::WHITE, "a mask with its eye off must not leak through");
-    m.execute("view.layerMask", json!({"mode":"overlay"})).unwrap();
-    let st = m.active().unwrap();
-    let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
-    assert_eq!(px[0], Color32::BLACK, "showing the mask eye reveals its grayscale values");
+    assert_eq!(px[0], Color32::BLACK, "a mask with its eye on can be shown alone");
 }

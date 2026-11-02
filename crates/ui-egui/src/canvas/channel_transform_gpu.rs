@@ -10,6 +10,10 @@ use photocraft_engine::channel_cmds::ChannelView;
 
 use crate::state::TransformSession;
 
+#[path = "channel_transform_gpu_validation.rs"]
+mod validation;
+use validation::{Validated, validated};
+
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FLOAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const UNIFORM_BYTES: u64 = 144;
@@ -17,8 +21,8 @@ const UNIFORM_BYTES: u64 = 144;
 struct Pipelines {
     inputs: wgpu::BindGroupLayout,
     moved: wgpu::BindGroupLayout,
-    scalar: OnceLock<Option<Passes>>,
-    multiple: OnceLock<Option<Passes>>,
+    scalar: OnceLock<Validated<Option<Passes>>>,
+    multiple: OnceLock<Validated<Option<Passes>>>,
 }
 
 struct Passes {
@@ -29,7 +33,7 @@ struct Passes {
 
 pub(crate) struct Preview {
     rs: RenderState,
-    pipes: Arc<Pipelines>,
+    pipes: Arc<Validated<Pipelines>>,
     uniform: wgpu::Buffer,
     inputs: wgpu::BindGroup,
     moved: wgpu::BindGroup,
@@ -83,6 +87,10 @@ impl Preview {
     pub(crate) fn new(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4]) -> Option<Self> {
         let (l, beneath) = source(doc, layer)?;
         let surf = l.surface()?;
+        if !doc.bounds().contains_rect(&surf.content_bounds()) {
+            // Off-canvas native samples require the CPU source; this upload is canvas-sized.
+            return None;
+        }
         let selection_bounds = doc.selection.as_ref().map(photocraft_raster::Surface::content_bounds);
         if doc.selection.as_ref().is_some_and(|s| s.default_pixel().first().copied().unwrap_or(0.0) != 0.0)
             || selection_bounds.is_some_and(|b| !doc.bounds().contains_rect(&b))
@@ -107,14 +115,15 @@ impl Preview {
         }
         let pipes = {
             let mut renderer = rs.renderer.write();
-            if let Some(p) = renderer.callback_resources.get::<Arc<Pipelines>>() {
+            if let Some(p) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() {
                 p.clone()
             } else {
-                let p = Arc::new(Pipelines::new(&rs.device)?);
+                let p = Arc::new(validated(&rs.device, || Pipelines::build(&rs.device)));
                 renderer.callback_resources.insert(p.clone());
                 p
             }
         };
+        let layouts = pipes.get()?;
         let texture = |label, format, usage| {
             rs.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -200,7 +209,7 @@ impl Preview {
         });
         let inputs = rs.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("channel transform source"),
-            layout: &pipes.inputs,
+            layout: &layouts.inputs,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&rgb.create_view(&Default::default())) },
@@ -209,7 +218,7 @@ impl Preview {
         });
         let moved = rs.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("channel transform result"),
-            layout: &pipes.moved,
+            layout: &layouts.moved,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&moved_view) }],
         });
         let id = rs.renderer.write().register_native_texture(&rs.device, &output_view, wgpu::FilterMode::Linear);
@@ -285,8 +294,7 @@ impl Preview {
         let rect = t.rect.map(|v| v / k);
         let quad = t.quad.map(|p| p.map(|v| v / k));
         let h = photocraft_algo::transform::Homography::rect_to_quad(rect, quad)?;
-        let denominators = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
-        if denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12 || v.signum() != denominators[0].signum()) {
+        if crosses_horizon(&h, rect) {
             return None;
         }
         let inv = h.inverse()?;
@@ -322,6 +330,12 @@ impl Preview {
             }
         }
         let source_rect = [source_bounds.x0, source_bounds.y0, source_bounds.x1, source_bounds.y1].map(f64::from);
+        // Commit checks the original selection bounds, including coverage that rounds
+        // to zero at the layer's depth and is absent from the GPU sampler's outline.
+        let checked = self.selection.unwrap_or(source_bounds);
+        if t.warp.is_none() && crosses_horizon(&h, [checked.x0, checked.y0, checked.x1, checked.y1].map(f64::from)) {
+            return None;
+        }
         let mut interp = match t.interpolation.as_str() {
             "nearest" => 0.0,
             "bilinear" => 1.0,
@@ -374,7 +388,7 @@ impl Preview {
             Some(w) => Some(warp_geometry(w, source_rect, k)?),
             None => None,
         };
-        let passes = self.pipes.passes(&self.rs.device, colors.len() > 1)?;
+        let passes = self.pipes.get()?.passes(&self.rs.device, colors.len() > 1)?;
         self.rs.queue.write_buffer(&self.uniform, 0, &bytes(&data));
         let mut encoder = self.rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("channel preview") });
         if let Some((vertices, indices)) = geometry {
@@ -462,6 +476,12 @@ impl Preview {
 
 fn bytes(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// A projective horizon through any part of the source is refused by commit as well.
+fn crosses_horizon(h: &photocraft_algo::transform::Homography, rect: [f64; 4]) -> bool {
+    let denominators = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]]].map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
+    denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12 || v.signum() != denominators[0].signum())
 }
 
 fn write_band(rs: &RenderState, texture: &wgpu::Texture, width: u32, y: u32, rows: u32, channels: u32, values: &[f32]) {
@@ -631,13 +651,9 @@ fn render_pass<'a>(encoder: &'a mut wgpu::CommandEncoder, view: &wgpu::TextureVi
 
 // Both variants share bindings and textures; only the sampler vector width differs.
 impl Pipelines {
-    fn new(device: &wgpu::Device) -> Option<Self> {
-        validated(device, || Self::build(device))
-    }
-
     fn passes(&self, device: &wgpu::Device, multiple: bool) -> Option<&Passes> {
         let cache = if multiple { &self.multiple } else { &self.scalar };
-        cache.get_or_init(|| validated(device, || Passes::build(device, self, multiple)).flatten()).as_ref()
+        cache.get_or_init(|| validated(device, || Passes::build(device, self, multiple))).get()?.as_ref()
     }
 
     fn build(device: &wgpu::Device) -> Self {
@@ -731,19 +747,31 @@ impl Passes {
     }
 }
 
-fn validated<T>(device: &wgpu::Device, build: impl FnOnce() -> T) -> Option<T> {
-    use std::future::Future;
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let result = build();
-    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-    for pop in [internal.pop(), validation.pop()] {
-        if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
-            log::warn!("channel preview uses CPU: {e}");
-            return None;
+/// Pending scopes need another frame, including when the first capture used the CPU fallback.
+pub(crate) fn validation_pending(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
+    let renderer = gpu.render_state().renderer.read();
+    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
+    if cache.is_pending() {
+        return true;
+    }
+    cache.get().is_some_and(|pipes| [&pipes.scalar, &pipes.multiple].into_iter().any(|slot| slot.get().is_some_and(Validated::is_pending)))
+}
+
+/// Advance even abandoned captures, and request one final frame when a scope settles so a
+/// capture that used the CPU earlier in this frame gets another chance to use the GPU.
+pub(crate) fn poll_validation(gpu: &crate::gpu_canvas::GpuCanvas) -> bool {
+    let renderer = gpu.render_state().renderer.read();
+    let Some(cache) = renderer.callback_resources.get::<Arc<Validated<Pipelines>>>() else { return false };
+    let mut pending = cache.is_pending();
+    if let Some(pipes) = cache.get() {
+        for slot in [&pipes.scalar, &pipes.multiple] {
+            if let Some(validation) = slot.get() {
+                pending |= validation.is_pending();
+                let _ = validation.get();
+            }
         }
     }
-    Some(result)
+    pending
 }
 
 #[cfg(test)]
@@ -752,6 +780,33 @@ mod tests {
     use photocraft_color::Color;
     use photocraft_doc::{Layer, LayerMask, Size};
     use photocraft_geom::warp::{BezierMesh, Warp};
+
+    #[test]
+    fn abandoned_captures_finish_validation_and_stop_requesting_frames() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _lock = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        for valid in [true, false] {
+            let count = Arc::new(AtomicUsize::new(0));
+            let polls = count.clone();
+            let future =
+                std::future::poll_fn(move |_| if polls.fetch_add(1, Ordering::SeqCst) < 2 { std::task::Poll::Pending } else { std::task::Poll::Ready(valid) });
+            let cache = Arc::new(Validated::new(Pipelines::build(&rs.device), future));
+            rs.renderer.write().callback_resources.insert(cache.clone());
+            for _ in 0..3 {
+                assert!(poll_validation(&gpu));
+            }
+            assert!(!validation_pending(&gpu));
+            assert!(!poll_validation(&gpu), "settled or failed validation cannot keep an idle view repainting");
+            assert_eq!(cache.get().is_some(), valid);
+            assert_eq!(count.load(Ordering::SeqCst), 3);
+        }
+    }
 
     #[test]
     fn unsupported_stacks_keep_the_cpu_oracle() {
