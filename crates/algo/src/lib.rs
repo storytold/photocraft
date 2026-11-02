@@ -76,6 +76,7 @@ mod selection_blur;
 pub mod separable;
 mod shape_blur;
 mod sharpen;
+mod square_dilate;
 pub mod stack;
 mod stylize;
 mod stylize2;
