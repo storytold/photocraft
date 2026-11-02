@@ -19,6 +19,10 @@ pub struct CraftFont {
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
 
+#[cfg(test)]
+#[path = "../build_paths.rs"]
+mod build_paths;
+
 /// The preferred UI family for Japanese.
 pub const UI_JAPANESE_FAMILY: &str = "BIZ UDPGothic";
 
