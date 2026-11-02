@@ -240,6 +240,111 @@ fn menu_opens_the_dialog_and_params_skip_it() {
     assert!(empty.ui.dialogs.is_empty());
 }
 
+/// A live control-channel target change must not redirect an admitted Fill, even after Reset.
+#[test]
+fn open_fill_retains_its_target_when_ui_set_changes_mask_target() {
+    use crate::control::{ControlRequest, Outcome, handle};
+    for mask in [true, false] {
+        let mut app = app();
+        app.run(COMMAND, json!({"contents": "white"})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.ui.mask_target = mask;
+        let ctx = egui::Context::default();
+        let id = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let (request, _) = ControlRequest::new("ui.set", json!({"maskTarget": !mask}));
+        let Outcome::Done(reply) = handle(&mut app, &ctx, &request) else { panic!("ui.set should finish immediately") };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(app.ui.mask_target, !mask);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        reset(&app, &mut fields);
+        fields.insert("contents".into(), json!("black"));
+        app.ui.dialog_mut(id).unwrap().fields = fields;
+        let history = app.session.active().unwrap().history.past_len();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(layer.mask.as_ref().unwrap().surface.sample_channel(4, 5, 0), if mask { 0.0 } else { 1.0 }, "the admitted mask target is retained");
+        assert_eq!(layer.surface().unwrap().rgba(4, 5), if mask { [1.0; 4] } else { [0.0, 0.0, 0.0, 1.0] }, "the admitted pixel target is retained");
+        assert_eq!(st.history.past_len(), history + 1);
+        let saved = &app.session.prefs().dialogs[COMMAND];
+        assert!(saved.get("target").is_none() && saved.get("__target").is_none(), "target is not a remembered choice");
+        app.run("edit.undo", json!({})).unwrap();
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(layer.mask.as_ref().unwrap().surface.sample_channel(4, 5, 0), 1.0);
+        assert_eq!(layer.surface().unwrap().rgba(4, 5), [1.0; 4]);
+    }
+}
+
+/// The real window-open control path can switch documents under either dialog; refuse stale OK.
+#[test]
+fn open_fill_and_stroke_refuse_a_different_document_after_window_open() {
+    use crate::control::{ControlRequest, Outcome, handle};
+    for command in [COMMAND, crate::stroke_ui::COMMAND] {
+        let mut app = app();
+        app.run(COMMAND, json!({"contents": "white"})).unwrap();
+        app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+        assert!(app.session.set_active(0));
+        let before: Vec<_> = app.session.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
+        let ctx = egui::Context::default();
+        let id = crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+        fields.insert("contents".into(), json!("black"));
+        fields.insert("color".into(), json!("#000000"));
+        fields.insert("location".into(), json!("inside"));
+        let (request, _) = ControlRequest::new("ui.window.open", json!({"document": 1}));
+        let Outcome::Done(_) = handle(&mut app, &ctx, &request) else { panic!("window.open should finish immediately") };
+        assert_eq!(app.session.active_index(), Some(1), "the real control path changed the document while the dialog stayed open");
+        let result = crate::dialogs::confirm(&mut app, id);
+        assert!(result.is_err(), "{command}: confirmation must refuse a different document; its edge is now {:?}", px(&app, 0, 15));
+        for (st, (doc, history)) in app.session.documents().iter().zip(before) {
+            assert_eq!(st.doc, doc, "neither document is edited");
+            assert_eq!(st.history.past_len(), history);
+        }
+    }
+}
+
+/// Capturing a mask target must retain the legitimate Alpha, Quick Mask and colour-row routes.
+#[test]
+fn open_fill_preserves_channel_targets() {
+    for kind in ["alpha", "quick", "red", "red-blue"] {
+        let mut app = app();
+        app.run(COMMAND, json!({"contents": "white"})).unwrap();
+        let target = match kind {
+            "alpha" => {
+                app.run("channel.new", json!({"name": "saved", "fill": "white"})).unwrap();
+                app.run("channel.target", json!({"channel": "saved"})).unwrap();
+                json!({"channel": 0})
+            }
+            "quick" => {
+                app.run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+                json!("quickMask")
+            }
+            _ => {
+                let colors = if kind == "red" { vec![0] } else { vec![0, 2] };
+                app.run("channel.target", json!({"colors": colors})).unwrap();
+                json!({"colors": colors})
+            }
+        };
+        let id = open(&mut app);
+        app.ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("black"));
+        let history = app.session.active().unwrap().history.past_len();
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let st = app.session.active().unwrap();
+        let color = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(4, 5);
+        if matches!(kind, "alpha" | "quick") {
+            let p = json!({"target": target});
+            assert_eq!(photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &p).unwrap().sample_channel(4, 5, 0), 0.0);
+            assert_eq!(color, [1.0; 4], "{kind} leaves layer pixels unchanged");
+        } else {
+            assert_eq!(color, if kind == "red" { [0.0, 1.0, 1.0, 1.0] } else { [0.0, 1.0, 0.0, 1.0] }, "{kind}");
+        }
+        assert_eq!(st.history.past_len(), history + 1);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(px(&app, 4, 5), [1.0; 4]);
+    }
+}
+
 /// The open Fill dialog's id and the top Color Picker, if one is open.
 fn fill_and_picker(h: &Harness<'_, PhotocraftApp>) -> (u64, Option<u64>) {
     let app = h.state();
