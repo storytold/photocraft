@@ -682,10 +682,13 @@ pub struct PhotocraftApp {
     /// A Save As to a file that can't keep the document, parked behind its question (see
     /// `flat_copy_ui`).
     pub(crate) flat_copy: Option<flat_copy_ui::Prompt>,
-    /// The save running now was confirmed there, so no notice repeats it.
-    pub(crate) flat_copy_confirmed: bool,
+    /// The path of the save confirmed there, so no notice repeats it. It lasts through the file's
+    /// own options (Targa, DDS, JPEG), which can follow the question.
+    pub(crate) flat_copy_confirmed: Option<String>,
     /// Documents whose last save was a copy that left content behind, for the close prompt.
     pub(crate) flat_copy_docs: std::collections::HashSet<photocraft_doc::DocId>,
+    /// Such copies still being written: they count once the file is.
+    pub(crate) flat_copy_saves: std::collections::HashSet<(photocraft_doc::DocId, String)>,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,

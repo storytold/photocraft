@@ -251,7 +251,8 @@ impl PhotocraftApp {
                     return r;
                 }
                 if crate::flat_copy_ui::wants_prompt(app, &path) {
-                    crate::flat_copy_ui::park(app, path.clone(), choices)?;
+                    let plain_save = plain_save && own.as_deref() == Some(path.as_str());
+                    crate::flat_copy_ui::park(app, path.clone(), choices, plain_save)?;
                     return Ok(serde_json::json!({"path": path, "warnings": []}));
                 }
                 let from = app.session.journal.len();
@@ -537,24 +538,35 @@ impl PhotocraftApp {
     /// Options.
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
-        // The exporter reports flattened layers, but not these. Up front, as a background save ends
-        // later.
-        let doc = self.session.active().map(|st| &*st.doc);
-        if copy && !self.flat_copy_confirmed && doc.is_some_and(|doc| !flat_file_keeps_extras(doc, &path)) {
-            let line =
-                tl!("This file type can't hold the document's alpha channels, saved paths or layer comps. The document stays open, with its changes unsaved.");
-            notices::post(self, tl!("Saving a copy"), vec![line.to_string()], false, None);
-        }
-        let flat = self.active_doc_id().ok().filter(|_| self.save_loses_content(&path));
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
-        let written = self.write_document(path.clone(), &settings, copy)?;
-        if let Some(doc) = flat {
-            self.flat_copy_docs.insert(doc);
-        }
-        match written {
+        match self.write_flat_aware(path.clone(), &settings, copy)? {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
+    }
+
+    /// [`Self::write_document`] for a Save or Save As: says what a copy leaves behind, and remembers
+    /// it for the close prompt once the file is written. Save a Copy doesn't come here: that copy
+    /// is what was asked for.
+    pub(crate) fn write_flat_aware(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        // The exporter reports flattened layers, but not these. Up front, as a background save ends
+        // later.
+        let doc = self.session.active().map(|st| &*st.doc);
+        if copy && self.flat_copy_confirmed.as_deref() != Some(path.as_str()) && doc.is_some_and(|doc| !flat_file_keeps_extras(doc, &path)) {
+            let line = tl!(
+                "This file type can't hold the document's alpha channels, saved paths, layer comps or Quick Mask. The document stays open, with its changes unsaved."
+            );
+            notices::post(self, tl!("Saving a copy"), vec![line.to_string()], false, None);
+        }
+        let flat = self.active_doc_id().ok().filter(|_| self.save_loses_content(&path)).map(|doc| (doc, path.clone()));
+        if let Some(save) = flat.clone() {
+            self.flat_copy_saves.insert(save);
+        }
+        let written = self.write_document(path, settings, copy);
+        if let (Err(_), Some(save)) = (&written, &flat) {
+            self.flat_copy_saves.remove(save);
+        }
+        written
     }
 
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
@@ -635,9 +647,6 @@ impl PhotocraftApp {
     }
 
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
-        if !copy {
-            self.flat_copy_docs.remove(&doc);
-        }
         // Automation: only a layered save becomes the document's file; a flat one is a
         // copy, as in the headless server (#2579).
         let (hooks, arm) = match kind {
@@ -647,6 +656,12 @@ impl PhotocraftApp {
                 (false, holds)
             }
         };
+        if !copy && arm {
+            self.flat_copy_docs.remove(&doc);
+        }
+        if self.flat_copy_saves.remove(&(doc, path.to_string())) && copy {
+            self.flat_copy_docs.insert(doc);
+        }
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
         // The file was written, copy or not: another tab bound to it no longer matches it.
         self.detach_others_from_file(path, doc);
@@ -721,7 +736,7 @@ impl PhotocraftApp {
             // Before the save renames the document: a Save As that keeps its own name records
             // only the folder (#5305).
             app.record_answered_save_as(record, &mut step);
-            app.write_document(path, settings, copy)
+            app.write_answered(path, settings, copy, record)
         });
         if written.is_ok() {
             self.session.journal.push((record.into(), step));
@@ -735,6 +750,17 @@ impl PhotocraftApp {
             // A background save releases the close prompt when it finishes (`jobs_ui`).
             Ok(_) => {}
         }
+    }
+
+    /// Writes a save whose file options were just answered; `record` is the command it finishes.
+    pub(crate) fn write_answered(
+        &mut self,
+        path: String,
+        settings: &ExportSettings,
+        copy: bool,
+        record: &str,
+    ) -> Result<Option<(String, Vec<String>)>, String> {
+        if record == "file.saveACopy" { self.write_document(path, settings, copy) } else { self.write_flat_aware(path, settings, copy) }
     }
 
     /// A print worker may still be handing a job to the system queue.

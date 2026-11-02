@@ -1,5 +1,5 @@
 //! The question File › Save As asks before writing a file that can't keep the document: its layers,
-//! alpha channels, saved paths or layer comps. Such a save is a copy, and the document stays
+//! alpha channels, saved paths, layer comps or Quick Mask. Such a save is a copy, and the document stays
 //! unsaved, which a notice in the corner was too easy to miss. Like TIFF Options: the save is
 //! parked in [`Prompt`] while the modal is up, "Don't show again" clears the preference, and Cancel
 //! drops the save. Only the save dialog asks: a command with a path never waits on a person.
@@ -13,6 +13,9 @@ pub struct Prompt {
     /// Where the copy goes.
     pub path: String,
     choices: FormatChoices,
+    /// File › Save back to the document's own file, recorded as one so a replay doesn't write
+    /// this path.
+    plain_save: bool,
     /// Clears `ask_before_saving_flat_copy` when the save goes ahead.
     pub dont_ask_again: bool,
 }
@@ -23,19 +26,25 @@ pub fn wants_prompt(app: &PhotocraftApp, path: &str) -> bool {
 }
 
 /// Parks the save behind the prompt.
-pub fn park(app: &mut PhotocraftApp, path: String, choices: FormatChoices) -> Result<(), String> {
+pub fn park(app: &mut PhotocraftApp, path: String, choices: FormatChoices, plain_save: bool) -> Result<(), String> {
     let doc = app.active_doc_id()?;
-    app.flat_copy = Some(Prompt { doc, path, choices, dont_ask_again: false });
+    app.flat_copy = Some(Prompt { doc, path, choices, plain_save, dont_ask_again: false });
     Ok(())
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // Answered and written, or the file's own options were cancelled.
+    if !app.save_options_open() {
+        app.flat_copy_confirmed = None;
+    }
     let Some(p) = &mut app.flat_copy else { return };
     let (mut ok, mut cancel) = (false, false);
     let mut dont_ask = p.dont_ask_again;
     let name = crate::file_open::display_name(&p.path);
     let message = crate::i18n::fmt(
-        tl!("“{name}” can't keep this document's layers, alpha channels, saved paths or layer comps. The document stays open, with its changes unsaved."),
+        tl!(
+            "“{name}” can't keep this document's layers, alpha channels, saved paths, layer comps or Quick Mask. The document stays open, with its changes unsaved."
+        ),
         &[("name", name.as_str())],
     );
     let modal = egui::Modal::new(egui::Id::unique("flat-copy")).show(ctx, |ui| {
@@ -63,9 +72,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_flat_copy = false);
         }
         // Answered: the file's own options come next, as if the dialog had just closed.
-        app.flat_copy_confirmed = true;
+        app.flat_copy_confirmed = Some(p.path.clone());
+        let path = p.path.clone();
+        let from = app.session.journal.len();
         let written = app.with_document(p.doc, |app| app.save_to(p.path, p.choices));
-        app.flat_copy_confirmed = false;
+        if written.is_ok() && p.plain_save {
+            app.journal_as_plain_save(&path, from);
+        }
         if let Err(e) = written {
             app.ui.status = crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &e)]);
             app.ui.status_error = true;
@@ -103,6 +116,7 @@ mod tests {
         let h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
             |ui, app| {
                 show(app, ui.ctx());
+                crate::jpeg_options_ui::show(app, ui.ctx());
                 app.poll_file_dialog(ui.ctx(), None);
             },
             app,
@@ -177,6 +191,88 @@ mod tests {
         assert!(h.state().only_saved_flat(doc));
         h.state_mut().save_as(Some("art.psd".into())).unwrap();
         assert!(!h.state().only_saved_flat(doc));
+    }
+
+    /// A JPEG finishes through its own options, after the question.
+    #[test]
+    fn a_flat_jpeg_is_remembered_once_its_options_are_answered() {
+        let (mut h, writes) = harness("flat.jpg");
+        h.state_mut().save_as(None).unwrap();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().jpeg_options.is_some() && writes.borrow().is_empty());
+        let doc = h.state().active_doc_id().unwrap();
+        assert!(!h.state().only_saved_flat(doc), "nothing is written yet");
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(*writes.borrow(), ["flat.jpg"]);
+        assert!(h.state().only_saved_flat(doc), "the close prompt can say so");
+        assert!(h.state().ui.notices.iter().all(|n| n.title != "Saving a copy"), "the question said it already");
+        assert_eq!(h.state().flat_copy_confirmed, None);
+    }
+
+    #[test]
+    fn cancelling_the_jpeg_options_leaves_no_trace_of_the_save() {
+        let (mut h, writes) = harness("flat.jpg");
+        h.state_mut().save_as(None).unwrap();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        let doc = h.state().active_doc_id().unwrap();
+        assert!(writes.borrow().is_empty() && !h.state().only_saved_flat(doc));
+        assert_eq!(h.state().flat_copy_confirmed, None, "a later save still gets its notice");
+    }
+
+    /// With the question turned off, the file's own options still end in the notice.
+    #[test]
+    fn a_flat_jpeg_says_so_when_the_question_is_off() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().session.edit_prefs(|p| p.file_handling.ask_before_saving_flat_copy = false);
+        h.state_mut().run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+        h.state_mut().save_as(Some("flat.jpg".into())).unwrap();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().ui.notices.iter().any(|n| n.title == "Saving a copy"));
+        assert!(h.state().only_saved_flat(h.state().active_doc_id().unwrap()));
+    }
+
+    #[test]
+    fn the_question_names_the_quick_mask() {
+        let (mut h, _) = harness("flat.png");
+        h.state_mut().save_as(None).unwrap();
+        h.run_steps(3);
+        h.get_by_label_contains("Quick Mask");
+    }
+
+    /// File › Save onto the document's own flat file stays a plain Save in a recording, so a replay
+    /// on another document doesn't write this one's path.
+    #[test]
+    fn saving_over_its_own_flat_file_records_a_plain_save() {
+        let (mut h, writes) = harness("own.png");
+        h.state_mut().session.active_mut().unwrap().path = Some("own.png".into());
+        h.state_mut().save_dialog_flow(None, FormatChoices::default(), true).unwrap();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(*writes.borrow(), ["own.png"]);
+        assert_eq!(h.state().session.journal.last().map(|s| s.0.as_str()), Some("file.save"));
+    }
+
+    /// An automation save to a flat file leaves the document without a complete file.
+    #[test]
+    fn an_automation_save_only_clears_the_note_when_the_file_holds_the_document() {
+        let (mut h, _) = harness("unused.png");
+        let doc = h.state().active_doc_id().unwrap();
+        let revision = h.state().session.active().unwrap().revision;
+        h.state_mut().flat_copy_docs.insert(doc);
+        h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
+        assert!(h.state().flat_copy_docs.contains(&doc));
+        h.state_mut().saved_automation(doc, revision, "art.psd", &[], false);
+        assert!(!h.state().flat_copy_docs.contains(&doc));
     }
 
     /// A command with a path never waits on a person.
