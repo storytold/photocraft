@@ -1224,7 +1224,21 @@ impl StrokeRenderer {
                                 src[ch] = p[ch] / c;
                             }
                         }
-                        if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
+                        if b.behind {
+                            let Some(a) = a_idx else { continue };
+                            let da = px[a];
+                            if lock_transparency || da >= 1.0 {
+                                continue;
+                            }
+                            let underneath = src[a] * k * (1.0 - da);
+                            let alpha = da + underneath;
+                            if alpha > 0.0 {
+                                for channel in 0..a {
+                                    px[channel] = (px[channel] * da + src[channel] * underneath) / alpha;
+                                }
+                                px[a] = alpha;
+                            }
+                        } else if matches!(b.mode, BlendMode::Normal | BlendMode::Dissolve) {
                             over_native(&fmt, px, &src[..n], k, lock_transparency);
                         } else {
                             let d = to_rgba(&fmt, px);
