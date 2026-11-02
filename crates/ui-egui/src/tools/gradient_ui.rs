@@ -75,7 +75,7 @@ pub struct LiveGradient {
     preset_stop: Option<Value>,
     /// The Gradient Editor window's selected colour stop (sorted index), set each frame the window
     /// shows: a colour picked in the Color or Swatches panel goes to it, not to the foreground (#10783).
-    editor_stop: Option<(Sink, usize)>,
+    editor_stop: Option<(Option<photocraft_doc::DocId>, Sink, usize)>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
 }
@@ -663,10 +663,10 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // The colour stop the Color and Swatches panels pick for: none while an opacity stop or a
     // midpoint is selected, or once the window is closed.
-    let sink = layer.as_ref().map_or(Sink::Preset, |l| Sink::Layer(l.id));
+    let sink = editor_sink(app);
     let selection_key = strip_key(app, sink).with("selection");
     app.gradient.editor_stop = match ctx.data(|d| d.get_temp::<Marker>(selection_key)) {
-        Some(Marker::Color(i)) if open => Some((sink, i)),
+        Some(Marker::Color(i)) if open => Some((active_doc(app), sink, i)),
         _ => None,
     };
     if !open {
@@ -674,12 +674,27 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The Gradient Editor's selected colour stop and its colour, while the window is open.
+/// What the Gradient Editor window edits now: the selected gradient fill layer, else the tool's gradient.
+fn editor_sink(app: &PhotocraftApp) -> Sink {
+    selected_gradient(app).map_or(Sink::Preset, |l| Sink::Layer(l.id))
+}
+
+fn active_doc(app: &PhotocraftApp) -> Option<photocraft_doc::DocId> {
+    app.session.active().map(|s| s.doc.id)
+}
+
+/// The Gradient Editor's selected colour stop and its colour, while the window is open. The stop
+/// the window recorded counts only while it still shows that gradient: another document or
+/// another selected layer since then (layer ids repeat across documents) drops it until the
+/// window draws again.
 fn editor_target(app: &PhotocraftApp) -> Option<(Sink, usize, [f32; 3])> {
     if !app.ui.panels.gradient_editor {
         return None;
     }
-    let (sink, i) = app.gradient.editor_stop?;
+    let (doc, sink, i) = app.gradient.editor_stop?;
+    if doc != active_doc(app) || sink != editor_sink(app) {
+        return None;
+    }
     let Some(Fill::Gradient { mut stops, .. }) = sink.fill(app) else { return None };
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     let (_, c) = stops.get(i)?;
@@ -708,8 +723,14 @@ pub(crate) fn panel_color_picked(app: &mut PhotocraftApp, rgb: [f32; 3], gesture
     if hex(rgb) == hex(current) {
         return true;
     }
+    // One drag is one step per stop: a drag that ends on another layer's stop (⌥[ / ⌥] while it
+    // is held) starts a step of its own.
+    let target = match sink {
+        Sink::Layer(id) => format!("layer-{}", id.0),
+        Sink::Preset => "preset".to_string(),
+    };
     let key = match gesture {
-        Some(g) => format!("gradient-editor-color-{g}"),
+        Some(g) => format!("gradient-editor-color-{g}-{target}-stop-{i}"),
         None => format!("gradient-editor-color-{}", app.ui.alloc_id()),
     };
     let p = sink.params(json!({"action": "color", "index": i, "color": hex(rgb), "coalesce": key}));
