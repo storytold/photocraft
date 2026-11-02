@@ -1,45 +1,37 @@
-//! Strict Artboard from Group forms whose settings the existing native model can apply.
+//! Measured Artboard conversion and background-only Properties edits.
 
 use super::descriptors::{desc, get_num, get_obj, get_text, target_ref, text};
 use super::fields::{Mapped, none, step};
 use super::{D, Descriptor, Value, json};
 
-const COMMAND: &str = "layer.new.artboardFromGroup";
+const FROM_GROUP: &str = "layer.new.artboardFromGroup";
+const EDIT: &str = "layer.artboard.set";
 
-/// Import the current-target form or the verified empty-guide settings form, keeping other forms whole.
-pub(super) fn artboard_from(d: &Descriptor) -> Mapped {
-    let unsupported = Mapped::Unsupported { harmless: false };
-    if d.items == desc("null").with("null", target_ref("Lyr ")).items {
-        return none(COMMAND);
-    }
-    let Some(board) = get_obj(d, "artboard") else { return unsupported };
-    let Some(color) = get_obj(board, "Clr ") else { return unsupported };
-    let Some(preset) = get_text(board, "artboardPresetName") else { return unsupported };
+/// Keep recorded colors and ignored guide IDs, including an omitted background type.
+fn settings_from(board: &Descriptor, preset_key: &str) -> Option<Value> {
+    let color = get_obj(board, "Clr ")?;
+    let preset = get_text(board, "artboardPresetName")?;
     let background = match board.get("artboardBackgroundType") {
-        Some(D::Integer(1)) => "white",
+        None | Some(D::Integer(1)) => "white",
         Some(D::Integer(2)) => "black",
         Some(D::Integer(3)) => "transparent",
         Some(D::Integer(4)) => "custom",
-        _ => return unsupported,
+        _ => return None,
     };
-    let rgb: Option<Vec<f64>> = ["Rd  ", "Grn ", "Bl  "].iter().map(|key| get_num(color, key).map(|n| n / 255.0)).collect();
-    let Some(rgb) = rgb else { return unsupported };
-    let p = json!({"background": background, "color": rgb, "preset": preset, "guideIDs": [], "changeBackground": true});
-    // Reconstruction checks every ordered key, nested class, value type and the evidenced flag.
-    if artboard_to(COMMAND, &p).is_some_and(|expected| expected.items == d.items) { step(COMMAND, p) } else { unsupported }
+    let Some(D::List(guides)) = board.get("guideIDs") else { return None };
+    let guides: Vec<i32> = guides.iter().map(|v| if let D::Integer(n) = v { Some(*n) } else { None }).collect::<Option<_>>()?;
+    let rgb: Vec<f64> = ["Rd  ", "Grn ", "Bl  "].iter().map(|key| get_num(color, key).map(|n| n / 255.0)).collect::<Option<_>>()?;
+    let mut p = json!({"background": background, "color": rgb, "guideIDs": guides});
+    p[preset_key] = preset.into();
+    if board.get("artboardBackgroundType").is_none() {
+        p["backgroundTypeOmitted"] = true.into();
+    }
+    Some(p)
 }
 
-/// Export only current-target steps or complete, representable empty-guide settings without quantizing RGB.
-pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
-    let p = p.as_object()?;
-    let d = desc("null").with("null", target_ref("Lyr "));
-    if p.is_empty() {
-        return Some(d);
-    }
-    if p.len() != 5 || p.get("changeBackground") != Some(&Value::Bool(true)) || !p.get("guideIDs")?.as_array()?.is_empty() {
-        return None;
-    }
-    let preset = p.get("preset")?.as_str()?;
+/// Rebuild only settings whose native meaning still agrees with the saved wire form.
+fn settings_to(p: &Value, preset_key: &str) -> Option<Descriptor> {
+    let preset = p.get(preset_key)?.as_str()?;
     let background = match p.get("background")?.as_str()? {
         "white" => 1,
         "black" => 2,
@@ -47,6 +39,7 @@ pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
         "custom" => 4,
         _ => return None,
     };
+    let guides = p.get("guideIDs")?.as_array()?.iter().map(|v| Some(D::Integer(i32::try_from(v.as_i64()?).ok()?))).collect::<Option<Vec<_>>>()?;
     let rgb = p.get("color")?.as_array()?;
     if rgb.len() != 3 {
         return None;
@@ -56,10 +49,86 @@ pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
         return None;
     }
     let color = ["Rd  ", "Grn ", "Bl  "].into_iter().zip(rgb).fold(desc("RGBC"), |d, (key, n)| d.with(key, D::Double(n * 255.0)));
-    let board = desc("artboard")
-        .with("guideIDs", D::List(vec![]))
-        .with("artboardPresetName", text(preset))
-        .with("Clr ", D::Descriptor(color))
-        .with("artboardBackgroundType", D::Integer(background));
-    Some(d.with("artboard", D::Descriptor(board)).with("changeBackground", D::Integer(1)))
+    let board = desc("artboard").with("guideIDs", D::List(guides)).with("artboardPresetName", text(preset)).with("Clr ", D::Descriptor(color));
+    match p.get("backgroundTypeOmitted") {
+        None => Some(board.with("artboardBackgroundType", D::Integer(background))),
+        Some(Value::Bool(true)) if background == 1 => Some(board),
+        _ => None,
+    }
+}
+
+/// Import target-only conversion or complete recorded settings, preserving flag absence and values.
+pub(super) fn artboard_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    if d.items == desc("null").with("null", target_ref("Lyr ")).items {
+        return none(FROM_GROUP);
+    }
+    let Some(mut p) = get_obj(d, "artboard").and_then(|b| settings_from(b, "preset")) else { return unsupported };
+    match d.get("changeBackground") {
+        None => {}
+        Some(D::Integer(n)) => p["changeBackground"] = (*n).into(),
+        _ => return unsupported,
+    }
+    if artboard_to(FROM_GROUP, &p).is_some_and(|expected| expected.items == d.items) { step(FROM_GROUP, p) } else { unsupported }
+}
+
+/// Save complete recorded conversion settings; unknown native options must not disappear.
+pub(super) fn artboard_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let fields = p.as_object()?;
+    let d = desc("null").with("null", target_ref("Lyr "));
+    if fields.is_empty() {
+        return Some(d);
+    }
+    if fields.keys().any(|k| !["background", "color", "preset", "guideIDs", "changeBackground", "backgroundTypeOmitted"].contains(&k.as_str())) {
+        return None;
+    }
+    let d = d.with("artboard", D::Descriptor(settings_to(p, "preset")?));
+    match p.get("changeBackground") {
+        None => Some(d),
+        // Older native action files used true for the recorded integer 1.
+        Some(Value::Bool(true)) => Some(d.with("changeBackground", D::Integer(1))),
+        Some(value) => Some(d.with("changeBackground", D::Integer(i32::try_from(value.as_i64()?).ok()?))),
+    }
+}
+
+/// Background-only edits retain recorded geometry as metadata, never as native resize parameters.
+pub(super) fn artboard_edit_from(d: &Descriptor) -> Mapped {
+    let unsupported = Mapped::Unsupported { harmless: false };
+    let Some(board) = get_obj(d, "artboard") else { return unsupported };
+    let Some(rect) = get_obj(board, "artboardRect") else { return unsupported };
+    let Some(mut p) = settings_from(board, "recordedPreset") else { return unsupported };
+    let Some(edges) = ["Top ", "Left", "Btom", "Rght"].iter().map(|key| get_num(rect, key)).collect::<Option<Vec<_>>>() else { return unsupported };
+    p["recordedRect"] = json!(edges);
+    p["changeSizes"] = 8.into();
+    p["changeBackground"] = 1.into();
+    if artboard_edit_to(EDIT, &p).is_some_and(|expected| expected.items == d.items) { step(EDIT, p) } else { unsupported }
+}
+
+/// Export only the measured background-edit flags and exact recorded rectangle, without quantization.
+pub(super) fn artboard_edit_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let fields = p.as_object()?;
+    if fields.keys().any(|k| {
+        !["background", "color", "recordedPreset", "guideIDs", "recordedRect", "changeSizes", "changeBackground", "backgroundTypeOmitted"].contains(&k.as_str())
+    }) || p.get("changeSizes")?.as_i64()? != 8
+        || p.get("changeBackground")?.as_i64()? != 1
+    {
+        return None;
+    }
+    let edges = p.get("recordedRect")?.as_array()?;
+    if edges.len() != 4 {
+        return None;
+    }
+    let rect = ["Top ", "Left", "Btom", "Rght"]
+        .into_iter()
+        .zip(edges)
+        .try_fold(desc("classFloatRect"), |d, (key, value)| Some(d.with(key, D::Double(value.as_f64().filter(|v| v.is_finite())?))))?;
+    let mut board = desc("artboard").with("artboardRect", D::Descriptor(rect));
+    board.items.extend(settings_to(p, "recordedPreset")?.items);
+    Some(
+        desc("null")
+            .with("null", target_ref("Lyr "))
+            .with("artboard", D::Descriptor(board))
+            .with("changeSizes", D::Integer(8))
+            .with("changeBackground", D::Integer(1)),
+    )
 }

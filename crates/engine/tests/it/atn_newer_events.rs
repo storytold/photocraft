@@ -64,6 +64,7 @@ fn file(event: &str, descriptor: Descriptor) -> Vec<u8> {
             ..Default::default()
         }],
         warnings: vec![],
+        ..Default::default()
     })
     .unwrap()
 }
@@ -442,40 +443,56 @@ fn artboard_fixture() -> Session {
 
 /// The reference's ordered settings keys, with fractional RGB that must not be rounded to hex.
 fn artboard_descriptor(background: i32, guides: Vec<D>, flag: D) -> Descriptor {
+    Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(artboard_settings(Some(background), guides))).with("changeBackground", flag)
+}
+
+/// Background types 1..3 still record the last custom RGB value; absent type means white.
+fn artboard_settings(background: Option<i32>, guides: Vec<D>) -> Descriptor {
     let color = Descriptor::new("RGBC").with("Rd  ", D::Double(63.75)).with("Grn ", D::Double(127.5)).with("Bl  ", D::Double(191.25));
     let board = Descriptor::new("artboard")
         .with("guideIDs", D::List(guides))
         .with("artboardPresetName", D::Text(UnicodeString::new_nul("iPhone 14")))
-        .with("Clr ", D::Descriptor(color))
-        .with("artboardBackgroundType", D::Integer(background));
-    Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(board)).with("changeBackground", flag)
+        .with("Clr ", D::Descriptor(color));
+    match background {
+        Some(n) => board.with("artboardBackgroundType", D::Integer(n)),
+        None => board,
+    }
 }
 
 /// Conversion preserves the group's geometry/content while applying every admitted setting and Undo.
 #[test]
-fn artboard_empty_guide_settings_roundtrip_apply_background_and_preset_without_resizing() {
+fn artboard_recorded_flags_and_guides_roundtrip_without_resizing() {
     for (background, expected) in [(1, [1.0, 1.0, 1.0, 1.0]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
-        let mut s = artboard_fixture();
-        let before = s.active().unwrap().doc.clone();
-        let id = s.active().unwrap().active_layer.unwrap();
-        let d = artboard_descriptor(background, vec![], D::Integer(1));
-        assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
-        assert_eq!(s.actions.list[0].steps[0].0, "layer.new.artboardFromGroup");
-        assert_eq!(s.actions.list[0].steps[0].1["color"], json!([0.25, 0.5, 0.75]));
-        assert_eq!(saved_item(&mut s).descriptor, Some(d));
-        play(&mut s);
-        let doc = &s.active().unwrap().doc;
-        let board = doc.layer(id).unwrap().artboard().unwrap();
-        assert_eq!(board.rect, photocraft_doc::Rect::new(2, 2, 6, 6), "preset is a tag, not a request to resize the group");
-        assert_eq!(board.preset, "iPhone 14");
-        assert_eq!(doc.size, before.size);
-        assert_eq!(doc.layer(id).unwrap().children(), before.layer(id).unwrap().children());
-        let pixel = photocraft_compose::render(doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
-        for (actual, expected) in pixel.into_iter().zip(expected) {
-            assert!((actual - expected).abs() < 0.005, "background {background}: {pixel:?}");
+        for flag in [None, Some(0), Some(1), Some(2), Some(3), Some(-1), Some(7)] {
+            let mut s = artboard_fixture();
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.vertical.push(4.0);
+            let before = s.active().unwrap().doc.clone();
+            let id = s.active().unwrap().active_layer.unwrap();
+            let mut d = artboard_descriptor(background, vec![D::Integer(2), D::Integer(99999)], D::Integer(flag.unwrap_or(1)));
+            if flag.is_none() {
+                d.items.pop();
+            }
+            assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
+            assert_eq!(s.actions.list[0].steps[0].0, "layer.new.artboardFromGroup");
+            assert_eq!(s.actions.list[0].steps[0].1["color"], json!([0.25, 0.5, 0.75]));
+            assert_eq!(saved_item(&mut s).descriptor, Some(d));
+            play(&mut s);
+            let doc = &s.active().unwrap().doc;
+            let board = doc.layer(id).unwrap().artboard().unwrap();
+            assert_eq!(board.rect, photocraft_doc::Rect::new(2, 2, 6, 6), "preset is a tag, not a request to resize the group");
+            assert_eq!(board.preset, "iPhone 14");
+            assert_eq!(doc.size, before.size);
+            assert_eq!(doc.layer(id).unwrap().children(), before.layer(id).unwrap().children());
+            assert_eq!(doc.guides, before.guides);
+            let pixel = photocraft_compose::render(doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
+            let applied = flag.is_none_or(|n| n == 1);
+            for (actual, expected) in pixel.into_iter().zip(if applied { expected } else { [1.0; 4] }) {
+                assert!((actual - expected).abs() < 0.005, "background {background}, flag {flag:?}: {pixel:?}");
+            }
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc, before);
         }
-        assert!(s.undo());
-        assert_eq!(s.active().unwrap().doc, before);
     }
 }
 
@@ -496,11 +513,9 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
 
 /// Unproved settings remain byte-preserving kept steps and cannot partially edit the document.
 #[test]
-fn artboard_unproven_associations_flags_and_extra_settings_stay_whole() {
+fn artboard_unmeasured_types_and_extra_settings_stay_whole() {
     for d in [
-        artboard_descriptor(1, vec![D::Integer(7)], D::Integer(1)),
-        artboard_descriptor(1, vec![], D::Integer(0)),
-        artboard_descriptor(1, vec![], D::Integer(2)),
+        artboard_descriptor(1, vec![D::Double(7.0)], D::Integer(1)),
         artboard_descriptor(1, vec![], D::Boolean(true)),
         artboard_descriptor(5, vec![], D::Integer(1)),
         artboard_descriptor(1, vec![], D::Integer(1)).with("extra", D::Boolean(true)),
@@ -523,24 +538,104 @@ fn artboard_unproven_associations_flags_and_extra_settings_stay_whole() {
     }
 }
 
-/// An explicit empty association cannot silently acquire the document's spatially inferred guides.
+/// Omitted type means white rather than the color-only native call's custom background.
 #[test]
-fn artboard_empty_association_refuses_existing_guides_before_editing() {
+fn artboard_omitted_type_defaults_to_white_and_invalid_native_settings_are_atomic() {
     let mut s = artboard_fixture();
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
     let before = s.active().unwrap().doc.clone();
-    let history = s.active().unwrap().history.past_len();
-    assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", artboard_descriptor(4, vec![], D::Integer(1))))["unsupported"], json!([]));
-    let report = s.execute("actions.play", json!({"action":"A","set":"Links"})).unwrap();
-    assert_eq!(report["ran"], 0, "{report}");
-    assert_eq!(report["failed"]["id"], "layer.new.artboardFromGroup");
-    assert!(report["failed"]["error"].as_str().unwrap().contains("without guides"));
+    let d =
+        Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(artboard_settings(None, vec![]))).with("changeBackground", D::Integer(1));
+    assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
+    assert_eq!(saved_item(&mut s).descriptor, Some(d));
+    let mut changed = s.actions.list[0].steps[0].1.clone();
+    changed["background"] = "black".into();
+    assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.new.artboardFromGroup".into(), changed)])], &[], false).is_err());
+    play(&mut s);
+    assert_eq!(photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0], [1.0; 4]);
+    assert!(s.undo());
     assert_eq!(s.active().unwrap().doc, before);
-    assert_eq!(s.active().unwrap().history.past_len(), history);
-    for p in [json!({"guideIDs":[7]}), json!({"guideIDs":false}), json!({"changeBackground":false}), json!({"preset":7})] {
+    let history = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"guideIDs":[7.5]}),
+        json!({"guideIDs":false}),
+        json!({"changeBackground":false}),
+        json!({"changeBackground":2147483648i64}),
+        json!({"preset":7}),
+    ] {
         assert!(s.execute("layer.new.artboardFromGroup", p).is_err());
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+/// Recorded geometry deliberately differs from the target: flag 8 changes only its background.
+fn artboard_edit_descriptor(background: i32, change_sizes: i32) -> Descriptor {
+    let rect = Descriptor::new("classFloatRect")
+        .with("Top ", D::Double(40.5))
+        .with("Left", D::Double(60.25))
+        .with("Btom", D::Double(340.5))
+        .with("Rght", D::Double(260.25));
+    let mut board = Descriptor::new("artboard").with("artboardRect", D::Descriptor(rect));
+    board.items.extend(artboard_settings(Some(background), vec![D::Integer(99999)]).items);
+    Descriptor::new("null")
+        .with("null", target())
+        .with("artboard", D::Descriptor(board))
+        .with("changeSizes", D::Integer(change_sizes))
+        .with("changeBackground", D::Integer(1))
+}
+
+/// Background edits preserve all wire fields, target geometry, children and guides, with one Undo.
+#[test]
+fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
+    for (kind, expected) in [(1, [1.0; 4]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
+        let mut s = artboard_fixture();
+        s.execute("layer.new.artboardFromGroup", json!({})).unwrap();
+        Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
+        let before = s.active().unwrap().doc.clone();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let history = s.active().unwrap().history.past_len();
+        let d = artboard_edit_descriptor(kind, 8);
+        assert_eq!(load(&mut s, &file("editArtboardEvent", d.clone()))["unsupported"], json!([]));
+        assert_eq!(s.actions.list[0].steps[0].0, "layer.artboard.set");
+        assert_eq!(saved_item(&mut s).descriptor, Some(d));
+        play(&mut s);
+        let doc = &s.active().unwrap().doc;
+        let board = doc.layer(id).unwrap().artboard().unwrap();
+        assert_eq!(board.rect, before.layer(id).unwrap().artboard().unwrap().rect);
+        assert_eq!(board.preset, before.layer(id).unwrap().artboard().unwrap().preset);
+        assert_eq!(doc.layer(id).unwrap().children(), before.layer(id).unwrap().children());
+        assert_eq!(doc.size, before.size);
+        assert_eq!(doc.guides, before.guides);
+        let pixel = photocraft_compose::render(doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
+        for (actual, expected) in pixel.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.005, "{kind}: {pixel:?}");
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+/// Unmeasured geometry modes remain whole; edited native resize options cannot be silently omitted.
+#[test]
+fn artboard_edit_refuses_unmeasured_modes_and_lossy_native_exports() {
+    let mut s = artboard_fixture();
+    for d in [artboard_edit_descriptor(1, 4), artboard_edit_descriptor(5, 8), artboard_edit_descriptor(1, 8).with("extra", D::Integer(1))] {
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        assert_eq!(load(&mut s, &file("editArtboardEvent", d.clone()))["unsupported"].as_array().unwrap().len(), 1);
+        assert_eq!(saved_item(&mut s).descriptor, Some(d));
+        let result = s.execute("actions.play", json!({"set":"Links","action":"A"})).unwrap();
+        assert_eq!(result["ran"], 0);
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    load(&mut s, &file("editArtboardEvent", artboard_edit_descriptor(4, 8)));
+    let params = s.actions.list[0].steps[0].1.clone();
+    for (key, value) in [("rect", json!([0, 0, 100, 100])), ("preset", json!("iPhone 14")), ("changeSizes", json!(4)), ("changeBackground", json!(0))] {
+        let mut edited = params.clone();
+        edited[key] = value;
+        assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.artboard.set".into(), edited)])], &[], false).is_err());
     }
 }
 

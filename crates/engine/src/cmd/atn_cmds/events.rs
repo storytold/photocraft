@@ -2,7 +2,7 @@ const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
 use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, path_text, path_value, ref_class, target_ref};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
-use super::steps_artboard::{artboard_from, artboard_to};
+use super::steps_artboard::{artboard_edit_from, artboard_edit_to, artboard_from, artboard_to};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
     crop_from, crop_to, export_from, export_to, image_size_from, image_size_to, merge_visible_from, merge_visible_to, open_from, open_to, paste_from, paste_to,
@@ -500,6 +500,7 @@ pub(super) const EVENTS: &[Event] = &[
         from: artboard_from,
         to: artboard_to,
     },
+    Event { code: "", name: "editArtboardEvent", label: "Edit Artboard", ids: &["layer.artboard.set"], from: artboard_edit_from, to: artboard_edit_to },
     Event { code: "", name: "linkSelectedLayers", label: "Link Layers", ids: &["layer.linkLayers"], from: |d| link_from(d, true), to: |_, p| link_to(p, true) },
     Event {
         code: "",

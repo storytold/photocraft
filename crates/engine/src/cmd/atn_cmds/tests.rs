@@ -576,7 +576,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("file.automate.cropAndStraightenPhotos", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
         ("layer.new.artboardFromGroup", json!({})),
-        ("layer.new.artboardFromGroup", json!({"background":"white","color":[1,1,1],"preset":"","guideIDs":[],"changeBackground":true})),
+        ("layer.new.artboardFromGroup", json!({"background":"white","color":[1,1,1],"preset":"","guideIDs":[],"changeBackground":1})),
+        (
+            "layer.artboard.set",
+            json!({"background":"custom","color":[0.25,0.5,0.75],"recordedPreset":"","guideIDs":[],"recordedRect":[2,2,6,6],"changeSizes":8,"changeBackground":1}),
+        ),
         ("layer.new.layerViaCopy", json!({})),
         ("layer.newFillLayer.solidColor", json!({"color": "#336699"})),
         ("layer.newAdjustmentLayer.hueSaturation", json!({})),

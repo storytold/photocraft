@@ -160,23 +160,26 @@ the reference application.
 | (string ID only) | placedLayerRelinkToFile | Relink to File | `layer.smartObjects.relinkToFile` |
 | (string ID only) | placedLayerReplaceContents | Replace Contents | `layer.smartObjects.replaceContents` |
 | (string ID only) | shapeBlur | Shape Blur (radius-only form) | `filter.blur.shapeBlur` |
-| (string ID only) | artboardFromLayerGroupEvent | Artboard from Group (limited forms below) | `layer.new.artboardFromGroup` |
+| (string ID only) | artboardFromLayerGroupEvent | Artboard from Group | `layer.new.artboardFromGroup` |
+| (string ID only) | editArtboardEvent | Artboard background color (flags 8/1) | `layer.artboard.set` |
 
 ### Newer event mapping boundaries
 
-Twenty-two of the 23 requested forms in the two **Measured** tables under
-[Newer events](#newer-events-string-id-only) are fully mapped. Artboard from Group
-has an intermediate mapping for the canonical current-layer target alone, or a
-complete settings object with empty `guideIDs` and integer `changeBackground: 1`.
-The latter requires a document without guides, so the existing spatial guide
-export cannot manufacture an association. The preset is retained as a tag without
-resizing the group; RGB background channels retain fractional values. Only forms
-that reconstruct exactly are admitted. Unrepresented native options refuse export.
+The 23 requested forms in the two **Measured** tables under
+[Newer events](#newer-events-string-id-only) are mapped. Artboard from Group
+retains the current-layer target, preset tag, fractional RGB, background type
+and integer `changeBackground`, including absence. A flag of 1 or absence applies
+the background; other integers give white. An omitted type defaults to white.
+Recorded guide IDs are preserved on save and ignored on playback, as measured
+in [the guide/background reference below](#newer-events-string-id-only).
+Existing document guides remain unchanged. The preset does not resize the group.
 
-Nonempty guide associations and other flag values remain complete kept steps.
-The Artboard row is still unfinished: [Adobe documents guide IDs as object identities](https://developer.adobe.com/photoshop/uxp/2022/ps-reference/classes/guide),
-separate from list positions, and the current native model has no corresponding
-identity/ownership binding. No guide ID is discarded or treated as an array index.
+The additional `editArtboardEvent` maps background-only changes with `changeSizes`
+8 and `changeBackground` 1. Its rectangle and preset remain recording metadata:
+they do not move or resize the target artboard. Colors remain in the saved step
+even for white, black or transparent backgrounds. Other flags, extra settings,
+unknown targets and forms that cannot reconstruct exactly remain whole kept
+steps. Native geometry edits without a matching wire form refuse export.
 
 The sixteen target-only events accept an empty descriptor or the current-layer
 `null` reference (`Lyr `/`Ordn.Trgt`). Save retains which form was imported.
