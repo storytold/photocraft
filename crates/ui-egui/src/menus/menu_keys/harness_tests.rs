@@ -108,6 +108,88 @@ fn alt_with_a_wheel_scroll_or_a_lost_focus_is_no_tap() {
     assert_eq!(Keys::current(&h.ctx).focus, None, "Alt that went to the desktop leaves the bar alone");
 }
 
+/// #9763: coming back with Alt+Tab on Windows, the window gets Alt's press after the focus, but
+/// its release only as a modifier change (no key event). The mnemonics stayed underlined until
+/// the next Alt press. The sequence is the one logged on Windows 11.
+#[test]
+fn alt_let_go_without_a_key_event_after_alt_tab_stops_underlining() {
+    let mut h = bar();
+    h.event(egui::Event::WindowFocused(true));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.event_modifiers(
+        egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT },
+        egui::Modifiers::ALT,
+    );
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "Alt is up: no underlines");
+    assert_eq!(Keys::current(&h.ctx).focus, None, "and no keyboard on the bar");
+    // The other order logged there: Alt reported down, then the focus, then nothing at all (the
+    // release went to the window switcher).
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    assert!(h.ctx.input(|i| i.modifiers.alt), "egui still reports Alt down");
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "an Alt held for the switcher underlines nothing");
+    // Alt pressed in the window underlines again.
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    assert!(Keys::current(&h.ctx).show_underlines(&h.ctx), "a held Alt shows the mnemonics");
+    h.key_up(egui::Key::AltLeft);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "and letting go of it is a tap, as ever");
+}
+
+/// Review on #10383: Alt held *in the window*, then Alt+Tab away and back, with the release going
+/// to the window switcher and no modifier change arriving at all. The press was this window's, so
+/// a focus change is the last word on it: the mnemonics stop being underlined.
+#[test]
+fn an_alt_held_before_alt_tab_stops_underlining_on_the_way_back() {
+    let mut h = bar();
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    assert!(Keys::current(&h.ctx).show_underlines(&h.ctx), "a held Alt underlines");
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "the release went to the switcher: nothing underlined");
+    assert_eq!(Keys::current(&h.ctx).focus, None, "and no keyboard on the bar");
+    // Alt pressed again in the window still works.
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    assert!(Keys::current(&h.ctx).show_underlines(&h.ctx));
+    h.key_up(egui::Key::AltLeft);
+    h.run_steps(3);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "and is a tap, as ever");
+}
+
+/// #9763 review: the window can come back with the switcher's Alt still reported, and the next
+/// thing the user does may be an ordinary key press. That press neither underlines the mnemonics
+/// nor opens the menu whose letter it is, and a real Alt tap after it still does.
+#[test]
+fn a_key_press_while_the_switchers_alt_is_still_reported_opens_no_menu() {
+    let mut h = bar();
+    // Alt+Tab away and back, so the Alt egui still reports is the switcher's.
+    h.key_down(egui::Key::AltLeft);
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(2);
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(3);
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "the switcher's Alt underlines nothing");
+    // Typing on: an ordinary press, no Alt of its own. "F" is the File menu's mnemonic.
+    key(&mut h, egui::Key::F);
+    assert_eq!(Keys::current(&h.ctx).focus, None, "no keyboard on the bar");
+    assert!(!Keys::current(&h.ctx).show_underlines(&h.ctx), "and still nothing underlined");
+    // A tap of this window's own Alt works as ever.
+    alt_tap(&mut h);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "a real Alt tap still reaches the bar");
+}
+
 /// Alt's own auto-repeat (holding it after Alt+wheel) doesn't make the release a tap again, and
 /// holding Alt alone long enough to repeat is still a tap.
 #[test]
