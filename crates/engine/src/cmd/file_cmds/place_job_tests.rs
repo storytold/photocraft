@@ -53,7 +53,7 @@ fn layer_pixels(s: &Session) -> Vec<f32> {
 }
 
 fn canvas_pixels(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px
+    photocraft_compose::render(&s.active().unwrap().doc, s.active().unwrap().doc.bounds()).px.clone()
 }
 
 fn steps(s: &Session) -> usize {
