@@ -27,6 +27,7 @@ photocraft-gpu = { path = "crates/gpu" }
 photocraft-paint = { path = "crates/paint" }
 photocraft-algo = { path = "crates/algo" }
 photocraft-io = { path = "crates/io" }
+photocraft-gen = { path = "crates/gen" }
 photocraft-text = { path = "crates/text" }
 photocraft-vector = { path = "crates/vector" }
 photocraft-format = { path = "crates/format" }

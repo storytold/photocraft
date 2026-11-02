@@ -4260,3 +4260,55 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Barva zarážky
 	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Úprava pomocí AI…
+@id	edit.ai.codex	Úprava pomocí AI…
+	Describe your edit	Popište úpravu
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Viditelné plátno a pokyn budou odeslány do Codexu pomocí přihlášení přes ChatGPT. Výsledek se přizpůsobí plátnu a přidá jako nová vrstva.
+	Codex account has not been checked	Účet Codex ještě nebyl ověřen
+	Checking Codex connection…	Ověřování připojení ke Codexu…
+	Complete ChatGPT sign-in in your browser	Dokončete přihlášení k ChatGPT v prohlížeči
+	Connected to ChatGPT	Připojeno k ChatGPT
+	ChatGPT plan	Tarif ChatGPT
+	ChatGPT sign-in is required	Je vyžadováno přihlášení k ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex používá jiný způsob přihlášení. Pro využití předplatného se přihlaste přes ChatGPT.
+	Cancelling sign-in…	Rušení přihlášení…
+	Sign-in cancelled	Přihlášení zrušeno
+	Could not verify the account. Check your connection or sign in again.	Účet se nepodařilo ověřit. Zkontrolujte připojení nebo se přihlaste znovu.
+	Connection details	Podrobnosti připojení
+	Sign in with ChatGPT	Přihlásit se přes ChatGPT
+	Open sign-in page	Otevřít přihlašovací stránku
+	Check connection	Ověřit připojení
+	Cancel sign-in	Zrušit přihlášení
+	Copy sign-in link	Kopírovat přihlašovací odkaz
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Prohlížeč se nepodařilo otevřít. Zkuste to znovu nebo vložte přihlašovací odkaz do prohlížeče.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Přihlášení spravuje nainstalované prostředí Codex a sdílí je s Codexem. PhotoCraft neukládá tokeny.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex nebyl nalezen. Nainstalujte a otevřete desktopovou aplikaci Codex a znovu ověřte připojení.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Použijte úplnou instalaci Codexu; při zkopírování samotného codex.exe mohou chybět součásti pro úpravu obrázků.
+	AI Edit	Úprava pomocí AI
+	Codex Account	Účet Codex
+# Image API and related UI (original translations).
+	Image service	Obrazová služba
+	Codex (ChatGPT subscription)	Codex (předplatné ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	Viditelné plátno a pokyn budou odeslány nastavené službě. Poskytovatel může účtovat poplatky za použití.
+	Model ID	ID modelu
+	API address and protocol	Adresa a protokol API
+	API address	Adresa API
+	API protocol	Protokol API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	Vlastní služby musí podporovat vybraný protokol úpravy obrázků. Změna adresy vyžaduje klíč pro danou adresu.
+	API key	Klíč API
+	API key configured — leave empty to keep it	Klíč API je nastaven — pro zachování ponechte prázdné
+	Remember API key in system credential store	Uložit klíč API do systémového úložiště přihlašovacích údajů
+	The API key is available for this session only.	Klíč API je k dispozici pouze v této relaci.
+	Save API settings	Uložit nastavení API
+	Remove API key	Odstranit klíč API
+	API configured. Saving settings does not generate an image.	API je nastaveno. Uložení nastavení nevygeneruje obrázek.
+	Save your API settings before editing.	Před úpravou uložte nastavení API.
+	API settings saved	Nastavení API uloženo
+	Enter a valid API key without whitespace	Zadejte platný klíč API bez bílých znaků
+	API key removed	Klíč API odstraněn
+	Could not load API settings	Nastavení API se nepodařilo načíst
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	Výsledek se přizpůsobí plátnu a přidá jako nová vrstva. Stávající vrstvy zůstanou zachovány.
+	AI Edit via API	Úprava pomocí AI přes API
+	AI Provider Settings	Nastavení poskytovatele AI

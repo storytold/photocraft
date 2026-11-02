@@ -13,6 +13,8 @@
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--codex-account-fixture connected|signedOut|unsupported|failed|cancelled` supplies a visual-only
+//! account state without authentication I/O (cannot be combined with `--background-jobs`).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -159,6 +161,32 @@ fn main() {
         if timing {
             eprintln!("{:>8.1} ms  {label}", t0.elapsed().as_secs_f64() * 1000.0);
         }
+    }
+    if let Some(state) = arg(&args, "--codex-account-fixture") {
+        use photocraft_engine::cmd::ai_account_cmds::{Snapshot, State};
+        if background_jobs {
+            eprintln!("--codex-account-fixture cannot be combined with --background-jobs");
+            std::process::exit(2);
+        }
+        let state = match state.as_str() {
+            "connected" => State::Connected,
+            "signedOut" => State::SignedOut,
+            "unsupported" => State::Unsupported,
+            "failed" => State::Failed,
+            "cancelled" => State::Cancelled,
+            _ => {
+                eprintln!("unsupported account fixture");
+                std::process::exit(2);
+            }
+        };
+        let status = Snapshot {
+            plan: (state == State::Connected).then(|| "plus".into()),
+            message: (state == State::Failed).then(|| "Synthetic connection error".into()),
+            state,
+        };
+        harness.state_mut().session.ai_account.snapshot = status.clone();
+        harness.state_mut().ui.ai_account.status = status;
+        harness.run_steps(4);
     }
     for (flag, button) in [("--click-at", egui::PointerButton::Primary), ("--right-click-at", egui::PointerButton::Secondary)] {
         let Some((x, y)) = arg(&args, flag).and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) else {

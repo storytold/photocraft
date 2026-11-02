@@ -43,12 +43,33 @@ fn red_bounds(h: &Harness<'static, PhotocraftApp>) -> photocraft_geom::Rect {
     top.surface().unwrap().content_bounds()
 }
 
+fn click_hand(h: &mut Harness<'static, PhotocraftApp>) {
+    // Pinned toolbar commands can leave the lower tools outside the scroll viewport.
+    h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool").scroll_to_me();
+    h.run_steps(4);
+    let rect = h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool").rect();
+    let visible = h
+        .ctx
+        .viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, widgets)| widgets.iter()).find(|w| w.rect == rect && w.sense.senses_click()).map(|w| w.interact_rect)
+        })
+        .expect("the Hand Tool has a hit area");
+    assert!(visible.is_positive(), "Hand Tool is visible after scrolling: {rect:?}, {visible:?}");
+    let pos = visible.center();
+    h.hover_at(pos);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().ui.tool, crate::state::Tool::Hand, "the toolbar click selected Hand");
+}
+
 #[test]
 fn picking_another_tool_in_the_toolbar_applies_the_transform() {
     let mut h = app();
     transform_and_move(&mut h);
-    let hand = h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool");
-    hand.click();
+    click_hand(&mut h);
     h.run_steps(4);
     assert!(h.state().ui.transform.is_none(), "the box closed");
     assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(150, 140, 250, 200), "the move was applied, not cancelled");
@@ -93,7 +114,7 @@ fn placed_and_moved(h: &mut Harness<'static, PhotocraftApp>) {
 fn a_placed_image_is_applied_when_another_tool_is_picked() {
     let mut h = placed_app();
     placed_and_moved(&mut h);
-    h.query_by_label_contains("Hand Tool").expect("the toolbar's Hand Tool").click();
+    click_hand(&mut h);
     h.run_steps(4);
     assert!(h.state().ui.transform.is_none());
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "the placed layer stays");
@@ -154,7 +175,7 @@ fn an_untouched_placed_image_stays_when_another_tool_or_layer_is_picked() {
             let bg = h.state().session.active().unwrap().doc.layers[0].id;
             h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
         } else {
-            h.query_by_label_contains("Hand Tool").expect("Hand Tool").click();
+            click_hand(&mut h);
         }
         h.run_steps(4);
         let st = h.state().session.active().unwrap();

@@ -3545,3 +3545,55 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+# Codex image editing and account controls (original translations).
+	AI Edit…	تحرير بالذكاء الاصطناعي…
+@id	edit.ai.codex	تحرير بالذكاء الاصطناعي…
+	Describe your edit	صِف التعديل
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	ستُرسل مساحة الرسم الظاهرة والتعليمات إلى Codex باستخدام تسجيل دخولك إلى ChatGPT. ستُضبط النتيجة لتناسب مساحة الرسم وتُضاف كطبقة جديدة.
+	Codex account has not been checked	لم يُفحص حساب Codex بعد
+	Checking Codex connection…	جارٍ فحص الاتصال بـ Codex…
+	Complete ChatGPT sign-in in your browser	أكمل تسجيل الدخول إلى ChatGPT في المتصفح
+	Connected to ChatGPT	متصل بـ ChatGPT
+	ChatGPT plan	اشتراك ChatGPT
+	ChatGPT sign-in is required	يلزم تسجيل الدخول إلى ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	يستخدم Codex طريقة أخرى لتسجيل الدخول. سجّل الدخول باستخدام ChatGPT للاستفادة من اشتراكك.
+	Cancelling sign-in…	جارٍ إلغاء تسجيل الدخول…
+	Sign-in cancelled	أُلغي تسجيل الدخول
+	Could not verify the account. Check your connection or sign in again.	تعذّر التحقق من الحساب. افحص الاتصال أو سجّل الدخول مجددًا.
+	Connection details	تفاصيل الاتصال
+	Sign in with ChatGPT	تسجيل الدخول باستخدام ChatGPT
+	Open sign-in page	فتح صفحة تسجيل الدخول
+	Check connection	فحص الاتصال
+	Cancel sign-in	إلغاء تسجيل الدخول
+	Copy sign-in link	نسخ رابط تسجيل الدخول
+	Could not open your browser. Try again or copy the sign-in link into your browser.	تعذّر فتح المتصفح. حاول مجددًا أو الصق رابط تسجيل الدخول في متصفحك.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	تدير بيئة Codex المثبّتة تسجيل الدخول وتشاركه مع Codex. لا يخزّن PhotoCraft الرموز المميّزة.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	لم يُعثر على Codex. ثبّت تطبيق Codex لسطح المكتب وافتحه، ثم افحص الاتصال مجددًا.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	استخدم تثبيت Codex الكامل؛ فقد يؤدي نسخ codex.exe وحده إلى فقدان مكوّنات تحرير الصور.
+	AI Edit	تحرير بالذكاء الاصطناعي
+	Codex Account	حساب Codex
+# Image API and related UI (original translations).
+	Image service	خدمة الصور
+	Codex (ChatGPT subscription)	Codex (اشتراك ChatGPT)
+	Doubao / Seedream	Doubao / Seedream
+	This API sends the visible canvas and instruction to the configured service. Usage may incur charges billed by that service.	تُرسل مساحة الرسم الظاهرة والتعليمات إلى الخدمة المُعدّة. قد يفرض مزوّد الخدمة رسوم استخدام.
+	Model ID	معرّف النموذج
+	API address and protocol	عنوان API والبروتوكول
+	API address	عنوان API
+	API protocol	بروتوكول API
+	Custom services must support the selected image-editing protocol. Changing the address requires a key for that address.	يجب أن تدعم الخدمات المخصّصة بروتوكول تحرير الصور المحدد. يتطلب تغيير العنوان مفتاحًا لذلك العنوان.
+	API key	مفتاح API
+	API key configured — leave empty to keep it	مفتاح API مُعدّ — اتركه فارغًا للاحتفاظ به
+	Remember API key in system credential store	حفظ مفتاح API في مخزن بيانات اعتماد النظام
+	The API key is available for this session only.	مفتاح API متاح لهذه الجلسة فقط.
+	Save API settings	حفظ إعدادات API
+	Remove API key	إزالة مفتاح API
+	API configured. Saving settings does not generate an image.	تم إعداد API. لا يؤدي حفظ الإعدادات إلى توليد صورة.
+	Save your API settings before editing.	احفظ إعدادات API قبل التحرير.
+	API settings saved	حُفظت إعدادات API
+	Enter a valid API key without whitespace	أدخل مفتاح API صالحًا دون مسافات بيضاء
+	API key removed	أُزيل مفتاح API
+	Could not load API settings	تعذّر تحميل إعدادات API
+	The result is fitted to the canvas and added as a new layer. Your existing layers are preserved.	ستُضبط النتيجة لتناسب مساحة الرسم وتُضاف كطبقة جديدة. ستُحفظ الطبقات الحالية.
+	AI Edit via API	تحرير بالذكاء الاصطناعي عبر API
+	AI Provider Settings	إعدادات مزوّد الذكاء الاصطناعي
