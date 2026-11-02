@@ -318,6 +318,24 @@ fn native_cmyk_composite_alpha_is_bounded() {
     assert!(b.px.iter().all(|p| (0.0..=1.0).contains(&p[4])), "alpha must stay in 0..=1, got {:?}", b.px.iter().map(|p| p[4]).fold(0.0f32, f32::max));
 }
 
+/// A non-finite alpha (two finite float opacities can overflow their product) must not leave the
+/// tile holding NaN inks: the buffer's contract is finite inks in `0..=1`, so the pixel clears
+/// entirely rather than keeping invisible NaN samples.
+#[test]
+fn native_cmyk_composite_clears_non_finite_alpha() {
+    let mut d = Document::new("t", photocraft_geom::Size::new(4, 4), ColorMode::Cmyk, SampleType::F32);
+    let fmt = d.pixel_format();
+    let mut ink = raster("Ink", fmt, photocraft_geom::Rect::new(0, 0, 4, 4), 0, false);
+    if let LayerContent::Raster(s) = &mut ink.content {
+        let px: Vec<f32> = (0..16).flat_map(|_| [0.2, 0.4, 0.6, 0.1, 3.0e38]).collect();
+        s.write_region(photocraft_geom::Rect::new(0, 0, 4, 4), &px);
+    }
+    ink.opacity = 3.0e38;
+    d.layers.push(ink);
+    let b = photocraft_compose::cmyk::render_cmyk(&d, d.bounds()).expect("native CMYK composite");
+    assert!(b.px.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "inks and alpha must be finite and in 0..=1");
+}
+
 /// Photoshop (27.11) saves a layered TIFF with Save Transparency as a composite with a
 /// transparency sample, a positive layer count and an `MTrn` block first in the layer data
 /// (the specification's key is `Mtrn`; `nrTM` in an `II` file). That sample is the merged
