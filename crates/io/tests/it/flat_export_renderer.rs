@@ -13,9 +13,9 @@ use photocraft_io::{
 use photocraft_raster::{Interrupt, Surface};
 
 fn synthetic_doc() -> Document {
-    let mut doc = Document::with_background("synth", Size::new(128, 128), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut doc = Document::with_background("synth", Size::new(128, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut s = Surface::new(doc.pixel_format());
-    s.fill_rect(Rect::new(20, 20, 100, 100), &[0.1, 0.4, 0.9, 0.7]);
+    s.fill_rect(Rect::new(20, 20, 100, 260), &[0.1, 0.4, 0.9, 0.7]);
     let mut top = Layer::new("top", LayerContent::Raster(s));
     top.opacity = 0.8;
     top.blend = BlendMode::Multiply;
@@ -64,7 +64,7 @@ struct GeometryViolatingRenderer {
 impl BandRenderer for GeometryViolatingRenderer {
     fn render_bands(
         &mut self,
-        doc: &Document,
+        _doc: &Document,
         rect: Rect,
         _band_rows: i32,
         sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
@@ -77,10 +77,10 @@ impl BandRenderer for GeometryViolatingRenderer {
             }
             "out_of_order" => {
                 // Yield band starting at y=10 instead of 0
-                sink(RenderBand { rect: Rect::new(0, 10, w as i32, 20), pixels: vec![[0.0; 4]; (w as usize * 10)] }).map_err(RenderError::sink)
+                sink(RenderBand { rect: Rect::new(0, 10, w as i32, 20), pixels: vec![[0.0; 4]; w as usize * 10] }).map_err(RenderError::sink)
             }
             "wrong_width" => {
-                sink(RenderBand { rect: Rect::new(0, 0, (w as i32).saturating_sub(5), 10), pixels: vec![[0.0; 4]; ((w as usize).saturating_sub(5) * 10)] })
+                sink(RenderBand { rect: Rect::new(0, 0, (w as i32).saturating_sub(5), 10), pixels: vec![[0.0; 4]; (w as usize).saturating_sub(5) * 10] })
                     .map_err(RenderError::sink)
             }
             _ => Ok(()),
