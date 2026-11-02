@@ -17,9 +17,10 @@ fn right_to_left_scripts_by_language_code() {
     for code in ["en", "ja", "zh-hans", "pt-br", "ku", "arn", ""] {
         assert_eq!(i18n::dir_for_code(code), Dir::Ltr, "{code}");
     }
-    // Arabic is the one right-to-left catalog; every other registered language stays left to right.
+    // Arabic and Hebrew are the right-to-left catalogs; every other registered language stays
+    // left to right.
     for lang in Lang::all() {
-        let want = if lang.code() == "ar" { Dir::Rtl } else { Dir::Ltr };
+        let want = if matches!(lang.code(), "ar" | "he") { Dir::Rtl } else { Dir::Ltr };
         assert_eq!(lang.dir(), want, "{}", lang.code());
     }
 }
