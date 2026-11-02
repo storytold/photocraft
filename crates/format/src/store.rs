@@ -15,9 +15,9 @@ use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
 use crate::zip::{ZipReader, ZipWriter};
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
 
+use craft_pcraft_format::{BLOBS_DIR, COMPOSITE_DIR, TILES_DIR, blob_path, tile_path};
 // `SAVE_LOCK` is the file a directory save holds an exclusive lock on for its whole transaction (#4957).
 pub(crate) use craft_pcraft_format::{COMPOSITE, MANIFEST, SAVE_LOCK, THUMB};
-use craft_pcraft_format::{blob_path, tile_path};
 /// How long a directory save waits for another save of the same bundle to finish.
 const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -153,12 +153,14 @@ fn manifest_limits(max_manifest_bytes: usize) -> craft_pcraft_format::Limits {
 
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
-    // serde_json stops at 128 levels (about 40 nested groups); `parse_manifest` checks the nesting
-    // and the items in one pass, then parses without that limit.
-    let mut v = craft_pcraft_format::parse_manifest(&raw, &manifest_limits(opts.max_manifest_bytes))?;
-    crate::migrate::migrate(&mut v)?;
-    let layers = take_array(&mut v, "/document/layers");
-    let mut m: Manifest = serde_json::from_value(v)?;
+    // serde_json stops at 128 levels (about 40 nested groups); `read_manifest_with` checks the
+    // nesting and the items in one pass, then parses without that limit.
+    let limits = manifest_limits(opts.max_manifest_bytes);
+    let mut layers = Vec::new();
+    let mut m: Manifest = craft_pcraft_format::read_manifest_with(&raw, &limits, crate::migrate::STEPS, FORMAT_VERSION, |mut document| {
+        layers = take_array(&mut document, "/layers");
+        Ok::<_, FormatError>(serde_json::from_value(document)?)
+    })?;
     m.document.layers = layers_from_json(layers)?;
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
@@ -557,7 +559,7 @@ fn bundle_root(dir: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let root = std::fs::canonicalize(&dir)?;
     plain_directory_or_missing(&root)?;
-    for sub in ["tiles", "blobs", "composite"] {
+    for sub in [TILES_DIR, BLOBS_DIR, COMPOSITE_DIR] {
         let path = root.join(sub);
         plain_directory_or_missing(&path)?;
         if !path.exists() {
@@ -577,7 +579,7 @@ fn bundle_root(dir: &Path) -> Result<PathBuf> {
 
 fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
-    if parent != root && parent != root.join("tiles") && parent != root.join("blobs") && parent != root.join("composite") {
+    if parent != root && parent != root.join(TILES_DIR) && parent != root.join(BLOBS_DIR) && parent != root.join(COMPOSITE_DIR) {
         return Err(unsafe_bundle_entry(path));
     }
     plain_directory_or_missing(parent)?;
@@ -734,9 +736,9 @@ impl BundleGc {
 
         let flags = gc_directory_flags();
         let root = open(root, flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let tiles = openat(&root, "tiles", flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let blobs = openat(&root, "blobs", flags, Mode::empty()).map_err(std::io::Error::from)?;
-        let composite = openat(&root, "composite", flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let tiles = openat(&root, TILES_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let blobs = openat(&root, BLOBS_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
+        let composite = openat(&root, COMPOSITE_DIR, flags, Mode::empty()).map_err(std::io::Error::from)?;
         Ok(Self { root, tiles, blobs, composite })
     }
 
@@ -746,8 +748,8 @@ impl BundleGc {
             THUMB => (&self.root, THUMB),
             COMPOSITE => (&self.composite, "preview.png"),
             _ => match relative.split_once('/') {
-                Some(("tiles", name)) if name.strip_suffix(".zst").is_some_and(is_valid_hash) => (&self.tiles, name),
-                Some(("blobs", name)) if name.strip_suffix(".zst").is_some_and(is_valid_hash) => (&self.blobs, name),
+                Some((TILES_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.tiles, name),
+                Some((BLOBS_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.blobs, name),
                 _ => return Err(FormatError::Unsupported(format!("invalid bundle cleanup target: {relative}"))),
             },
         };
@@ -869,13 +871,9 @@ impl PcraftWriter {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
-        let manifest = Manifest {
-            format_version: FORMAT_VERSION,
-            generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
-            document,
-            thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
-            composite: opts.composite.as_ref().map(|_| COMPOSITE.to_owned()),
-        };
+        let mut manifest = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        manifest.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
+        manifest.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
         // refuse on load (issue #1101): refuse the save instead, naming the value.
         crate::finite::check(&manifest).map_err(|e| match e {
@@ -1047,12 +1045,12 @@ impl PcraftWriter {
             // flush. The retry can reuse those valid bytes (including cached ones), so flush
             // both object directories again before publishing a manifest that references them.
             // This also persists the fixed subdirectories of a newly created bundle.
-            for sub in ["tiles", "blobs"] {
+            for sub in [TILES_DIR, BLOBS_DIR] {
                 fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
             }
         }
         #[cfg(not(windows))]
-        for sub in ["tiles", "blobs"] {
+        for sub in [TILES_DIR, BLOBS_DIR] {
             let folder = dir.join(sub);
             if folder.is_dir() {
                 confirm_flushed(&folder, &folder)?;

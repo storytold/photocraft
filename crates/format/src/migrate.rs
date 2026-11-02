@@ -1,30 +1,29 @@
 //! Manifest migrations. Each step upgrades the raw JSON from version `n` to
 //! `n + 1`, so old bundles keep loading as the schema evolves.
 
-use serde_json::Value;
-
-use crate::manifest::FORMAT_VERSION;
-use crate::{FormatError, Result};
+use crate::FormatError;
 
 pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
 /// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version.
+/// the only version. `craft_pcraft_format::read_manifest_with` runs them on load.
 pub(crate) const STEPS: &[Step] = &[];
-
-/// Upgrade `v` in place to `target` using `steps`, with craft-pcraft-format's runner.
-pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
-    craft_pcraft_format::migrate(v, steps, target)
-}
-
-pub(crate) fn migrate(v: &mut Value) -> Result<u32> {
-    migrate_with(v, STEPS, FORMAT_VERSION)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::Result;
+    use crate::manifest::FORMAT_VERSION;
+    use serde_json::{Value, json};
+
+    /// Upgrade `v` in place to `target` using `steps`, with craft-pcraft-format's runner.
+    fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
+        craft_pcraft_format::migrate(v, steps, target)
+    }
+
+    fn migrate(v: &mut Value) -> Result<u32> {
+        migrate_with(v, STEPS, FORMAT_VERSION)
+    }
 
     fn rename_title(v: &mut Value) -> Result<()> {
         let t = v["document"]["title"].take();

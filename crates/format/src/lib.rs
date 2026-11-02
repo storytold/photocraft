@@ -82,7 +82,7 @@ impl From<craft_pcraft_format::Error> for FormatError {
         match e {
             Error::Corrupt(m) => FormatError::Corrupt(m),
             Error::Unsupported(m) => FormatError::Unsupported(m),
-            Error::TooNew { found, supported } => FormatError::TooNew { found, supported },
+            Error::TooNew { found, supported, .. } => FormatError::TooNew { found, supported },
             Error::LimitExceeded(m) => FormatError::LimitExceeded(m),
             Error::Json(e) => FormatError::Json(e),
             other => FormatError::Corrupt(other.to_string()),
