@@ -480,7 +480,7 @@ does; later steps that edit the same document fail with a message naming the job
 The web build has no TCP server (a page can't listen on a socket), so it offers the same methods to the
 page itself, on `window.photocraft` (`apps/photocraft-web/src/api.rs`), like VectorCraft's
 `window.vectorcraft` and FilmCraft's `window.filmcraft`. An agent driving PhotoCraft in a browser tab, or
-a host app showing it in an `<iframe>`, uses the commands it would send to the desktop app:
+a host page on the same origin that shows it in an `<iframe>`, uses the commands it would send to the desktop app:
 
 | Call | |
 |---|---|
@@ -495,6 +495,23 @@ a host app showing it in an `<iframe>`, uses the commands it would send to the d
 
 Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
+
+**Who can call it.** `window.photocraft` is on the page's own `window`, so only scripts that run in that
+page can call it: the page's own scripts, anything it includes, and the browser console. A page on another
+origin can't reach it, even one that frames PhotoCraft, because the browser doesn't let it read the frame's
+`window`; and PhotoCraft adds no `message` listener for it. A host that wants to drive a framed PhotoCraft
+serves it from its own origin. The scripts that can call it can already do anything the page can, so it
+adds no one who can control the app.
+
+There is no token. The desktop server needs one because any local process can open its TCP port. In the
+page there is nothing outside it to keep out, and a token kept in the page could be read by the scripts it
+would be meant to stop. A page that runs scripts it doesn't trust shouldn't host PhotoCraft.
+
+**What it reaches.** Every method of this document (`METHODS` in `crates/ui-egui/src/control.rs`), as on
+the desktop. Files stay in the browser: the page has no file system, so a path never reaches the device's
+files. A write the app makes goes through `Services::write`, which on the web only starts a browser
+download named after the path's last part; folders can't be picked; and the app reads only files a person
+picks or a page passes to `openFile`.
 
 ## Transport limits
 

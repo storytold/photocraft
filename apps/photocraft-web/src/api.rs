@@ -1,8 +1,8 @@
 //! `window.photocraft`: the control channel for the page, as promises.
 //!
 //! The same JSON methods as the desktop control server (`docs/control-protocol.md`), so an agent
-//! driving PhotoCraft in a browser tab (or an `<iframe>` in another app) uses the same commands as
-//! the CLI and the MCP server:
+//! driving PhotoCraft in a browser tab (or in an `<iframe>` of a page on the same origin) uses the
+//! same commands as the CLI and the MCP server:
 //!
 //! ```js
 //! await photocraft.execute("file.new", {width: 800, height: 600})  // engine command → its result
