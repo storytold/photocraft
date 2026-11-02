@@ -276,30 +276,42 @@ fn open_fill_retains_its_target_when_ui_set_changes_mask_target() {
     }
 }
 
-/// The real window-open control path can switch documents under either dialog; refuse stale OK.
+/// Refuse a different document through window.open, or a different layer in the same document.
 #[test]
-fn open_fill_and_stroke_refuse_a_different_document_after_window_open() {
+fn open_fill_and_stroke_refuse_a_different_document_or_layer() {
     use crate::control::{ControlRequest, Outcome, handle};
     for command in [COMMAND, crate::stroke_ui::COMMAND] {
-        let mut app = app();
-        app.run(COMMAND, json!({"contents": "white"})).unwrap();
-        app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
-        assert!(app.session.set_active(0));
-        let before: Vec<_> = app.session.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
-        let ctx = egui::Context::default();
-        let id = crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-        fields.insert("contents".into(), json!("black"));
-        fields.insert("color".into(), json!("#000000"));
-        fields.insert("location".into(), json!("inside"));
-        let (request, _) = ControlRequest::new("ui.window.open", json!({"document": 1}));
-        let Outcome::Done(_) = handle(&mut app, &ctx, &request) else { panic!("window.open should finish immediately") };
-        assert_eq!(app.session.active_index(), Some(1), "the real control path changed the document while the dialog stayed open");
-        let result = crate::dialogs::confirm(&mut app, id);
-        assert!(result.is_err(), "{command}: confirmation must refuse a different document; its edge is now {:?}", px(&app, 0, 15));
-        for (st, (doc, history)) in app.session.documents().iter().zip(before) {
-            assert_eq!(st.doc, doc, "neither document is edited");
-            assert_eq!(st.history.past_len(), history);
+        for change in ["document", "layer"] {
+            let mut app = app();
+            app.run(COMMAND, json!({"contents": "white"})).unwrap();
+            let original_layer = app.session.active().unwrap().active_layer.unwrap();
+            app.run("layer.new.layer", json!({"name": "other layer"})).unwrap();
+            let other_layer = app.session.active().unwrap().active_layer.unwrap();
+            app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+            assert!(app.session.set_active(0));
+            app.session.select_layer(original_layer).unwrap();
+            let before: Vec<_> = app.session.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
+            let ctx = egui::Context::default();
+            let id = crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap()["dialog"].as_u64().unwrap();
+            let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+            fields.insert("contents".into(), json!("black"));
+            fields.insert("color".into(), json!("#000000"));
+            fields.insert("location".into(), json!("inside"));
+            if change == "document" {
+                let (request, _) = ControlRequest::new("ui.window.open", json!({"document": 1}));
+                let Outcome::Done(_) = handle(&mut app, &ctx, &request) else { panic!("window.open should finish immediately") };
+                assert_eq!(app.session.active_index(), Some(1), "the real control path changed the document while the dialog stayed open");
+            } else {
+                app.session.select_layer(other_layer).unwrap();
+                assert_eq!(app.session.active_index(), Some(0));
+                assert_eq!(app.session.active().unwrap().active_layer, Some(other_layer));
+            }
+            let result = crate::dialogs::confirm(&mut app, id);
+            assert!(result.is_err(), "{command}: confirmation must refuse a different {change}; its edge is now {:?}", px(&app, 0, 15));
+            for (st, (doc, history)) in app.session.documents().iter().zip(before) {
+                assert_eq!(st.doc, doc, "neither document is edited");
+                assert_eq!(st.history.past_len(), history);
+            }
         }
     }
 }
@@ -326,6 +338,10 @@ fn open_fill_preserves_channel_targets() {
                 json!({"colors": colors})
             }
         };
+        let target_before = {
+            let st = app.session.active().unwrap();
+            photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &json!({"target": target})).unwrap().clone()
+        };
         let id = open(&mut app);
         app.ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("black"));
         let history = app.session.active().unwrap().history.past_len();
@@ -342,6 +358,12 @@ fn open_fill_preserves_channel_targets() {
         assert_eq!(st.history.past_len(), history + 1);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(px(&app, 4, 5), [1.0; 4]);
+        let st = app.session.active().unwrap();
+        assert_eq!(
+            photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &json!({"target": target})).unwrap(),
+            &target_before,
+            "Undo restores the {kind} samples too"
+        );
     }
 }
 
