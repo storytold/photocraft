@@ -288,8 +288,12 @@ announcement must occur at most once and match the configured address. The succe
 proof must name that exact parent origin. Only the retained generated directory is discovered
 from stdout. The helper proxies the unchanged generated index from its configured test HTTP
 origin and streams only the generated run/module/snippets/WASM allowlist from that retained
-directory. It adds `Access-Control-Allow-Origin: null`
-(no wildcard), preserves COOP same-origin and COEP require-corp, and never exposes arbitrary
+directory. It adds `Access-Control-Allow-Origin: null` (no wildcard) and
+`Cross-Origin-Resource-Policy: cross-origin`, while preserving COOP same-origin and COEP
+require-corp. CORP explicitly permits cross-origin embedding of only these public generated test
+artifacts under the parent's COEP policy. It grants no access to the parent window's provider API:
+the child remains sandboxed with only `allow-scripts`, without `allow-same-origin`. This test-only
+header does not change the application API or backend contract. The relay never exposes arbitrary
 workspace files, authentication, storage or provider backends. No application startup or ordinary
 CI command starts this support service. There is no handwritten JS/TS, srcdoc script or Function
 constructor in the fixture.
@@ -330,9 +334,11 @@ Success requires the original literal fixture marker exactly once, one passed/ze
 ignored, an actual `PHOTOCRAFT_OPAQUE_CHILD_PROOF` from the parent and durable matching index/
 module/WASM receipts. The child has its own generated test context; its output does not replace
 the top-level test result. Missing/unbound support fails rather than silently skipping the
-foreign-origin scenario. Native support regressions cover the nonzero loopback HTTP binding,
-separation from ChromeDriver's URL, exact proof origin, route escapes, chunk framing and
-streaming SHA256 against the existing implementation.
+foreign-origin scenario. Seven native support regressions cover the nonzero loopback HTTP
+binding, separation from ChromeDriver's URL, exact proof origin, route escapes, chunk framing,
+streaming SHA256 against the existing implementation, and real bounded loopback HTTP responses
+with exactly one CORP, COOP, COEP and opaque-origin CORS header at their required values for
+HTML, JavaScript and WASM artifacts.
 
 The existing malformed-open Rust fixture injects an importer failure. It does not demonstrate
 decoding of a real corrupt file. Neither native nor browser boundary tests establish remote

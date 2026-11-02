@@ -551,7 +551,7 @@ mod support {
     }
 
     fn response_headers(socket: &mut TcpStream, mime: &str, length: u64) -> Result<(), String> {
-        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: null\r\nVary: Origin\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nX-Content-Type-Options: nosniff\r\n\r\n").map_err(|e| e.to_string())
+        write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: null\r\nVary: Origin\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nCross-Origin-Resource-Policy: cross-origin\r\nX-Content-Type-Options: nosniff\r\n\r\n").map_err(|e| e.to_string())
     }
 
     fn stream_file(socket: &mut TcpStream, file: &mut File, snapshot: &mut File, length: u64, stop: &AtomicBool, deadline: Instant) -> Result<String, String> {
@@ -768,11 +768,65 @@ mod support {
 
     #[cfg(test)]
     mod tests {
-        use super::{Digest, State, artifact_path, configure_runner_http, observe, unchunk, valid_proof};
+        use super::{Digest, MAX_HEADER, State, artifact_path, configure_runner_http, observe, request, response_headers, unchunk, valid_proof};
         use std::ffi::OsStr;
-        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use std::io::{Read, Write};
+        use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
         use std::path::Path;
         use std::process::Command;
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn relay_wire_headers_allow_public_artifact_embedding_without_weakening_isolation() -> Result<(), String> {
+            for mime in ["text/html; charset=utf-8", "text/javascript; charset=utf-8", "application/wasm"] {
+                let timeout = Duration::from_secs(2);
+                let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+                listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+                let address = listener.local_addr().map_err(|e| e.to_string())?;
+                let mut client = TcpStream::connect_timeout(&address, timeout).map_err(|e| e.to_string())?;
+                client.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+                client.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+                let (mut server, peer) = listener.accept().map_err(|e| e.to_string())?;
+                assert!(peer.ip().is_loopback());
+                server.set_nonblocking(false).map_err(|e| e.to_string())?;
+                server.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+                server.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
+                client.write_all(b"GET /fixture/ HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\n\r\n").map_err(|e| e.to_string())?;
+                let received = request(&mut server, &AtomicBool::new(false), Instant::now() + timeout)?;
+                assert_eq!(received.target, "/fixture/");
+                assert_eq!(received.origin.as_deref(), Some("null"));
+                // Exercise the production writer shared by generated HTML, module and WASM responses.
+                response_headers(&mut server, mime, 0)?;
+                server.shutdown(Shutdown::Write).map_err(|e| e.to_string())?;
+                let mut wire = Vec::new();
+                client.take(MAX_HEADER as u64 + 1).read_to_end(&mut wire).map_err(|e| e.to_string())?;
+                assert!(wire.len() <= MAX_HEADER, "response exceeded the header bound");
+                let text = std::str::from_utf8(&wire).map_err(|e| e.to_string())?;
+                let (header, body) = text.split_once("\r\n\r\n").ok_or("incomplete relay response headers")?;
+                assert!(body.is_empty());
+                let mut lines = header.split("\r\n");
+                assert_eq!(lines.next(), Some("HTTP/1.1 200 OK"));
+                let headers = lines.map(|line| line.split_once(':').ok_or("malformed relay response header")).collect::<Result<Vec<_>, _>>()?;
+                assert_eq!(headers.len(), 10, "unexpected or duplicate relay response header");
+                for (name, expected) in [
+                    ("Content-Type", mime),
+                    ("Content-Length", "0"),
+                    ("Connection", "close"),
+                    ("Cache-Control", "no-store"),
+                    ("Access-Control-Allow-Origin", "null"),
+                    ("Vary", "Origin"),
+                    ("Cross-Origin-Opener-Policy", "same-origin"),
+                    ("Cross-Origin-Embedder-Policy", "require-corp"),
+                    ("Cross-Origin-Resource-Policy", "cross-origin"),
+                    ("X-Content-Type-Options", "nosniff"),
+                ] {
+                    let values: Vec<_> = headers.iter().filter(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.trim()).collect();
+                    assert_eq!(values, [expected], "{name} must occur once with its exact policy");
+                }
+            }
+            Ok(())
+        }
 
         #[test]
         fn runner_http_binding_requires_nonzero_ipv4_loopback() -> Result<(), String> {
