@@ -4767,3 +4767,27 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Flersidigt dokument
+	Output Options	Utdataalternativ
+	Presentation Options	Presentationsalternativ
+	Advance Every	Gå vidare var
+	Seconds	sekund
+	Loop after Last Page	Upprepa efter sista sidan
+	Acrobat and Adobe Reader only	Endast Acrobat och Adobe Reader
+	Blinds Horizontal	Persienner vågrätt
+	Blinds Vertical	Persienner lodrätt
+	Box In	Ruta in
+	Box Out	Ruta ut
+	Glitter Down	Glitter nedåt
+	Glitter Right	Glitter åt höger
+	Glitter Right-Down	Glitter åt höger och nedåt
+	Split Horizontal In	Dela vågrätt in
+	Split Horizontal Out	Dela vågrätt ut
+	Split Vertical In	Dela lodrätt in
+	Split Vertical Out	Dela lodrätt ut
+	Wipe Down	Svep nedåt
+	Wipe Left	Svep åt vänster
+	Wipe Right	Svep åt höger
+	Wipe Up	Svep uppåt
+	Uses the saved file: save {name} first to include its latest changes	Använder den sparade filen: spara {name} först för att få med de senaste ändringarna

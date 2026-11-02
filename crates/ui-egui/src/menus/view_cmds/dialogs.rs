@@ -433,7 +433,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
-            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "quality": 10}), json!({}))
+            dialog(app, json!({"path": format!("{dir}/{stem}.pdf"), "encoding": "zip", "quality": 10}), json!({"encoding": ["zip", "jpeg"]}))
         }
         "layer.new.artboard" => {
             let (w, h, _) = doc?;
@@ -461,6 +461,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             dialog(app, json!({"path": format!("{dir}/{stem}.cube"), "size": 33, "title": stem, "scope": scope}), json!({"scope": ["all", "selected"]}))
         }
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app)}))),
+        "file.automate.pdfPresentation" => Some(Ok(json!({"dialog": crate::pdf_presentation_ui::open(app)}))),
         // Photography automation (photo_cmds / lens_cmds): a folder (or the open documents).
         "file.automate.photomerge" => dialog(
             app,

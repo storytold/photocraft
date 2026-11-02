@@ -4769,3 +4769,27 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+# File › Automate › PDF Presentation (#6637)
+	Multi-Page Document	Dokument med flere sider
+	Output Options	Utdataalternativer
+	Presentation Options	Presentasjonsalternativer
+	Advance Every	Gå videre hvert
+	Seconds	sekund
+	Loop after Last Page	Gjenta etter siste side
+	Acrobat and Adobe Reader only	Bare Acrobat og Adobe Reader
+	Blinds Horizontal	Persienner vannrett
+	Blinds Vertical	Persienner loddrett
+	Box In	Boks inn
+	Box Out	Boks ut
+	Glitter Down	Glitter nedover
+	Glitter Right	Glitter mot høyre
+	Glitter Right-Down	Glitter mot høyre og nedover
+	Split Horizontal In	Del vannrett inn
+	Split Horizontal Out	Del vannrett ut
+	Split Vertical In	Del loddrett inn
+	Split Vertical Out	Del loddrett ut
+	Wipe Down	Tørk nedover
+	Wipe Left	Tørk mot venstre
+	Wipe Right	Tørk mot høyre
+	Wipe Up	Tørk oppover
+	Uses the saved file: save {name} first to include its latest changes	Bruker den lagrede filen: lagre {name} først for å få med de siste endringene

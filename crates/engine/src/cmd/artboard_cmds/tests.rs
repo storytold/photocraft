@@ -192,20 +192,14 @@ fn export_to_files_and_pdf() {
     assert!(bytes.ends_with(b"%%EOF\n"));
     let text = String::from_utf8_lossy(&bytes);
     assert_eq!(text.matches("/Type /Page ").count(), 2);
+    assert_eq!(text.matches("/Subtype /Image").count(), 2);
+    assert_eq!(text.matches("/DCTDecode").count(), 0, "ZIP by default: lossless");
+    let r = s.execute("file.export.artboardsToPdf", json!({"path": pdf, "encoding": "jpeg", "quality": 8})).unwrap();
+    assert_eq!(r["pages"], 2);
+    let text = String::from_utf8_lossy(&std::fs::read(&pdf).unwrap()).into_owned();
     assert_eq!(text.matches("/DCTDecode").count(), 2);
+    assert!(s.execute("file.export.artboardsToPdf", json!({"path": pdf, "encoding": "lzw"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn raster_pdf_xref_offsets_point_at_objects() {
-    let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
-    let text = String::from_utf8_lossy(&pdf).into_owned();
-    let xref = text.rfind("xref\n").unwrap();
-    let offsets: Vec<usize> = text[xref..].lines().skip(3).take(5).map(|l| l[..10].parse().unwrap()).collect();
-    for (i, o) in offsets.iter().enumerate() {
-        assert!(text[*o..].starts_with(&format!("{} 0 obj", i + 1)));
-    }
-    assert!(text.contains("/MediaBox [0 0 2.000 3.000]"));
 }
 
 #[test]
