@@ -99,14 +99,20 @@ fn distance(a: &[u8; 4], b: &[u8; 4]) -> u32 {
 /// `transparent` ones on BC1's transparent index. `bc1` allows the three-colour mode; BC2 and
 /// BC3 always decode four colours.
 fn colour_block(block: &Block, opaque: Mask, transparent: Mask, bc1: bool) -> [u8; 8] {
-    let colours: Vec<[f32; 3]> = block.iter().enumerate().filter(|(t, _)| opaque >> t & 1 != 0).map(|(_, texel)| rgb_of(texel)).collect();
+    let mut storage = [[0f32; 3]; 16];
+    let mut len = 0;
+    for (colour, (_, texel)) in storage.iter_mut().zip(block.iter().enumerate().filter(|(t, _)| opaque >> t & 1 != 0)) {
+        *colour = rgb_of(texel);
+        len += 1;
+    }
+    let colours = storage.get(..len).unwrap_or_default();
     if colours.is_empty() {
         // Nothing visible: every texel on the transparent index (or index 0 of black).
         let indices = if transparent != 0 { u32::MAX } else { 0 };
         return pack(0, 0, indices);
     }
-    let (lo, hi) = principal_endpoints(&colours);
-    let mut candidates = vec![(to565(lo), to565(hi))];
+    let (lo, hi) = principal_endpoints(colours);
+    let (mut e0, mut e1) = (to565(lo), to565(hi));
     let modes: &[bool] = if transparent != 0 {
         &[false]
     } else if bc1 {
@@ -118,22 +124,18 @@ fn colour_block(block: &Block, opaque: Mask, transparent: Mask, bc1: bool) -> [u
     // Each refinement starts from the best block so far: its indices give the least-squares
     // endpoints, which become one more candidate.
     for round in 0..3 {
-        for &(e0, e1) in &candidates {
-            for &four in modes {
-                let (bytes, error) = fit(block, opaque, transparent, e0, e1, four);
-                if best.is_none_or(|(e, _)| error < e) {
-                    best = Some((error, bytes));
-                }
+        for &four in modes {
+            let (bytes, error) = fit(block, opaque, transparent, e0, e1, four);
+            if best.is_none_or(|(e, _)| error < e) {
+                best = Some((error, bytes));
             }
         }
         let Some((error, bytes)) = best else { break };
         if error == 0 || round == 2 {
             break;
         }
-        candidates = least_squares(block, opaque, &bytes).into_iter().collect();
-        if candidates.is_empty() {
-            break;
-        }
+        let Some(endpoints) = least_squares(block, opaque, &bytes) else { break };
+        (e0, e1) = endpoints;
     }
     best.map_or([0; 8], |(_, bytes)| bytes)
 }
@@ -357,6 +359,7 @@ mod tests {
         assert!(ours < bounding_box, "{ours} vs the bounding box's {bounding_box}");
     }
 
+    /// Masked-out texel colours must not affect the encoded block, including an empty mask.
     #[test]
     fn texels_outside_the_image_are_ignored() {
         // Only the top-left texel is inside: its colour alone decides the endpoints.
@@ -364,5 +367,16 @@ mod tests {
         block[0] = [255, 0, 255, 255];
         let out = decode_colour(&encode_bc1(&block, 1), true);
         assert_eq!(out[0], [255, 0, 255, 255]);
+        for inside in [0, 1, 0x0011, 0x7777, u16::MAX] {
+            let mut changed = block;
+            for (t, texel) in changed.iter_mut().enumerate() {
+                if inside >> t & 1 == 0 {
+                    *texel = [17, 193, 61, 255];
+                }
+            }
+            assert_eq!(encode_bc1(&block, inside), encode_bc1(&changed, inside));
+            assert_eq!(encode_bc2(&block, inside), encode_bc2(&changed, inside));
+            assert_eq!(encode_bc3(&block, inside), encode_bc3(&changed, inside));
+        }
     }
 }
