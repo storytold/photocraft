@@ -830,13 +830,17 @@ fn match_color_after_source_change(change: &str) {
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());
     let root = open(&mut app, "image.adjustments.matchColor").unwrap();
-    for (field, value) in [("source", json!(1)), ("sourceLayer", json!(reference_id))] {
-        assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": root, "field": field, "value": value}))["ok"], true);
+    if !change.starts_with("select-") {
+        for (field, value) in [("source", json!(1)), ("sourceLayer", json!(reference_id))] {
+            assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": root, "field": field, "value": value}))["ok"], true);
+        }
+    } else {
+        assert_eq!(app.ui.dialog_mut(root).unwrap().fields["source"], json!(-1));
     }
     let (command, field, value) = if change == "delete-layer" {
         ("layer.delete", "layer", json!(reference_id))
     } else {
-        ("file.close", "document", json!(if change == "close-earlier" { 0 } else { 1 }))
+        ("file.close", "document", json!(if change == "close-source" { 1 } else { 0 }))
     };
     let params = Value::Object([(field.into(), value.clone())].into_iter().collect());
     assert_eq!(
@@ -869,15 +873,23 @@ fn match_color_after_source_change(change: &str) {
     } else {
         assert_eq!(app.session.documents().len(), 2, "the supported nested command really closed a document");
     }
+    if change == "select-with-frame" {
+        ctx.run_ui(Default::default(), |ui| crate::dialogs::show(&mut app, ui.ctx())).textures_delta.clear();
+    }
+    if change.starts_with("select-") {
+        assert_eq!(app.session.documents()[0].doc.name, "reference", "the explicitly chosen current index is the blue source");
+        let value = if change == "select-invalid" { 99 } else { 0 };
+        assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": root, "field": "source", "value": value}))["ok"], true);
+    }
     let result = crate::dialogs::confirm(&mut app, root);
     let st = app.session.active().unwrap();
-    if change == "close-source" {
-        assert!(result.is_err(), "a closed source must not silently become the target with copied layer IDs");
+    if change == "close-source" || change == "select-invalid" {
+        assert!(result.is_err(), "a closed or invalid source must not silently become another document");
         assert_eq!(st.history.past_len(), 0);
     } else {
         assert!(result.is_ok(), "{change}: {result:?}");
         let pixel = st.doc.layers[0].surface().unwrap().rgba(4, 4);
-        assert_eq!(pixel[2] > pixel[0], change == "close-earlier", "{change}: {pixel:?}");
+        assert_eq!(pixel[2] > pixel[0], change != "delete-layer", "{change}: {pixel:?}");
         assert_eq!(st.history.past_len(), 1);
     }
 }
@@ -895,6 +907,14 @@ fn match_color_source_document_keeps_its_identity_after_an_earlier_close() {
 #[test]
 fn match_color_closed_source_does_not_become_another_document() {
     match_color_after_source_change("close-source");
+}
+
+/// A fresh explicit source index has the same meaning before and after a normal render frame.
+#[test]
+fn match_color_explicit_source_selection_does_not_depend_on_a_frame() {
+    match_color_after_source_change("select-with-frame");
+    match_color_after_source_change("select-without-frame");
+    match_color_after_source_change("select-invalid");
 }
 
 /// Match Color's preview reads the Source document from the open documents, as OK does: the

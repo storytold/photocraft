@@ -1026,6 +1026,8 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {
+            // Reconcile old choices before interpreting a new explicit source index.
+            crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
             d.fields.insert(field.to_string(), value);
             ok(Value::Null)
         }

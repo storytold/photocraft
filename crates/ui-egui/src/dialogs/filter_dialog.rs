@@ -543,7 +543,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         fields.insert("__docs".into(), json!(names));
     }
     if command == "image.adjustments.matchColor" {
-        refresh_match_color_sources(app, &mut fields);
+        refresh_match_color_sources(&app.session, &mut fields);
     }
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
     Some(id)
@@ -551,11 +551,11 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 
 /// Keep Match Color's source choices live without reinterpreting a shifted document index.
 /// Rebuild layer lists only when a document changes; a closed source remains visibly unavailable.
-pub(crate) fn refresh_match_color_sources(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+pub(crate) fn refresh_match_color_sources(session: &photocraft_engine::Session, fields: &mut Map<String, Value>) {
     if fields.get("__command").and_then(Value::as_str) != Some("image.adjustments.matchColor") {
         return;
     }
-    let documents = app.session.documents();
+    let documents = session.documents();
     let state = json!(documents.iter().map(|st| (st.doc.id.0, st.revision, &st.doc.name)).collect::<Vec<_>>());
     if fields.get("__sourceState") == Some(&state) {
         return;
