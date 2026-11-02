@@ -1,4 +1,23 @@
 #[test]
+fn preview_shows_the_exported_aspect_ratio_inside_the_panel() {
+    let panel = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, 300.0));
+    for (w, h) in [(1600.0, 500.0), (500.0, 1600.0), (64.0, 64.0), (1.0, 4000.0)] {
+        let ir = preview_image_rect(panel, egui::vec2(w, h));
+        assert!(panel.contains_rect(ir), "{w}×{h}: {ir:?} leaves the panel");
+        assert!(ir.width() < panel.width() && ir.height() < panel.height(), "{w}×{h}: the edges stay visible");
+        assert!((ir.width() / ir.height() - w / h).abs() / (w / h) < 1e-3, "{w}×{h}: aspect ratio {ir:?}");
+        assert_eq!(ir.center(), panel.center());
+    }
+    // A wide export no longer fills the square panel with transparency.
+    let wide = preview_image_rect(panel, egui::vec2(1600.0, 500.0));
+    assert!(wide.height() < panel.height() / 2.0);
+    // Degenerate sizes draw nothing rather than panicking or covering the panel.
+    for size in [egui::Vec2::ZERO, egui::vec2(f32::NAN, 10.0)] {
+        assert_eq!(preview_image_rect(panel, size).area(), 0.0);
+    }
+}
+
+#[test]
 fn ico_export_is_available_and_rejects_oversize_output() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
