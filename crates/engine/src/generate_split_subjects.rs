@@ -24,7 +24,8 @@ pub(super) struct SubjectsPlan {
 pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
     let SubjectsPlan { prompt, subjects, seed, name } = plan;
     let finder = crate::select_ml_cmds::subject_finder(s, prompt.as_deref())?;
-    let job = removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
+    let job =
+        removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
     let base = name.unwrap_or_else(|| "Split Layer".to_string());
     crate::jobs::edit_job(
         s,
@@ -42,7 +43,8 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             // Each subject's alpha: the detector's mask with the edge refined from the pixels
             // (hair, soft edges), as Select Subject does.
             ctx.progress(0.05, "Refining edges");
-            let alphas: Vec<Vec<f32>> = instances.iter().map(|(cov, _, _)| crate::select_ml_cmds::refine_coverage(doc, *active, true, cov.clone(), area)).collect();
+            let alphas: Vec<Vec<f32>> =
+                instances.iter().map(|(cov, _, _)| crate::select_ml_cmds::refine_coverage(doc, *active, true, cov.clone(), area)).collect();
             // The hole: every subject, all or nothing, as the Remove tool's.
             let mut hole = vec![0.0f32; w as usize * h as usize];
             for (cov, _, _) in &instances {
@@ -76,11 +78,8 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             layers.push((Rgba8::new(w, h, background).map_err(gen_err)?, format!("{base} 1/{count}")));
             // The largest subject lowest: the furthest back, as a rule.
             for (i, alpha) in alphas.iter().enumerate() {
-                let px: Vec<u8> = picture
-                    .chunks_exact(4)
-                    .zip(alpha)
-                    .flat_map(|(p, a)| [p[0], p[1], p[2], (f32::from(p[3]) * a.clamp(0.0, 1.0)).round() as u8])
-                    .collect();
+                let px: Vec<u8> =
+                    picture.chunks_exact(4).zip(alpha).flat_map(|(p, a)| [p[0], p[1], p[2], (f32::from(p[3]) * a.clamp(0.0, 1.0)).round() as u8]).collect();
                 layers.push((Rgba8::new(w, h, px).map_err(gen_err)?, format!("{base} {}/{count}", i + 2)));
             }
             let mut ids = Vec::with_capacity(count);

@@ -963,4 +963,3 @@ fn fast_draft_sets_the_step_cache_on_a_2511_full_edit_only() {
     assert_eq!(cache(1), Some(json!(FAST_DRAFT_STEP_CACHE)));
     assert_eq!(cache(2), None, "not on the 8-step tier");
 }
-
