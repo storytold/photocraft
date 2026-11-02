@@ -207,7 +207,7 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G15. AI and generative features
-- **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
+- **Missing:** Generative Fill, Generative Upscale, Neural Filters, Sky Replacement,
   Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
   exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has

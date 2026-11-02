@@ -17,7 +17,7 @@ mod transport;
 
 pub use iopaint::{DEFAULT_ENDPOINT, IoPaintProvider};
 pub use mask::{Rect, expand_coverage, expand_mask};
-pub use png_codec::{decode_png_rgba, encode_png_rgba};
+pub use png_codec::{MAX_PIXELS, decode_png_rgba, decode_png_rgba_expecting, encode_png_rgba};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use transport::UreqTransport;
 pub use transport::{FakeTransport, HttpResponse, Transport};

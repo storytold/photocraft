@@ -8,7 +8,7 @@
 
 use base64::Engine as _;
 
-use crate::png_codec::{decode_png_rgba, encode_png_rgba};
+use crate::png_codec::{decode_png_rgba_expecting, encode_png_rgba};
 use crate::transport::Transport;
 use crate::{Error, GenerateOptions, GenerativeProvider, Mask, ProviderInfo, RgbaImage};
 
@@ -90,10 +90,11 @@ impl GenerativeProvider for IoPaintProvider {
             let detail = String::from_utf8_lossy(&r.body).chars().take(400).collect();
             return Err(Error::HttpStatus { status: r.status, detail });
         }
-        let out = decode_png_rgba(&r.body).map_err(|e| Error::BadReply(e.to_string()))?;
-        if out.width != image.width || out.height != image.height {
-            return Err(Error::WrongSize { want_w: image.width, want_h: image.height, got_w: out.width, got_h: out.height });
-        }
+        // The header must announce the input's size before any buffer is allocated.
+        let out = match decode_png_rgba_expecting(&r.body, image.width, image.height) {
+            Err(e @ Error::WrongSize { .. }) => return Err(e),
+            r => r.map_err(|e| Error::BadReply(e.to_string()))?,
+        };
         Ok(out)
     }
 }
@@ -101,6 +102,7 @@ impl GenerativeProvider for IoPaintProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::png_codec::decode_png_rgba;
     use crate::transport::FakeTransport;
     use std::sync::Arc;
 

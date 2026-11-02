@@ -46,6 +46,9 @@ impl PhotocraftApp {
             }
             // `ui.set` may have changed the edit target: the next request sees its colours.
             self.sync_mask_targets();
+            // A control request that changed the AI Integrations preferences is followed, in the
+            // same batch, by commands that must see the provider built or dropped for it.
+            crate::generative_ui::sync(self);
         }
         self.control_rx = Some(rx);
     }

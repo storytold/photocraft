@@ -46,8 +46,18 @@ pub(crate) fn privacy_rows(ui: &mut egui::Ui, obj: &Map<String, Value>) {
 /// frame; it does nothing while the wanted address is the one the provider was built for.
 pub fn sync(app: &mut PhotocraftApp) {
     let wanted = app.session.prefs().integrations.generative_endpoint().map(str::to_owned);
-    if wanted == app.generative_endpoint {
+    // Nothing to do while the address is the one the provider was built for (or refused for:
+    // a refused address is not retried every frame), unless a provider exists that the
+    // preferences no longer justify.
+    let stale = wanted.is_none() && app.session.generative.is_some();
+    if wanted == app.generative_endpoint && !stale {
         return;
+    }
+    // A generation still running was started under the old address or consent: stop it
+    // before the provider goes (the job's own cancellation path; the document stays unchanged).
+    let running: Vec<_> = app.session.jobs().into_iter().filter(|j| j.state == "running" && j.command == "image.generativeExpand").map(|j| j.id).collect();
+    for id in running {
+        app.session.cancel_job(id);
     }
     app.session.generative = match (&wanted, app.services.generative_factory.as_ref()) {
         (Some(endpoint), Some(make)) => match make(endpoint) {
@@ -156,6 +166,17 @@ mod tests {
         app.ui.status.clear();
         sync(&mut app);
         assert!(app.ui.status.is_empty());
+    }
+
+    #[test]
+    fn a_provider_the_preferences_no_longer_justify_is_dropped() {
+        let mut app = app();
+        sync(&mut app);
+        // Installed behind sync's back (preferences off, nothing cached): dropped on the next frame.
+        app.session.generative = Some(Arc::new(IoPaintProvider::new("http://127.0.0.1:1", Box::new(FakeTransport::new()))));
+        sync(&mut app);
+        assert!(app.session.generative.is_none());
+        assert!(!has_menu_item(&app));
     }
 
     #[test]
