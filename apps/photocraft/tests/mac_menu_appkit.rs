@@ -13,6 +13,7 @@
 mod mac_menu;
 
 #[cfg(target_os = "macos")]
+/// Collect and clear the native menu input queues for one simulated egui frame.
 fn take_native_input(app: &mut photocraft_ui_egui::PhotocraftApp) -> egui::RawInput {
     let mut raw = egui::RawInput::default();
     if let Some(menu) = app.services.native_menu.as_mut() {

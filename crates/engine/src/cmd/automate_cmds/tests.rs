@@ -531,6 +531,7 @@ fn scripts_nested_deeper_than_the_limit_fail() {
 }
 
 #[test]
+/// Contact Sheet must reject PSD sources that exceed the session allowance.
 fn psd_import_budget_is_used_by_contact_sheet_sources() {
     let dir = tmp("psd-import-budget");
     let path = format!("{dir}/source.psd");

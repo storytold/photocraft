@@ -444,6 +444,7 @@ mod psd_import_budget_tests {
     use super::*;
 
     #[test]
+    /// Apply identical PSD allowances to trusted-local and capability-authorized opens.
     fn trusted_and_workspace_opens_honour_session_import_limits() {
         let dir = std::env::temp_dir().join(format!("photocraft-10745-automation-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

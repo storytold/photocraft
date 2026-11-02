@@ -1991,6 +1991,7 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
 }
 
 #[test]
+/// All direct and auxiliary file imports use the session PSD allowance.
 fn psd_import_budget_is_used_by_open_place_and_auxiliary_imports() {
     let source = session(256, 256, 8);
     let bytes = photocraft_io::export(doc(&source), "psd", &Default::default()).unwrap().bytes;
@@ -2004,4 +2005,29 @@ fn psd_import_budget_is_used_by_open_place_and_auxiliary_imports() {
     s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":4096})).unwrap();
     open_bytes_as(&mut s, "layers.psd", &bytes, None, None).unwrap();
     assert_eq!(s.documents().len(), 2);
+}
+
+#[test]
+/// Nested place/open steps must inherit low and high limits from the batch caller.
+fn batch_action_imports_inherit_the_callers_psd_allowance() {
+    let dir = tmp("batch-nested-psd-budget");
+    let input = png(&dir, "input.png", 8, 8, "#ffffff");
+    let source = join(&dir, "placed.psd");
+    let large = session(256, 256, 8);
+    save_doc(doc(&large), &source, None).unwrap();
+    let mut s = Session::new();
+    for command in ["file.placeEmbedded", "file.placeLinked", "file.openAs"] {
+        let output = join(&dir, command);
+        let params = json!({"input":[input],"output":output,"format":"png","steps":[{"command":command,"params":{"path":source}}]});
+        s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":1})).unwrap();
+        let result = s.execute("file.automate.batch", params.clone()).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), 0, "{command}: {result}");
+        assert!(result["errors"][0]["error"].as_str().unwrap().contains("pixel memory"), "{command}: {result}");
+        assert!(!std::path::Path::new(&join(&output, "input.png")).exists());
+        s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":4096})).unwrap();
+        let result = s.execute("file.automate.batch", params).unwrap();
+        assert_eq!(result["files"].as_array().unwrap().len(), 1, "{command}: {result}");
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{command}: {result}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

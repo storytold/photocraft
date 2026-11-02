@@ -36,6 +36,7 @@ pub fn default_psd_import_pixel_bytes() -> u64 {
 }
 
 #[cfg(any(test, not(target_arch = "wasm32")))]
+/// Use half of physical RAM with a conservative fallback and the process address-space bound.
 fn native_default(total_ram: u64, address_limit: u64) -> u64 {
     (total_ram / 2).max(2 << 30).min(address_limit)
 }
@@ -43,6 +44,49 @@ fn native_default(total_ram: u64, address_limit: u64) -> u64 {
 /// Explicit native limits can be raised or lowered; wasm retains its fixed safety ceiling.
 pub(crate) fn effective_limit(requested: u64, web: bool) -> u64 {
     if web { requested.min(1 << 30) } else { requested.min(isize::MAX as u64) }
+}
+
+/// Preflight a group of PSD/PSB sources against one shared pixel allowance before importing.
+/// Non-PSD inputs spend nothing here. Estimates include each source's decode workspace,
+/// conservatively summed rather than credited for sequential reuse. Linux free memory and
+/// cgroup headroom are checked afresh; explicit allowances cannot bypass that safety check.
+#[derive(Default)]
+pub struct PsdImportBatchBudget {
+    required: u64,
+}
+
+impl PsdImportBatchBudget {
+    /// Add one encoded source without decoding pixels. A failed check leaves the total intact.
+    /// Call this for every source before starting the import loop, using the same options.
+    pub fn include(&mut self, bytes: &[u8], opts: &crate::ImportOptions) -> Result<(), IoError> {
+        if !bytes.starts_with(b"8BPS") {
+            return Ok(());
+        }
+        // Stop at the parser's preflight callback: even a missing merged section must not
+        // precede the memory refusal. Parser errors before that point still propagate.
+        let mut estimated = None;
+        let parsed = PsdFile::from_bytes_and_merged_preflight(
+            bytes,
+            |file| {
+                estimated = Some(estimate_budget(file).and_then(|budget| budget.required()).map(|required| (required, file.header.width, file.header.height)));
+                Err(photocraft_psd::PsdError::LimitExceeded("PSD batch preflight complete"))
+            },
+            |_| false,
+        );
+        let (required, width, height) = match estimated {
+            Some(result) => result?,
+            None => {
+                parsed?;
+                return Err(IoError::Unsupported("PSD batch preflight did not run".into()));
+            }
+        };
+        let total = self.required.checked_add(required).ok_or_else(overflow)?;
+        let limit = effective_limit(opts.psd_max_pixel_bytes, cfg!(target_arch = "wasm32"));
+        ImportBudget { retained: total, workspace: 0 }.check(limit)?;
+        crate::memory::check_fits(width, height, total, crate::memory::available())?;
+        self.required = total;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -104,6 +148,18 @@ impl ImportBudget {
 /// buffers, interleave output and float conversion workspace. This is an upper estimate,
 /// rather than a promise that an allocator or OS can satisfy an accepted import.
 pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
+    let budget = estimate_budget(file)?;
+    check_available(file, &budget, limit, crate::memory::available())
+}
+
+/// Apply both the configured allowance and fresh process/cgroup headroom, even for overrides.
+fn check_available(file: &PsdFile, budget: &ImportBudget, limit: u64, available: Option<u64>) -> Result<(), IoError> {
+    budget.check(limit)?;
+    crate::memory::check_fits(file.header.width, file.header.height, budget.required()?, available)
+}
+
+/// Estimate retained pixels and peak decode workspace without decoding any pixel streams.
+fn estimate_budget(file: &PsdFile) -> Result<ImportBudget, IoError> {
     let mut budget = ImportBudget::default();
     let h = &file.header;
     h.validate()?;
@@ -174,7 +230,7 @@ pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
             budget.scratch(converted.checked_add(p.decoded_bytes).ok_or_else(overflow)?);
         }
     }
-    budget.check(limit)
+    Ok(budget)
 }
 
 #[cfg(test)]

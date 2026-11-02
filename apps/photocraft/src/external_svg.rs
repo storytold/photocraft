@@ -1377,6 +1377,7 @@ mod native {
 
         #[cfg(unix)]
         #[test]
+        /// Reject symlinks and real FIFO nodes without following or blocking on them.
         fn unix_saved_file_rejects_symlinks_and_fifos_without_blocking() {
             let owned = OwnedSvg::create(b"<svg/>").unwrap();
             let stamp = owned.stamp().unwrap();

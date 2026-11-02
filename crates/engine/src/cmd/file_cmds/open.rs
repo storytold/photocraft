@@ -4,6 +4,7 @@ use super::{
     resize_surface, str_param, translate_surface,
 };
 
+/// Import an auxiliary document with default settings, refusing thumbnail-only previews.
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
     import_with_options(name, bytes, &Default::default())
 }
@@ -24,6 +25,7 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
     Ok(doc)
 }
 
+/// Apply the import allowance and refuse previews that auxiliary workflows cannot identify to users.
 fn import_result(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
     crate::allocation::checkpoint("importing document")?;
     let r = photocraft_io::import_with_options(name, bytes, opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
@@ -110,6 +112,7 @@ fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
     }
 }
 
+/// Open bytes with an optional format override while retaining session import limits and raw defaults.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
@@ -215,6 +218,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "smartObject": smart}))
 }
 
+/// Read and place a source through session import settings, retaining a path for linked objects.
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let cmd = if linked { "file.placeLinked" } else { "file.placeEmbedded" };
     let path = str_param(p, "path", cmd)?.to_string();

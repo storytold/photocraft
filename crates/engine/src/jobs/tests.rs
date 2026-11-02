@@ -784,6 +784,7 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
 }
 
 #[test]
+/// Background byte and file opens enforce the same session PSD allowance.
 fn psd_import_budget_is_used_by_background_byte_and_file_opens() {
     let src = session(256, 256);
     let bytes = photocraft_io::export(&src.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;

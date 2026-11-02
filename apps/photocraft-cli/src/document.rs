@@ -26,6 +26,7 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// Open with the CLI import allowance, preserve raw defaults, and export to the requested format.
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
@@ -42,6 +43,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
+/// Inspect a document after opening it under the CLI import allowance.
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
@@ -75,6 +77,7 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
     Ok(cmds)
 }
 
+/// Open or create a document, run commands, and export using the configured import allowance.
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
@@ -239,6 +242,7 @@ mod psd_import_budget_tests {
     use crate::test_support::invoke;
 
     #[test]
+    /// Cover import-flag help, numeric bounds and the headless-only MCP restriction.
     fn psd_import_flag_validates_values_and_is_listed_on_import_commands() {
         for subcommand in ["convert", "info", "run", "batch", "droplet", "serve", "mcp"] {
             let result = invoke(&[subcommand, "--help"]);
@@ -256,6 +260,7 @@ mod psd_import_budget_tests {
     }
 
     #[test]
+    /// Refuse an over-budget PSD across CLI import routes before writing an output.
     fn cli_info_run_convert_and_batch_honour_the_limit_before_opening() {
         let folder = std::env::temp_dir().join(format!("photocraft-10745-cli-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();

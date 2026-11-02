@@ -32,6 +32,7 @@ pub(crate) fn commands(a: &CommandsArgs, out: &mut dyn Write) -> Result {
     Ok(())
 }
 
+/// Serve a headless session with filesystem authority and import limits configured up front.
 pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     use std::sync::{Arc, Mutex};
     let mut headless = Headless::with_workspace(a.automation.workspace()?);
@@ -64,6 +65,8 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
+/// Start MCP with a configured local session or an authenticated bridge to the running app.
+/// Local import overrides apply only to headless mode; argument validation rejects them in bridge mode.
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     let server = match &a.bridge {
         Some(addr) => {

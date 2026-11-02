@@ -48,6 +48,7 @@ pub(crate) struct ImportArgs {
 }
 
 impl ImportArgs {
+    /// Apply the validated CLI import allowance before any file or action is opened.
     pub(crate) fn apply(&self, session: &mut photocraft_engine::Session) {
         if let Some(mb) = self.psd_import_memory_mb {
             session.edit_prefs(|p| p.performance.psd_import_memory_mb = mb);

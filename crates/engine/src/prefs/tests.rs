@@ -1067,6 +1067,7 @@ fn the_web_build_caps_memory_usage() {
 }
 
 #[test]
+/// The import preference survives persistence, validates bounds and reaches import options.
 fn psd_import_memory_preference_is_validated_persisted_and_used() {
     let mut s = Session::new();
     let path = "performance.psdImportMemoryMb";

@@ -47,6 +47,8 @@ fn strip_shell_steps(action: &mut Action) {
     (action.steps, action.disabled, action.dialogs) = (steps, disabled, dialogs);
 }
 
+/// Process each input in an isolated headless session with the CLI import allowance.
+/// Collect per-file failures while preventing output-name collisions.
 pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (in_dir, out_dir) = (a.in_dir.as_path(), a.out.as_path());
     let (actions, mut set, warnings) = load_actions_file(&a.actions, a.action.as_deref())?;
@@ -116,6 +118,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     if failed > 0 { Err(CliError::FilesFailed(failed)) } else { Ok(()) }
 }
 
+/// Run a saved droplet using the CLI import allowance for its inputs and nested actions.
 pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (file, inputs) = (&a.file, &a.inputs);
     let mut p = json!({"droplet": file, "input": inputs});

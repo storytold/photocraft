@@ -1222,6 +1222,8 @@ pub(crate) fn psd_to_document_decoded_integrity(
     psd_to_document_global(file, ctl, decoded, global, false).map(|(doc, warnings, damaged, _)| (doc, warnings, damaged))
 }
 
+/// Map a parsed PSD to a document, refusing failed preflights before allocating pixel surfaces.
+/// Legacy callers receive a minimal document and warning; preflighted imports reuse their earlier check.
 fn psd_to_document_global(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,

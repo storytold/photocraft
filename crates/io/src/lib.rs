@@ -67,7 +67,7 @@ pub mod pixels;
 mod psd_budget;
 mod psd_export;
 mod psd_import;
-pub use psd_budget::{DEFAULT_PSD_IMPORT_PIXEL_BYTES, default_psd_import_pixel_bytes};
+pub use psd_budget::{DEFAULT_PSD_IMPORT_PIXEL_BYTES, PsdImportBatchBudget, default_psd_import_pixel_bytes};
 pub mod psd_thumbnail;
 pub mod raw;
 pub mod slices_map;
@@ -349,11 +349,13 @@ pub struct ImportOptions {
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace. May lower the
-    /// native default or raise it; wasm is capped at 1 GiB. Does not cover metadata or smart-filter caches.
+    /// native default or raise it; wasm is capped at 1 GiB. Linux also checks current process/cgroup
+    /// headroom for both defaults and overrides. Does not cover metadata or smart-filter caches.
     pub psd_max_pixel_bytes: u64,
 }
 
 impl Default for ImportOptions {
+    /// Use normal SVG/raw settings and the platform’s automatic PSD/PSB pixel allowance.
     fn default() -> Self {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,

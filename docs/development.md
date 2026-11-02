@@ -809,3 +809,18 @@ backend command without submitting; it writes a PDF only when `output` is explic
 without an output requires `dryRun: true`. Remembered print settings omit `output`, `dryRun` and
 `send`, so Print One Copy derives submission from its own output choice. Shared spooler transport
 files are automatically removed on Windows; CUPS needs none.
+
+### PSD/PSB import preflight safety
+
+The pixel allowance applies to batch action steps as well as their primary inputs. Photomerge
+and Merge to HDR Pro preflight the sum of all PSD/PSB source estimates against one allowance
+before importing any source. Each estimate includes retained pixels and decode workspace;
+the aggregate conservatively sums both. Non-PSD inputs remain subject to their existing checks.
+On Linux, every PSD preflight also checks current free RAM/swap and cgroup headroom, leaving
+512 MiB for the app and system. This check applies to both Automatic and explicit allowances;
+only installed RAM is cached, never dynamic free memory.
+
+The real 6144 × 2560, 38-layer PSD/PSB decode regression runs automatically in the existing
+release corpus suite (`cargo xtask test-corpus`), on machines with at least 8 GiB of RAM and
+sufficient current process/cgroup headroom. It remains opt-in for debug tests:
+`cargo test -p photocraft-io --lib ordinary_38_layer_documents_open_under_the_native_default -- --ignored`.

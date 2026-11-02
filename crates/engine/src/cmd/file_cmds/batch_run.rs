@@ -176,6 +176,8 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+/// Run each input and its action steps in an isolated session inheriting the caller’s preferences.
+/// Save successful outputs and collect errors without changing the caller’s documents.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
@@ -191,6 +193,7 @@ fn process_outputs<'a>(
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
+            scratch.edit_prefs(|prefs| *prefs = s.prefs().clone());
             let doc = import_opened(s, &file_name(path), &bytes)?;
             scratch.add_document(doc, Some(path.to_string()));
             if !f(&mut scratch, &out)? {
@@ -243,6 +246,7 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Validate a batch action, carry playback limits across inputs, and save each result to its destination.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps =

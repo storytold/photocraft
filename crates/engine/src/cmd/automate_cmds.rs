@@ -471,6 +471,7 @@ fn units_px(v: f64, unit: &str, res: f64) -> f64 {
     }
 }
 
+/// Lay out source files on contact-sheet pages using session import settings for every source.
 fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let import_opts = crate::jobs::import_options(s.prefs());
     let cmd = "file.automate.contactSheetII";

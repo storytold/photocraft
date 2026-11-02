@@ -575,8 +575,9 @@ fn honoured_memory_usage_mb(stored: u32, web: bool) -> u32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Performance {
-    /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
-    /// oldest states are dropped beyond it), and the result of one transform.
+    /// Best-effort memory budget, in MB, for each document's pixels plus its History.
+    /// Undo states are trimmed oldest first. The current document is never dropped and may
+    /// exceed this budget. It also bounds the result of one transform.
     pub memory_usage_mb: u32,
     /// PSD/PSB pixel preflight limit in MiB; 0 selects the machine-aware default.
     /// Includes decode workspace. Web honours at most 1 GiB. Applies to subsequent imports.
