@@ -367,7 +367,9 @@ fn deeply_nested_embedded_svg_is_dropped_not_a_stack_overflow() {
 }
 
 /// The embedded SVG is parsed on top of the drawing's own recursion, so the two depths share
-/// [`svg::MAX_XML_DEPTH`]: 511 + 511 groups, each fine alone, overflowed a 1 MB thread stack.
+/// [`svg::MAX_XML_DEPTH`]: the two together, each fine alone, overflowed a 1 MB thread stack. A
+/// thread can inherit a finished thread's larger stack, so this one failed only now and then
+/// while the limit needed 1.4 MB (at 512 levels).
 #[test]
 fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
     let embed = |outer: usize, inner: usize| {
@@ -380,7 +382,7 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
             let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
             assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
             // Within the shared budget the embedded drawing renders (its rect is black).
-            let r = open(&embed(250, 250));
+            let r = open(&embed(120, 120));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
         })
         .unwrap()

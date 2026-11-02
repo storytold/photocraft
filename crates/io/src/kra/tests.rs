@@ -261,7 +261,7 @@ fn malformed_files_fail_cleanly() {
     for (what, bytes) in cases {
         assert!(crate::import("x.kra", &bytes).is_err(), "{what}");
     }
-    let deep = maindoc("RGBA", &format!("{}{}", r#"<layer nodetype="grouplayer"><layers>"#.repeat(150), "</layers></layer>".repeat(150)));
+    let deep = maindoc("RGBA", &format!("{}{}", r#"<layer nodetype="grouplayer"><layers>"#.repeat(110), "</layers></layer>".repeat(110)));
     assert!(matches!(crate::import("x.kra", &archive(&deep, &[])), Err(IoError::Unsupported(_))));
 }
 
