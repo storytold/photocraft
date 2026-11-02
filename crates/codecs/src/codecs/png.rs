@@ -1354,7 +1354,7 @@ mod streamed_tests {
         // left out and the 12 bytes of pixels still decode.
         let limits = |max_alloc| Limits { max_alloc, ..Limits::default() };
         let decoded = decode(&png, &limits(1999)).unwrap();
-        assert_eq!((decoded.icc, decoded.data()), (None, &[9u8; 12][..]));
+        assert_eq!((decoded.icc.as_deref(), decoded.data()), (None, &[9u8; 12][..]));
         assert_eq!(decode(&png, &limits(2000)).unwrap().icc.map(|p| p.len()), Some(2000));
         // And one byte under the cap comes through whole.
         let png = crate::encode(&img(vec![3; cap - 1]), Format::Png, &EncodeOptions::default()).unwrap();
