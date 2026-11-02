@@ -1771,8 +1771,11 @@ fn live_dodge_matches_the_commit_across_cells() {
     }
     assert!(changed);
     // A soft tip's footprint spans more live cells, so sums land in a different order: within
-    // 2e-4 (a twentieth of an 8-bit level).
-    assert!(worst <= 2e-4, "live and commit differ by {worst}");
+    // 3e-4 (under a tenth of an 8-bit level). The default brush's Smoothing rounds this stroke's
+    // corners (#2138), which moves its dabs and the rounding noise with them (2.1e-4 at worst, in
+    // a few pixels at a dab's soft edge); a live stroke that lagged the commit would be off by
+    // hundredths.
+    assert!(worst <= 3e-4, "live and commit differ by {worst}");
 }
 
 /// The sequential-dab tools' options for the live hand-off tests.
