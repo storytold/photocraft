@@ -184,6 +184,15 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
     doc.layers.push(layer);
 
     let rect = doc.bounds();
+    if let Err(reason) = comp.supports(&doc) {
+        assert!(reason.0.contains("float effect-map render targets"), "unexpected unsupported feature: {reason:?}");
+        let result = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 32, 32 * 1024, |_, _| -> Result<(), std::convert::Infallible> {
+            panic!("unsupported layer effects must not emit pixels");
+        });
+        assert!(matches!(result, Err(ReadbackError::Unsupported(_))));
+        eprintln!("SKIPPED effect seam parity: {reason:?}; verified unsupported-feature rejection instead");
+        return;
+    }
     let full = render_to_vec(&mut comp, ctx.device(), ctx.queue(), &doc, rect).expect("full readback");
 
     // Render with bands of 32 rows so the shadow seamlessly crosses multiple band boundaries
