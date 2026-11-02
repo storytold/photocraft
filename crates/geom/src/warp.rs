@@ -688,7 +688,8 @@ impl BezierMesh {
 
     /// Removes interior vertical boundary `k` (1..us.len()-1), merging its two patch columns.
     /// Exact when the patches came from an unedited split; otherwise the outer control points are
-    /// kept and the inner handles extrapolated. Returns false for malformed meshes.
+    /// kept and the inner handles extrapolated. Returns false without changes for malformed
+    /// meshes or extrapolated handles outside the finite coordinate range.
     pub fn remove_split_u(&mut self, k: usize) -> bool {
         if !self.is_valid() {
             return false;
@@ -706,6 +707,11 @@ impl BezierMesh {
             // De Casteljau inverse: q1 = lerp(p0, p1, a), r2 = lerp(p2, p3, a).
             let p1 = [(q1[0] - (1.0 - a) * p0[0]) / a, (q1[1] - (1.0 - a) * p0[1]) / a];
             let p2 = [(r2[0] - a * p3[0]) / (1.0 - a), (r2[1] - a * p3[1]) / (1.0 - a)];
+            // An edited patch can require handles outside f64's finite range when
+            // merging. Refuse the candidate before replacing any knots or points.
+            if !p1.iter().chain(p2.iter()).all(|v| v.is_finite()) {
+                return false;
+            }
             pts.extend_from_slice(&row[..c0]);
             pts.extend_from_slice(&[p0, p1, p2, p3]);
             pts.extend_from_slice(&row[c0 + 7..]);
@@ -715,7 +721,7 @@ impl BezierMesh {
         true
     }
 
-    /// Removes interior horizontal boundary `k`; rejects malformed meshes.
+    /// Removes interior horizontal boundary `k`; rejects malformed meshes and non-finite results.
     pub fn remove_split_v(&mut self, k: usize) -> bool {
         if !self.is_valid() {
             return false;
