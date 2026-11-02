@@ -3,8 +3,8 @@
 //!
 //! The preview is a CPU proxy: the layer box-downsampled once to at most 1600 px
 //! (`ProxyImage`), re-rendered through the displacement field only where a dab changed it
-//! (bilinear field and source), and uploaded with a partial texture update. A dab plus its
-//! update costs well under a millisecond on a 24 MP layer (see `bench_liquify`). Strokes are
+//! (bilinear field and source), and uploaded with a partial texture update. `bench_liquify`
+//! measures the sampler; display conversion additionally depends on the document profile. Strokes are
 //! recorded exactly as the engine replays them (`stroke_begin` + `stroke_segment` per point), so
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
@@ -27,6 +27,10 @@ const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
 
+fn encode_preview(display: Option<&photocraft_engine::display_color::CanvasDisplay>, rgba: [f32; 4]) -> [u8; 4] {
+    display.map_or_else(|| rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8), |d| d.premultiplied_rgba8(rgba))
+}
+
 /// Native component sampling keeps the other components and opacity at the destination. Work
 /// stays bounded by the dirty proxy/viewport rectangle; a dab never scans the full source.
 #[allow(clippy::too_many_arguments)]
@@ -39,6 +43,7 @@ fn render_components(
     bounds: Rect,
     dirty: Rect,
     out: &mut [[u8; 4]],
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
 ) -> bool {
     let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
     let width = bounds.width() as usize;
@@ -79,7 +84,8 @@ fn render_components(
             }
             let rgba = photocraft_raster::to_rgba(&fmt, &native);
             let a = rgba[3].clamp(0.0, 1.0);
-            let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            let premultiplied = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a];
+            let encoded = encode_preview(display, premultiplied);
             let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
             if let Some(pixel) = out.get_mut(index) {
                 *pixel = encoded;
@@ -237,6 +243,7 @@ pub struct LiquifyDialog {
     source: Surface,
     target: Value,
     native_proxy: Option<Surface>,
+    display: Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -441,9 +448,9 @@ impl LiquifyDialog {
             if let Some(source) = &self.native_proxy {
                 let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
                 let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
-                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out, self.display.as_deref());
             } else {
-                self.proxy.render(&self.field, r, &mut self.out);
+                self.proxy.render_mapped(&self.field, r, &mut self.out, |rgba| encode_preview(self.display.as_deref(), rgba));
             }
         }
     }
@@ -495,9 +502,11 @@ impl LiquifyDialog {
         }
         let started = crate::gpu_canvas::now_ms();
         let rendered = if self.native_proxy.is_some() {
-            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out, self.display.as_deref())
         } else {
-            ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+            ProxyImage::render_full_resolution_mapped(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch, |rgba| {
+                encode_preview(self.display.as_deref(), rgba)
+            })
         };
         if !rendered {
             self.view_bounds = None;
@@ -609,6 +618,7 @@ fn open_on(
 ) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
@@ -631,6 +641,7 @@ fn open_on(
         source: surf,
         target,
         native_proxy,
+        display,
         out,
         tex: None,
         dirty: None,
@@ -914,10 +925,16 @@ fn shortcut(t: LiquifyTool) -> &'static str {
 fn load_backdrop(app: &PhotocraftApp, ctx: &egui::Context, of: Option<u64>, canvas: Rect) -> Option<TextureHandle> {
     let st = app.session.active()?;
     let buf = photocraft_compose::render(&backdrop_doc(&st.doc, of), canvas);
-    let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
-    let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
-    s.write_region(canvas, &flat);
-    Some(ctx.load_texture("liquify-backdrop", crate::distort_ui::surface_image(&s, canvas, PROXY_SIDE), egui::TextureOptions::LINEAR))
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
+    // Preserve the existing nearest-sampled proxy size, without an RGBA8 working-space round trip.
+    let scale = (canvas.width().max(canvas.height()) as usize).div_ceil(PROXY_SIDE).max(1);
+    let (width, height) = ((canvas.width() as usize).div_ceil(scale), (canvas.height() as usize).div_ceil(scale));
+    let pixels = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| buf.get(canvas.x0 + (x * scale) as i32, canvas.y0 + (y * scale) as i32))
+        .collect();
+    let reduced = photocraft_compose::Buffer { rect: Rect::new(0, 0, width as i32, height as i32), px: pixels };
+    Some(ctx.load_texture("liquify-backdrop", crate::canvas::display_image(display.as_deref(), &reduced), egui::TextureOptions::LINEAR))
 }
 
 /// The document [`load_backdrop`] renders for Use `of`.

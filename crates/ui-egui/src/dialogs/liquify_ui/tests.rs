@@ -59,7 +59,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                 let mut field = LiquifyField::new(bounds, 8.0);
                 field.d.fill([2.0, 0.0]);
                 let mut out = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out));
+                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out, None));
                 for y in 0..48 {
                     for x in 0..64 {
                         let mut native = before.pixel(x, y);
@@ -76,7 +76,7 @@ fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets()
                 d.rebuild();
                 d.render_dirty();
                 let mut detail = vec![[0; 4]; 64 * 48];
-                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail));
+                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail, None));
                 assert_eq!(d.out, detail, "proxy at 100% equals the detail path");
                 app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
                 commit(&mut app).unwrap();
@@ -1037,6 +1037,9 @@ fn managed_preview_texture(path: &str) {
                         Ok(())
                     })
                     .unwrap();
+                if path.starts_with("component") {
+                    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+                }
                 app.session.color.settings.monitor_profile = "srgb".into();
                 let st = app.session.active().unwrap();
                 let before = st.doc.clone();
@@ -1052,8 +1055,8 @@ fn managed_preview_texture(path: &str) {
                 let ctx = egui::Context::default();
                 open(&mut app, &ctx).unwrap();
                 let texture = match path {
-                    "proxy" => app.distort.liquify.as_ref().unwrap().tex.as_ref().unwrap().id(),
-                    "detail" => {
+                    "proxy" | "component-proxy" => app.distort.liquify.as_ref().unwrap().tex.as_ref().unwrap().id(),
+                    "detail" | "component-detail" => {
                         let d = app.distort.liquify.as_mut().unwrap();
                         d.zoom = 2.0;
                         d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
@@ -1078,7 +1081,7 @@ fn managed_preview_texture(path: &str) {
                     let d = app.distort.liquify.as_mut().unwrap();
                     d.mark(Rect::new(50, 35, 55, 40), false);
                     d.render_dirty();
-                    if path == "proxy" {
+                    if path.ends_with("proxy") {
                         d.upload(&ctx);
                     } else {
                         d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
@@ -1107,4 +1110,107 @@ fn managed_preview_detail_texture_matches_canvas() {
 #[test]
 fn managed_preview_backdrop_texture_matches_canvas() {
     managed_preview_texture("backdrop");
+}
+
+#[test]
+fn managed_preview_component_proxy_texture_matches_canvas() {
+    managed_preview_texture("component-proxy");
+}
+#[test]
+fn managed_preview_component_detail_texture_matches_canvas() {
+    managed_preview_texture("component-detail");
+}
+
+#[test]
+fn unavailable_display_transform_keeps_liquify_and_backdrop_visible() {
+    use photocraft_cms::{Builtin, ColorSpace, Profile, ProfileClass};
+    let mut profile = Builtin::ProPhotoCompat.profile().clone();
+    profile.class = ProfileClass::Abstract;
+    let bytes = profile.with_encoded_bytes().to_bytes();
+    let parsed = Profile::parse(&bytes).unwrap();
+    assert_eq!(parsed.class, ProfileClass::Abstract);
+    assert_eq!(parsed.color_space, ColorSpace::Rgb);
+    let mut app = app_with_layer();
+    app.session
+        .edit("Unsupported display source", |doc, active| {
+            doc.layers.retain(|layer| layer.id == active.unwrap());
+            doc.icc_profile = Some(bytes);
+            Ok(())
+        })
+        .unwrap();
+    app.session.color.settings.monitor_profile = "srgb".into();
+    let before = app.session.active().unwrap().doc.clone();
+    assert_eq!(photocraft_engine::color_cmds::composite_profile(&before).class, ProfileClass::Abstract);
+    assert!(app.session.color.canvas_display(&before).is_err(), "the parsed RGB profile must reach the unsupported transform branch");
+    let (display, _) = crate::canvas::canvas_display(&app, &before, None);
+    assert!(display.is_none());
+    let expected = crate::canvas::display_image(display.as_deref(), &photocraft_compose::flatten(&before));
+    let ctx = egui::Context::default();
+    open(&mut app, &ctx).unwrap();
+    let backdrop = load_backdrop(&app, &ctx, None, before.bounds()).expect("same fallback as the canvas");
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert!(d.display.is_none());
+    d.zoom = 2.0;
+    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0)));
+    let mut delta = ctx.tex_manager().write().take_delta();
+    for (texture, bounds) in [(d.tex.as_ref().unwrap().id(), d.canvas), (d.view_tex.as_ref().unwrap().id(), d.view_bounds.unwrap()), (backdrop.id(), d.canvas)]
+    {
+        let egui::ImageData::Color(image) = &delta.set.get(&texture).unwrap()[0].image;
+        for (index, pixel) in image.pixels.iter().enumerate() {
+            let x = bounds.x0 as usize + index % image.size[0];
+            let y = bounds.y0 as usize + index / image.size[0];
+            assert!(pixel.to_array().iter().zip(expected.pixels[y * expected.size[0] + x].to_array()).all(|(a, b)| a.abs_diff(b) <= 2));
+        }
+    }
+    delta.clear();
+    cancel(&mut app);
+    assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+}
+
+#[test]
+fn mapped_previews_encode_float_samples_only_in_the_dirty_region() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let bounds = || Rect::new(0, 0, 96, 64);
+    let mut source = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    source.fill_rect(bounds(), &[4.0, 0.002, 0.25, 0.5]);
+    let field = LiquifyField::new(bounds(), 8.0);
+    let proxy = ProxyImage::new(&source, bounds(), 96);
+    let encode = |p: [f32; 4]| {
+        for (value, expected) in p.into_iter().zip([2.0, 0.001, 0.125, 0.5]) {
+            assert!((value - expected).abs() < 1e-6, "working floats must precede clipping/quantisation");
+        }
+        [17, 33, 65, 128]
+    };
+    let mut out = vec![[0; 4]; 96 * 64];
+    proxy.render_mapped(&field, [10, 10, 12, 12], &mut out, encode);
+    assert_eq!(out.iter().filter(|p| **p != [0; 4]).count(), 4);
+    assert_eq!(out[10 * 96 + 10], [17, 33, 65, 128]);
+    out.fill([0; 4]);
+    assert!(ProxyImage::render_full_resolution_mapped(&source, &field, bounds(), Rect::new(10, 10, 12, 12), &mut out, &mut Vec::new(), encode));
+    assert_eq!(out.iter().filter(|p| **p != [0; 4]).count(), 4);
+    assert_eq!(out[10 * 96 + 10], [17, 33, 65, 128]);
+}
+
+#[test]
+fn premultiplied_preview_samples_match_the_straight_canvas_display() {
+    use photocraft_cms::Builtin;
+    use photocraft_doc::{ColorMode, SampleType, Size};
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.monitor_profile = "srgb".into();
+    for profile in [Builtin::Srgb, Builtin::ProPhotoCompat, Builtin::LinearSrgb] {
+        let mut doc = Document::new("display", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        doc.icc_profile = Some(profile.profile().to_bytes());
+        let display = session.color.canvas_display(&doc).unwrap();
+        for rgb in [[0.55, 0.35, 0.25], [0.002, 0.004, 0.01], [4.0, -0.5, 0.25]] {
+            for alpha in [0.0, 0.001, 0.01, 0.37, 1.0] {
+                let straight = [rgb[0], rgb[1], rgb[2], alpha];
+                let image = display.to_rgba8(&photocraft_compose::Buffer::filled(Rect::new(0, 0, 1, 1), straight));
+                let a = image.pixels[3];
+                let expected = [0, 1, 2].map(|k| ((u16::from(image.pixels[k]) * u16::from(a) + 127) / 255) as u8);
+                let got = display.premultiplied_rgba8([rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]);
+                assert_eq!(got[3], a);
+                assert!(got[..3].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{profile:?} {straight:?}: {got:?} versus {expected:?}");
+            }
+        }
+    }
 }

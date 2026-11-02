@@ -69,6 +69,31 @@ impl CanvasDisplay {
         img
     }
 
+    /// A premultiplied working-space preview sample → premultiplied RGBA8 monitor values.
+    /// Unpremultiply before the same straight-alpha encoding and transform as [`Self::to_rgba8`];
+    /// quantising a translucent working sample first would lose colour precision.
+    pub fn premultiplied_rgba8(&self, rgba: [f32; 4]) -> [u8; 4] {
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let alpha = q(rgba[3]);
+        if alpha == 0 {
+            return [0; 4];
+        }
+        if self.is_identity() && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
+            return rgba.map(q);
+        }
+        let table = self.encode_srgb.then(encode_table);
+        let code = |v| table.map_or_else(|| q(v), |t| linear_code(t, v));
+        let mut pixel = [code(rgba[0] / rgba[3]), code(rgba[1] / rgba[3]), code(rgba[2] / rgba[3]), alpha];
+        if let Some(transform) = &self.transform {
+            let source = pixel;
+            transform.convert_u8(&source, 4, &mut pixel, 4, true);
+        }
+        for channel in &mut pixel[..3] {
+            *channel = ((u16::from(*channel) * u16::from(alpha) + 127) / 255) as u8;
+        }
+        pixel
+    }
+
     /// GPU canvas: a CPU composite as the texture stores it (sRGB-encoded for linear
     /// composites; the display LUT does the rest). Values above 1.0 are encoded too (the sRGB
     /// curve extended), for the float canvas texture of 32-bit documents.
@@ -94,13 +119,16 @@ fn encode_table() -> &'static [u8] {
     T.get_or_init(|| (0..=65535u32).map(|i| (photocraft_color::convert::linear_to_srgb(i as f32 / 65535.0) * 255.0 + 0.5) as u8).collect())
 }
 
+fn linear_code(t: &[u8], v: f32) -> u8 {
+    t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255)
+}
+
 fn encode_rgba8(buf: &Buffer) -> Rgba8Image {
     let t = encode_table();
     let mut img = Rgba8Image::new(buf.rect.width(), buf.rect.height());
-    let code = |v: f32| t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255);
     par_pixels(img.pixels.as_chunks_mut::<4>().0, &buf.px, |out, src| {
         for (o, p) in out.iter_mut().zip(src) {
-            *o = [code(p[0]), code(p[1]), code(p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
+            *o = [linear_code(t, p[0]), linear_code(t, p[1]), linear_code(t, p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
         }
     });
     img
