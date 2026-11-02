@@ -1145,7 +1145,11 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
     let imp = import(&atn::write(&file).unwrap()).unwrap();
     let ids: Vec<&str> = imp.actions[0].steps.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, PHOTOSHOP_STEP]);
-    assert_eq!(imp.actions[0].steps[4].1, json!({"id":"filter.blur.gaussianBlur","eventKind":"code"}));
+    assert_eq!(
+        imp.actions[0].steps[4].1,
+        json!({"id":"filter.blur.gaussianBlur","eventKind":"code",
+        "_atnEvent":{"event":"GsnB","eventKind":"code","name":file.actions[0].items[4].dictionary(),"dictionary":b64(&file.actions[0].items[4].dictionary)}})
+    );
     assert_eq!(imp.unsupported.len(), 5);
     assert!(imp.actions[0].disabled.is_empty(), "steps with a document effect stay on so playback reports them");
 }
@@ -3580,7 +3584,11 @@ fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
     assert_eq!(unsupported, [0, 1], "{loaded}");
     let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, MENU_ITEM, "filter.cameraRaw"]);
-    assert_eq!(s.actions.list[0].steps[2].1, json!({"id":"filter.cameraRaw","eventKind":"name"}));
+    assert_eq!(
+        s.actions.list[0].steps[2].1,
+        json!({"id":"filter.cameraRaw","eventKind":"name",
+        "_atnEvent":{"event":"Adobe Camera Raw Filter","eventKind":"name","name":"Camera Raw Filter","dictionary":b64(b"Camera Raw Filter")}})
+    );
     // Kept, it still saves back as recorded.
     let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
     let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();

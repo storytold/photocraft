@@ -29,7 +29,7 @@ pub const MENU_ITEM: &str = "actions.menuItem";
 /// Validate menu identity before the shell gates and opens its actual command.
 pub fn menu_item_command(p: &Value) -> Result<&str> {
     let object = p.as_object().ok_or_else(|| bad(MENU_ITEM, "parameters must be an object"))?;
-    if object.keys().any(|key| !matches!(key.as_str(), "id" | "eventKind")) {
+    if object.keys().any(|key| !matches!(key.as_str(), "id" | "eventKind" | super::RECORDED_EVENT)) {
         return Err(bad(MENU_ITEM, "only `id` and `eventKind` are supported; a menu item has no recorded settings"));
     }
     if object.get("eventKind").is_some_and(|kind| !matches!(kind.as_str(), Some("code" | "name"))) {
@@ -64,7 +64,8 @@ pub(super) fn export(p: &Value) -> Option<AtnItem> {
     } else {
         AtnEvent::name(mapped.name)
     };
-    Some(AtnItem { event, dictionary: mapped.label.as_bytes().to_vec(), descriptor: None, ..Default::default() })
+    let (event, dictionary) = super::steps_gallery::recorded_event(super::MENU_ITEM, p).unwrap_or_else(|| (event, mapped.label.as_bytes().to_vec()));
+    Some(AtnItem { event, dictionary, descriptor: None, ..Default::default() })
 }
 
 /// Headless execution runs stateless items and refuses settings deliberately left for a dialog.

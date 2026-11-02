@@ -22,12 +22,14 @@ fn image_size_menu_item_opens_real_dialog_cancel_stops_and_confirm_resumes() {
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     let revision = h.state().session.active().unwrap().revision;
     let definition = h.state().session.actions.list[0].steps.clone();
+    assert!(definition[0].1.get("_atnEvent").is_some(), "the imported definition keeps save-only metadata");
     let result = h.state_mut().run("actions.play", json!({"action": "Menu"})).unwrap();
     let dialog = result["paused"]["dialog"].as_u64().unwrap();
     h.run_steps(3);
     let fields = &h.state().ui.dialogs.iter().find(|d| d.id == dialog).unwrap().fields;
     assert_eq!(fields["__command"], "image.imageSize");
     assert_eq!(fields["__sizing"], true, "the populated sizing dialog, not a generic confirmation");
+    assert!(fields.get("_atnEvent").is_none(), "save-only metadata never enters the command editor");
     assert_eq!(fields["width"], 8.0);
     assert_eq!(fields["height"], 6.0);
     h.get_by_label("Cancel").click();
@@ -50,6 +52,7 @@ fn image_size_menu_item_opens_real_dialog_cancel_stops_and_confirm_resumes() {
     assert_eq!(doc.size, photocraft_doc::Size::new(4, 3));
     assert!(doc.selection.is_some(), "the following step runs only after confirmation");
     assert_eq!(h.state().session.actions.list[0].steps, definition, "menu playback does not record the entered settings into the definition");
+    assert!(h.state().session.journal.iter().all(|(_, p)| p.get("_atnEvent").is_none()), "save-only metadata stays out of executed commands");
 }
 
 /// Permit the wrapper while denying the concrete resize command it would open.

@@ -26,7 +26,14 @@ fn absent_image_size_settings_round_trip_and_require_interaction_without_edits()
         let imported = atn_cmds::import(&bytes).unwrap();
         assert!(imported.unsupported.is_empty(), "{:?}", imported.unsupported);
         let action = &imported.actions[0];
-        assert_eq!(action.steps, vec![("actions.menuItem".into(), json!({"id": "image.imageSize", "eventKind": kind}))]);
+        assert_eq!(
+            action.steps,
+            vec![(
+                "actions.menuItem".into(),
+                json!({"id": "image.imageSize", "eventKind": kind,
+            "_atnEvent":{"event":event.id(),"eventKind":kind,"name":"","dictionary":""}})
+            )]
+        );
         let (saved, skipped) = atn_cmds::export("Menu", &[action], &[], false).unwrap();
         assert!(skipped.is_empty());
         let reparsed = atn::parse(&saved).unwrap();
@@ -92,4 +99,81 @@ fn empty_target_and_other_event_forms_keep_their_existing_meaning() {
     let result = session.execute("actions.play", json!({"action": "Recorded"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
     assert_eq!(session.active().unwrap().doc.size, photocraft_doc::Size::new(4, 3));
+}
+
+/// Imported panel names retain their exact bytes; save metadata never becomes command input.
+/// The gallery case exercises the existing user of the shared event/name representation.
+#[test]
+fn imported_menu_names_keep_raw_bytes_without_leaking_into_playback() {
+    let gallery = Descriptor::new("null")
+        .with("GEfk", D::Enumerated { type_id: Id::new("GEft"), value: Id::new("Ct") })
+        .with("NmbL", D::Integer(6))
+        .with("EdgS", D::Integer(4))
+        .with("EdgF", D::Integer(2));
+    let cases = [
+        (AtnEvent::Code(*b"ImgS"), None, atn_cmds::MENU_ITEM, "image.imageSize"),
+        (AtnEvent::name("imageSize"), None, atn_cmds::MENU_ITEM, "image.imageSize"),
+        (AtnEvent::Code(*b"GsnB"), None, atn_cmds::MENU_ITEM, "filter.blur.gaussianBlur"),
+        (AtnEvent::name("findEdges"), None, atn_cmds::MENU_ITEM, "filter.stylize.findEdges"),
+        (AtnEvent::name("cutout"), Some(gallery), "filter.gallery.cutout", "filter.gallery.cutout"),
+    ];
+    for dictionary in ["画像サイズ".as_bytes().to_vec(), vec![0x83, 0x8a, 0xff, 0], Vec::new()] {
+        for (event, descriptor, id, command) in &cases {
+            let bytes = file(AtnItem { event: event.clone(), dictionary: dictionary.clone(), descriptor: descriptor.clone(), ..Default::default() });
+            let imported = atn_cmds::import(&bytes).unwrap();
+            assert!(imported.unsupported.is_empty());
+            let (step_id, params) = &imported.actions[0].steps[0];
+            assert_eq!(step_id, id);
+            assert_eq!(params["_atnEvent"]["dictionary"], json!(photocraft_engine::paint::tile::b64_encode(&dictionary)));
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+            let execution = photocraft_engine::actions_cmds::playback_params(&session, step_id, params).unwrap();
+            assert!(execution.get("_atnEvent").is_none());
+            if *id == atn_cmds::MENU_ITEM {
+                let kind = if matches!(event, AtnEvent::Code(_)) { "code" } else { "name" };
+                assert_eq!(execution, json!({"id":command,"eventKind":kind}));
+                assert_eq!(atn_cmds::menu_item_command(params).unwrap(), *command);
+            }
+            session.actions.list = imported.actions;
+            let result = session.execute("actions.play", json!({"action": "Resize"})).unwrap();
+            if *id == atn_cmds::MENU_ITEM && atn_cmds::menu_item_needs_settings(command) {
+                assert_eq!(result["ran"], 0);
+                assert!(result["failed"]["error"].as_str().unwrap().contains("interactive-required"));
+            } else {
+                assert_eq!(result["ran"], 1, "{result}");
+                assert!(result.get("failed").is_none());
+            }
+            assert!(session.journal.iter().all(|(_, p)| p.get("_atnEvent").is_none()));
+            let (saved, skipped) = atn_cmds::export("Menu", &[&session.actions.list[0]], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let reparsed = atn::parse(&saved).unwrap();
+            let item = &reparsed.actions[0].items[0];
+            assert_eq!(&item.event, event);
+            assert_eq!(item.dictionary, dictionary);
+            assert_eq!(item.descriptor.is_none(), descriptor.is_none());
+        }
+    }
+}
+
+/// Native choices keep canonical labels, and stale saved event metadata cannot retarget them.
+#[test]
+fn native_menu_names_stay_canonical_and_ignore_mismatched_saved_events() {
+    let native = json!({"id":"image.imageSize"});
+    for metadata in [None, Some(json!({"event":"GsnB","eventKind":"code"})), Some(json!({"event":"imageSize","eventKind":"name"}))] {
+        let mut params = native.clone();
+        if let Some(mut metadata) = metadata {
+            params["eventKind"] = json!("code");
+            metadata["dictionary"] = json!(photocraft_engine::paint::tile::b64_encode(b"wrong label"));
+            params["_atnEvent"] = metadata;
+        }
+        let expected = if params.get("eventKind").is_some() { AtnEvent::Code(*b"ImgS") } else { AtnEvent::name("imageSize") };
+        let action = Action::new("Native", vec![(atn_cmds::MENU_ITEM.into(), params)]);
+        let (saved, skipped) = atn_cmds::export("Menu", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let parsed = atn::parse(&saved).unwrap();
+        let item = &parsed.actions[0].items[0];
+        assert_eq!(item.event, expected);
+        assert_eq!(item.dictionary, b"Image Size");
+        assert!(item.descriptor.is_none());
+    }
 }

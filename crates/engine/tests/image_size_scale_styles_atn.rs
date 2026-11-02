@@ -146,7 +146,14 @@ fn malformed_or_empty_steps_are_kept_without_becoming_resizes() {
             if original.actions[0].items[0].descriptor.is_none() {
                 assert_eq!(loaded["unsupported"], json!([]));
                 let kind = if event == "ImgS" { "code" } else { "name" };
-                assert_eq!(s.actions.list[0].steps, vec![(atn_cmds::MENU_ITEM.into(), json!({"id":"image.imageSize","eventKind":kind}))]);
+                assert_eq!(
+                    s.actions.list[0].steps,
+                    vec![(
+                        atn_cmds::MENU_ITEM.into(),
+                        json!({"id":"image.imageSize","eventKind":kind,
+                    "_atnEvent":{"event":event,"eventKind":kind,"name":"Image Size","dictionary":photocraft_engine::paint::tile::b64_encode(b"Image Size")}})
+                    )]
+                );
             } else {
                 assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}: {:?}", original.actions[0].items[0].descriptor);
                 assert_eq!(s.actions.list[0].steps.len(), 1);
