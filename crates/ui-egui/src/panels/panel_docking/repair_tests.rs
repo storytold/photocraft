@@ -295,6 +295,32 @@ fn compact_resize_keeps_keyboard_and_accessibility_value_control() {
 }
 
 #[test]
+fn floating_tools_outline_keeps_one_physical_pixel_at_all_scales() {
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_pixels_per_point(scale).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("window.tools.float", json!({"x":600,"y":100})).unwrap();
+            app
+        });
+        h.run_steps(6);
+        let rect = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("hidden-panels-hover").with("tools"))).unwrap();
+        let border = crate::theme::Tokens::get(&h.ctx).card_border;
+        let stroke = h
+            .output()
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.rect == rect && r.stroke.color == border => Some(r.stroke),
+                _ => None,
+            })
+            .unwrap();
+        assert!((stroke.width * scale - 1.0).abs() < 0.01, "Tools border scale {scale}");
+    }
+}
+
+#[test]
 fn shared_column_resize_has_no_hover_fill_and_keeps_a_thin_keyboard_indicator() {
     let mut h = harness(compact_pair());
     let (anchor, rect, _) = layers_column(&h);

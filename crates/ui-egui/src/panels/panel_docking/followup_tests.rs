@@ -267,6 +267,88 @@ pub(super) fn full_app(ctx: &egui::Context) -> PhotocraftApp {
     app.run("prefs.set", json!({"path":"interface.theme","value":crate::theme::ThemeKind::ProMedium.id()})).unwrap();
     app
 }
+#[test]
+fn floating_tools_resize_both_axes_and_restore_through_workspace() {
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(|cc| {
+        let mut app = full_app(&cc.egui_ctx);
+        app.run("file.new", json!({"width":64,"height":64})).unwrap();
+        app.run("window.tools.float", json!({"x":650,"y":120,"width":60,"height":500})).unwrap();
+        app
+    });
+    h.run_steps(8);
+    let frame = egui::Id::unique("tools-palette").with("floating");
+    let at = h.ctx.read_response(frame.with("resize-right")).unwrap().rect.center();
+    press(&mut h, at, at + vec2(50.0, 0.0));
+    release(&mut h, at + vec2(50.0, 0.0));
+    let size = h.state().ui.panel_presentation.tools_size.unwrap();
+    assert!((size[0] - 110.0).abs() < 1.0);
+    assert_eq!(size[1], 500.0);
+    let at = h.ctx.read_response(frame.with("resize-bottom")).unwrap().rect.center();
+    press(&mut h, at, at - vec2(0.0, 180.0));
+    release(&mut h, at - vec2(0.0, 180.0));
+    let size = h.state().ui.panel_presentation.tools_size.unwrap();
+    assert!((size[1] - 320.0).abs() < 1.0);
+    assert!((size[0] - 110.0).abs() < 1.0);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
+    let saved = crate::dock::snapshot(h.state());
+    let mut restored = single();
+    crate::dock::apply(&mut restored, &saved);
+    assert_eq!(restored.ui.panel_presentation.tools_size, Some(size));
+    let before = crate::dock::snapshot(h.state());
+    assert!(h.state_mut().run("window.tools.float", json!({"x":10,"width":12})).is_err());
+    assert_eq!(crate::dock::snapshot(h.state()), before);
+}
+#[test]
+fn capture_followup_twelve_scenarios() {
+    let Some(root) = std::env::var_os("PHOTOCRAFT_FOLLOWUP_CAPTURES").map(std::path::PathBuf::from) else { return };
+    let _gpu = photocraft_testkit::gpu_lock();
+    std::fs::create_dir_all(&root).unwrap();
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).wgpu().build_eframe(|cc| full_app(&cc.egui_ctx));
+        h.run_steps(8);
+        let save = |h: &mut Harness<'static, PhotocraftApp>, name: &str| h.render().unwrap().save(root.join(format!("{scale}-{name}.png"))).unwrap();
+        for width in [130.0, 70.0, 42.0] {
+            h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"strip-width","width":width})).unwrap();
+            h.run_steps(5);
+            save(&mut h, &format!("width-{width}"));
+        }
+        for name in ["expand", "close"] {
+            let at = h.ctx.read_response(key(name).with("properties")).unwrap().rect.center();
+            h.event(Event::PointerMoved(at));
+            h.run_steps(2);
+            save(&mut h, &format!("hover-{name}"));
+        }
+        h.event(Event::PointerMoved(pos2(450.0, 400.0)));
+        h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"expand"})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "expanded");
+        h.state_mut().run("window.panel.edge", json!({"panel":"properties","edge":"top"})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "top-docked");
+        let source = DockArea::<String>::hit_rects(&h.ctx, area_id())
+            .into_iter()
+            .find(|(hit, _)| matches!(hit,Hit::DragBar(id) if id=="properties"))
+            .unwrap()
+            .1
+            .center();
+        press(&mut h, source, pos2(450.0, 650.0));
+        release(&mut h, pos2(450.0, 650.0));
+        save(&mut h, "detached-from-top");
+        h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"collapse"})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "collapsed-after-top");
+        h.state_mut().run("window.tools.float", json!({"x":650,"y":120,"width":110,"height":500})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "tools-large");
+        h.state_mut().run("window.tools.float", json!({"x":650,"y":120,"width":42,"height":240})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "tools-small");
+        h.state_mut().run("window.panel.edge", json!({"panel":"color","edge":"floating","individual":true,"collapsed":false,"x":750,"y":180})).unwrap();
+        h.state_mut().run("window.panel.group",json!({"panel":"color","operation":"drop","whole":true,"to":Target::At {anchor:"properties".to_owned(),placement:Placement::Split(Zone::Bottom)}})).unwrap();
+        h.run_steps(6);
+        save(&mut h, "full-joins-compact");
+    }
+}
 
 #[test]
 fn compact_header_fills_preserve_the_window_silhouette() {
@@ -373,6 +455,40 @@ fn one_bad_presentation_field_does_not_reset_the_other_view_preferences() {
     assert_eq!(app.ui.panel_presentation.widths.get("properties"), Some(&90.0));
     assert!(app.ui.panel_presentation.migrated);
     assert!(app.ui.panel_presentation.tools_size.is_none());
+}
+#[test]
+fn open_windows_keep_identity_and_preferences_across_host_ui_changes() {
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(|cc| {
+        let mut app = full_app(&cc.egui_ctx);
+        app.run("window.tools.float", json!({"x":650,"y":120,"width":74,"height":300})).unwrap();
+        app
+    });
+    h.run_steps(8);
+    let original = h.state().ui.docking.clone();
+    let view = h.state().ui.panel_presentation.clone();
+    let tools = h.state().ui.toolbar_floating;
+    for (theme, scale, size, chrome) in [
+        (crate::theme::ThemeKind::StudioLight, 1.25, vec2(760.0, 580.0), false),
+        (crate::theme::ThemeKind::ProLight, 2.0, vec2(420.0, 540.0), true),
+        (crate::theme::ThemeKind::Pro, 1.5, vec2(1280.0, 800.0), false),
+        (crate::theme::ThemeKind::ProMedium, 1.0, vec2(1280.0, 800.0), true),
+    ] {
+        h.state_mut().run("prefs.set", json!({"path":"interface.theme","value":theme.id()})).unwrap();
+        h.state_mut().ui.panels.menu_bar = chrome;
+        h.state_mut().ui.panels.rail = chrome;
+        h.set_pixels_per_point(scale);
+        h.set_size(size);
+        h.run_steps(8);
+        assert_eq!(h.state().ui.docking, original, "layout identity changed with the host UI");
+        assert_eq!(h.state().ui.panel_presentation, view);
+        assert_eq!(h.state().ui.toolbar_floating, tools);
+    }
+    let saved = crate::dock::snapshot(h.state());
+    let mut restored = single();
+    crate::dock::apply(&mut restored, &saved);
+    assert_eq!(restored.ui.docking, original);
+    assert_eq!(restored.ui.panel_presentation, view);
+    assert_eq!(restored.ui.toolbar_floating, tools);
 }
 
 #[test]

@@ -176,3 +176,12 @@ helper in a checkout-specific target first. It embeds `CARGO_MANIFEST_DIR`; a
 shared top-level `debug/xtask` alias from another checkout can otherwise validate
 the wrong tree despite the caller's working directory. Check the UI crate's source
 path in the wasm log before accepting the result.
+
+## Whole Tools palette
+
+`window.tools.float`/`window.tools.dock` and the palette header/grip move only the
+whole Tools owner. Individual buttons retain tool selection/flyouts. Both resize
+axes and normal palette sizes are saved with the existing view metadata. Workspace
+locking and generation changes cancel moves; invalid command coordinates/sizes
+return errors without changing the palette. Header/chrome token geometry now
+matches the compact panels in every theme.

@@ -1402,7 +1402,8 @@ mod toolbar_tests {
 
     /// A tool's toolbar button: tool buttons have no label, so find it by slot order.
     fn tool_button(h: &egui_kittest::Harness<'_, PhotocraftApp>, tool: Tool) -> egui::Pos2 {
-        let size = egui::Vec2::splat(if Tokens::get(&h.ctx).pro { 30.0 } else { 36.0 });
+        // Tools now shares the compact palette geometry in every theme.
+        let size = egui::Vec2::splat(30.0);
         let buttons: Vec<Rect> = h.ctx.viewport(|v| {
             v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).map(|w| w.rect).collect()
         });

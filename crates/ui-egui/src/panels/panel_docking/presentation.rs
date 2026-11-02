@@ -1761,6 +1761,18 @@ mod tests {
         assert_eq!(layout(h.state()), &before);
         assert!(h.ctx.data(|d| d.get_temp::<Drag>(key("drag"))).is_none());
     }
+    #[test]
+    fn tools_float_moves_only_the_whole_palette_and_restores_from_workspace() {
+        let mut app = app();
+        let tool = app.ui.tool;
+        app.run("window.tools.float", json!({"x":150,"y":180})).unwrap();
+        assert_eq!(app.ui.toolbar_floating, Some([150.0, 180.0]));
+        assert_eq!(app.ui.tool, tool);
+        let saved = crate::dock::snapshot(&app);
+        app.run("window.tools.dock", json!({})).unwrap();
+        crate::dock::apply(&mut app, &saved);
+        assert_eq!(app.ui.toolbar_floating, Some([150.0, 180.0]));
+    }
 
     pub(super) fn press(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
         h.event(Event::PointerMoved(from));
@@ -1981,6 +1993,41 @@ mod tests {
             "panel state, test profile, 18 registered panels: cached p50={:.3} us p95={:.3} us; serialize-every-frame reference p50={:.3} us p95={:.3} us",
             cached.0, cached.1, snapshot.0, snapshot.1
         );
+    }
+
+    /// Explicit visual evidence: no application EXE or desktop windows are built or opened.
+    #[test]
+    fn capture_port_chrome_at_multiple_scales() {
+        let Some(path) = std::env::var_os("PHOTOCRAFT_PANEL_PORT_FIXTURES").map(std::path::PathBuf::from) else { return };
+        let _gpu = photocraft_testkit::gpu_lock();
+        std::fs::create_dir_all(&path).unwrap();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_pixels_per_point(scale).with_max_steps(64).wgpu().build_eframe(|cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
+                let mut app = compact_pair();
+                app.ui.theme = crate::theme::ThemeKind::ProMedium;
+                app.run("window.panel.edge", json!({"panel":"properties","edge":"rightInner","collapsed":true})).unwrap();
+                app.run("window.panel.group", json!({"panel":"properties","operation":"peek"})).unwrap();
+                app
+            });
+            h.run_steps(6);
+            h.render().unwrap().save(path.join(format!("port-attached-{scale}.png"))).unwrap();
+            h.state_mut().run("window.panel.edge", json!({"panel":"properties","edge":"floating","x":100,"y":100,"collapsed":true})).unwrap();
+            h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"strip-width","width":150})).unwrap();
+            h.run_steps(5);
+            h.render().unwrap().save(path.join(format!("port-floating-labels-{scale}.png"))).unwrap();
+            h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"expand"})).unwrap();
+            h.state_mut().run("window.panel.edge", json!({"panel":"properties","edge":"left"})).unwrap();
+            h.state_mut().run("window.panel.group", json!({"panel":"properties","operation":"edge-size","height":560})).unwrap();
+            h.run_steps(5);
+            h.render().unwrap().save(path.join(format!("port-full-stack-{scale}.png"))).unwrap();
+            h.state_mut().run("window.tools.float", json!({"x":700,"y":150})).unwrap();
+            h.run_steps(5);
+            let tools = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("hidden-panels-hover").with("tools"))).unwrap();
+            assert!((tools.width() - COMPACT_COLUMN_WIDTH).abs() < 1.0);
+            assert!(h.ctx.content_rect().contains_rect(tools));
+            h.render().unwrap().save(path.join(format!("port-floating-tools-{scale}.png"))).unwrap();
+        }
     }
 }
 
