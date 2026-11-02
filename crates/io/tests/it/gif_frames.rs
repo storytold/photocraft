@@ -5,7 +5,7 @@ use photocraft_io::{IoError, import_gif_frames};
 
 fn gif(colours: &[([u8; 3], u16)]) -> Vec<u8> {
     let frames: Vec<GifFrame> = colours.iter().map(|&(c, delay_cs)| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs }).collect();
-    encode_gif_animated(3, 2, &frames, true).unwrap()
+    encode_gif_animated(3, 2, &frames, true, false).unwrap()
 }
 
 #[test]

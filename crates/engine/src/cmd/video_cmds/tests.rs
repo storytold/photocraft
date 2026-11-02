@@ -399,7 +399,7 @@ fn write_gif(path: &str, w: u32, h: u32, frames: &[([u8; 3], u16)]) {
     use photocraft_codecs::web::{GifFrame, encode_gif_animated};
     let list: Vec<GifFrame> =
         frames.iter().map(|&(c, delay_cs)| GifFrame { indices: vec![0; (w * h) as usize], palette: vec![c], transparent: None, delay_cs }).collect();
-    std::fs::write(path, encode_gif_animated(w, h, &list, true).unwrap()).unwrap();
+    std::fs::write(path, encode_gif_animated(w, h, &list, true, false).unwrap()).unwrap();
 }
 
 fn frame_rgb(s: &Session, id: LayerId, frame: usize) -> Vec<f32> {
@@ -456,8 +456,10 @@ fn gif_frame_delays_time_the_timeline_and_render_back() {
     assert_eq!(*t.delays_ms, [50, 500, 50, 100]);
     assert_eq!(t.fps, 20.0);
     assert_eq!(rendered_gif_delays(&s), [5, 50, 5, 10]);
-    // A second GIF on the same timeline leaves its timing alone.
-    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    // A second GIF, with other delays, on the same timeline leaves its timing alone.
+    let other = format!("{dir}/other.gif");
+    write_gif(&other, 8, 8, &[([1, 1, 1], 7), ([2, 2, 2], 8)]);
+    s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": other})).unwrap();
     assert_eq!(*s.active().unwrap().doc.timeline.as_ref().unwrap().delays_ms, [50, 500, 50, 100]);
 
     let mut s = session();

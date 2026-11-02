@@ -152,7 +152,8 @@ const MAX_ANIMATED_GIF_PIXELS: u64 = 1 << 30;
 
 /// Every frame of the timeline as one animated GIF of `w` × `h` (the still image's layout). Each
 /// frame is laid out and quantized like the still image, to its own palette, and shows for its own
-/// frame delay. Edits on the frame at the playhead are kept, as in Render Video. The size is
+/// frame delay, interlaced when the still image would be. Edits on the frame at the playhead are
+/// kept, as in Render Video. The size is
 /// checked against `MAX_ANIMATED_GIF_PIXELS` before any frame is rendered.
 fn animated_gif(doc: &Document, p: &Value, st: &WebSettings, frames: usize, (w, h): (u32, u32)) -> Result<Vec<u8>> {
     if (frames as u64).saturating_mul(u64::from(w) * u64::from(h)) > MAX_ANIMATED_GIF_PIXELS {
@@ -182,7 +183,7 @@ fn animated_gif(doc: &Document, p: &Value, st: &WebSettings, frames: usize, (w, 
             delay_cs: crate::video_cmds::delay_cs(delay_ms),
         });
     }
-    photocraft_codecs::web::encode_gif_animated(w, h, &gframes, true).map_err(other)
+    photocraft_codecs::web::encode_gif_animated(w, h, &gframes, true, st.interlaced).map_err(other)
 }
 
 /// Save for Web through a platform writer (native files or browser downloads).

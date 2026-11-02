@@ -1329,6 +1329,10 @@ fn save_for_web_gif_writes_every_frame_with_its_delay() {
     // frame has no delay of its own and shows at the 10 fps rate.
     let delays: Vec<u16> = gif.windows(8).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| u16::from_le_bytes([w[4], w[5]])).collect();
     assert_eq!(delays, [5, 20, 10]);
+    // Interlaced, as the still GIF would be: every frame's Image Descriptor sets the flag.
+    let (_, laced) = saved_for_web(&mut s, &json!({"format": "gif", "path": "laced.gif", "interlaced": true}));
+    let flags: Vec<u8> = laced.windows(10).filter(|d| d[0] == 0x2C && d[1..5] == [0; 4]).map(|d| d[9] & 0x40).collect();
+    assert_eq!(flags, [0x40; 3]);
     // Control: PNG-8 and a document without a timeline stay one still image.
     let (r, _) = saved_for_web(&mut s, &json!({"format": "png8", "path": "still.png"}));
     assert_eq!(r["frames"], Value::Null);
