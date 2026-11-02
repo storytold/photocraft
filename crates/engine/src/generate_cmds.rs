@@ -4080,7 +4080,14 @@ fn run_remove_bg(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.0, "Rendering");
             // The route: the matte model when it is wanted and the server has it, else the
             // detector (its masks are hard-edged, its licence permissive).
-            let (template_id, segment, models) = if auto && !segment {
+            // With ViTMatte served, the detector and ViTMatte (hair strand by strand, in about a
+            // second) come before the matte model.
+            let vit = auto
+                && resolve_auto(backend.as_ref(), &[crate::select_ml_cmds::VITMATTE_TEMPLATE], "") == crate::select_ml_cmds::VITMATTE_TEMPLATE
+                && resolve_auto(backend.as_ref(), &[crate::select_ml_cmds::DEFAULT_SEGMENT_TEMPLATE], "") == crate::select_ml_cmds::DEFAULT_SEGMENT_TEMPLATE;
+            let (template_id, segment, models) = if vit {
+                (crate::select_ml_cmds::DEFAULT_SEGMENT_TEMPLATE.to_string(), true, Vec::new())
+            } else if auto && !segment {
                 let t = resolve_auto(backend.as_ref(), &[DEFAULT_MATTE_TEMPLATE], crate::select_ml_cmds::DEFAULT_SEGMENT_TEMPLATE);
                 let seg = t != DEFAULT_MATTE_TEMPLATE;
                 (t, seg, if seg { Vec::new() } else { models })
@@ -4184,10 +4191,19 @@ fn run_remove_bg(s: &mut Session, p: &Value) -> Result<Value> {
             // A detector's mask is hard-edged: the classical edge refinement (a narrow smart
             // radius, a little smoothing and feather, as after Select Subject) gives hair and
             // soft edges partial coverage from the pixels themselves.
+            let mut matted = false;
             if segment && refine {
                 ctx.progress(0.9, "Refining edge");
-                let (content, found) = crate::select_ml_cmds::coverage_bounds(&cov, area);
+                let (bounds, found) = crate::select_ml_cmds::coverage_bounds(&cov, area);
                 if found > 0 {
+                    let picture = crate::select_ml_cmds::picture_rgba(doc, Some(id), all_layers);
+                    if let Some(mut a) = crate::select_ml_cmds::vitmatte_alphas(backend.as_ref(), &picture, area, &[(cov.clone(), bounds, found)], ctx)? {
+                        cov = a.swap_remove(0);
+                        matted = true;
+                    }
+                }
+                let (content, found) = crate::select_ml_cmds::coverage_bounds(&cov, area);
+                if found > 0 && !matted {
                     let wv = w as usize;
                     let reader = |r: Rect| -> Vec<f32> {
                         let mut v = Vec::with_capacity(r.width() as usize * r.height() as usize);
@@ -4225,11 +4241,11 @@ fn run_remove_bg(s: &mut Session, p: &Value) -> Result<Value> {
                 doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface, ..LayerMask::reveal_all() });
                 doc.selection = None;
             }
-            Ok((bounds, count, resp.seed, resp.run_id, resp.elapsed_ms, resp.timings, (rw, rh), (w, h), template_id))
+            Ok((bounds, count, resp.seed, resp.run_id, resp.elapsed_ms, resp.timings, (rw, rh), (w, h), (template_id, matted)))
         },
-        move |(b, count, seed, run_id, ms, timings, (rw, rh), (w, h), tid)| {
+        move |(b, count, seed, run_id, ms, timings, (rw, rh), (w, h), (tid, matted))| {
             json!({
-                "layer": id.0, "selection": as_selection, "bounds": [b.x0, b.y0, b.width(), b.height()], "pixels": count,
+                "layer": id.0, "selection": as_selection, "bounds": [b.x0, b.y0, b.width(), b.height()], "pixels": count, "vitmatte": matted,
                 "seed": seed, "template": tid, "runId": run_id, "width": w, "height": h, "requestWidth": rw, "requestHeight": rh,
                 "ms": ms, "timings": [serde_json::to_value(timings).unwrap_or(Value::Null)],
             })

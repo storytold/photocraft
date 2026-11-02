@@ -15,8 +15,8 @@ use photocraft_geom::Rect;
 
 use super::{
     Common, DEFAULT_MATTE_TEMPLATE, GenerativeInfo, Gray8, JobCtx, JobProgress, Layer, MATTE_DEFAULT_PROMPT, MAX_GROW, REMOVE_BG, REMOVE_MIN_REQUEST, Request,
-    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, fit_pixels, gen_err, json, matte_request_size,
-    name_selected, plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
+    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, gen_err, json, matte_request_size, name_selected,
+    plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
 };
 
 /// The most subjects one split gives their own layer (the largest kept).
@@ -139,7 +139,7 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             let mut alphas = None;
             if matches!(edges, Edges::Auto | Edges::Vitmatte) {
                 ctx.progress(0.05, "Matting hair");
-                alphas = vitmatte_alphas(backend.as_ref(), &picture, area, &instances, ctx)?;
+                alphas = crate::select_ml_cmds::vitmatte_alphas(backend.as_ref(), &picture, area, &instances, ctx)?;
                 used = Edges::Vitmatte;
             }
             ctx.check()?;
@@ -344,132 +344,3 @@ const MIN_BAND: f32 = 6.0;
 const MIN_KEPT: f64 = 0.6;
 /// The matte's most mean over the rest (well away from every subject) to be trusted.
 const MAX_STRAY: f64 = 0.2;
-
-/// ViTMatte's template (native only).
-pub(super) const VITMATTE_TEMPLATE: &str = "vitmatte/refine";
-
-/// The subjects' alphas from ViTMatte, or `None` when the server lacks it. Each subject is
-/// cropped with a margin and sent with a trimap made from its detector mask: solid a little
-/// inside the edge, unknown in a band around it reaching out to where stray hair goes (a
-/// fraction of the subject's size), background beyond. Another subject's body stays out of it.
-fn vitmatte_alphas(
-    backend: &dyn GenerativeBackend,
-    picture: &[u8],
-    area: Rect,
-    instances: &[crate::select_ml_cmds::Instance],
-    ctx: &JobCtx,
-) -> Result<Option<Vec<Vec<f32>>>> {
-    if instances.is_empty() || resolve_auto(backend, &[VITMATTE_TEMPLATE], "") != VITMATTE_TEMPLATE {
-        return Ok(None);
-    }
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut alphas = Vec::with_capacity(instances.len());
-    for (i, (cov, bounds, _)) in instances.iter().enumerate() {
-        ctx.check()?;
-        let side = bounds.width().max(bounds.height()) as f32;
-        let (out_band, in_band) = ((side * BAND_OUT).max(MIN_BAND_OUT), (side * BAND_IN).max(MIN_BAND_IN));
-        let crop = bounds.inflate(out_band.ceil() as i32 + 8).intersect(&area);
-        let (cw, ch) = (crop.width() as usize, crop.height() as usize);
-        if cw == 0 || ch == 0 {
-            return Ok(None);
-        }
-        // The crop's pixels and mask.
-        let mut px = Vec::with_capacity(cw * ch * 4);
-        let mut on = Vec::with_capacity(cw * ch);
-        for y in crop.y0 as usize..crop.y1 as usize {
-            px.extend_from_slice(&picture[(y * w + crop.x0 as usize) * 4..(y * w + crop.x1 as usize) * 4]);
-            on.extend(cov[y * w + crop.x0 as usize..y * w + crop.x1 as usize].iter().map(|c| *c >= 0.5));
-        }
-        let off: Vec<bool> = on.iter().map(|b| !*b).collect();
-        let (to_mask, depth) = (photocraft_algo::selection::edt(&on, cw, ch), photocraft_algo::selection::edt(&off, cw, ch));
-        if to_mask.len() != cw * ch || depth.len() != cw * ch {
-            return Ok(None);
-        }
-        let trimap: Vec<u8> = (0..cw * ch)
-            .map(|k| {
-                if on[k] && depth[k] > in_band {
-                    255
-                } else if to_mask[k] <= out_band {
-                    128
-                } else {
-                    0
-                }
-            })
-            .collect();
-        // At most MAX_VITMATTE_PIXELS go to the model (its global attention grows with the
-        // square of the tokens); the alpha comes back up to the crop.
-        let (rw, rh) = fit_pixels(cw as u32, ch as u32, MAX_VITMATTE_PIXELS);
-        let image = Rgba8::new(cw as u32, ch as u32, px).map_err(gen_err)?;
-        let tri = Gray8::new(cw as u32, ch as u32, trimap.clone()).map_err(gen_err)?;
-        let (image, tri) = if (rw, rh) == (cw as u32, ch as u32) {
-            (image, tri)
-        } else {
-            let t = resize_gray8(&tri, rw, rh)?;
-            let t = Gray8::new(
-                rw,
-                rh,
-                t.data
-                    .iter()
-                    .map(|v| {
-                        if *v < 64 {
-                            0
-                        } else if *v > 192 {
-                            255
-                        } else {
-                            128
-                        }
-                    })
-                    .collect(),
-            )
-            .map_err(gen_err)?;
-            (resize_rgba8(&image, rw, rh)?, t)
-        };
-        let req = Request {
-            template: VITMATTE_TEMPLATE.to_string(),
-            prompt: String::new(),
-            negative: String::new(),
-            seed: 0,
-            steps: 1,
-            guidance: 0.0,
-            image: Some(image),
-            mask: Some(tri),
-            models: Vec::new(),
-            size: None,
-            params: BTreeMap::new(),
-            references: Vec::new(),
-        };
-        let n = instances.len() as f32;
-        let resp = match backend.run(&req, &JobProgress::span(ctx, 0.05 + 0.25 * i as f32 / n, 0.05 + 0.25 * (i + 1) as f32 / n)) {
-            Ok(r) => r,
-            Err(_) if !ctx.cancelled() => return Ok(None),
-            Err(e) => return Err(gen_err(e)),
-        };
-        let Some(out) = resp.images.into_iter().next() else { return Ok(None) };
-        let plane = Gray8::new(out.width, out.height, out.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect()).map_err(gen_err)?;
-        let plane = if (plane.width, plane.height) == (cw as u32, ch as u32) { plane } else { resize_gray8(&plane, cw as u32, ch as u32)? };
-        let mut alpha = vec![0.0f32; w * h];
-        for (k, (a, t)) in plane.data.iter().zip(&trimap).enumerate() {
-            let (x, y) = (crop.x0 as usize + k % cw, crop.y0 as usize + k / cw);
-            let other = instances.iter().enumerate().any(|(j, (c, _, _))| j != i && c[y * w + x] >= 0.5) && !on[k];
-            alpha[y * w + x] = match (*t, other) {
-                (_, true) | (0, _) => 0.0,
-                (255, _) => 1.0,
-                _ => f32::from(*a) / 255.0,
-            };
-        }
-        alphas.push(alpha);
-    }
-    Ok(Some(alphas))
-}
-
-/// How far the unknown band reaches out past a subject's mask, as a fraction of its larger
-/// side (stray hair)...
-const BAND_OUT: f32 = 0.05;
-/// ...and at least this many pixels;
-const MIN_BAND_OUT: f32 = 10.0;
-/// how far it reaches in (the mask's own edge is a few pixels off)...
-const BAND_IN: f32 = 0.015;
-/// ...and at least this many pixels.
-const MIN_BAND_IN: f32 = 4.0;
-/// The most pixels one ViTMatte request carries (about 1536 × 1536).
-const MAX_VITMATTE_PIXELS: u64 = 1536 * 1536;
