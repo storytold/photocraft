@@ -306,3 +306,8 @@ sync_github_name = true
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
+
+[people.texjer]
+real_name = "Tex Jernigan"
+display_name = "Tex Jernigan"
+sync_github_name = false
