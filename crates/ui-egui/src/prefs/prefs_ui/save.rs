@@ -309,7 +309,10 @@ pub fn autosave_now(app: &mut PhotocraftApp) {
     app.prefs_rt.next_autosave_ms = f64::MIN_POSITIVE;
 }
 
-/// History Log preference: append executed commands to a text file.
+/// Consume each new journal batch once and append the configured text representation.
+/// Disabled, filtered and failed batches stay consumed: a failed append may have written
+/// a prefix already. Report its path and I/O error without rolling back successful edits;
+/// successful or skipped writes leave unrelated status messages untouched.
 fn history_log(app: &mut PhotocraftApp) {
     let n = app.session.journal.len();
     if n <= app.prefs_rt.log_len {
@@ -336,7 +339,14 @@ fn history_log(app: &mut PhotocraftApp) {
             prefs::LogDetail::Detailed => text.push_str(&format!("{label}  {id} {params}\n")),
         }
     }
-    if !text.is_empty() {
-        let _ = append(&hl.file_path, &text);
+    if !text.is_empty()
+        && let Err(e) = append(&hl.file_path, &text)
+    {
+        // Keep the batch consumed: the append may already have written part of it.
+        app.ui.status = format!("{} ({}): {e}", tl!("History Log"), hl.file_path);
+        app.ui.status_error = true;
     }
 }
+
+#[cfg(test)]
+mod history_log_tests;
