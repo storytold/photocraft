@@ -62,7 +62,11 @@ pub fn flush_events(app: &mut PhotocraftApp) {
         loop {
             let batch = log.since(sub.cursor, &sub.filter, 64);
             if batch.gap {
-                sub.dropped = sub.dropped.saturating_add(batch.next.saturating_sub(sub.cursor).saturating_sub(batch.events.len() as u64));
+                let oldest = log.oldest();
+                sub.dropped = sub.dropped.saturating_add(oldest.saturating_sub(sub.cursor.saturating_add(1)));
+                // The evicted range has now been counted, even if the queue cannot accept the
+                // notice until a later frame. Keep retained events for after that notice.
+                sub.cursor = oldest.saturating_sub(1);
             }
             if sub.dropped > 0 {
                 match sub.tx.try_send(json!({"event": "gap", "dropped": sub.dropped}).to_string()) {

@@ -145,7 +145,9 @@ appears when it lands, a dragged slider when the dialog commits).
   only): from then on, matching events are pushed on the same connection as JSON lines without an
   `id`, between replies, as they happen (once a frame). A connection that stops reading loses
   events rather than frames: its queue holds 1024, and once there is room again a
-  `{"event": "gap", "dropped": n}` line says how many were lost. A subscribed connection is not
+  `{"event": "gap", "dropped": n}` line counts matching events lost from its full queue plus
+  log entries evicted before the subscriber could read them. Retained events excluded by the
+  subscriber's filter are not counted. A subscribed connection is not
   closed for being idle. `events.unsubscribe` ends it; so does closing the connection.
 - The MCP tool `events_poll` and the headless server's `events.poll` are the same poll (no
   subscriptions there; the bridge forwards `wait_ms` to the desktop app).

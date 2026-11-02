@@ -613,7 +613,9 @@ impl Session {
                     let held = s.hold_open(r.document, r.source_read_only);
                     return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
                 }
-                let (index, color) = s.open_document(r.document, source_path);
+                // Keep the source file unbound for read-only importers. File ▸ Save must ask for
+                // a new path, as the synchronous file.openAs path already does.
+                let (index, color) = s.open_document(r.document, source_path.filter(|_| !r.source_read_only));
                 // Persisted IDs can collide: report the identity the session actually admitted.
                 let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
                 if let Some(st) = s.active_mut() {
@@ -869,8 +871,10 @@ impl Session {
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
         self.live_commit = live_commit.filter(|live| live.cmd == id);
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        self.event_command_running = was_running;
         self.live_commit = None;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
@@ -1055,11 +1059,13 @@ impl Session {
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let was_running = std::mem::replace(&mut self.event_command_running, true);
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
+        self.event_command_running = was_running;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
         }

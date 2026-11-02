@@ -34,6 +34,30 @@ fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp
     h
 }
 
+#[test]
+fn prompted_open_event_records_its_saveable_source_path() {
+    let mut h = app_harness();
+    let doc = h.state().session.active().unwrap().doc.as_ref().clone();
+    crate::open_prompt::arrive(
+        h.state_mut(),
+        crate::open_prompt::Held {
+            doc,
+            read_only: false,
+            damage_pending: false,
+            name: "prompted.psd".into(),
+            path: Some("/tmp/prompted.psd".into()),
+            warnings: Vec::new(),
+            bytes: None,
+            slot: None,
+            question: None,
+            policy_applied: true,
+        },
+    );
+    let events = h.state().session.events.since(0, &photocraft_engine::events::Filter::default(), 100).events;
+    let opened = events.iter().rev().find(|event| event.event == "document.opened").unwrap();
+    assert_eq!(opened.data["path"], "/tmp/prompted.psd");
+}
+
 /// A fake document job that runs until `gate` opens (or it is cancelled), reporting 40 %.
 fn slow_job(app: &mut PhotocraftApp, gate: &Arc<AtomicBool>) -> JobId {
     let gate = gate.clone();

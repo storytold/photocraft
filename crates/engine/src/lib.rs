@@ -201,6 +201,9 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// Bounded committed-change log for control clients (#4939).
     pub events: events::EventLog,
+    /// Direct layer-selection helpers publish their own events only outside command dispatch;
+    /// a command's before/after snapshot publishes its selection change once.
+    event_command_running: bool,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).

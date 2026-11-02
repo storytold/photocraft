@@ -139,10 +139,15 @@ impl EventLog {
         self.last
     }
 
+    /// Sequence number of the oldest retained event (or the next sequence when empty).
+    pub fn oldest(&self) -> u64 {
+        self.events.front().map_or(self.last.saturating_add(1), |event| event.seq)
+    }
+
     /// The events after `since` that `filter` wants, at most `limit` of them (the rest wait for
     /// the next poll: `next` stops at the last one returned).
     pub fn since(&self, since: u64, filter: &Filter, limit: usize) -> Batch {
-        let oldest = self.events.front().map_or(self.last.saturating_add(1), |e| e.seq);
+        let oldest = self.oldest();
         // A cursor greater than this run's sequence cannot make progress. Restart at the
         // oldest retained event and tell the reader that its earlier run was lost.
         let restarted = since > self.last;
@@ -333,6 +338,22 @@ mod tests {
         let events = kinds(&s, cursor);
         assert_eq!(events.iter().map(|(event, _)| *event).collect::<Vec<_>>(), ["document.closed", "document.activated"]);
         assert_eq!(events[1].1["name"], "First");
+    }
+
+    #[test]
+    fn direct_layer_selection_and_restore_emit_selection_events() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        let background = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+        let cursor = s.events.last();
+        s.select_layer(background).unwrap();
+        let selected = kinds(&s, cursor);
+        assert!(selected.iter().any(|(kind, data)| *kind == "layers.selected" && data["active"] == background.0), "{selected:?}");
+        let cursor = s.events.last();
+        s.restore_layer_selection(None, &[], None).unwrap();
+        let restored = kinds(&s, cursor);
+        assert!(restored.iter().any(|(kind, data)| *kind == "layers.selected" && data["active"].is_null()), "{restored:?}");
     }
 
     #[test]

@@ -556,6 +556,43 @@ fn path_open_event_contains_the_opened_path() {
     let opened = s.events.since(0, &crate::events::Filter::default(), 10).events;
     let event = opened.iter().find(|event| event.event == "document.opened").unwrap();
     assert_eq!(event.data["path"], path);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn background_open_does_not_bind_a_read_only_import_to_its_source_path() {
+    // An Affinity preview is a real import producer that marks its result read-only, even when
+    // the source name suggests a saveable format. The job path must match file.openAs.
+    let image =
+        photocraft_codecs::Image::from_raw(2, 1, photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8, vec![220, 40, 60, 255, 0, 0, 0, 0])
+            .unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let mut bytes = vec![0; 72];
+    bytes[..4].copy_from_slice(b"\x00\xffKA");
+    bytes[4..6].copy_from_slice(&12u16.to_le_bytes());
+    bytes[8..12].copy_from_slice(b"nsrP");
+    bytes[12..16].copy_from_slice(b"#Inf");
+    bytes[24..32].copy_from_slice(&72u64.to_le_bytes());
+    bytes[64..68].copy_from_slice(b"Prot");
+    bytes.extend(b"\xff\xff\xff\xffThmb");
+    bytes.extend(1u32.to_le_bytes());
+    bytes.extend((png.len() as u32 + 13).to_le_bytes());
+    bytes.extend(29u32.to_le_bytes());
+    bytes.extend(0u32.to_le_bytes());
+    bytes.extend((png.len() as u32).to_le_bytes());
+    bytes.push(1);
+    bytes.extend(png);
+    assert!(photocraft_io::import("renamed.psd", &bytes).unwrap().source_read_only);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("renamed.psd");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::new();
+    let id = job(s.start_open("renamed.psd", OpenSource::Path(path.to_string_lossy().into_owned())).unwrap());
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+    let opened = s.active().unwrap();
+    assert!(opened.source_read_only);
+    assert_eq!(opened.path, None, "Save must ask for a new destination");
 }
 
 /// Ask When Opening: a file whose profile doesn't match is decoded but not added; the shell takes

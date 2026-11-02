@@ -2361,3 +2361,27 @@ fn events_poll_and_subscribe() {
     flush_events(&mut app);
     assert!(app.event_subscribers.is_empty());
 }
+
+#[test]
+fn a_filtered_subscriber_counts_an_evicted_gap_once_while_its_queue_is_full() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.last_tool_event = Some(app.ui.tool);
+    app.session.events.push("history.changed", None, Some("test"), json!({}));
+    let (tx, rx) = std::sync::mpsc::sync_channel::<String>(1);
+    let (mut req, _rrx) = ControlRequest::new("events.subscribe", json!({"since": 0, "events": ["history.changed"]}));
+    req.push = Some(tx.clone());
+    let Outcome::Done(reply) = handle(&mut app, &ctx, &req) else { panic!("subscribe replies at once") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    tx.send("occupied".into()).unwrap();
+    for _ in 0..(photocraft_engine::events::CAPACITY + 2) {
+        app.session.events.push("tool.changed", None, Some("test"), json!({}));
+    }
+    flush_events(&mut app);
+    flush_events(&mut app);
+    assert_eq!(rx.try_recv().unwrap(), "occupied");
+    flush_events(&mut app);
+    let notice: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+    assert_eq!(notice["event"], "gap");
+    assert_eq!(notice["dropped"], 3, "only the three evicted log entries are counted once: {notice}");
+}
