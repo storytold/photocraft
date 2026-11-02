@@ -89,6 +89,8 @@ struct Shared {
     /// `fetch_max` keeps progress monotonic even with several reporting threads.
     progress: AtomicU32,
     message: Mutex<String>,
+    /// Intermediate results the worker published for the UI ([`JobCtx::publish`]).
+    published: Mutex<Vec<Box<dyn Any + Send>>>,
 }
 
 impl std::fmt::Debug for JobCtx {
@@ -124,6 +126,12 @@ impl JobCtx {
     /// Ask the job to stop (idempotent).
     pub fn cancel(&self) {
         self.shared.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Hands an intermediate result (for example a preview of what the job is making) to the UI
+    /// thread, which collects it with [`Session::take_published`] while the job runs.
+    pub fn publish<T: Send + 'static>(&self, value: T) {
+        self.shared.published.lock().unwrap_or_else(PoisonError::into_inner).push(Box::new(value));
     }
 
     /// `Err(Cancelled)` once cancelled, for `?` between stages.
@@ -223,6 +231,8 @@ struct Running {
     recorded_by: Option<u64>,
     pre_selected: Option<Vec<LayerId>>,
     doc: Option<DocId>,
+    /// A document the job locks without editing it (an open's preview, [`Session::set_job_lock`]).
+    locks: Option<DocId>,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
     snapshot: Option<Weak<Document>>,
     ctx: JobCtx,
@@ -352,6 +362,25 @@ fn import_path(
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
 
+/// Reads a file whole unless it is a PSD/PSB, which the importer parses from the open file
+/// instead (`None`). A read error stays an error.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_unless_psd(path: &str) -> std::result::Result<Option<Vec<u8>>, photocraft_io::IoError> {
+    use std::io::Read;
+    let read_failed = |e: std::io::Error| photocraft_io::IoError::Read(format!("{path}: {e}"));
+    let mut magic = [0u8; 4];
+    let n = std::fs::File::open(path).map_err(read_failed)?.take(4).read(&mut magic).map_err(read_failed)?;
+    if photocraft_io::is_psd(&magic[..n]) {
+        return Ok(None);
+    }
+    photocraft_format::read_file(std::path::Path::new(path)).map(Some).map_err(read_failed)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_unless_psd(path: &str) -> std::result::Result<Option<Vec<u8>>, photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+}
+
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
 /// started with [`Session::start`] (inline otherwise, and always on wasm); `apply` then runs on
 /// the calling thread with its output and returns the command's result. With `lock_document`,
@@ -425,6 +454,7 @@ pub fn run<T: Send + 'static>(
         recorded_by: None,
         pre_selected: None,
         doc,
+        locks: None,
         snapshot,
         ctx,
         started_ms: now_ms(),
@@ -514,6 +544,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        keep_raw: false,
         ..Default::default()
     }
 }
@@ -559,7 +590,9 @@ impl Session {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let opts = import_options(self.prefs());
+        // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
+        let progressive = confirm_damage;
+        let opts = photocraft_io::ImportOptions { keep_raw: confirm_damage && self.prefs().raw_defaults.open_in_camera_raw, ..import_options(self.prefs()) };
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),
@@ -567,14 +600,31 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let imported = match source {
-                    OpenSource::Bytes(bytes) => {
-                        ctx.check()?;
+                // A PSD/PSB is decoded straight from the file, which is never read whole; every other
+                // format is read whole first.
+                let (bytes, path) = match source {
+                    OpenSource::Bytes(b) => (Some(b), None),
+                    OpenSource::Path(p) => match read_unless_psd(&p) {
+                        Ok(Some(b)) => (Some(Arc::new(b)), None),
+                        Ok(None) => (None, Some(p)),
+                        Err(e) => return Err(EngineError::Other(e.to_string())),
+                    },
+                };
+                ctx.check()?;
+                let imported = match (bytes, path) {
+                    (Some(bytes), _) => {
+                        // Interactive raw opens show the camera's JPEG and a half-size develop while
+                        // the full develop runs (the UI takes them with `take_published`).
+                        if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
+                            ctx.progress(0.01, "Previewing");
+                            photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
+                            ctx.check()?;
+                        }
                         ctx.progress(0.02, "Decoding");
                         ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl))
                     }
-                    // A PSD/PSB is decoded straight from the file, which is never read whole.
-                    OpenSource::Path(p) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
+                    (None, Some(p)) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
+                    (None, None) => return Err(EngineError::Other("open source is neither bytes nor a path".into())),
                 }
                 .map_err(|e| match e {
                     photocraft_io::IoError::Cancelled => EngineError::Cancelled,
@@ -742,7 +792,26 @@ impl Session {
 
     /// The running job that locks document `doc`, if any.
     pub fn job_on(&self, doc: DocId) -> Option<JobInfo> {
-        self.jobs.running.iter().find(|r| r.doc == Some(doc)).map(Running::info)
+        self.jobs.running.iter().find(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(Running::info)
+    }
+
+    /// Collects the values of type `T` that running job `id` published ([`JobCtx::publish`]) since
+    /// the last call, oldest first.
+    pub fn take_published<T: 'static>(&mut self, id: JobId) -> Vec<T> {
+        let Some(job) = self.jobs.running.iter().find(|r| r.id == id) else { return Vec::new() };
+        let mut all = job.ctx.shared.published.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mine, rest) = std::mem::take(&mut *all).into_iter().partition::<Vec<_>, _>(|v| v.is::<T>());
+        *all = rest;
+        mine.into_iter().filter_map(|v| v.downcast::<T>().ok().map(|b| *b)).collect()
+    }
+
+    /// Makes running job `id` lock document `doc` (or none) as if it edited it, without it being
+    /// the job's document: edits are refused meanwhile and closing `doc` cancels the job. For a
+    /// preview shown while an open job makes the real document.
+    pub fn set_job_lock(&mut self, id: JobId, doc: Option<DocId>) {
+        if let Some(job) = self.jobs.running.iter_mut().find(|r| r.id == id) {
+            job.locks = doc;
+        }
     }
 
     /// The running job that locks the active document, if any.
@@ -770,7 +839,7 @@ impl Session {
 
     /// Cancel the jobs editing document `doc` (it is closing).
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) {
-        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
+        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(|r| r.id).collect();
         for id in ids {
             self.cancel_job(id);
         }

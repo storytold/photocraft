@@ -264,6 +264,6 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
-    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
+    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_ref())?;
     Ok(json!({"document": index, "action": action}))
 }
