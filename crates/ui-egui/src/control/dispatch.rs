@@ -1027,6 +1027,8 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {
             d.fields.insert(field.to_string(), value);
+            // A Color Picker's colour shows in its target dialog at once, as a drag would.
+            crate::color_picker_ui::live_preview::sync(app);
             ok(Value::Null)
         }
         None => err(format!("no dialog {id}")),
