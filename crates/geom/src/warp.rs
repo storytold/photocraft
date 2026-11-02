@@ -645,9 +645,10 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false for malformed meshes or when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false for malformed meshes, at the 64-column limit, or when `s`
+    /// is on or too close to an existing boundary.
     pub fn split_u(&mut self, s: f64) -> bool {
-        if !self.is_valid() {
+        if !self.is_valid() || self.us.len() >= 65 {
             return false;
         }
         let (pi, a) = Self::locate(&self.us, s);
@@ -668,9 +669,10 @@ impl BezierMesh {
         true
     }
 
-    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact; rejects malformed meshes.
+    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact; rejects
+    /// malformed meshes and splits beyond the 64-row limit.
     pub fn split_v(&mut self, t: f64) -> bool {
-        if !self.is_valid() {
+        if !self.is_valid() || self.vs.len() >= 65 {
             return false;
         }
         self.transpose();
