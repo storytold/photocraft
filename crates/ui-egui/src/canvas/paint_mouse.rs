@@ -172,12 +172,15 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
-    if right_click
+    // A pen barrel press drifts past egui's click distance about half the time: its release
+    // opens the picker too, unless it resized the brush or erased (#5364).
+    let pen_tap = app.control_click.pen_secondary() && response.drag_stopped_by(PointerButton::Secondary) && !resizing && !erase;
+    if (right_click || pen_tap)
         && !erase
         && !layer_menu
         && !crate::color_hud::is_open(&app.ui)
         && right_click_picker(tool)
-        && let Some(p) = response.interact_pointer_pos()
+        && let Some(p) = response.interact_pointer_pos().or_else(|| response.hover_pos())
     {
         crate::brush_picker::open(&mut app.ui, &response.ctx, [p.x, p.y]);
     }

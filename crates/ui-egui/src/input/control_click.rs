@@ -3,9 +3,17 @@
 #[derive(Default)]
 pub(crate) struct ControlClick {
     secondary_down: bool,
+    /// The last press was a pen barrel press, until the next press (read on its release frame).
+    pen_secondary: bool,
 }
 
 impl ControlClick {
+    /// Was the last press a pen press with the barrel button held? A hovering hand can't hold a
+    /// press as still as a mouse, so the canvas takes its release as a right-click (#5364).
+    pub fn pen_secondary(&self) -> bool {
+        self.pen_secondary
+    }
+
     pub fn normalize(&mut self, events: &mut [egui::Event], macos: bool) {
         self.normalize_with_pen(events, macos, false);
     }
@@ -13,15 +21,13 @@ impl ControlClick {
     /// [`Self::normalize`], where `pen_barrel` says this frame's pen press had the barrel button
     /// held. A barrel press's release still maps after the barrel lets go.
     pub fn normalize_with_pen(&mut self, events: &mut [egui::Event], macos: bool, pen_barrel: bool) {
-        if !macos && !pen_barrel && !self.secondary_down {
-            return;
-        }
         for event in events {
             match event {
                 egui::Event::PointerButton { button, pressed, modifiers, .. } if *button == egui::PointerButton::Primary => {
                     if *pressed {
                         // Control-Option is the existing brush resize gesture.
                         self.secondary_down = pen_barrel || (macos && modifiers.ctrl && !modifiers.alt && !modifiers.command);
+                        self.pen_secondary = pen_barrel;
                     }
                     if self.secondary_down {
                         *button = egui::PointerButton::Secondary;
@@ -30,6 +36,8 @@ impl ControlClick {
                         self.secondary_down = false;
                     }
                 }
+                // A mouse's own right or middle press is no pen press.
+                egui::Event::PointerButton { pressed: true, .. } => self.pen_secondary = false,
                 // A drag keeps the mapping when the pointer leaves the window or focus is lost: the
                 // release still arrives and must match the secondary press egui already saw. The
                 // next press recomputes it, so a missed release can't remap a plain click.

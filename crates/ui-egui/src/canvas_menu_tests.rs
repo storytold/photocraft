@@ -165,6 +165,60 @@ fn control_clicks_open_the_right_click_menus() {
     }
 }
 
+/// A pen press with the barrel button held (Windows, #5364) that drifts `drift` before it lifts,
+/// as a hovering hand does; `pen` false is the same right-drag from a mouse.
+fn barrel_drift(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, drift: egui::Vec2, modifiers: Modifiers, pen: bool) {
+    h.event(Event::ModifiersChanged(modifiers));
+    h.event(Event::PointerMoved(at));
+    h.run_steps(2);
+    let button = if pen { PointerButton::Primary } else { PointerButton::Secondary };
+    let mut down = vec![Event::PointerButton { pos: at, button, pressed: true, modifiers }];
+    h.state_mut().control_click.normalize_with_pen(&mut down, false, pen);
+    h.input_mut().events.extend(down);
+    h.run_steps(1);
+    for step in 1..=4 {
+        h.event(Event::PointerMoved(at + drift * (step as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    let mut up = vec![Event::PointerButton { pos: at + drift, button, pressed: false, modifiers }];
+    h.state_mut().control_click.normalize_with_pen(&mut up, false, false);
+    h.input_mut().events.extend(up);
+    h.run_steps(3);
+}
+
+#[test]
+fn a_drifting_pen_barrel_press_opens_the_brush_picker_and_paints_nothing() {
+    for drift in [vec2(3.0, 0.0), vec2(20.0, -12.0), vec2(0.0, 35.0)] {
+        let mut h = harness(Tool::Brush, false, 1.0);
+        let at = fractional_point(&h, 1.0);
+        let before = document_state(&h);
+        barrel_drift(&mut h, at, drift, Modifiers::NONE, true);
+        assert!(is_open(&h, Popup::Brush), "drift {drift:?}");
+        assert!(document_state(&h) == before, "drift {drift:?}: a barrel press paints nothing");
+    }
+}
+
+#[test]
+fn a_mouse_right_drag_still_opens_no_brush_picker() {
+    let mut h = harness(Tool::Brush, false, 1.0);
+    let at = fractional_point(&h, 1.0);
+    // A pen barrel tap first: its flag must not carry over to the mouse's own right button.
+    barrel_drift(&mut h, at, vec2(0.0, 0.0), Modifiers::NONE, true);
+    dismiss_outside(&mut h, Popup::Brush);
+    barrel_drift(&mut h, at, vec2(20.0, -12.0), Modifiers::NONE, false);
+    assert!(!is_open(&h, Popup::Brush));
+}
+
+#[test]
+fn a_pen_barrel_alt_drag_resizes_and_opens_no_brush_picker() {
+    let mut h = harness(Tool::Brush, false, 1.0);
+    let at = fractional_point(&h, 1.0);
+    let size = h.state().session.tools.brush.size;
+    barrel_drift(&mut h, at, vec2(40.0, 0.0), Modifiers::ALT, true);
+    assert!(!is_open(&h, Popup::Brush));
+    assert!(h.state().session.tools.brush.size > size, "Alt with the barrel button resizes the brush");
+}
+
 #[test]
 fn reopened_canvas_menus_still_choose_their_actions() {
     let mut h = harness(Tool::RectMarquee, true, 1.0);
