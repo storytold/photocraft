@@ -183,6 +183,7 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         && view.shown_layer_mask(&preview.base).is_none()
         && (0..preview.base.channels.len()).all(|i| !view.alpha_shown(i))
         && (preview.base.quick_mask.is_none() || view.quick_mask_hidden);
+    let mut refused = None;
     if let Some(gpu) = &app.gpu
         && gpu.health().is_ok()
         && fast_view
@@ -193,22 +194,25 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
             preview.gpu_attempted = preview.gpu.is_some() || !crate::channel_transform_gpu::validation_pending(gpu);
         }
         if let Some(tex) = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor)) {
-            // Drawing the visible canvas is cheaper than validating the full output. A
-            // previously refused geometry must pass the oracle before its error is cleared.
+            // Ordinary GPU dragging avoids CPU resampling. After a refusal, the geometry
+            // must pass the oracle before showing the GPU result or clearing its error.
             if preview.reported_error.is_some() {
                 match preview.update(t) {
                     Ok(()) => preview.recovered(&mut app.ui.status, &mut app.ui.status_error),
-                    Err(error) => {
-                        preview.reported_error = Some(error.clone());
-                        app.ui.status = error;
-                        app.ui.status_error = true;
-                    }
+                    Err(error) => refused = Some(error),
                 }
             }
-            return Some(tex);
+            if refused.is_none() {
+                return Some(tex);
+            }
         }
     }
-    if let Err(error) = preview.update(t) {
+    // Reuse a failure already checked above; transient failures must not extract twice in a frame.
+    let updated = match refused {
+        Some(error) => Err(error),
+        None => preview.update(t),
+    };
+    if let Err(error) = updated {
         preview.reported_error = Some(error.clone());
         app.ui.status = error;
         app.ui.status_error = true;
@@ -1488,7 +1492,7 @@ mod tests {
     }
 
     #[test]
-    fn gpu_drawing_does_not_clear_an_unchanged_cpu_refusal() {
+    fn gpu_refusal_keeps_the_last_valid_cpu_preview() {
         let _lock = photocraft_testkit::gpu_lock();
         let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
@@ -1503,14 +1507,19 @@ mod tests {
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         let valid = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 3.0, y]);
-        a.ui.transform.as_mut().unwrap().quad = [[0.0, 0.0], [20000.0, 0.0], [20000.0, 15000.0], [0.0, 15000.0]];
+        a.ui.transform.as_mut().unwrap().quad = valid;
         let cpu = texture(&mut a, &ctx, 0, None).unwrap();
+        uploaded_preview_pixels(&ctx, cpu);
+        let last_valid = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
+        a.ui.transform.as_mut().unwrap().quad = [[0.0, 0.0], [20000.0, 0.0], [20000.0, 15000.0], [0.0, 15000.0]];
+        assert_eq!(texture(&mut a, &ctx, 0, None), Some(cpu));
         uploaded_preview_pixels(&ctx, cpu);
         assert!(a.ui.status_error);
         let message = a.ui.status.clone();
         a.set_wgpu(rs.clone());
         let shown = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, 0, None)).unwrap();
-        assert_ne!(shown, cpu, "the unchanged quad is now displayed by the GPU");
+        assert_eq!(shown, cpu, "refused GPU geometry must show the last valid CPU texture");
+        assert!(Arc::ptr_eq(&last_valid, &a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown));
         assert!(a.ui.status_error);
         assert_eq!(a.ui.status, message);
         a.ui.transform.as_mut().unwrap().quad = valid;
@@ -1551,9 +1560,7 @@ mod tests {
         })) else {
             return;
         };
-        if crate::channel_transform_gpu::test_supported(&rs) {
-            return;
-        }
+        let _forced = crate::channel_transform_gpu::force_unsupported_for_test();
         let mut a = app();
         a.set_wgpu(rs.clone());
         a.run("channel.target", json!({"colors":[0,2]})).unwrap();

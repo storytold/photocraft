@@ -429,8 +429,9 @@ extracting native planes. Frame queries use the compositor's tile-identity bound
 Ordinary layer transforms and tiny selected scalar edits retain their existing sparse extent
 semantics. Queued drops also wait for command-started isolated jobs that have no interactive box.
 
-A recovered CPU preview clears only the error it owns; a GPU draw alone cannot clear an
-unresolved CPU refusal. The main GPU Move canvas retains the CPU document preview used by
+A recovered CPU preview clears only the error it owns. After a CPU refusal, the canvas
+keeps the last valid CPU pixels until the geometry passes the oracle, even if the GPU can
+draw the refused quad. The main GPU Move canvas retains the CPU document preview used by
 secondary displays and Navigator, and a GPU drag commit refreshes the main compositor.
 
 Reduced RGB Move previews retain compact native byte planes (one RGBA8 integer texture-array
@@ -445,7 +446,9 @@ channel GPU previews; OpenGL adapters without it retain CPU rendering.
 Regression coverage includes native sample phases at all depths, HDR values, scalar/set
 targets and eye combinations; unsupported-renderer fallback; deferred pipeline readiness;
 live target changes during Move; per-display cache reuse; uploaded profile-converted pixels;
-worker capture, cancellation and output pricing. The Move benchmark accepts `--step 21` to
+worker capture, cancellation and output pricing. Fallback is also forced on capable test
+adapters, and shader specialization is checked with both LF and Windows CRLF checkouts.
+The Move benchmark accepts `--step 21` to
 measure offsets that are not multiples of the preview reduction factor.
 
 ### Native Move measurements, 2026-11-02

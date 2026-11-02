@@ -21,7 +21,35 @@ const FLOAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const UNIFORM_BYTES: u64 = 144;
 
 fn supports_channels(rs: &RenderState) -> bool {
+    #[cfg(test)]
+    if FORCE_UNSUPPORTED.with(std::cell::Cell::get) {
+        return false;
+    }
     rs.adapter.get_texture_format_features(FLOAT).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_UNSUPPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) struct UnsupportedChannelsGuard {
+    previous: bool,
+    // This guard must restore the flag on the thread that installed it.
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+pub(crate) fn force_unsupported_for_test() -> UnsupportedChannelsGuard {
+    UnsupportedChannelsGuard { previous: FORCE_UNSUPPORTED.with(|flag| flag.replace(true)), _thread: std::marker::PhantomData }
+}
+
+#[cfg(test)]
+impl Drop for UnsupportedChannelsGuard {
+    fn drop(&mut self) {
+        FORCE_UNSUPPORTED.with(|flag| flag.set(self.previous));
+    }
 }
 
 struct Pipelines {
@@ -720,11 +748,21 @@ impl Pipelines {
 }
 
 fn shader_source(multiple: bool) -> Option<std::borrow::Cow<'static, str>> {
-    const SCALAR: &str = "alias Sample = vec2<f32>;\nconst COMPONENTS: u32 = 1u;";
-    const MULTIPLE: &str = "alias Sample = vec4<f32>;\nconst COMPONENTS: u32 = 3u;";
-    let shared = include_str!("channel_transform_gpu.wgsl");
+    specialize_shader(include_str!("channel_transform_gpu.wgsl"), multiple)
+}
+
+fn specialize_shader(shared: &str, multiple: bool) -> Option<std::borrow::Cow<'_, str>> {
+    // include_str preserves Windows checkout line endings. Match declarations separately
+    // so both variants accept LF and CRLF without normalizing/copying the scalar source.
+    const SCALAR: &str = "alias Sample = vec2<f32>;";
+    const COMPONENTS: &str = "const COMPONENTS: u32 = 1u;";
     let (prefix, suffix) = shared.split_once(SCALAR)?;
-    Some(if multiple { std::borrow::Cow::Owned(format!("{prefix}{MULTIPLE}{suffix}")) } else { std::borrow::Cow::Borrowed(shared) })
+    let (space, body) = suffix.split_once(COMPONENTS)?;
+    Some(if multiple {
+        std::borrow::Cow::Owned(format!("{prefix}alias Sample = vec4<f32>;{space}const COMPONENTS: u32 = 3u;{body}"))
+    } else {
+        std::borrow::Cow::Borrowed(shared)
+    })
 }
 
 impl Passes {
@@ -855,6 +893,46 @@ mod tests {
     use photocraft_color::Color;
     use photocraft_doc::{Layer, LayerMask, Size};
     use photocraft_geom::warp::{BezierMesh, Warp};
+
+    #[test]
+    fn shader_specialization_accepts_both_checkout_line_endings() {
+        let lf = include_str!("channel_transform_gpu.wgsl").replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        for multiple in [false, true] {
+            let expected = if multiple {
+                lf.replace("alias Sample = vec2<f32>;", "alias Sample = vec4<f32>;").replace("const COMPONENTS: u32 = 1u;", "const COMPONENTS: u32 = 3u;")
+            } else {
+                lf.clone()
+            };
+            for source in [&lf, &crlf] {
+                let actual = specialize_shader(source, multiple).expect("both Windows and Unix checkouts build the same shader");
+                assert_eq!(actual.replace("\r\n", "\n"), expected);
+            }
+        }
+        assert!(matches!(specialize_shader(&crlf, false), Some(std::borrow::Cow::Borrowed(_))));
+    }
+
+    #[test]
+    fn incomplete_shader_headers_fail_gracefully() {
+        for source in ["", "alias Sample = vec2<f32>;", "const COMPONENTS: u32 = 1u;"] {
+            assert!(specialize_shader(source, false).is_none());
+            assert!(specialize_shader(source, true).is_none());
+        }
+    }
+
+    #[test]
+    fn forced_fallback_restores_nested_state_and_stays_on_its_thread() {
+        assert!(!FORCE_UNSUPPORTED.with(std::cell::Cell::get));
+        let outer = force_unsupported_for_test();
+        {
+            let _inner = force_unsupported_for_test();
+            assert!(FORCE_UNSUPPORTED.with(std::cell::Cell::get));
+        }
+        assert!(FORCE_UNSUPPORTED.with(std::cell::Cell::get));
+        assert!(!std::thread::spawn(|| FORCE_UNSUPPORTED.with(std::cell::Cell::get)).join().unwrap());
+        drop(outer);
+        assert!(!FORCE_UNSUPPORTED.with(std::cell::Cell::get));
+    }
 
     #[test]
     fn abandoned_captures_finish_validation_and_stop_requesting_frames() {

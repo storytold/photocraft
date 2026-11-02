@@ -79,6 +79,31 @@ fn colour_set_geometry_matches_independent_scalar_oracles_at_native_depth() {
     }
 }
 
+/// Main's named/custom pivot support must also use the isolated target's frame.
+#[test]
+fn relative_channel_transforms_honour_named_and_custom_reference_points() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for colors in [vec![0], vec![0, 2]] {
+                for reference in [json!("bottomRight"), json!([12, 8])] {
+                    let mut actual = session(mode, depth);
+                    actual.execute("channel.target", json!({"colors":colors})).unwrap();
+                    let before = actual.active().unwrap().doc.clone();
+                    let mut expected = Session::new();
+                    expected.add_document((*before).clone(), None);
+                    // Scale about (12, 8), then translate (1, 2): x' = 2x - 11, y' = y/2 + 6.
+                    expected.execute("edit.transform", json!({"target":{"colors":colors},"matrix":[2,0,0,0.5,-11,6],"interpolation":"nearest"})).unwrap();
+                    actual.execute("edit.transform", json!({"scaleX":200,"scaleY":50,"dx":1,"dy":2,"reference":reference,"interpolation":"nearest"})).unwrap();
+                    assert_eq!(surface(&actual), surface(&expected), "{mode:?}/{depth:?}/{colors:?}/{reference}");
+                    assert_ne!(surface(&actual), before.layers[0].surface().unwrap());
+                    actual.undo();
+                    assert_eq!(surface(&actual), before.layers[0].surface().unwrap());
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn colour_set_move_preserves_unselected_samples_and_matches_single_moves() {
     for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {

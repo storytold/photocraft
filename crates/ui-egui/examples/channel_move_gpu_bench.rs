@@ -93,7 +93,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if step == 10
             && let Some(path) = save
         {
-            image.save(format!("{path}-{}-{}.png", if whole { "whole" } else { "channel" }, if cpu { "cpu" } else { "gpu" }))?;
+            let mode = if whole {
+                "whole"
+            } else if set {
+                "set"
+            } else {
+                "channel"
+            };
+            image.save(format!("{path}-{mode}-{}.png", if cpu { "cpu" } else { "gpu" }))?;
         }
     }
     println!("{}", json!({"cpu":cpu,"whole":whole,"set":set,"step":stride,"cold_ms":cold_ms,"completed_frame_ms":frames}));
