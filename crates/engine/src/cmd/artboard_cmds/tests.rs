@@ -840,3 +840,74 @@ fn from_layers_defaults_are_the_selected_layers_size() {
     assert_eq!(from_layers_defaults(&s), Some(("Artboard 1".to_string(), [100, 80])), "an empty layer: the canvas");
     assert_eq!(from_layers_defaults(&Session::new()), None);
 }
+
+/// #10258: with the active layer on an artboard (the board, or a layer inside it), Select All
+/// selects that board, as Photoshop does; with no artboard involved, the whole canvas.
+#[test]
+fn select_all_selects_the_active_artboard() {
+    let mut s = session(8);
+    let first = board_with_square(&mut s);
+    let r = s.execute("layer.artboard.addBeside", json!({"layer": first.0, "side": "right"})).unwrap();
+    let second = LayerId(r["layer"].as_u64().unwrap());
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    let inner = doc(&s).layer(first).unwrap().children().and_then(|c| c.first()).map(|l| l.id).unwrap();
+    for (layer, inside, outside) in [(second, (155, 15), (15, 15)), (first, (15, 15), (155, 15)), (inner, (15, 15), (155, 15))] {
+        s.execute("layer.select", json!({"layer": layer.0, "mode": "replace"})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        assert_eq!((selected(&s, inside.0, inside.1), selected(&s, outside.0, outside.1)), (1.0, 0.0), "{layer:?}");
+        assert_eq!(selected(&s, 100, 15), 0.0, "{layer:?}: not the gap between the boards");
+    }
+    // A document without artboards selects its whole canvas.
+    let mut plain = session(8);
+    plain.execute("select.all", json!({})).unwrap();
+    let (w, h) = (doc(&plain).size.width as i32, doc(&plain).size.height as i32);
+    assert_eq!((selected(&plain, 0, 0), selected(&plain, w - 1, h - 1)), (1.0, 1.0));
+}
+
+/// A board the canvas cuts off selects only the part inside it; a board cropped away entirely
+/// selects the canvas, never an empty selection that would block painting.
+#[test]
+fn select_all_clips_the_active_artboard_to_the_canvas() {
+    let mut s = session(8);
+    let first = board_with_square(&mut s);
+    let r = s.execute("layer.artboard.addBeside", json!({"layer": first.0, "side": "right"})).unwrap();
+    let second = LayerId(r["layer"].as_u64().unwrap());
+    s.execute("image.canvasSize", json!({"width": 30, "height": 30, "anchor": "topLeft"})).unwrap();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height, board_rect(&s, first.0)), (30, 30, Rect::new(10, 10, 50, 50)));
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    s.execute("layer.select", json!({"layer": first.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 29, 29), selected(&s, 5, 5), selected(&s, 30, 30)), (1.0, 0.0, 0.0), "the board, clipped");
+    s.execute("layer.select", json!({"layer": second.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    assert_eq!((selected(&s, 0, 0), selected(&s, 29, 29)), (1.0, 1.0), "a board off the canvas selects the canvas");
+}
+
+/// #10258 review: an artboard is a top-level group, so there are no nested boards to choose
+/// between — and a group carrying artboard data *inside* a board (a PSD can hold one; the
+/// commands never make one) changes nothing: `Document::artboard_of` names the top-level board,
+/// which is the one Select All takes.
+#[test]
+fn select_all_takes_the_top_level_board_even_with_a_board_inside_one() {
+    let mut s = session(8);
+    let board = board_with_square(&mut s);
+    let child = doc(&s).layer(board).and_then(|l| l.children()).and_then(|c| c.first()).map(|l| l.id).expect("the board holds the square");
+    s.execute("layer.select", json!({"layer": child.0, "mode": "replace"})).unwrap();
+    let inner = LayerId(s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    // Give that inner group a board's own rect: a smaller one, well inside the outer board.
+    s.edit("nest", |doc, _| {
+        let g = doc.layer_mut(inner).ok_or(EngineError::NoLayer(inner))?;
+        if let photocraft_doc::LayerContent::Group(grp) = &mut g.content {
+            grp.artboard = Some(photocraft_doc::Artboard { rect: Rect::new(14, 14, 22, 22), background: Default::default(), preset: String::new() });
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(doc(&s).artboard_of(inner), Some(board), "the top-level board, not the nested one");
+    let selected = |s: &Session, x: i32, y: i32| doc(s).selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+    s.execute("layer.select", json!({"layer": inner.0, "mode": "replace"})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    // The whole 40x40 board at (10, 10), not the inner 8x8 rect.
+    assert_eq!((selected(&s, 12, 12), selected(&s, 45, 45)), (1.0, 1.0), "the outer board is selected whole");
+    assert_eq!(selected(&s, 5, 5), 0.0, "and nothing outside it");
+}

@@ -231,6 +231,7 @@ impl Registry {
     }
 }
 
+/// The command registry, built on first use and shared for the rest of the process.
 fn registry() -> &'static Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY.get_or_init(|| Registry::new(build()))
@@ -238,6 +239,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Every command this module owns, in menu order: the table the registry is built from once.
 #[allow(clippy::too_many_lines)]
 fn build() -> Vec<CommandSpec> {
     let mut v = vec![
@@ -368,9 +370,16 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
+            // With the active layer on an artboard (the board itself or a layer inside it), Select
+            // All selects that board, as Photoshop does; otherwise the whole canvas (#10258).
+            let active = s.active().and_then(|d| d.active_layer);
             s.edit("Select All", |doc, _| {
+                let board = active.and_then(|id| doc.artboard_of(id)).and_then(|id| doc.layer(id)).and_then(|l| l.artboard()).map(|a| a.rect);
+                // A board the canvas no longer reaches (cropped away) selects the canvas, never an
+                // empty selection that would block painting.
+                let area = board.map(|r| r.intersect(&doc.bounds())).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds());
                 let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.fill_rect(doc.bounds(), &[1.0]);
+                m.fill_rect(area, &[1.0]);
                 doc.selection = Some(m);
                 Ok(())
             })?;
