@@ -87,12 +87,13 @@ pub fn open_for_read(path: &Path) -> io::Result<File> {
 }
 
 /// [`open_for_read`] with each step injectable: `open` opens a path, `retry` says whether an error
-/// is worth another attempt by a different route, and `fallbacks` lists those routes.
+/// is worth another attempt by a different route, and `fallbacks` lists those routes (lazily, so
+/// a route that is costly to work out is only worked out if the ones before it failed).
 fn open_with(
     path: &Path,
     open: &dyn Fn(&Path) -> io::Result<File>,
     retry: &dyn Fn(&io::Error) -> bool,
-    fallbacks: &dyn Fn(&Path) -> Vec<PathBuf>,
+    fallbacks: &dyn Fn(&Path) -> Fallbacks,
 ) -> io::Result<File> {
     let first = match open(path) {
         Ok(f) => return Ok(f),
@@ -109,6 +110,9 @@ fn open_with(
     Err(first)
 }
 
+/// The routes [`open_with`] tries after the path as written, in order.
+type Fallbacks = Box<dyn Iterator<Item = PathBuf>>;
+
 /// Whether `e` says a link on the path could not be followed, as opposed to the file being
 /// missing or unreadable. Only Windows reports these.
 fn refuses_traversal(e: &io::Error) -> bool {
@@ -117,10 +121,12 @@ fn refuses_traversal(e: &io::Error) -> bool {
 }
 
 /// The other routes to `path`: its links followed by hand, then the OS's canonical form.
-fn fallback_paths(path: &Path) -> Vec<PathBuf> {
+fn fallback_paths(path: &Path) -> Fallbacks {
     let by_hand = follow_links(path, &link_target);
-    let canonical = std::fs::canonicalize(path).ok();
-    by_hand.into_iter().chain(canonical).collect()
+    let path = path.to_path_buf();
+    // Canonicalizing touches the disk, so it waits until the by-hand route has failed.
+    let canonical = std::iter::once_with(move || std::fs::canonicalize(path).ok()).flatten();
+    Box::new(by_hand.into_iter().chain(canonical))
 }
 
 /// Where the symlink or junction at `path` points, `None` for anything else (or when it can't be
@@ -166,7 +172,10 @@ fn follow_links(path: &Path, link_target: &dyn Fn(&Path) -> Option<PathBuf>) -> 
             Piece::Anchor(a) => resolved.push(a),
             Piece::CurDir => {}
             Piece::ParentDir => {
-                if !resolved.pop() {
+                // Only a real name can be stepped out of: a leading `..` stays (`../..`).
+                if matches!(resolved.components().next_back(), Some(Component::Normal(_))) {
+                    resolved.pop();
+                } else {
                     resolved.push("..");
                 }
             }
@@ -367,7 +376,7 @@ mod tests {
             tried.borrow_mut().push(p.to_path_buf());
             if p == virtual_path { Err(untrusted_mount_point()) } else { File::open(p) }
         };
-        let fallbacks = |_: &Path| vec![virtual_path.clone(), real.clone()];
+        let fallbacks = |_: &Path| -> Fallbacks { Box::new(vec![virtual_path.clone(), real.clone()].into_iter()) };
         let mut f = open_with(&virtual_path, &open, &is_448, &fallbacks).expect("the fallback path opens");
         let mut text = String::new();
         f.read_to_string(&mut text).unwrap();
@@ -380,7 +389,7 @@ mod tests {
     fn when_every_route_fails_the_first_error_is_reported() {
         let missing = std::env::temp_dir().join("photocraft-read-448-missing.psd");
         let open = |p: &Path| if p == Path::new("blocked") { Err(untrusted_mount_point()) } else { File::open(p) };
-        let e = open_with(Path::new("blocked"), &open, &is_448, &|_| vec![missing.clone()]).unwrap_err();
+        let e = open_with(Path::new("blocked"), &open, &is_448, &|_| -> Fallbacks { Box::new(std::iter::once(missing.clone())) }).unwrap_err();
         assert_eq!(e.raw_os_error(), Some(448));
     }
 
@@ -391,7 +400,7 @@ mod tests {
         let looked = std::cell::Cell::new(false);
         let e = open_with(&missing, &|p| File::open(p), &is_448, &|_| {
             looked.set(true);
-            Vec::new()
+            Box::new(std::iter::empty())
         })
         .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::NotFound);
@@ -425,6 +434,15 @@ mod tests {
         assert_eq!(follow_links(Path::new("/users/me/Documents/a.psd"), &follow), None);
         // `.` and `..` are folded in the usual way.
         assert_eq!(follow_links(Path::new("/users/me/./x/../iCloudDrive/a.psd"), &follow), Some(PathBuf::from("/store/icloud/a.psd")));
+    }
+
+    /// A second leading `..` is kept, so a link below it is looked up where it sits (#10716).
+    #[test]
+    fn leading_parent_dirs_are_all_kept() {
+        let table = [("../../cloud_link", "/store/cloud"), ("cloud_link", "/wrong")];
+        assert_eq!(follow_links(Path::new("../../cloud_link/file.psd"), &links(&table)), Some(PathBuf::from("/store/cloud/file.psd")));
+        // A `..` after a name still steps out of it.
+        assert_eq!(follow_links(Path::new("../a/../../cloud_link/f"), &links(&table)), Some(PathBuf::from("/store/cloud/f")));
     }
 
     #[test]
