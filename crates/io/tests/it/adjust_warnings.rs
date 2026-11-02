@@ -176,6 +176,36 @@ fn short_color_lookup_table_warns_on_open() {
 }
 
 #[test]
+fn a_short_lookup_only_a_baked_timeline_step_holds_warns_on_open() {
+    use photocraft_doc::design::{Baked, DesignStep, DesignTimeline};
+    let _scope = photocraft_doc::IdScope::new(1).enter();
+    let mut d = Document::new("a", Size::new(16, 16), ColorMode::Rgb, SampleType::U8);
+    let short = Adjustment::ColorLookup {
+        name: "t.cube".into(),
+        size: 3,
+        lut: Some(std::sync::Arc::new(vec![0.5; 7])),
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
+    let baked = Layer::new("Teal Look", LayerContent::Adjustment(short));
+    let mut step: DesignStep = serde_json::from_value(serde_json::json!({
+        "step": 2, "command": "edit.paste", "params": {}, "label": "Paste",
+        "active": null, "selected": [], "created": [], "changed": []
+    }))
+    .unwrap();
+    step.created = vec![baked.id];
+    step.baked = Some(std::sync::Arc::new(Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None }));
+    let mut tl = DesignTimeline::new(std::sync::Arc::new(d.clone()));
+    tl.steps.push(step);
+    d.design_timeline = Some(std::sync::Arc::new(tl));
+    let r = export(&d, "x.pcraft", &ExportOptions::default()).expect("export");
+    let imp = import("x.pcraft", &r.bytes).expect("import");
+    assert!(imp.document.design_timeline.is_some(), "{:?}", imp.warnings);
+    assert!(imp.warnings.iter().any(|w| w.contains("Teal Look") && w.contains("7 values")), "{:?}", imp.warnings);
+}
+
+#[test]
 fn custom_domain_lookup_warns_and_round_trips_verbatim() {
     let domains = ["DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", "DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", "LUT_3D_INPUT_RANGE 0 0.5\n"];
     for domain in domains {

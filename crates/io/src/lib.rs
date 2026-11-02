@@ -794,8 +794,9 @@ mod tests {
     use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
 
-    /// A damaged lookup that only the timeline's base or a baked step holds is reported, one in
-    /// both trees once, and two layers with the same name and damage each.
+    /// A damaged lookup that only the current tree, the timeline's base (inside a group) or a
+    /// baked step holds is reported, one in both trees once, and two layers with the same name
+    /// and damage each.
     #[test]
     fn open_warnings_cover_the_design_timeline_trees() {
         use photocraft_doc::adjust::Adjustment;
@@ -813,9 +814,10 @@ mod tests {
             l
         };
         let mut base = Document::new("d", Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
-        base.layers = vec![lookup("both"), lookup("old"), lookup("old")];
+        base.layers = vec![lookup("both"), lookup("old"), lookup("old"), Layer::group("g", vec![lookup("nested")])];
         let mut doc = base.clone();
         doc.layers.truncate(1);
+        doc.layers.push(lookup("current"));
         let mut tl = DesignTimeline::new(std::sync::Arc::new(base));
         let mut step: photocraft_doc::design::DesignStep = serde_json::from_value(serde_json::json!({
             "step": 2, "command": "edit.paste", "params": {}, "label": "Paste",
@@ -828,8 +830,10 @@ mod tests {
         tl.steps.push(step);
         doc.design_timeline = Some(std::sync::Arc::new(tl));
         let w = super::open_warnings(&doc);
-        assert_eq!(w.len(), 4, "\"both\" once, each \"old\" layer on its own, the baked one: {w:?}");
-        assert!(w.iter().any(|w| w.contains("\"baked\"")), "{w:?}");
+        assert_eq!(w.len(), 6, "\"both\" once, each \"old\" layer on its own, and the rest: {w:?}");
+        for only in ["\"baked\"", "\"nested\"", "\"current\""] {
+            assert!(w.iter().any(|w| w.contains(only)), "{only}: {w:?}");
+        }
         assert_eq!(w.iter().filter(|w| w.contains("\"old\"")).count(), 2, "{w:?}");
     }
 
