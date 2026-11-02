@@ -970,6 +970,7 @@ fn ui_set_drives_the_path_options() {
     assert_eq!((o.path_color.as_str(), o.path_thickness, o.anchor_size, o.path_mark_start), ("red", 2.5, 7, true));
     let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"];
     assert_eq!((shown["path_color"].as_str(), shown["anchor_size"].as_u64()), (Some("red"), Some(7)));
+    assert_eq!((shown["path_thickness"].as_f64(), shown["path_mark_start"].as_bool()), (Some(2.5), Some(true)));
     for bad in [
         json!({"pathColor": "plaid"}),
         json!({"pathColor": 3}),
