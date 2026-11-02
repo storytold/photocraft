@@ -56,6 +56,17 @@ pub(crate) fn geometric(id: &str) -> bool {
     )
 }
 
+/// Classify the operation a background job actually performs. The Smart Objects Warp alias
+/// defaults to whole-object edits, but accepts explicit scalar targets through the same worker.
+pub(crate) fn isolated_job(id: &str, p: &Value) -> bool {
+    (geometric(id) || id == "layer.smartObjects.warp")
+        && (is_color(p)
+            || matches!(
+                crate::channel_cmds::target_of(p),
+                crate::channel_cmds::Target::Mask | crate::channel_cmds::Target::Alpha(_) | crate::channel_cmds::Target::QuickMask
+            ))
+}
+
 /// Resolve once, without selecting a channel (which would also change its eyes).
 pub fn params(s: &Session, p: &Value) -> Result<Value> {
     let mut out = if p.is_null() { json!({}) } else { p.clone() };

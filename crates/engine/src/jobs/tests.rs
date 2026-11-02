@@ -823,6 +823,125 @@ fn cancelling_an_isolated_colour_set_warp_discards_all_planes() {
     assert!(!crate::channel_transform::locked(&s));
 }
 
+/// A patterned scalar target on a smart object, accepted by both Warp command IDs.
+fn scalar_warp_session(target: &Value) -> (Session, Value) {
+    let mut s = session(48, 32);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let eye = if target == "mask" {
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        json!("mask")
+    } else if target == "quickMask" {
+        s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+        json!("quickMask")
+    } else {
+        s.execute("channel.new", json!({"fill":"white"})).unwrap();
+        json!(0)
+    };
+    s.edit("channel pattern", |doc, layer| {
+        let (surface, _) = crate::channel_cmds::target_surface(doc, *layer, &json!({"target":target}))?;
+        surface.fill_rect(photocraft_geom::Rect::new(8, 8, 32, 24), &[0.25]);
+        Ok(())
+    })
+    .unwrap();
+    (s, eye)
+}
+
+fn set_scalar_warp_eye(s: &mut Session, eye: &Value, visible: bool) {
+    if eye == "mask" {
+        s.execute("view.layerMask", json!({"mode":if visible {"overlay"} else {"off"}})).unwrap();
+    } else {
+        s.execute("channel.setVisible", json!({"channel":eye,"visible":visible})).unwrap();
+    }
+}
+
+#[test]
+fn warp_alias_jobs_keep_scalar_targets_locked_and_channel_eyes_editable() {
+    for command in ["edit.transform.warp", "layer.smartObjects.warp"] {
+        for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+            for cancel in [false, true] {
+                let (mut s, eye) = scalar_warp_session(&target);
+                let p = json!({"target":target,"style":"arc","bend":20});
+                set_scalar_warp_eye(&mut s, &eye, true);
+                let before = s.active().unwrap().doc.clone();
+                let steps = s.active().unwrap().history.past_len();
+                let view = s.active().unwrap().channel_view.clone();
+                let layer = s.active().unwrap().active_layer;
+                let mut inline = Session::new();
+                inline.add_document((*before).clone(), None);
+                inline.execute(command, p.clone()).unwrap();
+                let expected = inline.active().unwrap().doc.clone();
+                assert!(
+                    crate::channel_cmds::read_target_surface(&before, layer, &p).unwrap()
+                        != crate::channel_cmds::read_target_surface(&expected, layer, &p).unwrap(),
+                    "{command}/{target}: the oracle must actually warp the target"
+                );
+                let id = job(s.start(command, p).unwrap());
+                assert!(crate::channel_transform::locked(&s), "{command}/{target}");
+                assert_eq!(s.active().unwrap().channel_view, view, "starting must preserve the eyes");
+                assert!(s.execute("channel.target", json!({"channel":"green"})).is_err());
+                assert!(s.execute("layer.select", json!({"layer":layer.unwrap().0})).is_err());
+                s.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+                for visible in [false, true, false] {
+                    set_scalar_warp_eye(&mut s, &eye, visible);
+                }
+                let eyes = s.active().unwrap().channel_view.clone();
+                assert_eq!(eyes.visible_colors(3), 0);
+                assert_eq!(eyes.target, view.target);
+                assert_eq!(s.active().unwrap().active_layer, layer);
+                assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                if cancel {
+                    assert!(s.cancel_job(id));
+                    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+                    s.join_cancelled_jobs();
+                    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+                    assert_eq!(s.active().unwrap().history.past_len(), steps);
+                } else {
+                    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+                    let actual = &s.active().unwrap().doc;
+                    assert!(actual.layers == expected.layers && actual.channels == expected.channels && actual.quick_mask == expected.quick_mask);
+                    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+                    assert!(s.undo());
+                    let actual = &s.active().unwrap().doc;
+                    assert!(actual.layers == before.layers && actual.channels == before.channels && actual.quick_mask == before.quick_mask);
+                    assert_eq!(s.active().unwrap().channel_view, eyes);
+                    assert!(s.redo());
+                    let actual = &s.active().unwrap().doc;
+                    assert!(actual.layers == expected.layers && actual.channels == expected.channels && actual.quick_mask == expected.quick_mask);
+                }
+                assert!(!crate::channel_transform::locked(&s));
+                assert_eq!(s.active().unwrap().channel_view, eyes, "{command}/{target}/cancel={cancel}");
+            }
+        }
+    }
+}
+
+#[test]
+fn smart_object_warp_whole_object_jobs_do_not_acquire_an_isolated_target_lock() {
+    for target in [None, Some(json!("pixels")), Some(json!("filterMask"))] {
+        let mut s = session(48, 32);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel":"red"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let mut inline = Session::new();
+        inline.add_document((*before).clone(), None);
+        let mut p = json!({"style":"arc","bend":20});
+        if let Some(target) = target {
+            p["target"] = target;
+        }
+        inline.execute("layer.smartObjects.warp", p.clone()).unwrap();
+        let id = job(s.start("layer.smartObjects.warp", p).unwrap());
+        assert!(!crate::channel_transform::locked(&s), "whole-object warps keep their ordinary job lock");
+        assert!(s.execute("channel.setVisible", json!({"channel":"red","visible":true})).is_err());
+        assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+        assert!(s.active().unwrap().doc.layers == inline.active().unwrap().doc.layers);
+        assert!(matches!(
+            &s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().content,
+            photocraft_doc::LayerContent::Smart(sm) if sm.warp.is_some()
+        ));
+    }
+}
+
 #[test]
 fn raster_mask_alpha_and_quick_mask_warp_use_the_same_job_path() {
     for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {

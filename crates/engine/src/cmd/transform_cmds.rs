@@ -285,7 +285,7 @@ pub(crate) fn targets_of(doc: &Document, selected: &[LayerId], active: Option<La
 
 /// The `layers` param: the layers one box transforms together (at most 10000, each in the
 /// document), without those a listed group carries. `None` when it isn't given.
-fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
+pub(crate) fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
     let a = match p.get("layers") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => a,

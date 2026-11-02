@@ -409,7 +409,12 @@ validated separately, rather than presented as another 24 MP measurement of the 
 Native colour geometry includes off-canvas samples and preserves other encoded components,
 including transparency. Default frames include the canvas and stored native extent; source
 and writeback allocations remain bounded. Isolated Warp commits run through cancellable jobs.
-A refused interactive commit keeps its box and captured target available for retry.
+A refused interactive commit keeps its box and captured target available for retry. Its last
+valid pixel preview continues to follow channel eyes and display-profile changes.
+Both Warp command IDs keep explicit scalar targets locked while their eyes remain editable;
+Smart Objects Warp keeps its default whole-object behavior.
+Whole-layer rotate/flip presets use the same selected-layer frame as Free Transform, including
+the selection outline and implicit Background exclusion; explicit layer targets stay scoped.
 
 GPU previews retain pending WebGPU validation until both scopes settle, reject the same
 perspective horizons as commit, and apply display encoding to partial linear-RGB views.

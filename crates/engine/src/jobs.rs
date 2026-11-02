@@ -896,7 +896,7 @@ impl Session {
             (Err(e), None) => Err(self.explain_missing_layer(e)),
             (Ok(_), Some(mut job)) => {
                 job.command = id.to_string();
-                job.isolated_transform = crate::channel_transform::geometric(id) && run_params.get("target").is_some_and(|t| t != "pixels");
+                job.isolated_transform = crate::channel_transform::isolated_job(id, &run_params);
                 job.params = params;
                 job.journal = spec.journal;
                 job.recorded_by = self.actions.recording.map(|_| self.actions.take);

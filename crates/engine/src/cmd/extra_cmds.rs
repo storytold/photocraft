@@ -299,9 +299,14 @@ fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         match crate::channel_transform::source_bounds(&d.doc, p.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(d.active_layer), p)? {
             Some(bounds) => (bounds, p.clone()),
             None => {
-                let id = layer_param(s, p)?;
-                let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-                (crate::transform_cmds::transform_frame(&d.doc, l), p.clone())
+                let ids = match crate::transform_cmds::layers_param(&d.doc, p)? {
+                    Some(ids) => ids,
+                    None => match crate::commands::explicit_layer(s, p)? {
+                        Some(id) => vec![id],
+                        None => crate::transform_cmds::selection_targets(d),
+                    },
+                };
+                (crate::transform_cmds::transform_frame_of(&d.doc, &ids), p.clone())
             }
         };
     if b.is_empty() {

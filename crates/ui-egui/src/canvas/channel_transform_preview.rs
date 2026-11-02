@@ -187,7 +187,8 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     if let Err(error) = preview.update(t) {
         app.ui.status = error;
         app.ui.status_error = true;
-        return preview.textures.get(&output).map(|entry| entry.texture.id());
+        // A refused commit keeps the box open. Its last valid pixels still follow the
+        // current eyes and display profile, even while this geometry cannot be resampled.
     }
     let key = (view.clone(), look, display_key);
     if preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
@@ -1415,6 +1416,84 @@ mod tests {
             assert!(Arc::ptr_eq(&before, &st.doc));
         }
         a.run("channel.target", json!({"channel":"blue"})).unwrap();
+    }
+
+    fn uploaded_preview_pixels(ctx: &egui::Context, id: egui::TextureId) -> Option<Vec<Color32>> {
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let pixels = delta.set.get(&id).and_then(|deltas| deltas.last()).map(|delta| {
+            let egui::ImageData::Color(image) = &delta.image;
+            image.pixels.clone()
+        });
+        delta.clear();
+        pixels
+    }
+
+    fn check_refused_commit_visibility(target: Value, horizon: bool) {
+        let mut a = app();
+        a.run("channel.target", json!({"colors":target})).unwrap();
+        a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+        let before = a.session.active().unwrap().doc.clone();
+        let history = a.session.active().unwrap().history.past_len();
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut a, &ctx).unwrap();
+        let t = a.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 3.0, y]);
+        let id = texture(&mut a, &ctx, 0, None).unwrap();
+        let original = uploaded_preview_pixels(&ctx, id).unwrap();
+        assert!(original.iter().any(|p| *p != Color32::WHITE));
+        let shown = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
+        let t = a.ui.transform.as_mut().unwrap();
+        let [x0, y0, x1, y1] = t.rect;
+        let (w, h) = (x1 - x0, y1 - y0);
+        t.quad = if horizon { [[x0, y0], [x0 + 3.0 * w, y0], [x0 + 0.6 * w, y0 + 0.6 * h], [x0, y0 + 3.0 * h]] } else { [[0.0; 2]; 4] };
+        let geometry = a.ui.transform.clone();
+        crate::transform_tool::commit(&mut a);
+        assert!(a.ui.status_error);
+        assert_eq!(a.ui.transform, geometry);
+        assert!(photocraft_engine::channel_transform::locked(&a.session));
+        for (channel, visible) in [("composite", false), ("red", true), ("green", true), ("composite", true)] {
+            a.run("channel.setVisible", json!({"channel":channel,"visible":visible})).unwrap();
+            assert_eq!(texture(&mut a, &ctx, 0, None), Some(id));
+            let actual = uploaded_preview_pixels(&ctx, id).expect("eyes must refresh the texture even while geometry is refused");
+            let st = a.session.active().unwrap();
+            let (display, _) = crate::canvas::canvas_display(&a, &st.doc, None);
+            let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
+            let expected = preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref());
+            assert_eq!(actual, expected.pixels, "{target}/horizon={horizon}/{channel}={visible}");
+            assert!(Arc::ptr_eq(&shown, &preview.shown), "eye changes cannot replace the last valid transformed pixels");
+            assert!(preview.failed.is_some());
+            assert_eq!(a.ui.transform, geometry);
+            assert!(Arc::ptr_eq(&before, &st.doc));
+            assert_eq!(st.history.past_len(), history);
+        }
+        // Display conversion is view state too, including while a refused box stays open.
+        let icc = photocraft_engine::color_cmds::resolve_profile("display-p3", None, None).unwrap().to_bytes();
+        a.session.color.set_displays(Ok(vec![photocraft_engine::display_color::Display {
+            id: 4,
+            name: "Display P3".into(),
+            frame: [0.0, 0.0, 100.0, 100.0],
+            profile_name: None,
+            icc: Some(icc),
+        }]));
+        a.session.color.main_display = Some(4);
+        assert_eq!(texture(&mut a, &ctx, 0, None), Some(id));
+        let actual = uploaded_preview_pixels(&ctx, id).expect("display changes must also refresh a refused preview");
+        let st = a.session.active().unwrap();
+        let (display, _) = crate::canvas::canvas_display(&a, &st.doc, None);
+        let preview = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap();
+        assert_eq!(actual, preview.image(&st.channel_view, crate::channel_view::Look::of(&a.session), display.as_deref()).pixels);
+        crate::transform_tool::cancel(&mut a);
+        assert!(!photocraft_engine::channel_transform::locked(&a.session));
+        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+    }
+
+    #[test]
+    fn refused_channel_commits_still_refresh_eyes_and_display_profiles() {
+        for target in [json!([1]), json!([0, 2])] {
+            for horizon in [false, true] {
+                check_refused_commit_visibility(target.clone(), horizon);
+            }
+        }
     }
 
     #[test]
