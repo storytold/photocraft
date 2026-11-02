@@ -295,6 +295,13 @@ sync_github_name = true
 display_name = "DC@yuki.himejima"
 sync_github_name = false
 
+[people.sn-o-w]
+real_name = "Cristian Silaghi"
+sync_github_name = false
+
+[people.regexer]
+sync_github_name = true
+
 [people.SimoneRecchia]
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
