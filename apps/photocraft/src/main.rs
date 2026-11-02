@@ -48,6 +48,8 @@ mod launch_args;
 mod mac_menu;
 #[cfg(target_os = "macos")]
 mod mac_window;
+#[cfg(target_os = "macos")]
+mod traffic_lights;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(not(target_arch = "wasm32"))]
 mod external_svg;
@@ -523,6 +525,12 @@ fn main() -> eframe::Result {
             let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            // The strip fits around the traffic lights where AppKit put them (#2554).
+            #[cfg(target_os = "macos")]
+            if let Some(bar) = traffic_lights::title_bar() {
+                log::info!("title bar around the traffic lights: {bar:?}");
+                app.mac_titlebar = Some(bar);
+            }
             app.custom_titlebar = custom_titlebar;
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
             #[cfg(target_os = "macos")]

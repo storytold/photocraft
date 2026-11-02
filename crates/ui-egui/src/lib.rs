@@ -45,6 +45,7 @@ pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
 pub mod panels;
+pub use panels::title_bar::MacTitleBar;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
@@ -454,6 +455,9 @@ pub struct PhotocraftApp {
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
     pub integrated_titlebar: bool,
+    /// macOS: the title strip fitted around the traffic lights as AppKit placed them; `None` until
+    /// measured (the strip keeps its standard size).
+    pub mac_titlebar: Option<MacTitleBar>,
     /// Windows and Linux: the window has no OS decorations and the app's top bar is the title bar
     /// (caption buttons, window dragging and edge resizing, `titlebar`).
     pub custom_titlebar: bool,
