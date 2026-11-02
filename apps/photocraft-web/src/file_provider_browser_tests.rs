@@ -232,7 +232,11 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
         maximum.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?.into());
     }
     call(&api, "setResources", &[connection.clone(), maximum.into()])?;
-    call(&api, "setResources", &[connection.clone(), list(&entry)])?;
+    let second = resource("file-two", "Second.psd", "today")?;
+    let pair = Array::new();
+    pair.push(&entry);
+    pair.push(&second);
+    call(&api, "setResources", &[connection.clone(), pair.into()])?;
 
     // Keep a valid live read throughout the rejection cases: none may consume or admit it.
     let request = call(&api, "requestOpen", &["file-one".into()])?;
@@ -273,14 +277,14 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
         Ok((document.clone(), Vec::new()))
     }));
     let published = PublishedEvents::listen(&window)?;
-    let accepted = call(&api, "requestOpen", &["file-one".into()])?;
+    let accepted = call(&api, "requestOpen", &["file-two".into()])?;
     let accepted_id = accepted.as_string().ok_or_else(|| JsValue::from_str("open request ID must be a string"))?;
     crate::file_providers::publish(&host);
     assert_eq!(published.events.length(), 1);
     let requested = published.detail(0)?;
     assert_eq!(Reflect::get(&requested, &"type".into())?.as_string().as_deref(), Some("openRequest"));
     assert_eq!(Reflect::get(&requested, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
-    assert_eq!(Reflect::get(&requested, &"resourceId".into())?.as_string().as_deref(), Some("file-one"));
+    assert_eq!(Reflect::get(&requested, &"resourceId".into())?.as_string().as_deref(), Some("file-two"));
     call(&api, "openResource", &[accepted, "loaded.png".into(), Uint8Array::from(&[1u8, 2, 3][..]).into()])?;
     assert!(host.busy());
     crate::file_providers::publish(&host);
@@ -292,7 +296,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     let opened = published.detail(1)?;
     assert_eq!(Reflect::get(&opened, &"type".into())?.as_string().as_deref(), Some("opened"));
     assert_eq!(Reflect::get(&opened, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
-    assert_eq!(Reflect::get(&opened, &"resourceId".into())?.as_string().as_deref(), Some("file-one"));
+    assert_eq!(Reflect::get(&opened, &"resourceId".into())?.as_string().as_deref(), Some("file-two"));
     assert_eq!(Reflect::get(&opened, &"filename".into())?.as_string().as_deref(), Some("loaded.png"));
     let active = app.session.active().ok_or_else(|| JsValue::from_str("admitted provider document missing"))?;
     assert_eq!(Reflect::get(&opened, &"documentId".into())?.as_string(), Some(active.doc.id.0.to_string()));
