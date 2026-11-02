@@ -410,7 +410,20 @@ pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Resu
             out.push(Segment { x: 0, y: i * rps, w: width, h: rps, offset: offsets[i] as usize, len: counts[i] as usize });
         }
     }
+    reject_shared_bytes(&out)?;
     Ok(out)
+}
+
+/// Fails when two segments' byte ranges overlap. Distinct strips and tiles never share bytes, and
+/// a file whose segments do would have each decode the same data again, up to the allocation
+/// budget in all, from a few bytes (#2776).
+fn reject_shared_bytes(segments: &[Segment]) -> Result<()> {
+    let mut ranges: Vec<(usize, usize)> = segments.iter().filter(|s| s.len != 0).map(|s| (s.offset, s.offset.saturating_add(s.len))).collect();
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|w| w[1].0 < w[0].1) {
+        return Err(RawError::malformed("raw strips or tiles share bytes"));
+    }
+    Ok(())
 }
 
 /// Decodes one compression-7 (lossless JPEG) segment to the segment's own samples.

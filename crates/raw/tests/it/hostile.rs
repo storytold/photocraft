@@ -271,6 +271,39 @@ fn lossless_jpeg_frame_larger_than_the_budget_is_refused() {
     assert!(matches!(decode(&b, &budget), Err(RawError::LimitExceeded(_))));
 }
 
+/// The value of an out-of-line LONG array tag: (offset of the array in the file, its element count).
+fn long_array(b: &[u8], tag: u16) -> Option<(usize, usize)> {
+    (0..b.len().saturating_sub(12)).find_map(|i| {
+        let entry = b.get(i..i + 12)?;
+        (entry[..2] == tag.to_le_bytes() && entry[2..4] == 4u16.to_le_bytes()).then(|| {
+            let n = u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]]) as usize;
+            (u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as usize, n)
+        })
+    })
+}
+
+/// Tiles that point at the same bytes would each decode them again, up to the allocation budget
+/// in all, from a file a few kilobytes long. A well-formed file's tiles never share bytes.
+#[test]
+fn tiles_sharing_bytes_are_rejected() {
+    let (w, h) = (32, 8);
+    let mut d = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 64, 4000));
+    d.bits = 12;
+    d.white = 4000;
+    d.black = vec![64];
+    d.storage = DngStorage::Lj92Tiles { width: 16, height: 8 };
+    let mut b = d.build();
+    assert!(decode(&b, &Limits::default()).is_ok(), "the file itself is valid");
+    // 324 = TileOffsets, 325 = TileByteCounts: tile 1 reuses tile 0's bytes
+    for tag in [324, 325] {
+        let (at, n) = long_array(&b, tag).expect("tile array");
+        assert_eq!(n, 2);
+        let first = b[at..at + 4].to_vec();
+        b[at + 4..at + 8].copy_from_slice(&first);
+    }
+    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Malformed(_))), "{:?}", decode(&b, &Limits::default()).err());
+}
+
 #[test]
 fn a_non_finite_black_level_develops_without_panicking() {
     // A BlackLevel DOUBLE beyond f32 reads as inf: the planes must not turn into NaN and trip
