@@ -1350,6 +1350,12 @@ mod streamed_tests {
         let png = crate::encode(&img(vec![7; 2000]), Format::Png, &EncodeOptions::default()).unwrap();
         assert_eq!(read_iccp(&png, 1999), None);
         assert_eq!(read_iccp(&png, 2000).map(|p| p.len()), Some(2000));
+        // CodeRabbit on #10300: through `decode`, which passes its own limit on: the profile is
+        // left out and the 12 bytes of pixels still decode.
+        let limits = |max_alloc| Limits { max_alloc, ..Limits::default() };
+        let decoded = decode(&png, &limits(1999)).unwrap();
+        assert_eq!((decoded.icc, decoded.data()), (None, &[9u8; 12][..]));
+        assert_eq!(decode(&png, &limits(2000)).unwrap().icc.map(|p| p.len()), Some(2000));
         // And one byte under the cap comes through whole.
         let png = crate::encode(&img(vec![3; cap - 1]), Format::Png, &EncodeOptions::default()).unwrap();
         assert_eq!(decode(&png, &Limits::default()).unwrap().icc.map(|p| p.len()), Some(cap - 1));
