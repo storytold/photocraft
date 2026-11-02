@@ -51,7 +51,8 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
         if it.path.len() == depth {
             if it.label == "---" {
                 if !last_was_sep && i + 1 < items.len() {
-                    ui.add(egui::Separator::default().spacing(MENU_SEPARATOR));
+                    let sep = ui.add(egui::Separator::default().spacing(MENU_SEPARATOR));
+                    nav.separator(depth - 1, &sep);
                     last_was_sep = true;
                 }
                 continue;
@@ -97,7 +98,9 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
             let title = crate::menu_keys::menu_row_text(ui, false, &shown, mnemonic.filter(|_| nav.underline));
             ui.add_enabled_ui(enabled, |ui| {
                 nav.row(ui, depth - 1, enabled, None, mnemonic, |ui, nav| {
-                    let (response, inner) = submenu_row(ui, title, |ui| render_level(ui, &child, depth + 1, clicked, nav));
+                    let own_look = nav.next_row_lit(depth - 1) || nav.elsewhere_in_menu(ui, depth - 1);
+                    let keyboard = nav.keyboard();
+                    let (response, inner) = submenu_row(ui, title, own_look, keyboard, |ui| render_level(ui, &child, depth + 1, clicked, nav));
                     if inner.is_some() {
                         // Where the submenu hangs from, to keep it below the menu bar (#319).
                         nav.set_anchor(depth, response.rect);
@@ -116,20 +119,33 @@ pub(super) fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: u
 /// hidden above its view, over the menu bar, and the hidden one under the title opened on the
 /// press; the release on the title then counted as a click outside that submenu and closed the
 /// whole menu (#5896, #6225). An open submenu (e.g. opened from the keyboard) is drawn as usual.
-fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
+/// Nor does the pointer on the row's bottom edge open it: that edge belongs to the row below
+/// ([`crate::menu_nav::on_row`]), and egui, which counts it as this row's, reopened a submenu just
+/// closed for the pointer stepping onto a separator. `own_look`: the row is highlighted, or the
+/// pointer is on another row of this menu ([`crate::menu_nav::Nav::elsewhere_in_menu`]), so it
+/// isn't drawn in the open-submenu style. `keyboard`: the keys have the highlight
+/// ([`crate::menu_nav::Nav::keyboard`]), so a pointer left resting on the row doesn't open it,
+/// though a click from assistive technology does.
+fn submenu_row<R>(
+    ui: &mut egui::Ui,
+    title: egui::WidgetText,
+    own_look: bool,
+    keyboard: bool,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, Option<R>) {
     use egui::containers::menu::{MenuState, SubMenu, SubMenuButton};
     let sub = SubMenu::id_from_widget_id(ui.next_auto_id());
     let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(sub));
     let inactive = ui.style().visuals.widgets.inactive;
-    if open {
+    if open && !own_look {
         ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
     }
     let response = ui.add(egui::Button::new(title).right_text(SubMenuButton::arrow_atom(None)));
     ui.style_mut().visuals.widgets.inactive = inactive;
     // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
     let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
-    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
-    if hidden && !open {
+    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && (!ui.clip_rect().contains(p) || !crate::menu_nav::on_row(response.rect, p)));
+    if (hidden || (keyboard && !response.clicked())) && !open {
         return (response, None);
     }
     let inner = SubMenu::new().show(ui, &response, content);
