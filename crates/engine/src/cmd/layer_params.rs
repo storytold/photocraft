@@ -21,6 +21,10 @@ pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> 
                 .map(|(_, _, l)| Some(l.id))
                 .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
         }
+        // A group end is no layer: fail rather than fall back to the selection.
+        Some(v @ Value::Object(fields)) if fields.contains_key("index") || fields.contains_key("ordinal") => {
+            super::recorded_layer(s, v)?.map(Some).ok_or_else(|| EngineError::Other("a group end is not a layer".into()))
+        }
         Some(Value::Null) | None => Ok(None),
         Some(other) => Err(EngineError::Other(format!("`layer` must be an id or a name, not {other}"))),
     }

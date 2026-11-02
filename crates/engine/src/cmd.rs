@@ -103,6 +103,7 @@ pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
 mod layer_params;
+mod layer_references;
 pub mod layer_xmp_cmds;
 pub mod lens_cmds;
 pub mod magnetic_cmds;
@@ -166,6 +167,7 @@ pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel_or_channel, has_selection};
 pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
+pub(crate) use layer_references::{recorded_drop, recorded_layer};
 use ops::{arrange, merge_group, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer};
 use params::{bad, set_clipped};
@@ -586,7 +588,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -910,7 +912,7 @@ fn build() -> Vec<CommandSpec> {
             "Reorder Layer",
             [],
             None,
-            r##"{"layer":id?| "layers":[id,…]?, "target":id|name,"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; a recorded action keeps the target by name)"##,
+            r##"{"layer":id|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"}?| "layers":[id,…]?, "target":id|name|{"index":uint},"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (typed target: pre-move recorded stack boundary, omit position; layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; recorded typed references retain their form)"##,
             has_layer,
             crate::layer_multi_cmds::move_to
         ),
@@ -1045,7 +1047,7 @@ fn build() -> Vec<CommandSpec> {
             label: "Activate Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index} or {"offset":int} (the document that many places after the active one in opening order, before it when negative: a Photoshop action's switch to another document) → {document}"##,
+            params: r##"{"document":index|{"index":uint}} or {"offset":int} (numeric document: zero-based tab index; typed index: one-based opening order; offset: places after the active document in opening order, before it when negative) → {document}"##,
             enabled: has_doc,
             run: |s, p| {
                 // A null key counts as omitted.
@@ -1060,6 +1062,16 @@ fn build() -> Vec<CommandSpec> {
                         s.document_at_offset(o)?
                     }
                     (Some(d), None) => {
+                        if let Some(selector) = d.as_object() {
+                            let index = selector
+                                .get("index")
+                                .filter(|_| selector.len() == 1)
+                                .and_then(Value::as_u64)
+                                .ok_or_else(|| bad("document.activate", "document reference needs one non-negative index"))?;
+                            return s
+                                .document_at_index(index)
+                                .and_then(|idx| if s.set_active(idx) { Ok(json!({"document": idx})) } else { Err(EngineError::NoDocument) });
+                        }
                         let i = d.as_u64().ok_or_else(|| bad("document.activate", "`document` must be a tab index"))?;
                         usize::try_from(i).map_err(|_| bad("document.activate", "`document` out of range"))?
                     }

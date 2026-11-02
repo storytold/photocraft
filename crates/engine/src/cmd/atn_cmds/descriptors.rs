@@ -124,6 +124,22 @@ pub(super) fn layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
     Some(m)
 }
 
+/// Select and Move retain stack references until playback rather than capturing local ids.
+pub(super) fn recorded_layer_target(r: &[ReferenceItem]) -> Option<Map<String, Value>> {
+    let selector = match r {
+        [ReferenceItem::Index { class, index }] if trimmed(&class.class_id) == "Lyr" => json!({"index": index}),
+        [ReferenceItem::Enumerated { class, type_id, value }]
+            if trimmed(&class.class_id) == "Lyr" && type_id.is("Ordn") && matches!(trimmed(value).as_str(), "Trgt" | "Frwr" | "Bckw" | "Frnt" | "Back") =>
+        {
+            json!({"ordinal": trimmed(value)})
+        }
+        [ReferenceItem::Index { .. } | ReferenceItem::Enumerated { .. }] => return None,
+        _ if matches!(target(r), Target::Index(_) | Target::Ordinal(_)) => return None,
+        _ => return layer_target(r),
+    };
+    Some(Map::from_iter([("layer".into(), selector)]))
+}
+
 // ------------------------------------------------------------------ descriptor building
 
 /// A Photoshop id: codes shorter than four characters are space-padded (`H   `, `Rd  `),
@@ -187,6 +203,27 @@ pub(super) fn layer_ref(p: &Value) -> Option<D> {
         Some(Value::String(n)) => Some(name_ref("Lyr ", n)),
         _ => None,
     }
+}
+
+/// Write the recorded form, including the padded four-byte ordinal codes.
+pub(super) fn recorded_layer_ref(p: &Value) -> Option<D> {
+    let Some(Value::Object(selector)) = p.get("layer") else { return layer_ref(p) };
+    if !selector.contains_key("index") && !selector.contains_key("ordinal") {
+        return layer_ref(p);
+    }
+    if selector.len() != 1 {
+        return None;
+    }
+    let item = if let Some(index) = selector.get("index") {
+        ReferenceItem::Index { class: class("Lyr "), index: u32::try_from(index.as_u64()?).ok()? }
+    } else {
+        let ordinal = selector.get("ordinal")?.as_str()?;
+        if !matches!(ordinal, "Trgt" | "Frwr" | "Bckw" | "Frnt" | "Back") {
+            return None;
+        }
+        ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(ordinal) }
+    };
+    Some(D::Reference(vec![item]))
 }
 
 pub(super) fn desc(cls: &str) -> Descriptor {

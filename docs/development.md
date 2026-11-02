@@ -634,6 +634,14 @@ verbatim (so Save Actions writes them back) and fail at playback with the step's
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
 its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
+and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
+indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
+tab index. Layer comp references retain their name, index, ID or ordinal form when saved, including
+the measured comp ordinals that reapply the current or first comp. Invalid comp indexes do nothing,
+even with an empty comp list. Recording-document layer IDs and layer/comp offsets stay kept steps.
+These rules follow [davidmann4's measured reference](https://github.com/storytold/photocraft/pull/10603)
+(#10701).
 
 ## Remove Tool quality
 

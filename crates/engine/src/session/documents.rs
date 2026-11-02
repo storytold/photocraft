@@ -114,6 +114,16 @@ impl Session {
         self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
     }
 
+    /// A recorded index is one-based opening order, even after tabs are dragged.
+    pub(crate) fn document_at_index(&self, index: u64) -> Result<usize> {
+        let id = index
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.open_document_order.get(index))
+            .ok_or_else(|| EngineError::Other(format!("no document at opening index {index}")))?;
+        self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
+    }
+
     /// Add a document (from File → New, an import, etc.) and make it active.
     /// Preserve its identity unless another open document already owns it.
     /// Identity-dependent callers must read the admitted document at the returned index.

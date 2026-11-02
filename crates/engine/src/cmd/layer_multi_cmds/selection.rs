@@ -222,6 +222,20 @@ fn range_order(layers: &[Layer], include_collapsed: bool, out: &mut Vec<LayerId>
 
 /// `layer.select`: `{"layer": id, "mode": "replace|toggle|range|add|remove"}`.
 pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(selector @ Value::Object(fields)) = p.get("layer")
+        && (fields.contains_key("index") || fields.contains_key("ordinal"))
+        && crate::commands::recorded_layer(s, selector)?.is_none()
+    {
+        if p.get("name").is_some() || p.get("occurrence").is_some() {
+            return Err(bad("layer.select", "a layer reference cannot be combined with name or occurrence"));
+        }
+        let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
+        if !matches!(mode, "replace" | "toggle" | "range" | "add" | "remove") {
+            return Err(bad("layer.select", format!("unknown mode `{mode}`")));
+        }
+        // A group-end index leaves the active layer, anchor and full selection unchanged.
+        return Ok(json!({"selected": selected(s).iter().map(|id| id.0).collect::<Vec<_>>()}));
+    }
     let id = selection_target(s, p)?;
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
     let st = s.active().ok_or(EngineError::NoDocument)?;

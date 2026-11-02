@@ -186,10 +186,9 @@ fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
         Some(D::Integer(1)),
         Some(D::Reference(vec![])),
         Some(name_ref("Lyr ", "Comp 1")),
-        Some(target_ref("compsClass")),
         Some(class_ref("compsClass")),
-        Some(D::Reference(vec![ReferenceItem::Index { class: class("compsClass"), index: 1 }])),
-        Some(D::Reference(vec![ReferenceItem::Identifier { class: class("compsClass"), id: 1 }])),
+        Some(D::Reference(vec![ReferenceItem::Offset { class: class("compsClass"), offset: 1 }])),
+        Some(D::Reference(vec![ReferenceItem::Enumerated { class: class("compsClass"), type_id: code("Ordn"), value: code("unsupported") }])),
         Some(D::Reference(vec![
             ReferenceItem::Name { class: class("compsClass"), name: UnicodeString::new_nul("Comp 1") },
             ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") },
@@ -481,6 +480,7 @@ fn settings_at_the_value_the_event_plays_still_export() {
     }
 }
 
+/// Every exported command has a canonical import, including recorded full-stack navigation.
 #[test]
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
@@ -601,6 +601,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.setLabelColor", json!({"color": "red"})),
         ("layer.select", json!({"layer": "Shadow", "mode": "add"})),
         ("layer.select", json!({"layer": "Shadow", "mode": "range"})),
+        ("layer.select", json!({"layer": {"index": 2}})),
+        ("layer.moveTo", json!({"target": {"index": 0}})),
+        ("layer.moveTo", json!({"layer": {"index": 2}, "target": {"index": 4}})),
+        ("layer.selectAbove", json!({})),
+        ("layer.selectBottom", json!({})),
         ("layer.selectTop", json!({})),
         ("layer.selectBelow", json!({})),
         ("layer.addBelowToSelection", json!({})),
@@ -678,6 +683,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("actions.play", json!({"action": "Other", "set": "S"})),
         (STOP_MESSAGE, json!({"message": "Hi", "allowContinue": false})),
         ("document.activate", json!({"offset": -1})),
+        ("document.activate", json!({"document": {"index": 2}})),
         // The TrueGrit Texture Supply sets (Debaser, Distress Press, Halftone Zine Machine).
         ("filter.distort.ripple", json!({"amount": 50, "size": "medium"})),
         ("filter.pixelate.crystallize", json!({"cellSize": 5})),
@@ -710,6 +716,9 @@ fn every_mapped_command_exports_and_imports_back() {
         ("history.clear", json!({})),
         ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
         ("layerComp.apply", json!({"comp": "Comp 1"})),
+        ("layerComp.apply", json!({"comp": {"index": 2}})),
+        ("layerComp.apply", json!({"comp": {"id": 7}})),
+        ("layerComp.apply", json!({"comp": {"ordinal": "Nxt"}})),
     ];
     for (id, params) in &cases {
         let item = export_item(id, params, "S").unwrap_or_else(|| panic!("{id} does not export"));
@@ -722,6 +731,23 @@ fn every_mapped_command_exports_and_imports_back() {
         match (e.from)(item.descriptor.as_ref().unwrap()) {
             Mapped::Steps(steps) => {
                 assert_eq!(steps.len(), 1, "{id}: {steps:?}");
+                let navigation = match *id {
+                    "layer.selectAbove" => Some(("Frwr", false)),
+                    "layer.selectBelow" => Some(("Bckw", false)),
+                    "layer.selectTop" => Some(("Frnt", false)),
+                    "layer.selectBottom" => Some(("Back", false)),
+                    "layer.addAboveToSelection" => Some(("Frwr", true)),
+                    "layer.addBelowToSelection" => Some(("Bckw", true)),
+                    _ => None,
+                };
+                if let Some((ordinal, add)) = navigation {
+                    let mut expected = json!({"layer": {"ordinal": ordinal}});
+                    if add {
+                        expected["mode"] = json!("add");
+                    }
+                    assert_eq!(steps, vec![("layer.select".into(), expected)]);
+                    continue;
+                }
                 assert_eq!(steps[0].0, *id, "{id} came back as another command");
                 let mut back = steps[0].1.clone();
                 normalise(&mut back);
@@ -777,8 +803,6 @@ fn every_mapped_command_exports_and_imports_back() {
         "layer.newAdjustmentLayer.vibrance",
         "layer.rasterize.layer",
         "layer.renameLayer",
-        "layer.selectAbove",
-        "layer.selectBottom",
         "layer.setAdjustment",
         "select.allLayers",
         "select.deselectLayers",
@@ -1550,10 +1574,11 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     let more_steps = &more.actions[0].steps;
     assert_eq!(
         more_steps.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
-        ["edit.transform", "select.transformSelection", "layer.arrange.sendToBack", "view.fitOnScreen", "tools.setColors"]
+        ["edit.transform", "select.transformSelection", "layer.moveTo", "view.fitOnScreen", "tools.setColors"]
     );
     assert_eq!(more_steps[0].1, json!({"dx": 4, "dy": 6, "scaleX": 50, "scaleY": 50}));
     assert_eq!(more_steps[1].1, json!({"dx": 3, "dy": -2}));
+    assert_eq!(more_steps[2].1, json!({"target": {"index": 0}}));
     assert_eq!(more_steps[4].1, json!({"foreground": "#000000"}));
     assert!(more.unsupported.is_empty());
     assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
