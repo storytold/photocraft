@@ -55,7 +55,8 @@ fn input() -> Vec<u8> {
 fn pick(h: &mut Harness<'static, PhotocraftApp>, picker: &Picker) {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Replace Actions…").click();
     h.run_steps(3);
-    assert!(matches!(picker.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, extensions: Some(ext), .. }, _)] if ext == &["atn"]));
+    assert!(matches!(picker.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, extensions: Some(ext), max_bytes: Some(max), .. }, _)]
+        if ext == &["atn"] && *max == photocraft_engine::preset_import_cmds::MAX_FILE_BYTES));
 }
 
 /// Deliver a platform answer through the real continuation, without bypassing staging.
@@ -87,6 +88,11 @@ fn cancelling_preserves_actions_and_confirmation_never_rereads_the_source_path()
     pick(&mut h, &picker);
     answer(&mut h, &picker, Some(FileDialogAnswer::Contents("Broken.atn".into(), b"bad".to_vec())));
     assert!(h.state().ui.dialogs.is_empty());
+    pick(&mut h, &picker);
+    answer(&mut h, &picker, Some(FileDialogAnswer::Unavailable("Picked.atn: the file is larger than the picker limit".into())));
+    assert!(h.state().ui.dialogs.is_empty());
+    assert!(h.state().ui.status.contains("picker limit"));
+    assert_eq!(h.state().session.actions.list, actions);
     stage(&mut h, &picker);
     h.get_by_label("Cancel").click();
     h.run_steps(3);

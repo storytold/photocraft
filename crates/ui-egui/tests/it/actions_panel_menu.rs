@@ -267,3 +267,54 @@ fn reset_offers_allowed_replace_when_append_is_denied() {
     assert!(h.state().session.actions.list.is_empty());
     assert_eq!(h.state().session.actions.sets, [actions_edit_cmds::DEFAULT_SET_PLACEHOLDER]);
 }
+
+/// Only this test changes the policy; the same gate identity can revoke consent after opening.
+static RESET_MODES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(3);
+/// The policy is queried independently for each mode, including again at confirmation.
+fn reset_modes(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "actions.reset" {
+        let bit = if params["mode"] == "append" { 1 } else { 2 };
+        if RESET_MODES.load(Ordering::SeqCst) & bit == 0 {
+            return Err(EngineError::Other("reset mode denied".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Denied radios stay disabled; replace forgets old collapsed sets, append keeps them, and gates recheck.
+#[test]
+fn reset_modes_and_replaced_set_disclosures_follow_retained_and_current_policy() {
+    use egui_kittest::kittest::NodeT;
+    for allowed in [0, 1, 2, 3] {
+        RESET_MODES.store(allowed, Ordering::SeqCst);
+        let mut h = harness();
+        h.state_mut().session.authorize = Some(reset_modes);
+        h.state_mut().ui.actions.collapsed_sets = vec!["S".into(), "Remember".into()];
+        let before = h.state().session.actions.list.clone();
+        if allowed == 0 {
+            h.get_by_label("Reset Actions…").click();
+            h.run_steps(3);
+            assert!(h.state().ui.dialogs.is_empty());
+            assert_eq!(h.state().session.actions.list, before);
+            continue;
+        }
+        let dialog = open(&mut h, "Reset Actions…");
+        assert_eq!(h.get_by_label("Append").accesskit_node().is_disabled(), allowed & 1 == 0);
+        assert_eq!(h.get_by_label("Replace").accesskit_node().is_disabled(), allowed & 2 == 0);
+        if allowed == 3 {
+            RESET_MODES.store(0, Ordering::SeqCst);
+            assert!(dialogs::confirm(h.state_mut(), dialog).is_err());
+            assert_eq!(h.state().session.actions.list, before);
+            assert_eq!(h.state().ui.actions.collapsed_sets, ["S", "Remember"]);
+        } else {
+            dialogs::confirm(h.state_mut(), dialog).unwrap();
+            if allowed == 1 {
+                assert_eq!(h.state().session.actions.list, before);
+                assert_eq!(h.state().ui.actions.collapsed_sets, ["S", "Remember"]);
+            } else {
+                assert!(h.state().session.actions.list.is_empty());
+                assert_eq!(h.state().ui.actions.collapsed_sets, ["Remember"]);
+            }
+        }
+    }
+}

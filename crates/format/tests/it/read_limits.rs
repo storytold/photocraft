@@ -2,7 +2,7 @@
 
 /// Exact, over-limit, empty, and default reads use tiny regular files rather than large allocations.
 #[test]
-fn picked_read_limit_checks_before_allocating_and_preserves_default_reader() {
+fn picked_read_limit_preserves_exact_default_and_regular_file_behavior() {
     let dir = super::common::temp_dir("picked-read-limit");
     let path = dir.join("small.atn");
     std::fs::write(&path, b"12345").unwrap();

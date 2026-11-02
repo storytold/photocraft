@@ -207,7 +207,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions, .. } => {
             if let Some(dir) = initial_dir {
                 dialog = dialog.set_directory(dir);
             }

@@ -419,28 +419,36 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         file_dialog: Some(Box::new(|request, _parent, reply| match request {
             // The browser's file picker hands over the files' contents, not paths. File › Open
             // asks for several files (`multiple`), each opened in its own tab.
-            FileDialogRequest::Open { multiple, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
+            FileDialogRequest::Open { multiple, extensions, max_bytes, .. } => wasm_bindgen_futures::spawn_local(async move {
                 let dialog = if let Some(exts) = extensions {
                     rfd::AsyncFileDialog::new().add_filter("Supported Files", &exts)
                 } else {
                     rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("SVG", SVG_EXTS)
                 };
-                let answer = if multiple {
-                    match dialog.pick_files().await {
-                        Some(picked) if !picked.is_empty() => {
-                            let mut files = Vec::with_capacity(picked.len());
-                            for file in picked {
-                                files.push((file.file_name(), file.read().await));
+                let picked = if multiple { dialog.pick_files().await } else { dialog.pick_file().await.map(|file| vec![file]) };
+                let answer = match picked {
+                    Some(picked) if !picked.is_empty() => {
+                        let mut files = Vec::with_capacity(picked.len());
+                        let mut error = None;
+                        for file in picked {
+                            // File/Blob size is immutable; reject before rfd creates its ArrayBuffer/Vec.
+                            match crate::picked_file::read(file.file_name(), file.inner().size(), max_bytes, || file.read()).await {
+                                Ok(file) => files.push(file),
+                                Err(why) => {
+                                    error = Some(why);
+                                    break;
+                                }
                             }
-                            Some(FileDialogAnswer::ContentsMany(files))
                         }
-                        _ => None,
+                        if let Some(why) = error {
+                            Some(FileDialogAnswer::Unavailable(why))
+                        } else if multiple {
+                            Some(FileDialogAnswer::ContentsMany(files))
+                        } else {
+                            files.pop().map(|(name, bytes)| FileDialogAnswer::Contents(name, bytes))
+                        }
                     }
-                } else {
-                    match dialog.pick_file().await {
-                        Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
-                        None => None,
-                    }
+                    _ => None,
                 };
                 reply.send(answer);
             }),

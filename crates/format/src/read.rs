@@ -231,4 +231,16 @@ mod tests {
         assert_eq!(size_text(4_750_000_000), "4.75 GB");
         assert_eq!(size_text(759_000_000), "759.00 MB");
     }
+
+    /// An over-limit metadata hint must refuse before touching the reader.
+    #[test]
+    fn a_size_hint_over_the_limit_fails_before_any_read() {
+        struct NeverRead;
+        impl Read for NeverRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                panic!("the size hint must be checked before reading");
+            }
+        }
+        assert_eq!(read_all_with(&mut NeverRead, 5, 64, 4).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+    }
 }

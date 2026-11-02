@@ -26,7 +26,13 @@ use crate::file_open::display_name;
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
-    Open { multiple: bool, initial_dir: Option<String>, extensions: Option<Vec<String>> },
+    Open {
+        multiple: bool,
+        initial_dir: Option<String>,
+        extensions: Option<Vec<String>>,
+        /// Per-file limit: byte-producing services must check size before reading; consumers recheck.
+        max_bytes: Option<u64>,
+    },
     /// Which folder to read from. Starts in `initial_dir` when available.
     Folder { initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
@@ -244,7 +250,7 @@ impl PhotocraftApp {
     ) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
-        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions, max_bytes: max }, move |app, answer| {
             let (name, bytes) = read_picked(answer, max)?;
             then(app, name, bytes)
         })
@@ -253,7 +259,7 @@ impl PhotocraftApp {
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None, max_bytes: None }, |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);

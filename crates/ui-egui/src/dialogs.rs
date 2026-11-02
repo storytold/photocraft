@@ -26,7 +26,7 @@ fn browse_field(app: &mut PhotocraftApp, id: u64, fields: &serde_json::Map<Strin
         app.ask_folder(move |app, path| fill_field(app, id, &key, path))
     } else if fields.get("__command").and_then(Value::as_str) == Some("plugin.install") {
         let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-        let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]) };
+        let request = crate::file_dialog::FileDialogRequest::Open { multiple: false, initial_dir, extensions: Some(vec!["wasm".into()]), max_bytes: None };
         app.ask_file(request, move |app, answer| match answer {
             crate::file_dialog::FileDialogAnswer::Paths(mut paths) if !paths.is_empty() => fill_field(app, id, &key, paths.remove(0)),
             _ => Err("Install Plug-in reads a .wasm file from disk".into()),

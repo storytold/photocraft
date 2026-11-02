@@ -887,7 +887,7 @@ pub(crate) fn owned_dialog_body(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: 
     } else if replace::owns(fields) {
         replace::body(app, ui, dialog);
     } else if reset::owns(fields) {
-        reset::body(ui, fields);
+        reset::body(app, ui, dialog, fields);
     } else if menu_item::owns(fields) {
         menu_item::body(ui, fields);
     } else {

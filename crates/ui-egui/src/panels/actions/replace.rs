@@ -54,7 +54,9 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
         // Validate before asking to discard the library. The normal command parses this
         // same immutable input again on confirmation, keeping dispatch authoritative.
         let count = photocraft_engine::atn_cmds::import(&bytes)?.actions.len();
-        let params = json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes), "confirm": true});
+        let mut params = json!({"confirm": true});
+        // Move the encoded allocation into the transport rather than serializing another String copy.
+        params["data"] = Value::String(photocraft_engine::paint::tile::b64_encode(&bytes));
         drop(bytes);
         authorize(app, &params, gate, automated)?;
         let fields = json!({MARK: true, "__command": COMMAND, "__label": "Replace Actions"});

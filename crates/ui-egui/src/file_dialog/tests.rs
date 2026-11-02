@@ -378,7 +378,7 @@ fn open_starts_in_the_last_used_folder() {
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(
-        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None }, _)] if dir == "/pics"),
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None, max_bytes: None }, _)] if dir == "/pics"),
         "{:?}",
         open.borrow().first().map(|(r, _)| r.clone())
     );
@@ -1516,12 +1516,18 @@ fn picked_file_limit_refuses_before_callback_and_keeps_other_callers_unchanged()
             app.pick_file_bytes_filtered(&["atn"], then).unwrap();
         }
         app.poll_file_dialog(&ctx, None);
+        assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { max_bytes, .. }, _)] if *max_bytes == max));
+        let bounded_path = max.is_some() && matches!(chosen, FileDialogAnswer::Paths(_));
         answer(&open, Some(chosen));
         app.poll_file_dialog(&ctx, None);
         assert_eq!(called.get(), allowed);
         if !allowed {
             assert!(app.ui.status_error);
             assert!(app.ui.status.contains("larger"), "{}", app.ui.status);
+            if bounded_path {
+                let limited = photocraft_format::read::read_file_limited(&over, 4).unwrap_err().to_string();
+                assert!(app.ui.status.contains(&limited), "{}", app.ui.status);
+            }
         }
     }
 }

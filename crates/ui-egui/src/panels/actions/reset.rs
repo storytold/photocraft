@@ -10,6 +10,8 @@ pub(crate) struct Held {
     revision: u64,
     gate: Option<super::Gate>,
     automated: bool,
+    append: bool,
+    replace: bool,
 }
 
 /// Identify the fixed reset workflow through the protected route.
@@ -34,24 +36,26 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let automated = app.automation_input || gate.is_some();
-    let mode = if super::authorize_owned(app, COMMAND, &json!({"mode":"append","confirm":true}), gate, automated).is_ok() {
-        "append"
-    } else {
-        super::authorize_owned(app, COMMAND, &json!({"mode":"replace","confirm":true}), gate, automated)?;
-        "replace"
-    };
+    let append = super::authorize_owned(app, COMMAND, &json!({"mode":"append","confirm":true}), gate, automated).is_ok();
+    let replace = super::authorize_owned(app, COMMAND, &json!({"mode":"replace","confirm":true}), gate, automated);
+    let allowed_replace = replace.is_ok();
+    if !append {
+        replace?;
+    }
+    let mode = if append { "append" } else { "replace" };
     let fields = json!({MARK:true,"__command":COMMAND,"__label":"Reset Actions","mode":mode});
     let dialog = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
-    app.held_actions_reset = Some(Held { dialog, revision: app.session.actions.rev, gate, automated });
+    app.held_actions_reset = Some(Held { dialog, revision: app.session.actions.rev, gate, automated, append, replace: allowed_replace });
     Ok(json!({"dialog":dialog}))
 }
 
 /// Clearly label the temporary content and offer append, replace or the standard Cancel.
-pub(crate) fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, dialog: u64, fields: &mut Map<String, Value>) {
+    let held = app.held_actions_reset.as_ref().filter(|held| held.dialog == dialog);
     ui.label(tl!("Default Actions contents are not available yet. This restores an empty placeholder set."));
     let mut mode = fields.get("mode").and_then(Value::as_str).unwrap_or("append").to_string();
-    ui.radio_value(&mut mode, "append".into(), tl!("Append"));
-    ui.radio_value(&mut mode, "replace".into(), tl!("Replace"));
+    ui.add_enabled_ui(held.is_some_and(|held| held.append), |ui| ui.radio_value(&mut mode, "append".into(), tl!("Append")));
+    ui.add_enabled_ui(held.is_some_and(|held| held.replace), |ui| ui.radio_value(&mut mode, "replace".into(), tl!("Replace")));
     if mode == "replace" {
         ui.label(tl!("This removes the current action library and cannot be undone."));
     }
@@ -70,6 +74,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     }
     let params = json!({"mode":fields.get("mode"),"confirm":true});
     super::authorize_owned(app, COMMAND, &params, held.gate, held.automated)?;
+    let replaced_sets = (params["mode"] == "replace").then(|| photocraft_engine::actions_edit_cmds::set_names(&app.session));
     let saved = app.session.authorize;
     if let (Some(old), Some(current)) = (held.gate, saved)
         && !std::ptr::fn_addr_eq(old, current)
@@ -80,6 +85,9 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     let result = app.run(COMMAND, params);
     app.session.authorize = saved;
     let result = result?;
+    if let Some(replaced) = replaced_sets {
+        app.ui.actions.collapsed_sets.retain(|set| !replaced.contains(set));
+    }
     app.ui.actions.selected = None;
     app.ui.actions.selected_step = None;
     app.ui.actions.selected_set = result.get("set").and_then(Value::as_str).map(str::to_string);
