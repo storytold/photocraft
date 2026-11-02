@@ -26,9 +26,6 @@ pub struct Options {
     pub no_batch: bool,
     /// The index lists the templates served and no per-folder files, as gn-diffusion's does.
     pub templates_only: bool,
-    /// Seeds at which a layers request comes back as the real model's failure: the whole
-    /// picture, opaque, on every layer (the top one hides the rest).
-    pub covering_split_seeds: Vec<u64>,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -46,7 +43,6 @@ impl Default for Options {
             vram_free: None,
             no_batch: false,
             templates_only: false,
-            covering_split_seeds: Vec::new(),
         }
     }
 }
@@ -295,8 +291,7 @@ impl FakeEngine {
                         c.copy_from_slice(src);
                     }
                     if req.task == "layers" {
-                        let covering = self.options.covering_split_seeds.contains(&req.seed);
-                        c[3] = if covering || y as usize * count / (h as usize) == layer { 255 } else { 0 };
+                        c[3] = if y as usize * count / (h as usize) == layer { 255 } else { 0 };
                     }
                     if let Some(r) = self.options.matte {
                         c[3] = if inside(&r) {

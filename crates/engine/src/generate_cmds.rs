@@ -119,11 +119,6 @@ pub(crate) struct Tuning {
 /// 24.8 s, 32.5 dB against the full run, the snow slightly softer (2026-10-30).
 pub(crate) const FAST_DRAFT_STEP_CACHE: f64 = 0.05;
 
-/// The step-cache threshold Fast draft asks for on Split into Layers: 3 layers at 864x1152 59.6
-/// to 43.9 s warm, the composite against the picture 37.18 dB (37.25 without); the layer the
-/// model gives the least changes most (2026-10-30).
-pub(crate) const FAST_DRAFT_SPLIT_STEP_CACHE: f64 = 0.10;
-
 /// Whether Fast draft applies to `template` at `steps`: a Qwen-Image-Edit-2511 template that is
 /// not one of its few-step Lightning tiers.
 pub(crate) fn fast_draft_applies(template: &str, steps: u32) -> bool {
@@ -469,13 +464,8 @@ pub(crate) fn enhance_prompt(
 }
 
 pub(crate) const SPLIT: &str = "generate.splitLayers";
-pub(crate) const DEFAULT_LAYERS_TEMPLATE: &str = "qwen-layered/split";
+/// Split into Layers asks for at most this many layers (the background and the subjects).
 const MAX_SPLIT_LAYERS: u32 = 8;
-/// The layered model's working size: 640 px on the longer side (what ComfyUI's official graph
-/// scales the input to); the layers come back resampled to the canvas.
-const LAYERED_MAX_SIDE: u32 = 640;
-/// What the layered model is told when no description is given.
-const SPLIT_DEFAULT_PROMPT: &str = "separate this image into layers: the background and each foreground subject on its own layer";
 
 /// The PSD additional-layer-info key a generative layer keeps its [`GenerativeInfo`] under
 /// (JSON). An unmodelled block, so it survives PSD round trips and `Layer::duplicate`.
@@ -1426,6 +1416,73 @@ fn remove_grow(b: Rect) -> u32 {
     ((side * REMOVE_GROW_SHARE).round() as u32).clamp(REMOVE_GROW_MIN, REMOVE_GROW_MAX)
 }
 
+/// The fill job a generative removal runs ([`generative_remove`], Split into Layers'
+/// subjects): the fill template the preferences give (under `auto` the native
+/// Qwen-Image-2.1 removal route), the measured removal prompt, `variations` judged.
+#[allow(clippy::too_many_arguments)]
+fn removal_job(
+    s: &Session,
+    label: &str,
+    grow: u32,
+    erase: bool,
+    enhance: bool,
+    variations: u32,
+    seed: Option<u64>,
+    prefill: bool,
+    tuning: Tuning,
+) -> Result<FillJob> {
+    let (default_template, default_model) = {
+        let i = &s.prefs().integrations;
+        (template_or(&i.default_fill_template, AUTO_TEMPLATE), i.default_edit_model.clone())
+    };
+    let mut auto = default_template == AUTO_TEMPLATE;
+    let mut tuning = tuning;
+    let base = match (auto, native21_auto(s, FILL, true)) {
+        (true, Some(t)) => {
+            auto = false;
+            if tuning.max_pixels == MAX_FILL_REQUEST_PIXELS {
+                tuning.max_pixels = NATIVE21_REMOVAL_PIXELS;
+            }
+            t.to_string()
+        }
+        (true, None) => DEFAULT_FILL_TEMPLATE.to_string(),
+        (false, _) => default_template,
+    };
+    // An edit template as the fill template: the removal runs as a whole-crop instruction
+    // ("Remove the glasses") with no noise mask, which is what an edit model was trained for,
+    // and the layer mask confines the visible change to the hole.
+    let as_edit = template::find(&base).map(|t| t.meta.task == Task::Edit).unwrap_or(false);
+    let Common { template, prompt, negative, seed, steps, guidance, models, .. } =
+        plan_common(s, FILL, &json!({"prompt": REMOVE_PROMPT, "seed": seed}), &base, if as_edit { Task::Edit } else { Task::Fill }, &default_model)?;
+    let backend = backend(s)?;
+    Ok(FillJob {
+        thinker: Arc::clone(&backend),
+        backend,
+        command: if as_edit { EDIT } else { FILL },
+        template_id: template.meta.id.clone(),
+        auto,
+        auto_order: auto_order(FILL, removal_quality(s)),
+        prompt,
+        negative,
+        seed,
+        steps,
+        guidance,
+        name: label.to_string(),
+        models,
+        variations: variations.clamp(1, MAX_REMOVAL_VARIATIONS),
+        edge: Edge::Soft,
+        enhance,
+        refs: Default::default(),
+        grow,
+        erase,
+        rewritten: None,
+        removal: true,
+        prefill,
+        tuning,
+        object: None,
+    })
+}
+
 /// Remove what `coverage` marks (one value per pixel of `bounds`) with the fill model, as
 /// Generative Fill does with [`REMOVE_PROMPT`]: the hole widened by `grow` (or, when `grow`
 /// is 0, by [`remove_grow`]), its pixels kept in the request (or flattened to grey when
@@ -1476,56 +1533,7 @@ pub(crate) fn generative_remove(
     if hole.is_empty() {
         return Err(EngineError::Other("nothing to remove: the stroke covers no pixel that can change (check the selection)".into()));
     }
-    let (default_template, default_model) = {
-        let i = &s.prefs().integrations;
-        (template_or(&i.default_fill_template, AUTO_TEMPLATE), i.default_edit_model.clone())
-    };
-    let mut auto = default_template == AUTO_TEMPLATE;
-    let mut tuning = tuning;
-    let base = match (auto, native21_auto(s, FILL, true)) {
-        (true, Some(t)) => {
-            auto = false;
-            if tuning.max_pixels == MAX_FILL_REQUEST_PIXELS {
-                tuning.max_pixels = NATIVE21_REMOVAL_PIXELS;
-            }
-            t.to_string()
-        }
-        (true, None) => DEFAULT_FILL_TEMPLATE.to_string(),
-        (false, _) => default_template,
-    };
-    // An edit template as the fill template: the removal runs as a whole-crop instruction
-    // ("Remove the glasses") with no noise mask, which is what an edit model was trained for,
-    // and the layer mask confines the visible change to the hole.
-    let as_edit = template::find(&base).map(|t| t.meta.task == Task::Edit).unwrap_or(false);
-    let Common { template, prompt, negative, seed, steps, guidance, models, .. } =
-        plan_common(s, FILL, &json!({"prompt": REMOVE_PROMPT, "seed": seed}), &base, if as_edit { Task::Edit } else { Task::Fill }, &default_model)?;
-    let backend = backend(s)?;
-    let job = FillJob {
-        thinker: Arc::clone(&backend),
-        backend,
-        command: if as_edit { EDIT } else { FILL },
-        template_id: template.meta.id.clone(),
-        auto,
-        auto_order: auto_order(FILL, removal_quality(s)),
-        prompt,
-        negative,
-        seed,
-        steps,
-        guidance,
-        name: label.to_string(),
-        models,
-        variations: variations.clamp(1, MAX_REMOVAL_VARIATIONS),
-        edge: Edge::Soft,
-        enhance,
-        refs: Default::default(),
-        grow,
-        erase,
-        rewritten: None,
-        removal: true,
-        prefill,
-        tuning,
-        object: None,
-    };
+    let job = removal_job(s, label, grow, erase, enhance, variations, seed, prefill, tuning)?;
     let label_kept = label.to_string();
     crate::jobs::edit_job(
         s,
@@ -4232,245 +4240,29 @@ fn run_remove_bg(s: &mut Session, p: &Value) -> Result<Value> {
 /// A detector request is sent at most this large (SAM 3.1 works at about 1 megapixel inside).
 const MAX_SEGMENT_REQUEST_PIXELS: u64 = 2048 * 1024;
 
-/// The size a split request goes out at: at most [`LAYERED_MAX_SIDE`] on the longer side, or,
-/// with `max_pixels`, as large as fits that many pixels (up or down: 1 MP at 3:4 is 864×1152);
-/// multiples of 16 (the layered latent's step), at least 64.
-pub(crate) fn layered_request_size(w: u32, h: u32, max_pixels: Option<u64>) -> (u32, u32) {
-    let longer = w.max(h).max(1);
-    let scale = match max_pixels {
-        Some(m) => (m as f64 / (f64::from(w.max(1)) * f64::from(h.max(1)))).sqrt(),
-        None if longer > LAYERED_MAX_SIDE => f64::from(LAYERED_MAX_SIDE) / f64::from(longer),
-        None => 1.0,
-    };
-    let fit = |v: u32| (((f64::from(v) * scale).round() as u32) / SIZE_STEP * SIZE_STEP).max(SIZE_STEP);
-    (fit(w), fit(h))
-}
-
-/// Everything `generate.splitLayers` needs, validated before any network work.
-struct SplitPlan {
-    common: Common,
-    layers: u32,
-    all_layers: bool,
-    /// `maxPixels`: the working size by pixel count instead of the 640 px side.
-    max_pixels: Option<u64>,
-    /// `integrations.fastDraft`: the worker's step cache ([`FAST_DRAFT_SPLIT_STEP_CACHE`]).
-    fast_draft: bool,
-    /// `tries`: seeds run, the best-separated split kept ([`split_separation`]).
-    tries: u32,
-}
-
-/// Most seeds one Split tries (`tries`).
-const MAX_SPLIT_TRIES: u32 = 4;
-/// Seeds a Split tries unless told otherwise: one, the owner's choice (2026-11-01), with Tries in
-/// the dialog for more. On his picture three seeds in a row gave at least one foreground layer
-/// every time, one seed at 7 of 10, at about 8 s a further try.
-const DEFAULT_SPLIT_TRIES: u32 = 1;
-
-/// How well a split separates the picture, for choosing between seeds: each layer above the
-/// background (the first) whose opaque share (alpha above half) is neither nearly none nor
-/// nearly all counts 1, plus its share up to a half, so of two splits with as many layers the
-/// one whose layers hold more of the picture wins. A layer above the background that is
-/// nearly all opaque hides every layer under it, so such a split scores 0 whatever else it
-/// holds: the owner's split of 2026-11-02 came back 100/76/100 % opaque (bottom to top), the
-/// whole picture again on top, and looked like nothing had happened. Qwen-Image-Layered leaves
-/// the whole picture on one layer at many seeds, the same through ComfyUI's own graph (the
-/// owner's portrait: a foreground layer at 2 of 10 seeds there, 7 of 10 here; 2026-11-01).
-pub(crate) fn split_separation(layers: &[Rgba8]) -> f64 {
-    let shares: Vec<f64> = layers.iter().skip(1).map(opaque_share).collect();
-    if shares.iter().any(|s| *s > SPLIT_COVERING_SHARE) {
-        return 0.0;
-    }
-    shares.iter().map(|&share| if share >= 0.02 { 1.0 + share.min(0.5) } else { 0.0 }).sum()
-}
-
-/// An upper layer more opaque than this covers the picture ([`split_separation`]).
-const SPLIT_COVERING_SHARE: f64 = 0.97;
-
-/// The share of a layer's pixels with alpha above half (sampled to about 65 536 pixels).
-fn opaque_share(l: &Rgba8) -> f64 {
-    let px = l.data.len() / 4;
-    if px == 0 {
-        return 0.0;
-    }
-    let step = (px / 65_536).max(1);
-    let (mut on, mut n) = (0usize, 0usize);
-    for i in (0..px).step_by(step) {
-        n += 1;
-        if l.data.get(i * 4 + 3).is_some_and(|a| *a > 127) {
-            on += 1;
-        }
-    }
-    on as f64 / n.max(1) as f64
-}
-
-fn plan_split(s: &Session, p: &Value) -> Result<SplitPlan> {
-    s.active().ok_or(EngineError::NoDocument)?;
-    let mut q = p.clone();
-    if opt_str(SPLIT, p, "prompt", MAX_PROMPT_CHARS)?.map(str::trim).unwrap_or("").is_empty()
-        && let Some(o) = q.as_object_mut()
-    {
-        o.insert("prompt".into(), Value::String(SPLIT_DEFAULT_PROMPT.into()));
-    }
-    let common = plan_common(s, SPLIT, &q, DEFAULT_LAYERS_TEMPLATE, Task::Layers, "")?;
-    let layers = match opt_num(SPLIT, p, "layers", 1.0, f64::from(MAX_SPLIT_LAYERS))? {
-        None => 3,
-        Some(x) if x.fract() == 0.0 => x as u32,
-        Some(_) => return Err(bad(SPLIT, format!("`layers` must be a whole number from 1 to {MAX_SPLIT_LAYERS}"))),
-    };
-    let all_layers = opt_bool(SPLIT, p, "sampleAllLayers", true)?;
-    let max_pixels = opt_num(SPLIT, p, "maxPixels", 4096.0, 4_194_304.0)?.map(|m| m as u64);
-    let tries = match opt_num(SPLIT, p, "tries", 1.0, f64::from(MAX_SPLIT_TRIES))? {
-        None => DEFAULT_SPLIT_TRIES,
-        Some(x) if x.fract() == 0.0 => x as u32,
-        Some(_) => return Err(bad(SPLIT, format!("`tries` must be a whole number from 1 to {MAX_SPLIT_TRIES}"))),
-    };
-    Ok(SplitPlan { common, layers, all_layers, max_pixels, fast_draft: s.prefs().integrations.fast_draft, tries })
-}
-
 fn split_enabled(s: &Session) -> std::result::Result<(), String> {
     web_unavailable()?;
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
-/// `generate.splitLayers`: the picture goes to a layered model that decomposes it into RGBA
-/// layers (background first); each comes back as a new layer above the active one, with the
-/// alpha the model gave it.
+/// `generate.splitLayers`: SAM 3.1 subjects, each on its own layer, over a background the
+/// generative removal repaints ([`split_subjects`]). Qwen-Image-Layered split only 5 of 10
+/// seeds of the owner's portrait whatever the sampler settings; this did 5 of 5 in a third of
+/// the time, and the owner chose it alone (2026-11-02).
 fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
-    let plan = plan_split(s, p)?;
-    // The worker serves it when it has the files (Qwen-Image-Layered is Apache-2.0: no opt-in).
-    let backend = backend(s)?;
-    let SplitPlan { common, layers, all_layers, max_pixels, fast_draft, tries } = plan;
-    let Common { template, prompt, negative, seed, steps, guidance, models, name } = common;
-    let tid = template.meta.id.clone();
-    let tid_out = tid.clone();
-    let base = name.unwrap_or_else(|| "Split Layer".to_string());
-    crate::jobs::edit_job(
-        s,
-        "Split into Layers",
-        move |doc, active, ctx| {
-            ctx.progress(0.0, "Rendering");
-            let area = doc.bounds();
-            // Each layer of the split covers the canvas; the canvas shows the one being made.
-            ctx.preview_at(area);
-            let (w, h) = (area.width(), area.height());
-            let n = w as usize * h as usize;
-            let layer = if all_layers { None } else { active.and_then(|id| doc.layer(id)).and_then(|l| l.surface()) };
-            let rgba8: Vec<u8> = match layer {
-                Some(surf) => {
-                    let mut px = vec![[0u8; 4]; n];
-                    surf.read_rgba8_into(area, &mut px);
-                    // Transparent pixels go to the model over mid-grey (its loader drops alpha).
-                    px.into_iter()
-                        .flat_map(|p| {
-                            let a = u16::from(p[3]);
-                            let over = |c: u8| ((u16::from(c) * a + 128 * (255 - a)) / 255) as u8;
-                            [over(p[0]), over(p[1]), over(p[2]), 255]
-                        })
-                        .collect()
-                }
-                None => photocraft_compose::render(doc, area).to_rgba8().pixels,
-            };
-            let image = Rgba8::new(w, h, rgba8).map_err(gen_err)?;
-            let (rw, rh) = layered_request_size(w, h, max_pixels);
-            let image = if (rw, rh) == (w, h) { image } else { resize_rgba8(&image, rw, rh)? };
-            let mut params = BTreeMap::new();
-            params.insert("layers".to_string(), json!(layers));
-            if fast_draft {
-                params.insert("step_cache".to_string(), json!(FAST_DRAFT_SPLIT_STEP_CACHE));
-            }
-            let req = Request {
-                template: tid.clone(),
-                prompt: prompt.clone(),
-                negative,
-                seed,
-                steps,
-                guidance,
-                image: Some(image),
-                mask: None,
-                models,
-                size: Some((rw, rh)),
-                params,
-                references: Vec::new(),
-            };
-            // `tries` seeds in a row (the prompt's conditioning and the model stay resident in
-            // the worker, so each further try costs its sampling); the best-separated is kept.
-            // While no try has separated anything (score 0: nothing apart, or a layer covering
-            // the rest), further seeds run, up to [`MAX_SPLIT_TRIES`] in all: a split that
-            // looks like nothing happened is never the answer when another seed may do.
-            let mut req = req;
-            let mut best: Option<(f64, photocraft_genai::Response)> = None;
-            let mut scores = Vec::with_capacity(tries as usize);
-            for t in 0..MAX_SPLIT_TRIES {
-                let separated = best.as_ref().is_some_and(|(b, _)| *b > 0.0);
-                if t >= tries && separated {
-                    break;
-                }
-                req.seed = seed.wrapping_add(u64::from(t)) % MAX_SEED;
-                let planned = if t < tries { tries } else { MAX_SPLIT_TRIES };
-                let (lo, hi) = (0.9 * t as f32 / planned as f32, 0.9 * (t + 1) as f32 / planned as f32);
-                if t >= tries {
-                    ctx.progress(lo, &format!("Nothing separated, trying another seed ({}/{MAX_SPLIT_TRIES})", t + 1));
-                } else if tries > 1 {
-                    ctx.progress(lo, &format!("Try {}/{tries}", t + 1));
-                }
-                let resp = backend.as_ref().run(&req, &JobProgress::span(ctx, lo, hi)).map_err(gen_err)?;
-                ctx.check()?;
-                // One layer is the picture itself: nothing to separate, nothing to retry.
-                let score = if resp.images.len() > 1 { split_separation(&resp.images) } else { 1.0 };
-                scores.push(score);
-                if best.as_ref().is_none_or(|(b, _)| score > *b) {
-                    best = Some((score, resp));
-                }
-            }
-            let Some((best_score, resp)) = best else { return Err(EngineError::Other("the backend returned no layers".into())) };
-            if best_score <= 0.0 {
-                // Every seed left the picture whole: placing those layers would change nothing
-                // the user can see, so say so instead.
-                return Err(EngineError::Other(format!(
-                    "the model left the whole picture on one layer at {} seeds; try another seed, a description of the picture as the prompt, or more layers",
-                    scores.len()
-                )));
-            }
-            ctx.progress(0.95, "Placing");
-            if resp.images.is_empty() {
-                return Err(EngineError::Other("the backend returned no layers".into()));
-            }
-            let count = resp.images.len();
-            let mut made: Vec<LayerId> = Vec::with_capacity(count);
-            for (i, out) in resp.images.into_iter().enumerate() {
-                let out = if (out.width, out.height) == (w, h) { out } else { resize_rgba8(&out, w, h)? };
-                let layer_name = format!("{base} {}/{count}", i + 1);
-                let mut layer = Layer::raster(layer_name.clone(), doc.pixel_format());
-                write_rgba8(&mut layer, &out, area)?;
-                set_generative_info(
-                    &mut layer,
-                    &GenerativeInfo {
-                        command: SPLIT.to_string(),
-                        prompt: prompt.clone(),
-                        template: tid.clone(),
-                        seed: resp.seed,
-                        steps,
-                        guidance,
-                        rect: [area.x0, area.y0, w as i32, h as i32],
-                        name: layer_name,
-                        ..GenerativeInfo::default()
-                    },
-                );
-                // Background first, each next layer above the last.
-                let nid = doc.insert_above(*active, layer);
-                *active = Some(nid);
-                made.push(nid);
-            }
-            Ok((made, resp.seed, resp.run_id, resp.elapsed_ms, resp.timings, (rw, rh), (w, h), scores))
-        },
-        move |(made, seed, run_id, ms, timings, (rw, rh), (w, h), scores)| {
-            json!({
-                "layers": made.iter().map(|l| l.0).collect::<Vec<_>>(), "count": made.len(), "seed": seed, "template": tid_out,
-                "runId": run_id, "width": w, "height": h, "requestWidth": rw, "requestHeight": rh,
-                "ms": ms, "timings": [serde_json::to_value(timings).unwrap_or(Value::Null)], "separation": scores,
-            })
-        },
-    )
+    s.active().ok_or(EngineError::NoDocument)?;
+    let layers = match opt_num(SPLIT, p, "layers", 2.0, f64::from(MAX_SPLIT_LAYERS))? {
+        None => 3,
+        Some(x) if x.fract() == 0.0 => x as usize,
+        Some(_) => return Err(bad(SPLIT, format!("`layers` must be a whole number from 2 to {MAX_SPLIT_LAYERS} (the background and at least one subject)"))),
+    };
+    let prompt = opt_str(SPLIT, p, "prompt", MAX_PROMPT_CHARS)?.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    let seed = match p.get("seed") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(SPLIT, "`seed` must be a whole number"))?),
+    };
+    let name = opt_str(SPLIT, p, "name", 200)?.map(str::to_string);
+    split_subjects::run(s, split_subjects::SubjectsPlan { prompt, subjects: (layers - 1).min(split_subjects::MAX_SUBJECTS), seed, name })
 }
 
 /// Edit › Purge › Generative Models: the server unloads its models and frees their memory. A
@@ -4911,7 +4703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // Placed by the menu catalogue under Edit, with the other generative items.
             menu: &[],
             shortcut: None,
-            params: r#"{"layers":int=3,"prompt":text,"negative":text,"sampleAllLayers":bool=true,"maxPixels":{4096..4194304?=the 640-px working size},"tries":1..4=1,"steps":0..250=0,"guidance":0..30=0,"seed":{u64?=random},"template":{id?=qwen-layered/split},"model":{file?},"name":{str?}} → {"layers":[id],"count","seed","template","runId","width","height","requestWidth","requestHeight","ms","timings"} (a layered model (Qwen-Image-Layered, Apache-2.0) decomposes the picture into `layers` RGBA layers, the background first, each a new layer above the active one with the alpha the model gave it; prompt = a description of the picture, empty = a generic instruction; sampleAllLayers false sends the active layer alone; the picture goes out at 640 px on its longer side, or at maxPixels pixels (1000000 = 864x1152 at 3:4), and the layers come back resampled; tries = seeds run in a row (seed, seed+1, …), the split whose layers above the background hold the most of the picture kept (`separation` in the result: each try's score), each further try about one sampling more; a background job; needs the native worker with the layered model's files)"#,
+            params: r#"{"layers":2..8=3,"prompt":text,"seed":{u64?=random},"name":{str?}} → {"layers":[id],"count","subjects","foundBy","template","seed","width","height","fillMs","ms"} (SAM 3.1 finds what the picture is of (prompt = what to cut out, e.g. "the dog"; empty = the main subject, then a person, an animal, an object) and each instance, the largest first and up to layers - 1 of them, becomes its own layer with the picture's pixels and an edge-refined alpha, above one background layer: the picture with the subjects repainted away by the generative removal (the fill template the preferences give); new layers above the active one, one undo step; a background job; needs the native worker with SAM 3.1 and a fill model)"#,
             enabled: split_enabled,
             run: run_split,
             journal: true,
@@ -5053,6 +4845,9 @@ mod edit_tests;
 #[cfg(test)]
 #[path = "generate_similar_tests.rs"]
 mod similar_tests;
+
+#[path = "generate_split_subjects.rs"]
+mod split_subjects;
 
 #[cfg(test)]
 #[path = "generate_split_tests.rs"]

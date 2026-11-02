@@ -828,6 +828,52 @@ impl ObjectUnderStroke {
     }
 }
 
+/// Split into Layers' subjects: the detector's instances of what a picture is of (Select
+/// Subject's prompts in turn, or the caller's), each a canvas coverage with its bounds and
+/// pixel count, largest first, specks dropped and enclosed gaps filled. Built on the session,
+/// run inside the split's job.
+pub(crate) struct SubjectFinder {
+    backend: Arc<dyn photocraft_genai::GenerativeBackend>,
+    server: String,
+    prompting: Prompting,
+    prompts: Vec<String>,
+}
+
+/// A [`SubjectFinder`] asking for `prompt` (none: Select Subject's [`SUBJECT_FALLBACKS`]).
+pub(crate) fn subject_finder(s: &Session, prompt: Option<&str>) -> Result<SubjectFinder> {
+    let prompts: Vec<String> = match prompt.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => vec![p.to_string()],
+        None => SUBJECT_FALLBACKS.iter().map(|p| (*p).to_string()).collect(),
+    };
+    let (backend, server, prompting) = prompting_for(s, BY_TEXT, DEFAULT_SEGMENT_TEMPLATE, &prompts[0])
+        .ok_or_else(|| EngineError::Other("no segmentation model (SAM 3.1) is set up; see Preferences > Generative".into()))?;
+    Ok(SubjectFinder { backend, server, prompting, prompts })
+}
+
+impl SubjectFinder {
+    /// The instances found in the picture (`all_layers`: the composite, else the active layer).
+    pub(crate) fn instances(&self, doc: &Document, active: Option<LayerId>, all_layers: bool, ctx: &JobCtx) -> Result<(Vec<(Vec<f32>, Rect, u64)>, String)> {
+        let area = doc.bounds();
+        let (image, _) = detector_image(doc, active, all_layers, MAX_SEGMENT_REQUEST_PIXELS)?;
+        let (masks, _, prompt) = detect_any(self.backend.as_ref(), &self.server, &image, area, &self.prompting, &self.prompts, ctx)?;
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        let mut instances: Vec<(Vec<f32>, Rect, u64)> = without_specks(instances_of(&masks, area)?)
+            .into_iter()
+            .map(|(cov, _, _)| {
+                let cov = fill_enclosed(&cov, w, h);
+                let (b, n) = coverage_bounds(&cov, area);
+                (cov, b, n)
+            })
+            .filter(|(_, _, n)| *n > 0)
+            .collect();
+        instances.sort_by(|a, b| b.2.cmp(&a.2));
+        if instances.is_empty() {
+            return Err(EngineError::Other(format!("nothing matching \"{prompt}\" was found")));
+        }
+        Ok((instances, prompt))
+    }
+}
+
 /// Standard base64 with padding (a probe mask is at most a few hundred kilobytes).
 pub(crate) fn b64_encode(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

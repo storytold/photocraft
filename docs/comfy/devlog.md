@@ -4,6 +4,27 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-02: Split into Layers is SAM 3.1 + Fill; Qwen-Image-Layered is out of the app
+
+- The owner's Split "did nothing": it finished in 24 s, but the model put an opaque copy of the
+  whole picture on the top layer (100/76/100 % opaque, bottom to top). Over the day's 72 splits
+  about half the seeds did that or left everything in the background.
+- Measured on his portrait (images.jpg at 416x640, seeds 1–10, 3 layers, the RTX 5090; genai-native
+  branch `layered-official-schedule` adds the reference pipeline's sampling as request params):
+  today's graph 5/10 usable at 11.8 s warm; the diffusers schedule (linear time shift, mu =
+  sqrt(patches/256)) 5/10; + CFG 4 4/10; + cfg_normalize 4/10; + 50 steps 5/10 at 27.7 s; a Qwen3-VL
+  caption as the prompt 5/10 (+13 s); 4 layers 0/10; the full reference setup 4/10 at 34.6 s. The
+  seed decides, and even the best splits left a ghost of the subject in the background.
+- SAM 3.1 + the generative removal, in the app over the control channel (Select Subject, Layer via
+  Copy, Remove on the background): 5/5 fill seeds clean, the subject never came back, about 4.6 s
+  (SAM 0.65 s, fill 3.9 s). The owner chose SAM alone.
+- `generate.splitLayers` now: SAM 3.1 instances (Select Subject's prompts in turn, or the prompt as
+  what to cut out), the largest up to `layers` - 1, each a layer with the picture's pixels and an
+  edge-refined alpha, over one background layer (the picture with the subjects removed by the fill
+  template the preferences give); one undo step. `tries`, `maxPixels`, `steps`, `guidance`,
+  `template` and the qwen-layered/split template are gone. Open: hair edges are the detector's
+  refined mask, so fine wisps clip; Refine Edge on the subject layer helps.
+
 ## 2026-11-01 (night): Split can try several seeds and keep the best-separated
 
 - With the dialog fixed, the owner's picture still split badly at most seeds. ComfyUI's own
