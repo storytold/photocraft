@@ -27,8 +27,11 @@ use crate::pickers::picker_browser_dragging::{DragSession, DropCommitResult, Dro
 use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
-const GROUP_HEADER_HEIGHT: f32 = 30.0;
-const GROUP_GAP_HEIGHT: f32 = 12.0;
+// 27px of header content plus a one-pixel border on each vertical edge.
+const GROUP_HEADER_HEIGHT: f32 = 29.0;
+const GROUP_LAYOUT_GAP: f32 = 0.0;
+// Keep a forgiving drag target even though the visible group separation is only two pixels.
+const GROUP_GAP_DROP_HEIGHT: f32 = 12.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
 const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
@@ -563,14 +566,12 @@ mod group_drop_tests {
 use crate::pickers::asset_browser_groups::{header as asset_browser_header, inset_row_rect, paint as paint_asset_browser_header};
 
 /// Browser-specific layout and presentation, supplied by each asset consumer.
-/// `flush` lays the grid out as Photoshop's Swatches panel: the cells touch, square-cornered and
-/// without a border of their own, so no screen is spent on gaps (#5103); gradients, patterns and
-/// the other preset grids keep their [`GRID_GAP`] and card borders.
+/// Cards use a consistent border and two-pixel inter-card spacing across picker consumers.
 #[derive(Clone, Copy)]
 pub(crate) struct BrowserOptions {
     /// Canvas hit region used to distinguish drops onto the canvas from drops into the browser.
     pub(crate) canvas: Rect,
-    /// Use touching, square-cornered grid cells rather than spaced preset cards.
+    /// Legacy layout preference retained for existing consumers; card borders define spacing.
     pub(crate) flush: bool,
     /// Centre a partially filled grid row in the available item area.
     pub(crate) center_grid: bool,
@@ -732,7 +733,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
         canvas,
         flush,
         center_grid,
-        grid_indent,
+        grid_indent: _,
         all_groups_open,
         compact_context_menus,
         item_size,
@@ -740,6 +741,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
         domain_hierarchy_actions,
         root_item_group,
     } = adapter.options;
+    // Kept in the options shape for existing consumers; spacing/borders are now consistent.
+    let _legacy_flush_layout = flush;
     let capabilities = adapter.capabilities;
     // Canonical hierarchy drag/drop is opt-in: each adapter enables it only after its projected
     // tree and domain commit callback can represent every hierarchy operation it exposes.
@@ -892,13 +895,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     // The browser is the flexible middle region of a picker panel. Keep it at the allocated
     // height even when the library is short; otherwise the footer floats up and each consumer's
     // panel geometry depends on how many presets happen to be installed.
+    // The group rows intentionally paint flush to the parent UI's left clip edge, while
+    // ScrollArea::inner_rect excludes its built-in content margin. Retain the parent's horizontal
+    // extent but the scroll viewport's vertical bounds for row hit-testing and overlays.
+    let browser_parent_clip = ui.clip_rect();
     let scroll = egui::ScrollArea::vertical()
         .id_salt(("preset-scroll", panel))
         .max_height(scroll_height)
         .min_scrolled_height(scroll_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             // Keep drag targets reachable when a preset or hierarchy node is dragged beyond the
             // current viewport. This behavior belongs to the shared scrollable browser, not to a
             // particular asset consumer.
@@ -914,15 +921,18 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             // group drag can show only one insertion line in the entire shared browser.
             let mut item_hierarchy_targets: Vec<(egui::Response, Rect, bool, bool, usize, String, Vec<String>)> = Vec::new();
             // The root is a real sibling sequence, not merely the area after the final group.
-            // Give its leading edge an explicit separator/drop target before the first root node.
-            if canonical_hierarchy_drag && let Some(first) = hierarchy.roots().first() {
-                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
+            // Give its leading edge an overlay drop target; it must not reserve vertical layout space.
+            if canonical_hierarchy_drag && let Some(first @ HierarchyNode::Group { .. }) = hierarchy.roots().first() {
+                let top = ui.cursor().min.y;
+                let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), top), pos2(ui.clip_rect().right(), top + 1.0));
+                let response = ui.interact(rect, ui.id().with(("root-leading-group-drop", panel)), Sense::hover());
                 let indicator = Rect::from_min_max(
-                    pos2(rect.left(), rect.center().y - 2.0),
-                    pos2(rect.right(), rect.center().y + 2.0),
+                    pos2(rect.left(), top - 0.5),
+                    pos2(rect.right(), top + 0.5),
                 );
-                let hit_index = canonical_drop_hits.borrow().len();
-                canonical_drop_hits.borrow_mut().push((root_prepend_hit(rect, indicator, first.id().clone(), hit_index), response));
+                // The leading border is the insertion boundary itself. Give it precedence over
+                // the group-body hit registered immediately afterward, without adding layout space.
+                canonical_drop_hits.borrow_mut().push((root_prepend_hit(rect, indicator, first.id().clone(), usize::MAX), response));
             }
             for segment in &render_segments {
                 let gi = segment.group_index;
@@ -955,10 +965,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     expanded_groups.insert(g.name.clone());
                 }
                 if segment.show_header {
-                // Reserve a forgiving twelve-pixel separator between group rows. Keep the visual
-                // gap and its two semantic hit halves the same size.
+                // Keep the visible separator compact; drag hit-testing has a larger invisible target.
                 if !gap_headers.is_empty() {
-                    ui.add_space((GROUP_GAP_HEIGHT - ui.spacing().item_spacing.y).max(0.0));
+                    ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
                 }
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
                     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
@@ -1090,9 +1099,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_group = |ui: &mut egui::Ui, group: &HierarchyGroup<'_, ItemView>, group_open: bool, group_depth: usize| {
                             if !gap_headers.is_empty() {
-                                ui.add_space((GROUP_GAP_HEIGHT - ui.spacing().item_spacing.y).max(0.0));
+                                ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
                             }
-                            let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                            let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
                             let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
                             let row_depth = group_depth + 1 + depth;
                             let fresp = ui.interact(inset_row_rect(fr, row_depth), allocated.id, Sense::click_and_drag());
@@ -1167,15 +1176,16 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             }
                         };
                         let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_path: &[String]| {
-                            let group_depth = group_path.len();
                             let w = ui.available_width();
-                            // Cards and hierarchy rows share the same 20px-per-level visual
-                            // coordinate. Grid-only padding is accounted for inside that amount,
-                            // rather than being added on top of the hierarchy indentation.
-                            let visual_indent = if segment.root_items { 0.0 } else { row_indent(depth + group_depth + 1) };
-                            let content_indent = if list { visual_indent } else { (visual_indent - grid_indent).max(0.0) };
-                            let pad = if segment.root_items { 0.0 } else { content_indent + (if list { 0.0 } else { grid_indent }) };
-                            let gap = if list || flush { 0.0 } else { GRID_GAP };
+                            let root_level_items = segment.root_items;
+                            // Cards are children of their containing group, so they take one
+                            // additional twenty-pixel step beyond that group's header. Apply
+                            // the same rule at every nested depth. Root-level cards are siblings
+                            // of groups and retain only their small safety inset.
+                            let hierarchy_indent = row_indent(depth + group_path.len() + 1);
+                            let content_indent = if root_level_items { 0.0 } else { hierarchy_indent };
+                            let pad = content_indent;
+                            let gap = if list { 0.0 } else { GRID_GAP };
                             let (cell, cols) = if list {
                                 let row_h = list_item_height.unwrap_or(24.0).max(1.0);
                                 (vec2((w - content_indent).max(0.0), row_h), 1)
@@ -1191,6 +1201,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             // accumulate with row spacing and leave uneven vertical gaps.
                             let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
                             let (area, _) = ui.allocate_exact_size(vec2(w, grid_height), Sense::hover());
+                            // Anchor to the same clip edge as group headers so the full hierarchy
+                            // indent is applied exactly once, not on top of the area's base inset.
+                            let item_origin_x = ui.clip_rect().left() + 1.0;
                             if grid_height > 0.0 {
                                 group_content_areas.push((g.name.clone(), area));
                             }
@@ -1198,16 +1211,15 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             for (run_i, it) in items.iter().enumerate() {
                                 let ii = g.items.iter().position(|original| std::ptr::eq(original, *it)).unwrap_or(run_i);
                                 let (cx, cy) = ((run_i % cols) as f32, (run_i / cols) as f32);
-                                let r = Rect::from_min_size(area.min + vec2(pad + center_offset + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
-                                // A one-pixel inset on every card yields a two-pixel visible gap
-                                // between neighbours while retaining the same gap at group edges.
-                                let r = if !list && !flush { r.shrink(1.0) } else { r };
+                                let r = Rect::from_min_size(pos2(item_origin_x + pad + center_offset + cx * (cell.x + gap), area.min.y + cy * (cell.y + gap)), cell);
                                 let next_rect = (run_i + 1 < items.len()).then(|| {
                                     let next_i = run_i + 1;
                                     let (next_x, next_y) = ((next_i % cols) as f32, (next_i / cols) as f32);
-                                    let next =
-                                        Rect::from_min_size(area.min + vec2(pad + center_offset + next_x * (cell.x + gap), next_y * (cell.y + gap)), cell);
-                                    if !list && !flush { next.shrink(1.0) } else { next }
+                                    let next = Rect::from_min_size(
+                                        pos2(item_origin_x + pad + center_offset + next_x * (cell.x + gap), area.min.y + next_y * (cell.y + gap)),
+                                        cell,
+                                    );
+                                    next
                                 });
                                 let resp = ui.interact(r, ui.id().with((panel, gi, ii)), Sense::click_and_drag());
                                 let is_sel = st_cell.borrow().is_selected_item(panel, &g.name, &it.group_path, &it.key);
@@ -1233,11 +1245,14 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 } else {
                                     asset_browser_item_info(&resp, &it.name, is_sel);
                                     paint_item(ui, r, gi, ii, ItemPaintState::Item { selected: is_sel });
-                                    // Only selected cards are outlined; centring the stroke on the inset
-                                    // card edge leaves one pixel of it on either side.
-                                    if is_sel {
-                                        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
-                                    }
+                                    ui.painter().rect_stroke(
+                                        r,
+                                        CornerRadius::ZERO,
+                                        Stroke::new(if is_sel { 2.0 } else { 1.0 }, if is_sel { t.accent } else { t.card_border }),
+                                        // Keep the entire border inside the allocated card rect:
+                                        // it consumes card dimensions and cannot overlap neighbours.
+                                        egui::StrokeKind::Inside,
+                                    );
                                 }
                                 let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
                                     AssetDrag::Group { scope, name, path } if scope == panel => {
@@ -1561,7 +1576,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     }
                 }
             }
-            // Each adjacent visible group pair has an actual twelve-pixel gap. The upper half inserts
+            // Each adjacent visible group pair has no layout gap and a forgiving twelve-pixel
+            // invisible drop target aligned to the lower group's border. The upper half inserts
             // after the last node in the lower group's parent sequence that precedes it. This is
             // important when the preceding visible header is not a sibling of the lower header.
             if canonical_hierarchy_drag {
@@ -1569,15 +1585,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     let (upper_id, _upper_rect, upper_depth, _upper_open) = &pair[0];
                     let (lower_id, lower_rect, lower_depth, _) = &pair[1];
                     let gap_rect = Rect::from_min_max(
-                        pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_HEIGHT),
-                        pos2(lower_rect.right(), lower_rect.top()),
+                        pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_DROP_HEIGHT),
+                        // Include the lower header's one-pixel top border so the target reaches
+                        // the visual boundary despite the two-pixel layout separation.
+                        pos2(lower_rect.right(), lower_rect.top() + 1.0),
                     );
-                    // The layout inserts exactly twelve pixels before every visible header after
-                    // the first. Do not infer the gap from the upper group's content bounds: a
+                    // The drop target extends twelve pixels before every visible header after
+                    // the first, independently of layout spacing. Do not infer it from the upper group's content bounds: a
                     // mixed sibling sequence can render cards from that group after a child
                     // header, and nested descendants can extend beyond the upper group's own
                     // card area. The twelve pixels immediately preceding the lower header are the
-                    // authoritative gap regardless of that content ordering.
+                    // authoritative target regardless of that content ordering.
                     if gap_rect.is_positive() {
                         let response = ui.interact(
                             gap_rect,
@@ -1713,6 +1731,11 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
             }
         });
+    let browser_view_clip = Rect::from_min_max(
+        pos2(browser_parent_clip.left(), scroll.inner_rect.top()),
+        pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()),
+    )
+    .intersect(browser_parent_clip);
     let mut hierarchy_drop_feedback = None;
     if canonical_hierarchy_drag {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
@@ -1724,7 +1747,10 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 .iter()
                 .filter_map(|(hit, _)| {
                     let mut visible = hit.clone();
-                    visible.hit_rect = visible.hit_rect.intersect(scroll.inner_rect);
+                    // Header visuals deliberately extend into the ScrollArea's left margin. The
+                    // inner rect excludes that margin, so use the parent's horizontal clip with
+                    // the scroll viewport's vertical bounds instead of trimming the row's left.
+                    visible.hit_rect = visible.hit_rect.intersect(browser_view_clip);
                     visible.hit_rect.is_positive().then_some(visible)
                 })
                 .collect();
@@ -1742,7 +1768,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 {
                     let mut session = DragSession::new(source.clone());
                     if let Some(candidate) = session.resolve(pointer, &hits[index], &hierarchy).cloned() {
-                        paint_candidate(ui, &candidate, t.accent);
+                        paint_candidate(ui, &candidate, t.accent, browser_view_clip);
                         // Resolve and validate the exact candidate before taking egui's global
                         // one-shot payload. The taken source must still identify this same node.
                         if let Some(released) = asset_browser_take_release(ui.ctx()) {

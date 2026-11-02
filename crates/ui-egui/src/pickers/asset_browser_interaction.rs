@@ -160,10 +160,12 @@ pub(crate) fn group_gap_drop_hits(
     lower_depth: usize,
     order: usize,
 ) -> Vec<DropHitRegion> {
-    // Both semantic halves share one visual marker: the separator's exact center.
+    // Both semantic halves share one visual marker, aligned to the narrow visible gap at
+    // the bottom of the larger invisible hit target.
+    let line_center_y = rect.max.y - 1.0;
     let line = Rect::from_min_max(
-        Pos2::new(rect.left(), rect.center().y - 2.0),
-        Pos2::new(rect.right(), rect.center().y + 2.0),
+        Pos2::new(rect.left(), line_center_y - 2.0),
+        Pos2::new(rect.right(), line_center_y + 2.0),
     );
     let middle = rect.center().y;
     vec![
@@ -448,7 +450,7 @@ mod insertion_marker_tests {
                     assert_eq!(hits.len(), 2);
                     assert_eq!(hits[0].hit_rect, Rect::from_min_max(gap.min, Pos2::new(gap.right(), top + 6.0)));
                     assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 6.0), gap.max));
-                    let centered_line = Rect::from_min_max(Pos2::new(left, top + 4.0), Pos2::new(gap.right(), top + 8.0));
+                    let centered_line = Rect::from_min_max(Pos2::new(left, top + 9.0), Pos2::new(gap.right(), top + 13.0));
                     assert_eq!(hits[0].indicator_rect, centered_line);
                     assert_eq!(hits[1].indicator_rect, centered_line);
                     assert_eq!(hits[0].depth, 0);
@@ -632,7 +634,24 @@ pub(crate) fn asset_browser_header_target_with_capabilities(
                     let t = Tokens::get(ui.ctx());
                     paint_group_drop_outline(ui, rect, t.accent);
                 } else {
-                    crate::widgets::drop_line(ui, rect, false, false, &Tokens::get(ui.ctx()));
+                    let t = Tokens::get(ui.ctx());
+                    // Header insertion lines span the complete header width. The generic card
+                    // marker deliberately leaves a four-pixel end-cap inset, which reads as a
+                    // rectangular notch on a full-width hierarchy row. Paint on the foreground
+                    // layer as well, so header glyphs and later row content cannot cover it.
+                    let layer = egui::LayerId::new(egui::Order::Foreground, ui.layer_id().id);
+                    let painter = ui.ctx().layer_painter(layer).with_clip_rect(ui.clip_rect());
+                    let y = rect.top();
+                    painter.rect_filled(
+                        Rect::from_min_max(Pos2::new(rect.left(), y - 1.0), Pos2::new(rect.right(), y + 1.0)),
+                        egui::CornerRadius::ZERO,
+                        t.accent,
+                    );
+                    painter.rect_filled(
+                        Rect::from_min_max(Pos2::new(rect.left(), rect.top()), Pos2::new(rect.left() + 2.0, rect.bottom())),
+                        egui::CornerRadius::ZERO,
+                        t.accent,
+                    );
                 }
             }
             _ => {}

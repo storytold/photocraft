@@ -183,17 +183,21 @@ pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Opti
 
 /// Paint the indicator carried by a valid resolved candidate. Invalid destinations intentionally
 /// remain visually quiet rather than drawing distracting error-colored bars.
-pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32) {
+pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32, clip_rect: Rect) {
     if !candidate.is_valid() {
         return;
     }
+    // Drop feedback must sit above group headers/cards, especially for the root-leading marker
+    // which intentionally shares the first header's top border. Keep it clipped to the browser.
+    let layer = egui::LayerId::new(egui::Order::Foreground, ui.layer_id().id);
+    let painter = ui.ctx().layer_painter(layer).with_clip_rect(clip_rect);
     match &candidate.indicator {
         DropIndicator::InsertionLine { rect } | DropIndicator::RootAppendLine { rect } => {
-            ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, color);
+            painter.rect_filled(*rect, egui::CornerRadius::ZERO, color);
         }
         DropIndicator::ContainerHighlight { rect } => {
             for border in container_outline_rects(*rect) {
-                ui.painter().rect_filled(border, egui::CornerRadius::ZERO, color);
+                painter.rect_filled(border, egui::CornerRadius::ZERO, color);
             }
         }
     }

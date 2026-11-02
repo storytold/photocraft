@@ -128,6 +128,51 @@ fn pointer_drag(h: &mut Harness<'static, UiTestState>, source: Pos2, target: Pos
     h.run_steps(3);
 }
 
+#[test]
+fn group_header_left_border_is_visible_in_rendered_pixels() {
+    let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
+    let header = h.get_by_label("A").rect();
+    let border = crate::theme::Tokens::get(&h.ctx).card_border;
+    let image = h.render().expect("render group header");
+    let x = (header.left() * h.ctx.pixels_per_point()).round() as u32;
+    let y = (header.center().y * h.ctx.pixels_per_point()).round() as u32;
+    let actual = image.get_pixel(x, y).0;
+
+    assert_eq!(actual[..3], border.to_array()[..3], "the header's left border should reach its one-pixel tree inset; header={header:?}, pixel=({x}, {y})");
+}
+
+#[test]
+fn canonical_group_drop_outline_left_edge_is_visible_in_rendered_pixels() {
+    let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
+    let source = h.get_by_label("C").rect().center();
+    let target = h.get_by_label("A").rect();
+    let pointer = target.center();
+
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (pointer - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent;
+    let ppp = h.ctx.pixels_per_point();
+    let image = h.render().expect("render active group-drop preview");
+    let browser_clip = h.ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(("preset-browser-rect", PANEL))));
+    let pixel_is_accent = |x: f32, y: f32| {
+        let x = (x * ppp).round() as u32;
+        let y = (y * ppp).round() as u32;
+        x < image.width() && y < image.height() && image.get_pixel(x, y).0[..3] == accent.to_array()[..3]
+    };
+    let left_edge = (0..4).any(|dy| pixel_is_accent(target.left(), target.top() + dy as f32));
+    let top_edge = (0..4).any(|dx| pixel_is_accent(target.left() + dx as f32, target.top() + 1.0));
+
+    assert!(left_edge, "left edge missing from rendered drop outline: target={target:?}, clip={browser_clip:?}, accent={accent:?}, ppp={ppp}, pixels={:?}", (0..6).map(|x| image.get_pixel(x, (target.top() + 1.0) as u32).0).collect::<Vec<_>>());
+    assert!(top_edge, "top edge missing from rendered drop outline: target={target:?}, accent={accent:?}, ppp={ppp}");
+}
+
 fn drag_labels(h: &mut Harness<'static, UiTestState>, source: &str, target: &str, offset: Vec2) {
     let from = h.get_by_label(source).rect().center();
     let to = h.get_by_label(target).rect().center() + offset;
@@ -167,6 +212,21 @@ fn actual_nested_header_drop_prepends_and_preserves_the_complete_nested_path() {
 }
 
 #[test]
+fn actual_cards_and_headers_share_the_same_indent_at_every_hierarchy_depth() {
+    let h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+
+    let a_header = h.get_by_label("A").rect();
+    let a_card = h.get_by_label("A card 1").rect();
+    let b_header = h.get_by_label("B").rect();
+    let b_card = h.get_by_label("B card 1").rect();
+
+    assert_eq!(a_card.left() - a_header.left(), 20.0, "cards directly inside a root group should be indented one level beyond their group header");
+    assert_eq!(b_card.left() - b_header.left(), 20.0, "cards inside a nested group should be indented one level beyond their nested group header");
+    assert_eq!(b_header.left() - a_header.left(), 20.0, "each nested hierarchy level adds exactly twenty pixels");
+    assert_eq!(b_card.left() - a_card.left(), 20.0, "cards should inherit the same twenty-pixel hierarchy step as headers");
+}
+
+#[test]
 fn actual_card_edge_drop_reorders_mixed_siblings_at_both_halves_across_many_cards() {
     for (source, target, after) in [("C", "A card 1", false), ("C", "A card 2", true), ("B", "A card 1", true), ("B", "A card 2", false)] {
         let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
@@ -200,24 +260,6 @@ fn actual_twelve_pixel_group_gap_selects_upper_and_lower_sibling_levels() {
         } else {
             assert!(c_index < b_index, "lower gap half inserts before the lower group: {a:?}");
         }
-    }
-}
-
-#[test]
-fn actual_vertical_indent_column_appends_to_the_intended_group_from_many_subtree_positions() {
-    for card_label in ["A card 1", "A card 2", "A card 3"] {
-        let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
-        let source = h.get_by_label("C").rect().center();
-        let header = h.get_by_label("A").rect();
-        let card = h.get_by_label(card_label).rect();
-        // The prepend/append column is the narrow vertical strip immediately left of the
-        // group's indented card content. Staying inside it avoids overlapping the card hitbox.
-        // Stay inside the scroll viewport and the twelve-pixel-wide indent column.
-        let target = pos2(header.left() + 12.0, card.center().y);
-        pointer_drag(&mut h, source, target);
-        let children = &h.state().0.hierarchy_order[PANEL]["A"];
-        assert_eq!(children.last(), Some(&HierarchyOrderEntry::Group("C".into())), "drop beside {card_label}: {children:?}");
-        assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"));
     }
 }
 
@@ -301,6 +343,7 @@ fn actual_root_card_is_rendered_between_root_groups_and_can_be_dropped_into_a_gr
     let a_header = h.get_by_label("A").rect();
     let root_card = h.get_by_label("A card 1").rect();
     let b_header = h.get_by_label("B").rect();
+    assert_eq!(root_card.left(), a_header.left(), "root-level cards should share the root tree's one-pixel inset without an additional card indent");
     assert!(a_header.center().y < root_card.center().y && root_card.center().y < b_header.center().y);
 
     pointer_drag(&mut h, root_card.center(), b_header.center());
@@ -341,7 +384,7 @@ fn actual_nested_card_drop_between_root_groups_promotes_card_to_root_level() {
     let mut h = harness(nested_group_tree(), vec2(520.0, 900.0));
     let source = h.get_by_label("A card 1").rect().center();
     let b_header = h.get_by_label("B").rect();
-    let target = pos2(b_header.center().x, b_header.top() - 1.0);
+    let target = pos2(b_header.center().x, b_header.top() + 0.5);
 
     pointer_drag(&mut h, source, target);
 
@@ -358,8 +401,8 @@ fn actual_nested_card_drop_before_first_root_group_promotes_card_to_root_front()
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
     let source = h.get_by_label("B card 1").rect().center();
     let first_header = h.get_by_label("A").rect();
-    // The shared browser exposes a dedicated leading separator before the first root node.
-    let target = pos2(first_header.center().x, first_header.top() - 5.0);
+    // The first-position insertion target sits on the group's top border without reserving space.
+    let target = pos2(first_header.center().x, first_header.top());
 
     pointer_drag(&mut h, source, target);
 

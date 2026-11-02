@@ -13,6 +13,7 @@ const LIGHT_SURFACE_CONTRAST: f32 = 1.12;
 const DARK_TEXT_CONTRAST: f32 = 7.11;
 const LIGHT_TEXT_CONTRAST: f32 = 10.5;
 pub(crate) const ROW_INDENT: f32 = 20.0;
+const TREE_LEFT_INSET: f32 = 1.0;
 
 /// Initial expansion policy for a browser group, with explicit user toggles overriding the default.
 pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, all_groups_open: bool) -> bool {
@@ -43,8 +44,16 @@ pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &s
         if tokens.dark() { (DARK_SURFACE_CONTRAST, DARK_TEXT_CONTRAST) } else { (LIGHT_SURFACE_CONTRAST, LIGHT_TEXT_CONTRAST) };
     let colors = crate::color_utils::contrasting_surface_colors(tokens.card, tokens.dark(), surface_contrast, text_contrast);
     let with_opacity = |color| crate::color_utils::with_opacity(color, opacity);
-    ui.painter().rect_filled(inset_row_rect(rect, depth), egui::CornerRadius::ZERO, with_opacity(colors.background));
-    let content_left = rect.left() + indent;
+    let row_rect = inset_row_rect(rect, depth);
+    ui.painter().rect_filled(row_rect, egui::CornerRadius::ZERO, with_opacity(colors.background));
+    ui.painter().rect_stroke(
+        row_rect,
+        egui::CornerRadius::ZERO,
+        egui::Stroke::new(1.0, with_opacity(tokens.card_border)),
+        // The border is contained by the allocated header dimensions.
+        egui::StrokeKind::Inside,
+    );
+    let content_left = rect.left() + TREE_LEFT_INSET + indent;
     crate::icons::paint(
         ui,
         // The chevron path is inset within its SVG viewBox; position its visible stroke, not the viewport.
@@ -78,7 +87,7 @@ pub(crate) fn row_indent(depth: usize) -> f32 {
 
 /// Inset both the painted row and its interactive target; preserve the right edge and height.
 pub(crate) fn inset_row_rect(rect: Rect, depth: usize) -> Rect {
-    Rect::from_min_max(pos2((rect.left() + row_indent(depth)).min(rect.right()), rect.top()), rect.max)
+    Rect::from_min_max(pos2((rect.left() + TREE_LEFT_INSET + row_indent(depth)).min(rect.right()), rect.top()), rect.max)
 }
 
 #[cfg(test)]
@@ -94,7 +103,8 @@ mod tests {
         assert_eq!(row_indent(0), 0.0);
         assert_eq!(row_indent(1), 20.0);
         assert_eq!(row_indent(2), 40.0);
-        assert_eq!(inset_row_rect(rect, 1), Rect::from_min_max(pos2(30.0, 20.0), pos2(210.0, 50.0)));
+        assert_eq!(inset_row_rect(rect, 0), Rect::from_min_max(pos2(11.0, 20.0), pos2(210.0, 50.0)));
+        assert_eq!(inset_row_rect(rect, 1), Rect::from_min_max(pos2(31.0, 20.0), pos2(210.0, 50.0)));
     }
 
     #[test]
