@@ -474,7 +474,7 @@ fn subject_on_a_layer_with_no_pixels_says_so() {
     s.execute("select.rect", json!({"x": 1, "y": 2, "width": 30, "height": 40})).unwrap();
     let before = s.active().unwrap().doc.selection.clone();
     let e = s.execute("select.subject", json!({})).unwrap_err().to_string();
-    assert!(e.contains("the active layer is empty"), "{e}");
+    assert!(e.contains("the active layer is empty") && e.contains("select.subject"), "{e}");
     assert_eq!(s.active().unwrap().doc.selection, before);
     let e = s.execute("layer.maskAllObjects", json!({})).unwrap_err().to_string();
     assert!(e.contains("no objects"), "{e}");
@@ -484,7 +484,7 @@ fn subject_on_a_layer_with_no_pixels_says_so() {
     let (mut s, _) = disc_on_a_bigger_canvas(8);
     s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 1000, 0]})).unwrap();
     let e = s.execute("select.subject", json!({})).unwrap_err().to_string();
-    assert!(e.contains("no pixels in that area"), "{e}");
+    assert!(e.contains("no pixels in that area") && e.contains("select.subject"), "{e}");
 }
 
 /// Inside its box a cut-out runs out of the frame, which reads as background, so a cut-out is
