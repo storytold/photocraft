@@ -547,3 +547,129 @@ fn locked_reference_opacity_roundtrips_through_commands_history_and_export() {
         assert!(reopened.layers[0].locks.all);
     }
 }
+
+/// Reference projections must not report successful turns which capture would silently discard.
+#[test]
+fn reference_layers_refuse_canvas_geometry_before_state_changes() {
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    doc.sprite.as_mut().unwrap().layers[0].flags |= 64;
+    doc.layers[0].locks.all = true;
+    doc.restore_sprite_frame().unwrap();
+    let mut s = add_to_session(doc);
+    for (command, params) in [
+        ("image.imageRotation.flipCanvasHorizontal", json!({})),
+        ("image.imageRotation.180", json!({})),
+        ("image.rotation.arbitrary", json!({"angle":180})),
+        ("image.canvasSize", json!({"width":3})),
+        ("image.imageSize", json!({"width":4})),
+        ("image.crop", json!({"x":1,"y":0,"width":2,"height":1})),
+        ("image.perspectiveCrop", json!({"corners":[[0,0],[2,0],[1.5,1],[0,1]],"width":2,"height":1})),
+    ] {
+        let error = s.execute(command, params.clone()).unwrap_err();
+        assert!(error.to_string().contains("reference layers"), "{command}: {error}");
+        assert_refused_unchanged(&mut s, command, params);
+    }
+}
+
+/// Right-angle turns move index identity in every layer, including equal-colored entries.
+#[test]
+fn indexed_turns_move_duplicate_color_indices_before_palette_edits_and_export() {
+    use photocraft_doc::sprite::PaletteEntry;
+    for command in [
+        "image.imageRotation.flipCanvasHorizontal",
+        "image.imageRotation.flipCanvasVertical",
+        "image.imageRotation.180",
+        "image.imageRotation.90cw",
+        "image.imageRotation.90ccw",
+    ] {
+        let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+        doc.mode = ColorMode::Indexed;
+        let sprite = doc.sprite.as_mut().unwrap();
+        sprite.indexed = true;
+        sprite.transparent_index = 0;
+        let palette = Arc::new(vec![
+            PaletteEntry { rgba: [0, 0, 0, 0], name: "Empty".into() },
+            PaletteEntry { rgba: [255, 0, 0, 255], name: "A".into() },
+            PaletteEntry { rgba: [255, 0, 0, 255], name: "B".into() },
+        ]);
+        let frame = Arc::make_mut(&mut sprite.frames[0]);
+        frame.palette = palette.clone();
+        for cel in frame.cels.values_mut() {
+            let cel = Arc::make_mut(cel);
+            cel.rect = Rect::from_xywh(0, 0, 2, 1);
+            let mut indices = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+            indices.write_interleaved(cel.rect, &[1, 2]);
+            cel.pixels = photocraft_doc::sprite::pixels::render_indices(&indices, cel.rect, &palette, Some(0)).unwrap();
+            cel.indices = Some(indices);
+        }
+        // A second ordinary layer proves the turn is not tied to the active layer.
+        let mut second = doc.layers[0].clone();
+        second.id = photocraft_doc::LayerId::fresh();
+        let source = sprite.layers[0].id;
+        let source_cel = sprite.frames[0].cels[&source].clone();
+        sprite.layers.push(SpriteLayer { id: second.id, flags: 3, opacity: 255, uuid: None });
+        Arc::make_mut(&mut sprite.frames[0]).cels.insert(second.id, source_cel);
+        doc.layers.push(second);
+        doc.restore_sprite_frame().unwrap();
+        let mut s = add_to_session(doc);
+        let before = s.active().unwrap().doc.clone();
+        s.execute(command, json!({})).unwrap();
+        let turned = s.active().unwrap().doc.clone();
+        let expected = if command.ends_with("90ccw") || command.ends_with("Horizontal") || command.ends_with(".180") { [2, 1] } else { [1, 2] };
+        for cel in turned.sprite.as_ref().unwrap().frames[0].cels.values() {
+            assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(cel.rect), expected, "{command}");
+        }
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, before);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc, turned);
+        s.execute("sprite.setPaletteEntry", json!({"index":1,"rgba":[0,0,255,255]})).unwrap();
+        let out = photocraft_io::export(&s.active().unwrap().doc, "aseprite", &Default::default()).unwrap();
+        let back = photocraft_io::import("turned.aseprite", &out.bytes).unwrap().document;
+        for cel in back.sprite.as_ref().unwrap().frames[0].cels.values() {
+            assert_eq!(cel.indices.as_ref().unwrap().to_interleaved(cel.rect), expected, "{command}");
+            let rgba = cel.pixels.to_interleaved(cel.rect);
+            assert_eq!(rgba, expected.into_iter().flat_map(|i| if i == 1 { [0, 0, 255, 255] } else { [255, 0, 0, 255] }).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// Global Frame-target legacy records are retained when the original first frame is removed.
+#[test]
+fn deleting_frame_zero_transfers_frame_metadata_with_its_identifying_bytes() {
+    use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
+    let mut doc = (*session().active().unwrap().doc).clone();
+    let mut text = 1u32.to_le_bytes().to_vec();
+    text.extend(12u16.to_le_bytes());
+    text.extend(b"frame marker");
+    let chunk = SpriteChunk { kind: 0x2020, target: MetadataTarget::Frame, bytes: Arc::new(text) };
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).metadata.push(chunk.clone());
+    let mut s = add_to_session(doc);
+    s.execute("sprite.deleteFrame", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.sprite.as_ref().unwrap().frames[0].metadata, vec![chunk]);
+}
+
+/// Retained maps cannot be turned by changing only their derived raster/index caches.
+#[test]
+fn retained_tilemaps_refuse_turns_until_explicit_rasterization() {
+    let doc = photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document;
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("tilemap"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}
+
+/// Native cel bounds at an extreme coordinate must be refused before turn-map arithmetic.
+#[test]
+fn canvas_turn_refuses_unrepresentable_cel_coordinates_without_panicking() {
+    let mut doc = (*single_frame_session().active().unwrap().doc).clone();
+    let id = doc.layers[0].id;
+    let cel = Arc::make_mut(Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[0]).cels.get_mut(&id).unwrap());
+    cel.rect = Rect::from_xywh(i32::MIN, 0, 2, 1);
+    cel.pixels = Surface::new(PixelFormat::RGBA8);
+    doc.restore_sprite_frame().unwrap();
+    let mut s = add_to_session(doc);
+    let error = s.execute("image.imageRotation.flipCanvasHorizontal", json!({})).unwrap_err();
+    assert!(error.to_string().contains("coordinate range"), "{error}");
+    assert_refused_unchanged(&mut s, "image.imageRotation.flipCanvasHorizontal", json!({}));
+}

@@ -78,7 +78,11 @@ refused when retained slice keys would become stale; changing tag definitions is
 tag user properties would be reassigned. Deleting frame zero is also refused when its
 palette user data would otherwise attach to the surviving frame's palette. Whole-canvas geometry operations (resize, crop, trim, flips and rotations) are refused on
 multi-frame sprites until they can transform all cels consistently. Detach a copy to transform
-only the selected frame; resolution-only edits remain available. Canvas changes with retained
+only the selected frame; resolution-only edits remain available. Reference layers also block
+canvas geometry changes because their display is derived from retained source bounds. Retained
+tilemaps must be explicitly rasterized before whole-canvas geometry edits. Indexed
+sprites support exact right-angle turns/flips with their original index planes; other canvas
+resampling/cropping requires detaching a copy so duplicate-color index identity is not lost. Canvas changes with retained
 slice coordinates are also refused. These errors preserve the original document and explain the affected metadata.
 
 ## Save and metadata preservation
