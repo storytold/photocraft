@@ -99,6 +99,26 @@ fn clouds_events_map_and_refuse_unrepresentable_native_settings() {
         for p in [json!({"seed": 7}), json!({"foreground": "#ff0000"}), json!({"background": "#0000ff"}), json!({"layer": 7}), json!({"target": "mask"})] {
             assert!(export_item(id, &p, "Render").is_none(), "{id}: {p}");
         }
+        // The Clouds dialog records `seed: 0`, which is what the empty imported step plays as.
+        for p in [json!({"seed": 0}), json!({"seed": 0.0}), json!({"seed": 0, "target": "pixels"})] {
+            assert_eq!(export_item(id, &p, "Render").map(|item| item.descriptor), Some(Some(desc("null"))), "{id}: {p}");
+        }
+        for p in [json!({"seed": -1}), json!({"seed": 0.5}), json!({"seed": "0"}), json!({"seed": 0, "foreground": "#ff0000"})] {
+            assert!(export_item(id, &p, "Render").is_none(), "{id}: {p}");
+        }
+    }
+}
+
+/// A recorded dialog step saves through the real Save Actions command.
+#[test]
+fn clouds_recorded_through_the_dialog_save() {
+    for id in ["filter.render.clouds", "filter.render.differenceClouds"] {
+        let mut s = Session::new();
+        s.actions.list.push(Action::new("Render", vec![(id.into(), json!({"seed": 0}))]));
+        let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
+        assert_eq!(saved["skipped"], json!([]), "{id}");
+        let back = import(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.actions[0].steps, vec![(id.into(), json!({}))], "{id}");
     }
 }
 
@@ -238,6 +258,8 @@ fn render_actions_match_direct_filters_and_undo() {
         (*b"DfrC", desc("null"), "filter.render.differenceClouds", json!({})),
         (*b"Fbrs", fibers(23, 6, -7), "filter.render.fibers", json!({"variance": 23, "strength": 6, "seed": -7})),
         (*b"LnsF", flare(240, [5.0, -5.0], "Nkn1"), "filter.render.lensFlare", json!({"brightness": 240, "centerX": 5.0, "centerY": -5.0, "lens": "prime105"})),
+        // Just right of the canvas: the dialog's 0..1 range does not clamp a recorded centre.
+        (*b"LnsF", flare(100, [1.4, 0.25], "Zm"), "filter.render.lensFlare", json!({"brightness": 100, "centerX": 1.4, "centerY": 0.25, "lens": "zoom"})),
     ];
     for mode in ["rgb", "gray"] {
         for depth in [8, 16, 32] {

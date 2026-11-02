@@ -42,9 +42,12 @@ pub(super) fn clouds_from(id: &str, d: &Descriptor) -> Mapped {
     if d.items.is_empty() { step(id, json!({})) } else { Mapped::Unsupported { harmless: false } }
 }
 
-/// Explicit seeds, colors and layer references have no fields in these ATN events.
+/// Explicit colors and layer references have no fields in these ATN events. A seed has none
+/// either, but `seed: 0` (what PhotoCraft's dialog records) is what the imported empty step
+/// plays as, so it is dropped; any other seed would play differently and is refused.
 pub(super) fn clouds_to(_: &str, p: &Value) -> Option<Descriptor> {
-    params(p, &[]).then(|| desc("null"))
+    let seed_replays = p.get("seed").is_none_or(|s| s.as_f64() == Some(0.0));
+    (params(p, &["seed"]) && seed_replays).then(|| desc("null"))
 }
 
 /// Capture a missing recorded seed once; later playback and export reuse the stored bits.
