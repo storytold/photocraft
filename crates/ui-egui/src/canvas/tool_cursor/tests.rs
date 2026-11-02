@@ -638,11 +638,13 @@ fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_s
             assert!(has_dark_outline, "{variant:?} at {scale} has dark outline");
 
             // Verify hotspot matches expected formula: pad + (hot_box / 24.0) * 22.0 * scale
-            let offset = (1.0 * scale).round().max(1.0) as f32;
-            let pad = offset + 1.0;
+            let offset_px = 1.0 * scale;
+            let pad = (offset_px + 2.0).ceil() as f32;
             let hot_box = variant.hotspot_in_box();
-            let expected_hx = (pad + (hot_box.x / 24.0) * 22.0 * scale).round() as u16;
-            let expected_hy = (pad + (hot_box.y / 24.0) * 22.0 * scale).round() as u16;
+            let ideal_hx = pad + (hot_box.x / 24.0) * 22.0 * scale;
+            let ideal_hy = pad + (hot_box.y / 24.0) * 22.0 * scale;
+            let expected_hx = ideal_hx.round() as u16;
+            let expected_hy = ideal_hy.round() as u16;
             assert_eq!(hx, expected_hx, "{variant:?} hotspot x at {scale}");
             assert_eq!(hy, expected_hy, "{variant:?} hotspot y at {scale}");
         }
@@ -691,13 +693,13 @@ fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
         assert!(Arc::ptr_eq(&lookup.rgba, &images[i].rgba), "switching tools retains cached image");
     }
 
-    // Bounded cache capacity: inserting more shapes evicts the oldest
+    // Non-Pen shapes use single-entry cache (memory bounded to 1 bitmap)
     for i in 0..25 {
         let _ = super::cached_image(&ctx, &super::Shape::Circle { radius: (10 + i) as f32, centre: false }, 1.0);
     }
     let id = egui::Id::unique("photocraft-tool-cursor");
-    let cache = ctx.data(|d| d.get_temp::<super::CursorCache>(id)).unwrap();
-    assert!(cache.entries.len() <= super::MAX_CACHE_ENTRIES, "cache remains strictly bounded");
+    let cached = ctx.data(|d| d.get_temp::<super::Cached>(id)).unwrap();
+    assert_eq!(cached.shape, super::Shape::Circle { radius: 34.0, centre: false }, "non-Pen cache holds only single most recent shape");
 }
 
 #[test]
@@ -718,4 +720,94 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
     // Clear on pass end / leaving canvas
     let empty = frame(&ctx, |_| {});
     assert!(empty.platform_output.cursor_image.is_none(), "lifecycle clears cursor image");
+}
+
+#[test]
+fn pen_bitmap_independent_comparison_versus_painted_path_on_light_dark_midgrey() {
+    for scale in [1.0, 1.25, 1.5, 2.0] {
+        for bg_lum in [240u8, 15u8, 128u8] {
+            for variant in super::PenVariant::all() {
+                // 1. Native bitmap path
+                let native_img = super::pen::rasterize(variant, scale).expect("rasterize succeeds");
+                let [nw, nh] = native_img.size;
+
+                let mut native_comp = vec![bg_lum; usize::from(nw) * usize::from(nh)];
+                for (i, px) in native_img.rgba.as_chunks::<4>().0.iter().enumerate() {
+                    let fg_val = px[0] as f32;
+                    let alpha = px[3] as f32 / 255.0;
+                    let comp = fg_val * alpha + (bg_lum as f32) * (1.0 - alpha);
+                    native_comp[i] = comp.round().clamp(0.0, 255.0) as u8;
+                }
+
+                // 2. Independent painted path representation
+                let icon_px = (22.0 * scale).round() as u32;
+                let svg_image = crate::icons::rasterize_svg(variant.icon_name(), icon_px, icon_px).expect("svg rasterize succeeds");
+                let [sw, sh] = svg_image.size;
+
+                let pad = ((1.0 * scale) + 2.0).ceil() as usize;
+                let pw = sw + pad * 2;
+                let ph = sh + pad * 2;
+                assert_eq!(usize::from(nw), pw);
+                assert_eq!(usize::from(nh), ph);
+
+                let mut painted_comp = vec![bg_lum; pw * ph];
+
+                let outline_alpha = 200.0 / 255.0;
+                let offset = 1.0 * scale;
+                for (dx, dy) in [(-1.0f32, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+                    let ox = (pad as f32) + dx * offset;
+                    let oy = (pad as f32) + dy * offset;
+                    for y in 0..sh {
+                        for x in 0..sw {
+                            let src_a = f32::from(svg_image.pixels[y * sw + x].a()) / 255.0;
+                            if src_a <= 0.0 {
+                                continue;
+                            }
+                            let layer_a = src_a * outline_alpha;
+                            let dst_x = (ox + x as f32).round() as usize;
+                            let dst_y = (oy + y as f32).round() as usize;
+                            if dst_x < pw && dst_y < ph {
+                                let idx = dst_y * pw + dst_x;
+                                let cur = painted_comp[idx] as f32;
+                                painted_comp[idx] = (cur * (1.0 - layer_a)).round().clamp(0.0, 255.0) as u8;
+                            }
+                        }
+                    }
+                }
+
+                for y in 0..sh {
+                    for x in 0..sw {
+                        let src_a = f32::from(svg_image.pixels[y * sw + x].a()) / 255.0;
+                        if src_a <= 0.0 {
+                            continue;
+                        }
+                        let dst_x = pad + x;
+                        let dst_y = pad + y;
+                        if dst_x < pw && dst_y < ph {
+                            let idx = dst_y * pw + dst_x;
+                            let cur = painted_comp[idx] as f32;
+                            painted_comp[idx] = (255.0 * src_a + cur * (1.0 - src_a)).round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
+                }
+
+                // 3. Comparison metrics
+                let mut sum_abs_diff = 0.0f64;
+                let total_px = pw * ph;
+                for i in 0..total_px {
+                    let d = (native_comp[i] as i16 - painted_comp[i] as i16).unsigned_abs() as u8;
+                    sum_abs_diff += d as f64;
+                }
+                let mean_abs_diff = sum_abs_diff / (total_px as f64);
+
+                // Both must have visible white foreground and dark outline
+                assert!(native_comp.iter().any(|&p| p > bg_lum.saturating_add(30) || (bg_lum == 240 && p >= 250)));
+                assert!(native_comp.iter().any(|&p| p < bg_lum.saturating_sub(30) || (bg_lum == 15 && p <= 5)));
+
+                // Perceptual similarity: Mean Absolute Error should remain within tolerance (< 20 / 255)
+                // Note: we do not assert pixel-exact equality as subpixel resampling differs from discrete integer offsets
+                assert!(mean_abs_diff < 20.0, "{variant:?} at scale {scale} on bg {bg_lum}: MAE {mean_abs_diff:.2} exceeds tolerance");
+            }
+        }
+    }
 }

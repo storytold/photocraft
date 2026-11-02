@@ -10,12 +10,13 @@ use std::sync::Arc;
 use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 
 use crate::canvas::ViewXform;
+use crate::state::Tool;
 
 mod hand;
 mod pen;
 mod zoom;
 
-pub use pen::PenVariant;
+pub use pen::{PenVariant, pen_rasterization_count, reset_pen_rasterization_count};
 
 /// The largest cursor bitmap (physical pixels; points on macOS, see [`native_scale`]); a larger tip
 /// paints its outline instead, with a small OS crosshair at the hotspot, and that outline trails
@@ -39,18 +40,18 @@ enum Shape {
     Pen(PenVariant),
 }
 
-const MAX_CACHE_ENTRIES: usize = 16;
-
-#[derive(Clone, Default)]
-struct CursorCache {
-    entries: Vec<CachedEntry>,
-}
-
+/// Single-entry cache for non-Pen shapes, keeping memory bounded to one bitmap.
 #[derive(Clone)]
-struct CachedEntry {
+struct Cached {
     shape: Shape,
     scale: f32,
     image: CustomCursorImage,
+}
+
+/// Separately bounded cache for Pen tool variants (up to 6 small bitmaps at current scale).
+#[derive(Clone, Default)]
+struct PenCache {
+    entries: [Option<(f32, CustomCursorImage)>; 6],
 }
 
 /// The image is sticky in egui's platform output. Clear it every pass, including when a
@@ -167,14 +168,9 @@ pub(crate) fn pointer_elsewhere(ctx: &egui::Context, others: &[egui::ViewportId]
         return false;
     }
     let here = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. } | egui::Event::PointerGone)));
-    // A pointer that arrived: moving or pressing there. One that only stayed (a hidden window
-    // keeps its last one) does not take the pointer from this window.
     let arrived = |i: &egui::InputState| {
         i.pointer.has_pointer() && i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }))
     };
-    // Where this window has pointer events of its own too, another window's report counts only
-    // if this window's pointer lies inside that window: one just outside its edge, where both
-    // may hear the pointer, stays this window's.
     let at = ctx.input(|i| i.viewport().inner_rect.zip(i.pointer.latest_pos()).map(|(r, p)| r.min + p.to_vec2()));
     let there = separate && others.iter().any(|&v| v != own && ctx.input_for(v, |i| arrived(i) && (!here || covers(i.viewport().inner_rect, at))));
     let now = separate && elsewhere(before, here, there);
@@ -184,26 +180,18 @@ pub(crate) fn pointer_elsewhere(ctx: &egui::Context, others: &[egui::ViewportId]
     now
 }
 
-/// Whether a window at `rect` (desktop points) lies over the desktop point `at`; unknown when
-/// either is, which counts as covering.
 fn covers(rect: Option<egui::Rect>, at: Option<Pos2>) -> bool {
     rect.zip(at).is_none_or(|(r, p)| r.contains(p))
 }
 
-/// [`pointer_elsewhere`] for one frame: whether the pointer belonged to another window `before`,
-/// whether this window got a pointer event (`here`) and whether another window reports the
-/// pointer arriving (`there`). Both in one frame mean the pointer just crossed into the other
-/// window: this window's last events come from before the crossing.
 fn elsewhere(before: bool, here: bool, there: bool) -> bool {
     there || (before && !here)
 }
 
-/// Mark this window as a Wayland surface (or not), for [`native`]; the shell calls it every pass.
 pub(crate) fn set_wayland(ctx: &egui::Context, wayland: bool) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-cursor-wayland"), wayland));
 }
 
-/// A Wayland window whose scale is not 1, where winit's cursor bitmaps are unreliable.
 fn scaled_wayland(ctx: &egui::Context) -> bool {
     let wayland = cfg!(target_os = "linux") && ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("photocraft-cursor-wayland"))).unwrap_or(false);
     wayland && ctx.native_pixels_per_point().unwrap_or_else(|| ctx.pixels_per_point() / ctx.zoom_factor()) != 1.0
@@ -213,22 +201,14 @@ fn scaled_wayland(ctx: &egui::Context) -> bool {
 /// macOS, so there the bitmap scales only with the UI zoom (the monitor's density would enlarge it
 /// a second time on Retina displays); Windows, X11 and Wayland take physical pixels. (The macOS
 /// sizing is from @jerrykimo's #968.)
-pub(crate) fn native_scale(ctx: &egui::Context) -> f32 {
+pub fn native_scale(ctx: &egui::Context) -> f32 {
     if cfg!(target_os = "macos") { ctx.zoom_factor() } else { ctx.pixels_per_point() }
 }
 
-/// The resize arrow for a handle that resizes along document direction `d`, as the view shows it
-/// (its rotation, flip and pixel aspect): the nearest of the four arrows. Free Transform (handles
-/// and Warp splits), the type box, Content-Aware Move's box, the Artboard tool and guides pick
-/// their arrows here.
 pub(crate) fn resize(d: [f64; 2], xf: &ViewXform) -> CursorIcon {
     resize_on_screen(xf.map_vec(vec2(d[0] as f32, d[1] as f32)))
 }
 
-/// The resize arrow for corner `i` of a box's `quad` (corners in order round the box), as the view
-/// shows it: along the corner's bisector, so an upright box's corners always show a diagonal arrow,
-/// as in Photoshop, however wide or tall the box is. Aiming from the opposite corner instead gave a
-/// box wider than about 2.4:1 the horizontal arrow at its corners (and a tall one the vertical).
 pub(crate) fn corner_resize(quad: &[[f64; 2]; 4], i: usize, xf: &ViewXform) -> CursorIcon {
     let at = quad[i % 4];
     let edge = |k: usize| {
@@ -240,7 +220,6 @@ pub(crate) fn corner_resize(quad: &[[f64; 2]; 4], i: usize, xf: &ViewXform) -> C
     let bisector = edge(i + 1).zip(edge(i + 3)).map(|(a, b)| a + b).filter(|s| s.length() > 1e-3);
     match bisector {
         Some(s) => resize_on_screen(s),
-        // A collapsed or folded corner has no bisector: aim away from the opposite corner.
         None => {
             let opposite = quad[(i + 2) % 4];
             resize([at[0] - opposite[0], at[1] - opposite[1]], xf)
@@ -248,7 +227,6 @@ pub(crate) fn corner_resize(quad: &[[f64; 2]; 4], i: usize, xf: &ViewXform) -> C
     }
 }
 
-/// The nearest of the four resize arrows to screen direction `s`.
 fn resize_on_screen(s: Vec2) -> CursorIcon {
     let angle = f64::from(s.y).atan2(f64::from(s.x)).rem_euclid(std::f64::consts::PI);
     match (angle / std::f64::consts::FRAC_PI_4).round() as u8 % 4 {
@@ -259,9 +237,6 @@ fn resize_on_screen(s: Vec2) -> CursorIcon {
     }
 }
 
-/// The Hand tool's pointer: an open hand, a fist while it drags (`closed`). winit maps `Grab` and
-/// `Grabbing` to the four-arrow move cursor on Windows, so there it is a bitmap; macOS and the
-/// Linux themes already draw hands, and the OS moves those without waiting for a frame.
 pub(crate) fn hand(ctx: &egui::Context, closed: bool) -> CursorIcon {
     hand_with(ctx, closed, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
 }
@@ -274,15 +249,11 @@ fn hand_with(ctx: &egui::Context, closed: bool, bitmap: bool) -> CursorIcon {
     if closed { CursorIcon::Grabbing } else { CursorIcon::Grab }
 }
 
-/// The bitmap [`hand`] hands Windows, for tests that check the Hand's pointer on every platform.
 #[cfg(test)]
 pub(crate) fn hand_bitmap(ctx: &egui::Context, closed: bool) -> Option<CustomCursorImage> {
     rasterize(&Shape::Hand { closed }, native_scale(ctx))
 }
 
-/// The Zoom tool's pointer: a magnifier with a plus, or a minus when it zooms `out`. winit maps
-/// `ZoomIn` and `ZoomOut` to the plain arrow on Windows (#3735), so there it is a bitmap; macOS and
-/// the Linux themes already draw magnifiers.
 pub(crate) fn zoom(ctx: &egui::Context, out: bool) -> CursorIcon {
     zoom_with(ctx, out, cfg!(target_os = "windows") && ctx.viewport_id() == egui::ViewportId::ROOT)
 }
@@ -300,31 +271,47 @@ pub fn rasterize_pen(variant: PenVariant, scale: f32) -> Option<CustomCursorImag
     pen::rasterize(variant, scale)
 }
 
-/// The Pen tool's pointer: its toolbar icon with the nib/apex on `at`. Uses an OS cursor bitmap
-/// where supported so its movement tracks hardware input without waiting for canvas frames (#9122);
-/// returns `None` when unsupported or unrasterizable so the caller can paint the fallback.
+/// The Pen tool's pointer: its toolbar icon with the nib/apex on the cursor hotspot. Uses an OS
+/// cursor bitmap where supported so its movement tracks hardware input without waiting for canvas
+/// frames (#9122); returns `None` when unsupported or unrasterizable so the caller can paint the fallback.
 pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
     let variant = PenVariant::from_tool(tool)?;
     if !native(ctx) {
         return None;
     }
     let scale = native_scale(ctx);
-    let image = cached_image(ctx, &Shape::Pen(variant), scale)?;
+    let image = cached_pen_image(ctx, variant, scale)?;
     ctx.set_cursor_image(Some(image));
     Some(CursorIcon::None)
 }
 
+fn cached_pen_image(ctx: &egui::Context, variant: PenVariant, scale: f32) -> Option<CustomCursorImage> {
+    let id = egui::Id::unique("photocraft-pen-cursor-cache");
+    let idx = variant as usize;
+    if let Some(cache) = ctx.data(|d| d.get_temp::<PenCache>(id)) {
+        if let Some(Some((cached_scale, ref image))) = cache.entries.get(idx) {
+            if (*cached_scale - scale).abs() < 1e-4 {
+                return Some(image.clone());
+            }
+        }
+    }
+    let image = pen::rasterize(variant, scale)?;
+    let mut cache = ctx.data(|d| d.get_temp::<PenCache>(id)).unwrap_or_default();
+    if let Some(slot) = cache.entries.get_mut(idx) {
+        *slot = Some((scale, image.clone()));
+    }
+    ctx.data_mut(|d| d.insert_temp(id, cache));
+    Some(image)
+}
+
 fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
     let ctx = painter.ctx();
-    // Where cursor images can't be uploaded (immediate viewports, the web), paint the shape.
     if native(ctx) {
         let scale = native_scale(ctx);
         if let Some(image) = cached_image(ctx, &shape, scale) {
             ctx.set_cursor_image(Some(image));
             return CursorIcon::None;
         }
-        // An enormous tip cannot fit an OS cursor. Preserve its full-size outline, with an OS
-        // crosshair at the hotspot so the user still gets immediate position feedback.
         paint(painter, at, &shape);
         if let Some(image) = cached_image(ctx, &Shape::Crosshair { length: 6.0, gap: 2.0 }, scale) {
             ctx.set_cursor_image(Some(image));
@@ -336,23 +323,17 @@ fn show(painter: &Painter, at: Pos2, shape: Shape) -> CursorIcon {
 }
 
 fn cached_image(ctx: &egui::Context, shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
+    if let Shape::Pen(variant) = shape {
+        return cached_pen_image(ctx, *variant, scale);
+    }
     let id = egui::Id::unique("photocraft-tool-cursor");
-    if let Some(mut cache) = ctx.data(|d| d.get_temp::<CursorCache>(id)) {
-        if let Some(pos) = cache.entries.iter().position(|e| e.shape == *shape && (e.scale - scale).abs() < 1e-4) {
-            let hit = cache.entries.remove(pos);
-            let image = hit.image.clone();
-            cache.entries.push(hit);
-            ctx.data_mut(|d| d.insert_temp(id, cache));
-            return Some(image);
+    if let Some(cached) = ctx.data(|d| d.get_temp::<Cached>(id)) {
+        if cached.shape == *shape && (cached.scale - scale).abs() < 1e-4 {
+            return Some(cached.image);
         }
     }
     let image = rasterize(shape, scale)?;
-    let mut cache = ctx.data(|d| d.get_temp::<CursorCache>(id)).unwrap_or_default();
-    if cache.entries.len() >= MAX_CACHE_ENTRIES {
-        cache.entries.remove(0);
-    }
-    cache.entries.push(CachedEntry { shape: shape.clone(), scale, image: image.clone() });
-    ctx.data_mut(|d| d.insert_temp(id, cache));
+    ctx.data_mut(|d| d.insert_temp(id, Cached { shape: shape.clone(), scale, image: image.clone() }));
     Some(image)
 }
 
@@ -382,7 +363,7 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
                 }
             }
             // Only ever a bitmap: without one the OS draws its own grab cursors, or fallback paints.
-            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pen { .. } => {}
+            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Pen(_) => {}
         }
     }
 }
@@ -393,7 +374,6 @@ fn paint_crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32, stroke: S
     }
 }
 
-/// Distance to the nearest arm (round caps), in physical pixels from the hotspot.
 fn cross_distance(x: f32, y: f32, length: f32, gap: f32) -> f32 {
     let horizontal = (x - x.clamp(gap, length)).hypot(y);
     let vertical = x.hypot(y - y.clamp(gap, length));
@@ -435,16 +415,12 @@ fn extent(shape: &Shape) -> Option<f32> {
     })
 }
 
-/// Distance from (`x`, `y`) to the segment `a`-`b`, all in the same units.
 fn seg_distance(x: f32, y: f32, a: Vec2, b: Vec2) -> f32 {
-    let (abx, aby) = (b.x - a.x, b.y - a.y);
-    let t = (((x - a.x) * abx + (y - a.y) * aby) / (abx * abx + aby * aby).max(1e-12)).clamp(0.0, 1.0);
-    ((x - a.x - abx * t).powi(2) + (y - a.y - aby * t).powi(2)).sqrt()
+    let (abx, handy) = (b.x - a.x, b.y - a.y);
+    let t = (((x - a.x) * abx + (y - a.y) * handy) / (abx * abx + handy * handy).max(1e-12)).clamp(0.0, 1.0);
+    ((x - a.x - abx * t).powi(2) + (y - a.y - handy * t).powi(2)).sqrt()
 }
 
-/// How much of the pixel at `(dx, dy)` physical pixels from the hotspot the light fill covers and
-/// how much the dark outline around it does, each 0 to 1. A dark crease inside the hand takes
-/// from the fill, so the fill never covers it.
 fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
     let (x, y) = (dx.abs(), dy.abs());
     match shape {
@@ -483,8 +459,6 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
     }
 }
 
-/// A light filled shape with a 1 px dark outline and dark lines `half_width` logical pixels either
-/// side of its creases, from their signed distances in logical pixels.
 fn silhouette(edge: f32, crease: f32, half_width: f32, scale: f32) -> (f32, f32) {
     let edge = edge * scale;
     let inside = (0.5 - edge).clamp(0.0, 1.0);
@@ -493,12 +467,10 @@ fn silhouette(edge: f32, crease: f32, half_width: f32, scale: f32) -> (f32, f32)
     (inside * (1.0 - crease), outline.max(inside * crease))
 }
 
-/// A 1 px light line with a 1 px dark one on each side, `distance` physical pixels from its centre.
 fn stroke_coverage(distance: f32, scale: f32) -> (f32, f32) {
     ((0.5 * scale + 0.5 - distance).clamp(0.0, 1.0), (1.5 * scale + 0.5 - distance).clamp(0.0, 1.0))
 }
 
-/// Splat the distance to one ring segment into an outline's side × side distance buffer.
 fn splat_segment(dist: &mut [f32], side: usize, hot: f32, a: Vec2, b: Vec2, reach: f32) {
     let n = side as f32;
     let (x0, x1) = (a.x.min(b.x) + hot - reach, a.x.max(b.x) + hot + reach);
@@ -520,7 +492,6 @@ fn splat_segment(dist: &mut [f32], side: usize, hot: f32, a: Vec2, b: Vec2, reac
     }
 }
 
-/// Fold the centre crosshair (the circle cursor's) into the outline distances.
 fn splat_cross(dist: &mut [f32], side: usize, hot: f32, arm: f32) {
     let reach = arm + 2.0;
     let lo = (hot - reach).max(0.0).floor() as i32;
@@ -538,9 +509,6 @@ fn splat_cross(dist: &mut [f32], side: usize, hot: f32, arm: f32) {
     }
 }
 
-/// One bitmap pixel from its distance to the stroke centre, in straight RGBA (winit form).
-/// A pixel with light `fill` over a dark `outline` (coverages 0 to 1), in straight RGBA as winit
-/// requires (not egui's premultiplied). No coverage is `[0; 4]`.
 fn stroke_pixel((fill, outline): (f32, f32), dark: egui::Color32, light: egui::Color32) -> [u8; 4] {
     let a_dark = outline * f32::from(dark.a()) / 255.0;
     let a_light = fill * f32::from(light.a()) / 255.0;
@@ -549,9 +517,6 @@ fn stroke_pixel((fill, outline): (f32, f32), dark: egui::Color32, light: egui::C
     [white, white, white, (255.0 * alpha).round() as u8]
 }
 
-/// The columns of row offset `dy` (from the hotspot, in pixels) that can be painted by a ring of
-/// radius `r` drawn `reach` wide either side: the left and right arcs of the annulus, padded by
-/// a pixel. Every other pixel of the row is transparent.
 fn ring_spans(dy: f32, r: f32, reach: f32) -> Option<[(f32, f32); 2]> {
     let (ro, ri) = (r + reach + 1.0, (r - reach - 1.0).max(0.0));
     if dy.abs() > ro {
@@ -570,8 +535,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         return pen::rasterize(*variant, scale);
     }
     let extent = extent(shape)?;
-    // Odd dimensions put the hotspot on the centre pixel at every DPI. Include the outline
-    // and its antialiasing fringe, then check before converting or allocating.
     let half = ((extent + 1.5) * scale + 1.0).ceil();
     if !half.is_finite() || half > f32::from((MAX_SIDE - 1) / 2) {
         return None;
@@ -579,8 +542,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     let hot = half as u16;
     let side = hot * 2 + 1;
     let bytes = usize::from(side).checked_mul(usize::from(side))?.checked_mul(4)?;
-    // Transparent to start; only pixels a shape can reach are evaluated below (a big tip's
-    // outline is a thin ring in a large square, #1343).
     let mut rgba = vec![0u8; bytes];
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     let n = usize::from(side);
@@ -591,8 +552,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         }
     };
     if let Shape::Outline { rings, centre } = shape {
-        // Splat each segment into its bounding box instead of measuring every ring per pixel:
-        // tip outlines may carry hundreds of points.
         let reach = 1.5 * scale + 2.0;
         let mut dist = vec![f32::INFINITY; n * n];
         for ring in rings.iter() {
@@ -614,8 +573,6 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
         }
         return Some(CustomCursorImage { rgba: Arc::from(rgba), size: [side, side], hotspot: [hot, hot] });
     }
-    // Columns to evaluate in each row: the ring's two arcs (and the centre mark) for a circle,
-    // the whole row otherwise.
     let last = f32::from(side - 1);
     for row in 0..n {
         let dy = row as f32 - hotf;
