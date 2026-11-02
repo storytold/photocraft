@@ -28,13 +28,13 @@ are recorded before exclusive host delegation; collapsed groups do not overwrite
 normal editor sizes. Dock gaps are separate from actual row/split
 gaps. Keep upstream's default behavior for other consumers of these optional hooks.
 
-The local `vendor/craft-ui` snapshot is explicit and pinned in `PATCH.md`. Do not edit
-Cargo's checkout. `build/panel_contract.rs` compares the workspace's requested craft-ui
-and egui revisions with the snapshot's reviewed revisions. A revision bump with the
-old override produces an actionable build error. Reconcile the adapter and rerun the
-checks before changing its metadata. Removing the override for a reviewed upstream
-implementation is supported. This check catches stale dependency pins; it cannot
-prove behavioral compatibility with arbitrary future UI changes.
+The shared host APIs were accepted in storytold/craft-libs#470. PhotoCraft now
+pins `craft-ui` to the immutable merge revision
+`ea1fbeb05b94bb692b27b687adb2ac1e5abc640f`, without a local override or vendored
+copy. The temporary snapshot revision guard is removed with that snapshot.
+Other craft-libs dependencies retain their own upstream pins. Future UI revision
+changes still require adapter tests and visual checks; a revision alone cannot
+prove behavioral compatibility.
 
 ## Mouse targets and header surfaces
 

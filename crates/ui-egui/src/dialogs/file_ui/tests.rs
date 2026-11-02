@@ -543,6 +543,52 @@ fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     assert_eq!(h.state().ui.dialogs.len(), 1);
 }
 
+/// #10675: moving the pointer over Save for Web repaints it, and each repaint must lay it out the
+/// same way. At a fractional display scale the previews came out a fraction of a pixel wider than
+/// the room they were given, so the dialog grew a little on every repaint and the fitted zoom
+/// with it.
+#[test]
+fn web_preview_keeps_its_size_and_zoom_while_the_pointer_moves() {
+    let mut drifted = Vec::new();
+    for ppp in [1.0, 1.25, 1.5, 1.75, 2.25] {
+        for screen in [egui::vec2(1600.0, 1100.0), egui::vec2(1097.0, 617.0), egui::vec2(1280.0, 720.0)] {
+            for view in ["2up", "4up", "original"] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width": 1980, "height": 1200})).unwrap();
+                let id = open_web(&mut app);
+                app.ui.dialog_mut(id).unwrap().fields.insert("__view".into(), json!(view));
+                let mut h = egui_kittest::Harness::builder().with_size(screen).with_pixels_per_point(ppp).build_ui_state(
+                    |ui, app: &mut PhotocraftApp| {
+                        if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                            crate::dialogs::show(app, ui.ctx());
+                        }
+                    },
+                    app,
+                );
+                PhotocraftApp::setup_context(&h.ctx, Default::default());
+                h.run_steps(8);
+                let layout = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+                    let f = &h.state().ui.dialogs[0].fields;
+                    let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique("pc-dialog-rects"))).unwrap();
+                    (rects[0], f["__previewRects"].clone(), f["__effectiveZoom"].clone())
+                };
+                let before = layout(&h);
+                let pane = &before.1[0];
+                let at = egui::pos2(pane[0].as_f64().unwrap() as f32 + 20.0, pane[1].as_f64().unwrap() as f32 + 20.0);
+                for i in 0..30 {
+                    h.event(egui::Event::PointerMoved(at + egui::vec2(i as f32 * 3.0, i as f32)));
+                    h.step();
+                }
+                let after = layout(&h);
+                if after != before {
+                    drifted.push(format!("{view} at {ppp}x on {screen:?}: {before:?} -> {after:?}"));
+                }
+            }
+        }
+    }
+    assert!(drifted.is_empty(), "the dialog or its zoom changed while the pointer moved: {drifted:#?}");
+}
+
 #[test]
 fn palette_draft_survives_navigation_and_resets_when_colors_change() {
     let (app, _) = app();

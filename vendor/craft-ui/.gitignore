@@ -1,3 +1,0 @@
-# Optional upstream test inputs, restored from the pinned source; never commit fonts.
-/tests/
-/Cargo.lock
