@@ -2701,6 +2701,7 @@ fn spot_healing_across_the_canvas_corner_heals_every_copy_of_the_stroke_and_noth
         let px = |v: &[f32], x: usize, y: usize| v[(y * WRAP.0 as usize + x) * n..][..n].to_vec();
         assert!(px(&after, 1, 1)[0] > 0.1, "{kind}: the blemish healed: {:?}", px(&after, 1, 1));
         for (x, y) in [(46, 1), (1, 34), (46, 34)] {
+            assert!(px(&after, x, y)[0] > 0.1, "{kind}: ({x}, {y}) healed: {:?}", px(&after, x, y));
             assert_ne!(px(&after, x, y), px(&before, x, y), "{kind}: ({x}, {y}) is under the stroke");
         }
         for (x, y) in [(24, 18), (10, 18), (24, 4), (38, 28)] {
