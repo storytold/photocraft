@@ -248,6 +248,29 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     assert_eq!(maximum_cancelled[0].metadata["requestId"].as_str(), Some(maximum_id.as_str()));
     assert_eq!(maximum_cancelled[0].metadata["resourceId"], "file-99");
     assert!(!host.busy());
+    // Keep the direct Host assertions above and independently observe the real window delivery.
+    {
+        let published = PublishedEvents::listen(&window)?;
+        let request = call(&api, "requestOpen", &["file-99".into()])?;
+        let request_id = request.as_string().ok_or_else(|| JsValue::from_str("cancelled request ID must be a string"))?;
+        crate::file_providers::publish(&host);
+        assert_eq!(published.events.length(), 1);
+        let requested = published.detail(0)?;
+        assert_eq!(Reflect::get(&requested, &"type".into())?.as_string().as_deref(), Some("openRequest"));
+        assert_eq!(Reflect::get(&requested, &"requestId".into())?.as_string().as_deref(), Some(request_id.as_str()));
+        assert_eq!(Reflect::get(&requested, &"resourceId".into())?.as_string().as_deref(), Some("file-99"));
+        call(&api, "cancelOpen", &[request, "".into()])?;
+        crate::file_providers::publish(&host);
+        assert_eq!(published.events.length(), 2, "cancellation publishes exactly one additional window event");
+        let cancelled = published.detail(1)?;
+        assert_eq!(Reflect::get(&cancelled, &"type".into())?.as_string().as_deref(), Some("openCancelled"));
+        assert_eq!(Reflect::get(&cancelled, &"requestId".into())?.as_string().as_deref(), Some(request_id.as_str()));
+        assert_eq!(Reflect::get(&cancelled, &"resourceId".into())?.as_string().as_deref(), Some("file-99"));
+        assert!(!host.busy());
+        assert!(host.take_commands().is_empty(), "a cancelled read must not enqueue application admission");
+        crate::file_providers::publish(&host);
+        assert_eq!(published.events.length(), 2, "the cancelled read's terminal event is not replayed");
+    }
     let second = resource("file-two", "Second.psd", "today")?;
     let pair = Array::new();
     pair.push(&entry);
