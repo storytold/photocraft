@@ -329,3 +329,73 @@ fn photomerge_merges_a_folder() {
     let d = &h.state().session.active().unwrap().doc;
     assert!(d.layers.iter().all(|l| l.mask.is_some()), "blended by default: one masked layer per image");
 }
+
+/// The params of the last Photomerge the session ran.
+fn photomerge_params(h: &Harness<'_, PhotocraftApp>) -> Value {
+    h.state().session.journal.iter().rev().find(|(id, _)| id == PHOTOMERGE).map(|(_, p)| p.clone()).unwrap()
+}
+
+/// Use: Folder enables OK only for a folder with two images or more, as the engine needs.
+#[test]
+fn photomerge_folder_needs_two_images() {
+    let (one, _) = pngs("photomerge-one", &["only.png"]);
+    let (two, _) = panorama_pngs("folder-count");
+    let (mut h, _) = harness(vec![]);
+    let id = open_photomerge(h.state_mut());
+    for (dir, ok) in [("", false), (one.as_str(), false), (two.as_str(), true)] {
+        let d = h.state_mut().ui.dialog_mut(id).unwrap();
+        d.fields.insert("use".into(), json!("folder"));
+        d.fields.insert("folder".into(), json!(dir));
+        let f = d.fields.clone();
+        assert_eq!(can_confirm(h.state(), &f), ok, "{dir:?}");
+    }
+}
+
+/// Use: Open Files merges every open document, unsaved ones included.
+#[test]
+fn photomerge_merges_the_open_documents() {
+    let (_, paths) = panorama_pngs("open");
+    let (mut h, _) = harness(vec![]);
+    h.state_mut().background_jobs = false;
+    // left.png open from its file; right.png as an unsaved document.
+    for (p, saved) in paths.iter().zip([true, false]) {
+        let doc = photocraft_io::import(file_name(p), &std::fs::read(p).unwrap()).unwrap().document;
+        h.state_mut().session.add_document(doc, saved.then(|| p.clone()));
+    }
+    let id = open_photomerge(h.state_mut());
+    h.run_steps(3);
+    assert_eq!(open_files(h.state()).len(), 1, "Add Open Files skips the unsaved document");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("use".into(), json!("open"));
+    h.run_steps(3);
+    assert!(h.query_by_label("left.png").is_some() && h.query_by_label("right.png").is_some(), "the open documents are listed");
+    assert!(h.get_by_label("Browse…").accesskit_node().is_disabled() && h.get_by_label("Add Open Files").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+    let r = crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(r["placed"].as_array().unwrap().len(), 2, "{r}");
+    let p = photomerge_params(&h);
+    assert_eq!(p["useOpenDocuments"], true, "{p}");
+    assert!(p.get("paths").is_none(), "{p}");
+}
+
+/// Vignette Removal, Geometric Distortion Correction and Content Aware Fill Transparent Areas
+/// reach the engine when checked; the fill adds its layer.
+#[test]
+fn photomerge_options_reach_the_engine() {
+    let (_, paths) = panorama_pngs("options");
+    let (mut h, _) = harness(vec![]);
+    h.state_mut().background_jobs = false;
+    let id = open_photomerge(h.state_mut());
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("files".into(), json!(paths));
+    h.run_steps(3);
+    for label in ["Vignette Removal", "Geometric Distortion Correction", "Content Aware Fill Transparent Areas"] {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+    }
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let p = photomerge_params(&h);
+    for key in ["blend", "vignetteRemoval", "geometricCorrection", "contentAwareFill"] {
+        assert_eq!(p[key], true, "{key}: {p}");
+    }
+    let d = &h.state().session.active().unwrap().doc;
+    assert!(d.layers.iter().any(|l| l.name == "Content-Aware Fill"), "the fill layer");
+}

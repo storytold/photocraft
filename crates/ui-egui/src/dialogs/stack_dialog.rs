@@ -4,7 +4,8 @@
 //! Loading Layers. Statistics adds Stack Mode and always creates a smart object. File › Automate ›
 //! Photomerge… shares the Source Files controls with Layout above them and Blend Images Together,
 //! Vignette Removal, Geometric Distortion Correction and Content Aware Fill Transparent Areas
-//! below. OK runs the corresponding engine command with the list or the folder.
+//! below, and Use can also be Open Files (every open document, saved or not). OK runs the
+//! corresponding engine command with the list or the folder.
 use egui::{RichText, vec2};
 use serde_json::{Map, Value, json};
 
@@ -90,6 +91,11 @@ fn folder_mode(f: &Map<String, Value>) -> bool {
     f.get("use").and_then(Value::as_str) == Some("folder")
 }
 
+/// Use: Open Files (Photomerge only): the open documents, unsaved ones included.
+fn open_mode(f: &Map<String, Value>) -> bool {
+    photomerge(f) && f.get("use").and_then(Value::as_str) == Some("open")
+}
+
 fn files(f: &Map<String, Value>) -> Vec<String> {
     f.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
@@ -122,10 +128,18 @@ fn open_files(app: &PhotocraftApp) -> Vec<String> {
     app.session.documents().iter().filter_map(|d| d.path.clone()).collect()
 }
 
-/// OK needs files to load: some in the list (two for Photomerge), or a chosen folder.
-pub fn can_confirm(f: &Map<String, Value>) -> bool {
+/// OK needs files to load: some in the list or a chosen folder (two images for Photomerge, also
+/// in the folder), or for Use: Open Files two open documents.
+pub fn can_confirm(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
     let least = if photomerge(f) { 2 } else { 1 };
-    !owns(f) || if folder_mode(f) { !folder(f).is_empty() } else { files(f).len() >= least }
+    !owns(f)
+        || if open_mode(f) {
+            app.session.documents().len() >= least
+        } else if folder_mode(f) {
+            !folder(f).is_empty() && (!photomerge(f) || photocraft_engine::file_cmds::list_images(folder(f)).is_ok_and(|v| v.len() >= least))
+        } else {
+            files(f).len() >= least
+        }
 }
 
 /// Browse…: files to add (Files) or the folder to load (Folder), into dialog `id` once the file
@@ -180,19 +194,27 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(tl!("Use:"));
-        let mut mode = usize::from(folder_mode(f));
-        let options = [(0, tl!("Files")), (1, tl!("Folder"))];
+        let mut mode = if open_mode(f) { 2 } else { usize::from(folder_mode(f)) };
+        let mut options = vec![(0, tl!("Files")), (1, tl!("Folder"))];
+        if photomerge(f) {
+            options.push((2, tl!("Open Files")));
+        }
         if widgets::dropdown(ui, "load-stack-use", tl!("Use"), &mut mode, &options, 120.0) {
-            f.insert("use".into(), json!(if mode == 1 { "folder" } else { "files" }));
+            f.insert("use".into(), json!(["files", "folder", "open"].get(mode).copied().unwrap_or("files")));
             f.remove("selected");
         }
     });
     ui.add_space(6.0);
+    let open_mode = open_mode(f);
     let folder_mode = folder_mode(f);
+    // Folder and Open Files list what will be merged; only Files is edited by hand.
+    let fixed = folder_mode || open_mode;
     let mut browse_now = false;
     ui.horizontal_top(|ui| {
-        // The list: the chosen files, or the images in the chosen folder.
-        let shown: Vec<String> = if folder_mode {
+        // The list: the chosen files, the images in the chosen folder, or the open documents.
+        let shown: Vec<String> = if open_mode {
+            app.session.documents().iter().map(|d| d.doc.name.clone()).collect()
+        } else if folder_mode {
             if folder(f).is_empty() { Vec::new() } else { photocraft_engine::file_cmds::list_images(folder(f)).unwrap_or_default() }
         } else {
             files(f)
@@ -207,8 +229,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         ui.label(RichText::new(folder(f)).color(t.text_dim));
                     }
                     for (i, p) in shown.iter().enumerate() {
-                        let row = ui.add(egui::Button::selectable(!folder_mode && sel == Some(i), file_name(p))).on_hover_text(p.as_str());
-                        if row.clicked() && !folder_mode {
+                        let row = ui.add(egui::Button::selectable(!fixed && sel == Some(i), file_name(p))).on_hover_text(p.as_str());
+                        if row.clicked() && !fixed {
                             f.insert("selected".into(), json!(i));
                         }
                     }
@@ -218,10 +240,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         ui.add_space(8.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            if widgets::secondary_button(ui, tl!("Browse…"), 120.0).clicked() {
+            if ui.add_enabled_ui(!open_mode, |ui| widgets::secondary_button(ui, tl!("Browse…"), 120.0)).inner.clicked() {
                 browse_now = true;
             }
-            let can_remove = !folder_mode && sel.is_some_and(|i| i < files(f).len());
+            let can_remove = !fixed && sel.is_some_and(|i| i < files(f).len());
             if ui.add_enabled_ui(can_remove, |ui| widgets::secondary_button(ui, tl!("Remove"), 120.0)).inner.clicked()
                 && let Some(i) = sel
             {
@@ -231,10 +253,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 f.remove("selected");
             }
             let open = open_files(app);
-            if ui.add_enabled_ui(!folder_mode && !open.is_empty(), |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
+            if ui.add_enabled_ui(!fixed && !open.is_empty(), |ui| widgets::secondary_button(ui, tl!("Add Open Files"), 120.0)).inner.clicked() {
                 add(f, open);
             }
-            if ui.add_enabled_ui(!folder_mode && files(f).len() > 1, |ui| widgets::secondary_button(ui, tl!("Sort By Name"), 120.0)).inner.clicked() {
+            if ui.add_enabled_ui(!fixed && files(f).len() > 1, |ui| widgets::secondary_button(ui, tl!("Sort By Name"), 120.0)).inner.clicked() {
                 let mut list = files(f);
                 list.sort_by_key(|p| file_name(p).to_lowercase());
                 f.insert("files".into(), json!(list));
@@ -272,9 +294,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     }
 }
 
-/// OK: load the list (or the folder) into a new document.
+/// OK: load the list (or the folder, or the open documents) into a new document.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let paths = if folder_mode(f) {
+    let paths = if open_mode(f) {
+        Value::Null
+    } else if folder_mode(f) {
         let dir = folder(f);
         if dir.is_empty() {
             return Err("Choose a folder to load".into());
@@ -290,7 +314,12 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let align = flag(f, "align", false);
     let smart = flag(f, "smartObject", false);
     let r = if photomerge(f) {
-        let mut p = json!({"paths": paths, "layout": f.get("layout").and_then(Value::as_str).unwrap_or("auto")});
+        let mut p = json!({"layout": f.get("layout").and_then(Value::as_str).unwrap_or("auto")});
+        if paths.is_null() {
+            p["useOpenDocuments"] = json!(true);
+        } else {
+            p["paths"] = paths;
+        }
         for (key, _, default) in PHOTOMERGE_OPTIONS {
             p[key] = json!(flag(f, key, default));
         }
