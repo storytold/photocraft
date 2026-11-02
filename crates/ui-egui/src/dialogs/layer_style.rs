@@ -551,17 +551,23 @@ pub fn drag_gradient(f: &mut Map<String, Value>, start: bool, total: [f64; 2], b
     const KEY: &str = "__gradientDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_gradient(f)) else { return };
     let Some(p) = entry(f, &id).and_then(|e| e.get("params")) else { return };
+    // The offset as stored (None: centred, never set).
+    let stored =
+        p.get("offset").and_then(Value::as_array).map(|a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
     if start || f.get(KEY).is_none() {
-        let at = p
-            .get("offset")
-            .and_then(Value::as_array)
-            .map_or([0.0, 0.0], |a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
-        f.insert(KEY.into(), json!(at));
+        f.insert(KEY.into(), json!(stored.unwrap_or([0.0, 0.0])));
     }
     let Some([x0, y0]) = f.get(KEY).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])) else { return };
     let [w, h] = [bounds[0].max(1.0), bounds[1].max(1.0)];
-    let (x, y) = (x0 + total[0] / w, y0 + total[1] / h);
+    // Kept within what the renderer takes (±4 of the layer's size), so the next drag starts from
+    // where the gradient shows.
+    let (x, y) = ((x0 + total[0] / w).clamp(-4.0, 4.0), (y0 + total[1] / h).clamp(-4.0, 4.0));
     if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    // A press that has not moved the gradient (or a drag back to where it began, with nothing
+    // written since) leaves the stored offset as it is, to its full precision.
+    if x == x0 && y == y0 && stored == Some([x0, y0]) {
         return;
     }
     set_param(f, &id, "offset", json!([(x * 1000.0).round() / 1000.0, (y * 1000.0).round() / 1000.0]));

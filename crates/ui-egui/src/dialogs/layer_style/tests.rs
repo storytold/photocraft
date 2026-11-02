@@ -62,6 +62,19 @@ fn dragging_on_the_image_moves_the_selected_gradient_overlay() {
     drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
     drag_gradient(&mut f, false, [20.0, 0.0], [200.0, 100.0]);
     assert_eq!(offset(&f, "fx1"), Some(json!([-0.4, 0.0])));
+    // A press that moves nothing keeps a precise offset as it is; a drag that comes back to where
+    // it began still writes, since the gradient moved in between. The offset stays within ±4.
+    f.insert("selected".into(), json!("fx2"));
+    set_param(&mut f, "fx2", "offset", json!([0.123456, 0.1]));
+    drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
+    drag_gradient(&mut f, false, [0.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.123456, 0.1])), "nothing moved: nothing rounded");
+    drag_gradient(&mut f, false, [20.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.223, 0.1])));
+    drag_gradient(&mut f, false, [0.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.123, 0.1])), "back at the start: the start is written");
+    drag_gradient(&mut f, false, [100_000.0, -100_000.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx2"), Some(json!([4.0, -4.0])), "clamped as the renderer clamps");
     // Not on a gradient page: nothing moves.
     f.insert("selected".into(), json!(BLENDING));
     assert!(!drags_gradient(&f));
