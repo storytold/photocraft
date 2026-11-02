@@ -180,7 +180,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     }
     let too_many = Array::new();
     for index in 0..101 {
-        too_many.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?);
+        too_many.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?.into());
     }
     rejected_without_snapshot_change(&host, &api, "setResources", &[connection.clone(), too_many.into()]);
     assert_eq!(host.snapshot(), before_bad_lists);
@@ -194,7 +194,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     assert!(!host.busy());
     let maximum = Array::new();
     for index in 0..100 {
-        maximum.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?);
+        maximum.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?.into());
     }
     call(&api, "setResources", &[connection.clone(), maximum.into()])?;
     call(&api, "setResources", &[connection.clone(), list(&entry)])?;
