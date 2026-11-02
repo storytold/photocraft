@@ -473,7 +473,7 @@ fn match_rotation_leaves_a_pending_crops_turn_out() {
         (v.zoom, v.center, v.fit_pending, v.rotation) = (1.0, [100.0, 50.0], false, 0.0);
         app.ui.views[1].rotation = 15.0;
         let view = app.ui.views[1].clone();
-        app.ui.windows.push(crate::state::DocWindow { id: 7, document: 1, view, open: true, position: None });
+        app.ui.windows.push(crate::state::DocWindow { id: 7, document: 1, view, open: true, position: None, floating: false, focused: false });
         with_frame(&mut app);
         screen_drag(&mut app, &[pos2(450.0, 300.0), pos2(440.0, 320.0), pos2(370.0, 380.0)], NONE);
         assert!((view_rotation(&app) - 90.0).abs() < 0.01, "{id}: the view turned with the frame");
