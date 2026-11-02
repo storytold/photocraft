@@ -541,21 +541,32 @@ const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
     ("microBrush", "bristleDetail", 10.0, 5.0),
 ];
 
-/// `filter.stylize.oilPaint`'s ranges. The command clamps a value outside them when it plays,
-/// so such a step keeps the Photoshop step on import and is refused on export, rather than
-/// mapping a step that plays clamped and saves back unchanged.
-const OIL_PAINT_LIMITS: &[(&str, f64, f64)] =
-    &[("stylization", 0.1, 10.0), ("cleanliness", 0.0, 10.0), ("scale", 0.1, 10.0), ("bristleDetail", 0.0, 10.0), ("shine", 0.0, 10.0)];
+/// `filter.stylize.oilPaint`'s ranges (the light direction's is the command's -180..180). Photoshop
+/// clamps a recorded value outside them when the step plays, so the import clamps it too; export
+/// refuses one, as the dialog cannot hold it.
+const OIL_PAINT_LIMITS: &[(&str, f64, f64)] = &[
+    ("stylization", 0.1, 10.0),
+    ("cleanliness", 0.0, 10.0),
+    ("scale", 0.1, 10.0),
+    ("bristleDetail", 0.0, 10.0),
+    ("angle", -180.0, 180.0),
+    ("shine", 0.0, 10.0),
+];
 
 /// Whether `n` is within `filter.stylize.oilPaint`'s range for `param` (a param without one is).
 fn in_oil_paint_limits(param: &str, n: f64) -> bool {
     OIL_PAINT_LIMITS.iter().all(|(p, min, max)| *p != param || (*min..=*max).contains(&n))
 }
 
+/// `n` clamped to `filter.stylize.oilPaint`'s range for `param` (unchanged for a param without one).
+fn oil_paint_clamped(param: &str, n: f64) -> f64 {
+    OIL_PAINT_LIMITS.iter().find(|(p, ..)| *p == param).map_or(n, |(_, min, max)| n.clamp(*min, *max))
+}
+
 /// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
 /// command's for cleanliness, scale, bristle detail and shine, so they are written out. A
-/// setting of another number type, with a unit, or outside the command's ranges keeps the
-/// Photoshop step.
+/// setting of another number type or with a unit keeps the Photoshop step; one outside the
+/// command's ranges is clamped, as Photoshop clamps it.
 pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
     match oil_paint_params(d) {
         Some(p) => step("filter.stylize.oilPaint", Value::Object(p)),
@@ -571,10 +582,10 @@ fn oil_paint_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
     p.insert("lighting".into(), setting(d, "lightingOn", boolean, true)?.into());
     for (key, param, ps, _) in OIL_PAINT {
-        p.insert((*param).into(), setting(d, key, double, *ps).filter(|n| in_oil_paint_limits(param, *n))?.into());
+        p.insert((*param).into(), oil_paint_clamped(param, setting(d, key, double, *ps)?).into());
     }
-    p.insert("angle".into(), setting(d, "LghD", |v| integer(v).map(f64::from), -60.0)?.into());
-    p.insert("shine".into(), setting(d, "specularity", double, 1.299_999_952_316_28).filter(|n| in_oil_paint_limits("shine", *n))?.into());
+    p.insert("angle".into(), oil_paint_clamped("angle", setting(d, "LghD", |v| integer(v).map(f64::from), -60.0)?).into());
+    p.insert("shine".into(), oil_paint_clamped("shine", setting(d, "specularity", double, 1.299_999_952_316_28)?).into());
     Some(p)
 }
 
@@ -613,16 +624,17 @@ fn in_unit(unit: [u8; 4]) -> impl Fn(&D) -> Option<f64> {
     }
 }
 
-/// `filter.sharpen.smartSharpen`'s amount and radius limits, in `smart_sharpen_params`' key order.
-/// The command rejects a value outside them, so such a step keeps the Photoshop step on import
-/// and is refused on export, rather than mapping a step that fails when it plays.
-const SMART_SHARPEN_LIMITS: &[(&str, f64, f64)] = &[("amount", 1.0, 500.0), ("radius", 0.1, 64.0)];
+/// `filter.sharpen.smartSharpen`'s amount, radius and noise reduction limits, in
+/// `smart_sharpen_params`' key order. Photoshop clamps a recorded value outside them when the step
+/// plays, so the import clamps it too; export refuses one, as the dialog cannot hold it.
+const SMART_SHARPEN_LIMITS: &[(&str, f64, f64)] = &[("amount", 1.0, 500.0), ("radius", 0.1, 64.0), ("reduceNoise", 0.0, 100.0)];
 
-/// Smart Sharpen (`smartSharpen`), as Photoshop records it without its dialog: the legacy
-/// filter, removing Lens Blur, with no noise reduction (so `reduceNoise` is 0). A step that
-/// asks for what the command does not do (another blur, More Accurate, the newer filter, a
-/// preset), or an amount or radius in another unit or outside the command's limits, keeps it
-/// as a Photoshop step.
+/// Smart Sharpen (`smartSharpen`) in the one form the command plays, the same form PSD smart
+/// filters map (`photocraft-io`'s `smart_map`): the newer filter (`useLegacy` false) removing a
+/// Gaussian blur (`blur` `GsnB`), both recorded. The legacy filter (Photoshop's default, which
+/// removes Lens Blur), Lens Blur, Motion Blur, a preset other than Custom or any other key, or an
+/// amount, radius or noise reduction in another unit, keeps it as a Photoshop step. A missing
+/// amount, radius or noise reduction takes Photoshop's default (200 %, 1 px, 10 %).
 pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
     match smart_sharpen_params(d) {
         Some(p) => step("filter.sharpen.smartSharpen", Value::Object(p)),
@@ -630,29 +642,37 @@ pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// A `blurType` enumeration's value (`enumerated` alone does not check the type).
+fn blur_type(v: &D) -> Option<String> {
+    match v {
+        D::Enumerated { type_id, .. } if trimmed(type_id) == "blurType" => enumerated(v),
+        _ => None,
+    }
+}
+
 fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
-    let keys = ["presetKind", "useLegacy", "Amnt", "Rds", "moreAccurate", "blur"];
-    let as_recorded = only_keys(d, &keys)
+    let keys = ["presetKind", "useLegacy", "Amnt", "Rds", "noiseReduction", "blur"];
+    let gaussian = only_keys(d, &keys)
         && setting(d, "presetKind", enumerated, "presetKindCustom".into())? == "presetKindCustom"
-        && setting(d, "useLegacy", boolean, true)?
-        && !setting(d, "moreAccurate", boolean, false)?
-        && setting(d, "blur", enumerated, "lensBlur".into())? == "lensBlur";
-    if !as_recorded {
+        && !setting(d, "useLegacy", boolean, true)?
+        && setting(d, "blur", blur_type, "lensBlur".into())? == "GsnB";
+    if !gaussian {
         return None;
     }
     let mut p = Map::new();
-    for ((key, unit, default), (param, min, max)) in [("Amnt", *b"#Prc", 200.0), ("Rds", PX, 1.0)].into_iter().zip(SMART_SHARPEN_LIMITS) {
-        let n = setting(d, key, in_unit(unit), default).filter(|n| (*min..=*max).contains(n))?;
+    let read = [("Amnt", *b"#Prc", 200.0), ("Rds", PX, 1.0), ("noiseReduction", *b"#Prc", 10.0)];
+    for ((key, unit, default), (param, min, max)) in read.into_iter().zip(SMART_SHARPEN_LIMITS) {
+        let n = setting(d, key, in_unit(unit), default)?.clamp(*min, *max);
         p.insert((*param).into(), n.into());
     }
-    p.insert("reduceNoise".into(), 0.into());
     Some(p)
 }
 
-/// Every key in recorded order. The legacy filter has no noise reduction, so only a step that
-/// sets `reduceNoise` to 0 is written (the command reduces noise by 10 when it is left out).
+/// The form `smart_sharpen_params` reads, with the keys in the order Photoshop records them (as
+/// PSD smart filters write it; `presetKind` is left out, as Photoshop leaves it out of a step with
+/// explicit values). The command's defaults fill what the step leaves out.
 pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
-    if !pixel_target(p) || !sets_only(p, &["target", "amount", "radius", "reduceNoise"]) || p.get("reduceNoise").and_then(Value::as_f64) != Some(0.0) {
+    if !pixel_target(p) || !sets_only(p, &["target", "amount", "radius", "reduceNoise"]) {
         return None;
     }
     let num = |k: &str, default: f64| match p.get(k) {
@@ -661,11 +681,10 @@ pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
     };
     Some(
         desc("null")
-            .with("presetKind", enm("presetKindType", "presetKindCustom"))
-            .with("useLegacy", D::Boolean(true))
+            .with("useLegacy", D::Boolean(false))
             .with("Amnt", pct(num("amount", 100.0)?))
             .with("Rds ", px(num("radius", 1.0)?))
-            .with("moreAccurate", D::Boolean(false))
-            .with("blur", enm("blurType", "lensBlur")),
+            .with("noiseReduction", pct(num("reduceNoise", 10.0)?))
+            .with("blur", enm("blurType", "GsnB")),
     )
 }

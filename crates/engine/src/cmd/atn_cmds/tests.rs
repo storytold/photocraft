@@ -3210,16 +3210,21 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
         "bristleDetail": 10.0, "angle": -60.0, "shine": 1.299_999_952_316_28});
     assert_eq!(mapped(newer("oilPaint", oil.clone())), ("filter.stylize.oilPaint".into(), expected_oil.clone()));
     assert_eq!(mapped(newer("oilPaint", desc("null"))).1, expected_oil, "a missing key takes Photoshop's default");
+    // Smart Sharpen in the form the command plays (the newer filter, removing a Gaussian blur).
     let sharpen = desc("null")
-        .with("presetKind", enm("presetKindType", "presetKindCustom"))
-        .with("useLegacy", D::Boolean(true))
-        .with("Amnt", pct(200.0))
-        .with("Rds ", px(1.0))
-        .with("moreAccurate", D::Boolean(false))
-        .with("blur", enm("blurType", "lensBlur"));
+        .with("useLegacy", D::Boolean(false))
+        .with("Amnt", pct(150.0))
+        .with("Rds ", px(2.5))
+        .with("noiseReduction", pct(20.0))
+        .with("blur", enm("blurType", "GsnB"));
     assert_eq!(
         mapped(newer("smartSharpen", sharpen.clone())),
-        ("filter.sharpen.smartSharpen".into(), json!({"amount": 200.0, "radius": 1.0, "reduceNoise": 0}))
+        ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 20.0}))
+    );
+    assert_eq!(
+        mapped(newer("smartSharpen", gaussian_sharpen(&[]))).1,
+        json!({"amount": 200.0, "radius": 1.0, "reduceNoise": 10.0}),
+        "a missing amount, radius or noise reduction takes Photoshop's default"
     );
     assert_eq!(mapped(newer("selectSky", desc("null"))), ("select.sky".into(), json!({"sampleAllLayers": false})));
     assert_eq!(mapped(newer("focusMask", desc("null"))), ("select.focusArea".into(), json!({})));
@@ -3228,7 +3233,9 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
     // Written back, they carry the same keys in the same order.
     let back = |id: &str, p: Value| export_item(id, &p, "S").unwrap_or_else(|| panic!("{id} does not export")).descriptor.unwrap();
     assert_eq!(back("filter.stylize.oilPaint", expected_oil).items, oil.items);
-    assert_eq!(back("filter.sharpen.smartSharpen", json!({"amount": 200, "radius": 1, "reduceNoise": 0})).items, sharpen.items);
+    assert_eq!(back("filter.sharpen.smartSharpen", json!({"amount": 150, "radius": 2.5, "reduceNoise": 20})).items, sharpen.items);
+    let (id, params) = mapped(newer("smartSharpen", sharpen.clone()));
+    assert_eq!(back(&id, params).items, sharpen.items, "load -> save changed the step");
 
     // Oil Paint and Smart Sharpen play.
     let mut s = Session::new();
@@ -3238,7 +3245,7 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
         "Paint",
         vec![
             ("filter.stylize.oilPaint".into(), mapped(newer("oilPaint", desc("null"))).1),
-            ("filter.sharpen.smartSharpen".into(), mapped(newer("smartSharpen", desc("null"))).1),
+            ("filter.sharpen.smartSharpen".into(), mapped(newer("smartSharpen", gaussian_sharpen(&[]))).1),
         ],
     );
     s.actions.list.push(action);
@@ -3251,10 +3258,26 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
 #[test]
 fn newer_feature_steps_the_commands_cannot_play_are_kept() {
     let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
-    assert!(kept(newer("smartSharpen", desc("null").with("blur", enm("blurType", "motionBlur")))));
-    assert!(kept(newer("smartSharpen", desc("null").with("moreAccurate", D::Boolean(true)))));
-    assert!(kept(newer("smartSharpen", desc("null").with("useLegacy", D::Boolean(false)))));
-    assert!(kept(newer("smartSharpen", desc("null").with("presetKind", enm("presetKindType", "presetKindDefault")))));
+    // Photoshop's own default step: the legacy filter removing Lens Blur, which the command's
+    // Gaussian sharpen does not play.
+    let legacy = desc("null")
+        .with("presetKind", enm("presetKindType", "presetKindCustom"))
+        .with("useLegacy", D::Boolean(true))
+        .with("Amnt", pct(200.0))
+        .with("Rds ", px(1.0))
+        .with("moreAccurate", D::Boolean(false))
+        .with("blur", enm("blurType", "lensBlur"));
+    assert!(kept(newer("smartSharpen", legacy)));
+    assert!(kept(newer("smartSharpen", desc("null"))), "an empty step is the legacy filter");
+    assert!(kept(newer("smartSharpen", desc("null").with("useLegacy", D::Boolean(false)))), "no blur recorded is Lens Blur");
+    assert!(kept(newer("smartSharpen", desc("null").with("blur", enm("blurType", "GsnB")))), "no useLegacy recorded is the legacy filter");
+    for blur in ["lensBlur", "MtnB", "motionBlur"] {
+        assert!(kept(newer("smartSharpen", gaussian_sharpen(&[("blur", enm("blurType", blur))]))), "{blur}");
+    }
+    assert!(kept(newer("smartSharpen", gaussian_sharpen(&[("useLegacy", D::Boolean(true))]))));
+    assert!(kept(newer("smartSharpen", gaussian_sharpen(&[("blur", enm("Ordn", "GsnB"))]))), "a blur of another type");
+    assert!(kept(newer("smartSharpen", gaussian_sharpen(&[("moreAccurate", D::Boolean(false))]))));
+    assert!(kept(newer("smartSharpen", gaussian_sharpen(&[("presetKind", enm("presetKindType", "presetKindDefault"))]))));
     assert!(kept(newer("focusMask", desc("null").with("Rng ", D::Double(3.0)))));
     assert!(kept(newer("removeBackground", desc("null").with("Lyr ", D::Integer(1)))));
     assert!(kept(newer("selectSky", desc("null").with("smartRadius", D::Boolean(true)))));
@@ -3265,8 +3288,8 @@ fn newer_feature_steps_the_commands_cannot_play_are_kept() {
 #[test]
 fn newer_feature_steps_that_cannot_be_written_are_refused() {
     for (id, params) in [
-        ("filter.sharpen.smartSharpen", json!({"amount": 150})),
-        ("filter.sharpen.smartSharpen", json!({"amount": 150, "reduceNoise": 10})),
+        ("filter.sharpen.smartSharpen", json!({"amount": 150, "blur": "lens"})),
+        ("filter.sharpen.smartSharpen", json!({"target": "mask"})),
         ("filter.stylize.oilPaint", json!({"angle": 10.5})),
         ("filter.stylize.oilPaint", json!({"target": "mask"})),
         ("select.focusArea", json!({"range": 0.3})),
@@ -3277,6 +3300,28 @@ fn newer_feature_steps_that_cannot_be_written_are_refused() {
         assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
     }
     assert!(export_item("select.sky", &json!({"mode": "replace", "threshold": 50, "softness": 50}), "S").is_some());
+}
+
+/// A Smart Sharpen step in the form the command plays (`useLegacy` false, `blur` `GsnB`) plus
+/// `settings`, which replace those two when they name them.
+fn gaussian_sharpen(settings: &[(&str, D)]) -> Descriptor {
+    let named = |k: &str| settings.iter().any(|(key, _)| key.trim_end() == k);
+    let mut d = desc("null");
+    if !named("useLegacy") {
+        d = d.with("useLegacy", D::Boolean(false));
+    }
+    if !named("blur") {
+        d = d.with("blur", enm("blurType", "GsnB"));
+    }
+    settings.iter().fold(d, |d, (k, v)| d.with(k, v.clone()))
+}
+
+/// `kept_when_wrong_typed` for Smart Sharpen, on the form it would otherwise map.
+fn sharpen_kept_when(settings: &[(&str, D)]) {
+    for (key, v) in settings {
+        let m = newer("smartSharpen", gaussian_sharpen(&[(key, v.clone())]));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "smartSharpen with {key:?} = {v:?} was mapped");
+    }
 }
 
 /// A recorded setting of the wrong type is the step's own setting, not a missing one: the
@@ -3311,26 +3356,23 @@ fn oil_paint_with_a_wrong_typed_setting_is_kept() {
 
 #[test]
 fn smart_sharpen_with_a_wrong_typed_setting_is_kept() {
-    kept_when_wrong_typed(
-        "smartSharpen",
-        &[
-            ("presetKind", text("presetKindDefault")),
-            ("useLegacy", D::Integer(0)),
-            ("moreAccurate", D::Integer(1)),
-            ("blur", text("motionBlur")),
-            ("Amnt", D::Boolean(true)),
-            ("Rds ", text("2")),
-            ("Rds", text("2")),
-        ],
-    );
+    sharpen_kept_when(&[
+        ("presetKind", text("presetKindDefault")),
+        ("useLegacy", D::Integer(0)),
+        ("blur", text("GsnB")),
+        ("Amnt", D::Boolean(true)),
+        ("Rds ", text("2")),
+        ("Rds", text("2")),
+        ("noiseReduction", text("10")),
+    ]);
 }
 
 /// `only_keys` admits a code without its space padding, so the mapper reads it too: an
 /// unpadded `Rds` radius is the step's radius, not the default 1 (#10610).
 #[test]
 fn smart_sharpen_reads_an_unpadded_radius() {
-    let d = desc("null").with("Amnt", pct(150.0)).with("Rds", px(2.5));
-    assert_eq!(mapped(newer("smartSharpen", d)), ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})));
+    let d = gaussian_sharpen(&[("Amnt", pct(150.0)), ("Rds", px(2.5))]);
+    assert_eq!(mapped(newer("smartSharpen", d)), ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 10.0})));
 }
 
 /// A step recording one of its keys twice, padded or not, can't be saved back with both values,
@@ -3344,9 +3386,9 @@ fn newer_feature_steps_with_a_repeated_key_are_kept() {
         ("smartSharpen", "Rds ", "Rds", px(2.0), px(3.0)),
         ("smartSharpen", "Rds", "Rds", px(2.0), px(2.0)),
         ("smartSharpen", "presetKind", "presetKind", enm("presetKindType", "presetKindCustom"), enm("presetKindType", "presetKindCustom")),
-        ("smartSharpen", "useLegacy", "useLegacy", D::Boolean(true), D::Boolean(true)),
-        ("smartSharpen", "moreAccurate", "moreAccurate", D::Boolean(false), D::Boolean(false)),
-        ("smartSharpen", "blur", "blur", enm("blurType", "lensBlur"), enm("blurType", "lensBlur")),
+        ("smartSharpen", "useLegacy", "useLegacy", D::Boolean(false), D::Boolean(false)),
+        ("smartSharpen", "noiseReduction", "noiseReduction", pct(10.0), pct(20.0)),
+        ("smartSharpen", "blur", "blur", enm("blurType", "GsnB"), enm("blurType", "GsnB")),
         ("oilPaint", "lightingOn", "lightingOn", D::Boolean(true), D::Boolean(false)),
         ("oilPaint", "stylization", "stylization", D::Double(4.0), D::Double(6.0)),
         ("oilPaint", "cleanliness", "cleanliness", D::Double(2.0), D::Double(3.0)),
@@ -3357,7 +3399,14 @@ fn newer_feature_steps_with_a_repeated_key_are_kept() {
         ("selectSky", "sampleAllLayers", "sampleAllLayers", D::Boolean(false), D::Boolean(true)),
     ]
     .into_iter()
-    .filter(|(name, key, again, a, b)| !kept(newer(name, desc("null").with(key, a.clone()).with(again, b.clone()))))
+    .filter(|(name, key, again, a, b)| {
+        let d = if *name == "smartSharpen" {
+            gaussian_sharpen(&[(key, a.clone()), (again, b.clone())])
+        } else {
+            desc("null").with(key, a.clone()).with(again, b.clone())
+        };
+        !kept(newer(name, d))
+    })
     .map(|(name, key, again, ..)| format!("{name} {key:?} {again:?}"))
     .collect::<Vec<_>>();
     assert!(mapped.is_empty(), "mapped with a repeated key: {mapped:?}");
@@ -3387,47 +3436,59 @@ fn oil_paint_setting_with_a_unit_or_another_number_type_is_kept() {
 /// step stays a Photoshop step, whether the radius key is padded or not (#10610).
 #[test]
 fn smart_sharpen_amount_or_radius_in_another_unit_is_kept() {
-    kept_when_wrong_typed(
-        "smartSharpen",
-        &[
-            ("Amnt", px(150.0)),
-            ("Amnt", D::Double(150.0)),
-            ("Amnt", D::Integer(150)),
-            ("Rds ", pct(2.0)),
-            ("Rds ", D::Double(2.0)),
-            ("Rds", D::UnitFloat { unit: *b"#Mlm", value: 2.0 }),
-            ("Rds", D::Double(2.0)),
-        ],
-    );
+    sharpen_kept_when(&[
+        ("Amnt", px(150.0)),
+        ("Amnt", D::Double(150.0)),
+        ("Amnt", D::Integer(150)),
+        ("Rds ", pct(2.0)),
+        ("Rds ", D::Double(2.0)),
+        ("Rds", D::UnitFloat { unit: *b"#Mlm", value: 2.0 }),
+        ("Rds", D::Double(2.0)),
+        ("noiseReduction", px(10.0)),
+        ("noiseReduction", D::Double(10.0)),
+    ]);
     for rds in ["Rds ", "Rds"] {
-        let d = desc("null").with("Amnt", pct(150.0)).with(rds, px(2.5));
+        let d = gaussian_sharpen(&[("Amnt", pct(150.0)), (rds, px(2.5))]);
         assert_eq!(
             mapped(newer("smartSharpen", d)),
-            ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 0})),
+            ("filter.sharpen.smartSharpen".into(), json!({"amount": 150.0, "radius": 2.5, "reduceNoise": 10.0})),
             "{rds:?}"
         );
     }
 }
 
-/// `filter.sharpen.smartSharpen` takes an amount of 1..500 % and a radius of 0.1..64 px and
-/// rejects anything else. A step outside them would map and then fail when it plays, so it
-/// stays a Photoshop step, and a step outside them is not written either (#10610).
+/// `filter.sharpen.smartSharpen` takes an amount of 1..500 %, a radius of 0.1..64 px and a noise
+/// reduction of 0..100 %. Photoshop clamps a recorded value outside them when the step plays,
+/// so the import clamps it too; a step outside them is not written (#10610).
 #[test]
-fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
-    kept_when_wrong_typed("smartSharpen", &[("Amnt", pct(0.5)), ("Amnt", pct(500.5)), ("Rds ", px(0.05)), ("Rds ", px(64.5)), ("Rds", px(1000.0))]);
-    for (amount, radius) in [(1.0, 0.1), (500.0, 64.0)] {
-        let d = desc("null").with("Amnt", pct(amount)).with("Rds ", px(radius));
+fn smart_sharpen_outside_the_commands_limits_is_clamped_on_import_and_refused_on_export() {
+    for (key, v, param, want) in [
+        ("Amnt", pct(0.5), "amount", 1.0),
+        ("Amnt", pct(500.5), "amount", 500.0),
+        ("Rds ", px(0.05), "radius", 0.1),
+        ("Rds ", px(64.5), "radius", 64.0),
+        ("Rds", px(1000.0), "radius", 64.0),
+        ("noiseReduction", pct(-5.0), "reduceNoise", 0.0),
+        ("noiseReduction", pct(150.0), "reduceNoise", 100.0),
+    ] {
+        let (id, p) = mapped(newer("smartSharpen", gaussian_sharpen(&[(key, v.clone())])));
+        assert_eq!((id.as_str(), &p[param]), ("filter.sharpen.smartSharpen", &json!(want)), "{key:?} = {v:?}");
+    }
+    for (amount, radius, noise) in [(1.0, 0.1, 0.0), (500.0, 64.0, 100.0)] {
+        let d = gaussian_sharpen(&[("Amnt", pct(amount)), ("Rds ", px(radius)), ("noiseReduction", pct(noise))]);
         assert_eq!(
             mapped(newer("smartSharpen", d)),
-            ("filter.sharpen.smartSharpen".into(), json!({"amount": amount, "radius": radius, "reduceNoise": 0})),
+            ("filter.sharpen.smartSharpen".into(), json!({"amount": amount, "radius": radius, "reduceNoise": noise})),
             "{amount} {radius}"
         );
     }
     for params in [
-        json!({"amount": 0.5, "reduceNoise": 0}),
-        json!({"amount": 501, "reduceNoise": 0}),
-        json!({"radius": 0.05, "reduceNoise": 0}),
-        json!({"radius": 65, "reduceNoise": 0}),
+        json!({"amount": 0.5}),
+        json!({"amount": 501}),
+        json!({"radius": 0.05}),
+        json!({"radius": 65}),
+        json!({"reduceNoise": -1}),
+        json!({"reduceNoise": 101}),
     ] {
         assert!(export_item("filter.sharpen.smartSharpen", &params, "S").is_none(), "{params} exported");
     }
@@ -3495,27 +3556,30 @@ fn newer_feature_selection_steps_play() {
     assert!(mask.value(20, 15) < 0.2, "Remove Background revealed the sky");
 }
 
-/// `filter.stylize.oilPaint` takes a stylization and scale of 0.1..10 and a cleanliness, bristle
-/// detail and shine of 0..10, and clamps anything else when it plays. A step outside them would
-/// play clamped and save back unchanged, so it stays a Photoshop step, and a step outside them
-/// is not written either (#10610).
+/// `filter.stylize.oilPaint` takes a stylization and scale of 0.1..10, a cleanliness, bristle
+/// detail and shine of 0..10 and a light direction of -180..180. Photoshop clamps a recorded
+/// value outside them when the step plays, so the import clamps it too; a step outside them is
+/// not written (#10610).
 #[test]
-fn oil_paint_outside_the_commands_ranges_is_kept_and_refused() {
-    kept_when_wrong_typed(
-        "oilPaint",
-        &[
-            ("stylization", D::Double(0.05)),
-            ("stylization", D::Double(10.5)),
-            ("cleanliness", D::Double(-0.5)),
-            ("cleanliness", D::Double(10.5)),
-            ("brushScale", D::Double(0.05)),
-            ("brushScale", D::Double(10.5)),
-            ("microBrush", D::Double(-1.0)),
-            ("microBrush", D::Double(10.5)),
-            ("specularity", D::Double(-0.5)),
-            ("specularity", D::Double(10.5)),
-        ],
-    );
+fn oil_paint_outside_the_commands_ranges_is_clamped_on_import_and_refused_on_export() {
+    for (key, v, param, want) in [
+        ("stylization", D::Double(0.05), "stylization", 0.1),
+        ("stylization", D::Double(10.5), "stylization", 10.0),
+        ("cleanliness", D::Double(-0.5), "cleanliness", 0.0),
+        ("cleanliness", D::Double(10.5), "cleanliness", 10.0),
+        ("brushScale", D::Double(0.05), "scale", 0.1),
+        ("brushScale", D::Double(10.5), "scale", 10.0),
+        ("microBrush", D::Double(-1.0), "bristleDetail", 0.0),
+        ("microBrush", D::Double(10.5), "bristleDetail", 10.0),
+        ("specularity", D::Double(-0.5), "shine", 0.0),
+        ("specularity", D::Double(10.5), "shine", 10.0),
+        ("LghD", D::Integer(500), "angle", 180.0),
+        ("LghD", D::Integer(-500), "angle", -180.0),
+        ("LghD", D::Integer(181), "angle", 180.0),
+    ] {
+        let (id, p) = mapped(newer("oilPaint", desc("null").with(key, v.clone())));
+        assert_eq!((id.as_str(), &p[param]), ("filter.stylize.oilPaint", &json!(want)), "{key:?} = {v:?}");
+    }
     for (low, high) in [(0.1, 0.0), (10.0, 10.0)] {
         let d = desc("null")
             .with("stylization", D::Double(low))
@@ -3543,6 +3607,9 @@ fn oil_paint_outside_the_commands_ranges_is_kept_and_refused() {
         json!({"bristleDetail": 11}),
         json!({"shine": -0.5}),
         json!({"shine": 10.5}),
+        json!({"angle": 181}),
+        json!({"angle": -181}),
+        json!({"angle": 1000}),
     ] {
         assert!(export_item("filter.stylize.oilPaint", &params, "S").is_none(), "{params} exported");
     }
