@@ -34,6 +34,7 @@ fn corpus_animation_syntax() {
             let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}; run cargo xtask corpus --psd", path.display()));
             let psd = PsdFile::from_bytes(&bytes).unwrap();
             let mut found = 0;
+            let mut decoded_descriptors = 0;
             for resource in &psd.resources {
                 if let Some(Ok(ResourceData::Animation(animation))) = resource.parsed() {
                     found += 1;
@@ -41,6 +42,7 @@ fn corpus_animation_syntax() {
                     for record in &animation.records {
                         if let Some(d) = record.descriptor() {
                             let d = d.unwrap();
+                            decoded_descriptors += 1;
                             let frames = frame_info(&d.descriptor).unwrap();
                             assert_eq!(frames.len(), 2, "{case}/{name}");
                             assert!(frames.iter().all(|f| f.delay_centiseconds == delay), "{case}/{name}");
@@ -53,6 +55,7 @@ fn corpus_animation_syntax() {
                 }
             }
             assert_eq!(found, 1, "{case}/{name}");
+            assert_eq!(decoded_descriptors, 1, "expected one decoded AnDs descriptor in {case}/{name}");
             let mut state_layers = 0;
             for layer in psd.layers() {
                 for block in &layer.blocks {

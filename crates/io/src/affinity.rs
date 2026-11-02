@@ -47,7 +47,7 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> 
             // Type layers draw from their model, within the import's raster bound: the sizes and
             // frames come from an untrusted file.
             let mut document = b.doc;
-            crate::text_import::prepare(&mut document);
+            crate::text_import::prepare(&mut document, None);
             // Save never writes back over the Affinity file.
             Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
         }
@@ -149,7 +149,7 @@ impl Builder {
                 let r = self.bbox(to_doc, page);
                 let mut g = Layer::new(
                     format!("Page {}", i + 1),
-                    LayerContent::Group(Group { children: std::mem::take(&mut children), expanded: true, artboard: None }),
+                    LayerContent::Group(Group { children: std::mem::take(&mut children), expanded: true, artboard: None, frame_stroke: None }),
                 );
                 if let LayerContent::Group(gr) = &mut g.content {
                     gr.artboard = Some(Artboard { rect: r, background: ArtboardBackground::White, preset: String::new() });
@@ -244,7 +244,7 @@ impl Builder {
 
     fn group(&mut self, n: &af::Node, children: Vec<Layer>) -> Layer {
         // Pass-through and Normal (isolated) groups map one to one.
-        self.base(n, LayerContent::Group(Group { children, expanded: false, artboard: None }))
+        self.base(n, LayerContent::Group(Group { children, expanded: false, artboard: None, frame_stroke: None }))
     }
 
     /// One Affinity node and its subtree; `to_doc` maps Affinity document pixels to the canvas.
@@ -443,7 +443,17 @@ impl Builder {
             })
         });
         let mut sh = ShapeLayer { path, fill, stroke, ..ShapeLayer::default() };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, self.format, self.canvas));
+        // The pixel cache is optional (the shape renders from its path without it), so charge the
+        // area it would cover to the import's pixel budget and go without it when that is spent:
+        // geometry across a 300000 px canvas would otherwise be rasterized for every shape.
+        let reach = sh.stroke.as_ref().map_or(0, |s| (s.width.ceil() as i32).saturating_add(1));
+        let area = frame.inflate(reach).intersect(&self.canvas);
+        let cost = u64::from(area.width()).saturating_mul(u64::from(area.height())).saturating_mul(self.format.bytes_per_pixel() as u64);
+        if charge(&mut self.pixel_budget, cost) {
+            sh.cache = Some(photocraft_vector::render_shape(&sh, self.format, self.canvas));
+        } else {
+            self.warn("shapes covering more pixels than the import's memory allows were left without a pixel cache");
+        }
         sh
     }
 

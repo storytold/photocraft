@@ -12,6 +12,46 @@ use photocraft_raster::Rgba8Image;
 const MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab];
 
 #[test]
+fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
+    use photocraft_doc::effects::GradientInterpolation;
+    use photocraft_doc::{Color, Effect, FxCommon, Gradient};
+
+    for mode in MODES {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = rich_doc(mode, depth);
+            let source = GradientInterpolation {
+                method: "smooth".into(),
+                smoothness: 73.0,
+                stops: vec![(0.0, Color::rgb(0.123456, 0.4, 0.9)), (0.4, Color::WHITE), (1.0, Color::BLACK)],
+            };
+            let effect = Effect::GradientOverlay {
+                common: FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
+                gradient: Gradient::default(),
+                dither: true,
+                interpolation: Some(source),
+            }
+            .in_mode(mode);
+            doc.layers.first_mut().unwrap().effects.items.push(effect);
+            let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+        }
+    }
+}
+
+#[test]
+fn old_effect_snapshots_need_no_interpolation_record() {
+    let effect = photocraft_doc::Effect::GradientOverlay {
+        common: photocraft_doc::FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
+        gradient: photocraft_doc::Gradient::default(),
+        dither: false,
+        interpolation: None,
+    };
+    let json = serde_json::to_value(&effect).unwrap();
+    assert!(json["GradientOverlay"].get("interpolation").is_none());
+    assert_eq!(serde_json::from_value::<photocraft_doc::Effect>(json).unwrap(), effect);
+}
+
+#[test]
 fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -176,6 +216,13 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
     assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
 }
 
+/// craft-pcraft-format's default manifest nesting limit is computed from its own copy of the
+/// group depth, so the two must stay equal.
+#[test]
+fn group_depth_matches_craft_pcraft_format() {
+    assert_eq!(MAX_GROUP_DEPTH, craft_pcraft_format::MAX_GROUP_DEPTH);
+}
+
 #[test]
 fn empty_document_roundtrips() {
     let doc = Document::new("empty", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
@@ -240,10 +287,11 @@ fn text_run_baseline_roundtrips() {
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();
-    let (_, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (first, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
-    let (_, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (cached, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(first, cached);
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.tiles_reused, s2.tiles_total);
     assert_eq!(s2.blobs_written, 0);
@@ -253,6 +301,7 @@ fn zip_incremental_only_new_tiles() {
     let (bytes, s3) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(s3.tiles_written, 1);
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    assert_eq!(bytes, PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
 }
 
 #[test]
@@ -482,6 +531,22 @@ fn save_is_deterministic() {
     assert_eq!(a, b);
 }
 
+/// A bundle that is read and saved again gives the same bytes, previews included.
+#[test]
+fn save_load_save_gives_the_same_bytes() {
+    let mut preview = Rgba8Image::new(4, 3);
+    preview.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = i as u8);
+    for opts in [SaveOptions::default(), SaveOptions { thumbnail: Some(preview.clone()), composite: Some(preview.clone()) }] {
+        for mode in MODES {
+            for depth in SampleType::ALL {
+                let first = save_to_bytes(&rich_doc(mode, depth), &opts).unwrap();
+                let again = save_to_bytes(&load_from_bytes(&first).unwrap(), &opts).unwrap();
+                assert!(first == again, "{mode:?} {depth:?}: the second save differs");
+            }
+        }
+    }
+}
+
 #[test]
 fn not_pcraft() {
     assert!(!is_pcraft(b""));
@@ -597,6 +662,32 @@ fn path_text_shape_roundtrips() {
         _ => None,
     });
     assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
+}
+
+/// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
+#[test]
+fn area_text_shape_roundtrips() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_doc::vector::{FillRule, Path, PathOp, Subpath};
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let mut path = Path::new(vec![
+        Subpath::polygon(&[(0.0, 0.0), (200.0, 0.0), (200.0, 120.0), (0.0, 120.0)]),
+        Subpath::polygon(&[(80.0, 40.0), (120.0, 40.0), (120.0, 80.0)]).with_op(PathOp::Subtract),
+    ]);
+    path.fill_rule = FillRule::EvenOdd;
+    let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    assert!(!ids.is_empty());
+    for id in ids {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            t.shape = TextShape::Area { path: path.clone() };
+        }
+    }
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let shape = back.walk().into_iter().find_map(|(_, _, l)| match &l.content {
+        LayerContent::Text(t) => Some(t.shape.clone()),
+        _ => None,
+    });
+    assert_eq!(shape, Some(TextShape::Area { path }));
 }
 
 #[test]
@@ -818,6 +909,25 @@ fn variables_follow_layer_id_remapping() {
     assert!(back.walk().into_iter().all(|(_, _, l)| l.id != gone), "dangling target must not address a live layer");
 }
 
+#[test]
+fn color_lookup_lut_file_round_trips_and_old_files_load() {
+    use photocraft_doc::Adjustment;
+    use photocraft_doc::adjust::{LutFormat, LutSource};
+    let lut = Some(std::sync::Arc::new(vec![0.5f32; 24]));
+    let source = Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) });
+    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, tetrahedral: false, dither: false, source };
+    let mut doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
+    // A .pcraft written before the field existed has no `source`: it loads as None.
+    let mut v = serde_json::to_value(&adj).unwrap();
+    let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));
+    assert!(removed.is_some(), "{v}");
+    let Adjustment::ColorLookup { source: None, name, .. } = serde_json::from_value(v).unwrap() else { panic!("old lookup must load") };
+    assert_eq!(name, "Film.3dl");
+}
+
 /// Removing previews is post-commit housekeeping, not part of publishing the new document.
 #[test]
 fn directory_save_without_previews_removes_stale_files_after_commit() {
@@ -887,4 +997,58 @@ fn locked_stale_preview_does_not_fail_committed_save() {
     writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert!(!dir.join("thumb.png").exists());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn arrow_document_is_backward_compatible() {
+    use photocraft_doc::{Fill, LiveShape, Path, ShapeLayer, Subpath};
+
+    let arrow =
+        LiveShape::ArrowLine { from: [12.0, 64.0], to: [140.0, 64.0], weight: 16.0, start: false, end: true, width: 52.0, length: 50.0, concavity: 20.0 };
+
+    let path = Path::new(vec![Subpath::polygon(&[(12.0, 56.0), (100.0, 56.0), (100.0, 44.0), (140.0, 64.0), (100.0, 84.0), (100.0, 72.0), (12.0, 72.0)])]);
+
+    let mut doc = Document::new("Arrow compatibility", photocraft_doc::Size::new(256, 256), ColorMode::Rgb, SampleType::U8);
+
+    doc.layers.push(Layer::new(
+        "Editable arrow",
+        LayerContent::Shape(ShapeLayer {
+            path: path.clone(),
+            fill: Some(Fill::Solid(photocraft_doc::Color::BLACK)),
+            live: Some(arrow.clone()),
+            ..Default::default()
+        }),
+    ));
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let manifest = read_manifest(&bytes).unwrap();
+    let json = serde_json::to_value(&manifest).unwrap();
+    let saved = &json["document"]["layers"][0]["content"];
+
+    assert_eq!(saved["kind"], "shape");
+    assert!(saved["live"].is_null());
+    assert_eq!(saved["arrow_live"]["kind"], "arrowLine");
+    assert_eq!(saved["path"], serde_json::to_value(&path).unwrap());
+
+    // Simulate an old reader that knows no ArrowLine or arrow_live.
+    #[derive(serde::Deserialize)]
+    struct LegacyShape {
+        live: Option<LegacyLive>,
+        path: Path,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    #[allow(dead_code)]
+    enum LegacyLive {
+        Line { from: [f64; 2], to: [f64; 2], weight: f64 },
+    }
+
+    let legacy: LegacyShape = serde_json::from_value(saved.clone()).unwrap();
+    assert!(legacy.live.is_none());
+    assert_eq!(legacy.path, path);
+
+    // The new reader restores full parametric editability.
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc);
 }

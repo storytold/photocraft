@@ -21,6 +21,8 @@ pub fn session(s: &Session) -> Value {
         })).collect::<Vec<_>>(),
         "foreground": s.tools.foreground,
         "background": s.tools.background,
+        // History panel › History Options… (`history.options`).
+        "historyOptions": crate::history_options_cmds::current(s),
     })
 }
 
@@ -224,7 +226,7 @@ mod tests {
         s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
         s.edit("unsupported fixture", |doc, active| {
-            let l = Layer::new("Mystery", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "xyzw".into(), raw: vec![1, 2, 3] }));
+            let l = Layer::new("Mystery", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "xyzw".into(), raw: vec![1, 2, 3].into() }));
             let id = l.id;
             doc.layers.push(l);
             *active = Some(id);

@@ -87,6 +87,25 @@ fn rejects_truncated_and_overshooting_rle_without_panicking() {
     let mut b = header(8, 3, 2, 1, 2);
     b[66..68].copy_from_slice(&0u16.to_le_bytes());
     assert_eq!(detect(&b), None, "invalid stride is not a PCX signature");
+
+    // A solid image with stride of the form 63k + 1 (64, 127) encodes as k full 63-byte runs
+    // plus a 1-byte literal (2k + 1 bytes per plane row), which is valid and must decode.
+    for width in [64u16, 127] {
+        let mut solid = header(8, 3, width, 1, width);
+        for _plane in 0..3 {
+            let mut rem = usize::from(width);
+            while rem >= 63 {
+                solid.extend_from_slice(&[0xff, 0x00]); // 63-byte run of 0x00
+                rem -= 63;
+            }
+            if rem == 1 {
+                solid.push(0x00); // 1-byte literal 0x00
+            }
+        }
+        let im = decode(&solid).unwrap();
+        assert_eq!(im.dimensions(), (u32::from(width), 1));
+        assert!(im.data().iter().all(|&v| v == 0));
+    }
 }
 
 #[test]
