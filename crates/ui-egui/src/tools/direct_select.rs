@@ -243,14 +243,14 @@ fn converting(tool: Tool, mods: Modifiers, pen_idle: bool) -> bool {
 
 /// The selected anchor when it is the only one and an endpoint of an open subpath of the active
 /// path: where the Curvature Pen carries the path on from (#10726), as Photoshop does after a
-/// click, or ⌘/Ctrl-click, on the last point.
-pub(crate) fn selected_open_end(app: &PhotocraftApp) -> Option<[f64; 2]> {
+/// click, or ⌘/Ctrl-click, on the last point. The path, the subpath's index and the knot's.
+pub(crate) fn selected_open_end(app: &PhotocraftApp) -> Option<(PathRef, usize, usize)> {
     let ds = &app.ui.direct_selection;
     let ([[s, k]], Some(target)) = (ds.anchors.as_slice(), ds.target) else { return None };
     let (_, path) = active_paths(app).into_iter().find(|(r, _)| *r == target)?;
     let sub = path.subpaths.get(*s).filter(|sub| !sub.closed)?;
-    let knot = sub.knots.get(*k).filter(|_| *k == 0 || *k + 1 == sub.knots.len())?;
-    Some([knot.anchor.x, knot.anchor.y])
+    sub.knots.get(*k).filter(|_| *k == 0 || *k + 1 == sub.knots.len())?;
+    Some((target, *s, *k))
 }
 
 /// Is the Curvature Pen idle (no path being drawn, no ⌘/Ctrl)? Then it edits the active path in

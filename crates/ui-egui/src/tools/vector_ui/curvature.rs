@@ -1,10 +1,11 @@
-use super::pen::{cancel_stale, pen_commit, resume_at};
+use super::pen::{cancel_stale, pen_commit, resume_selected};
 use super::{PenPath, PhotocraftApp};
 
 /// Recompute a Curvature Pen path's handles from its anchors and corner points. The knots of a
 /// path it carries on (`PenPath::fixed`) keep theirs, but for the endpoint's outgoing handle,
 /// which bends into the first new segment (#10726), and, once the path closes, the first knot's
-/// incoming handle, which bends into the closing one.
+/// incoming handle, which bends into the closing one. A smooth knot's bent handle stays in line
+/// with the one it keeps, so the knot stays smooth.
 pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
     let corners: Vec<bool> = (0..anchors.len()).map(|i| pen.unlinked.contains(&i)).collect();
@@ -14,6 +15,7 @@ pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     for (i, was) in pen.fixed.iter().enumerate() {
         let Some(k) = pen.knots.get_mut(i) else { break };
         let (keep_in, keep_out) = (!(closed && i == 0), !(extended && i == last));
+        let smooth = !pen.unlinked.contains(&i);
         k[0] = was[0];
         if keep_in {
             k[1] = was[1];
@@ -21,7 +23,25 @@ pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
         if keep_out {
             k[2] = was[2];
         }
+        if smooth && keep_in != keep_out {
+            let (kept, bent) = if keep_in { (1, 2) } else { (2, 1) };
+            if let Some(h) = in_line(k[0], k[kept], k[bent]) {
+                k[bent] = h;
+            }
+        }
     }
+}
+
+/// A handle as long as `bent` from `anchor`, on the far side of it from `kept`: `None` when
+/// `kept` lies on the anchor and gives no direction.
+fn in_line(anchor: [f64; 2], kept: [f64; 2], bent: [f64; 2]) -> Option<[f64; 2]> {
+    let (dx, dy) = (anchor[0] - kept[0], anchor[1] - kept[1]);
+    let d = dx.hypot(dy);
+    if !(d > 1e-9 && d.is_finite()) {
+        return None;
+    }
+    let len = (bent[0] - anchor[0]).hypot(bent[1] - anchor[1]);
+    len.is_finite().then(|| [anchor[0] + dx / d * len, anchor[1] + dy / d * len])
 }
 
 /// The anchor of the Curvature Pen path being drawn under (x, y), for the cursor.
@@ -64,8 +84,7 @@ pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     // carries that path on from there, as in Photoshop (#10726): its segments keep their shape,
     // the press adds the next anchor and the commit extends that subpath.
     if app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty())
-        && let Some(end) = crate::direct_select::selected_open_end(app)
-        && let Some(mut resumed) = resume_at(app, end[0], end[1], 0.5)
+        && let Some(mut resumed) = resume_selected(app)
     {
         resumed.curvature = true;
         resumed.fixed = resumed.knots.clone();

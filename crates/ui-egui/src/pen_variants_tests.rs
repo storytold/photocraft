@@ -258,6 +258,75 @@ fn the_curvature_pen_carries_on_an_open_path() {
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots[1][0]), Some([80.0, 20.0]));
 }
 
+/// The work path set to `subpaths`, in one step.
+fn set_work_path(app: &mut PhotocraftApp, subpaths: Vec<photocraft_doc::vector::Subpath>) {
+    app.session
+        .edit("path", |doc, _| {
+            doc.work_path = Some(Path::new(subpaths));
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Direct Selection's selection: anchor `[subpath, knot]` of `target`, alone.
+fn select_anchor(app: &mut PhotocraftApp, target: crate::direct_select::PathRef, anchor: [usize; 2]) {
+    app.ui.direct_selection.target = Some(target);
+    app.ui.direct_selection.anchors = vec![anchor];
+}
+
+/// CodeRabbit on #10744: two open subpaths end on the same point, and the Curvature Pen carries on
+/// the one whose endpoint is selected, not the first one ending there.
+#[test]
+fn the_curvature_pen_carries_on_the_selected_subpath_of_two_that_end_together() {
+    use photocraft_doc::vector::Subpath;
+    let mut app = app(Tool::CurvaturePen);
+    set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 80.0)]), Subpath::polyline(&[(200.0, 20.0), (80.0, 80.0)])]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [1, 1]);
+    click(&mut app, 140.0, 150.0);
+    assert_eq!(app.ui.pen.as_ref().and_then(|p| p.resumes.as_ref()).map(|r| r.index), Some(1), "the selected subpath");
+    crate::vector_ui::pen_commit(&mut app, false);
+    let work = work_path(&app);
+    assert_eq!(work.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>(), [2, 3], "the second subpath grew");
+}
+
+/// CodeRabbit on #10744: a smooth endpoint carried on keeps its incoming handle, and its outgoing
+/// one, bent into the new segment, stays in line with it: the knot stays smooth.
+#[test]
+fn a_smooth_endpoint_carried_on_stays_smooth() {
+    use photocraft_doc::vector::{Knot, Point, Subpath};
+    let mut app = app(Tool::CurvaturePen);
+    let end = Knot::smooth(Point::new(80.0, 80.0), Point::new(60.0, 60.0), Point::new(100.0, 100.0));
+    set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![Knot::corner(20.0, 20.0), end], op: Default::default() }]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 1]);
+    click(&mut app, 140.0, 40.0);
+    let knots = app.ui.pen.as_ref().map(|p| p.knots.clone()).expect("the path is carried on");
+    let [anchor, in_ctrl, out_ctrl] = knots[1];
+    assert_eq!(in_ctrl, [60.0, 60.0], "the incoming handle is kept");
+    let (a, b) = ([anchor[0] - in_ctrl[0], anchor[1] - in_ctrl[1]], [out_ctrl[0] - anchor[0], out_ctrl[1] - anchor[1]]);
+    assert!(b[0].hypot(b[1]) > 1.0, "the outgoing handle bends into the new segment: {out_ctrl:?}");
+    assert!((a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "in line: {knots:?}");
+}
+
+/// CodeRabbit on #10744: in Path mode, an endpoint selected on a shape layer is not one a Pen path
+/// carries on, even with the work path ending on the same point: the press starts a new path.
+#[test]
+fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
+    use photocraft_doc::vector::Subpath;
+    let mut app = app(Tool::Pen);
+    app.ui.tool_options.vector_mode = "shape".into();
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let shape = app.session.active().and_then(|st| st.active_layer).expect("a shape layer").0;
+    app.ui.tool_options.vector_mode = "path".into();
+    set_work_path(&mut app, vec![Subpath::polyline(&[(200.0, 20.0), (80.0, 80.0)])]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Layer(shape), [0, 1]);
+    app.ui.tool = Tool::CurvaturePen;
+    click(&mut app, 140.0, 150.0);
+    let pen = app.ui.pen.as_ref().expect("a new path");
+    assert!(pen.resumes.is_none() && pen.knots.len() == 1, "{pen:?}");
+}
+
 /// #6593 review: carrying on a subpath keeps its path operation, and a draft whose subpath changed
 /// meanwhile refuses without overwriting newer work. The historical test name is retained
 /// for reviewed-head provenance; captured-revision validation supersedes its stale fallback.
