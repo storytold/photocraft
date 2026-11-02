@@ -121,8 +121,17 @@ impl StrokeMask {
         if area.is_empty() {
             return Ok(Rect::EMPTY);
         }
-        if area.size().area() / (TILE_SIZE as u64 * TILE_SIZE as u64) > 1_000_000 {
+        let tile = i64::from(TILE_SIZE);
+        let cols = (i64::from(area.x1) - 1).div_euclid(tile) - i64::from(area.x0).div_euclid(tile) + 1;
+        let rows = (i64::from(area.y1) - 1).div_euclid(tile) - i64::from(area.y0).div_euclid(tile) + 1;
+        let tiles = (cols * rows) as u64;
+        if tiles > 1_000_000 {
             return Err("stroke segment is too large");
+        }
+        // Distance-culled tiles still require work; charge them before entering the iterator.
+        self.work = self.work.saturating_add(tiles);
+        if self.work > 250_000_000 {
+            return Err("stroke exceeds the work budget; use shorter strokes");
         }
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
         let denom = dx * dx + dy * dy;
@@ -231,6 +240,37 @@ mod tests {
         let region = Rect::new(0, 0, 150, 150);
         assert_eq!(actual.read_region(region), expected.read_region(region));
         assert_eq!(actual.sample_channel(999_999_999, 999_999_999, 0), 0.0);
+    }
+
+    #[test]
+    /// Candidate tiles consume budget even when the capsule misses every tile.
+    fn selection_brush_culled_tiles_consume_work_budget() {
+        let mut stroke = StrokeMask::new(Options { size: 1.0, ..Default::default() }, Rect::new(0, 0, 1024, 1024)).unwrap();
+        stroke.append(&[[-2048., 1024.], [1024., -2048.]]).unwrap();
+        assert_eq!(stroke.mask().tile_count(), 0);
+        assert_eq!(stroke.work, 16);
+        stroke.work = 250_000_000 - 15;
+        assert!(stroke.append(&[[-2048., 1024.]]).is_err());
+        assert_eq!(stroke.mask().tile_count(), 0);
+    }
+
+    #[test]
+    /// A thin clipped strip spans tile columns regardless of its small pixel area.
+    fn selection_brush_thin_strip_counts_tile_indices() {
+        let mut stroke = StrokeMask::new(Options { size: 1.0, ..Default::default() }, Rect::new(-256_000, -1, 0, 0)).unwrap();
+        stroke.work = 250_000_000 - 999;
+        assert!(stroke.append(&[[-256_000., -256_001.], [0., 0.]]).is_err());
+        assert_eq!(stroke.mask().tile_count(), 0);
+        assert_eq!(stroke.work, 250_000_001);
+    }
+
+    #[test]
+    /// Reject an oversized candidate grid before enumerating it or allocating painted tiles.
+    fn selection_brush_candidate_tile_limit_precedes_enumeration() {
+        let mut stroke = StrokeMask::new(Options { size: 1.0, ..Default::default() }, Rect::new(0, 0, 300_000, 300_000)).unwrap();
+        assert!(stroke.append(&[[-301_000., 300_000.], [300_000., -301_000.]]).is_err());
+        assert_eq!(stroke.mask().tile_count(), 0);
+        assert_eq!(stroke.work, 0);
     }
 
     #[test]

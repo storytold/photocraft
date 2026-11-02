@@ -99,3 +99,7 @@ Partial-opacity closed fills scale only the clipped polygon bounds, within the s
 64 MP fill budget, rather than enumerating the canvas. Regression coverage compares
 a small closed fill on ordinary and billion-pixel-wide sparse canvases; the benchmark
 also reports small-stroke finalization on 24 MP and 500,000-square sparse canvases.
+
+Stroke work accounting charges every candidate tile before distance culling, in addition
+to rasterized pixels. The per-segment one-million-tile limit uses exact tile-index bounds,
+including thin strips and negative coordinates.

@@ -724,7 +724,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::slider_row(ui, tl!("Opacity"), &mut opacity, 0.0..=100.0, "%", None);
             });
             ui.menu_button(tl!("Overlay"), |ui| {
-                crate::widgets::color_edit_button_rgb(ui, &mut settings.overlay_color);
+                crate::widgets::color_edit_button_rgb(ui, &mut settings.overlay_color, tl!("Overlay"));
                 crate::widgets::slider_row(ui, tl!("Display Opacity"), &mut settings.overlay_opacity, 0.0..=100.0, "%", None);
                 crate::widgets::checkbox(ui, &mut settings.fill_closed, tl!("Fill Closed Strokes"));
             });
