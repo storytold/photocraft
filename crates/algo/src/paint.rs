@@ -238,22 +238,33 @@ pub fn bucket_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f
         }
     }
     let matched = |x: i32, y: i32| core.at(x, y) > 0.0;
-    // Candidates: the unmatched pixels within FRINGE of the region's edge.
-    let mut candidate = vec![false; mask.len()];
-    for y in b.y0..b.y1 {
-        for x in b.x0..b.x1 {
-            if !matched(x, y) || [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].iter().all(|&(nx, ny)| matched(nx, ny) || !area.contains(nx, ny)) {
-                continue;
-            }
-            for ny in (y - FRINGE).max(grown.y0)..(y + FRINGE + 1).min(grown.y1) {
-                for nx in (x - FRINGE).max(grown.x0)..(x + FRINGE + 1).min(grown.x1) {
-                    if let Some(c) = candidate.get_mut(idx(nx, ny)) {
-                        *c = true;
-                    }
-                }
-            }
+    // Candidates: the unmatched pixels within FRINGE of the region's edge. The region's edge is
+    // found row by row, then spread FRINGE pixels sideways and then up and down, each pass over
+    // independent rows.
+    let bh = (b.y1 - b.y0) as usize;
+    let mut edge = vec![false; bw.checked_mul(bh)?];
+    for_each_row(&mut edge, bw, |ry, row| {
+        let y = b.y0 + ry as i32;
+        for (rx, e) in row.iter_mut().enumerate() {
+            let x = b.x0 + rx as i32;
+            *e = matched(x, y) && ![(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)].iter().all(|&(nx, ny)| matched(nx, ny) || !area.contains(nx, ny));
         }
-    }
+    });
+    let mut spread = vec![false; gw.checked_mul(bh)?];
+    for_each_row(&mut spread, gw, |ry, row| {
+        for (gx, s) in row.iter_mut().enumerate() {
+            let x = grown.x0 + gx as i32;
+            *s = ((x - FRINGE).max(b.x0)..(x + FRINGE + 1).min(b.x1)).any(|nx| edge.get(ry * bw + (nx - b.x0) as usize).copied().unwrap_or(false));
+        }
+    });
+    let mut candidate = vec![false; mask.len()];
+    for_each_row(&mut candidate, gw, |gy, row| {
+        let y = grown.y0 + gy as i32;
+        let rows = (y - FRINGE).max(b.y0)..(y + FRINGE + 1).min(b.y1);
+        for (gx, c) in row.iter_mut().enumerate() {
+            *c = rows.clone().any(|ny| spread.get((ny - b.y0) as usize * gw + gx).copied().unwrap_or(false));
+        }
+    });
     const AROUND: [(i32, i32); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
     let touches_region = |c: (i32, i32)| AROUND.iter().any(|&(dx, dy)| matched(c.0 + dx, c.1 + dy));
     // One step along the ramp: the neighbour farthest from the seed colour (`outward`) or the
@@ -271,9 +282,13 @@ pub fn bucket_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f
         }
         best
     };
-    for y in grown.y0..grown.y1 {
-        for x in grown.x0..grown.x1 {
-            if !candidate.get(idx(x, y)).copied().unwrap_or(false) || matched(x, y) {
+    // Each candidate reads only the image and the matched region, and writes its own mask byte,
+    // so the rows are covered in parallel.
+    for_each_row(&mut mask, gw, |gy, row| {
+        let y = grown.y0 + gy as i32;
+        for (gx, m) in row.iter_mut().enumerate() {
+            let x = grown.x0 + gx as i32;
+            if !candidate.get(gy * gw + gx).copied().unwrap_or(false) || matched(x, y) {
                 continue;
             }
             let Some(p) = at(x, y) else { continue };
@@ -310,14 +325,26 @@ pub fn bucket_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f
                 continue;
             }
             let coverage = 1.0 - d as f32 / d_max as f32;
-            if coverage >= 0.04
-                && let Some(m) = mask.get_mut(idx(x, y))
-            {
+            if coverage >= 0.04 {
                 *m = (coverage * 255.0).round() as u8;
             }
         }
-    }
+    });
     Some(crate::selection::Region { bbox: grown, mask })
+}
+
+/// Run `f(row index, row)` over the `width`-wide rows of `buf`, in parallel where threads exist.
+fn for_each_row<T: Send>(buf: &mut [T], width: usize, f: impl Fn(usize, &mut [T]) + Sync + Send) {
+    if width == 0 {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        buf.par_chunks_mut(width).enumerate().for_each(|(i, row)| f(i, row));
+    }
+    #[cfg(target_arch = "wasm32")]
+    buf.chunks_mut(width).enumerate().for_each(|(i, row)| f(i, row));
 }
 
 /// Like [`bucket_fill`] but the fill colour comes from `src(x, y)` — e.g. a pattern sampled at the
