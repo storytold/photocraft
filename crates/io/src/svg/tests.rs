@@ -907,3 +907,56 @@ fn only_stored_previews_refuse_unreadable_embedded_images() {
     assert!(import_svg_bounded_with_work("edit", svg.as_bytes(), MAX_RASTER_PIXELS).is_ok());
     assert!(import_svg_preview_with_work("preview", svg.as_bytes(), MAX_RASTER_PIXELS).is_err());
 }
+
+fn drawing(w: u32, h: u32, body: &str) -> String {
+    format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\"><defs><filter id=\"f\"><feOffset dx=\"1\"/></filter><pattern id=\"p\" patternUnits=\"userSpaceOnUse\" width=\"TILE\" height=\"TILE\"><rect width=\"4\" height=\"4\"/></pattern></defs>{body}</svg>")
+}
+
+fn pixel_layers(r: &ImportResult) -> usize {
+    r.document.layers.iter().filter(|l| matches!(l.content, LayerContent::Raster(_))).count()
+}
+
+/// resvg gives every filtered group a layer up to 5 x 5 times the pixmap, whatever the pixmap's
+/// own 24 MP limit: a 4000 x 4000 canvas with one huge filtered rect asked for about 1.6 GB.
+#[test]
+fn a_huge_filtered_group_is_dropped_not_allocated() {
+    let svg = drawing(4000, 4000, "<g filter=\"url(#f)\"><rect x=\"-100000\" y=\"-100000\" width=\"200000\" height=\"200000\"/></g>");
+    let r = import_svg("hostile", svg.as_bytes()).unwrap();
+    assert_eq!(pixel_layers(&r), 0);
+    assert!(r.warnings.iter().any(|w| w.contains("too much memory")), "{:?}", r.warnings);
+    assert!(rasterize(svg.as_bytes(), 1.0).is_err());
+}
+
+/// A pattern tile is sized from the document (`width × height × scale`); 100,000 px a side was a
+/// 40 GB allocation, which aborts the process when it fails.
+#[test]
+fn a_huge_pattern_tile_is_refused_not_allocated() {
+    let svg = drawing(100, 100, "<rect width=\"100\" height=\"100\" fill=\"url(#p)\"/>").replace("TILE", "100000");
+    let err = rasterize(svg.as_bytes(), 1.0).unwrap_err().to_string();
+    assert!(err.contains("MiB limit"), "{err}");
+    let r = import_svg("hostile", svg.as_bytes()).unwrap();
+    assert_eq!(pixel_layers(&r), 0);
+    assert!(r.warnings.iter().any(|w| w.contains("too much memory")), "{:?}", r.warnings);
+}
+
+/// A scale factor multiplies the tile too.
+#[test]
+fn a_pattern_tile_scaled_up_past_the_limit_is_refused() {
+    // 20 px at 64x is a 1280 px canvas, well inside the 24 MP limit; the 1000 px tile becomes 64,000 px.
+    let svg = drawing(20, 20, "<rect width=\"20\" height=\"20\" fill=\"url(#p)\"/>").replace("TILE", "1000");
+    assert!(rasterize(svg.as_bytes(), 1.0).is_ok());
+    let err = rasterize(svg.as_bytes(), 64.0).unwrap_err().to_string();
+    assert!(err.contains("MiB limit"), "{err}");
+}
+
+/// Ordinary filtered groups and patterns, including a large canvas, still rasterise.
+#[test]
+fn ordinary_filters_and_patterns_still_rasterise() {
+    let svg = drawing(4000, 3000, "<g filter=\"url(#f)\"><rect x=\"100\" y=\"100\" width=\"3000\" height=\"2000\"/></g>");
+    let r = import_svg("big", svg.as_bytes()).unwrap();
+    assert_eq!(pixel_layers(&r), 1, "{:?}", r.warnings);
+    assert!(!r.warnings.iter().any(|w| w.contains("too much memory")));
+    let svg = drawing(512, 512, "<rect width=\"512\" height=\"512\" fill=\"url(#p)\"/>").replace("TILE", "64");
+    let buf = rasterize(svg.as_bytes(), 1.0).unwrap();
+    assert!(buf.px.iter().any(|p| p[3] > 0.99));
+}

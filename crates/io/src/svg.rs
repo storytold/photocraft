@@ -1040,6 +1040,7 @@ fn import_parsed_with_limits(
         }
         let (w, h) = (cv.size.width, cv.size.height);
         if let Some(mut pixmap) = pixmap(w, h) {
+            check_render_memory(&tree, global, w, h)?;
             resvg::render(&tree, global, &mut pixmap.as_mut());
             doc.layers.push(Layer::new("Background", LayerContent::Raster(surface(&pixmap, doc.bounds(), fmt))));
         }
@@ -1117,8 +1118,24 @@ fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
     let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
-    resvg::render(tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+    let ts = tiny_skia::Transform::from_scale(k, k);
+    check_render_memory(tree, ts, w, h)?;
+    resvg::render(tree, ts, &mut pixmap.as_mut());
     Ok(pixmap)
+}
+
+/// An error when drawing the whole `tree` at `ts` onto a `w × h` pixmap would need more than
+/// [`MAX_PEAK_PIXEL_BYTES`] of buffers (see [`Scratch`]).
+fn check_render_memory(tree: &usvg::Tree, ts: tiny_skia::Transform, w: u32, h: u32) -> Result<(), IoError> {
+    let bytes = render_bytes(tree.root().children(), ts, w, h);
+    if bytes > MAX_PEAK_PIXEL_BYTES {
+        return Err(IoError::Svg(format!(
+            "the drawing needs about {} MiB of layers to rasterise at {w} × {h} px, over the {} MiB limit (huge groups, filters, masks or pattern tiles)",
+            bytes >> 20,
+            MAX_PEAK_PIXEL_BYTES >> 20
+        )));
+    }
+    Ok(())
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -1127,6 +1144,78 @@ fn pixmap(w: u32, h: u32) -> Option<tiny_skia::Pixmap> {
         return None;
     }
     tiny_skia::Pixmap::new(w, h)
+}
+
+/// Worst-case pixels of scratch buffers resvg holds at once while it draws a subtree onto a
+/// `w × h` pixmap, found by walking the tree without allocating. [`MAX_RASTER_PIXELS`] bounds the
+/// target pixmap only; resvg also allocates a layer for every isolated group (opacity, blend mode,
+/// clip, mask, filter), up to 5 × 5 times the target, and one more per clip, mask and filter
+/// primitive on it, and a pattern tile as large as its `width × height` at the current scale.
+/// Layers nest, so a hostile drawing could reach many gigabytes (and an allocation failure aborts
+/// the process) while the target stays small. Siblings are drawn one after another, so a level
+/// costs its own buffers plus the most expensive child.
+struct Scratch {
+    /// Pixels in one layer at the most: resvg clamps a layer to 5 × 5 times the target.
+    layer_cap: f64,
+}
+
+impl Scratch {
+    fn new(w: u32, h: u32) -> Self {
+        Self { layer_cap: 25.0 * f64::from(w) * f64::from(h) }
+    }
+
+    fn nodes(&self, nodes: &[usvg::Node], ts: tiny_skia::Transform) -> f64 {
+        nodes.iter().map(|n| self.node(n, ts)).fold(0.0, f64::max)
+    }
+
+    fn node(&self, node: &usvg::Node, ts: tiny_skia::Transform) -> f64 {
+        match node {
+            usvg::Node::Group(g) => self.group(g, ts),
+            usvg::Node::Text(t) => self.group(t.flattened(), ts),
+            usvg::Node::Path(p) => {
+                let paint = |paint: &usvg::Paint| match paint {
+                    usvg::Paint::Pattern(pattern) => self.pattern(pattern, ts),
+                    _ => 0.0,
+                };
+                p.fill().map_or(0.0, |f| paint(f.paint())).max(p.stroke().map_or(0.0, |s| paint(s.paint())))
+            }
+            usvg::Node::Image(_) => 0.0,
+        }
+    }
+
+    fn group(&self, g: &usvg::Group, ts: tiny_skia::Transform) -> f64 {
+        let ts = ts.pre_concat(g.transform());
+        if !g.should_isolate() {
+            return self.nodes(g.children(), ts);
+        }
+        let Some(bb) = g.layer_bounding_box().transform(ts) else { return 0.0 };
+        // `min` also turns a NaN or infinite box into the cap.
+        let layer = ((f64::from(bb.width()).ceil() + 4.0) * (f64::from(bb.height()).ceil() + 4.0)).min(self.layer_cap);
+        let primitives: usize = g.filters().iter().map(|f| f.primitives().len()).sum();
+        let layers = 1 + usize::from(g.clip_path().is_some()) + usize::from(g.mask().is_some()) + primitives;
+        let mut inner = self.nodes(g.children(), ts);
+        if let Some(mask) = g.mask() {
+            inner = inner.max(self.nodes(mask.root().children(), ts));
+        }
+        layer * layers as f64 + inner
+    }
+
+    fn pattern(&self, pattern: &usvg::Pattern, ts: tiny_skia::Transform) -> f64 {
+        let (sx, sy) = ts.pre_concat(pattern.transform()).get_scale();
+        let rect = pattern.rect();
+        let (tw, th) = (f64::from(rect.width() * sx).round(), f64::from(rect.height() * sy).round());
+        if tw < 1.0 || th < 1.0 {
+            return 0.0;
+        }
+        tw * th + self.nodes(pattern.root().children(), tiny_skia::Transform::from_scale(sx, sy))
+    }
+}
+
+/// Bytes of RGBA8 buffers resvg needs to draw `nodes` at `ts` onto a `w × h` pixmap: the pixmap
+/// itself plus its scratch layers ([`Scratch`]). Saturates instead of overflowing.
+fn render_bytes(nodes: &[usvg::Node], ts: tiny_skia::Transform, w: u32, h: u32) -> u64 {
+    let pixels = f64::from(w) * f64::from(h) + Scratch::new(w, h).nodes(nodes, ts);
+    (pixels * 4.0).min(u64::MAX as f64) as u64
 }
 
 fn rgba(c: tiny_skia::ColorU8) -> [f32; 4] {
@@ -1497,11 +1586,17 @@ impl Conv {
             self.note("raster-alloc", "SVG: a rasterised element could not be allocated".to_string());
             return None;
         };
+        let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
+        let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
+        // resvg's own layers for this element (nested groups, masks, filters, pattern tiles) come on
+        // top of the pixmap and the layers already kept.
+        if self.retained_pixel_bytes.saturating_add(render_bytes(std::slice::from_ref(node), ts, w, h)) > MAX_PEAK_PIXEL_BYTES {
+            self.note("raster-scratch", "SVG: an element needing too much memory to rasterise (huge groups, filters, masks or pattern tiles) was dropped".to_string());
+            return None;
+        }
         // resvg renders the node in its parent's space after shifting its absolute bounding box
         // to the origin: undo that shift, apply the parent's transform, then scale to the canvas
         // and shift so the pixmap starts at (x0, y0).
-        let canvas = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, -(x0 as f32), -(y0 as f32));
-        let ts = canvas.pre_concat(parent).pre_translate(shift.x(), shift.y());
         resvg::render_node(node, ts, &mut pixmap.as_mut())?;
         let layer = Layer::new(name, LayerContent::Raster(surface(&pixmap, Rect::new(x0, y0, x1, y1), self.fmt)));
         let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
