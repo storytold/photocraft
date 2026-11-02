@@ -234,9 +234,16 @@ struct CornerCurve {
     last: Option<StrokePoint>,
     /// Unit direction the path arrived at `last` heading in.
     dir: Option<(f64, f64)>,
+    /// Longest leg time, in ms, that is still split into an arc. A longer leg stays one straight
+    /// chord, so the walker's stalled-backlog guard sees the whole gap rather than one piece of it.
+    max_gap_ms: Option<f64>,
 }
 
 impl CornerCurve {
+    fn new(max_gap_ms: Option<f64>) -> Self {
+        Self { max_gap_ms, ..Self::default() }
+    }
+
     /// Feed one point; appends the path points up to and including it.
     fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
         let Some(a) = self.last.replace(p) else {
@@ -260,21 +267,26 @@ impl CornerCurve {
         let (ex, ey) = (u.0 + CURVE_LEAD * (u.0 - t.0), u.1 + CURVE_LEAD * (u.1 - t.1));
         let e_len = (ex * ex + ey * ey).sqrt();
         let e = (ex / e_len, ey / e_len);
-        self.dir = Some(e);
         // Bézier handles a third of the chord long; the start handle shrinks as the turn grows.
         let reach = len / 3.0 * (1.0 + t.0 * u.0 + t.1 * u.1) / 2.0;
         let bend = ((t.0 * u.1 - t.1 * u.0).abs() * reach).max((e.0 * u.1 - e.1 * u.0).abs() * len / 3.0);
-        if bend <= 0.05 {
+        let n = (((len + bend) / CURVE_STEP_PX).ceil() as usize).clamp(1, MAX_CURVE_STEPS);
+        let long_gap = self.max_gap_ms.is_some_and(|g| p.time - a.time > g);
+        if bend <= 0.05 || n == 1 || long_gap {
+            // Drawn as the straight chord, so the next arc starts from the chord's direction.
+            self.dir = Some(u);
             out.push(p);
             return;
         }
+        self.dir = Some(e);
         let c1 = StrokePoint { x: a.x + t.0 * reach, y: a.y + t.1 * reach, ..a };
         let c2 = StrokePoint { x: p.x - e.0 * len / 3.0, y: p.y - e.1 * len / 3.0, ..p };
-        let n = (((len + bend) / CURVE_STEP_PX).ceil() as usize).clamp(1, MAX_CURVE_STEPS);
         for i in 1..n {
             let f = i as f64 / n as f64;
             let (ab, bc, cd) = (lerp_pt(&a, &c1, f), lerp_pt(&c1, &c2, f), lerp_pt(&c2, &p, f));
-            out.push(lerp_pt(&lerp_pt(&ab, &bc, f), &lerp_pt(&bc, &cd, f), f));
+            let q = lerp_pt(&lerp_pt(&ab, &bc, f), &lerp_pt(&bc, &cd, f), f);
+            // Only the position follows the arc; pose and time run evenly from `a` to `p`.
+            out.push(StrokePoint { x: q.x, y: q.y, ..lerp_pt(&a, &p, f) });
         }
         out.push(p);
     }
@@ -866,7 +878,8 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
-            curve: (brush.smoothing.enabled && brush.smoothing.amount > 0.0).then(CornerCurve::default),
+            curve: (brush.smoothing.enabled && brush.smoothing.amount > 0.0)
+                .then(|| CornerCurve::new(interval.map(|iv| iv * MAX_AIRBRUSH_DABS_PER_SEGMENT as f64))),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),

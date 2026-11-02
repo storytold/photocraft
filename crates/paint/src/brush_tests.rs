@@ -2027,7 +2027,10 @@ fn smoothing_rounds_the_corners_of_a_fast_stroke() {
     assert!(polygon > 25.0, "smoothing off keeps the corners ({polygon:.1}°)");
     for amount in [0.05, 0.2, 0.5] {
         // Without the end catch-up, which jumps straight to the last pointer position.
-        let turn = sharpest_turn(&dabs_of(&b(true, amount, false), &fast_circle()));
+        let d = dabs_of(&b(true, amount, false), &fast_circle());
+        let drawn: f64 = d.windows(2).map(|w| (w[1].center.x - w[0].center.x).hypot(w[1].center.y - w[0].center.y)).sum();
+        assert!(drawn > 200.0, "Smoothing {amount}: only {drawn:.0} px of the ~497 px circle drawn");
+        let turn = sharpest_turn(&d);
         assert!(turn < 6.0, "Smoothing {amount}: the sharpest turn between dabs is {turn:.1}°");
         // With it, the stroke still ends at the last pointer position.
         let (end, last) = (dabs_of(&b(true, amount, true), &fast_circle()).last().map(|d| d.center), fast_circle()[12]);
@@ -2065,6 +2068,27 @@ fn rounded_corners_are_the_same_however_the_points_arrive() {
 }
 
 #[test]
+fn rounded_corners_do_not_replay_a_long_build_up_pause() {
+    // A long pause between two samples on a turn is one gap, which the airbrush's stalled-backlog
+    // guard drops, not many arc pieces that each replay their share of it as Build-up dabs.
+    let pts = [
+        StrokePoint { time: 0.0, ..StrokePoint::new(0.0, 0.0, 1.0) },
+        StrokePoint { time: 8.0, ..StrokePoint::new(60.0, 0.0, 1.0) },
+        StrokePoint { time: 60_000.0, ..StrokePoint::new(60.0, 60.0, 1.0) },
+    ];
+    let b = |smooth| BrushSettings {
+        size: 10.0,
+        spacing: 0.25,
+        build_up: true,
+        build_up_rate: 20.0,
+        smoothing: Smoothing { enabled: smooth, amount: 0.05, ..Default::default() },
+        ..brush()
+    };
+    let (off, on) = (dabs_of(&b(false), &pts).len(), dabs_of(&b(true), &pts).len());
+    assert!(on < off * 2, "smoothing on: {on} dabs, off: {off}");
+}
+
+#[test]
 fn rounded_corners_survive_hostile_points() {
     let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount: 0.5, ..Default::default() }, ..brush() };
     let pts = [
@@ -2087,6 +2111,7 @@ fn rounded_corners_settle_back_onto_a_straight_line() {
     let pts: Vec<_> = pts.into_iter().enumerate().map(|(i, p)| StrokePoint { time: i as f64 * 8.0, ..p }).collect();
     let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount: 0.05, ..Default::default() }, ..brush() };
     let d = dabs_of(&b, &pts);
+    assert!(d.iter().any(|d| d.center.y >= 120.0), "the stroke reaches the straight tail");
     let off = |from: f64| d.iter().filter(|d| d.center.y >= from).map(|d| (d.center.x - 60.0).abs()).fold(0.0, f64::max);
     assert!(off(120.0) < 0.5, "the line is straight again after a few samples ({:.2} px off)", off(120.0));
 }
