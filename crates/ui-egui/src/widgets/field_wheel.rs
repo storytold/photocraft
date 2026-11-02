@@ -93,6 +93,19 @@ pub fn begin_frame(ctx: &Context) {
     ctx.data_mut(|d| d.insert_temp(gesture_id(), Gesture { last: now, owner }));
 }
 
+/// A hovered view with explicit wheel semantics may reclaim matching events that a focused
+/// value field captured earlier this frame. Other events and field focus remain untouched.
+pub(crate) fn take_focused_events(ctx: &Context, matches: impl Fn(&Event) -> bool) -> Vec<Event> {
+    ctx.data_mut(|d| {
+        let events = d.remove_temp::<Vec<Event>>(taken_id()).unwrap_or_default();
+        let (taken, rest): (Vec<_>, Vec<_>) = events.into_iter().partition(matches);
+        if !rest.is_empty() {
+            d.insert_temp(taken_id(), rest);
+        }
+        taken
+    })
+}
+
 /// Record that value field `id` (whose slot is `field`, as given to [`notches`]) has keyboard
 /// focus this frame, so the wheel is its next frame.
 pub fn set_focused(ctx: &Context, id: Id, field: Id) {
@@ -414,5 +427,24 @@ mod tests {
             }
         });
         out.textures_delta.clear();
+    }
+    #[test]
+    fn hovered_view_reclaims_only_matching_focused_events() {
+        use super::{take_focused_events, taken_id};
+        use egui::{Context, Event};
+        let ctx = Context::default();
+        let event = |modifiers| Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        };
+        let plain = event(Modifiers::NONE);
+        let shifted = event(Modifiers::SHIFT);
+        ctx.data_mut(|d| d.insert_temp(taken_id(), vec![plain.clone(), shifted.clone()]));
+        let taken = take_focused_events(&ctx, |e| matches!(e, Event::MouseWheel { modifiers, .. } if *modifiers == Modifiers::NONE));
+        assert_eq!(taken, vec![plain]);
+        assert_eq!(ctx.data(|d| d.get_temp::<Vec<Event>>(taken_id())), Some(vec![shifted]));
     }
 }

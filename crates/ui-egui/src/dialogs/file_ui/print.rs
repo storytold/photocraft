@@ -1,5 +1,7 @@
 use super::{Arc, DialogKind, Map, PhotocraftApp, Tokens, Value, b, check, dropdown_str, json, n, number, params, s};
 
+mod print_frame;
+
 /// Print's Printer menu: the default printer (value ""), then every printer `file.printers`
 /// listed. A saved name the spooler no longer lists stays selectable rather than vanishing.
 /// CUPS queue names stand in for spaces with `_`; the labels show the spaces.
@@ -60,6 +62,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
     ] {
         f.entry(k.to_string()).or_insert(v);
     }
+    normalize_print_units(&mut f);
     refresh_printers(app, &mut f);
     app.ui.open_dialog(DialogKind::Command, f)
 }
@@ -166,9 +169,48 @@ fn unit_pt(units: &str) -> f64 {
     }
 }
 
+/// Validate persisted/control-channel display units before passing them to internal helpers.
+/// Unknown values keep the historic centimetre fallback without affecting physical geometry.
+fn normalize_print_units(f: &mut Map<String, Value>) {
+    if !matches!(f.get("units").and_then(Value::as_str), Some("cm" | "mm" | "in")) {
+        f.insert("units".into(), json!("cm"));
+    }
+}
+
+/// Display-only conversion of canonical print points. Callers validate persisted units first;
+/// formatting never writes scale or geometry back into the dialog.
+fn print_preview_footer(l: photocraft_engine::print_cmds::PrintLayout, units: &str) -> String {
+    debug_assert!(matches!(units, "cm" | "mm" | "in"), "print display units must be validated");
+    let units = match units {
+        "in" => "in",
+        "mm" => "mm",
+        _ => "cm",
+    };
+    let (x, y, w, h) = l.rect;
+    // Size takes precedence: moving oversized artwork alone cannot make it fit.
+    let note = if w > l.paper.0 || h > l.paper.1 {
+        tl!("larger than the paper")
+    } else if x < 0.0 || y < 0.0 || x + w > l.paper.0 || y + h > l.paper.1 {
+        tl!("image extends outside the paper")
+    } else {
+        ""
+    };
+    let summary = crate::i18n::fmt(
+        tl!("Scale {scale}%  ·  {width} × {height} {unit}"),
+        &[
+            ("scale", &format!("{:.1}", l.scale * 100.0)),
+            ("width", &format!("{:.2}", l.rect.2 / unit_pt(units))),
+            ("height", &format!("{:.2}", l.rect.3 / unit_pt(units))),
+            ("unit", units),
+        ],
+    );
+    if note.is_empty() { summary } else { crate::i18n::fmt(tl!("{summary}  ·  {note}"), &[("summary", &summary), ("note", note)]) }
+}
+
 /// A number field in `units` for a value kept in points; true when edited.
 fn length_field(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str) -> bool {
-    length_field_prec(ui, label, pt, units, 0)
+    // Preserve fractional physical dimensions during continuous preview resizing.
+    length_field_prec(ui, label, pt, units, 2)
 }
 
 /// Edits a point-valued length in the selected units, with the requested decimal precision.
@@ -292,6 +334,23 @@ pub(super) fn drag_print_position(
     true
 }
 
+/// Stateless display transform: fit the whole physical sheet inside the *visible* preview.
+/// Paper geometry is already oriented by the engine. No print-layout fields are written.
+fn print_preview_page(paper: (f64, f64), viewport: egui::Rect) -> Option<(egui::Rect, f32)> {
+    if ![paper.0, paper.1].into_iter().all(|v| v.is_finite() && v > 0.0) || !viewport.is_finite() || viewport.width() <= 0.0 || viewport.height() <= 0.0 {
+        return None;
+    }
+    let padding = 16.0_f32.min(viewport.width().min(viewport.height()) / 4.0);
+    let inner = viewport.shrink(padding);
+    let k = (f64::from(inner.width()) / paper.0).min(f64::from(inner.height()) / paper.1) as f32;
+    if !k.is_finite() || k <= 0.0 {
+        return None;
+    }
+    let size = egui::vec2((paper.0 * f64::from(k)) as f32, (paper.1 * f64::from(k)) as f32);
+    let page = egui::Rect::from_center_size(viewport.center(), size);
+    (page.is_finite() && page.width() > 0.0 && page.height() > 0.0).then_some((page, k))
+}
+
 /// Maps the engine's bottom-left print-point rectangle into top-left egui coordinates.
 /// `k` is egui points per print point; Emulsion Down mirrors placement across the page,
 /// matching the PDF page transform. Returns the full image bounds for the caller to clip.
@@ -311,6 +370,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+    normalize_print_units(f);
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     // PDF exports and previews retain editable paper on Windows too. Only a real native
@@ -344,36 +404,13 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             match photocraft_engine::print_cmds::layout(&doc, &p, "file.print") {
                 Ok(mut l) => {
                     let (pw, ph) = l.paper;
-                    let k = ((area.width() - 20.0) / pw as f32).min((area.height() - 20.0) / ph as f32);
-                    let page = egui::Rect::from_center_size(area.center(), egui::vec2(pw as f32 * k, ph as f32 * k));
+                    // Fit only the display transform; retain a stable allocation to avoid modal feedback.
+                    let viewport = area.intersect(ui.clip_rect()).intersect(ui.ctx().content_rect());
+                    let Some((page, k)) = print_preview_page(l.paper, viewport) else { return };
                     ui.painter().rect_filled(page, 0.0, egui::Color32::WHITE);
                     ui.painter().rect_stroke(page, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
-                    let mut img = print_preview_image(l, page, k);
-                    let drag_id = ui.scope_id().with(("print-position", id));
-                    let visible = img.intersect(page).intersect(ui.clip_rect());
-                    let response = ui.interact(visible, drag_id, egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::Grab);
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Print preview image")));
-                    // Keep a fixed layout and press origin for the whole gesture: rounding and
-                    // the transition from Center must never accumulate or move the grab point.
-                    if response.drag_started_by(egui::PointerButton::Primary)
-                        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-                    {
-                        ui.data_mut(|d| d.insert_temp(drag_id, (l, origin, k)));
-                    }
-                    if (response.dragged_by(egui::PointerButton::Primary) || response.drag_stopped_by(egui::PointerButton::Primary))
-                        && let Some((start, origin, scale)) = ui.data(|d| d.get_temp::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id))
-                        && let Some(pointer) = response.interact_pointer_pos()
-                        && drag_print_position(f, start, pointer - origin, scale)
-                    {
-                        if let Ok(updated) = photocraft_engine::print_cmds::layout(&doc, &params(f), "file.print") {
-                            l = updated;
-                            img = print_preview_image(l, page, k);
-                        }
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    }
-                    if !ui.input(|i| i.pointer.primary_down()) {
-                        ui.data_mut(|d| d.remove::<(photocraft_engine::print_cmds::PrintLayout, egui::Pos2, f32)>(drag_id));
-                    }
+                    l = print_frame::interact(ui, f, &doc, l, page, viewport, id);
+                    let img = print_preview_image(l, page, k);
                     let (x, y, w, h) = l.rect;
                     let key = egui::Id::unique(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
                     let tex: Option<Arc<egui::TextureHandle>> = ui.data(|d| d.get_temp(key));
@@ -412,13 +449,9 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                             clip.circle_stroke(c, 3.5, mark);
                         }
                     }
+                    print_frame::paint(&ui.painter().with_clip_rect(viewport), img, &t);
                     let fits = x >= 0.0 && y >= 0.0 && x + w <= pw && y + h <= ph;
-                    let note = if fits { String::new() } else { "  ·  larger than the paper".to_string() };
-                    ui.label(
-                        egui::RichText::new(format!("Scale {:.1}%  ·  {:.2} × {:.2} in{note}", l.scale * 100.0, w / 72.0, h / 72.0))
-                            .color(if fits { t.text_dim } else { t.warning })
-                            .size(11.0),
-                    );
+                    ui.label(egui::RichText::new(print_preview_footer(l, &s(f, "units", "cm"))).color(if fits { t.text_dim } else { t.warning }).size(11.0));
                 }
                 Err(e) => {
                     ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, e.to_string(), egui::FontId::proportional(12.0), t.text_dim);
@@ -585,15 +618,18 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 let (_, _, w, h) = l.rect;
                 let (mut w2, mut h2) = (w, h);
                 let fit = b(f, "scaleToFit", false);
-                if !fit {
-                    // Two decimals: Height and Width set fractional scales.
+                // Keep this row present when a fitted preview becomes a manual resize:
+                // changing the modal height would move the paper during pointer capture.
+                ui.add_enabled_ui(!fit, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Scale")).color(t.text_dim));
-                        let mut v = n(f, "scale", 100.0) as f32;
-                        crate::widgets::value_field(ui, &mut v, 1.0..=1000.0, "%", 64.0).accessible_name(tl!("Scale"));
-                        f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
+                        let mut v = if fit { (l.scale * 100.0) as f32 } else { n(f, "scale", 100.0) as f32 };
+                        if crate::widgets::value_field_prec(ui, &mut v, 1.0..=1000.0, "%", 64.0, 2).accessible_name(tl!("Scale")).changed() {
+                            f.insert("scale".into(), json!((f64::from(v) * 100.0).round() / 100.0));
+                            ui.ctx().request_repaint();
+                        }
                     });
-                }
+                });
                 ui.horizontal(|ui| {
                     let hc = length_field(ui, tl!("Height"), &mut h2, &units);
                     let wc = length_field(ui, tl!("Width"), &mut w2, &units);
@@ -605,7 +641,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                         None
                     };
                     if let Some(k) = k.filter(|k| k.is_finite() && *k > 0.0) {
-                        f.insert("scale".into(), json!(((l.scale * k * 100.0) * 100.0).round() / 100.0));
+                        f.insert("scale".into(), json!((((l.scale * k * 100.0) * 100.0).round() / 100.0).clamp(1.0, 1000.0)));
                         f.insert("scaleToFit".into(), json!(false));
                     }
                 });

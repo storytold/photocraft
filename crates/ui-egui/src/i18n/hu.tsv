@@ -4434,3 +4434,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper
+	image extends outside the paper	image extends outside the paper

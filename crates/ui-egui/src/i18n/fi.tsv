@@ -4770,3 +4770,9 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper
+	image extends outside the paper	image extends outside the paper

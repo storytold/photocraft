@@ -4769,3 +4769,9 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+
+# Print-preview physical dimensions (display only; English fallback pending translation)
+	Scale {scale}%  ·  {width} × {height} {unit}	Scale {scale}%  ·  {width} × {height} {unit}
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	larger than the paper
+	image extends outside the paper	image extends outside the paper

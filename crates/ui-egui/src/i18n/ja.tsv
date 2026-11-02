@@ -4191,3 +4191,9 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# Print-preview physical dimensions (display only)
+	Scale {scale}%  ·  {width} × {height} {unit}	{width} × {height} {unit}  ·  拡大・縮小 {scale}%
+	{summary}  ·  {note}	{summary}  ·  {note}
+	larger than the paper	用紙より大きい
+	image extends outside the paper	画像が用紙の外にはみ出しています
