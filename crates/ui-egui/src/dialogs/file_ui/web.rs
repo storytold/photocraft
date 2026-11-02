@@ -269,7 +269,9 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     // fraction of a pixel too wide at a fractional scale widened it on every repaint (#10675).
     let ppp = ui.ctx().pixels_per_point();
     let floor = |v: f32| (v * ppp).floor() / ppp;
-    let area = egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0)), floor((ui.available_height() - 48.0).max(180.0)));
+    // The previews shrink before the settings do, down to a small floor that still fits beside
+    // them in a window smaller than the dialog's minimum.
+    let area = egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(120.0)), floor((ui.available_height() - 48.0).max(120.0)));
     let (half_w, half_h) = (floor(area.x / 2.0 - 4.0), floor(area.y / 2.0 - 4.0));
     ui.horizontal_top(|ui| {
         // Previews grow with the dialog; settings retain their compact width.
