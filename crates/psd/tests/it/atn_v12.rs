@@ -2,9 +2,9 @@ use photocraft_psd::PsdError;
 use photocraft_psd::atn;
 use photocraft_psd::descriptor::{Class, Descriptor, Id, MAX_DEPTH, ObjectArray, ReferenceItem as R, UnicodeString, Value as V};
 
-const STOP: &[u8] = include_bytes!("../../fuzz/corpus/atn/v12-stop.atn");
-const VALUES: &[u8] = include_bytes!("../../fuzz/corpus/atn/v12-values.atn");
-const COMMANDS: &[u8] = include_bytes!("../../fuzz/corpus/atn/v12-commands.atn");
+const STOP: &[u8] = include_bytes!("../fixtures/atn/v12-stop.atn");
+const VALUES: &[u8] = include_bytes!("../fixtures/atn/v12-values.atn");
+const COMMANDS: &[u8] = include_bytes!("../fixtures/atn/v12-commands.atn");
 
 fn code(id: &[u8; 4]) -> Id {
     Id::Code(*id)

@@ -140,6 +140,12 @@ next to the files:
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
+## Synthetic parser test fixtures
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/psd/tests/fixtures/atn/v12-*.atn` | Independently encoded ATN version-12 parser fixtures | @yoriswind | Original synthetic test data generated for PhotoCraft; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+
 ## Embedded-vector editor source
 
 The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change
