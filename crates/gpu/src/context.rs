@@ -38,6 +38,12 @@ pub struct NativeContextOptions {
     pub backends: wgpu::Backends,
     /// Bounded timeout for adapter/device initialization. When set, requests exceeding
     /// this duration return [`GpuContextError::NoAdapter`]. Default is 10 seconds.
+    ///
+    /// # Limitation
+    /// If initialization times out, the background initialization thread cannot be forcibly terminated
+    /// in standard Rust and continues detached until wgpu completes or fails. Callers should avoid
+    /// repeatedly requesting initialization in tight loops when timeouts occur to prevent thread and
+    /// resource leaks.
     pub timeout: Option<Duration>,
 }
 
@@ -129,7 +135,7 @@ impl NativeContext {
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())),
                 },
-                Err(_) => init_work(),
+                Err(e) => Err(GpuContextError::NoAdapter(format!("failed to spawn GPU initialization thread: {e}"))),
             }
         } else {
             init_work()

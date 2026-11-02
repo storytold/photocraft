@@ -8,6 +8,7 @@ mod tests {
     use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
     use photocraft_doc::{Document, Layer, LayerContent};
     use photocraft_geom::{Rect, Size};
+    use photocraft_io::BandRenderer;
     use photocraft_raster::Surface;
 
     use photocraft_automation::workspace::AuthorizedWorkspace;
@@ -28,7 +29,7 @@ mod tests {
     fn headless_with_gpu_renders_png_full_and_scaled() {
         let mut h = Headless::trusted_local().with_gpu();
         let doc = make_test_doc(120, 80, SampleType::U8);
-        h.session.open_document(doc);
+        h.session.open_document(doc, None);
 
         // Full size render (max_side = 0)
         let full_png = h.render_png(None, 0).expect("full render_png");
@@ -45,11 +46,11 @@ mod tests {
     fn capability_scoped_writes_preserved_with_gpu() {
         let dir = std::env::temp_dir().join(format!("photocraft-cap-test-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
-        let workspace = AuthorizedWorkspace::new(dir.clone(), vec![dir.clone()]).expect("authorized workspace");
+        let workspace = AuthorizedWorkspace::new(Some(&dir), Some(&dir)).expect("authorized workspace");
 
         let mut h = Headless::with_workspace(workspace).with_gpu();
         let doc = make_test_doc(64, 64, SampleType::U8);
-        h.session.open_document(doc);
+        h.session.open_document(doc, None);
 
         let valid_target = dir.join("out.png");
         let res = h.save(None, Some(&valid_target), Some("png"), &Default::default());
@@ -70,7 +71,7 @@ mod tests {
 
         // 1. Render Doc 1
         let doc1 = make_test_doc(64, 64, SampleType::U8);
-        h.session.open_document(doc1);
+        h.session.open_document(doc1, None);
         let png1_initial = h.render_png(Some(0), 0).expect("initial render");
         let img1_initial = decode(&png1_initial).expect("decode initial");
 
@@ -86,7 +87,7 @@ mod tests {
         let mut s2 = Surface::new(doc2.pixel_format());
         s2.fill_rect(Rect::new(0, 0, 64, 64), &[1.0, 0.0, 0.0, 1.0]);
         doc2.layers.push(Layer::new("red", LayerContent::Raster(s2)));
-        h.session.open_document(doc2);
+        h.session.open_document(doc2, None);
 
         let png2 = h.render_png(Some(1), 0).expect("doc2 render");
         let img2 = decode(&png2).expect("decode doc2");
@@ -95,41 +96,105 @@ mod tests {
     }
 
     #[test]
-    fn cpu_gpu_parity_over_synthetic_documents() {
-        if GpuRenderer::new().is_err() {
-            eprintln!("skipping cpu_gpu_parity test: no GPU adapter available");
-            return;
-        }
+    fn cpu_gpu_direct_parity_and_matrix_verification() {
+        let mut gpu_renderer = match GpuRenderer::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIPPED: GpuRenderer unavailable ({e}); no GPU adapter present");
+                return;
+            }
+        };
 
+        // Matrix: SampleType (U8, U16, F32) x Alpha modes (opaque background, translucent document)
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            let doc = make_test_doc(96, 96, depth);
+            for with_alpha in [false, true] {
+                let doc = if with_alpha {
+                    let mut d = Document::new("translucent", Size::new(96, 96), ColorMode::Rgb, depth);
+                    let mut s = Surface::new(d.pixel_format());
+                    s.fill_rect(Rect::new(10, 10, 86, 86), &[0.3, 0.6, 0.9, 0.5]);
+                    d.layers.push(Layer::new("trans", LayerContent::Raster(s)));
+                    d
+                } else {
+                    make_test_doc(96, 96, depth)
+                };
 
-            // Render via CPU
-            let mut cpu_h = Headless::trusted_local();
-            cpu_h.session.open_document(doc.clone());
-            let cpu_png = cpu_h.render_png(None, 0).expect("cpu render");
-            let cpu_img = decode(&cpu_png).expect("decode cpu");
+                // Independent reference CPU compositor oracle
+                let mut cpu_pixels = Vec::new();
+                photocraft_compose::render_bands(&doc, doc.bounds(), 16, |buf| {
+                    cpu_pixels.extend_from_slice(&buf.px);
+                    Ok::<(), std::convert::Infallible>(())
+                })
+                .expect("CPU reference compose failed");
 
-            // Render via GPU
-            let mut gpu_h = Headless::trusted_local().with_gpu();
-            gpu_h.session.open_document(doc);
-            let gpu_png = gpu_h.render_png(None, 0).expect("gpu render");
-            let gpu_img = decode(&gpu_png).expect("decode gpu");
+                // Direct GPU renderer invocation (MUST NOT fall back to CPU)
+                let mut gpu_pixels = Vec::new();
+                gpu_renderer
+                    .render_bands(&doc, doc.bounds(), 16, &mut |band| {
+                        gpu_pixels.extend_from_slice(&band.pixels);
+                        Ok::<(), photocraft_io::IoError>(())
+                    })
+                    .expect("direct GPU render_bands failed");
 
-            assert_eq!(cpu_img.width(), gpu_img.width());
-            assert_eq!(cpu_img.height(), gpu_img.height());
-            assert_eq!(cpu_img.layout(), gpu_img.layout());
-            assert_eq!(cpu_img.sample_type(), gpu_img.sample_type());
-
-            let cpu_data = cpu_img.data();
-            let gpu_data = gpu_img.data();
-            assert_eq!(cpu_data.len(), gpu_data.len());
-
-            let tol = 2u8; // Within 2/255 tolerance
-            for (i, (&c, &g)) in cpu_data.iter().zip(gpu_data).enumerate() {
-                let diff = (c as i16 - g as i16).abs();
-                assert!(diff <= tol as i16, "depth {:?} pixel byte {} differs: cpu={}, gpu={}, diff={}", depth, i, c, g, diff);
+                assert_eq!(cpu_pixels.len(), gpu_pixels.len());
+                let tol = 2.0 / 255.0;
+                for (i, (c, g)) in cpu_pixels.iter().zip(&gpu_pixels).enumerate() {
+                    for ch in 0..4 {
+                        assert!(
+                            (c[ch] - g[ch]).abs() <= tol,
+                            "depth {:?} alpha {} pixel {} ch {} differs: cpu={}, gpu={}",
+                            depth,
+                            with_alpha,
+                            i,
+                            ch,
+                            c[ch],
+                            g[ch]
+                        );
+                    }
+                }
             }
         }
+    }
+
+    #[test]
+    fn gpu_renderer_preserves_sink_errors_and_cancellation() {
+        let mut gpu_renderer = match GpuRenderer::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIPPED: GpuRenderer unavailable ({e}); no GPU adapter present");
+                return;
+            }
+        };
+
+        let doc = make_test_doc(64, 64, SampleType::U8);
+
+        // 1. Cancellation preservation
+        let cancel_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Cancelled));
+        assert!(matches!(cancel_res, Err(photocraft_io::RenderError::Cancelled)), "cancellation must be preserved: {cancel_res:?}");
+
+        // 2. Sink I/O error preservation
+        let sink_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Write("simulated sink error".into())));
+        assert!(matches!(sink_res, Err(photocraft_io::RenderError::Sink(_))), "sink error must be preserved as RenderError::Sink: {sink_res:?}");
+    }
+
+    #[test]
+    fn gpu_renderer_bounded_readback_staging() {
+        let mut gpu_renderer = match GpuRenderer::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIPPED: GpuRenderer unavailable ({e}); no GPU adapter present");
+                return;
+            }
+        };
+
+        let doc = make_test_doc(128, 128, SampleType::U8);
+        gpu_renderer.set_max_staging_bytes(32 * 1024);
+
+        let mut received_rows = 0;
+        let res = gpu_renderer.render_bands(&doc, doc.bounds(), 0, &mut |band| {
+            received_rows += band.rect.height();
+            Ok(())
+        });
+        assert!(res.is_ok(), "bounded staging readback must succeed: {res:?}");
+        assert_eq!(received_rows, 128);
     }
 }

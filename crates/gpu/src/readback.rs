@@ -123,11 +123,6 @@ where
         return Ok(());
     }
 
-    let max_dim = comp.limits().max_texture_dimension_2d;
-    if rect.width() > max_dim || rect.height() > max_dim {
-        return Err(ReadbackError::Unsupported(format!("requested bounds ({} x {}) exceed max 2D texture dimension {}", rect.width(), rect.height(), max_dim)));
-    }
-
     let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
     let max_staging = if max_staging_bytes == 0 { DEFAULT_MAX_STAGING_BYTES } else { max_staging_bytes };
     if max_staging < 256 {
@@ -135,19 +130,25 @@ where
     }
 
     // Account for actual aligned chunks staging across the horizontal span.
-    let chunk_size = comp.chunk() as i32;
+    let chunk_size = comp.chunk_size() as i32;
+    if chunk_size <= 0 {
+        return Err(ReadbackError::AllocationFailed("invalid compositor chunk size".into()));
+    }
     let mut row_staging_bytes: u64 = 0;
-    let mut x = rect.x0.div_euclid(chunk_size) * chunk_size;
+    let mut x =
+        rect.x0.div_euclid(chunk_size).checked_mul(chunk_size).ok_or_else(|| ReadbackError::AllocationFailed("coordinate calculation overflow".into()))?;
     while x < rect.x1 {
-        let x_end = (x + chunk_size).min(rect.x1);
-        let chunk_w = (x_end - x.max(rect.x0)) as u64;
+        let next_x = x.checked_add(chunk_size).ok_or_else(|| ReadbackError::AllocationFailed("coordinate overflow".into()))?;
+        let chunk_right = next_x.min(rect.x1);
+        let chunk_left = x.max(rect.x0);
+        let chunk_w = chunk_right.checked_sub(chunk_left).ok_or_else(|| ReadbackError::AllocationFailed("chunk width underflow".into()))? as u64;
         let chunk_row = (chunk_w.checked_mul(bpp).ok_or_else(|| ReadbackError::AllocationFailed("dimension overflow".into()))?)
             .checked_add(255)
             .ok_or_else(|| ReadbackError::AllocationFailed("dimension overflow".into()))?
             / 256
             * 256;
         row_staging_bytes = row_staging_bytes.checked_add(chunk_row).ok_or_else(|| ReadbackError::AllocationFailed("staging bytes overflow".into()))?;
-        x += chunk_size;
+        x = next_x;
     }
 
     if row_staging_bytes > max_staging as u64 {
@@ -160,7 +161,9 @@ where
 
     let mut y = rect.y0;
     while y < rect.y1 {
-        let y1 = (y as i64 + step_rows as i64).min(rect.y1 as i64) as i32;
+        let y_span = (rect.y1.checked_sub(y).ok_or_else(|| ReadbackError::AllocationFailed("coordinate underflow".into()))?) as u32;
+        let step = step_rows.min(y_span);
+        let y1 = y.checked_add(step as i32).ok_or_else(|| ReadbackError::AllocationFailed("coordinate overflow".into()))?;
         let band_rect = Rect::new(rect.x0, y, rect.x1, y1);
 
         if let Some(fault) = comp.fault() {
@@ -234,7 +237,14 @@ where
             }
             Some(_) => {}
             None => {
-                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) })
+                }));
+                match poll {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => return Err(ReadbackError::DeviceLost(format!("GPU device poll timed out or failed: {e}"))),
+                    Err(_) => return Err(ReadbackError::DeviceLost("GPU device lost during poll".into())),
+                }
             }
         }
 
@@ -290,8 +300,12 @@ where
                             .to_f32(),
                         ]
                     };
-                    let dx = (r.x0 - band_rect.x0) as usize + cx;
-                    let dy = (r.y0 - band_rect.y0) as usize + cy;
+                    let dx = (r.x0.checked_sub(band_rect.x0).ok_or_else(|| ReadbackError::Execution("coord underflow".into()))? as usize)
+                        .checked_add(cx)
+                        .ok_or_else(|| ReadbackError::Execution("coord overflow".into()))?;
+                    let dy = (r.y0.checked_sub(band_rect.y0).ok_or_else(|| ReadbackError::Execution("coord underflow".into()))? as usize)
+                        .checked_add(cy)
+                        .ok_or_else(|| ReadbackError::Execution("coord overflow".into()))?;
                     let dst_idx =
                         dy.checked_mul(band_w).and_then(|i| i.checked_add(dx)).ok_or_else(|| ReadbackError::Execution("dst index overflow".into()))?;
                     if let Some(target) = band_pixels.get_mut(dst_idx) {

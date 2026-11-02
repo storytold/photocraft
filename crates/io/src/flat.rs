@@ -8,7 +8,7 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::renderer::BandRenderer;
+use crate::renderer::{BandRenderer, RenderError};
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
@@ -1005,15 +1005,15 @@ pub fn export_png_streamed_with_renderer(
             None => opaque_bottom(doc),
         };
         let mut progress = 0.0;
-        let attempt = (|| -> Result<Option<ExportResult>, IoError> {
-            match stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, renderer.as_deref_mut())? {
-                Some(r) => Ok(Some(r)),
-                None => {
-                    // Alpha was mispredicted: retry with alpha enabled, retaining the GPU provider!
-                    stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, renderer.as_deref_mut())
-                }
+        let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, renderer.as_deref_mut());
+        let attempt = match first_try {
+            Ok(Some(r)) => Ok(Some(r)),
+            Ok(None) => {
+                // Alpha was mispredicted: retry with alpha enabled, retaining the GPU provider!
+                stream_png_with_renderer(doc, opts, ctl, true, rows, &mut progress, renderer.as_deref_mut())
             }
-        })();
+            Err(e) => Err(e),
+        };
         match attempt {
             Ok(Some(r)) => return Ok(r),
             Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),

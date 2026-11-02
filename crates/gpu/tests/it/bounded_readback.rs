@@ -81,7 +81,7 @@ fn bounded_readback_strictly_respects_staging_budget() {
     let budget = 16 * 1024; // 16 KiB strict cap
 
     let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
-    let chunk_size = comp.chunk() as i32;
+    let chunk_size = comp.chunk_size() as i32;
 
     let mut row_staging_bytes: u64 = 0;
     let mut x = rect.x0.div_euclid(chunk_size) * chunk_size;
@@ -135,11 +135,15 @@ fn hostile_dimensions_rejects_without_huge_allocation() {
     let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &wide_doc, wide_doc.bounds(), 0, small_budget, |_r, _px| Ok::<(), String>(()));
     assert!(matches!(res, Err(ReadbackError::Unsupported(_))), "must safely fall back when 1 row cannot fit in budget: {res:?}");
 
-    // 3. Exceeds max 2D texture dimension
-    let max_dim = comp.limits().max_texture_dimension_2d;
-    let huge_rect = Rect::new(0, 0, (max_dim + 1) as i32, 64);
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, huge_rect, 0, DEFAULT_MAX_STAGING_BYTES, |_r, _px| Ok::<(), String>(()));
-    assert!(matches!(res, Err(ReadbackError::Unsupported(_))));
+    // 3. Multi-chunk wide document spanning multiple chunk boundaries works via banding
+    let multi_chunk_doc = sample_doc(2500, 64);
+    let mut multi_chunk_px = Vec::new();
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &multi_chunk_doc, multi_chunk_doc.bounds(), 16, DEFAULT_MAX_STAGING_BYTES, |_r, px| {
+        multi_chunk_px.extend_from_slice(&px);
+        Ok::<(), String>(())
+    });
+    assert!(res.is_ok(), "multi-chunk canvas must succeed via banding: {res:?}");
+    assert_eq!(multi_chunk_px.len(), 2500 * 64);
 }
 
 #[test]

@@ -199,6 +199,11 @@ impl Compositor {
         self.page
     }
 
+    /// The chunk side cells are tiled in.
+    pub fn chunk_size(&self) -> u32 {
+        self.chunk
+    }
+
     /// Test hook: the next `n` layer page textures fail as if the device were out of memory
     /// (a real one can't be forced), so the fallback paths of #6563 can be tested.
     #[doc(hidden)]
