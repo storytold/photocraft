@@ -333,6 +333,57 @@ fn psd_limits_also_respect_current_process_and_cgroup_headroom() {
     assert!(matches!(check_with_available(&file, required - 1, Some(u64::MAX)), Err(IoError::PsdImportBudget { .. })));
 }
 
+/// Declare oversized RGBA32 layers, retaining only the generator's tiny encoded channel data.
+/// Grow the layer count once the side reaches the PSD/PSB 300,000-pixel dimension cap.
+fn layered_preflight_above(headroom: u64) -> PsdFile {
+    let mut file = testgen::layered(Version::Psb, ColorMode::Rgb, 32, Compression::Zip);
+    let mut layer = file.layers()[0].clone();
+    let side = headroom.div_ceil(16).isqrt().saturating_add(1).clamp(1, u64::from(photocraft_psd::header::MAX_DIMENSION)) as u32;
+    layer.rect = Rect::from_xywh(0, 0, side, side);
+    file.layer_info.as_mut().unwrap().layers = vec![layer.clone()];
+    let retained = super::estimate_budget(&file).unwrap().retained;
+    assert!(retained > 0);
+    let count = headroom / retained + 1;
+    assert!(count <= i16::MAX as u64, "headroom exceeds the format-valid fixture range: {headroom}");
+    file.layer_info.as_mut().unwrap().layers = vec![layer; usize::try_from(count).unwrap()];
+    assert!(super::estimate_budget(&file).unwrap().required().unwrap() > headroom);
+    file
+}
+
+#[test]
+/// Prove the metadata fixture scales past terabyte hosts without exceeding format limits.
+fn live_headroom_fixture_scales_without_decoding_pixels() {
+    // At the dimension cap, 32,767 RGBA32 layer records cover over 40 PiB, before
+    // workspace. Exercise twice the supported Linux host bound: 4 PiB physical RAM
+    // (52-bit addresses) + at most 32 swap types * 2^32 pages * 64 KiB = 8 PiB swap.
+    // Bounds: kernel.org/doc/html/latest/arch/x86/x86_64/5level-paging.html;
+    // github.com/torvalds/linux/blob/v6.17/arch/arm64/Kconfig (ARM64_PA_BITS_52);
+    // github.com/torvalds/linux/blob/v6.17/include/linux/swap.h (last_page/type bits).
+    for headroom in [0, 1, 4 << 30, 256 << 30, 4 << 40, 256 << 40, 4 << 50, 24 << 50] {
+        let file = layered_preflight_above(headroom);
+        assert!(file.layers().len() <= i16::MAX as usize);
+        assert!(file.layers().iter().all(|layer| layer.rect.size().is_ok()));
+        check_with_available(&file, u64::MAX, None).unwrap();
+        let error = check_with_available(&file, u64::MAX, Some(headroom)).unwrap_err();
+        assert!(error.to_string().contains("not enough memory"), "{error}");
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+/// Exercise the production live-memory query; bypassing it must fail without decoding pixels.
+fn check_refuses_a_layered_psd_above_live_linux_headroom() {
+    let live = crate::memory::available().expect("Linux must expose available RAM/swap for this regression");
+    let mut system = sysinfo::System::new();
+    system.refresh_memory_specifics(sysinfo::MemoryRefreshKind::nothing().with_ram().with_swap());
+    // Include all host RAM/swap, not only free/cgroup headroom, so reclaim or a cgroup
+    // expansion during the test cannot admit the fixture. No importer is called here.
+    let bound = live.max(system.total_memory().saturating_add(system.total_swap()));
+    let file = layered_preflight_above(bound.checked_mul(2).expect("host RAM/swap bound is too large to double"));
+    let error = check(&file, u64::MAX).unwrap_err();
+    assert!(error.to_string().contains("not enough memory"), "{error}");
+}
+
 #[test]
 /// Sum PSD/PSB source estimates before decoding, preserving the total after refused inputs.
 fn batch_sources_share_one_allowance_before_any_pixel_decode() {
