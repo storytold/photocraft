@@ -10,6 +10,8 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 
+const MAX_PIXEL_DIMENSION: f64 = 300_000.0;
+
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
@@ -174,17 +176,21 @@ fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
 }
 
 /// Width / height field in the current unit, writing back pixels. Returns true when edited.
-fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str) -> bool {
+fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key: &str, id: &str, image_size: bool) -> bool {
     let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
     let res = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
-    let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
-    // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
-    // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
-    // field reports that as an edit (#4162).
-    let lim = if unit == "px" { 300000.0 } else { to_unit(300000.0, &unit, orig, res, ppi).max(30000.0) as f32 };
+    let shown_px = if image_size && unit == "px" { px.round().max(1.0) } else { px };
+    let mut v = to_unit(shown_px, &unit, orig, res, ppi) as f32;
+    if image_size {
+        // Blurring an unedited rounded field must not overwrite fractional resampling state.
+        v = crate::widgets::fmt_num_prec(f64::from(v), crate::widgets::unit_decimals(&unit)).parse().unwrap_or(v);
+    }
+    let converted_limit = to_unit(MAX_PIXEL_DIMENSION, &unit, orig, res, ppi);
+    let resampling = f.get("resample").and_then(Value::as_str) != Some("none");
+    let lim = if image_size && resampling { converted_limit } else { converted_limit.max(30000.0) } as f32;
     let range = -lim..=lim;
     // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
     // A typed unit (`2in` while in pixels) converts at the dialog's resolution.
@@ -193,7 +199,7 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
         .accessible_name(if key == "width" { tl!("Width") } else { tl!("Height") })
         .changed();
     if changed {
-        let px = from_unit(v as f64, &unit, orig, res, ppi);
+        let px = if image_size && resampling && v == lim { MAX_PIXEL_DIMENSION } else { from_unit(v as f64, &unit, orig, res, ppi) };
         f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
     }
     let _ = id;
@@ -220,7 +226,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("width".into(), json!(ow));
         f.insert("height".into(), json!(oh));
     }
-    let (w, h) = (num(f, "width").round(), num(f, "height").round());
+    let (w, h) = (num(f, "width").round().max(1.0), num(f, "height").round().max(1.0));
     info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
@@ -232,13 +238,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
-        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w", true)).inner;
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
-        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
+        let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h", true)).inner;
         unit_dropdown(ui, f, "is-unit-h");
         c
     });
@@ -289,22 +295,35 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
         }
     }
+    if resampling && (w_changed || h_changed) {
+        let longest = num(f, "width").max(num(f, "height"));
+        if longest > MAX_PIXEL_DIMENSION && longest.is_finite() {
+            let scale = MAX_PIXEL_DIMENSION / longest;
+            for key in ["width", "height"] {
+                f.insert(key.into(), json!(num(f, key) * scale));
+            }
+        }
+    }
     ui.horizontal(|ui| {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
-            let r = r.max(1.0) as f64;
+            let mut r = r.max(1.0) as f64;
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
-            } else if !matches!(unit.as_str(), "px" | "percent") {
-                // Resampling in a physical unit keeps the print size: the pixels follow the
-                // resolution (Photoshop). In pixels or percent the pixel count stays.
+            } else {
+                // Resampling keeps the print size: pixels follow resolution regardless of the
+                // unit used to display dimensions.
                 let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
                 if old > 0.0 && old.is_finite() {
+                    let longest = num(f, "width").max(num(f, "height"));
+                    if longest > 0.0 && longest.is_finite() {
+                        r = r.min(old * (MAX_PIXEL_DIMENSION / longest));
+                    }
                     for key in ["width", "height"] {
-                        f.insert(key.into(), json!((num(f, key) * r / old).max(1.0)));
+                        f.insert(key.into(), json!(num(f, key) * r / old));
                     }
                 }
             }
@@ -368,12 +387,12 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Width:"), 90.0);
-        dim_field(ui, f, "width", "__origW", "cs-w");
+        dim_field(ui, f, "width", "__origW", "cs-w", false);
         unit_dropdown(ui, f, "cs-unit-w");
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Height:"), 90.0);
-        dim_field(ui, f, "height", "__origH", "cs-h");
+        dim_field(ui, f, "height", "__origH", "cs-h", false);
         unit_dropdown(ui, f, "cs-unit-h");
     });
     ui.horizontal(|ui| {
