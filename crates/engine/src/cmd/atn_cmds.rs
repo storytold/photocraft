@@ -37,6 +37,8 @@ mod steps_doc;
 mod steps_image;
 mod steps_layer;
 mod steps_make;
+
+mod steps_selection;
 mod steps_other;
 mod steps_render;
 mod tables;
@@ -148,6 +150,9 @@ mod tests;
 
 #[cfg(test)]
 mod layer_props_tests;
+
+#[cfg(test)]
+mod selection_tests;
 
 #[cfg(test)]
 mod render_tests;

@@ -488,6 +488,23 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.render.differenceClouds", json!({})),
         ("filter.render.fibers", json!({"variance": 20, "strength": 7, "seed": -123})),
         ("filter.render.lensFlare", json!({"brightness": 180, "centerX": 5, "centerY": -5, "lens": "moviePrime"})),
+        ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"add"})),
+        ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"add","ellipse":true,"antiAlias":false})),
+        ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"subtract"})),
+        ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"intersect"})),
+        ("edit.pasteSpecial.pasteInto", json!({})),
+        ("edit.pasteSpecial.pasteOutside", json!({})),
+        ("edit.fade", json!({"opacity":50,"mode":"Multiply"})),
+        ("layer.linkLayers", json!({})),
+        ("layer.distribute.leftEdges", json!({})),
+        ("layer.distribute.horizontalCenters", json!({})),
+        ("layer.distribute.rightEdges", json!({})),
+        ("layer.distribute.topEdges", json!({})),
+        ("layer.distribute.verticalCenters", json!({})),
+        ("layer.distribute.bottomEdges", json!({})),
+        ("edit.definePattern", json!({})),
+        ("layer.layerMask.delete", json!({"_atnEvent":"RmvL"})),
+        ("layer.mergeLayers", json!({"_atnEvent":"MrgL"})),
         ("filter.blur.gaussianBlur", json!({"radius": 3.5})),
         ("filter.sharpen.unsharpMask", json!({"amount": 120, "radius": 1.5, "threshold": 3})),
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
@@ -3123,7 +3140,7 @@ fn recorded_layer_select_exports_to_atn() {
 }
 
 #[test]
-fn select_rect_mode_strict_export_rejects_unrepresentable_modes() {
+fn select_rect_modes_export_without_becoming_replace() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
 
@@ -3132,22 +3149,23 @@ fn select_rect_mode_strict_export_rejects_unrepresentable_modes() {
     let saved = s.execute("actions.save", json!({"action": "ReplaceAct"})).unwrap();
     assert_eq!(saved["steps"], 1);
 
-    // "add" mode cannot be silently converted to replace (set) in strict export
-    s.actions.list.push(Action::new("AddAct", vec![("select.rect".into(), json!({"x": 4, "y": 4, "width": 2, "height": 2, "mode": "add"}))]));
-    let before_actions = s.actions.list.clone();
-    let err = s.execute("actions.save", json!({"action": "AddAct"}));
-    assert!(err.is_err(), "strict export must reject select.rect with add mode rather than converting to replace");
-    assert_eq!(s.actions.list, before_actions, "actions list must remain unchanged after rejected save");
+    for (mode, event) in [("add", "AddT"), ("subtract", "SbtF"), ("intersect", "IntW")] {
+        s.actions.list.push(Action::new(mode, vec![("select.rect".into(), json!({"x":4,"y":4,"width":2,"height":2,"mode":mode}))]));
+        let before = s.actions.list.clone();
+        let saved = s.execute("actions.save", json!({"action":mode})).unwrap();
+        let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].event.id(), event);
+        assert_eq!(import(&bytes).unwrap().actions[0].steps[0].1["mode"], mode);
+        assert_eq!(s.actions.list, before);
+    }
 
-    // "subtract" mode cannot be silently converted to replace either
-    s.actions.list.push(Action::new("SubtractAct", vec![("select.rect".into(), json!({"x": 4, "y": 4, "width": 2, "height": 2, "mode": "subtract"}))]));
-    let before_actions_sub = s.actions.list.clone();
-    let err_subtract = s.execute("actions.save", json!({"action": "SubtractAct"}));
-    assert!(err_subtract.is_err(), "strict export must reject select.rect with subtract mode rather than converting to replace");
-    assert_eq!(s.actions.list, before_actions_sub, "actions list must remain unchanged after rejected save");
+    s.actions.list.push(Action::new("Unsupported", vec![("select.rect".into(), json!({"x":4,"y":4,"width":2,"height":2,"mode":"xor"}))]));
+    let before = s.actions.list.clone();
+    assert!(s.execute("actions.save", json!({"action":"Unsupported"})).is_err());
+    assert_eq!(s.actions.list, before, "rejected export must leave actions unchanged");
 
     // With skipUnsupported: true, unrepresentable modes are reported in skipped
-    let skipped = s.execute("actions.save", json!({"action": "AddAct", "skipUnsupported": true})).unwrap();
+    let skipped = s.execute("actions.save", json!({"action": "Unsupported", "skipUnsupported": true})).unwrap();
     assert_eq!(skipped["steps"], 0);
     assert_eq!(skipped["skipped"][0]["id"], "select.rect");
 }

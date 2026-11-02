@@ -185,8 +185,86 @@ macro_rules! clipping_event {
     };
 }
 
+/// Group F routes every event through `steps_selection::from`; the outer header (name, class) is not checked.
+macro_rules! selection_event {
+    ($code:literal, $name:literal, $label:literal, $ids:expr, $from:expr, $to:expr) => {
+        Event { code: $code, name: $name, label: $label, ids: $ids, from: |d| super::steps_selection::from(d, $from), to: $to }
+    };
+}
+
 /// Every Photoshop event PhotoCraft maps. The order matters only for the panel label.
 pub(super) const EVENTS: &[Event] = &[
+    selection_event!("AddT", "addTo", "Add to Selection", &["select.rect"], |d| super::steps_selection::selection_from(d, "add"), |_, p| {
+        super::steps_selection::selection_to(p, "add")
+    }),
+    selection_event!("SbtF", "subtractFrom", "Subtract from Selection", &["select.rect"], |d| super::steps_selection::selection_from(d, "subtract"), |_, p| {
+        super::steps_selection::selection_to(p, "subtract")
+    }),
+    selection_event!(
+        "IntW",
+        "intersectWith",
+        "Intersect with Selection",
+        &["select.rect"],
+        |d| super::steps_selection::selection_from(d, "intersect"),
+        |_, p| super::steps_selection::selection_to(p, "intersect")
+    ),
+    selection_event!(
+        "PstI",
+        "pasteInto",
+        "Paste Into",
+        &["edit.pasteSpecial.pasteInto"],
+        |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteInto"),
+        super::steps_selection::paste_to
+    ),
+    selection_event!(
+        "PstO",
+        "pasteOutside",
+        "Paste Outside",
+        &["edit.pasteSpecial.pasteOutside"],
+        |d| super::steps_selection::paste_from(d, "edit.pasteSpecial.pasteOutside"),
+        super::steps_selection::paste_to
+    ),
+    selection_event!("Fade", "fade", "Fade", &["edit.fade"], super::steps_selection::fade_from, super::steps_selection::fade_to),
+    selection_event!("", "linkSelectedLayers", "Link Layers", &["layer.linkLayers"], super::steps_selection::link_from, super::steps_selection::link_to),
+    selection_event!(
+        "Dstr",
+        "distribute",
+        "Distribute",
+        &[
+            "layer.distribute.leftEdges",
+            "layer.distribute.horizontalCenters",
+            "layer.distribute.rightEdges",
+            "layer.distribute.topEdges",
+            "layer.distribute.verticalCenters",
+            "layer.distribute.bottomEdges",
+        ],
+        super::steps_selection::distribute_from,
+        super::steps_selection::distribute_to
+    ),
+    selection_event!(
+        "RmvL",
+        "removeLayerMask",
+        "Remove Layer Mask",
+        &["layer.layerMask.delete"],
+        |d| super::steps_selection::empty_from(d, "layer.layerMask.delete", Some("RmvL")),
+        super::steps_selection::empty_to
+    ),
+    selection_event!(
+        "DfnP",
+        "definePattern",
+        "Define Pattern",
+        &["edit.definePattern"],
+        |d| super::steps_selection::empty_from(d, "edit.definePattern", None),
+        super::steps_selection::empty_to
+    ),
+    selection_event!(
+        "MrgL",
+        "mergeLayers",
+        "Merge Layers",
+        &["layer.mergeLayers"],
+        |d| super::steps_selection::empty_from(d, "layer.mergeLayers", Some("MrgL")),
+        super::steps_selection::empty_to
+    ),
     // Filters.
     Event {
         code: "Clds",
@@ -783,10 +861,27 @@ pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
             .or_else(|| LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| by_name(name))),
         AtnEvent::Name(_) => by_name(&id),
     }
+    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || (!e.name.is_empty() && e.name == id));
+    find(&id).or_else(|| match item {
+        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
+        AtnEvent::Name(_) => None,
+    })
 }
 
 /// The event `id` exports as: the first event listing it whose converter accepts the params
 /// (Quick Mask on is a `set`, off a `clearEvent`).
 pub(super) fn event_and_descriptor(id: &str, params: &Value) -> Option<(&'static Event, Descriptor)> {
+    if params.get("_atnBounds").is_some()
+        && (id != "select.rect" || !matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")))
+    {
+        return None;
+    }
+    if let Some(origin) = params.get("_atnEvent") {
+        let origin = origin.as_str()?;
+        if !matches!((id, origin), ("layer.layerMask.delete", "RmvL") | ("layer.mergeLayers", "MrgL")) {
+            return None;
+        }
+        return EVENTS.iter().find(|e| e.code == origin).and_then(|e| (e.to)(id, params).map(|d| (e, d)));
+    }
     EVENTS.iter().filter(|e| e.ids.contains(&id)).find_map(|e| (e.to)(id, params).map(|d| (e, d)))
 }
