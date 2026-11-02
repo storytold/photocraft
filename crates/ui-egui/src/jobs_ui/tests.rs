@@ -945,6 +945,7 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
+/// Verifies that jobs UI does not cancel active background jobs upon Escape keypress while splash is active.
 #[test]
 fn splash_active_blocks_escape_job_cancellation() {
     let mut h = app_harness();
@@ -979,6 +980,7 @@ fn splash_active_blocks_escape_job_cancellation() {
     let _ = h.state_mut().session.cancel_job(job);
 }
 
+/// Verifies that splash dismisses immediately when failure notices arrive so errors are never hidden.
 #[test]
 fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
     let mut h = app_harness();
@@ -995,6 +997,7 @@ fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
     assert!(h.state().splash.is_none(), "splash must be dismissed so failure notices are not hidden");
 }
 
+/// Verifies that splash dismisses immediately when an in-flight synthetic batch or capture request is pending.
 #[test]
 fn splash_dismisses_on_synthetic_batch_or_pending_captures() {
     let mut h = app_harness();
