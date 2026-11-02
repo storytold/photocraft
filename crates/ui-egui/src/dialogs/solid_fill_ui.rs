@@ -32,7 +32,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Option<u64> {
     if color.mode == photocraft_color::ColorMode::Cmyk
         && let Some(d) = app.ui.dialog_mut(id)
     {
-        d.fields.insert("__cmyk".into(), json!(color.c));
+        color_picker_ui::seed_cmyk(&mut d.fields, color.c);
     }
     Some(id)
 }
