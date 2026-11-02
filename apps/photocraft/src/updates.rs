@@ -46,8 +46,13 @@ pub fn installed_a_moment_ago(tag: &str) -> bool {
     craft_update::Paths::for_app(&photocraft_ui_egui::UPDATE_APP).is_ok_and(|paths| installed_in(&paths, tag))
 }
 
+/// The marker holds the tag as GitHub published it, and releases may be tagged with or without the
+/// `v` (docs/releasing.md), so `tag` matches in either form.
 fn installed_in(paths: &craft_update::Paths, tag: &str) -> bool {
-    craft_update::self_update::just_updated_to(paths, &craft_update::Release { tag: tag.to_owned(), ..Default::default() })
+    let bare = tag.trim_start_matches(['v', 'V']);
+    [bare.to_owned(), format!("v{bare}"), format!("V{bare}")]
+        .into_iter()
+        .any(|tag| craft_update::self_update::just_updated_to(paths, &craft_update::Release { tag, ..Default::default() }))
 }
 
 #[cfg(test)]
@@ -163,5 +168,26 @@ mod tests {
         assert!(!installed_in(&paths, "v0.18.0"), "a day later the record no longer blocks an install");
         std::fs::write(&marker, "garbage").unwrap();
         assert!(!installed_in(&paths, "v0.18.0"));
+    }
+
+    /// docs/releasing.md allows tags without the `v`; the marker then holds `0.18.0` while the
+    /// update prompt asks about `v0.18.0`, and the loop warning must still fire.
+    #[test]
+    fn a_release_with_a_bare_tag_is_recognised_whichever_way_it_is_asked_for() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(&paths.data).unwrap();
+        std::fs::write(
+            paths.data.join("self-update.txt"),
+            format!(
+                "0.18.0
+{}
+",
+                craft_update::now()
+            ),
+        )
+        .unwrap();
+        assert!(installed_in(&paths, "v0.18.0"));
+        assert!(installed_in(&paths, "0.18.0"));
+        assert!(!installed_in(&paths, "v0.19.0"));
     }
 }

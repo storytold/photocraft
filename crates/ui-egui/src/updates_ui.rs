@@ -209,7 +209,9 @@ fn show_problem(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if open_page {
         crate::links::open(app, ctx, &problem.url);
     }
-    if open_page || close {
+    // Opening the page leaves the window up: `links::open` cannot report a failed browser launch,
+    // and closing it would lose the explanation and the link.
+    if close {
         app.updates_rt.problem = None;
     }
 }
@@ -491,5 +493,34 @@ mod tests {
         }
         assert!(app.updates_rt.problem.is_some(), "nothing closes it but the user");
         assert!(app.updates_rt.updater.prompt_open());
+    }
+
+    /// "Open Release Page" must not dismiss the explanation: `links::open` cannot report a browser
+    /// that failed to launch, and the window is the only place the release link survives.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn opening_the_release_page_keeps_the_problem_window_until_close() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app_offered("99.0.0", Some(|_| false));
+        app.services.open_url = Some(Box::new(|_| Err("no browser".into())));
+        app.updates_rt.problem = Some(Problem::helper_failed("disk full"));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                // The themed fonts are installed after the first frame.
+                if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    show_problem(app, &ctx);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(3);
+        h.get_by_label("Open Release Page").click();
+        h.run_steps(3);
+        assert!(h.state().updates_rt.problem.is_some(), "the page may not have opened");
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(h.state().updates_rt.problem.is_none());
     }
 }
