@@ -318,6 +318,10 @@ pub struct Group {
     pub expanded: bool,
     /// Set when this (top-level) group is an artboard: children are clipped to its rect.
     pub artboard: Option<Artboard>,
+    /// A Photoshop Frame's stroke (Properties › Stroke; PSD `vstk` on the frame group): drawn
+    /// along the group's enabled vector mask (the frame outline), above the framed content and
+    /// not clipped by the frame. Ignored without a vector mask.
+    pub frame_stroke: Option<ShapeStroke>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -499,12 +503,22 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
     out
 }
 
+/// A bounded display preview for an embedded native vector, bound to its exact source bytes.
+/// The SVG is display data only; saving the object retains the native source format.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorPreview {
+    pub source_hash: [u8; 32],
+    pub svg: Arc<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
+    /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
+    pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
     pub smart_filters: Vec<SmartFilter>,
     /// Rendered appearance.
@@ -536,6 +550,7 @@ impl SmartObject {
         Self {
             contents_id: SmartContentsId::fresh(),
             source,
+            vector_preview: None,
             transform,
             smart_filters: Vec::new(),
             cache,
@@ -703,7 +718,7 @@ impl Layer {
         Self::new(name, LayerContent::Raster(Surface::new(format)))
     }
     pub fn group(name: impl Into<String>, children: Vec<Layer>) -> Self {
-        let mut l = Self::new(name, LayerContent::Group(Group { children, expanded: true, artboard: None }));
+        let mut l = Self::new(name, LayerContent::Group(Group { children, expanded: true, artboard: None, frame_stroke: None }));
         l.blend = BlendMode::PassThrough;
         l
     }
@@ -1011,12 +1026,17 @@ impl Document {
 
     /// Pixel format for new raster layers in this document.
     pub fn pixel_format(&self) -> PixelFormat {
-        let mode = match self.mode {
+        Self::pixel_format_for(self.mode, self.depth)
+    }
+
+    /// [`Self::pixel_format`] of a document in `mode` at `depth`.
+    pub fn pixel_format_for(mode: ColorMode, depth: SampleType) -> PixelFormat {
+        let mode = match mode {
             ColorMode::Indexed | ColorMode::Multichannel => ColorMode::Rgb,
             ColorMode::Bitmap | ColorMode::Duotone => ColorMode::Grayscale,
             m => m,
         };
-        PixelFormat::new(mode, self.depth, true)
+        PixelFormat::new(mode, depth, true)
     }
 
     pub fn bounds(&self) -> Rect {
@@ -1509,7 +1529,7 @@ mod tests {
         assert_eq!(LayerContent::Adjustment(Adjustment::Invert).article(), "an");
         assert_eq!(LayerContent::Adjustment(Adjustment::Invert).kind_name(), "Adjustment");
         assert_eq!(LayerContent::Raster(Surface::new(PixelFormat::RGBA8)).article(), "a");
-        assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None }).article(), "a");
+        assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }).article(), "a");
     }
 }
 

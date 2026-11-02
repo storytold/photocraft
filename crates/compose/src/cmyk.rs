@@ -712,5 +712,4 @@ pub fn render_cmyk_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink
 }
 
 #[cfg(test)]
-#[path = "cmyk_tests.rs"]
 mod tests;

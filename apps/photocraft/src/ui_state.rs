@@ -65,7 +65,7 @@ fn write_migrated(path: &Path, text: &str) {
 }
 
 fn backup_path(path: &Path) -> std::path::PathBuf {
-    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_else(|| "ui.ron".into());
+    let mut name = path.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_else(|| "ui.ron".into());
     name.push(format!(".{BACKUP_SUFFIX}"));
     path.with_file_name(name)
 }

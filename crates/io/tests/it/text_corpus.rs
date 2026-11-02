@@ -169,6 +169,107 @@ fn corpus_photoshop_txt2_survives_an_unedited_save() {
     println!("Txt2 kept byte-for-byte in {checked} Photoshop type files");
 }
 
+/// #7962: Photoshop's type on a path (`Txt2` frames, EngineData calls it a text box) opens on its
+/// path, at the anchors the generator gave Photoshop; the circle re-renders where Photoshop drew
+/// it; and a save after an edit (new text, a moved path) reopens on the layer's path.
+#[cfg(feature = "corpus")]
+#[test]
+fn corpus_photoshop_path_text_opens_on_its_path() {
+    use photocraft_doc::text::TextShape;
+    use photocraft_geom::Point;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/text");
+    let k = 0.5522847498 * 96.0;
+    let cases: [(&str, bool, Vec<[f64; 2]>); 2] = [
+        // Photoshop sets the type from the closed path's last anchor (the bottom).
+        ("path-circle.psd", true, vec![[128.0, 224.0], [32.0, 128.0], [128.0, 32.0], [224.0, 128.0]]),
+        ("path-wave-open.psd", false, vec![[16.0, 100.0], [160.0, 80.0], [304.0, 60.0]]),
+    ];
+    let mut engine = photocraft_text::TextEngine::with_system_fonts();
+    for (file, closed, anchors) in cases {
+        let f = root.join(file);
+        let bytes = std::fs::read(&f).unwrap_or_else(|e| panic!("{}: {e}: run `cargo xtask corpus --photoshop`", f.display()));
+        let imp = photocraft_io::import(file, &bytes).unwrap();
+        assert!(!imp.warnings.iter().any(|w| w.contains("type path")), "{file}: {:?}", imp.warnings);
+        let doc = imp.document;
+        let mut all = Vec::new();
+        walk(&doc.layers, &mut all);
+        let layer = all.iter().find(|l| matches!(l.content, LayerContent::Text(_))).unwrap();
+        let LayerContent::Text(t) = &layer.content else { unreachable!() };
+        let doc_anchors = |t: &photocraft_doc::TextLayer| -> Vec<Point> {
+            let TextShape::Path { path, start, flip } = &t.shape else { panic!("{file}: not path text: {:?}", t.shape) };
+            assert_eq!((path.closed, *start, *flip), (closed, 0.0, false), "{file}");
+            path.knots.iter().map(|k| t.transform.apply(k.anchor)).collect()
+        };
+        let got = doc_anchors(t);
+        assert_eq!(got.len(), anchors.len(), "{file}");
+        for (g, [x, y]) in got.iter().zip(&anchors) {
+            assert!((g.x - x).abs() < 1e-3 && (g.y - y).abs() < 1e-3, "{file}: anchor {g:?}, want ({x}, {y})");
+        }
+        if closed {
+            // The circle's handles are the generator's (kappa × r), so the path is the circle.
+            let TextShape::Path { path, .. } = &t.shape else { unreachable!() };
+            let h = t.transform.apply(path.knots[0].out_ctrl);
+            assert!((h.x - (128.0 - k)).abs() < 1e-3 && (h.y - 224.0).abs() < 1e-3, "{file}: handle {h:?}");
+        }
+
+        // Photoshop's pixels (the wave's EngineData text is blank: Photoshop drew nothing).
+        if let Some(ps) = t.cache.as_ref().filter(|c| !c.content_bounds().is_empty()) {
+            let ps_rect = ps.content_bounds();
+            let (_, ours) = engine.render(t, doc.resolution_dpi, doc.pixel_format());
+            let our_rect = ours.surface.content_bounds();
+            let u = Rect::new(ps_rect.x0.min(our_rect.x0), ps_rect.y0.min(our_rect.y0), ps_rect.x1.max(our_rect.x1), ps_rect.y1.max(our_rect.y1));
+            let (a, b) = (alpha(ps, u), alpha(&ours.surface, u));
+            let inter: f32 = a.iter().zip(&b).map(|(x, y)| x.min(*y)).sum();
+            let union: f32 = a.iter().zip(&b).map(|(x, y)| x.max(*y)).sum();
+            let iou = if union > 0.0 { inter / union } else { 1.0 };
+            let edges = [ps_rect.x0 - our_rect.x0, ps_rect.y0 - our_rect.y0, ps_rect.x1 - our_rect.x1, ps_rect.y1 - our_rect.y1];
+            println!("{file}: ps={ps_rect:?} ours={our_rect:?} iou={iou:.2} edges={edges:?}");
+            // Where the type starts on the path and how far it reaches across it hold with any
+            // font; the far end and the glyph overlap need the font Photoshop used (a wider
+            // fallback runs further around the circle).
+            let [x0, y0, _, y1] = edges;
+            assert!([x0, y0, y1].iter().all(|d| d.abs() <= 8), "{file}: ink bounds {our_rect:?}, Photoshop's {ps_rect:?}");
+            let family = t.runs.first().map(|r| r.style.font_family.clone()).unwrap_or_default();
+            if engine.fonts.has_family(&family) {
+                assert!(edges.iter().all(|d| d.abs() <= 8), "{file}: ink bounds {our_rect:?}, Photoshop's {ps_rect:?}");
+                assert!(iou > 0.2, "{file}: the glyphs sit where Photoshop drew them (IoU {iou:.2})");
+            } else {
+                eprintln!("{file}: {family:?} not installed, far edge and overlap comparison skipped");
+            }
+        }
+
+        // Edited: new text and the path moved 10 px right; saved and opened again.
+        let mut edited = doc.clone();
+        let id = layer.id;
+        for l in edited.layers.iter_mut() {
+            if l.id != id {
+                continue;
+            }
+            let LayerContent::Text(t) = &mut l.content else { continue };
+            t.text = format!("{} again", t.text);
+            if let Some(r) = t.runs.last_mut() {
+                r.len += " again".len();
+            }
+            t.sync_summary();
+            if let TextShape::Path { path, .. } = &mut t.shape {
+                for k in &mut path.knots {
+                    *k = k.transform(&photocraft_geom::Affine::translate(10.0, 0.0));
+                }
+            }
+            t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::build_tysh(t, edited.resolution_dpi, None)));
+        }
+        let out = photocraft_io::export(&edited, file, &Default::default()).unwrap().bytes;
+        let back = photocraft_io::import(file, &out).unwrap().document;
+        let mut all = Vec::new();
+        walk(&back.layers, &mut all);
+        let LayerContent::Text(bt) = &all.iter().find(|l| matches!(l.content, LayerContent::Text(_))).unwrap().content else { unreachable!() };
+        assert!(bt.text.ends_with(" again"), "{file}: {:?}", bt.text);
+        for (g, [x, y]) in doc_anchors(bt).iter().zip(&anchors) {
+            assert!((g.x - (x + 10.0)).abs() < 1e-3 && (g.y - y).abs() < 1e-3, "{file}: saved anchor {g:?}, want ({}, {y})", x + 10.0);
+        }
+    }
+}
+
 /// A text layer created in PhotoCraft (no PSD data) exports as an editable type layer and
 /// imports back with the same model.
 #[test]
@@ -213,4 +314,66 @@ fn created_text_layer_roundtrips_through_psd() {
     assert_eq!(bt.shape, t.shape);
     assert_eq!(bt.transform, t.transform);
     assert!(bt.cache.as_ref().is_some_and(|c| c.content_bounds().width() > 10));
+}
+
+/// Review of #8888: the older Photoshop's text objects (`/DocumentObjects /TextObjects`) in the
+/// real psd-tools `text.psd`. Saving the type layer unedited leaves them (and the font list they
+/// index) exactly as the file has them; editing only the size changes the size of the legacy style
+/// run and nothing else in it, and the object's text, paragraph runs and view are untouched.
+#[cfg(feature = "corpus")]
+#[test]
+fn corpus_text_psd_legacy_objects_are_edited_in_place() {
+    use photocraft_text::engine_data::Value as E;
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd-tools/text.psd");
+    assert!(path.is_file(), "{} is missing: run `cargo xtask corpus --all`", path.display());
+    let bytes = std::fs::read(&path).unwrap();
+    let doc = photocraft_io::import("text.psd", &bytes).unwrap().document;
+    let txt2 = doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").map(|b| b.2.clone()).expect("text.psd has a Txt2 block");
+    let mut all = Vec::new();
+    walk(&doc.layers, &mut all);
+    let layer = all.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some(t.clone()) } else { None }).expect("a type layer");
+
+    let before = photocraft_text::psd::parse_txt2(&txt2).expect("the file's Txt2 parses");
+    let legacy = |block: &E| block.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(<[E]>::first).cloned().expect("the legacy object");
+    let features = |entry: &E| {
+        entry
+            .path(&["Model", "StyleRun", "RunArray"])
+            .and_then(E::as_array)
+            .and_then(<[E]>::first)
+            .and_then(|r| r.path(&["RunData", "StyleSheet", "Features"]))
+            .cloned()
+    };
+    let items = |value: &E| if let E::Dict(items) = value { items.clone() } else { Vec::new() };
+
+    // Unedited: the legacy object and the font list are as the file has them.
+    let unedited = photocraft_text::psd::parse_txt2(&photocraft_text::psd::build_txt2_at(&[(0, &layer)], Some(&txt2), doc.resolution_dpi)).unwrap();
+    assert!(legacy(&unedited) == legacy(&before), "an unedited layer leaves the legacy text object alone");
+    assert!(unedited.path(&["DocumentResources", "FontSet"]) == before.path(&["DocumentResources", "FontSet"]), "and the font list it indexes");
+
+    // Edited: only the size.
+    let mut bigger = layer.clone();
+    for run in &mut bigger.runs {
+        run.style.size_pt += 7.0;
+    }
+    let edited = photocraft_text::psd::parse_txt2(&photocraft_text::psd::build_txt2_at(&[(0, &bigger)], Some(&txt2), doc.resolution_dpi)).unwrap();
+    let (was, now) = (features(&legacy(&before)).expect("features"), features(&legacy(&edited)).expect("features"));
+    let size = |f: &E| f.get("FontSize").and_then(E::as_f64).expect("FontSize");
+    assert!((size(&now) - size(&was) - 7.0).abs() < 1e-6, "the legacy size follows the edit: {} -> {}", size(&was), size(&now));
+    let rest = |f: &E| items(f).into_iter().filter(|(k, _)| k != "FontSize").collect::<Vec<_>>();
+    let changed: Vec<String> =
+        rest(&was).iter().zip(rest(&now).iter()).filter(|(a, b)| a != b).map(|(a, b)| format!("{}: {:?} -> {:?}", a.0, a.1, b.1)).collect();
+    assert!(rest(&was) == rest(&now), "every other style key of the run is as the file has it; changed: {changed:?}");
+    let others = |entry: &E, key: &str| entry.path(&["Model", key]).cloned();
+    for key in ["Text", "ParagraphRun", "KernRun"] {
+        assert!(others(&legacy(&edited), key) == others(&legacy(&before), key), "{key} is untouched");
+    }
+    assert!(legacy(&edited).get("View") == legacy(&before).get("View"), "the view is untouched");
+    let lengths = |entry: &E| {
+        entry
+            .path(&["Model", "StyleRun", "RunArray"])
+            .and_then(E::as_array)
+            .map(|rs| rs.iter().map(|r| r.get("Length").and_then(E::as_i64)).collect::<Vec<_>>())
+    };
+    assert!(lengths(&legacy(&edited)) == lengths(&legacy(&before)), "the runs still cover the text");
 }
