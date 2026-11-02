@@ -7,7 +7,10 @@
 //! an opaque copy on top) and none of its authors' sampler settings did better (measured
 //! 2026-11-02; the owner chose SAM alone).
 
-use super::*;
+use super::{
+    GenerativeInfo, Layer, MAX_GROW, REMOVE_MIN_REQUEST, Result, Rgba8, SPLIT, Session, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region,
+    gen_err, json, name_selected, removal_job, removal_prompt, remove_grow, set_generative_info, write_rgba8,
+};
 
 /// The most subjects one split gives their own layer (the largest kept).
 pub(super) const MAX_SUBJECTS: usize = 7;
@@ -24,6 +27,7 @@ pub(super) struct SubjectsPlan {
 pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
     let SubjectsPlan { prompt, subjects, seed, name } = plan;
     let finder = crate::select_ml_cmds::subject_finder(s, prompt.as_deref())?;
+    let asked = prompt.clone();
     let job =
         removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
     let base = name.unwrap_or_else(|| "Split Layer".to_string());
@@ -56,6 +60,20 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             }
             let (hole_rect, _) = crate::select_ml_cmds::coverage_bounds(&hole, area);
             let mut job = job;
+            // The removal names what it removes ("Remove the woman…"): the 2.1 route is an
+            // edit model with no noise mask, and told only "the object" it changed nothing (the
+            // woman stayed in the background, measured in the app 2026-11-02). The prompt
+            // names it when given, else the vision-language model does from the hole's views,
+            // else the detector's prompt.
+            let name = match asked.as_deref() {
+                Some(p) => Some(p.to_string()),
+                None => name_selected(doc, &job, area, &hole, ctx)?,
+            };
+            let name = name.unwrap_or_else(|| found_by.clone());
+            let name = name.trim().strip_prefix("the ").unwrap_or(name.trim()).to_string();
+            ctx.check()?;
+            job.rewritten = Some(removal_prompt(&name));
+            job.object = Some(name);
             job.grow = remove_grow(hole_rect);
             let rect = fill_rect(hole_rect.inflate(job.grow.min(MAX_GROW) as i32).intersect(&area), job.tuning.remove_margin, area)?;
             let rect = at_least(rect, REMOVE_MIN_REQUEST, area);

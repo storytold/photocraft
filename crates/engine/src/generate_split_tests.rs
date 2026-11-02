@@ -58,6 +58,12 @@ fn split_by_subjects_cuts_each_instance_out_over_a_repainted_background() {
     assert!(st.runs.iter().any(|r| r.request["task"] == "segment"), "SAM asked");
     assert!(st.runs.iter().any(|r| r.request["task"] != "segment" && r.request["task"] != "layers"), "the fill ran");
     assert!(st.runs.iter().all(|r| r.request["task"] != "layers"), "not the layered model");
+    // The removal names what it removes (an edit model told only "the object" changed nothing).
+    assert!(
+        st.runs.iter().any(|r| r.request["task"] != "segment" && r.request["prompt"].as_str().is_some_and(|p| p.contains("main subject"))),
+        "{:?}",
+        st.runs.iter().map(|r| r.request["prompt"].clone()).collect::<Vec<_>>()
+    );
     drop(st);
     assert!(s.undo());
     assert_eq!(s.active().unwrap().doc.layers.len(), before);
@@ -79,6 +85,10 @@ fn split_validates_its_parameters_and_has_no_similar() {
     assert_eq!(s.active().unwrap().doc.layer(id).unwrap().name, "Scene 1/2");
     let st = fake.state();
     assert!(st.runs.iter().any(|r| r.request["task"] == "segment" && r.request["prompt"] == "the lighthouse"));
+    assert!(
+        st.runs.iter().any(|r| r.request["prompt"].as_str().is_some_and(|p| p.contains("the lighthouse") && r.request["task"] != "segment")),
+        "the fill removes the lighthouse by name"
+    );
     drop(st);
     let e = s.execute(SIMILAR, json!({"layer": id.0})).unwrap_err().to_string();
     assert!(e.contains("split"), "{e}");

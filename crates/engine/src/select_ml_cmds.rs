@@ -828,6 +828,9 @@ impl ObjectUnderStroke {
     }
 }
 
+/// One detector instance: its canvas coverage, bounds and pixel count.
+pub(crate) type Instance = (Vec<f32>, Rect, u64);
+
 /// Split into Layers' subjects: the detector's instances of what a picture is of (Select
 /// Subject's prompts in turn, or the caller's), each a canvas coverage with its bounds and
 /// pixel count, largest first, specks dropped and enclosed gaps filled. Built on the session,
@@ -851,13 +854,14 @@ pub(crate) fn subject_finder(s: &Session, prompt: Option<&str>) -> Result<Subjec
 }
 
 impl SubjectFinder {
-    /// The instances found in the picture (`all_layers`: the composite, else the active layer).
-    pub(crate) fn instances(&self, doc: &Document, active: Option<LayerId>, all_layers: bool, ctx: &JobCtx) -> Result<(Vec<(Vec<f32>, Rect, u64)>, String)> {
+    /// The instances found in the picture (`all_layers`: the composite, else the active layer)
+    /// and the prompt that found them.
+    pub(crate) fn instances(&self, doc: &Document, active: Option<LayerId>, all_layers: bool, ctx: &JobCtx) -> Result<(Vec<Instance>, String)> {
         let area = doc.bounds();
         let (image, _) = detector_image(doc, active, all_layers, MAX_SEGMENT_REQUEST_PIXELS)?;
         let (masks, _, prompt) = detect_any(self.backend.as_ref(), &self.server, &image, area, &self.prompting, &self.prompts, ctx)?;
         let (w, h) = (area.width() as usize, area.height() as usize);
-        let mut instances: Vec<(Vec<f32>, Rect, u64)> = without_specks(instances_of(&masks, area)?)
+        let mut instances: Vec<Instance> = without_specks(instances_of(&masks, area)?)
             .into_iter()
             .map(|(cov, _, _)| {
                 let cov = fill_enclosed(&cov, w, h);
@@ -866,7 +870,7 @@ impl SubjectFinder {
             })
             .filter(|(_, _, n)| *n > 0)
             .collect();
-        instances.sort_by(|a, b| b.2.cmp(&a.2));
+        instances.sort_by_key(|i| std::cmp::Reverse(i.2));
         if instances.is_empty() {
             return Err(EngineError::Other(format!("nothing matching \"{prompt}\" was found")));
         }
