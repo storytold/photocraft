@@ -232,6 +232,22 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
         maximum.push(&resource(&format!("file-{index}"), "Drawing.psd", "today")?.into());
     }
     call(&api, "setResources", &[connection.clone(), maximum.into()])?;
+    let maximum_request = call(&api, "requestOpen", &["file-99".into()])?;
+    let maximum_id = maximum_request.as_string().ok_or_else(|| JsValue::from_str("maximum-list request ID must be a string"))?;
+    let maximum_events = host.take_events();
+    assert_eq!(maximum_events.len(), 1);
+    assert_eq!(maximum_events[0].metadata["type"], "openRequest");
+    assert_eq!(maximum_events[0].metadata["requestId"].as_str(), Some(maximum_id.as_str()));
+    assert_eq!(maximum_events[0].metadata["resourceId"], "file-99");
+    assert_eq!(maximum_events[0].metadata["filename"], "Drawing.psd");
+    assert!(host.busy());
+    call(&api, "cancelOpen", &[maximum_request, "".into()])?;
+    let maximum_cancelled = host.take_events();
+    assert_eq!(maximum_cancelled.len(), 1);
+    assert_eq!(maximum_cancelled[0].metadata["type"], "openCancelled");
+    assert_eq!(maximum_cancelled[0].metadata["requestId"].as_str(), Some(maximum_id.as_str()));
+    assert_eq!(maximum_cancelled[0].metadata["resourceId"], "file-99");
+    assert!(!host.busy());
     let second = resource("file-two", "Second.psd", "today")?;
     let pair = Array::new();
     pair.push(&entry);
@@ -285,6 +301,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     assert_eq!(Reflect::get(&requested, &"type".into())?.as_string().as_deref(), Some("openRequest"));
     assert_eq!(Reflect::get(&requested, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
     assert_eq!(Reflect::get(&requested, &"resourceId".into())?.as_string().as_deref(), Some("file-two"));
+    assert_eq!(Reflect::get(&requested, &"filename".into())?.as_string().as_deref(), Some("Second.psd"));
     call(&api, "openResource", &[accepted, "loaded.png".into(), Uint8Array::from(&[1u8, 2, 3][..]).into()])?;
     assert!(host.busy());
     crate::file_providers::publish(&host);
@@ -301,6 +318,19 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     let active = app.session.active().ok_or_else(|| JsValue::from_str("admitted provider document missing"))?;
     assert_eq!(Reflect::get(&opened, &"documentId".into())?.as_string(), Some(active.doc.id.0.to_string()));
     assert!(host.bound(active.doc.id));
+    let admitted_id = active.doc.id.0.to_string();
+    let snapshot = call(&api, "snapshot", &[])?;
+    let documents = Reflect::get(&snapshot, &"documents".into())?.dyn_into::<Array>()?;
+    let mut matching_documents = 0;
+    let mut bound_resource = None;
+    for document in documents.iter() {
+        if Reflect::get(&document, &"documentId".into())?.as_string().as_deref() == Some(admitted_id.as_str()) {
+            matching_documents += 1;
+            bound_resource = Reflect::get(&document, &"resourceId".into())?.as_string();
+        }
+    }
+    assert_eq!(matching_documents, 1);
+    assert_eq!(bound_resource.as_deref(), Some("file-two"));
     assert_eq!(app.session.documents().len(), 2);
     assert!(!host.busy());
     call(&api, "unregisterProvider", &[])?;
