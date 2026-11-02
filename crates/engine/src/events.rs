@@ -143,9 +143,13 @@ impl EventLog {
     /// the next poll: `next` stops at the last one returned).
     pub fn since(&self, since: u64, filter: &Filter, limit: usize) -> Batch {
         let oldest = self.events.front().map_or(self.last.saturating_add(1), |e| e.seq);
+        // A cursor greater than this run's sequence cannot make progress. Restart at the
+        // oldest retained event and tell the reader that its earlier run was lost.
+        let restarted = since > self.last;
+        let since = if restarted { oldest.saturating_sub(1) } else { since };
         // A cursor before the oldest kept event means events were dropped, unless nothing was
         // ever logged past it.
-        let gap = since.saturating_add(1) < oldest && self.last > since;
+        let gap = restarted || (since.saturating_add(1) < oldest && self.last > since);
         let mut events = Vec::new();
         let mut next = since.max(if gap { oldest.saturating_sub(1) } else { since });
         for e in self.events.iter().filter(|e| e.seq > since) {
@@ -196,7 +200,9 @@ pub struct Snapshot {
     pub active_layer: Option<u64>,
     pub selected: Vec<u64>,
     pub layers: Vec<u64>,
-    pub selection: Option<[i32; 4]>,
+    /// A copy-on-write selection clone; comparing tile identity costs one pass over tile keys,
+    /// while `content_bounds` can scan pixels around a large selection on every command.
+    pub selection: Option<photocraft_raster::Surface>,
 }
 
 /// Bounds of the pixel selection as `[x0, y0, x1, y1]`, if any.
@@ -218,7 +224,7 @@ impl Snapshot {
             active_layer: st.active_layer.map(|l| l.0),
             selected: st.selected_layers().iter().map(|l| l.0).collect(),
             layers: st.doc.walk().iter().map(|(_, _, l)| l.id.0).collect(),
-            selection: selection_bounds(&st.doc),
+            selection: st.doc.selection.clone(),
         }
     }
 }
@@ -245,9 +251,13 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
         }
         log.push("document.changed", Some(doc), src, data);
     }
-    let selection = selection_bounds(&st.doc);
-    if selection != before.selection || (id.starts_with("select.") && st.revision != before.revision) {
-        log.push("selection.changed", Some(doc), src, json!({"bounds": selection}));
+    let selection_changed = match (&before.selection, &st.doc.selection) {
+        (None, None) => false,
+        (Some(before), Some(now)) => !before.shares_storage_with(now),
+        _ => true,
+    };
+    if selection_changed || (id.starts_with("select.") && st.revision != before.revision) {
+        log.push("selection.changed", Some(doc), src, json!({"bounds": selection_bounds(&st.doc)}));
     }
     let active = st.active_layer.map(|l| l.0);
     let selected: Vec<u64> = st.selected_layers().iter().map(|l| l.0).collect();
@@ -279,6 +289,21 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
 mod tests {
     use super::*;
     use crate::Session;
+
+    #[test]
+    fn selection_pixels_changing_with_the_same_bounds_emit_an_event() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        session.execute("select.rect", json!({"x": 2, "y": 2, "width": 8, "height": 8})).unwrap();
+        let before = Snapshot::of(session.active());
+        let st = session.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        doc.selection.as_mut().unwrap().write_pixel(4, 4, &[0.5]);
+        let mut log = EventLog::default();
+        after_command(&mut log, "select.refineEdge", &before, session.active());
+        let batch = log.since(0, &Filter::default(), 10);
+        assert!(batch.events.iter().any(|e| e.event == "selection.changed" && e.data["bounds"] == json!([2, 2, 10, 10])), "{batch:?}");
+    }
 
     fn kinds(s: &Session, since: u64) -> Vec<(&'static str, Value)> {
         s.events.since(since, &Filter::default(), 1000).events.into_iter().map(|e| (e.event, e.data)).collect()
@@ -385,6 +410,16 @@ mod tests {
         assert_eq!(b.next, 105);
         let b2 = log.since(b.next, &Filter::default(), 5);
         assert_eq!(b2.events[0].seq, 106);
+    }
+
+    #[test]
+    fn a_cursor_from_an_earlier_run_resynchronizes_to_this_log() {
+        let mut log = EventLog::default();
+        log.push("document.opened", Some(7), Some("ui"), json!({}));
+        let batch = log.since(9000, &Filter::default(), 10);
+        assert!(batch.gap, "a future cursor belongs to a different log: {batch:?}");
+        assert_eq!(batch.next, 1, "the client must be able to resume from this run");
+        assert_eq!(batch.events.len(), 1, "the first retained event is available after resynchronizing");
     }
 
     #[test]
