@@ -23,8 +23,8 @@ const EXTRUDE: &[Field] = &[
     Field("ExtR", "depthMode", Kind::Enum("ExtR", &[("Rndm", "random"), ("LvlB", "levelBased")], "random")),
 ];
 const TRACE: &[Field] = &[
-    // Recorded levels stay intact; playback alone clamps to the measured boundary image.
-    Field("Lvl ", "level", Kind::Long(128, i32::MIN, i32::MAX)),
+    // Whole levels 0..255; the reference application's dialog clamps to the nearest.
+    Field("Lvl ", "level", Kind::Long(128, 0, 255)),
     Field("Edg ", "edge", Kind::Enum("CntE", &[("Lwr ", "lower"), ("Upr ", "upper")], "upper")),
 ];
 const WIND: &[Field] = &[
@@ -164,12 +164,19 @@ pub(super) fn from(id: &str, d: &Descriptor) -> Mapped {
 /// Write every measured key, preserving native defaults and rejecting native-only settings.
 pub(super) fn to(id: &str, p: &Value) -> Option<Descriptor> {
     let fields = fields(id)?;
-    let params = p.as_object()?;
+    // No params mean the native defaults, as for the other mapped events.
+    let empty = Map::new();
+    let params = if p.is_null() { &empty } else { p.as_object()? };
+    // The filter dialog freezes the current colours; the recorded event has none and plays with the current ones.
+    let colours = matches!(id, "filter.stylize.tiles" | "filter.pixelate.pointillize");
     let seeded =
         matches!(id, "filter.stylize.extrude" | "filter.stylize.wind" | "filter.stylize.tiles" | "filter.pixelate.mezzotint" | "filter.pixelate.pointillize");
     if !super::events::pixel_target(p)
         || params.iter().any(|(key, value)| {
-            !fields.iter().any(|f| f.1 == key.as_str()) && key != "target" && !(key == "seed" && seeded && (value.is_null() || value.as_f64() == Some(0.0)))
+            !fields.iter().any(|f| f.1 == key.as_str())
+                && key != "target"
+                && !(colours && matches!(key.as_str(), "foreground" | "background"))
+                && !(key == "seed" && seeded && (value.is_null() || value.as_f64() == Some(0.0)))
         })
     {
         return None;
@@ -182,7 +189,14 @@ pub(super) fn to(id: &str, p: &Value) -> Option<Descriptor> {
             ("filter.stylize.traceContour", "edge") => json!("lower"),
             _ => kind.default(),
         };
-        d = d.with(key, kind.write(p.get(param).filter(|v| !v.is_null()).unwrap_or(&default))?);
+        let mut value = p.get(param).filter(|v| !v.is_null()).unwrap_or(&default).clone();
+        // The native command rounds the tile count, so a fractional dialog value plays as the whole one.
+        if (id, *param) == ("filter.stylize.tiles", "count")
+            && let Some(n) = value.as_f64().filter(|n| n.is_finite())
+        {
+            value = json!(n.round());
+        }
+        d = d.with(key, kind.write(&value)?);
     }
     Some(d)
 }

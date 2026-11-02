@@ -184,6 +184,7 @@ fn numeric_imports_clamp_measured_ranges() {
     for (code, key, param, min, max) in [
         ("Extr", "ExtS", "size", 2, 255),
         ("Extr", "ExtD", "depth", 1, 255),
+        ("TrcC", "Lvl ", "level", 0, 255),
         ("Tls ", "TlNm", "count", 1, 99),
         ("Tls ", "TlOf", "maxOffset", 1, 99),
         ("ClrH", "Rds ", "maxRadius", 4, 127),
@@ -208,21 +209,22 @@ fn numeric_imports_clamp_measured_ranges() {
     }
 }
 
-/// Trace levels retain their recorded integers; only playback uses the measured boundary image.
+/// Trace levels are whole numbers 0..255: imports clamp to that range and play like the clamped direct command.
 #[test]
-fn trace_levels_round_trip_and_play_at_the_boundary() {
+fn trace_levels_clamp_on_import_and_play_at_the_boundary() {
     for level in [i32::MIN, -1, 0, 128, 255, 256, 300, i32::MAX] {
+        let clamped = level.clamp(0, 255);
         for (edge, name) in [("Lwr ", "lower"), ("Upr ", "upper")] {
             let descriptor = desc("null").with("Lvl ", D::Integer(level)).with("Edg ", enm("CntE", edge));
-            let mut item = code_item("TrcC", descriptor.clone());
+            let mut item = code_item("TrcC", descriptor);
             item.with_dialog = true;
             let mut imported = load_items(vec![item]);
             assert_eq!(imported.actions.list[0].steps[0].0, "filter.stylize.traceContour", "{level}/{name}");
-            assert_eq!(imported.actions.list[0].steps[0].1["level"], level);
+            assert_eq!(imported.actions.list[0].steps[0].1["level"], clamped);
             let saved = saved_items(&mut imported);
-            assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), descriptor.to_bytes());
+            let expected = desc("null").with("Lvl ", D::Integer(clamped)).with("Edg ", enm("CntE", edge));
+            assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), expected.to_bytes());
             assert!(saved[0].with_dialog);
-            assert!(export_item("filter.stylize.traceContour", &json!({"level":level,"edge":name}), "Group D").is_some());
             for depth in [8, 16, 32] {
                 let mut direct = Session::new();
                 prepare_pattern(&mut imported, depth, "rgb");
@@ -234,8 +236,11 @@ fn trace_levels_round_trip_and_play_at_the_boundary() {
             }
         }
     }
-    for level in [255.5, 2147483648.0] {
-        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_none());
+    for level in [0, 128, 255] {
+        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_some(), "{level}");
+    }
+    for level in [json!(-1), json!(256), json!(255.5), json!(2147483648.0)] {
+        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_none(), "{level}");
     }
 }
 
@@ -324,6 +329,10 @@ fn exports_materialize_native_defaults_and_reject_unrepresentable_settings() {
             ("target", json!("channel:red")),
             ("unknown", json!(true)),
         ] {
+            // Tiles and Pointillize drop the dialog's frozen colours (tested below).
+            if matches!(key, "foreground" | "background") && matches!(fixture.code, "Tls " | "Pntl") {
+                continue;
+            }
             let mut params = fixture.defaults.clone();
             params[key] = value;
             let mut s = Session::new();
@@ -427,5 +436,48 @@ fn native_and_measured_defaults_stay_distinct_through_playback() {
         let result = imported.execute("actions.play", json!({"action":"A"})).unwrap();
         assert!(result.get("failed").is_none(), "{id}: {result}");
         assert_eq!(pixels(&imported), pixels(&native), "{id}");
+    }
+}
+
+/// Dialog recordings of Tiles and Pointillize carry the current colours; the recorded event has none.
+#[test]
+fn tiles_and_pointillize_exports_drop_dialog_colours() {
+    for (id, params) in
+        [("filter.stylize.tiles", json!({"count":17,"maxOffset":23,"fill":"foreground"})), ("filter.pixelate.pointillize", json!({"cellSize":19}))]
+    {
+        let plain = export_item(id, &params, "Group D").unwrap().descriptor;
+        let mut coloured = params.clone();
+        coloured["foreground"] = json!([0.2, 0.4, 0.6, 1.0]);
+        coloured["background"] = json!("#ffffff");
+        assert_eq!(export_item(id, &coloured, "Group D").unwrap().descriptor, plain, "{id}");
+        let mut s = Session::new();
+        s.actions.list.push(Action::new("A", vec![(id.into(), coloured)]));
+        assert!(s.execute("actions.save", json!({"action":"A"})).is_ok(), "{id}");
+    }
+}
+
+/// The native Tiles command rounds its count, so a fractional dialog value exports as the whole count it plays.
+#[test]
+fn tiles_count_rounds_like_the_native_command() {
+    for (count, expected) in [(17.4, 17), (17.5, 18), (1.2, 1), (98.6, 99)] {
+        let d = export_item("filter.stylize.tiles", &json!({"count":count}), "Group D").unwrap().descriptor.unwrap();
+        assert_eq!(d.get("TlNm"), Some(&D::Integer(expected)), "{count}");
+    }
+    for count in [0.4, 99.5] {
+        assert!(export_item("filter.stylize.tiles", &json!({"count":count}), "Group D").is_none(), "{count}");
+    }
+    assert!(export_item("filter.stylize.tiles", &json!({"maxOffset":10.5}), "Group D").is_none());
+}
+
+/// Null params mean the native defaults, as for the other mapped events.
+#[test]
+fn null_params_export_native_defaults() {
+    for id in ["filter.stylize.findEdges", "filter.stylize.tiles", "filter.stylize.traceContour"] {
+        assert_eq!(
+            export_item(id, &Value::Null, "Group D").map(|item| item.descriptor),
+            export_item(id, &json!({}), "Group D").map(|item| item.descriptor),
+            "{id}"
+        );
+        assert!(export_item(id, &Value::Null, "Group D").is_some(), "{id}");
     }
 }
