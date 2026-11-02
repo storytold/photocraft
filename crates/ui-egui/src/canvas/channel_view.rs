@@ -170,7 +170,12 @@ fn render_with_source(
     let mut out: Vec<[f32; 4]> = if vis == 0 {
         if !overlays.is_empty() {
             let first = overlays.remove(0);
-            gray(&first.surface)
+            // A spot channel alone reads as its tone, ink dark (as its thumbnail does).
+            let mut px: Vec<[f32; 4]> = gray(&first.surface);
+            if first.spot.is_some() {
+                px.iter_mut().for_each(|p| *p = [1.0 - p[0], 1.0 - p[1], 1.0 - p[2], 1.0]);
+            }
+            px
         } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
             solo_quick = true;
             gray(&q.surface)

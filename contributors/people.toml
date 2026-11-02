@@ -288,6 +288,10 @@ sync_github_name = false
 real_name = "Jason DeBoever"
 sync_github_name = true
 
+[people.Lcoding15]
+real_name = "Livio Oswald"
+sync_github_name = false
+
 [people.dylanmtaylor]
 sync_github_name = true
 

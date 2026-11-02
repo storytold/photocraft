@@ -349,3 +349,18 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
     assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
 }
+
+/// #10152: a spot channel viewed alone reads as its tone, as in Photoshop: ink is black, bare
+/// paper white (the channel stores ink, 1 = solid).
+#[test]
+fn a_spot_channel_alone_shows_its_ink_dark() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "solidity": 100})).unwrap();
+    let spot = r["channel"].as_u64().unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": spot})).unwrap();
+    let st = s.active().unwrap();
+    let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
+    assert_eq!((px[0], px[6]), (Color32::BLACK, Color32::WHITE), "ink dark, paper white");
+}

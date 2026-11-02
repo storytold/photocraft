@@ -290,8 +290,7 @@ impl PhotocraftApp {
                     for x in 0..w {
                         let sx = ((x as f32 + 0.5) * dw / w as f32) as i32;
                         let sy = ((y as f32 + 0.5) * dh / h as f32) as i32;
-                        let v = ch.surface.sample_channel(sx, sy, 0);
-                        px[(y + oy) * side + x + ox] = egui::Color32::from_gray((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+                        px[(y + oy) * side + x + ox] = egui::Color32::from_gray(channel_thumb_gray(ch, ch.surface.sample_channel(sx, sy, 0)));
                     }
                 }
                 texs.push((format!("chan-a{i}"), egui::ColorImage::new([side, side], px)));
@@ -341,6 +340,33 @@ fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: b
         (Cmyk, 1) => egui::Color32::from_rgb(255, byte, 255),
         (Cmyk, 2) => egui::Color32::from_rgb(255, 255, byte),
         _ => egui::Color32::from_gray(byte),
+    }
+}
+
+/// The grey of an alpha, spot or Quick Mask thumbnail pixel whose stored value is `v`. A spot
+/// channel stores ink and shows tone: ink is dark, as in Photoshop (#10152).
+fn channel_thumb_gray(ch: &photocraft_doc::AlphaChannel, v: f32) -> u8 {
+    let v = if ch.spot.is_some() { 1.0 - v } else { v };
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+#[cfg(test)]
+mod channel_thumb_tests {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{AlphaChannel, Color};
+    use photocraft_raster::Surface;
+
+    use super::channel_thumb_gray;
+
+    /// #10152: a spot channel's thumbnail shows its ink dark and bare paper white; an alpha
+    /// channel's shows what it stores.
+    #[test]
+    fn a_spot_thumbnail_shows_ink_dark_and_an_alpha_thumbnail_as_stored() {
+        let alpha = AlphaChannel::new("Alpha 1", Surface::new(PixelFormat::GRAY8));
+        let spot = AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 0.0), 1.0)), ..alpha.clone() };
+        assert_eq!((channel_thumb_gray(&alpha, 1.0), channel_thumb_gray(&alpha, 0.0)), (255, 0));
+        assert_eq!((channel_thumb_gray(&spot, 1.0), channel_thumb_gray(&spot, 0.0)), (0, 255), "solid ink black, paper white");
+        assert_eq!(channel_thumb_gray(&spot, 0.25), 191);
     }
 }
 
