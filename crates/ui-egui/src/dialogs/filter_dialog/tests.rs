@@ -1502,18 +1502,92 @@ fn replace_color_eyedropper_samples_the_image() {
     assert_eq!(app.ui.dialogs.last().unwrap().fields["color"], json!("#ff0000"), "the dialog starts from the foreground colour");
     // #6279: armed as it opens, so the first click on the image samples.
     assert!(color_eyedropper_armed(&app));
-    assert!(color_eyedropper_sample(&mut app, 4.0, 4.0));
+    assert!(color_eyedropper_sample(&mut app, 4.0, 4.0, egui::Modifiers::NONE));
     assert_eq!(app.ui.dialogs.last().unwrap().fields["color"], json!("#00ff00"));
     // #4457: where it was picked, for Localized Color Clusters.
     assert_eq!(app.ui.dialogs.last().unwrap().fields["points"], json!([[4.0, 4.0]]));
     // Off-image: the click is consumed, nothing changes and the eyedropper stays armed.
-    assert!(color_eyedropper_sample(&mut app, -1.0, 4.0));
+    assert!(color_eyedropper_sample(&mut app, -1.0, 4.0, egui::Modifiers::NONE));
     assert_eq!(app.ui.dialogs.last().unwrap().fields["color"], json!("#00ff00"));
     assert!(color_eyedropper_armed(&app));
     // Disarmed, the dialog never claims the click.
     app.ui.dialog_mut(id).unwrap().fields.insert(COLOR_EYEDROPPER.into(), json!(false));
     assert!(!color_eyedropper_armed(&app));
-    assert!(!color_eyedropper_sample(&mut app, 4.0, 4.0));
+    assert!(!color_eyedropper_sample(&mut app, 4.0, 4.0, egui::Modifiers::NONE));
+}
+
+/// #6280: Shift-click adds a sample and Alt-click subtracts one (as do the + and − eyedroppers),
+/// in click order, as in Photoshop; a plain click starts over from the clicked colour.
+#[test]
+fn replace_color_shift_and_alt_clicks_add_and_subtract_samples() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    open(&mut app, REPLACE_COLOR).unwrap();
+    let field = |app: &PhotocraftApp, k: &str| app.ui.dialogs.last().unwrap().fields.get(k).cloned().unwrap_or(Value::Null);
+    assert!(color_eyedropper_sample(&mut app, 2.0, 2.0, egui::Modifiers::NONE));
+    assert!(color_eyedropper_sample(&mut app, 5.0, 5.0, egui::Modifiers::SHIFT));
+    assert!(color_eyedropper_sample(&mut app, 9.0, 9.0, egui::Modifiers::ALT));
+    assert_eq!(field(&app, "points"), json!([[2.0, 2.0], [5.0, 5.0]]));
+    assert_eq!(field(&app, "subtractPoints"), json!([[9.0, 9.0]]));
+    assert_eq!(field(&app, "order"), json!(["+", "+", "-"]));
+    assert_eq!(field(&app, "color"), json!("#00ff00"), "the From colour is the plain sample's");
+    // The − eyedropper subtracts without a modifier; a plain click with the plain one starts over.
+    let id = app.ui.dialogs.last().unwrap().id;
+    app.ui.dialog_mut(id).unwrap().fields.insert("__tool".into(), json!("subtract"));
+    assert!(color_eyedropper_sample(&mut app, 3.0, 3.0, egui::Modifiers::NONE));
+    assert_eq!(field(&app, "subtractPoints"), json!([[9.0, 9.0], [3.0, 3.0]]));
+    app.ui.dialog_mut(id).unwrap().fields.insert("__tool".into(), json!("sample"));
+    assert!(color_eyedropper_sample(&mut app, 7.0, 7.0, egui::Modifiers::NONE));
+    assert_eq!((field(&app, "points"), field(&app, "subtractPoints")), (json!([[7.0, 7.0]]), json!([])));
+}
+
+/// A first click with Add to Sample, before any plain sample, takes the clicked colour as the
+/// From colour, so the single-sample command replaces it, not the foreground colour (CodeRabbit
+/// review on #10443). Color Range's matcher, used from the second sample on, also starts its
+/// range at the first added colour.
+#[test]
+fn replace_color_first_add_to_sample_click_sets_the_from_colour() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let id = open(&mut app, REPLACE_COLOR).unwrap();
+    let field = |app: &PhotocraftApp, k: &str| app.ui.dialogs.last().unwrap().fields.get(k).cloned().unwrap_or(Value::Null);
+    assert_ne!(field(&app, "color"), json!("#00ff00"), "the dialog starts from the foreground colour");
+    for (tool, mods) in [("sample", egui::Modifiers::SHIFT), ("add", egui::Modifiers::NONE)] {
+        let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+        reset_fields(&app, &mut fields);
+        fields.insert("__tool".into(), json!(tool));
+        app.ui.dialog_mut(id).unwrap().fields = fields;
+        assert!(color_eyedropper_sample(&mut app, 4.0, 4.0, mods));
+        assert_eq!(field(&app, "points"), json!([[4.0, 4.0]]));
+        assert_eq!(field(&app, "color"), json!("#00ff00"), "{tool}");
+    }
+    // A later added sample leaves the From colour alone.
+    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#123456"));
+    assert!(color_eyedropper_sample(&mut app, 6.0, 6.0, egui::Modifiers::SHIFT));
+    assert_eq!(field(&app, "color"), json!("#123456"));
+}
+
+/// Reset (Alt+Cancel) forgets the click order with the samples, so samples added afterwards
+/// carry an order that fits them and the command takes it (CodeRabbit review on #10443).
+#[test]
+fn replace_color_reset_forgets_the_click_order() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let id = open(&mut app, REPLACE_COLOR).unwrap();
+    assert!(color_eyedropper_sample(&mut app, 2.0, 2.0, egui::Modifiers::NONE));
+    assert!(color_eyedropper_sample(&mut app, 9.0, 9.0, egui::Modifiers::ALT));
+    let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+    reset_fields(&app, &mut fields);
+    app.ui.dialog_mut(id).unwrap().fields = fields;
+    assert!(color_eyedropper_sample(&mut app, 5.0, 5.0, egui::Modifiers::SHIFT));
+    assert!(color_eyedropper_sample(&mut app, 7.0, 7.0, egui::Modifiers::SHIFT));
+    let f = app.ui.dialogs.last().unwrap().fields.clone();
+    assert_eq!(f["order"], json!(["+", "+"]), "{f:?}");
+    let p = json!({"color": f["color"], "points": f["points"], "order": f["order"], "hue": 30});
+    app.session.execute(REPLACE_COLOR, p).unwrap();
 }
 
 /// #4143: the eyedropper button disarms and re-arms the canvas picker (#6279: it opens armed).
@@ -1594,7 +1668,7 @@ fn replace_color_localized_color_clusters() {
     h.run_steps(3);
     let _ = h.get_by_label("Localized Color Clusters");
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(COLOR_EYEDROPPER.into(), json!(true));
-    assert!(color_eyedropper_sample(h.state_mut(), 2.0, 5.0));
+    assert!(color_eyedropper_sample(h.state_mut(), 2.0, 5.0, egui::Modifiers::NONE));
     h.get_by_label("Localized Color Clusters").click();
     h.run_steps(2);
     let f = h.state().ui.dialogs.last().unwrap().fields.clone();

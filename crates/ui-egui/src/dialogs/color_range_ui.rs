@@ -401,7 +401,7 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
 }
 
 /// Eyedropper button: the pipette icon with a +/− badge; labelled for accessibility.
-fn eyedropper(ui: &mut egui::Ui, badge: &str, selected: bool, label: &str) -> egui::Response {
+pub(crate) fn eyedropper(ui: &mut egui::Ui, badge: &str, selected: bool, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let r = crate::icons::button(ui, "pipette", 26.0, selected, label);
     if !badge.is_empty() {
