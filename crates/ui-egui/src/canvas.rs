@@ -1921,7 +1921,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         opaque_fill_preview: {
             #[cfg(feature = "uv-workbench")]
             {
-                crate::uv_mask_paint_preview::current_fill_gray_mask(app, idx)
+                crate::uv_mask_paint_preview::opaque_fill_preview(app, idx)
             }
             #[cfg(not(feature = "uv-workbench"))]
             {

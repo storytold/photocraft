@@ -125,3 +125,22 @@ The detached-viewport menu ownership and dismissal behavior was exercised with
 egui's synthetic viewport test harness; a native multi-window application smoke
 test and the full UI suite were not run for this follow-up. The default-feature
 test binary compiled but was not executed as a suite.
+
+## 2026-11-02 exact comparison of the six deferred UI failures
+
+Reviewed working head: `ecfb9b83e` plus the workspace-close, Fill proxy, Crop tool-state and raster-budget corrections. Baseline: upstream merge base `fab871dadb85e7422d0b7c872497ff485ae92da9`, in a detached worktree. The four integration-test source files are byte-identical between baseline and head. No assertions were changed for this comparison.
+
+All runs used the same Windows host, shared dependency versions, GPU, `RUST_MIN_STACK=16777216`, and `--test-threads=1`, with no `CRAFT_FONTS_DIR` override. Baseline has no `uv-workbench` feature; the valid comparison is baseline default versus head default, with head UV also checked. Commands: `cargo test --offline -p photocraft-ui-egui --test it -- <filter> --test-threads=1`, adding `--features uv-workbench` for the head UV run.
+
+| Test/filter | Baseline default | Head default | Head UV |
+|---|---|---|---|
+| `checker_canvas::cpu_pixel_grid_is_not_drawn_over_empty_checker` | Failed: empty-checker pixel 252 vs 255 at zoom 16 | Failed: 255 vs 252 at zoom 8 | Failed: 255 vs 252 at zoom 16 |
+| `full_res_preview::adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off` | Failed, same assertion | Failed | Failed |
+| `full_res_preview::adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off` | Failed, same assertion | Failed | Failed |
+| `full_res_preview::filter_dialog_previews_at_full_resolution_when_low_res_is_off` | Failed: 128 vs 229.84 | Failed: 128 vs 229.84 | Failed: 128 vs 229.84 |
+| `live_stroke_canvas::the_canvas_shows_the_committed_stroke_part_0` | Initial full filter passed; isolated repeat passed once and failed once at 97/255 | Failed: 97/255; two isolated repeats also failed | Failed: 97/255 |
+| `pattern_preview_canvas::pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases` | Failed: right-copy GPU sample `[40,40,40]` | Failed: same sample | Failed: same sample |
+
+The former live-stroke test is now split into four parts; parts 1–3 passed in all three configurations. The shared part-0 failure uses zoom 12, smoothing 0.5, 16-bit depth, pressure and flipped canvas. A single passing baseline run was therefore insufficient: repeated baseline execution reproduced the exact head assertion and 97/255 difference.
+
+These results establish baseline reproductions of all six previously deferred failures on this host, including an unstable live-stroke case. They do not make the tests green or establish correctness on every renderer. Their existing assertions remain in place; fixing these shared canvas/display issues is separate from the UV-feature changes. Detailed logs are in `D:/PhotoCraft-UV-build/Temp/{baseline,head-default,head-uv,repeat-baseline,repeat-head}-*.txt` locally and are not committed.

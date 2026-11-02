@@ -347,7 +347,7 @@ pub fn ensure_frame(app: &mut PhotocraftApp) {
         && let Err(error) = crate::sizing::geometry_preflight(app, "image.crop")
     {
         cancel(app);
-        app.ui.tool = Tool::Brush;
+        crate::tool_memory::select(app, Tool::Brush);
         app.ui.status = error;
         app.ui.status_error = true;
         return;

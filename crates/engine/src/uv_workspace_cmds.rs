@@ -58,11 +58,15 @@ fn close(s: &mut Session, params: &Value) -> Result<Value> {
     if params.get("discard").and_then(Value::as_bool) != Some(true) && s.uv_documents().iter().any(DocState::is_dirty) {
         return Err(EngineError::Other("Unsaved 3D texture changes must be saved or explicitly discarded".into()));
     }
+    let restore_ordinary_workspace = !s.uv_workspace.active;
     switch(s, &json!({"active":true}))?;
     while !s.docs.is_empty() {
         s.close(s.docs.len() - 1);
     }
     s.uv = Default::default();
+    if restore_ordinary_workspace {
+        switch(s, &json!({"active":false}))?;
+    }
     Ok(Value::Null)
 }
 pub fn specs() -> Vec<CommandSpec> {
@@ -88,4 +92,28 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: false,
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+
+    #[test]
+    fn close_restores_the_ordinary_bank_when_it_was_active() {
+        let mut session = Session::new();
+        session.add_document(Document::new("ordinary", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None);
+        let ordinary_id = session.active().map(|state| state.doc.id).expect("ordinary document was added");
+        session.uv_workspace.parked.push(DocState::new(Document::new("UV texture", Size::new(8, 8), ColorMode::Rgb, SampleType::U8), None));
+        session.uv_workspace.initialized = true;
+        session.uv_workspace.active = false;
+
+        close(&mut session, &json!({"discard":true})).expect("UV project closes");
+
+        assert!(!session.uv_workspace.active);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.active().map(|state| state.doc.id), Some(ordinary_id));
+    }
 }

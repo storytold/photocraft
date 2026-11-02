@@ -144,7 +144,7 @@ fn changing_preview_target_commits_previous_value_then_keeps_new_preview() {
     set(&mut app, new_layer, 0, 0.3);
 
     assert_eq!(app.session.active().unwrap().doc.layer(new_layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].opacity, 0.8);
-    let preview = app.uv_mask_paint_preview.as_ref().unwrap();
+    let preview = app.uv_mask_paint_preview.as_mut().unwrap();
     assert_eq!((preview.doc, preview.layer, preview.index, preview.opacity), (app.session.active().unwrap().doc.id, new_layer, 0, 0.3));
     let old_index = app.session.documents().iter().position(|state| state.doc.id == old_doc).unwrap();
     assert_eq!(app.session.documents()[old_index].doc.layer(old_layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].opacity, 0.25);
@@ -544,4 +544,42 @@ fn sampled_fill_proxy_is_rejected_after_revision_change_or_cancel() {
     app.session.active_mut().unwrap().revision -= 1;
     cancel(&mut app);
     assert!(super::sampled_fill_proxy(&app, 0).is_none(), "cancelling drops the sampler generation");
+}
+
+#[test]
+fn opaque_fill_preview_waits_for_a_current_sampled_proxy() {
+    let (mut app, layer) = app();
+    {
+        let state = app.session.active_mut().unwrap();
+        let paint = std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask.as_mut().unwrap().paint.as_mut().unwrap();
+        paint.layers[0].kind = EffectKind::Fill { value: 1.0, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false };
+    }
+    app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
+    set_fill(&mut app, layer, 0, [2, 3, 20, 18], 0.0);
+
+    assert!(super::current_fill_gray_mask(&app, 0));
+    assert!(app.uv_mask_paint_preview.as_ref().unwrap().mask_sampler.worker.is_none());
+    assert!(!super::opaque_fill_preview(&app, 0), "pending preview stays transparent before sampling");
+
+    // Worker creation failure clears the scheduled key and leaves no accepted result.
+    app.uv_mask_paint_preview.as_mut().unwrap().mask_sampler.schedule.latest_key = None;
+    assert!(!super::opaque_fill_preview(&app, 0), "worker-unavailable preview stays transparent");
+
+    let key = super::current_fill_key(&app, 0).unwrap();
+    let preview = app.uv_mask_paint_preview.as_ref().unwrap();
+    let proxy = super::FillMaskProxy {
+        generation: preview.generation,
+        doc: preview.doc,
+        revision: preview.revision,
+        layer,
+        index: 0,
+        key,
+        size: [1, 1],
+        values: std::sync::Arc::new(vec![1.0]),
+    };
+    app.uv_mask_paint_preview.as_mut().unwrap().mask_sampler.ready = Some(proxy);
+    assert!(super::opaque_fill_preview(&app, 0), "a current sampled proxy enables the opaque preview");
+
+    app.uv_mask_paint_preview.as_mut().unwrap().mask_sampler.ready = None;
+    assert!(!super::opaque_fill_preview(&app, 0), "without a ready proxy, including worker-unavailable state, canvas remains unchanged");
 }

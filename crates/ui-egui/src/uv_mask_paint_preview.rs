@@ -616,6 +616,10 @@ pub(crate) fn current_fill_gray_mask(app: &PhotocraftApp, idx: usize) -> bool {
     (explicit || targeted) && state.doc.layer(preview.layer).is_some_and(|layer| layer.mask.is_some())
 }
 
+pub(crate) fn opaque_fill_preview(app: &PhotocraftApp, idx: usize) -> bool {
+    current_fill_gray_mask(app, idx) && sampled_fill_proxy(app, idx).is_some()
+}
+
 pub(crate) fn fill_manipulation_active(app: &PhotocraftApp, idx: usize) -> bool {
     current_fill_key(app, idx).is_some()
 }

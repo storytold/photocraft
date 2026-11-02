@@ -246,7 +246,7 @@ impl Topology {
         for triangle in scene.triangles.iter().filter(|t| t.material == material) {
             let pts = triangle.corners.map(|c| point(c.uv));
             let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
-            account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
+            account_raster_candidates(&mut raster_candidates, raster_budget(n), x0, y0, x1, y1)?;
             for y in y0..y1 {
                 for x in x0..x1 {
                     let covered = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
@@ -296,7 +296,7 @@ impl Topology {
             let shell = u32::try_from(shell_id).ok().and_then(|id| id.checked_add(1)).ok_or_else(|| Error("UV shell ID exceeds the raster format".into()))?;
             let pts = triangle.corners.map(|corner| point(corner.uv));
             let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
-            account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
+            account_raster_candidates(&mut raster_candidates, raster_budget(n), x0, y0, x1, y1)?;
             for y in y0..y1 {
                 for x in x0..x1 {
                     let covered = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
@@ -393,7 +393,7 @@ impl Topology {
             for t in shell.triangles.iter().filter_map(|i| scene.triangles.get(*i)) {
                 let pts = t.corners.map(|c| point(c.uv));
                 let (x0, y0, x1, y1) = bounds(&pts, 0.0, w, h);
-                account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
+                account_raster_candidates(&mut raster_candidates, raster_budget(n), x0, y0, x1, y1)?;
                 for y in y0..y1 {
                     for x in x0..x1 {
                         // Four samples give subpixel shells a useful, antialiased boundary.
@@ -420,7 +420,7 @@ impl Topology {
             for e in self.boundaries.iter().filter(|e| selected.contains(&e.shell) && (e.shared || *open_borders)) {
                 let pts = e.uv.map(point);
                 let (x0, y0, x1, y1) = bounds(&pts, radius, w, h);
-                account_raster_candidates(&mut raster_candidates, x0, y0, x1, y1)?;
+                account_raster_candidates(&mut raster_candidates, raster_budget(n), x0, y0, x1, y1)?;
                 let scaled = |p: [f64; 2]| [p[0] / radii[0], p[1] / radii[1]];
                 let scaled_pts = pts.map(scaled);
                 for y in y0..y1 {
@@ -466,11 +466,15 @@ impl Topology {
     }
 }
 
-fn account_raster_candidates(total: &mut usize, x0: usize, y0: usize, x1: usize, y1: usize) -> Result<()> {
+fn raster_budget(pixels: usize) -> usize {
+    MAX_UV_RASTER_CANDIDATES.max(pixels.saturating_mul(4))
+}
+
+fn account_raster_candidates(total: &mut usize, budget: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> Result<()> {
     let area = x1.saturating_sub(x0).checked_mul(y1.saturating_sub(y0)).ok_or_else(|| Error("UV raster candidate budget overflow".into()))?;
     *total = total.checked_add(area).ok_or_else(|| Error("UV raster candidate budget overflow".into()))?;
-    if *total > MAX_UV_RASTER_CANDIDATES {
-        return Err(Error(format!("UV rasterization exceeds the {MAX_UV_RASTER_CANDIDATES}-candidate budget")));
+    if *total > budget {
+        return Err(Error(format!("UV rasterization exceeds the {budget}-candidate budget")));
     }
     Ok(())
 }
@@ -644,6 +648,14 @@ mod shell_id_map_tests {
     }
 
     #[test]
+    fn dense_8k_atlas_is_within_the_scaled_budget() {
+        let scene = overlapping_scene(false);
+        let topology = Topology::build(&scene).unwrap();
+        let ids = topology.shell_id_map(&scene, 8192, 8192, 0, [0, 0]).unwrap();
+        assert_eq!(ids.len(), 8192 * 8192);
+        assert!(ids.iter().any(|&id| id != 0));
+    }
+    #[test]
     fn shell_id_grid_matches_occupancy_convention_and_resolves_overlaps_by_lowest_id() {
         let scene = overlapping_scene(false);
         let topology = Topology::build(&scene).unwrap();
@@ -723,21 +735,12 @@ mod import_budget_tests {
     }
 
     #[test]
-    fn occupancy_rejects_excessive_triangle_bbox_work_before_raster_loop() {
-        let scene = Scene {
-            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            triangles: vec![Triangle {
-                material: 0,
-                corners: [
-                    Corner { vertex: 0, uv: [0.0, 0.0], normal: None },
-                    Corner { vertex: 1, uv: [1.0, 0.0], normal: None },
-                    Corner { vertex: 2, uv: [0.0, 1.0], normal: None },
-                ],
-            }],
-            materials: vec![Material::default()],
-            warnings: Vec::new(),
-        };
-        let error = Topology::default().occupancy_mask(&scene, 16_384, 16_384, 0, [0, 0]).unwrap_err();
-        assert!(error.to_string().contains("candidate budget"));
+    fn raster_work_budget_scales_and_still_rejects_hostile_overlap() {
+        let n = 16384usize * 16384;
+        let mut total = 0;
+        for _ in 0..4 {
+            account_raster_candidates(&mut total, raster_budget(n), 0, 0, 16384, 16384).unwrap();
+        }
+        assert!(account_raster_candidates(&mut total, raster_budget(n), 0, 0, 16384, 16384).is_err());
     }
 }

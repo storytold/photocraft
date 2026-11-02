@@ -808,6 +808,48 @@ fn the_stylus_eraser_and_a_gesture_in_progress_keep_the_frame_pending() {
     assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
 }
 
+#[test]
+fn crop_refusal_clears_spring_and_stylus_tool_overrides() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_raster::Surface;
+
+    let mut app = app(SampleType::U8);
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let mask = {
+        let mut mask = LayerMask::hide_all();
+        mask.paint = Some(Stack {
+            base: Surface::with_default(PixelFormat::GRAY8, &[1.0]),
+            layers: vec![Paint {
+                name: "Editable paint".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 1.0]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            }],
+            active: 0,
+        });
+        mask
+    };
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(layer).unwrap().mask = Some(mask);
+    app.ui.spring = Some(crate::spring_tools::Spring { previous: Tool::Move, tool: Tool::Crop, keys: vec!['c'], since: 1.0, used: true, released: false });
+    app.stylus.tool_before_eraser = Some(Tool::Crop);
+
+    ensure_frame(&mut app);
+
+    assert_eq!(app.ui.tool, Tool::Brush);
+    assert!(app.ui.spring.is_none(), "refusal clears the spring-loaded tool override");
+    assert!(app.stylus.tool_before_eraser.is_none(), "refusal clears the pen eraser return tool");
+    assert!(app.ui.status_error);
+}
+
 /// Image › Crop with a pending crop commits the frame (the one Image item Photoshop keeps).
 #[test]
 fn image_crop_menu_commits_a_pending_crop() {
