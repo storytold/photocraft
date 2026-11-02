@@ -139,6 +139,28 @@ fn fill_dialog_draws_in_the_selected_language() {
 }
 
 #[test]
+fn palette_dialog_strings_have_translations() {
+    // Indexed Color (Custom) and Color Table share the grid, Load…/Save…, Set Transparent
+    // and the canvas eyedropper; their strings must be translated in every complete catalog.
+    let labels = [
+        "Set Transparent",
+        "Clear Transparency",
+        "Color Picker",
+        "Color Picker (First Color)",
+        "Color Picker (Last Color)",
+        "Pick a Palette Colour From the Image",
+        "Table Color",
+        "Palette Color",
+        "{count} transparent pixels were made opaque",
+    ];
+    for language in Lang::all().filter(|language| language.complete_menus()) {
+        for text in labels {
+            assert!(has(language, text), "{}: untranslated {text}", language.code());
+        }
+    }
+}
+
+#[test]
 fn file_info_camera_data_draws_in_the_selected_language_read_only() {
     with_language(Lang::EN, || {
         let mut h = harness();

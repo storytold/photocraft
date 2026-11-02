@@ -3545,3 +3545,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparent festlegen
+	{count} transparent pixels were made opaque	{count} transparente Pixel wurden undurchsichtig
+	Clear Transparency	Transparenz aufheben
+	Color Picker (First Color)	Farbwähler (Erste Farbe)
+	Color Picker (Last Color)	Farbwähler (Letzte Farbe)
+	Pick a Palette Colour From the Image	Eine Palettefarbe aus dem Bild wählen
+	Table Color	Tabellenfarbe
+	Palette Color	Palettenfarbe

@@ -4248,3 +4248,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Şeffaf Olarak Ayarla
+	{count} transparent pixels were made opaque	{count} saydam piksel opak hale geldi
+	Clear Transparency	Şeffaflığı Kaldır
+	Color Picker (First Color)	Renk Seçici (İlk Renk)
+	Color Picker (Last Color)	Renk Seçici (Son Renk)
+	Pick a Palette Colour From the Image	Görselden bir palet rengi seçin
+	Table Color	Tablo Rengi
+	Palette Color	Palet Rengi

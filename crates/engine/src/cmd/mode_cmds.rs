@@ -255,41 +255,87 @@ fn parse_dither(s: &str) -> Option<Dither> {
     })
 }
 
+/// The `colors` count param: an integer 2..=256, defaulting to 256.
+fn color_count(p: &Value, cmd: &str) -> Result<usize> {
+    match p.get("colors") {
+        None => Ok(256),
+        Some(value) => {
+            let value = value.as_f64().ok_or_else(|| bad(cmd, "colors must be an integer from 2 to 256"))?;
+            if !value.is_finite() || value.fract() != 0.0 || !(2.0..=256.0).contains(&value) {
+                return Err(bad(cmd, "colors must be an integer from 2 to 256"));
+            }
+            Ok(value as usize)
+        }
+    }
+}
+
 fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.mode.indexedColor";
-    let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
-        .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
+    let palette = str_or(p, "palette", "selective");
+    // Palette: Custom… — the table is given verbatim in `paletteColors`; like Photoshop,
+    // `colors` and `forced` are ignored while it is in use.
+    let custom_table: Option<Vec<[u8; 3]>> = if palette == "custom" {
+        let a =
+            p.get("paletteColors").and_then(Value::as_array).ok_or_else(|| bad(CMD, "custom palette: `paletteColors` is a JSON array of 2 to 256 colours"))?;
+        let c: Option<Vec<[u8; 3]>> = a.iter().map(parse_color).collect();
+        let c = c.ok_or_else(|| bad(CMD, "paletteColors: [\"#rrggbb\" | [r, g, b], …]"))?;
+        if c.len() < 2 || c.len() > 256 {
+            return Err(bad(CMD, "paletteColors: a custom palette has 2 to 256 entries"));
+        }
+        Some(c)
+    } else {
+        None
+    };
     let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
     let dither = parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?;
-    let colors = match p.get("colors") {
-        None => 256,
-        Some(value) => {
-            let value = value.as_f64().ok_or_else(|| bad(CMD, "colors must be an integer from 2 to 256"))?;
-            if !value.is_finite() || value.fract() != 0.0 || !(2.0..=256.0).contains(&value) {
-                return Err(bad(CMD, "colors must be an integer from 2 to 256"));
-            }
-            value as usize
-        }
-    };
+    // The count is disabled with a custom table (its length rules), so it is not validated then.
+    let colors = if custom_table.is_some() { 256 } else { color_count(p, CMD)? };
     let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
     let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
+    // An explicit transparent entry (index into the final table): that entry is used as-is and
+    // no white is appended for it. `null` explicitly disables transparency (a loaded .act
+    // without a trailer, or Clear Transparency); absent uses the auto-append-white behaviour.
+    let explicit_no_transparent = matches!(p.get("transparent"), Some(Value::Null));
+    let explicit_transparent = match p.get("transparent") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(CMD, "transparent: an integer index into the palette"))?),
+    };
+    let (pal_len, transparent, flattened) = s.edit("Indexed Color", |doc, active| {
         let mut px = composite(doc, !transparency);
-        let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
-        let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
-        let transparent = if has_clear && pal.len() < 256 {
+        // An explicit "no transparency" flattens the clear pixels to opaque: count them so the
+        // caller can warn that transparency was lost.
+        let flattened = if explicit_no_transparent { px.iter().filter(|q| q[3] < 0.5).count() } else { 0 };
+        let has_clear = transparency && !explicit_no_transparent && px.iter().any(|q| q[3] < 0.5);
+        let mut pal = match &custom_table {
+            Some(t) => t.clone(),
+            None => {
+                let kind = PaletteKind::from_id(palette)
+                    .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive|custom"))?;
+                // Without an explicit entry one slot is reserved for the auto-appended white.
+                let n = if has_clear && explicit_transparent.is_none() { colors.saturating_sub(1).max(2) } else { colors };
+                quantize::build_palette(&px, kind, n, forced).map_err(|e| bad(CMD, e))?
+            }
+        };
+        let transparent = if let Some(t) = explicit_transparent {
+            let t = (t < pal.len() as u64)
+                .then_some(t as usize)
+                .ok_or_else(|| bad(CMD, format!("transparent: an index from 0 to {}", pal.len().saturating_sub(1))))?;
+            Some(t)
+        } else if has_clear && pal.len() < 256 {
             pal.push([255, 255, 255]);
             Some(pal.len() - 1)
         } else {
             None
         };
         let w = doc.size.width as usize;
-        quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
+        // `transparent: null` (a loaded .act without a trailer, or Clear Transparency) flattens
+        // clear pixels to opaque; the auto path keeps its legacy handling of them.
+        quantize::quantize(&mut px, w, &pal, dither, amount, transparent, explicit_no_transparent);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
-        Ok((pal.len(), transparent))
+        Ok((pal.len(), transparent, flattened))
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "flattened": flattened}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -379,11 +425,17 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     if table == cur {
         return Ok(report(&cur));
     }
-    let out = report(&table);
-    s.edit("Color Table", |doc, _| {
+    let flattened = s.edit("Color Table", |doc, _| {
         let old = cur.clone();
+        // Clearing the transparent entry makes its own clear pixels opaque: count them so the
+        // caller can warn that transparency was lost.
+        let mut flattened = 0usize;
+        let canvas = doc.bounds();
         for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
-            let r = surf.content_bounds();
+            // Entry 0 = black + transparent encodes as [0,0,0,0] (the surface's default pixel),
+            // which `prune()` drops; include `canvas` whenever `old.transparent` is set so
+            // clearing transparency restores those tiles too.
+            let r = if old.transparent.is_some() { canvas.union(&surf.content_bounds()) } else { surf.content_bounds() };
             if r.is_empty() {
                 continue;
             }
@@ -394,6 +446,10 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 let c = photocraft_raster::to_rgba(&fmt, q);
                 let rgb = [c[0], c[1], c[2]];
                 let i = if c[3] <= 0.0 {
+                    // Only the old transparent entry's own pixels (stored as its colour with
+                    // alpha 0) re-index; other clear pixels — e.g. the surface default [0,0,0,0]
+                    // of an empty layer or pruned tiles — are left alone. A black entry matches
+                    // its default-pixel encoding directly, so pruned tiles restore too.
                     let Some(i) = old.transparent.map(usize::from) else { continue };
                     if i >= old.colors.len() || old.rgb(i) != rgb {
                         continue;
@@ -405,6 +461,7 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
+                    flattened += 1; // A clear pixel loses its transparency: it becomes opaque.
                     1.0
                 } else {
                     c[3]
@@ -418,8 +475,10 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             surf.prune();
         }
         doc.color_table = Some(table.clone());
-        Ok(())
+        Ok(flattened)
     })?;
+    let mut out = report(&table);
+    out["flattened"] = json!(flattened);
     Ok(out)
 }
 
@@ -434,7 +493,7 @@ pub(crate) fn paint_color_table(doc: &Document, p: &Value) -> Option<ColorTable>
 pub(crate) fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
     let mut px = [c];
     if !table.colors.is_empty() {
-        quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from));
+        quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from), false);
     }
     let [c] = px;
     c
@@ -467,7 +526,7 @@ pub(crate) fn keep_in_color_table(table: &ColorTable, pre: &Surface, surf: &mut 
             continue;
         }
         let w = px.len();
-        quantize::quantize(&mut px, w, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from));
+        quantize::quantize(&mut px, w, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from), false);
         let mut mapped = changed.into_iter().zip(px).peekable();
         for (i, q) in data.chunks_exact_mut(n).enumerate() {
             if let Some((_, c)) = mapped.next_if(|(j, _)| *j == i) {
@@ -689,7 +748,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens)"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform|custom"="selective","colors":2..256=256,"paletteColors":json,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"transparent":json,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; transparent: index of the transparent entry, no white appended)"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],

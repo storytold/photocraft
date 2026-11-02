@@ -342,6 +342,8 @@ impl PhotocraftApp {
             return;
         }
         let _ = self.finish_file_dialog(answer);
+        // The action may have filled a dialog's fields (a palette Load…): repaint so it updates.
+        ctx.request_repaint();
     }
 
     /// Ends the file dialog in progress: its action continues with `answer`, and its errors go to

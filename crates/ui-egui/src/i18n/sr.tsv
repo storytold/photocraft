@@ -4593,3 +4593,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Postavi kao providno
+	{count} transparent pixels were made opaque	{count} providnih piksela je postalo neprozirno
+	Clear Transparency	Očisti providnost
+	Color Picker (First Color)	Birač boja (prva boja)
+	Color Picker (Last Color)	Birač boja (poslednja boja)
+	Pick a Palette Colour From the Image	Izaberite boju palete sa slike
+	Table Color	Boja tabele
+	Palette Color	Boja palete

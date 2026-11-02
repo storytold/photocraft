@@ -686,10 +686,6 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     outcome = Some(true);
                 }
             } else {
-                // The Color Table dialog loads and saves `.act` files, as in Photoshop.
-                if matches!(d.kind, DialogKind::Command) && crate::color_table_ui::owns(&fields) {
-                    crate::color_table_ui::buttons(app, ui, d.id, &mut fields);
-                }
                 ui.add_space(8.0);
                 // Align::Min, not Center: a centred row fills the height left over from last frame's
                 // (larger) size, so a dialog whose body gets shorter would never shrink back.
@@ -746,15 +742,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if outcome.is_none() {
             crate::color_picker_ui::open_requested(app, d.id);
         }
+        // A palette Load…/Save… asked by the dialog body (Indexed Color Custom…, Color Table).
+        if outcome.is_none()
+            && let Err(error) = crate::palette_file_ui::take_request(app, d.id)
+        {
+            app.ui.status = error;
+        }
         if apply_requested && outcome.is_none() {
             let _ = crate::prefs_ui::apply(app, d.id);
         }
         match outcome {
-            Some(true) => {
-                if let Err(error) = confirm(app, d.id) {
-                    app.ui.status = error;
-                }
-            }
+            Some(true) => match confirm(app, d.id) {
+                Err(error) => app.ui.status = error,
+                Ok(result) => warn_flattened(app, &result),
+            },
             Some(false) => {
                 let _ = cancel(app, d.id);
             }
@@ -958,6 +959,14 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         crate::actions::abandoned(app, &d.fields);
     }
     result
+}
+
+/// A palette operation that flattens transparency reports how many clear pixels it made opaque:
+/// warn in the status bar, since the change is easy to miss in an indexed image.
+pub(crate) fn warn_flattened(app: &mut PhotocraftApp, result: &Value) {
+    if let Some(n) = result.get("flattened").and_then(Value::as_u64).filter(|&n| n > 0) {
+        app.ui.status = crate::i18n::fmt(tl!("{count} transparent pixels were made opaque"), &[("count", &n.to_string())]);
+    }
 }
 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler

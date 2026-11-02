@@ -4021,3 +4021,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Đặt trong suốt
+	{count} transparent pixels were made opaque	{count} pixel trong suốt đã trở nên mờ đục
+	Clear Transparency	Xóa trong suốt
+	Color Picker (First Color)	Ống hút màu (màu đầu tiên)
+	Color Picker (Last Color)	Ống hút màu (màu cuối cùng)
+	Pick a Palette Colour From the Image	Chọn một màu bảng màu từ hình ảnh
+	Table Color	Màu bảng
+	Palette Color	Màu bảng màu

@@ -4133,3 +4133,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kolor punktu
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ustaw jako przezroczyste
+	{count} transparent pixels were made opaque	{count} przezroczystych pikseli stało się nieprzezroczystych
+	Clear Transparency	Usuń przezroczystość
+	Color Picker (First Color)	Próbnik kolorów (pierwszy kolor)
+	Color Picker (Last Color)	Próbnik kolorów (ostatni kolor)
+	Pick a Palette Colour From the Image	Wybierz kolor palety z obrazu
+	Table Color	Kolor tabeli
+	Palette Color	Kolor palety

@@ -1577,6 +1577,120 @@ fn replace_color_result_swatch_sets_the_sliders() {
     assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["lightness"], json!(10.0));
 }
 
+/// Indexed Color's Custom palette eyedropper samples the merged image and highlights the
+/// matching entry (exact or nearest), like Replace Color's From-colour picker.
+#[test]
+fn palette_eyedropper_samples_the_image() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let id = open(&mut app, "image.mode.indexedColor").unwrap();
+    {
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("palette".into(), json!("custom"));
+        f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+    }
+    assert!(!palette_eyedropper_armed(&app));
+    app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+    assert!(palette_eyedropper_armed(&app));
+    // Exact match: the green image maps to palette entry 1.
+    assert!(palette_eyedropper_sample(&mut app, 4.0, 4.0));
+    assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+    // Off-image: consumed, nothing changes and the eyedropper stays armed.
+    assert!(palette_eyedropper_sample(&mut app, -1.0, 4.0));
+    assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+    assert!(palette_eyedropper_armed(&app));
+    // Disarmed, the dialog never claims the click.
+    app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(false));
+    assert!(!palette_eyedropper_armed(&app));
+    assert!(!palette_eyedropper_sample(&mut app, 4.0, 4.0));
+
+    // Armed in Custom…, then switched to a preset: the grid is gone, so the surviving flag
+    // must not arm an invisible eyedropper that would swallow canvas clicks.
+    app.ui.dialog_mut(id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+    assert!(palette_eyedropper_armed(&app), "armed while Custom");
+    app.ui.dialog_mut(id).unwrap().fields.insert("palette".into(), json!("systemMac"));
+    assert!(!palette_eyedropper_armed(&app), "a preset has no grid to highlight");
+    assert!(!palette_eyedropper_sample(&mut app, 4.0, 4.0), "the click is not consumed");
+
+    // Also works in the Color Table dialog (when the image is already in Indexed Color mode).
+    app.session.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+    app.ui.close_dialog(id);
+    let ct_id = open(&mut app, "image.mode.colorTable").unwrap();
+    assert!(!palette_eyedropper_armed(&app));
+    app.ui.dialog_mut(ct_id).unwrap().fields.insert(PALETTE_EYEDROPPER.into(), json!(true));
+    assert!(palette_eyedropper_armed(&app));
+    assert!(palette_eyedropper_sample(&mut app, 4.0, 4.0));
+    assert_eq!(app.ui.dialogs.last().unwrap().fields[PALETTE_HIGHLIGHT], json!(1));
+}
+
+/// Indexed Color (Custom…) and Color Table both have Set Transparent and Color Picker buttons.
+#[test]
+fn indexed_color_dialog_arms_transparent_and_palette_eyedropper() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.mode.indexedColor").unwrap();
+    {
+        let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        f.insert("palette".into(), json!("custom"));
+        f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+    }
+    h.run_steps(3);
+    let armed = |app: &PhotocraftApp| app.ui.dialogs.last().unwrap().fields.get(TRANSPARENT_PICK).and_then(Value::as_bool) == Some(true);
+    assert!(!armed(h.state()));
+    // The custom grid makes the body scroll; click via accesskit (works off-viewport).
+    h.get_by_label("Set Transparent").click_accesskit();
+    h.run_steps(2);
+    assert!(armed(h.state()), "the Set Transparent button arms the pick");
+    h.get_by_label("Set Transparent").click_accesskit();
+    h.run_steps(2);
+    assert!(!armed(h.state()), "clicking again disarms it");
+    h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+    h.run_steps(2);
+    assert!(palette_eyedropper_armed(h.state()), "the pipette arms the palette eyedropper");
+    h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+    h.run_steps(2);
+    assert!(!palette_eyedropper_armed(h.state()));
+
+    // Open Color Table on an Indexed Color document: both buttons are available there too.
+    h.state_mut().ui.close_dialog(id);
+    h.state_mut().session.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+    let _ct_id = open(h.state_mut(), "image.mode.colorTable").unwrap();
+    h.run_steps(3);
+    h.get_by_label("Set Transparent").click_accesskit();
+    h.run_steps(2);
+    assert!(armed(h.state()), "Color Table's Set Transparent button arms the pick");
+    h.get_by_label("Pick a Palette Colour From the Image").click_accesskit();
+    h.run_steps(2);
+    assert!(palette_eyedropper_armed(h.state()), "Color Table's pipette arms the palette eyedropper");
+}
+
+/// Indexed Color's transparent entry reaches the command when set; private pick fields never leak.
+#[test]
+fn indexed_color_params_include_transparent_when_set() {
+    let mut f = Map::new();
+    f.insert("__command".into(), json!("image.mode.indexedColor"));
+    f.insert("palette".into(), json!("custom"));
+    f.insert(crate::palette_file_ui::CUSTOM_FIELD.into(), json!(["#ff0000", "#00ff00"]));
+    assert!(!params_of(&f).as_object().unwrap().contains_key("transparent"), "absent until set");
+    f.insert("transparent".into(), json!(1));
+    assert_eq!(params_of(&f)["transparent"].as_u64(), Some(1));
+    f.insert(PALETTE_EYEDROPPER.into(), json!(true));
+    f.insert(TRANSPARENT_PICK.into(), json!(true));
+    f.insert(PALETTE_HIGHLIGHT.into(), json!(0));
+    let params_value = params_of(&f);
+    let params = params_value.as_object().unwrap();
+    assert!(!params.contains_key(PALETTE_EYEDROPPER));
+    assert!(!params.contains_key(TRANSPARENT_PICK));
+    assert!(!params.contains_key(PALETTE_HIGHLIGHT));
+}
+
 /// #4457: Localized Color Clusters and its Range, as in Photoshop's dialog; the sampled point
 /// and both settings reach the command.
 #[test]
