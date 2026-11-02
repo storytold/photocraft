@@ -35,6 +35,15 @@ fn relative_texture_and_project_paths_preserve_the_original_export_destination()
         restored.execute("uv.project.load", json!({"path":project.strip_prefix(&cwd).unwrap()})).unwrap();
         let export = restored.execute("file.uv.saveAllTextures", json!({})).unwrap();
         assert_eq!(export["saved"], if local { 1 } else { 0 }, "{export}");
+        if local {
+            let exported = std::fs::read(&texture).unwrap();
+            assert_ne!(exported, checker, "local export should replace the original map.png contents");
+            let decoded = photocraft_codecs::decode(&exported).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+            assert!(
+                decoded.data().chunks_exact(4).all(|pixel| pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40 && pixel[3] > 200),
+                "local export should write the edited red color pixel"
+            );
+        }
         if !local {
             assert_eq!(std::fs::read(other_texture).unwrap(), checker);
             assert_eq!(std::fs::read(texture).unwrap(), checker);

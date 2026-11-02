@@ -31,7 +31,7 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
                 .canonicalize()
                 .is_ok_and(|resolved| resolved.as_path() == original_identity.as_path() && resolved.starts_with(root) && resolved.is_file())
         {
-            errors.push(format!("{path}: texture destination no longer resolves inside the project; rebind it before exporting"));
+            errors.push(format!("{path}: texture destination no longer resolves to its original location; rebind it before exporting"));
             continue;
         }
         if bound_destinations.iter().any(|(id, bound_path)| *id != st.doc.id && crate::file_cmds::same_file(bound_path, &destination)) {
@@ -72,6 +72,46 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn imported_texture_export_rejects_a_removed_or_redirected_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_dir = temp.path().join("model");
+        std::fs::create_dir(&model_dir).unwrap();
+        let source = model_dir.join("mesh.obj");
+        let texture = model_dir.join("map.png");
+        std::fs::write(&source, "mtllib mesh.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl Painted\nf 1/1 2/2 3/3\n").unwrap();
+        std::fs::write(model_dir.join("mesh.mtl"), "newmtl Painted\nmap_Kd map.png\n").unwrap();
+        let original = include_bytes!("../../uv/tests/fixtures/checker.png");
+        std::fs::write(&texture, original).unwrap();
+        let mut session = Session::new();
+        session.execute("uv.model.import", json!({"path":source})).unwrap();
+        session.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+        assert!(session.uv.project_export_guards.contains_key(&session.active().unwrap().doc.id));
+        std::fs::remove_file(&texture).unwrap();
+        let missing = session.execute("file.uv.saveAllTextures", json!({})).unwrap();
+        assert_eq!(missing["saved"], 0);
+        assert_eq!(missing["errors"].as_array().unwrap().len(), 1);
+        assert!(session.uv.needs_export(session.active().unwrap()));
+        let outside = temp.path().join("unrelated.png");
+        std::fs::write(&outside, original).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &texture).unwrap();
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_file(&outside, &texture) {
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("Skipping Windows symbolic-link portion: Developer Mode or elevation is required");
+                return;
+            }
+            panic!("Could not create test symlink: {error}");
+        }
+        let redirected = session.execute("file.uv.saveAllTextures", json!({})).unwrap();
+        assert_eq!(redirected["saved"], 0);
+        assert_eq!(redirected["errors"].as_array().unwrap().len(), 1);
+        assert_eq!(std::fs::read(outside).unwrap(), original);
+        assert!(session.uv.needs_export(session.active().unwrap()));
+    }
+
     #[test]
     fn uv_save_all_writes_only_dirty_bound_maps_deduplicates_and_retains_failed_work() {
         let mut s = Session::new();

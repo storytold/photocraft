@@ -399,11 +399,16 @@ mod container_tests {
         let mut session = photocraft_engine::Session::new();
         session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
         session.execute("uv.model.import", json!({"path":source})).unwrap();
+        session.execute("uv.texture.create", json!({"width":32,"height":32})).unwrap();
         session.execute("uv.project.save", json!({"path":project})).unwrap();
 
         let mut restored = photocraft_engine::Session::new();
         restored.execute("uv.workspace.activate", json!({"active":true})).unwrap();
         restored.execute("uv.project.load", json!({"path":project})).unwrap();
+        let owner = restored.uv.map_bindings(Channel::Color)[0].unwrap();
+        let owner_index = restored.documents().iter().position(|document| document.doc.id == owner).unwrap();
+        assert!(restored.set_active(owner_index));
+        restored.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
         assert!(!restored.uv.source_authorized);
         assert_eq!(restored.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], false);
 
@@ -412,7 +417,7 @@ mod container_tests {
         app.ui.workspace = "3D".into();
         crate::menus::apply_workspace(&mut app);
         app.ui.uv_workbench.selected_polygons = std::collections::BTreeSet::from([0, 1]);
-        app.ui.uv_workbench.polygon_document = Some(photocraft_doc::DocId(123));
+        app.ui.uv_workbench.polygon_document = Some(owner);
         let ctx = egui::Context::default();
         assert!(crate::uv_workspace::menu(&mut app, "file.uv.reimport").unwrap().is_ok());
         app.poll_file_dialog(&ctx, None);
@@ -426,10 +431,36 @@ mod container_tests {
         assert_eq!(app.session.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], true);
 
         app.ui.uv_workbench.selected_polygons = std::collections::BTreeSet::from([2, 3]);
-        app.ui.uv_workbench.polygon_document = Some(photocraft_doc::DocId(456));
+        app.ui.uv_workbench.polygon_document = Some(owner);
         crate::uv_ui::reimport(&mut app);
         assert!(app.ui.uv_workbench.selected_polygons.is_empty());
         assert_eq!(app.ui.uv_workbench.polygon_document, None);
+
+        let select_live_owner = |app: &mut PhotocraftApp| {
+            assert!(app.session.documents().iter().any(|document| document.doc.id == owner));
+            app.ui.uv_workbench.selected_polygons = std::collections::BTreeSet::from([0, 1]);
+            app.ui.uv_workbench.polygon_document = Some(owner);
+        };
+        select_live_owner(&mut app);
+        app.uv_cache.project.approved_replace = true;
+        app.run("uv.model.import", json!({"path":source})).unwrap();
+        assert!(app.ui.uv_workbench.selected_polygons.is_empty());
+        assert_eq!(app.ui.uv_workbench.polygon_document, None);
+        select_live_owner(&mut app);
+        app.uv_cache.project.approved_replace = true;
+        assert!(app.run("uv.model.import", json!({"path":temp.path().join("missing.obj")})).is_err());
+        assert_eq!(app.ui.uv_workbench.selected_polygons, std::collections::BTreeSet::from([0, 1]));
+        assert_eq!(app.ui.uv_workbench.polygon_document, Some(owner));
+        select_live_owner(&mut app);
+        app.uv_cache.project.approved_replace = true;
+        app.run("uv.project.load", json!({"path":project})).unwrap();
+        assert!(app.ui.uv_workbench.selected_polygons.is_empty());
+        assert_eq!(app.ui.uv_workbench.polygon_document, None);
+        select_live_owner(&mut app);
+        app.uv_cache.project.approved_replace = true;
+        assert!(app.run("uv.project.load", json!({"path":temp.path().join("missing.pcuv")})).is_err());
+        assert_eq!(app.ui.uv_workbench.selected_polygons, std::collections::BTreeSet::from([0, 1]));
+        assert_eq!(app.ui.uv_workbench.polygon_document, Some(owner));
     }
 
     fn app() -> PhotocraftApp {

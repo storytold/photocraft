@@ -8,18 +8,32 @@ fn relative_model_filename_loads_material_and_discovered_textures() {
     if std::env::var_os(CHILD).is_some() {
         let absolute = std::env::current_dir().unwrap().join("mesh.obj").to_string_lossy().into_owned();
         for source in ["mesh.obj", "./mesh.obj", &absolute] {
+            std::fs::write("checker.png", include_bytes!("../../uv/tests/fixtures/checker.png")).unwrap();
             let mut s = Session::new();
             s.execute("uv.model.import", json!({"path":source})).unwrap();
             let material = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "Painted").unwrap();
             assert!(s.uv.bindings[material].is_some(), "MTL color texture missing for {source}");
             assert!(s.uv.normal_bindings[material].is_some(), "Discovered normal texture missing for {source}");
             assert_eq!(s.documents().len(), 2);
+            let color = s.uv.map_bindings(photocraft_uv::preview::Channel::Color)[material].unwrap();
+            let color_index = s.documents().iter().position(|document| document.doc.id == color).unwrap();
+            assert!(s.set_active(color_index));
             s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
             s.execute("uv.project.save", json!({"path":"scene.pcuv"})).unwrap();
             let mut restored = Session::new();
             restored.execute("uv.project.load", json!({"path":"scene.pcuv"})).unwrap();
+            let color = restored.uv.map_bindings(photocraft_uv::preview::Channel::Color)[material].unwrap();
+            let color_index = restored.documents().iter().position(|document| document.doc.id == color).unwrap();
+            assert!(restored.set_active(color_index));
             let export = restored.execute("file.uv.saveAllTextures", json!({})).unwrap();
             assert_eq!(export["saved"], 1, "Imported texture destination was lost after restore for {source}: {export}");
+            let exported = photocraft_codecs::decode(&std::fs::read("checker.png").unwrap())
+                .unwrap()
+                .convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+            assert!(
+                exported.data().chunks_exact(4).all(|pixel| pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40 && pixel[3] > 200),
+                "exported color texture did not retain the full red fill for {source}"
+            );
         }
         return;
     }

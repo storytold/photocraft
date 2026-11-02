@@ -167,7 +167,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
         None if s.uv.source_authorized && !s.uv.source.is_empty() => (s.uv.source.clone(), true),
         None => return Err(EngineError::Other("Choose the source model again before reimporting".into())),
     };
-    let (mut scene, stamp) = crate::uv_cmds::load_scene(&source, uv_set)?;
+    let (mut scene, stamp, _directory) = crate::uv_cmds::load_scene(&source, uv_set)?;
     let topology = photocraft_uv::topology::Topology::build(&scene).map_err(|e| EngineError::Other(e.to_string()))?;
     let uv_changed = uv_geometry_changed(s.uv.uv_set, uv_set, old, &scene);
     let mut old_names = BTreeMap::<&str, Vec<usize>>::new();

@@ -30,9 +30,8 @@ fn require_active_uv_bank(session: &Session) -> Result<()> {
 pub struct UvState {
     /// Restored external destinations require explicit rebinding before texture writeback.
     pub(crate) blocked_exports: std::collections::HashSet<DocId>,
-    /// In-project texture destinations restored from a project must keep resolving inside that
-    /// project before writeback. The original path distinguishes an explicit rebind from a
-    /// symlink that was redirected after the project was loaded.
+    /// Automatically imported and restored texture destinations must keep their original
+    /// canonical target before writeback. A changed document path denotes an explicit rebind.
     pub(crate) project_export_guards: std::collections::HashMap<DocId, (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)>,
     /// Opaque, bounded view metadata; camera/UI types stay above the engine layer.
     pub project_view: Value,
@@ -379,29 +378,6 @@ fn unsafe_model_reference(name: &str) -> bool {
     is_network_or_device_path(name) || normalized.starts_with('/') || name.contains(':') || name.contains('\0')
 }
 
-/// Resolve a regular file below a trusted, canonical directory without following any child
-/// symlink or junction. Each ancestor is checked before descending into it.
-fn regular_file_beneath(root: &Path, relative: &Path) -> Option<PathBuf> {
-    let components: Vec<_> = relative.components().collect();
-    if components.is_empty() || components.iter().any(|component| !matches!(component, std::path::Component::Normal(_))) {
-        return None;
-    }
-    let mut resolved = root.to_path_buf();
-    for (index, component) in components.iter().enumerate() {
-        let std::path::Component::Normal(name) = component else { return None };
-        resolved.push(name);
-        let metadata = std::fs::symlink_metadata(&resolved).ok()?;
-        if metadata.file_type().is_symlink() {
-            return None;
-        }
-        let is_last = index + 1 == components.len();
-        if (is_last && !metadata.is_file()) || (!is_last && !metadata.is_dir()) {
-            return None;
-        }
-    }
-    Some(resolved)
-}
-
 /// Restore only a lexical in-project texture destination. Do not touch the path here: it came
 /// from serialized project data. The explicit export command checks canonical identity again.
 fn restored_project_texture_path(project_directory: &Path, canonical_project_directory: &Path, source: &str) -> Option<(PathBuf, PathBuf)> {
@@ -423,117 +399,142 @@ fn restored_project_texture_path(project_directory: &Path, canonical_project_dir
     Some((project_directory.join(relative), canonical_project_directory.join(relative)))
 }
 
-/// Resolve model-provided references only to regular files within the model directory.
+/// A single directory capability shared by model parsing, discovery and texture decoding.
+/// Its handle remains anchored even if the user-facing model path is later redirected.
+pub(super) struct ModelDirectory {
+    directory: PathBuf,
+    canonical: PathBuf,
+    #[cfg(not(target_arch = "wasm32"))]
+    handle: cap_std::fs::Dir,
+}
+impl ModelDirectory {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn new(source: &str) -> Result<Self> {
+        let directory = std::path::absolute(model_directory(source)).map_err(|e| err(e.to_string()))?;
+        let canonical = directory.canonicalize().map_err(|e| err(e.to_string()))?;
+        let handle = cap_std::fs::Dir::open_ambient_dir(&canonical, cap_std::ambient_authority()).map_err(|e| err(e.to_string()))?;
+        Ok(Self { directory, canonical, handle })
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn new(_source: &str) -> Result<Self> {
+        Err(err("UV file import is available in native builds only"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_relative(&self, relative: &Path) -> std::io::Result<std::fs::File> {
+        use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+        let parts: Vec<_> = relative.components().collect();
+        if parts.is_empty() || parts.iter().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+            return Err(std::io::Error::other("Invalid model texture path"));
+        }
+        let mut directory = self.handle.try_clone()?;
+        for (index, part) in parts.iter().enumerate() {
+            let std::path::Component::Normal(name) = part else {
+                return Err(std::io::Error::other("Invalid model texture path"));
+            };
+            if index + 1 == parts.len() {
+                let mut options = cap_std::fs::OpenOptions::new();
+                options.read(true).follow(FollowSymlinks::No);
+                #[cfg(unix)]
+                {
+                    use cap_std::fs::OpenOptionsExt;
+                    options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+                }
+                let file = directory.open_with(name, &options)?;
+                if !file.metadata()?.is_file() {
+                    return Err(std::io::Error::other("UV input must be a regular file"));
+                }
+                return Ok(file.into_std());
+            }
+            directory = directory.open_dir_nofollow(name)?;
+        }
+        Err(std::io::Error::other("Missing model texture filename"))
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn open_relative(&self, _relative: &Path) -> std::io::Result<std::fs::File> {
+        Err(std::io::Error::other("UV file import is available in native builds only"))
+    }
+    fn resolve(&self, name: &str) -> String {
+        if unsafe_model_reference(name) {
+            return String::new();
+        }
+        let name = name.replace('\\', "/");
+        let relative = Path::new(&name);
+        for relative in std::iter::once(relative).chain(relative.file_name().map(Path::new)) {
+            if self.open_relative(relative).is_ok() {
+                return self.directory.join(relative).to_string_lossy().into_owned();
+            }
+        }
+        String::new()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        let relative = Path::new(path).strip_prefix(&self.directory).map_err(|_| err("Texture must stay inside the model directory"))?;
+        let file = self.open_relative(relative).map_err(|e| err(e.to_string()))?;
+        read_opened_file(file, photocraft_uv::MAX_FILE_BYTES)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        read(path)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sibling_files(&self) -> std::io::Result<(Vec<PathBuf>, bool)> {
+        let mut files = Vec::new();
+        for (index, entry) in self.handle.entries()?.take(4097).enumerate() {
+            if index == 4096 {
+                return Ok((Vec::new(), true));
+            }
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                files.push(PathBuf::from(entry.file_name()));
+            }
+        }
+        Ok((files, false))
+    }
+    fn export_guard(&self, path: &str) -> Option<(PathBuf, PathBuf, PathBuf)> {
+        let original = PathBuf::from(path);
+        let relative = original.strip_prefix(&self.directory).ok()?;
+        if relative.as_os_str().is_empty() || relative.components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+            return None;
+        }
+        // Capture the actual spelling through the pinned capability (not the mutable ambient
+        // alias), including Windows filename casing. An unavailable target still gets a guard
+        // whose later validation fails rather than becoming an unrestricted destination.
+        #[cfg(not(target_arch = "wasm32"))]
+        let identity = self.handle.canonicalize(relative).map(|path| self.canonical.join(path)).unwrap_or_else(|_| self.canonical.join(relative));
+        #[cfg(target_arch = "wasm32")]
+        let identity = self.canonical.join(relative);
+        Some((self.canonical.clone(), original.clone(), identity))
+    }
+}
+#[cfg(test)]
 fn resolved(source: &str, name: &str) -> String {
-    if unsafe_model_reference(name) {
-        return String::new();
-    }
-    let Ok(directory) = std::path::absolute(model_directory(source)) else { return String::new() };
-    let Ok(base) = directory.canonicalize() else { return String::new() };
-    let name = name.replace('\\', "/");
-    let relative = Path::new(&name);
-    let nearby = relative.file_name().map(Path::new);
-    for relative in std::iter::once(relative).chain(nearby) {
-        if regular_file_beneath(&base, relative).is_some() {
-            // Keep the user's absolute spelling for project provenance. In particular,
-            // Windows canonical paths contain a device prefix that serialized input rejects.
-            return directory.join(relative).to_string_lossy().into_owned();
-        }
-    }
-    String::new()
+    ModelDirectory::new(source).map_or_else(|_| String::new(), |directory| directory.resolve(name))
 }
-
-/// Open each component through a pinned directory, refusing links before reading any bytes.
-/// The returned file remains pinned even if its pathname changes after this function returns.
-#[cfg(unix)]
-fn open_model_texture(path: &Path) -> std::io::Result<std::fs::File> {
-    use rustix::fs::{Mode, OFlags, open, openat};
-    let mut directory = open("/", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?;
-    let parts: Vec<_> = path.components().filter(|part| !matches!(part, std::path::Component::RootDir)).collect();
-    for (index, part) in parts.iter().enumerate() {
-        let std::path::Component::Normal(name) = part else {
-            return Err(std::io::Error::other("Invalid model texture path"));
-        };
-        let last = index + 1 == parts.len();
-        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | if last { OFlags::NONBLOCK } else { OFlags::DIRECTORY };
-        let opened = openat(&directory, *name, flags, Mode::empty())?;
-        if last {
-            return Ok(opened.into());
-        }
-        directory = opened;
-    }
-    Err(std::io::Error::other("Missing model texture filename"))
-}
-
-#[cfg(windows)]
-fn open_model_texture(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    let mut current = PathBuf::new();
-    let mut pinned_directories = Vec::new();
-    let parts: Vec<_> = path.components().collect();
-    for (index, part) in parts.iter().enumerate() {
-        current.push(part.as_os_str());
-        if matches!(part, std::path::Component::Prefix(_)) {
-            continue;
-        }
-        if !matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)) {
-            return Err(std::io::Error::other("Invalid model texture path"));
-        }
-        // OPEN_REPARSE_POINT inspects the link itself; omit FILE_SHARE_DELETE so validated
-        // ancestors cannot be replaced until the final file handle has been opened.
-        let file = std::fs::OpenOptions::new().read(true).share_mode(0x1 | 0x2).custom_flags(0x00200000 | 0x02000000).open(&current)?;
-        let metadata = file.metadata()?;
-        if metadata.file_type().is_symlink() {
-            return Err(std::io::Error::other("Model textures cannot follow symbolic links"));
-        }
-        if index + 1 == parts.len() {
-            return Ok(file);
-        }
-        if !metadata.is_dir() {
-            return Err(std::io::Error::other("Model texture parent must be a directory"));
-        }
-        pinned_directories.push(file);
-    }
-    Err(std::io::Error::other("Missing model texture filename"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
 fn read_model_texture(source: &str, path: &str) -> Result<Vec<u8>> {
-    let directory = std::path::absolute(model_directory(source)).map_err(|e| err(e.to_string()))?;
-    let root = directory.canonicalize().map_err(|e| err(e.to_string()))?;
-    let relative = Path::new(path).strip_prefix(&directory).map_err(|_| err("Texture must stay inside the model directory"))?;
-    if relative.components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
-        return Err(err("Invalid model texture path"));
-    }
-    let file = open_model_texture(&root.join(relative)).map_err(|e| err(e.to_string()))?;
-    read_opened_file(file, photocraft_uv::MAX_FILE_BYTES)
+    ModelDirectory::new(source)?.read(path)
 }
-#[cfg(target_arch = "wasm32")]
-fn read_model_texture(_source: &str, path: &str) -> Result<Vec<u8>> {
-    read(path)
-}
-
-pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<crate::uv_reload_cmds::SourceStamp>)> {
+pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<crate::uv_reload_cmds::SourceStamp>, ModelDirectory)> {
     validate_model_path(source)?;
+    let directory = ModelDirectory::new(source)?;
     let stamp = crate::uv_reload_cmds::SourceStamp::read(source)?;
-    let bytes = read(source)?;
-    let mut scene = photocraft_uv::import::load(source, &bytes, uv_set, |name| {
-        read_model_texture(source, &resolved(source, name)).map_err(|e| photocraft_uv::Error(e.to_string()))
-    })
-    .map_err(|e| err(e.to_string()))?;
+    let filename = Path::new(source).file_name().ok_or_else(|| err("Missing model filename"))?;
+    let bytes = directory.read(&directory.directory.join(filename).to_string_lossy())?;
+    let mut scene =
+        photocraft_uv::import::load(source, &bytes, uv_set, |name| directory.read(&directory.resolve(name)).map_err(|e| photocraft_uv::Error(e.to_string())))
+            .map_err(|e| err(e.to_string()))?;
     // Only unambiguous names: material-prefixed siblings, or bare channel names
     // when exactly one material is used. Never guess between multiple candidates.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let used: BTreeSet<_> = scene.triangles.iter().map(|t| t.material).collect();
-        let base = model_directory(source);
-        let files: Vec<_> = std::fs::read_dir(base)
-            .into_iter()
-            .flatten()
-            .filter_map(std::result::Result::ok)
-            .take(4096)
-            .filter_map(|entry| entry.file_type().ok().filter(|kind| kind.is_file()).map(|_| entry.path()))
-            .collect();
+        let files = match directory.sibling_files() {
+            Ok((files, false)) => files,
+            _ => {
+                scene.warnings.push("Sibling texture discovery skipped: directory listing is incomplete or exceeds 4096 entries".into());
+                Vec::new()
+            }
+        };
         for (i, m) in scene.materials.iter_mut().enumerate().filter(|(i, _)| used.contains(i)) {
             let _ = i;
             for (kind, aliases) in [
@@ -582,33 +583,33 @@ pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<c
     }
     for m in &mut scene.materials {
         for name in m.maps.values_mut() {
-            *name = resolved(source, name);
+            *name = directory.resolve(name);
         }
         if let Some(name) = &m.normal_map {
-            m.normal_map = Some(resolved(source, name));
+            m.normal_map = Some(directory.resolve(name));
         }
         if let Some(name) = &m.base_color {
-            m.base_color = Some(resolved(source, name));
+            m.base_color = Some(directory.resolve(name));
         }
     }
     if crate::uv_reload_cmds::SourceStamp::read(source)? != stamp {
         return Err(err("The model changed while being read; wait for the export to finish and retry"));
     }
-    Ok((scene, stamp))
+    Ok((scene, stamp, directory))
 }
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     require_active_uv_bank(s)?;
     let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
     let source = model_path(p)?;
     let uv_set = uint(p, "uvSet", 0)?;
-    let (mut scene, source_stamp) = load_scene(&source, uv_set)?;
+    let (mut scene, source_stamp, directory) = load_scene(&source, uv_set)?;
     let topology = Topology::build(&scene).map_err(|e| err(e.to_string()))?;
     let mut documents = Vec::new();
     // Decode everything before mutating the session; missing textures stay unbound, never
     // aborting an otherwise valid mesh import.
     for (i, m) in scene.materials.iter().enumerate() {
         for (normal, filename, embedded) in [(false, &m.base_color, &m.embedded), (true, &m.normal_map, &m.embedded_normal)] {
-            let Some(bytes) = embedded.clone().or_else(|| filename.as_ref().and_then(|p| read_model_texture(&source, p).ok()).map(Arc::<[u8]>::from)) else {
+            let Some(bytes) = embedded.clone().or_else(|| filename.as_ref().and_then(|p| directory.read(p).ok()).map(Arc::<[u8]>::from)) else {
                 if let Some(path) = filename {
                     scene.warnings.push(format!("{}: missing texture {path}; assign a replacement", m.name));
                 }
@@ -631,6 +632,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let mut bindings = vec![None; scene.materials.len()];
     let mut normal_bindings = vec![None; scene.materials.len()];
     let mut opened = std::collections::BTreeMap::<String, DocId>::new();
+    let mut project_export_guards = std::collections::HashMap::new();
     for (i, normal, doc, path) in documents {
         let target = if normal { &mut normal_bindings } else { &mut bindings };
         if let Some(id) = path.as_ref().and_then(|p| opened.get(p)).copied() {
@@ -646,6 +648,9 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         {
             *b = Some(id);
             if let Some(path) = source_path {
+                if let Some(guard) = directory.export_guard(&path) {
+                    project_export_guards.insert(id, guard);
+                }
                 opened.insert(path, id);
             }
         }
@@ -661,7 +666,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 continue;
             }
-            match read_model_texture(&source, path).and_then(|bytes| photocraft_io::import(path, &bytes).map_err(|e| err(e.to_string()))) {
+            match directory.read(path).and_then(|bytes| photocraft_io::import(path, &bytes).map_err(|e| err(e.to_string()))) {
                 Ok(imported) if !imported.preview_only => {
                     let index = s.add_document(imported.document, (!imported.source_read_only).then(|| path.clone()));
                     if let Some(id) = s.documents().get(index).map(|st| st.doc.id) {
@@ -669,6 +674,11 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                             *slot = Some(id);
                         }
                         opened.insert(path.clone(), id);
+                        if !imported.source_read_only
+                            && let Some(guard) = directory.export_guard(path)
+                        {
+                            project_export_guards.insert(id, guard);
+                        }
                     }
                 }
                 _ => scene.warnings.push(format!("{}: cannot load {} map {path}", m.name, kind.label())),
@@ -683,6 +693,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let scene = Arc::new(scene);
     let wrap_mesh = photocraft_uv::wrap::Mesh::new(&scene).ok().map(Arc::new);
     s.uv = UvState {
+        project_export_guards,
         scene: Some(scene),
         topology: Some(Arc::new(topology)),
         wrap_mesh,
@@ -1708,6 +1719,91 @@ mod asset_path_tests {
         std::fs::remove_file(&texture).unwrap();
         std::os::unix::fs::symlink(outside, texture).unwrap();
         assert!(super::read_model_texture(source, &resolved).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn model_texture_replaced_by_a_windows_link_after_resolution_is_not_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let model_dir = temp.path().join("model");
+        std::fs::create_dir(&model_dir).unwrap();
+        let source = model_dir.join("mesh.obj");
+        let texture = model_dir.join("map.png");
+        std::fs::write(&texture, b"inside").unwrap();
+        let source = source.to_str().unwrap();
+        let resolved = super::resolved(source, "map.png");
+        assert!(!resolved.is_empty());
+        let outside = temp.path().join("private.png");
+        std::fs::write(&outside, b"outside").unwrap();
+        std::fs::remove_file(&texture).unwrap();
+        if let Err(error) = std::os::windows::fs::symlink_file(outside, texture) {
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("Skipping Windows symbolic-link test: Developer Mode or elevation is required");
+                return;
+            }
+            panic!("Could not create test symlink: {error}");
+        }
+        assert!(super::read_model_texture(source, &resolved).is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn model_directory_stays_pinned_when_its_parent_link_is_retargeted() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::fs::write(first.join("map.png"), b"original").unwrap();
+        std::fs::write(second.join("map.png"), b"redirected").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&first, &alias).unwrap();
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_dir(&first, &alias) {
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("Skipping Windows symbolic-link test: Developer Mode or elevation is required");
+                return;
+            }
+            panic!("Could not create test directory symlink: {error}");
+        }
+        let directory = super::ModelDirectory::new(alias.join("mesh.obj").to_str().unwrap()).unwrap();
+        let path = directory.resolve("map.png");
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&alias).unwrap();
+            std::os::unix::fs::symlink(&second, &alias).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            std::fs::remove_dir(&alias).unwrap();
+            std::os::windows::fs::symlink_dir(&second, &alias).unwrap();
+        }
+        assert_eq!(directory.read(&path).unwrap(), b"original");
+        assert_eq!(directory.resolve("map.png"), path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn incomplete_sibling_listing_does_not_select_a_texture() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("mesh.obj");
+        std::fs::write(&source, "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl Painted\nf 1/1 2/2 3/3\n").unwrap();
+        std::fs::write(temp.path().join("Painted_color.png"), include_bytes!("../../uv/tests/fixtures/checker.png")).unwrap();
+        for index in 0..4094 {
+            std::fs::write(temp.path().join(format!("extra-{index}")), b"").unwrap();
+        }
+        let directory = super::ModelDirectory::new(source.to_str().unwrap()).unwrap();
+        let (files, overflow) = directory.sibling_files().unwrap();
+        assert!(!overflow);
+        assert_eq!(files.len(), 4096);
+        std::fs::write(temp.path().join("Painted_albedo.png"), include_bytes!("../../uv/tests/fixtures/checker.png")).unwrap();
+        let (files, overflow) = directory.sibling_files().unwrap();
+        assert!(overflow);
+        assert!(files.is_empty());
+        let (scene, _, _) = super::load_scene(source.to_str().unwrap(), 0).unwrap();
+        assert!(scene.materials.iter().all(|material| material.base_color.is_none()));
+        assert!(scene.warnings.iter().any(|warning| warning.contains("4096 entries")));
     }
 
     #[test]

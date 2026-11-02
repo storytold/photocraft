@@ -322,7 +322,6 @@ pub(crate) fn reimport(app: &mut PhotocraftApp) {
     finish_paint(app);
     match app.run("uv.model.reimport", json!({"uvSet":app.ui.uv_workbench.uv_set})) {
         Ok(result) => {
-            clear_polygon_selection(app);
             app.ui.uv_workbench.overlap.clear();
             let message: String = if result["uvChanged"] == true {
                 tl!("Mesh reimported. UVs changed: check existing seam protection masks.").into()
@@ -1022,9 +1021,6 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
         match &result {
             Ok(_) => {
                 app.ui.uv_workbench.status.clear();
-                if kind == "model" || kind == "reimport" || kind == "project" {
-                    clear_polygon_selection(app);
-                }
                 if kind == "model" || kind == "reimport" {
                     app.ui.uv_workbench.model_path = path.clone();
                     app.ui.uv_workbench.view_3d = true;

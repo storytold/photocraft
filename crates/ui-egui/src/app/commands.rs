@@ -115,6 +115,10 @@ impl PhotocraftApp {
             self.ui.uv_workbench.status.clear();
             self.uv_cache.mask_settings_pending = false;
         }
+        #[cfg(feature = "uv-workbench")]
+        if result.is_ok() && matches!(id, "uv.model.import" | "uv.model.reimport" | "uv.project.load") {
+            crate::uv_ui::clear_polygon_selection(self);
+        }
         result
     }
 
