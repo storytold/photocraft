@@ -374,3 +374,24 @@ fn select_subject_takes_its_edge_from_vitmatte_when_served() {
     assert!(m.read_region(Rect::new(0, 0, 1, 1))[0] < 0.01);
     assert!(fake.state().runs.iter().any(|r| r.request["model"] == "vitmatte/refine"), "ViTMatte asked");
 }
+
+#[test]
+fn vitmatte_tiles_a_large_crop_and_feathers_the_overlaps() {
+    // A crop wider than one tile goes out in overlapping tiles at full size; tiles without
+    // unknown pixels are not sent; the overlap blends to the same constant.
+    let fake = FakeNative::start().unwrap();
+    let backend = crate::generate_cmds::backend_for(&session(&fake.url), VITMATTE_TEMPLATE).unwrap().0;
+    let (cw, ch) = (2000usize, 300usize);
+    let px = vec![128u8; cw * ch * 4];
+    let mut tri = vec![255u8; cw * ch];
+    for t in tri.iter_mut().take(cw * 10) {
+        *t = 128;
+    }
+    let ctx = crate::jobs::JobCtx::new();
+    let a = matte_tiles(backend.as_ref(), &px, &tri, cw, ch, (0.0, 1.0), &ctx).unwrap().unwrap();
+    assert_eq!(a.len(), cw * ch);
+    assert!(a.iter().all(|v| (*v - 1.0).abs() < 1e-4), "the fake answers opaque; the trimap's 255 elsewhere");
+    let st = fake.state();
+    let sizes: Vec<_> = st.runs.iter().filter(|r| r.request["model"] == VITMATTE_TEMPLATE).map(|r| r.request["image"]["width"].clone()).collect();
+    assert_eq!(sizes.len(), 3, "three 1024 tiles across 2000 px, overlapping by at least 128: {sizes:?}");
+}

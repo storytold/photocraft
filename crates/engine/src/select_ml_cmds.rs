@@ -1007,71 +1007,111 @@ pub(crate) fn vitmatte_alphas(
                 }
             })
             .collect();
-        // At most MAX_VITMATTE_PIXELS go to the model (its global attention grows with the
-        // square of the tokens); the alpha comes back up to the crop.
-        let (rw, rh) = fit_pixels(cw as u32, ch as u32, MAX_VITMATTE_PIXELS);
-        let image = Rgba8::new(cw as u32, ch as u32, px).map_err(gen_err)?;
-        let tri = Gray8::new(cw as u32, ch as u32, trimap.clone()).map_err(gen_err)?;
-        let (image, tri) = if (rw, rh) == (cw as u32, ch as u32) {
-            (image, tri)
-        } else {
-            let t = resize_gray8(&tri, rw, rh)?;
-            let t = Gray8::new(
-                rw,
-                rh,
-                t.data
-                    .iter()
-                    .map(|v| {
-                        if *v < 64 {
-                            0
-                        } else if *v > 192 {
-                            255
-                        } else {
-                            128
-                        }
-                    })
-                    .collect(),
-            )
-            .map_err(gen_err)?;
-            (resize_rgba8(&image, rw, rh)?, t)
-        };
-        let req = Request {
-            template: VITMATTE_TEMPLATE.to_string(),
-            prompt: String::new(),
-            negative: String::new(),
-            seed: 0,
-            steps: 1,
-            guidance: 0.0,
-            image: Some(image),
-            mask: Some(tri),
-            models: Vec::new(),
-            size: None,
-            params: BTreeMap::new(),
-            references: Vec::new(),
-        };
         let n = instances.len() as f32;
-        let resp = match backend.run(&req, &JobProgress::span(ctx, 0.05 + 0.25 * i as f32 / n, 0.05 + 0.25 * (i + 1) as f32 / n)) {
-            Ok(r) => r,
-            Err(_) if !ctx.cancelled() => return Ok(None),
-            Err(e) => return Err(gen_err(e)),
-        };
-        let Some(out) = resp.images.into_iter().next() else { return Ok(None) };
-        let plane = Gray8::new(out.width, out.height, out.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect()).map_err(gen_err)?;
-        let plane = if (plane.width, plane.height) == (cw as u32, ch as u32) { plane } else { resize_gray8(&plane, cw as u32, ch as u32)? };
+        let span = (0.05 + 0.25 * i as f32 / n, 0.05 + 0.25 * (i + 1) as f32 / n);
+        let Some(plane) = matte_tiles(backend, &px, &trimap, cw, ch, span, ctx)? else { return Ok(None) };
         let mut alpha = vec![0.0f32; w * h];
-        for (k, (a, t)) in plane.data.iter().zip(&trimap).enumerate() {
+        for (k, (a, t)) in plane.iter().zip(&trimap).enumerate() {
             let (x, y) = (crop.x0 as usize + k % cw, crop.y0 as usize + k / cw);
             let other = instances.iter().enumerate().any(|(j, (c, _, _))| j != i && c[y * w + x] >= 0.5) && !on[k];
             alpha[y * w + x] = match (*t, other) {
                 (_, true) | (0, _) => 0.0,
                 (255, _) => 1.0,
-                _ => f32::from(*a) / 255.0,
+                _ => *a,
             };
         }
         alphas.push(alpha);
     }
     Ok(Some(alphas))
 }
+
+/// ViTMatte's alpha (0–1) over a `cw × ch` crop at full resolution: one request when it is
+/// small enough, else overlapping tiles where the trimap has unknown pixels (elsewhere the
+/// trimap is the answer), feathered together across their overlaps. Tiles keep both the
+/// model's memory (its global attention grows with the square of the tokens) and the strands'
+/// sharpness: a 12-megapixel portrait scaled down to one request came back as a 15–25 px ramp
+/// (measured in the app 2026-11-02). `None` when the server fails.
+fn matte_tiles(
+    backend: &dyn photocraft_genai::GenerativeBackend,
+    px: &[u8],
+    trimap: &[u8],
+    cw: usize,
+    ch: usize,
+    (lo, hi): (f32, f32),
+    ctx: &JobCtx,
+) -> Result<Option<Vec<f32>>> {
+    let tiles = |len: usize| -> Vec<(usize, usize)> {
+        if len <= VITMATTE_TILE {
+            return vec![(0, len)];
+        }
+        let step = VITMATTE_TILE - VITMATTE_OVERLAP;
+        let count = (len - VITMATTE_OVERLAP).div_ceil(step);
+        (0..count).map(|k| (k * (len - VITMATTE_TILE) / (count - 1).max(1), VITMATTE_TILE)).collect()
+    };
+    let (xs, ys) = (tiles(cw), tiles(ch));
+    let mut sum = vec![0.0f32; cw * ch];
+    let mut weight = vec![0.0f32; cw * ch];
+    let total = (xs.len() * ys.len()) as f32;
+    for (ti, &(y0, th)) in ys.iter().enumerate() {
+        for (tj, &(x0, tw)) in xs.iter().enumerate() {
+            ctx.check()?;
+            let mut tpx = Vec::with_capacity(tw * th * 4);
+            let mut ttri = Vec::with_capacity(tw * th);
+            for y in y0..y0 + th {
+                tpx.extend_from_slice(&px[(y * cw + x0) * 4..(y * cw + x0 + tw) * 4]);
+                ttri.extend_from_slice(&trimap[y * cw + x0..y * cw + x0 + tw]);
+            }
+            let alpha: Vec<f32> = if ttri.contains(&128) {
+                let req = Request {
+                    template: VITMATTE_TEMPLATE.to_string(),
+                    prompt: String::new(),
+                    negative: String::new(),
+                    seed: 0,
+                    steps: 1,
+                    guidance: 0.0,
+                    image: Some(Rgba8::new(tw as u32, th as u32, tpx).map_err(gen_err)?),
+                    mask: Some(Gray8::new(tw as u32, th as u32, ttri).map_err(gen_err)?),
+                    models: Vec::new(),
+                    size: None,
+                    params: BTreeMap::new(),
+                    references: Vec::new(),
+                };
+                let k = (ti * xs.len() + tj) as f32;
+                let sub = JobProgress::span(ctx, lo + (hi - lo) * k / total, lo + (hi - lo) * (k + 1.0) / total);
+                let resp = match backend.run(&req, &sub) {
+                    Ok(r) => r,
+                    Err(_) if !ctx.cancelled() => return Ok(None),
+                    Err(e) => return Err(gen_err(e)),
+                };
+                let Some(out) = resp.images.into_iter().next() else { return Ok(None) };
+                if (out.width as usize, out.height as usize) != (tw, th) {
+                    return Ok(None);
+                }
+                out.data.as_chunks::<4>().0.iter().map(|p| f32::from(p[3]) / 255.0).collect()
+            } else {
+                ttri.iter().map(|t| f32::from(*t) / 255.0).collect()
+            };
+            // Feathered across the overlaps; full weight at the crop's own edges.
+            let ramp = |d: usize, at_edge: bool| if at_edge { 1.0 } else { ((d as f32 + 1.0) / VITMATTE_OVERLAP as f32).min(1.0) };
+            for ty in 0..th {
+                let wy = ramp(ty, y0 == 0).min(ramp(th - 1 - ty, y0 + th == ch));
+                for tx in 0..tw {
+                    let wx = ramp(tx, x0 == 0).min(ramp(tw - 1 - tx, x0 + tw == cw));
+                    let k = (y0 + ty) * cw + x0 + tx;
+                    let wgt = wx.min(wy);
+                    sum[k] += alpha[ty * tw + tx] * wgt;
+                    weight[k] += wgt;
+                }
+            }
+        }
+    }
+    Ok(Some(sum.iter().zip(&weight).map(|(s, w)| if *w > 0.0 { s / w } else { 0.0 }).collect()))
+}
+
+/// ViTMatte's tile side (it was trained on 512-pixel crops; a 1024 tile is 4096 tokens)...
+const VITMATTE_TILE: usize = 1024;
+/// ...and how far neighbouring tiles overlap.
+const VITMATTE_OVERLAP: usize = 128;
 
 /// How far the unknown band reaches out past a subject's mask, as a fraction of its larger
 /// side (stray hair)...
@@ -1082,8 +1122,6 @@ const MIN_BAND_OUT: f32 = 10.0;
 const BAND_IN: f32 = 0.015;
 /// ...and at least this many pixels.
 const MIN_BAND_IN: f32 = 4.0;
-/// The most pixels one ViTMatte request carries (about 1536 × 1536).
-const MAX_VITMATTE_PIXELS: u64 = 1536 * 1536;
 
 /// The picture a selection reads, canvas-sized RGBA8: the active layer's pixels, or the
 /// composite with `all_layers` (or when the active layer has none).
