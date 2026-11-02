@@ -1653,4 +1653,10 @@ fn a_generative_dialog_never_turns_an_optional_range_into_its_minimum() {
             .all(|p| p.key != "maxPixels" || !matches!(p.kind, Kind::Range { .. })),
         "Split's maxPixels is left to the engine (its 640-px working size), not a slider"
     );
+    // Split's Tries is a real slider whose default is the engine's (one seed; more keep the best).
+    let tries = parse_spec(photocraft_engine::commands::find("generate.splitLayers").map(|c| c.params).unwrap_or_default())
+        .into_iter()
+        .find(|p| p.key == "tries")
+        .map(|p| p.kind);
+    assert!(matches!(tries, Some(Kind::Range { min, max, default }) if min == 1.0 && max == 4.0 && default == 1.0), "{tries:?}");
 }
