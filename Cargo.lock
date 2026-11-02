@@ -1487,7 +1487,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-artcraft"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1499,10 +1499,11 @@ dependencies = [
 [[package]]
 name = "craft-ai-bfl"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "craft-ai-media",
  "png 0.18.1",
  "serde_json",
  "ureq",
@@ -1511,7 +1512,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-client"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "chrono",
  "craft-ai-artcraft",
@@ -1534,7 +1535,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-comfy-env"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-features",
@@ -1556,7 +1557,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-comfyui"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "base64 0.23.1",
  "craft-ai-core",
@@ -1574,7 +1575,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-core"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "chrono",
  "serde",
@@ -1584,7 +1585,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-declarative"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1596,7 +1597,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-engine"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-features",
@@ -1605,7 +1606,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-features"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "serde",
@@ -1615,10 +1616,11 @@ dependencies = [
 [[package]]
 name = "craft-ai-gemini"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "craft-ai-media",
  "png 0.18.1",
  "serde_json",
  "ureq",
@@ -1627,7 +1629,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-http"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "ureq",
@@ -1636,10 +1638,11 @@ dependencies = [
 [[package]]
 name = "craft-ai-media"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
+ "png 0.18.1",
  "tempfile",
  "ureq",
  "url",
@@ -1648,7 +1651,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-native"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1663,7 +1666,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-openai"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1675,7 +1678,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-sam3"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1686,7 +1689,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-seedance"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -1697,7 +1700,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-vertex"
 version = "0.1.0"
-source = "git+https://github.com/texjer/craft-ai-integrations?rev=1e8f490f254cebb1c96fdaf48fd84b35e34fa72b#1e8f490f254cebb1c96fdaf48fd84b35e34fa72b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=4829d844a5be80fd3314c6ee9a0b42fe834ea06c#4829d844a5be80fd3314c6ee9a0b42fe834ea06c"
 dependencies = [
  "craft-ai-core",
  "craft-ai-http",
@@ -2078,7 +2081,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8069,7 +8072,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
