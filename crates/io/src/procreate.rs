@@ -40,7 +40,7 @@ const MAX_ARCHIVE: usize = 8 << 20;
 const MAX_SET_PLIST: usize = 1 << 20;
 const MAX_IMAGE_FILE: usize = 64 << 20;
 const IMAGE_LIMITS: Limits = Limits { max_width: 8192, max_height: 8192, max_pixels: 1 << 24, max_alloc: 128 << 20 };
-/// Tip and texture bytes one import keeps (16-bit samples); later brushes are left out.
+/// Preset, tip and texture bytes one import keeps; later brushes are left out.
 const MAX_KEPT_BYTES: usize = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
 /// Unreadable brushes reported one by one; the rest are counted.
 const MAX_NOTED: usize = 10;
@@ -81,25 +81,26 @@ pub fn read_procreate_with(bytes: &[u8], group: &str, ctl: &Interrupt) -> Result
         ctl.check().map_err(|e| e.to_string())?;
         ctl.progress(i as f32 / dirs.len() as f32);
         let mut notes = Vec::new();
-        let brush = m.brush(dir, i, &mut notes);
-        for note in notes {
-            noted += 1;
-            if noted <= MAX_NOTED {
-                out.warnings.push(note);
+        match m.brush(dir, i, &mut notes) {
+            Ok(Some(brush)) => {
+                for note in notes {
+                    noted += 1;
+                    if noted <= MAX_NOTED {
+                        out.warnings.push(note);
+                    }
+                }
+                out.presets.push(BrushPreset {
+                    name: brush.0,
+                    brush: brush.1,
+                    builtin: false,
+                    group: group.to_string(),
+                    folder: Vec::new(),
+                    captures: Default::default(),
+                });
             }
-        }
-        match brush {
-            Ok(Some(brush)) => out.presets.push(BrushPreset {
-                name: brush.0,
-                brush: brush.1,
-                builtin: false,
-                group: group.to_string(),
-                folder: Vec::new(),
-                captures: Default::default(),
-            }),
             Ok(None) => {
                 let n = out.presets.len();
-                out.warnings.push(format!("the set's tips pass the {} MiB memory budget: {n} of {} brushes imported", MAX_KEPT_BYTES >> 20, dirs.len()));
+                out.warnings.push(format!("the set passes the {} MiB memory budget: {n} of {} brushes imported", MAX_KEPT_BYTES >> 20, dirs.len()));
                 break;
             }
             Err(e) => {
@@ -114,7 +115,7 @@ pub fn read_procreate_with(bytes: &[u8], group: &str, ctl: &Interrupt) -> Result
         out.warnings.push(format!("{} more brushes could not be read; skipped", unreadable - MAX_NOTED));
     }
     if noted > MAX_NOTED {
-        out.warnings.push(format!("{} more notes about missing shapes and grains", noted - MAX_NOTED));
+        out.warnings.push(format!("{} more notes about shapes and grains that were left out", noted - MAX_NOTED));
     }
     if out.presets.is_empty() {
         return Err(out.warnings.first().cloned().unwrap_or_else(|| "no brush in the file could be read".into()));
@@ -425,7 +426,7 @@ fn tile(w: u32, h: u32, v: &[f32]) -> GrayTile {
 struct Mapper<'a> {
     zip: &'a ZipReader<'a>,
     unmapped: BTreeSet<&'static str>,
-    /// Tip and texture bytes kept so far.
+    /// Bytes of presets, tips and textures kept so far.
     kept: usize,
 }
 
@@ -436,11 +437,15 @@ impl Mapper<'_> {
         photocraft_codecs::decode_with(&bytes, &DecodeOptions { limits: IMAGE_LIMITS, keep_orientation: false }).map(Some).map_err(|e| format!("{file}: {e}"))
     }
 
-    /// Keep a `w × h` 16-bit plane if the budget allows.
-    fn keep(&mut self, w: u32, h: u32) -> bool {
-        let bytes = (w as usize).saturating_mul(h as usize).saturating_mul(2);
+    /// Charge `bytes` to the budget; false once it is spent.
+    fn charge(&mut self, bytes: usize) -> bool {
         self.kept = self.kept.saturating_add(bytes);
         self.kept <= MAX_KEPT_BYTES
+    }
+
+    /// Keep a `w × h` 16-bit plane if the budget allows.
+    fn keep(&mut self, w: u32, h: u32) -> bool {
+        self.charge((w as usize).saturating_mul(h as usize).saturating_mul(2))
     }
 
     /// The brush in folder `dir` as a name and settings; `None` once the memory budget is spent.
@@ -502,7 +507,8 @@ impl Mapper<'_> {
             }
             Err(e) => notes.push(format!("\"{name}\": its grain could not be read ({e}); left out")),
         }
-        Ok(Some((name, b)))
+        // A file can hold tens of thousands of brushes with no image to charge.
+        Ok(self.charge(std::mem::size_of::<BrushPreset>().saturating_add(name.len())).then_some((name, b)))
     }
 }
 

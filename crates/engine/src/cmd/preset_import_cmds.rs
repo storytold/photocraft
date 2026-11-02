@@ -605,8 +605,15 @@ mod tests {
             d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(d.doc.bounds())
         };
         let blank = pixels(&s);
+        // Back to the round tip, so a stroke that ignored `preset` would paint this.
+        s.tools.brush = Session::new().tools.brush;
+        s.execute("paint.stroke", json!({"points": [[5, 30], [60, 30]]})).unwrap();
+        let session_brush = pixels(&s);
+        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         s.execute("paint.stroke", json!({"points": [[5, 30], [60, 30]], "preset": "Soft Ink"})).unwrap();
-        assert!(pixels(&s) != blank, "the imported brush paints");
+        let imported_brush = pixels(&s);
+        assert!(imported_brush != blank, "the imported brush paints");
+        assert!(imported_brush != session_brush, "the stroke takes the preset, not the session's brush");
         // From a file on disk, the group is the file's name.
         let path = std::env::temp_dir().join(format!("pc-procreate-{}.brushset", std::process::id()));
         std::fs::write(&path, procreate_set()).unwrap();

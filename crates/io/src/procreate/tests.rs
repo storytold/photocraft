@@ -309,7 +309,31 @@ fn names_and_notes_from_a_file_are_capped() {
     assert_eq!(imp.set_name.unwrap().chars().count(), MAX_TEXT);
     assert_eq!(imp.warnings.len(), MAX_NOTED + 1, "{:?}", imp.warnings.last());
     assert!(imp.warnings.iter().all(|w| w.len() < 3 * MAX_TEXT), "a note holds a capped name and path");
-    assert_eq!(imp.warnings[MAX_NOTED], "30 more notes about missing shapes and grains");
+    assert_eq!(imp.warnings[MAX_NOTED], "30 more notes about shapes and grains that were left out");
+}
+
+/// A skipped brush is reported once, without notes on parts it never got to use.
+#[test]
+fn a_skipped_brush_leaves_no_notes() {
+    // No shape, then a grain with no gray reading: the shape's note comes before the failure.
+    let cmyk = encode(&Image::from_u8(2, 2, ChannelLayout::Cmyk, vec![0; 16]).unwrap(), Format::Tiff, &Default::default()).unwrap();
+    let skipped = write_archive(&[("name", text("Skipped"))]);
+    let good = write_archive(&[("name", text("Good"))]);
+    let imp = read_procreate(&write_brushset("s", &[(skipped, None, Some(cmyk)), (good, Some(bar()), None)]), "g").unwrap();
+    assert_eq!(imp.presets.len(), 1);
+    assert_eq!(imp.warnings, ["brush 1: the image is not grayscale or RGB; skipped"]);
+}
+
+/// A brush with no images still spends the budget, so a file can't fill memory with presets.
+#[test]
+fn a_brush_with_no_images_counts_against_the_budget() {
+    let bytes = brush_zip(&write_archive(&[("name", text("Plain"))]), None, None);
+    let zip = ZipReader::new(&bytes).unwrap();
+    let mut m = Mapper { zip: &zip, unmapped: BTreeSet::new(), kept: 0 };
+    assert!(m.brush("", 0, &mut Vec::new()).unwrap().is_some());
+    assert_eq!(m.kept, std::mem::size_of::<BrushPreset>() + "Plain".len());
+    m.kept = MAX_KEPT_BYTES;
+    assert!(m.brush("", 0, &mut Vec::new()).unwrap().is_none(), "the budget is spent");
 }
 
 #[test]
