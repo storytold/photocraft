@@ -121,7 +121,8 @@ pub struct ExportDataSetsParams {
     /// Only these data sets, by name; default every one of them.
     #[serde(default, rename = "data_sets")]
     pub data_sets: Option<Vec<String>>,
-    /// Filename template with `{name}`, `{index}` and `{document}` (default `{name}`).
+    /// Filename template with `{name}` (data set), `{index}`, `{document}` and any variable as
+    /// `{Variable}`, e.g. `{Name}-{Level}` (default `{name}`).
     #[serde(default)]
     pub naming: Option<String>,
 }

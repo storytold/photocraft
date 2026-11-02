@@ -535,8 +535,10 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         authorize_pixel_paths(s, &changes)?;
         plans.push(changes);
     }
-    // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
+    // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based), `{document}`,
+    // or any variable's value in that data set, e.g. `{Name}`. Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
+    let var_names = vars.variable_names();
     // A document name is not a path: a separator in it, or a stem of `.` / `..` before a `/` in
     // the template, must not leave `dir`.
     let doc_stem: String = original
@@ -553,7 +555,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     let mut names = Vec::new();
     for (n, set) in sets.iter().enumerate() {
         let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
+        let stem = fill_naming(template, set, &var_names, &safe, n.saturating_add(1), &doc_stem)?;
         // Each folder the template makes is checked too: `{document}/{name}` of `nul.psd` would
         // otherwise write into the `nul` device.
         let name: String = format!("{stem}.{format}")
@@ -563,6 +565,14 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
                 crate::file_cmds::portable_device_name(part.strip_suffix(sep).unwrap_or(part).to_string()) + sep
             })
             .collect();
+        // A variable's value may be empty or `.`/`..`: no part of the path may be nameless or
+        // step out of the folder.
+        if let Some(part) = name.split(['/', '\\']).find(|part| matches!(*part, "" | "." | "..") || *part == format!(".{format}")) {
+            return Err(bad(
+                "file.export.dataSetsAsFiles",
+                format!("data set `{}` names its file `{name}`, whose part `{part}` is empty or not a name; check the variables `naming` reads", set.name),
+            ));
+        }
         if let Some(first) = claimed.insert(name.to_lowercase(), &set.name) {
             return Err(bad(
                 "file.export.dataSetsAsFiles",
@@ -582,6 +592,57 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         written.push(name.clone());
     }
     Ok(written)
+}
+
+/// Longest variable value, in characters, that a filename takes; the rest is dropped.
+const MAX_NAMING_VALUE: usize = 100;
+
+/// Fill the `file.export.dataSetsAsFiles` naming template for one data set. `{name}`, `{index}`
+/// and `{document}` keep their meaning; any other `{Variable}` is that variable's value in `set`
+/// (exact name, then ignoring case; empty when the set gives it none). A value is a name, not a
+/// path: separators and characters no file system accepts become `_`. A `{` without a closing
+/// `}` is kept as written; an unknown variable is an error, so a typo doesn't name every file
+/// the same.
+fn fill_naming(template: &str, set: &DataSet, var_names: &[String], safe_name: &str, index: usize, doc_stem: &str) -> Result<String> {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(rest.get(..open).unwrap_or_default());
+        let after = rest.get(open.saturating_add(1)..).unwrap_or_default();
+        let Some(close) = after.find('}') else {
+            out.push_str(rest.get(open..).unwrap_or_default());
+            rest = "";
+            break;
+        };
+        let token = after.get(..close).unwrap_or_default();
+        match token {
+            "name" => out.push_str(safe_name),
+            "index" => out.push_str(&format!("{index:03}")),
+            "document" => out.push_str(doc_stem),
+            _ => {
+                let key = token.trim();
+                let known = var_names.iter().find(|v| *v == key).or_else(|| var_names.iter().find(|v| v.to_lowercase() == key.to_lowercase()));
+                let Some(var) = known else {
+                    let list = if var_names.is_empty() { "none".to_string() } else { var_names.iter().map(|v| format!("{{{v}}}")).collect::<Vec<_>>().join(", ") };
+                    return Err(bad(
+                        "file.export.dataSetsAsFiles",
+                        format!("`naming` reads `{{{token}}}`, which is not a variable; use {{name}}, {{index}}, {{document}} or a variable ({list})"),
+                    ));
+                };
+                let value = lookup(set, var).map(|v| v.text()).unwrap_or_default();
+                let safe: String = value
+                    .trim()
+                    .chars()
+                    .take(MAX_NAMING_VALUE)
+                    .map(|c| if c.is_control() || "/\\<>:\"|?*".contains(c) { '_' } else { c })
+                    .collect();
+                out.push_str(safe.trim());
+            }
+        }
+        rest = after.get(close.saturating_add(1)..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 fn list(s: &mut Session) -> Result<Value> {
@@ -645,7 +706,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.dataSetsAsFiles",
             "Data Sets as Files…",
             &["File", "Export"],
-            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document; colliding filenames are rejected before writing (include {index} to disambiguate)",
+            "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}|{Variable}\"} → {files,count}: apply each data set and export the flattened document. `naming` (default `{name}`) puts together each file's name: `{name}` the data set's name, `{index}` its 001-based number, `{document}` the document's name, and any other `{Variable}` that variable's value in the data set, e.g. `{Name}-{Level}`. Colliding filenames are rejected before writing (include {index} to disambiguate)",
             |s, p| export_as_files(s, p)
         ),
         CommandSpec {

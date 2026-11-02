@@ -838,3 +838,60 @@ fn removing_a_layer_drops_its_bindings_and_undo_restores_them() {
     assert!(doc(&s).variables.defs.is_empty());
     s.execute("variables.list", json!({})).unwrap();
 }
+
+/// `naming` reads variable values: `{Name}` is that row's Name, next to `{name}`, `{index}` and
+/// `{document}`; a value is a filename, never a path.
+#[test]
+fn export_data_sets_names_files_from_variable_values() {
+    let (mut s, _p, badge, title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "Name", "layer": title.0, "type": "textReplacement"},
+            {"name": "Show Badge", "layer": badge.0, "type": "visibility"},
+        ], "names": ["Level"]}),
+    )
+    .unwrap();
+    let text = |v: &str, value: &str| json!({"variable": v, "kind": "text", "value": value});
+    s.execute(
+        "image.variables.dataSets",
+        json!({"dataSets": [
+            {"name": "row 1", "values": [text("Name", "Fire Sword"), text("Level", "12"), {"variable": "Show Badge", "kind": "visibility", "value": true}]},
+            {"name": "row 2", "values": [text("Name", "  ../Ice: Shield  "), text("Level", "3")]},
+        ]}),
+    )
+    .unwrap();
+    let dir = tmp("var-naming");
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": "{Name} - Lv {level} ({name}, {index}) {Show Badge}"})).unwrap();
+    assert_eq!(
+        r["files"],
+        json!([format!("{dir}/Fire Sword - Lv 12 (row_1, 001) true.png"), format!("{dir}/.._Ice_ Shield - Lv 3 (row_2, 002) .png")])
+    );
+    for f in r["files"].as_array().unwrap() {
+        assert!(std::path::Path::new(f.as_str().unwrap()).is_file(), "{f}");
+    }
+    // Variable values can make subfolders only where the template puts a `/`.
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "dataSets": ["row 1"], "naming": "{Level}/{Name}"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/12/Fire Sword.png")]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn export_data_sets_naming_rejects_unknown_and_empty_names() {
+    let mut s = visibility_export_session(&["a", "b"]);
+    s.execute("image.variables.define", json!({"defs": [{"name": "show", "layer": doc(&s).layers[0].id.0, "type": "visibility"}], "names": ["Name"]})).unwrap();
+    let dir = tmp("var-bad");
+    // A typo'd variable names every file the same: say which variables exist instead.
+    let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": "{Nmae}"})).unwrap_err();
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
+    assert!(err.to_string().contains("{Name}") && err.to_string().contains("{show}"), "{err}");
+    // `Name` has no value in either set: an empty filename or folder is refused.
+    for naming in ["{Name}", "{Name}/{name}", "{Name}..", "x/{Name}./y"] {
+        let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": naming})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{naming}: {err}");
+    }
+    // An unclosed brace is literal text.
+    let r = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir, "naming": "{index}-{name"})).unwrap();
+    assert_eq!(r["files"], json!([format!("{dir}/001-{{name.png"), format!("{dir}/002-{{name.png")]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
