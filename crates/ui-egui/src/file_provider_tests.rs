@@ -122,6 +122,16 @@ fn save_a_copy_does_not_use_the_provider_or_mark_the_editable_saved() {
     assert!(app.session.active().unwrap().path.is_none());
 }
 
+fn assert_retry_chooser_preserves_intent(app: &mut PhotocraftApp, provider: &Host, ctx: &egui::Context, command: &str, document_id: &str) {
+    menus::invoke(app, ctx, command, json!({})).unwrap();
+    app.poll_file_dialog(ctx, None);
+    let retry = event(provider, "saveDialog");
+    assert_eq!(retry["documentId"].as_str(), Some(document_id));
+    assert_eq!(retry["intent"], if command == "file.save" { "save" } else { "saveAs" });
+    provider.resolve_dialog(retry["requestId"].as_str().unwrap(), "cancel", "").unwrap();
+    app.poll_file_dialog(ctx, None);
+}
+
 fn assert_refused_pending_save_keeps_local_copy(pending_command: &str, refused_command: &str) {
     let ctx = egui::Context::default();
     let (mut app, provider, written) = app(true);
@@ -178,14 +188,8 @@ fn assert_refused_pending_save_keeps_local_copy(pending_command: &str, refused_c
     assert!(!provider.pending_for(document));
 
     // Once idle, the same Save/Save As entry point still records its intended route.
-    menus::invoke(&mut app, &ctx, refused_command, json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    let retry = event(&provider, "saveDialog");
     let document_id = document.0.to_string();
-    assert_eq!(retry["documentId"].as_str(), Some(document_id.as_str()));
-    assert_eq!(retry["intent"], if refused_command == "file.save" { "save" } else { "saveAs" });
-    provider.resolve_dialog(retry["requestId"].as_str().unwrap(), "cancel", "").unwrap();
-    app.poll_file_dialog(&ctx, None);
+    assert_retry_chooser_preserves_intent(&mut app, &provider, &ctx, refused_command, &document_id);
     assert!(!provider.pending_for(document) && !app.saving());
     assert_eq!(written.borrow().len(), 1);
 }
