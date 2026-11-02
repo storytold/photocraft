@@ -570,6 +570,7 @@ fn gradient_map_stop_dragged_down_off_the_bar_is_removed_and_dragging_back_cance
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [0.5, "#ff0000"], [1, "#ffffff"]]})).unwrap();
     h.run_steps(3);
     let three = layer(&h).1;
+    let before_cancel = h.state().session.active().unwrap().history.past_len();
     let live_stops = |h: &Harness<'_, PhotocraftApp>| h.state().live_adjust.as_ref().and_then(|(_, v)| v["stops"].as_array().map(Vec::len));
     // Off and back: nothing removed.
     let start = map_handle(&h, 0.5);
@@ -589,6 +590,7 @@ fn gradient_map_stop_dragged_down_off_the_bar_is_removed_and_dragging_back_cance
     h.drop_at(start);
     h.run_steps(3);
     assert_eq!(map_stops(&layer(&h).1), map_stops(&three), "dragging back cancels the removal");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), before_cancel, "a cancelled drag adds no history step");
     // Off and released: removed in one step.
     let steps = h.state().session.active().unwrap().history.past_len();
     drag(&mut h, start, away);

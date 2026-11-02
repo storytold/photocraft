@@ -260,7 +260,7 @@ fn the_last_two_color_stops_cannot_be_dragged_off() {
     }
 }
 
-/// An opacity stop dragged up off the bar is removed; dragging it down over the ramp is not.
+/// An opacity stop dragged up off the bar is removed while two remain.
 #[test]
 fn an_opacity_stop_dragged_up_off_the_bar_is_removed() {
     for layer in [true, false] {
@@ -275,5 +275,57 @@ fn an_opacity_stop_dragged_up_off_the_bar_is_removed() {
         let from = marker(&h, 0.0, true);
         drag_through(&mut h, &[from, from - vec2(0.0, 30.0)], |_| {});
         assert_eq!(sink.fill(h.state()).unwrap(), before, "layer {layer}: two opacity stops always remain");
+    }
+}
+
+/// Only the stop's own direction takes it off: an opacity stop dragged down over the ramp and a
+/// colour stop dragged up over it are kept, however far they go.
+#[test]
+fn a_stop_dragged_the_other_way_is_kept() {
+    for layer in [true, false] {
+        let (mut h, sink) = editor(layer);
+        for opacity in [true, false] {
+            let from = marker(&h, 0.5, opacity);
+            let to = from + vec2(0.0, if opacity { 70.0 } else { -70.0 });
+            drag_through(&mut h, &[from, to], |h| assert_eq!(shown(h, sink), (3, 3), "layer {layer} opacity {opacity}: still shown"));
+            assert_eq!(counts(&h, sink), (3, 3), "layer {layer} opacity {opacity}: the stop is kept");
+        }
+    }
+}
+
+/// Press on a stop, drag a little along the bar, then move to each of `then` in its own frame;
+/// the last move and the release arrive in the same frame, as a quick flick does.
+fn flick(h: &mut Harness<PhotocraftApp>, from: Pos2, then: &[Pos2]) {
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(from + vec2(10.0, 0.0)));
+    h.run_steps(1);
+    let Some((&last, moves)) = then.split_last() else { return };
+    for &p in moves {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+    }
+    // `Harness::event` runs one frame per event, so both go straight into the next frame.
+    let input = &mut h.input_mut().events;
+    input.push(egui::Event::PointerMoved(last));
+    input.push(egui::Event::PointerButton { pos: last, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+}
+
+/// The release frame counts: a stop flicked off the bar and released in the same frame is
+/// removed, and one brought back onto the bar in the release frame is kept.
+#[test]
+fn the_release_frame_decides_whether_the_stop_comes_off() {
+    for layer in [true, false] {
+        let (mut h, sink) = editor(layer);
+        let from = marker(&h, 0.5, false);
+        let away = from + vec2(10.0, 40.0);
+        flick(&mut h, from, &[away, from]);
+        assert_eq!(counts(&h, sink), (3, 3), "layer {layer}: back on the bar at release, the stop is kept");
+        let from = marker(&h, 0.5, false);
+        flick(&mut h, from, &[from + vec2(10.0, 40.0)]);
+        assert_eq!(counts(&h, sink), (2, 3), "layer {layer}: released off the bar in the same frame, the stop is removed");
     }
 }
