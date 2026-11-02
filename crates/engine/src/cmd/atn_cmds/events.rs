@@ -17,6 +17,7 @@ use super::steps_layer::{
     move_from, move_to, play_from, play_to, rotate_from, rotate_to, select_from, select_to, stroke_to, visibility_from, visibility_to,
 };
 use super::steps_make::{locking_from, locking_to, make_from, make_to, set_from, set_to};
+use super::steps_other::{DE_INTERLACE, HSB_HSL, bare_from, bare_to, custom_from, custom_to, enums_from, enums_to};
 use super::tables::{NOISE, OFFSET_FILL, SMART_BLUR_MODE, SMART_BLUR_QUALITY, TRIM};
 use super::{AtnEvent, D, Descriptor, STOP_MESSAGE, Value, json};
 
@@ -329,6 +330,49 @@ pub(super) const EVENTS: &[Event] = &[
     // What Photoshop needs in a written step (process version, the full settings set) is
     // unverified, so only an imported step saves back, as its recorded descriptor while unedited.
     Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[crate::lens_cmds::RAW], from: camera_raw_from, to: camera_raw_to },
+    // Video, Other, Average and matting (#10607).
+    Event {
+        code: "Dntr",
+        name: "deInterlace",
+        label: "De-Interlace",
+        ids: &["filter.video.deInterlace"],
+        from: |d| enums_from(d, "filter.video.deInterlace", DE_INTERLACE),
+        to: |_, p| enums_to(p, DE_INTERLACE),
+    },
+    Event {
+        code: "NTSC",
+        name: "NTSC",
+        label: "NTSC Colors",
+        ids: &["filter.video.ntscColors"],
+        from: |d| bare_from(d, "filter.video.ntscColors"),
+        to: bare_to,
+    },
+    Event {
+        code: "HsbP",
+        name: "HsbP",
+        label: "HSB/HSL",
+        ids: &["filter.other.hsbHsl"],
+        from: |d| enums_from(d, "filter.other.hsbHsl", HSB_HSL),
+        to: |_, p| enums_to(p, HSB_HSL),
+    },
+    Event { code: "Cstm", name: "custom", label: "Custom", ids: &["filter.other.custom"], from: custom_from, to: custom_to },
+    Event { code: "Avrg", name: "Avrg", label: "Average", ids: &["filter.blur.average"], from: |d| bare_from(d, "filter.blur.average"), to: bare_to },
+    Event {
+        code: "RmvB",
+        name: "removeBlackMatte",
+        label: "Remove Black Matte",
+        ids: &["layer.matting.removeBlackMatte"],
+        from: |d| bare_from(d, "layer.matting.removeBlackMatte"),
+        to: bare_to,
+    },
+    Event {
+        code: "RmvW",
+        name: "removeWhiteMatte",
+        label: "Remove White Matte",
+        ids: &["layer.matting.removeWhiteMatte"],
+        from: |d| bare_from(d, "layer.matting.removeWhiteMatte"),
+        to: bare_to,
+    },
     // Adjustments (Image › Adjustments).
     Event {
         code: "",

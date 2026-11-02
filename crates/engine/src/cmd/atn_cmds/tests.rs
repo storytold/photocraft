@@ -507,6 +507,16 @@ fn every_mapped_command_exports_and_imports_back() {
                 "undefinedAreas": "wrap", "seed": 4_000_000_000_u32}),
         ),
         ("filter.distort.zigZag", json!({"amount": -20, "ridges": 12, "style": "aroundCenter"})),
+        ("filter.video.deInterlace", json!({"eliminate": "evenFields", "createBy": "duplication"})),
+        ("filter.video.ntscColors", json!({})),
+        ("filter.other.hsbHsl", json!({"inputMode": "hsl", "rowOrder": "rgb"})),
+        (
+            "filter.other.custom",
+            json!({"kernel": [0, 0, 0, 0, 0, 0, -1, -1, -1, 0, 0, -1, 9, -1, 0, 0, -1, -1, -1, 0, 0, 0, 0, 0, 0], "scale": 3, "offset": -10}),
+        ),
+        ("filter.blur.average", json!({})),
+        ("layer.matting.removeBlackMatte", json!({})),
+        ("layer.matting.removeWhiteMatte", json!({})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3820,6 +3830,8 @@ fn load_rejects_bad_encodings() {
     assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
 /// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
 fn distort(code: &str, d: Descriptor) -> Mapped {
+/// The step `d` of the Photoshop event `code` (a four-character code), as PhotoCraft loads it.
+fn other_step(code: &str, d: Descriptor) -> Mapped {
     let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
     (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
 }
@@ -4084,4 +4096,192 @@ fn wave_with_a_fractional_scale_is_kept() {
         assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
     }
     assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
+/// Photoshop's De-Interlace, NTSC Colors, HSB/HSL, Custom, Average and Remove Black / White
+/// Matte steps load as their commands, play, and save back with the same keys (#10607).
+#[test]
+fn video_other_and_matting_steps_load_play_and_save_back() {
+    let cells: Vec<D> = (0..25)
+        .map(|i| {
+            D::Integer(if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            })
+        })
+        .collect();
+    let kernel: Vec<i32> = (0..25)
+        .map(|i| {
+            if i == 12 {
+                5
+            } else if [7, 11, 13, 17].contains(&i) {
+                -1
+            } else {
+                0
+            }
+        })
+        .collect();
+    let cases = [
+        (
+            "Dntr",
+            desc("null").with("IntE", enm("IntE", "ElmE")).with("IntC", enm("IntC", "CrtD")),
+            "filter.video.deInterlace",
+            json!({"eliminate": "evenFields", "createBy": "duplication"}),
+        ),
+        ("NTSC", desc("null"), "filter.video.ntscColors", json!({})),
+        (
+            "HsbP",
+            desc("null").with("Inpt", enm("ClrS", "RGBC")).with("Otpt", enm("ClrS", "HSLC")),
+            "filter.other.hsbHsl",
+            json!({"inputMode": "rgb", "rowOrder": "hsl"}),
+        ),
+        (
+            "Cstm",
+            desc("null").with("Scl ", D::Integer(1)).with("Ofst", D::Integer(0)).with("Mtrx", D::List(cells)),
+            "filter.other.custom",
+            json!({"kernel": kernel, "scale": 1, "offset": 0}),
+        ),
+        ("Avrg", desc("null"), "filter.blur.average", json!({})),
+        ("RmvB", desc("null"), "layer.matting.removeBlackMatte", json!({})),
+        ("RmvW", desc("null"), "layer.matting.removeWhiteMatte", json!({})),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24, "background": "transparent"})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, d, id, params) in cases {
+        let Mapped::Steps(steps) = other_step(code, d.clone()) else { panic!("{code} kept") };
+        let mut p = steps[0].1.clone();
+        // Numbers come back as the descriptor's integers.
+        if let Some(k) = p.get_mut("kernel") {
+            *k = json!(k.as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as i32).collect::<Vec<_>>());
+        }
+        for k in ["scale", "offset"] {
+            if let Some(v) = p.get_mut(k) {
+                *v = json!(v.as_f64().unwrap() as i32);
+            }
+        }
+        assert_eq!((steps[0].0.as_str(), &p), (id, &params), "{code}");
+        assert_eq!(export_item(id, &steps[0].1, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
+        s.actions.list.push(Action::new(code, vec![(id.to_string(), steps[0].1.clone())]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+    // Missing keys are Photoshop's defaults.
+    let Mapped::Steps(steps) = other_step("Dntr", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"eliminate": "oddFields", "createBy": "interpolation"}));
+    let Mapped::Steps(steps) = other_step("HsbP", desc("null")) else { panic!("kept") };
+    assert_eq!(steps[0].1, json!({"inputMode": "rgb", "rowOrder": "hsb"}));
+}
+
+/// A step the commands cannot play keeps the Photoshop step: a Custom matrix that is not 5 × 5,
+/// an unknown enumeration value, or a key the event does not have (#10607).
+#[test]
+fn video_other_and_matting_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let nine = D::List((0..9).map(D::Integer).collect());
+    assert!(kept(other_step("Cstm", desc("null").with("Mtrx", nine))));
+    assert!(kept(other_step("Cstm", desc("null"))));
+    assert!(kept(other_step("HsbP", desc("null").with("Inpt", enm("ClrS", "LbCl")))));
+    assert!(kept(other_step("Dntr", desc("null").with("IntE", enm("IntE", "ElmA")))));
+    assert!(kept(other_step("NTSC", desc("null").with("Lvl ", D::Integer(1)))));
+    assert!(kept(other_step("RmvW", desc("null").with("Lyr ", D::Integer(1)))));
+}
+
+/// What the events cannot hold refuses the step: a fractional kernel cell, a kernel that is not
+/// 25 cells, a mask target, an unknown mode (#10607).
+#[test]
+fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1.5);
+    for (id, params) in [
+        ("filter.other.custom", json!({"kernel": cells})),
+        ("filter.other.custom", json!({"kernel": [0, 0, 0, 0, 1, 0, 0, 0, 0]})),
+        ("filter.other.custom", json!({"scale": 2.5})),
+        ("filter.blur.average", json!({"target": "mask"})),
+        ("filter.other.hsbHsl", json!({"inputMode": "lab"})),
+        ("filter.video.deInterlace", json!({"eliminate": "allFields"})),
+        ("filter.other.custom", json!([1])),
+        ("filter.blur.average", json!(5)),
+        ("filter.other.hsbHsl", json!("hsl")),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // `null` params set nothing.
+    assert!(export_item("filter.blur.average", &Value::Null, "S").is_some());
+    // A Custom step without a kernel is the command's identity kernel.
+    let d = export_item("filter.other.custom", &json!({}), "S").unwrap().descriptor.unwrap();
+    let cells = get_list(&d, "Mtrx").unwrap();
+    assert_eq!((cells.len(), cells.get(12)), (25, Some(&D::Integer(1))));
+}
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10607).
+#[test]
+fn video_other_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    for (code, d) in [
+        ("Dntr", desc("null").with("IntE", D::Integer(1))),
+        ("Dntr", desc("null").with("IntC", text("CrtD"))),
+        ("HsbP", desc("null").with("Inpt", D::Boolean(true))),
+        ("HsbP", desc("null").with("Otpt", text("HSLC"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", text("2"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Boolean(true))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl", enm("Ordn", "Trgt"))),
+    ] {
+        assert!(kept(other_step(code, d.clone())), "{code} {d:?} was mapped");
+    }
+}
+
+/// The key gate admits `Scl` without its padding, so the mapper reads it too: an unpadded
+/// scale is the step's scale, not the default 1.
+#[test]
+fn custom_reads_an_unpadded_scale() {
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Scl", D::Integer(3)).with("Mtrx", identity)) else { panic!("kept") };
+    assert_eq!(steps[0].1["scale"], json!(3.0));
+}
+
+/// `filter.other.custom` plays a scale of 1..9999, an offset of -9999..9999 and cells of
+/// -999..999, and clamps anything else: `Scl 0` would play as 1 and save back as 0. Such a step
+/// stays a Photoshop step, as does a matrix of more than 25 cells, and export refuses those
+/// values instead of writing what the command doesn't play (#10607).
+#[test]
+fn custom_outside_the_commands_range_is_kept_and_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let kernel = |cell: i32| D::List((0..25).map(|i| D::Integer(if i == 12 { cell } else { 0 })).collect());
+    let identity = kernel(1);
+    for d in [
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(0)),
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Integer(10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(-10_000)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Integer(10_000)),
+        desc("null").with("Mtrx", kernel(1000)),
+        desc("null").with("Mtrx", kernel(-1000)),
+        desc("null").with("Mtrx", D::List((0..26).map(|_| D::Integer(0)).collect())),
+        desc("null").with("Mtrx", D::List((0..1000).map(|_| D::Integer(0)).collect())),
+        // Fractions: export writes integers, so Save Actions would refuse the mapped step.
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(1.5)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Double(2.5)),
+        desc("null").with("Mtrx", D::List((0..25).map(|i| if i == 12 { D::Double(0.5) } else { D::Integer(0) }).collect())),
+    ] {
+        assert!(kept(other_step("Cstm", d.clone())), "{:?} was mapped", d.items);
+    }
+    for (scale, offset, cell) in [(1, -9999, -999), (9999, 9999, 999)] {
+        let d = desc("null").with("Scl ", D::Integer(scale)).with("Ofst", D::Integer(offset)).with("Mtrx", kernel(cell));
+        let Mapped::Steps(steps) = other_step("Cstm", d) else { panic!("{scale} {offset} {cell} kept") };
+        assert_eq!(
+            (&steps[0].1["scale"], &steps[0].1["offset"], &steps[0].1["kernel"][12]),
+            (&json!(f64::from(scale)), &json!(f64::from(offset)), &json!(f64::from(cell)))
+        );
+    }
+    // An integral Double is a whole number and still maps.
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(2.0))) else { panic!("Scl 2.0 kept") };
+    assert_eq!(steps[0].1["scale"], json!(2.0));
+    let mut cells = vec![json!(0); 25];
+    cells[12] = json!(1000);
+    for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {
+        assert!(export_item("filter.other.custom", &params, "S").is_none(), "{params} exported");
+    }
 }
