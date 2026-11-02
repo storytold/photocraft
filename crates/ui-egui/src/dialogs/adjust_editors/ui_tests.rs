@@ -560,6 +560,55 @@ fn gradient_map_strip_adds_selects_and_removes_stops_without_deleting_the_last_p
     assert_eq!(layer(&h).1, original, "keep two stops");
 }
 
+/// #10742: a Gradient Map stop dragged down off the bar is removed on release (one history step);
+/// while it is off the bar the live preview already leaves it out, and dragging it back onto the
+/// bar before release puts it back. The last two stops can't be dragged off.
+#[test]
+fn gradient_map_stop_dragged_down_off_the_bar_is_removed_and_dragging_back_cancels() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [0.5, "#ff0000"], [1, "#ffffff"]]})).unwrap();
+    h.run_steps(3);
+    let three = layer(&h).1;
+    let live_stops = |h: &Harness<'_, PhotocraftApp>| h.state().live_adjust.as_ref().and_then(|(_, v)| v["stops"].as_array().map(Vec::len));
+    // Off and back: nothing removed.
+    let start = map_handle(&h, 0.5);
+    let away = start + vec2(0.0, 30.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(start + vec2(0.0, 15.0));
+    h.run_steps(1);
+    h.hover_at(away);
+    h.run_steps(1);
+    assert_eq!(live_stops(&h), Some(2), "off the bar the preview leaves the stop out");
+    h.hover_at(start);
+    h.run_steps(1);
+    assert_eq!(live_stops(&h), Some(3), "back on the bar the stop returns");
+    h.drop_at(start);
+    h.run_steps(3);
+    assert_eq!(map_stops(&layer(&h).1), map_stops(&three), "dragging back cancels the removal");
+    // Off and released: removed in one step.
+    let steps = h.state().session.active().unwrap().history.past_len();
+    drag(&mut h, start, away);
+    assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (1.0, [255, 255, 255])]);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(layer(&h).1, three);
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    h.run_steps(3);
+    // Two stops stay.
+    let two = layer(&h).1;
+    for at in [0.0, 1.0] {
+        let from = map_handle(&h, at);
+        drag(&mut h, from, from + vec2(0.0, 40.0));
+        assert_eq!(map_stops(&layer(&h).1), map_stops(&two), "two stops always remain");
+    }
+}
+
 #[test]
 fn gradient_map_drag_clamps_at_the_endpoints_and_reverse_keeps_stop_coordinates() {
     let mut h = app_harness("gradientMap", "rgb", 8);

@@ -57,6 +57,9 @@ struct MapStopDrag {
     index: usize,
     offset: f32,
     changed: bool,
+    /// The dragged stop while it is pulled off the bar (removed from the stops, so the preview
+    /// shows it gone); dragging back onto the bar puts it back.
+    removed: Option<Stop>,
 }
 
 /// Keep selection on the same stop when it crosses another stop (including coincident stops).
@@ -87,19 +90,43 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
     {
         *selected = index;
         let offset = stops.get(index).map_or(0.0, |s| pos.x - x_of(s.0));
-        ui.data_mut(|d| d.insert_temp(key, MapStopDrag { index, offset, changed: false }));
+        ui.data_mut(|d| d.insert_temp(key, MapStopDrag { index, offset, changed: false, removed: None }));
     }
     if let Some(mut drag) = ui.data(|d| d.get_temp::<MapStopDrag>(key)) {
         if (resp.dragged() || resp.drag_stopped())
             && let Some(pos) = resp.interact_pointer_pos()
         {
             let location = round(loc_of(pos.x - drag.offset), 0.001);
-            let changed = stops.get(drag.index).is_some_and(|s| s.0 != location);
-            if let Some(index) = move_map_stop(stops, drag.index, location) {
-                drag.index = index;
-                drag.changed |= changed;
-                *selected = index;
-                edit.changed |= changed;
+            // Pulled down off the bar, the stop is removed while at least two remain, as in
+            // Photoshop; released there it stays deleted, dragged back it returns.
+            let off = crate::gradient_ui::stop_dragged_off(bar, pos, false);
+            match drag.removed {
+                None if off && stops.len() > 2 && drag.index < stops.len() => {
+                    drag.removed = Some(stops.remove(drag.index));
+                    *selected = drag.index.min(stops.len().saturating_sub(1));
+                    drag.changed = true;
+                    edit.changed = true;
+                }
+                Some(stop) if !off => {
+                    stops.push(stop);
+                    let index = stops.len() - 1;
+                    drag.removed = None;
+                    if let Some(index) = move_map_stop(stops, index, location) {
+                        drag.index = index;
+                        *selected = index;
+                    }
+                    edit.changed = true;
+                }
+                Some(_) => {}
+                None => {
+                    let changed = stops.get(drag.index).is_some_and(|s| s.0 != location);
+                    if let Some(index) = move_map_stop(stops, drag.index, location) {
+                        drag.index = index;
+                        drag.changed |= changed;
+                        *selected = index;
+                        edit.changed |= changed;
+                    }
+                }
             }
         }
         if resp.drag_stopped() {

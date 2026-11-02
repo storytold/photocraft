@@ -516,6 +516,19 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
 }
 
+/// How far past the gradient bar's edge (in points) a dragged stop comes off it: the stop marker
+/// (about 15 pt) plus roughly its height again, as in Photoshop's Gradient Editor.
+pub(crate) const STOP_OFF_BAR: f32 = 26.0;
+
+/// Whether a stop dragged to `pos` is pulled off `bar`, as in Photoshop's Gradient Editor: a
+/// colour stop (under the bar) dragged down, an opacity stop (above it) dragged up, about a
+/// marker's height past the marker. Every stop strip uses this, so the gesture is the same in
+/// the Gradient Editor, Properties, the shape gradient popover, Gradient Map and Layer Style.
+/// The caller removes the stop only while more than two of its kind remain.
+pub(crate) fn stop_dragged_off(bar: Rect, pos: Pos2, opacity: bool) -> bool {
+    if opacity { pos.y < bar.top() - STOP_OFF_BAR } else { pos.y > bar.bottom() + STOP_OFF_BAR }
+}
+
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
@@ -995,12 +1008,14 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
     let dragging: Option<Marker> = ui.data(|d| d.get_temp(key));
     let mut preview = None;
     if let (Some(m), Some(pos)) = (dragging, resp.interact_pointer_pos()) {
-        let off = if pos.y > bar.bottom() + 28.0 || pos.y < bar.top() - 26.0 { 1.0 } else { 0.0 };
+        // Pulled off the bar, the stop is deleted (the preview shows it gone; dragging back
+        // cancels), while at least two of its kind remain.
+        let off = stop_dragged_off(bar, pos, matches!(m, Marker::Opacity(_)));
         let loc = loc_of(pos.x);
         let edit = match m {
-            Marker::Color(i) if off > 0.0 && stops.len() > 2 => json!({"action": "delete", "index": i}),
+            Marker::Color(i) if off && stops.len() > 2 => json!({"action": "delete", "index": i}),
             Marker::Color(i) => json!({"action": "move", "index": i, "location": loc}),
-            Marker::Opacity(i) if off > 0.0 && ops.len() > 2 => json!({"action": "delete", "kind": "opacity", "index": i}),
+            Marker::Opacity(i) if off && ops.len() > 2 => json!({"action": "delete", "kind": "opacity", "index": i}),
             Marker::Opacity(i) => json!({"action": "move", "kind": "opacity", "index": i, "location": loc}),
             Marker::Mid(i) => {
                 let (a, b) = (sorted.get(i).map_or(0.0, |s| s.0), sorted.get(i + 1).map_or(1.0, |s| s.0));
