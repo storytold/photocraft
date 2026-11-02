@@ -4,6 +4,20 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-02: Split's hair edges from ViTMatte
+
+Split's subjects clipped hair (SAM's mask is hard; the classical refine only moves the edge a
+couple of pixels). Measured in the app on the owner's portrait: Remove Background's matte
+around the SAM mask was smoother but kept no single strands; SAM's own soft logits made the
+subject see-through; an automatic Refine Hair (SAM "hair" + the Refine Edge Brush) punched
+holes, then, limited to adding outside the edge, added mostly backdrop-coloured fringe. ViTMatte
+(MIT), a trimap matting model, is now native (genai-native `vitmatte/refine`) and Split's
+default edge source when its weights are in `models/vitmatte/`: each subject goes with a trimap
+from its SAM mask. Fallbacks in order: the matte, then the refined mask. The hidden `edges`
+param (auto, vitmatte, matte, refine, hard) picks one for comparisons. The subject finder also
+asks for as many detections as subjects now; the worker's default was one, so Split never cut
+out a second person.
+
 ## 2026-11-02: Split into Layers is SAM 3.1 + Fill; Qwen-Image-Layered is out of the app
 
 - The owner's Split "did nothing": it finished in 24 s, but the model put an opaque copy of the

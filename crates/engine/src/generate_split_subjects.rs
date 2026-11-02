@@ -15,8 +15,8 @@ use photocraft_geom::Rect;
 
 use super::{
     Common, DEFAULT_MATTE_TEMPLATE, GenerativeInfo, Gray8, JobCtx, JobProgress, Layer, MATTE_DEFAULT_PROMPT, MAX_GROW, REMOVE_BG, REMOVE_MIN_REQUEST, Request,
-    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, gen_err, json, matte_request_size, name_selected,
-    plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
+    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, fit_pixels, gen_err, json, matte_request_size,
+    name_selected, plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
 };
 
 /// The most subjects one split gives their own layer (the largest kept).
@@ -35,63 +35,46 @@ pub(super) struct SubjectsPlan {
 /// Where the subjects' soft edges (hair) come from (`edges`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Edges {
-    /// `auto`: the matte when the server has it and it agrees with the detector, else `refine`.
+    /// `auto`: ViTMatte when the server has it, else the matte when it agrees with the
+    /// detector, else `refine`.
     Auto,
-    /// `matte`: as `auto` (the name says what was asked for).
+    /// `vitmatte`: ViTMatte inside a band around the detector's mask (hair strand by strand),
+    /// else as `auto`.
+    Vitmatte,
+    /// `matte`: Remove Background's matte model around the detector's mask, else `refine`.
     Matte,
-    /// `soft[:t]`: the detector's own soft mask (its logits through a sigmoid at temperature t).
-    Soft(f32),
     /// `refine`: the detector's hard mask, edge refined from the pixels (Select Subject's).
     Refine,
-    /// `hair`: as `auto`, plus the strands past the edge where the detector finds hair: the
-    /// Refine Edge Brush painted along that edge (Photoshop's Refine Hair) estimates their
-    /// coverage from the colours, and only what it adds outside the subject's mask is kept.
-    Hair,
     /// `hard`: the detector's hard mask as it is.
     Hard,
 }
 
 impl Edges {
     pub(super) fn parse(v: Option<&str>) -> std::result::Result<Edges, String> {
-        let v = v.map(str::trim).unwrap_or("auto");
-        Ok(match v {
+        Ok(match v.map(str::trim).unwrap_or("auto") {
             "" | "auto" => Edges::Auto,
+            "vitmatte" => Edges::Vitmatte,
             "matte" => Edges::Matte,
             "refine" => Edges::Refine,
-            "hair" => Edges::Hair,
             "hard" => Edges::Hard,
-            "soft" => Edges::Soft(DEFAULT_SOFT),
-            _ => match v.strip_prefix("soft:").and_then(|t| t.parse::<f32>().ok()).filter(|t| *t > 0.0 && *t <= 64.0) {
-                Some(t) => Edges::Soft(t),
-                None => return Err(format!("`edges` must be auto, matte, soft, soft:<0..64>, refine, hair or hard (got `{v}`)")),
-            },
+            other => return Err(format!("`edges` must be auto, vitmatte, matte, refine or hard (got `{other}`)")),
         })
     }
 
     fn name(self) -> &'static str {
         match self {
-            Edges::Auto | Edges::Matte => "matte",
-            Edges::Soft(_) => "soft",
+            Edges::Auto | Edges::Vitmatte => "vitmatte",
+            Edges::Matte => "matte",
             Edges::Refine => "refine",
-            Edges::Hair => "hair",
             Edges::Hard => "hard",
         }
     }
 }
 
-/// The detector's soft-edge temperature when `soft` names none.
-const DEFAULT_SOFT: f32 = 1.0;
-
 pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
     let SubjectsPlan { prompt, subjects, seed, name, edges } = plan;
     let finder = crate::select_ml_cmds::subject_finder(s, prompt.as_deref())?;
     let finder = finder.at_most(subjects.max(1));
-    let finder = if let Edges::Soft(t) = edges { finder.soft_edges(f64::from(t)) } else { finder };
-    // Hair, for the Refine Edge Brush (`hair`); none found is no hair to refine.
-    let hair_finder = match edges {
-        Edges::Hair => Some(crate::select_ml_cmds::subject_finder(s, Some(HAIR_PROMPT))?.at_most(MAX_SUBJECTS)),
-        _ => None,
-    };
     let asked = prompt.clone();
     let job =
         removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
@@ -148,64 +131,36 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             job.grow = remove_grow(hole_rect);
             let rect = fill_rect(hole_rect.inflate(job.grow.min(MAX_GROW) as i32).intersect(&area), job.tuning.remove_margin, area)?;
             let rect = at_least(rect, REMOVE_MIN_REQUEST, area);
-            // Each subject's alpha: the matte model's soft alpha around the detector's mask
-            // (hair), else the detector's mask with the edge refined from the pixels, as Select
-            // Subject does (or as `edges` asks).
+            // Each subject's alpha: ViTMatte inside a band around the detector's mask (hair,
+            // strand by strand), else the matte model's soft alpha around it, else the mask with
+            // the edge refined from the pixels, as Select Subject does (or as `edges` asks).
             let backend = Arc::clone(&job.backend);
-            let matted = match (&matte, edges) {
-                (Some(m), Edges::Auto | Edges::Matte | Edges::Hair) => {
-                    ctx.progress(0.05, "Matting edges");
-                    matte_alphas(backend.as_ref(), m, &picture, (w, h), &instances, &name, ctx)?
-                }
-                _ => None,
-            };
+            let mut used = edges;
+            let mut alphas = None;
+            if matches!(edges, Edges::Auto | Edges::Vitmatte) {
+                ctx.progress(0.05, "Matting hair");
+                alphas = vitmatte_alphas(backend.as_ref(), &picture, area, &instances, ctx)?;
+                used = Edges::Vitmatte;
+            }
             ctx.check()?;
-            let edge_base = match (&matted, edges) {
-                (Some(_), _) => Edges::Matte,
-                (None, Edges::Auto | Edges::Matte | Edges::Hair) => Edges::Refine,
-                (None, e) => e,
-            };
-            let mut alphas: Vec<Vec<f32>> = match matted {
+            if alphas.is_none()
+                && matches!(edges, Edges::Auto | Edges::Vitmatte | Edges::Matte)
+                && let Some(m) = &matte
+            {
+                ctx.progress(0.05, "Matting edges");
+                alphas = matte_alphas(backend.as_ref(), m, &picture, (w, h), &instances, &name, ctx)?;
+                used = Edges::Matte;
+            }
+            ctx.check()?;
+            let alphas: Vec<Vec<f32>> = match alphas {
                 Some(a) => a,
-                None if edge_base == Edges::Refine => {
+                None if used != Edges::Hard => {
+                    used = Edges::Refine;
                     ctx.progress(0.3, "Refining edges");
                     instances.iter().map(|(cov, _, _)| crate::select_ml_cmds::refine_coverage(doc, *active, true, cov.clone(), area)).collect()
                 }
                 None => instances.iter().map(|(cov, _, _)| cov.clone()).collect(),
             };
-            // Refine Hair: strands past the edge, added to what the edge already has (painting
-            // the brush over the hair itself let the colour estimate punch holes in it and eat
-            // the jaw beside it, measured in the app 2026-11-02).
-            let mut used = edge_base;
-            if let Some(f) = &hair_finder {
-                ctx.progress(0.32, "Finding hair");
-                let hair = match f.instances(doc, *active, true, ctx) {
-                    Ok((found, _)) => {
-                        let mut u = vec![0.0f32; w as usize * h as usize];
-                        for (cov, _, _) in &found {
-                            for (d, c) in u.iter_mut().zip(cov) {
-                                *d = d.max(*c);
-                            }
-                        }
-                        Some(u)
-                    }
-                    Err(e) if ctx.cancelled() => return Err(e),
-                    Err(_) => None,
-                };
-                if let Some(hair) = hair {
-                    ctx.progress(0.34, "Refining hair");
-                    for ((cov, bounds, _), alpha) in instances.iter().zip(alphas.iter_mut()) {
-                        let Some((brush, near)) = hair_brush(cov, &hair, area, *bounds) else { continue };
-                        let strands = crate::select_ml_cmds::refine_coverage_brushed(doc, *active, true, cov.clone(), area, Some(&brush));
-                        for (((a, s), n), c) in alpha.iter_mut().zip(&strands).zip(&near).zip(cov) {
-                            if *n && *c < 0.5 {
-                                *a = a.max(*s);
-                            }
-                        }
-                    }
-                    used = Edges::Hair;
-                }
-            }
             let template_id = job.template_id.clone();
             let below = *active;
             ctx.progress(0.35, "Filling the background");
@@ -390,58 +345,131 @@ const MIN_KEPT: f64 = 0.6;
 /// The matte's most mean over the rest (well away from every subject) to be trusted.
 const MAX_STRAY: f64 = 0.2;
 
-/// What the detector is asked for to find hair.
-const HAIR_PROMPT: &str = "hair";
+/// ViTMatte's template (native only).
+pub(super) const VITMATTE_TEMPLATE: &str = "vitmatte/refine";
 
-/// The Refine Edge Brush Photoshop's Refine Hair paints: dabs along the subject's edge where it
-/// meets hair, wide enough to reach the strands beyond it (a fraction of the subject's size),
-/// and where the strands it finds may count (near the hair). `None` when the subject has no
-/// edge in hair.
-fn hair_brush(subject: &[f32], hair: &[f32], area: Rect, bounds: Rect) -> Option<(photocraft_algo::matting::EdgeBrush, Vec<bool>)> {
+/// The subjects' alphas from ViTMatte, or `None` when the server lacks it. Each subject is
+/// cropped with a margin and sent with a trimap made from its detector mask: solid a little
+/// inside the edge, unknown in a band around it reaching out to where stray hair goes (a
+/// fraction of the subject's size), background beyond. Another subject's body stays out of it.
+fn vitmatte_alphas(
+    backend: &dyn GenerativeBackend,
+    picture: &[u8],
+    area: Rect,
+    instances: &[crate::select_ml_cmds::Instance],
+    ctx: &JobCtx,
+) -> Result<Option<Vec<Vec<f32>>>> {
+    if instances.is_empty() || resolve_auto(backend, &[VITMATTE_TEMPLATE], "") != VITMATTE_TEMPLATE {
+        return Ok(None);
+    }
     let (w, h) = (area.width() as usize, area.height() as usize);
-    if subject.len() != w * h || hair.len() != w * h {
-        return None;
-    }
-    let reach = (bounds.width().max(bounds.height()) as f32 * HAIR_BAND).max(MIN_HAIR_BAND);
-    // Near hair: within half the reach of the detector's hair (its mask stops short of strands).
-    let on: Vec<bool> = hair.iter().map(|c| *c >= 0.5).collect();
-    if !on.iter().any(|b| *b) {
-        return None;
-    }
-    let to_hair = photocraft_algo::selection::edt(&on, w, h);
-    // One dab per cell of half the reach along the subject's edge.
-    let step = (reach * 0.5).max(1.0) as usize;
-    let mut cells = std::collections::BTreeSet::new();
-    let mut strokes = Vec::new();
-    let inside = |x: usize, y: usize| subject[y * w + x] >= 0.5;
-    let win = bounds.inflate(1).intersect(&area);
-    for y in win.y0.max(0) as usize..(win.y1 as usize).min(h) {
-        for x in win.x0.max(0) as usize..(win.x1 as usize).min(w) {
-            if !inside(x, y) {
-                continue;
-            }
-            let edge = x == 0 || y == 0 || x + 1 == w || y + 1 == h || !inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1);
-            if !edge || to_hair.get(y * w + x).is_none_or(|d| *d > reach * 0.5) {
-                continue;
-            }
-            if cells.insert((x / step, y / step)) {
-                strokes.push(photocraft_algo::matting::EdgeStroke {
-                    points: vec![(area.x0 as f32 + x as f32 + 0.5, area.y0 as f32 + y as f32 + 0.5)],
-                    size: reach * 2.0,
-                    add: true,
-                });
-            }
+    let mut alphas = Vec::with_capacity(instances.len());
+    for (i, (cov, bounds, _)) in instances.iter().enumerate() {
+        ctx.check()?;
+        let side = bounds.width().max(bounds.height()) as f32;
+        let (out_band, in_band) = ((side * BAND_OUT).max(MIN_BAND_OUT), (side * BAND_IN).max(MIN_BAND_IN));
+        let crop = bounds.inflate(out_band.ceil() as i32 + 8).intersect(&area);
+        let (cw, ch) = (crop.width() as usize, crop.height() as usize);
+        if cw == 0 || ch == 0 {
+            return Ok(None);
         }
+        // The crop's pixels and mask.
+        let mut px = Vec::with_capacity(cw * ch * 4);
+        let mut on = Vec::with_capacity(cw * ch);
+        for y in crop.y0 as usize..crop.y1 as usize {
+            px.extend_from_slice(&picture[(y * w + crop.x0 as usize) * 4..(y * w + crop.x1 as usize) * 4]);
+            on.extend(cov[y * w + crop.x0 as usize..y * w + crop.x1 as usize].iter().map(|c| *c >= 0.5));
+        }
+        let off: Vec<bool> = on.iter().map(|b| !*b).collect();
+        let (to_mask, depth) = (photocraft_algo::selection::edt(&on, cw, ch), photocraft_algo::selection::edt(&off, cw, ch));
+        if to_mask.len() != cw * ch || depth.len() != cw * ch {
+            return Ok(None);
+        }
+        let trimap: Vec<u8> = (0..cw * ch)
+            .map(|k| {
+                if on[k] && depth[k] > in_band {
+                    255
+                } else if to_mask[k] <= out_band {
+                    128
+                } else {
+                    0
+                }
+            })
+            .collect();
+        // At most MAX_VITMATTE_PIXELS go to the model (its global attention grows with the
+        // square of the tokens); the alpha comes back up to the crop.
+        let (rw, rh) = fit_pixels(cw as u32, ch as u32, MAX_VITMATTE_PIXELS);
+        let image = Rgba8::new(cw as u32, ch as u32, px).map_err(gen_err)?;
+        let tri = Gray8::new(cw as u32, ch as u32, trimap.clone()).map_err(gen_err)?;
+        let (image, tri) = if (rw, rh) == (cw as u32, ch as u32) {
+            (image, tri)
+        } else {
+            let t = resize_gray8(&tri, rw, rh)?;
+            let t = Gray8::new(
+                rw,
+                rh,
+                t.data
+                    .iter()
+                    .map(|v| {
+                        if *v < 64 {
+                            0
+                        } else if *v > 192 {
+                            255
+                        } else {
+                            128
+                        }
+                    })
+                    .collect(),
+            )
+            .map_err(gen_err)?;
+            (resize_rgba8(&image, rw, rh)?, t)
+        };
+        let req = Request {
+            template: VITMATTE_TEMPLATE.to_string(),
+            prompt: String::new(),
+            negative: String::new(),
+            seed: 0,
+            steps: 1,
+            guidance: 0.0,
+            image: Some(image),
+            mask: Some(tri),
+            models: Vec::new(),
+            size: None,
+            params: BTreeMap::new(),
+            references: Vec::new(),
+        };
+        let n = instances.len() as f32;
+        let resp = match backend.run(&req, &JobProgress::span(ctx, 0.05 + 0.25 * i as f32 / n, 0.05 + 0.25 * (i + 1) as f32 / n)) {
+            Ok(r) => r,
+            Err(_) if !ctx.cancelled() => return Ok(None),
+            Err(e) => return Err(gen_err(e)),
+        };
+        let Some(out) = resp.images.into_iter().next() else { return Ok(None) };
+        let plane = Gray8::new(out.width, out.height, out.data.as_chunks::<4>().0.iter().map(|p| p[3]).collect()).map_err(gen_err)?;
+        let plane = if (plane.width, plane.height) == (cw as u32, ch as u32) { plane } else { resize_gray8(&plane, cw as u32, ch as u32)? };
+        let mut alpha = vec![0.0f32; w * h];
+        for (k, (a, t)) in plane.data.iter().zip(&trimap).enumerate() {
+            let (x, y) = (crop.x0 as usize + k % cw, crop.y0 as usize + k / cw);
+            let other = instances.iter().enumerate().any(|(j, (c, _, _))| j != i && c[y * w + x] >= 0.5) && !on[k];
+            alpha[y * w + x] = match (*t, other) {
+                (_, true) | (0, _) => 0.0,
+                (255, _) => 1.0,
+                _ => f32::from(*a) / 255.0,
+            };
+        }
+        alphas.push(alpha);
     }
-    if strokes.is_empty() {
-        return None;
-    }
-    // Where strands may be added: within the reach of the detector's hair.
-    let near = to_hair.iter().map(|d| *d <= reach).collect();
-    Some((photocraft_algo::matting::EdgeBrush::new(&strokes, area)?, near))
+    Ok(Some(alphas))
 }
 
-/// The hair band's half-width, as a fraction of the subject's larger side...
-const HAIR_BAND: f32 = 0.03;
+/// How far the unknown band reaches out past a subject's mask, as a fraction of its larger
+/// side (stray hair)...
+const BAND_OUT: f32 = 0.05;
+/// ...and at least this many pixels;
+const MIN_BAND_OUT: f32 = 10.0;
+/// how far it reaches in (the mask's own edge is a few pixels off)...
+const BAND_IN: f32 = 0.015;
 /// ...and at least this many pixels.
-const MIN_HAIR_BAND: f32 = 8.0;
+const MIN_BAND_IN: f32 = 4.0;
+/// The most pixels one ViTMatte request carries (about 1536 × 1536).
+const MAX_VITMATTE_PIXELS: u64 = 1536 * 1536;
