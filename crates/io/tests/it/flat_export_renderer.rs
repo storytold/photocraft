@@ -48,7 +48,7 @@ impl BandRenderer for FailingRenderer {
                     _ => Err(IoError::Render(RenderError::Execution("forced failure".into()))),
                 };
             }
-            sink(RenderBand { rect: buf.rect, pixels: buf.px })
+            sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })
         })
         .map_err(|e| match e {
             IoError::Render(r) => r,
