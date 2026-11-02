@@ -438,10 +438,8 @@ mod support {
         let mut origin = None;
         for line in lines.filter(|line| !line.is_empty()) {
             let (name, value) = line.split_once(':').ok_or("invalid request header")?;
-            if name.eq_ignore_ascii_case("origin") {
-                if origin.replace(value.trim().to_string()).is_some() {
-                    return Err("duplicate Origin".into());
-                }
+            if name.eq_ignore_ascii_case("origin") && origin.replace(value.trim().to_string()).is_some() {
+                return Err("duplicate Origin".into());
             }
             if name.eq_ignore_ascii_case("transfer-encoding") || (name.eq_ignore_ascii_case("content-length") && value.trim() != "0") {
                 return Err("request body is not permitted".into());
