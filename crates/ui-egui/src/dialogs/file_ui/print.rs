@@ -185,7 +185,10 @@ fn length_field_range(ui: &mut egui::Ui, label: &str, pt: &mut f64, units: &str,
         let before = v;
         let decimals = crate::widgets::unit_decimals(units);
         crate::widgets::value_field_prec(ui, &mut v, range, units, 70.0, decimals).accessible_name(tl!(&label));
-        if (v - before).abs() > 1e-4 && v.is_finite() {
+        // Leaving a field commits the text it shows: when that is just the stored value rounded
+        // to the field's decimals, nothing was edited and the exact value stays.
+        let shown = |x: f32| (f64::from(x) * 10f64.powi(decimals as i32)).round();
+        if (v - before).abs() > 1e-4 && v.is_finite() && shown(v) != shown(before) {
             *pt = f64::from(v) * k;
             changed = true;
         }
