@@ -272,6 +272,8 @@ fn set_work_path(app: &mut PhotocraftApp, subpaths: Vec<photocraft_doc::vector::
 fn select_anchor(app: &mut PhotocraftApp, target: crate::direct_select::PathRef, anchor: [usize; 2]) {
     app.ui.direct_selection.target = Some(target);
     app.ui.direct_selection.anchors = vec![anchor];
+    // Made now, on this document: not a stale selection the next press drops.
+    app.ui.direct_selection.owner = crate::direct_select::Owner::current(app);
 }
 
 /// CodeRabbit on #10744: two open subpaths end on the same point, and the Curvature Pen carries on
