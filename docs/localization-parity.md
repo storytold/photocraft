@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-29 · **Change:** minor (Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-02 · **Change:** minor (Persian UI catalog; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -62,6 +62,10 @@ completed for the current UI) and Norwegian Bokmål `nb` (4,552 rows, combined f
 `no` and `nn` locales resolve to it), all added 2026-10-29, cover the same keys with one term per
 concept; none has had a native-speaker review yet.
 
+Persian `fa` (3,032 rows, added 2026-11-02) covers every key of the current measured
+universe — 2,221 / 2,221, the only non-English catalog at 100% — with one term per
+concept and CLDR integer plurals (`one` = 0–1); no native-speaker review yet.
+
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
 counts now translate at their render/assignment sites. Navigator's zoom level uses a context
@@ -101,3 +105,4 @@ engine localization or native review is complete.
 | 2026-10-28 | minor | Arabic (`ar`) UI catalog: every measured key, six plural forms; layer names and the title bar no longer reversed on egui 0.37 |
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
+| 2026-11-02 | minor | Persian (`fa`) UI catalog: every key of the current measured universe (2,221 / 2,221), CLDR `one` = 0–1, RTL direction covered by a test |

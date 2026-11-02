@@ -1,6 +1,6 @@
 PhotoCraft's Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
-Turkish, Hungarian, Serbian, Russian, Swedish, Finnish, Danish and Norwegian Bokmål UI translation
-catalogs are licensed under MIT OR Apache-2.0, at your option.
+Turkish, Hungarian, Serbian, Persian, Russian, Swedish, Finnish, Danish and Norwegian Bokmål UI
+translation catalogs are licensed under MIT OR Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
 
 Korean translations: PhotoCraft contributors, original translations of
@@ -27,6 +27,9 @@ Dutch translations: PhotoCraft contributors, original translations of
 PhotoCraft's English labels; no proprietary translation resources were used.
 
 Czech translations: PhotoCraft contributors, original translations of
+PhotoCraft's English labels; no proprietary translation resources were used.
+
+Persian translations: PhotoCraft contributors, original translations of
 PhotoCraft's English labels; no proprietary translation resources were used.
 
 Turkish translations: PhotoCraft contributors, original translations of

@@ -24,6 +24,7 @@ fn requested_languages_resolve_regional_preferences() {
         ("ko-KR", "ko"),
         ("ru-RU", "ru"),
         ("uk-UA", "uk"),
+        ("fa-IR", "fa"),
         ("fr-CA", "fr"),
         ("id-ID", "id"),
         ("vi-VN", "vi"),
@@ -49,7 +50,18 @@ fn ukrainian_native_app_menu_keeps_product_and_language_names() {
         assert_eq!(layout.bar.find("app.language.uk").map(|item| (item.label.as_str(), item.checked)), Some(("Українська", Some(true))));
     });
 }
-
+#[test]
+fn persian_native_app_menu_keeps_product_and_language_names() {
+    with_language(Lang::EN, || {
+        let h = harness();
+        let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(h.state()), lang("fa"), "fa");
+        for (id, label) in [("help.about", "درباره PhotoCraft"), (crate::native_menu::HIDE, "پنهان کردن PhotoCraft"), ("file.exit", "خروج از PhotoCraft")]
+        {
+            assert_eq!(layout.bar.find(id).map(|item| item.label.as_str()), Some(label), "{id}");
+        }
+        assert_eq!(layout.bar.find("app.language.fa").map(|item| (item.label.as_str(), item.checked)), Some(("فارسی", Some(true))));
+    });
+}
 #[test]
 fn ukrainian_color_picker_titles_draw_in_the_selected_language() {
     with_language(Lang::EN, || {
@@ -237,6 +249,7 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
         ("ko-KR", "ko"),
         ("ru-RU", "ru"),
         ("uk-UA", "uk"),
+        ("fa-IR", "fa"),
         ("fr-CA", "fr"),
         ("sv-SE", "sv"),
         ("fi-FI", "fi"),
@@ -309,7 +322,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "en"] {
+        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fa", "fr", "id", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control_rx = Some(rx);
             let (request, reply) =

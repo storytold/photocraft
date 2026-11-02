@@ -7,7 +7,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs.
-       Keep in sync with LANGUAGES in crates/ui-egui/src/i18n/mod.rs. -->
+       Keep in sync with LANGUAGES in crates/ui-egui/src/i18n.rs. -->
   <key>CFBundleLocalizations</key>
   <array>
     <string>en</string>
@@ -35,6 +35,7 @@
     <string>fi</string>
     <string>da</string>
     <string>nb</string>
+    <string>fa</string>
   </array>
   <key>CFBundleDisplayName</key>
   <string>PhotoCraft</string>
