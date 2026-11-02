@@ -200,12 +200,15 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         // outside, a pixel is stroked when its centre is less than width + 1 from a selected
         // pixel's; inside, less than width + ½ from an unselected pixel's (fitted to Photoshop's
         // strokes of a 14 px circle: 6 px Outside; 3, 5 and 6 px Inside). Both give whole
-        // pixels on straight edges. Soft selections keep soft edges.
+        // pixels on straight edges. Soft selections keep soft edges. Past a hard selection's
+        // corner Photoshop joins the outer edges with a 45° bevel, not a quarter circle
+        // (#10775); inside, corners stay square.
         let hard = padded.iter().all(|v| *v <= 0.0 || *v >= 1.0);
         let in_r = if hard && in_px > 0 { in_px as f32 - 0.5 } else { in_px as f32 };
         let mut outer = sel::expand(&padded, pw, ph, out_px as f32);
         let mut inner = sel::contract(&padded, pw, ph, in_r);
         if hard {
+            sel::bevel_corners(&mut outer, &padded, pw, ph, out_px);
             outer.iter_mut().for_each(|v| *v = if *v > 0.0 { 1.0 } else { 0.0 });
             inner.iter_mut().for_each(|v| *v = if *v >= 1.0 { 1.0 } else { 0.0 });
         }
