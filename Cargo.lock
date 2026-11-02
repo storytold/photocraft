@@ -5135,6 +5135,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-tablet",
+ "photocraft-text",
  "photocraft-ui-egui",
  "plist",
  "resvg",
@@ -5557,6 +5558,7 @@ dependencies = [
  "photocraft-raster",
  "rayon",
  "skrifa",
+ "winsafe",
 ]
 
 [[package]]

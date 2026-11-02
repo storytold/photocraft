@@ -74,6 +74,7 @@ unsafe extern "system" {
 }
 
 const WH_GETMESSAGE: i32 = 3;
+const WM_FONTCHANGE: u32 = 0x001D;
 const WM_POINTERUPDATE: u32 = 0x0245;
 const WM_POINTERDOWN: u32 = 0x0246;
 const WM_POINTERUP: u32 = 0x0247;
@@ -118,12 +119,28 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
             WM_POINTERUP | WM_POINTERLEAVE => {
                 BARREL_DOWN.store(false, Ordering::Relaxed);
             }
+            // A font manager posts this to every window after it turns a font on or off.
+            WM_FONTCHANGE => {
+                if let Some(notify) = FONT_CHANGE_HOOK.get() {
+                    notify();
+                }
+            }
             _ => {}
         }
     }
     // SAFETY: CallNextHookEx passes the parameters down the hook chain. MSDN notes the first
     // parameter is ignored and can be null.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param) }
+}
+
+/// What to call when the installed fonts changed (see [`on_font_change`]).
+static FONT_CHANGE_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Registers the function the message hook calls on `WM_FONTCHANGE` (posted by font managers
+/// after they activate or deactivate a font). It runs inside the hook on the UI thread, so it
+/// must only set flags. The first registration wins.
+pub fn on_font_change(notify: fn()) {
+    let _ = FONT_CHANGE_HOOK.set(notify);
 }
 
 /// Keeps the thread-local pointer message hook installed; dropping it removes the hook.

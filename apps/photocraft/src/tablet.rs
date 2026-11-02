@@ -36,6 +36,8 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
 /// returns). On failure this logs why: the pen barrel button is then missed.
 #[cfg(target_os = "windows")]
 pub fn install_windows() -> Option<photocraft_tablet::windows::Monitor> {
+    // The same hook hears the font managers' WM_FONTCHANGE: the font menus rescan on it.
+    photocraft_tablet::windows::on_font_change(photocraft_text::fonts::system_fonts_changed);
     photocraft_tablet::windows::Monitor::install().map_err(|e| log::warn!("{e}")).ok()
 }
 

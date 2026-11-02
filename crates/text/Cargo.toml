@@ -38,6 +38,11 @@ rayon = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts", "system"] }
 
+# Windows only: fonts a font manager activated stay in their own folder and are only listed in the
+# registry, which `fonts.rs` reads through winsafe's safe binding (the workspace forbids `unsafe`).
+[target.'cfg(target_os = "windows")'.dependencies]
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "advapi"] }
+
 [build-dependencies]
 # Deflates the bundled fonts (build.rs); `flate2` above inflates them.
 flate2 = { workspace = true }
