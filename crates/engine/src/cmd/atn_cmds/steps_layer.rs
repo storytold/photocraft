@@ -6,11 +6,13 @@ use super::descriptors::{
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
 use super::steps_make::is_tool_class;
-use super::tables::{FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, lookup, lookup_back};
+
+use super::tables::{CHANNELS, FILL_CONTENTS, INTERPOLATION, MENU_ITEMS, STROKE_LOCATION, blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, Id, Map, ReferenceItem, UnicodeString, Value, json};
 
 /// Import recorded targets while retaining stack and opening-order references for playback.
 /// Resolve a recorded selection while retaining layer names, Background properties and modifiers.
+/// Translate supported selection targets, retaining unknown references as Photoshop steps.
 pub(super) fn select_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     match (ref_class(r).as_deref(), target(r)) {
@@ -37,6 +39,15 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
             "RGB" | "CMYK" | "Lab" | "Gry" => step("channel.target", json!({"channel": "composite"})),
             // Re-selecting the channel that is already targeted changes nothing.
             "Trgt" => Mapped::Unsupported { harmless: true },
+            _ if r.len() == 1
+                && d.get("selectionModifier").is_none()
+                // Shift-click (`Extd` true) adds the channel to the selection: kept verbatim.
+                && !matches!(d.get("Extd"), Some(v) if v != &D::Boolean(false))
+                && matches!(r.first(), Some(ReferenceItem::Enumerated { type_id, .. }) if type_id.is("Chnl")) =>
+            {
+                // The exact code only: the legacy `Lmnc` would save back as `Lght`.
+                lookup(CHANNELS, &o).map_or(Mapped::Unsupported { harmless: false }, |channel| step("channel.target", json!({"channel": {"color": channel}})))
+            }
             _ => Mapped::Unsupported { harmless: false },
         },
         // History › Step Backward / Step Forward.
@@ -58,6 +69,7 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
 
 /// Write supported selection/navigation references without replacing their kind with a name.
 /// Write the supported layer, channel, document and history selection references.
+/// Encode selections whose target and selection mode can be represented faithfully in ATN.
 pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
     let ord = |o: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class("Lyr "), type_id: code("Ordn"), value: code(o) }]);
     let enumerated = |cls: &str, ty: &str, v: &str| D::Reference(vec![ReferenceItem::Enumerated { class: class(cls), type_id: code(ty), value: code(v) }]);
@@ -83,10 +95,27 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
             d.with("MkVs", D::Boolean(false))
         }
         "channel.target" => {
-            let v = match jstr(p, "channel") {
-                Some("mask") => "Msk ",
-                None | Some("composite") => "RGB ",
-                Some(_) => return None,
+            if p.get("colors").is_some()
+                || p.get("channel").and_then(|channel| channel.get("colors")).is_some()
+                || p.get("extend").is_some_and(|v| v != &Value::Bool(false))
+            {
+                return None;
+            }
+            let v = match p.get("channel") {
+                None => "RGB ",
+                Some(Value::String(channel)) => match channel.as_str() {
+                    "mask" => "Msk ",
+                    "composite" => "RGB ",
+                    _ => return None,
+                },
+                Some(channel) => {
+                    let color = channel.get("color")?.as_str()?.to_ascii_lowercase();
+                    // Gry imports as portable composite, unlike a mode-specific Gray object.
+                    if color == "gray" {
+                        return None;
+                    }
+                    lookup_back(CHANNELS, &color)?
+                }
             };
             desc("null").with("null", enumerated("Chnl", "Chnl", v)).with("MkVs", D::Boolean(false))
         }
