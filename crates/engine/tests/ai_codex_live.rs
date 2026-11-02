@@ -37,10 +37,23 @@ fn live_codex_canvas_returns_an_undoable_layer() {
     assert!(blue[0] < 0.4 && blue[1] < 0.4 && blue[2] > 0.6, "right square should remain blue: {blue:?}");
     let output = photocraft_io::export(doc, "png", &Default::default()).unwrap();
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/ai-codex-live-result.png");
-    std::fs::write(&path, output.bytes).unwrap();
+    write_evidence(&path, &output.bytes);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), original.layers.len());
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.len(), original.layers.len() + 1);
     println!("Live canvas -> Codex -> layer -> undo/redo passed: {result}; image: {}", path.display());
+}
+
+fn write_evidence(path: &std::path::Path, bytes: &[u8]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn evidence_creates_missing_output_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("missing/target/ai-codex-live-result.png");
+    write_evidence(&path, b"synthetic evidence");
+    assert_eq!(std::fs::read(path).unwrap(), b"synthetic evidence");
 }

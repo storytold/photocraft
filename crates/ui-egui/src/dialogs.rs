@@ -955,6 +955,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
 /// that touches files itself, and a valid guide layout.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id)
+        && !crate::ai_account_ui::can_confirm(app, &d.fields)
+    {
+        return Err("sign in with ChatGPT and enter a prompt first".into());
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }

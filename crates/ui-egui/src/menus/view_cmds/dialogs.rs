@@ -143,7 +143,10 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             "The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.",
         ));
         let mut prompt = f.get("prompt").and_then(Value::as_str).unwrap_or_default().to_string();
-        ui.add(egui::TextEdit::multiline(&mut prompt).desired_rows(5).desired_width(400.0).hint_text(crate::i18n::t("Describe your edit")));
+        let response = ui.add(egui::TextEdit::multiline(&mut prompt).desired_rows(5).desired_width(400.0).hint_text(crate::i18n::t("Describe your edit")));
+        if response.has_focus() {
+            ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        }
         f.insert("prompt".into(), json!(prompt));
         return;
     }

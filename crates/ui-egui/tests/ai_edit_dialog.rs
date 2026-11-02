@@ -35,7 +35,7 @@ mod account_flow {
     use photocraft_engine::cmd::ai_account_cmds::{AccountError, AccountInfo, AccountService, State};
     use std::sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::{Duration, Instant};
 
@@ -45,9 +45,12 @@ mod account_flow {
         opened: Mutex<Vec<String>>,
         fail_browser: AtomicBool,
         runtime_missing: AtomicBool,
+        hold_cancel: AtomicBool,
+        checks: AtomicUsize,
     }
     impl AccountService for Fake {
         fn check(&self, _: &dyn Fn() -> bool) -> Result<AccountInfo, AccountError> {
+            self.checks.fetch_add(1, Ordering::AcqRel);
             if self.runtime_missing.load(Ordering::Acquire) {
                 return Err(AccountError::RuntimeUnavailable("Synthetic missing runtime".into()));
             }
@@ -56,6 +59,11 @@ mod account_flow {
         fn login(&self, url: &mut dyn FnMut(String) -> Result<(), AccountError>, cancel: &dyn Fn() -> bool) -> Result<AccountInfo, AccountError> {
             url("https://auth.openai.com/authorize?state=test".into())?;
             while !cancel() && !self.finish.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            // Model a bounded runtime that needs time to stop after cancellation.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while cancel() && self.hold_cancel.load(Ordering::Acquire) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(1));
             }
             if cancel() { Err(AccountError::Cancelled) } else { Ok(AccountInfo::ChatGpt { plan: Some("plus".into()) }) }
@@ -69,6 +77,8 @@ mod account_flow {
             opened: Mutex::new(Vec::new()),
             fail_browser: AtomicBool::new(false),
             runtime_missing: AtomicBool::new(false),
+            hold_cancel: AtomicBool::new(false),
+            checks: AtomicUsize::new(0),
         });
         let service = fake.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1280.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -76,6 +86,14 @@ mod account_flow {
             let mut session = photocraft_engine::Session::new();
             session.edit_prefs(|p| p.interface.language = "en".into());
             assert!(session.execute("file.new", json!({"width":16,"height":16})).is_ok());
+            // Even a broken confirmation path must never reach a real provider in this harness.
+            session.authorize = Some(|command, _| {
+                if command == "edit.ai.codex" {
+                    Err(photocraft_engine::EngineError::Other("Offline UI test: image requests are forbidden".into()))
+                } else {
+                    Ok(())
+                }
+            });
             let browser = service.clone();
             assert!(session.ai_account.set_service(service).is_ok());
             let ctx = cc.egui_ctx.clone();
@@ -210,5 +228,120 @@ mod account_flow {
         h.run_steps(2);
         assert!(h.query_by_label("Could not open your browser. Try again or copy the sign-in link into your browser.").is_none());
         assert_eq!(fake.opened.lock().unwrap_or_else(PoisonError::into_inner).len(), 2);
+    }
+
+    #[test]
+    fn missing_native_browser_service_reports_failure_without_emitting_an_open_url() {
+        let (mut h, _) = harness(AccountInfo::SignedOut);
+        wait(&mut h, State::SignedOut);
+        h.state_mut().services.open_url = None;
+        h.get_by_label("Sign in with ChatGPT").click();
+        wait(&mut h, State::WaitingForBrowser);
+        assert!(h.query_by_label("Could not open your browser. Try again or copy the sign-in link into your browser.").is_some());
+        assert!(!h.output().platform_output.commands.iter().any(|cmd| matches!(cmd, egui::OutputCommand::OpenUrl(_))));
+        h.get_by_label("Copy sign-in link").click();
+        h.run_steps(1);
+        assert!(
+            h.output()
+                .platform_output
+                .commands
+                .iter()
+                .any(|cmd| matches!(cmd, egui::OutputCommand::CopyText(text) if text.starts_with("https://auth.openai.com/")))
+        );
+    }
+
+    #[test]
+    fn reopening_during_cancel_rechecks_once_when_worker_finishes() {
+        let (mut h, fake) = harness(AccountInfo::SignedOut);
+        wait(&mut h, State::SignedOut);
+        fake.hold_cancel.store(true, Ordering::Release);
+        h.get_by_label("Sign in with ChatGPT").click();
+        wait(&mut h, State::WaitingForBrowser);
+        h.get_by_label("Cancel").click();
+        h.run_steps(1);
+        assert!(h.state().session.ai_account.pending());
+        *fake.info.lock().unwrap_or_else(PoisonError::into_inner) = Some(AccountInfo::ChatGpt { plan: None });
+        let ctx = h.ctx.clone();
+        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "edit.ai.codex", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!(fake.checks.load(Ordering::Acquire), 1);
+        fake.hold_cancel.store(false, Ordering::Release);
+        wait(&mut h, State::Connected);
+        h.run_steps(4);
+        assert_eq!(fake.checks.load(Ordering::Acquire), 2);
+        assert_eq!(fake.opened.lock().unwrap_or_else(PoisonError::into_inner).len(), 1);
+    }
+
+    #[test]
+    fn closing_reopened_dialog_clears_deferred_refresh() {
+        let (mut h, fake) = harness(AccountInfo::SignedOut);
+        wait(&mut h, State::SignedOut);
+        fake.hold_cancel.store(true, Ordering::Release);
+        h.get_by_label("Sign in with ChatGPT").click();
+        wait(&mut h, State::WaitingForBrowser);
+        let id = h.state().ui.dialogs[0].id;
+        photocraft_ui_egui::dialogs::cancel(h.state_mut(), id).unwrap();
+        let ctx = h.ctx.clone();
+        photocraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "edit.ai.codex", json!({})).unwrap();
+        let id = h.state().ui.dialogs[0].id;
+        photocraft_ui_egui::dialogs::cancel(h.state_mut(), id).unwrap();
+        fake.hold_cancel.store(false, Ordering::Release);
+        wait(&mut h, State::Cancelled);
+        assert_eq!(fake.checks.load(Ordering::Acquire), 1);
+        assert!(h.state().ui.dialogs.is_empty());
+    }
+
+    #[test]
+    fn control_confirm_during_login_keeps_dialog_and_pending_worker() {
+        let (mut h, _) = harness(AccountInfo::SignedOut);
+        wait(&mut h, State::SignedOut);
+        h.get_by_label("Sign in with ChatGPT").click();
+        wait(&mut h, State::WaitingForBrowser);
+        let id = h.state().ui.dialogs[0].id;
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("Make the circle yellow"));
+        assert!(photocraft_ui_egui::dialogs::confirm(h.state_mut(), id).is_err());
+        assert!(h.state().ui.dialogs.iter().any(|dialog| dialog.id == id));
+        assert!(h.state().session.ai_account.pending());
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
+    }
+
+    #[test]
+    fn enter_in_prompt_inserts_newline_without_confirming() {
+        let (mut h, _) = harness(AccountInfo::ChatGpt { plan: None });
+        wait(&mut h, State::Connected);
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+        h.event(egui::Event::Text("Make the circle yellow".into()));
+        h.run_steps(2);
+        assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.dialogs.len(), 1, "Enter must not submit the canvas");
+        assert!(h.state().ui.dialogs[0].fields["prompt"].as_str().unwrap().contains('\n'));
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
+    }
+
+    #[test]
+    fn control_confirm_rejects_stale_connected_ui_while_refresh_is_pending() {
+        let (mut h, _) = harness(AccountInfo::ChatGpt { plan: None });
+        wait(&mut h, State::Connected);
+        let id = h.state().ui.dialogs[0].id;
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("Make the circle yellow"));
+        h.state_mut().run("ai.codex.account", json!({"action":"refresh"})).unwrap();
+        assert_eq!(h.state().ui.ai_account.status.state, State::Connected);
+        assert!(photocraft_ui_egui::dialogs::confirm(h.state_mut(), id).is_err());
+        assert!(h.state().ui.dialogs.iter().any(|dialog| dialog.id == id));
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
+    }
+
+    #[test]
+    fn ready_confirmation_still_closes_dialog_and_reaches_the_command_gate() {
+        let (mut h, _) = harness(AccountInfo::ChatGpt { plan: None });
+        wait(&mut h, State::Connected);
+        let id = h.state().ui.dialogs[0].id;
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("prompt".into(), json!("Make the circle yellow"));
+        let error = photocraft_ui_egui::dialogs::confirm(h.state_mut(), id).unwrap_err();
+        assert!(error.contains("Offline UI test: image requests are forbidden"));
+        assert!(!h.state().ui.dialogs.iter().any(|dialog| dialog.id == id));
+        assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
     }
 }

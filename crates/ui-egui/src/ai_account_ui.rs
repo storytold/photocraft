@@ -12,6 +12,8 @@ pub struct AccountUi {
     browser_requested: bool,
     #[serde(skip)]
     browser_error: bool,
+    #[serde(skip)]
+    refresh_requested: bool,
 }
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
@@ -33,7 +35,12 @@ pub fn opened(app: &mut PhotocraftApp) {
     // Headless UI harnesses do not start an installed runtime implicitly. They inject a
     // deterministic account service; the actual desktop uses background_jobs.
     if app.background_jobs || app.session.ai_account.configured() {
-        action(app, "refresh");
+        if app.session.ai_account.pending() {
+            app.ui.ai_account.refresh_requested = true;
+            action(app, "status");
+        } else {
+            action(app, "refresh");
+        }
     }
 }
 
@@ -58,8 +65,16 @@ fn open_browser(app: &mut PhotocraftApp, ctx: &Context) {
         app.ui.ai_account.browser_error = if let Some(open) = &app.services.open_url {
             open(&url).is_err()
         } else {
-            ctx.open_url(egui::OpenUrl::new_tab(url));
-            false
+            #[cfg(target_arch = "wasm32")]
+            {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+                false
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = ctx;
+                true
+            }
         };
     } else {
         app.ui.ai_account.browser_error = true;
@@ -71,7 +86,15 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &Context) {
     if pending || app.ui.dialogs.iter().any(|dialog| owns(&dialog.fields)) {
         action(app, "status");
     }
-    if pending {
+    // A reopened dialog can outlive the cancelled worker. Retry only after polling
+    // its completion, and never start an implicit refresh after the dialog closes.
+    if app.ui.ai_account.refresh_requested && !app.session.ai_account.pending() {
+        app.ui.ai_account.refresh_requested = false;
+        if app.ui.dialogs.iter().any(|dialog| owns(&dialog.fields)) {
+            action(app, "refresh");
+        }
+    }
+    if app.session.ai_account.pending() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
     if app.ui.ai_account.browser_requested && app.ui.ai_account.status.state == State::WaitingForBrowser {
@@ -84,6 +107,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &Context) {
 }
 
 pub fn closed(app: &mut PhotocraftApp) {
+    app.ui.ai_account.refresh_requested = false;
     app.ui.ai_account.browser_requested = false;
     app.ui.ai_account.browser_error = false;
     if app.session.ai_account.pending() {
@@ -94,6 +118,7 @@ pub fn closed(app: &mut PhotocraftApp) {
 pub fn can_confirm(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
     !owns(fields)
         || (app.ui.ai_account.status.state == State::Connected
+            && !app.session.ai_account.pending()
             && fields.get("prompt").and_then(Value::as_str).is_some_and(|prompt| !prompt.trim().is_empty() && prompt.len() <= 16_000))
 }
 

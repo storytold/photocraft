@@ -72,6 +72,10 @@ fn main() {
     let safe_gpu = args.iter().any(|a| a == "--safe-gpu");
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
     let background_jobs = args.iter().any(|a| a == "--background-jobs");
+    if background_jobs && args.iter().any(|a| a == "--codex-account-fixture") {
+        eprintln!("--codex-account-fixture cannot be combined with --background-jobs");
+        std::process::exit(2);
+    }
     let custom_titlebar = args.iter().any(|a| a == "--custom-titlebar");
     // `--settle-ms N`: keep rendering frames for N ms before the capture (e.g. mid-job).
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -164,10 +168,6 @@ fn main() {
     }
     if let Some(state) = arg(&args, "--codex-account-fixture") {
         use photocraft_engine::cmd::ai_account_cmds::{Snapshot, State};
-        if background_jobs {
-            eprintln!("--codex-account-fixture cannot be combined with --background-jobs");
-            std::process::exit(2);
-        }
         let state = match state.as_str() {
             "connected" => State::Connected,
             "signedOut" => State::SignedOut,

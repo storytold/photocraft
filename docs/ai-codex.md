@@ -14,6 +14,10 @@ The form shows the Codex account state. Existing ChatGPT sign-in can be reused; 
 Checking the connection or opening the form does not generate an image. Enter an instruction
 and confirm to submit the visible canvas. Success adds an **AI Edit (Codex)** top-level layer;
 Undo removes it and Redo restores it. Existing layers are preserved.
+Enter in the focused instruction field inserts a newline; use **OK** to submit.
+Reopening the form while a cancelled sign-in is stopping automatically rechecks the
+connection once that worker finishes. Confirmation through the UI or control channel
+requires a connected account, no pending account operation and a nonempty instruction.
 
 Runtime discovery runs for each connection: explicit `PHOTOCRAFT_CODEX_PATH`, known desktop
 installation locations, then absolute PATH entries. Keep the executable in its complete
@@ -108,6 +112,25 @@ no lint allowances were added. These are recorded review limitations, not passin
 
 The snapshot tool built and the four captures below were inspected. Desktop build validation
 is recorded separately when complete. No real account sign-in or image request was made.
+
+### Review follow-up (Windows, 2026-11-02)
+
+The six findings from the first automated review are addressed. Offline regression tests
+cover Enter as a newline, confirmation during sign-in and with a stale connection display,
+the allowed confirmation path, reopening during cancellation, closing a deferred refresh,
+a missing native browser service, and creating a missing evidence directory. The UI
+harness forbids image commands even if confirmation regresses.
+
+The full UI run passed 4611 library tests and 146 graphical integration tests (21 and one
+ignored respectively), plus the then-current 13 AI form tests. After adding two more
+confirmation checks and the offline command gate, all 15 AI form tests passed separately.
+The offline evidence-file test passed; the opt-in subscription test remained ignored.
+Both conflicting snapshot-flag orders exited with code 2 before opening a missing input
+file. Fresh English/Chinese synthetic multiline-form captures were inspected. Formatting,
+32-crate layering and wasm's 25 crates plus HEIF passed. Strict Clippy remains blocked at
+the same unchanged upstream IO and UI sites described above; no allowances were added.
+The full engine run passed 2896 tests with 23 standard-run ignores; the ignored full-registry
+`panic_hunt` passed separately (19.46 s). Both UI and engine documentation compiled.
 
 ### UI captures
 
