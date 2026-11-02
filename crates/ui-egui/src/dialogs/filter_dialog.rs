@@ -504,6 +504,7 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
 }
 
+/// Open the command's schema dialog using current settings and editing target.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let spec = photocraft_engine::commands::find(command)?;
     let mut fields = Map::new();
@@ -540,6 +541,16 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         // The document picker lists every open document (params refer to them by index).
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         fields.insert("__docs".into(), json!(names));
+    }
+    if command == "image.adjustments.matchColor" {
+        // Layer IDs belong to the selected source document; names need not be unique.
+        let layers: Vec<Vec<_>> = app
+            .session
+            .documents()
+            .iter()
+            .map(|d| d.doc.walk().into_iter().rev().map(|(_, _, layer)| json!({"id": layer.id, "name": layer.name})).collect())
+            .collect();
+        fields.insert("__sourceLayers".into(), json!(layers));
     }
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
     Some(id)
@@ -824,6 +835,29 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// Match Color samples a layer from its Source document, or the merged image by default.
+fn match_color_layer(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let source = f.get("source").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    let layers = source.and_then(|i| f.get("__sourceLayers")?.as_array()?.get(i)?.as_array());
+    let enabled = layers.is_some();
+    let layers: Vec<(u64, String)> =
+        layers.into_iter().flatten().filter_map(|layer| Some((layer.get("id")?.as_u64()?, layer.get("name")?.as_str()?.to_owned()))).collect();
+    let mut selected = f.get("sourceLayer").and_then(Value::as_u64).filter(|id| layers.iter().any(|(layer, _)| layer == id));
+    let mut choices = vec![(None, tl!("Merged"))];
+    choices.extend(layers.iter().map(|(id, name)| (Some(*id), name.as_str())));
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tl!("Source Layer")).color(Tokens::get(ui.ctx()).text_dim));
+            crate::widgets::dropdown_literal(ui, "match-color-source-layer", tl!("Source Layer"), &mut selected, &choices, 170.0);
+        });
+    });
+    if let Some(id) = selected {
+        f.insert("sourceLayer".into(), json!(id));
+    } else {
+        f.remove("sourceLayer");
+    }
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
@@ -982,10 +1016,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
-                match sel.parse::<i64>() {
-                    Ok(i) if i >= 0 => f.insert(p.key, json!(i)),
-                    _ => f.insert(p.key, json!(-1)),
-                };
+                let selected = sel.parse::<i64>().ok().filter(|i| *i >= 0).unwrap_or(-1);
+                if cmd == "image.adjustments.matchColor" && p.key == "source" && selected != cur {
+                    f.remove("sourceLayer");
+                }
+                f.insert(p.key, json!(selected));
             }
             Kind::Grid(n) => {
                 let side = (n as f32).sqrt().round().max(1.0) as usize;
@@ -1003,6 +1038,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 });
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
+            Kind::Json if cmd == "image.adjustments.matchColor" && p.key == "sourceLayer" => match_color_layer(ui, f),
             Kind::Json => {}
             Kind::Color(default) => {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
