@@ -40,6 +40,7 @@ mod support {
     #[derive(Default)]
     struct State {
         upstream: Option<SocketAddr>,
+        http_announced: bool,
         generated: Option<PathBuf>,
         artifacts: PathBuf,
         receipts: Vec<Value>,
@@ -93,6 +94,16 @@ mod support {
         Ok(Config { evidence, temporary, timeout: Duration::from_secs(seconds) })
     }
 
+    /// The pinned runner uses this address both to bind its HTTP server and to navigate Chrome.
+    /// Port zero would bind an ephemeral server but still send headless Chrome to port zero.
+    fn configure_runner_http(command: &mut Command, address: SocketAddr) -> Result<(), String> {
+        if address.ip() != Ipv4Addr::LOCALHOST || address.port() == 0 {
+            return Err("the test HTTP server needs an exact nonzero IPv4 loopback address".into());
+        }
+        command.env("WASM_BINDGEN_TEST_ADDRESS", address.to_string());
+        Ok(())
+    }
+
     pub fn run(args: &[&str]) -> Result<(), String> {
         let cfg = config(args)?;
         // Caller supplies the existing D-backed TMP/target/cache and the sole managed heavy lane.
@@ -101,13 +112,17 @@ mod support {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let address = listener.local_addr().map_err(|e| e.to_string())?;
+        // Choose a separate nonzero HTTP port while both reservations are owned. The runner
+        // accepts an address, not a listener; execute releases only this reservation at spawn.
+        let runner_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+        let runner_address = runner_listener.local_addr().map_err(|e| e.to_string())?;
         let mut random = [0_u8; 32];
         File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut random)).map_err(|e| format!("test nonce: {e}"))?;
         let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
         let endpoint = format!("http://{address}/{token}/");
         let artifacts = cfg.evidence.with_extension("artifacts");
         std::fs::create_dir(&artifacts).map_err(|e| format!("fresh artifact snapshot directory: {e}"))?;
-        let state = Arc::new(Mutex::new(State { artifacts, ..Default::default() }));
+        let state = Arc::new(Mutex::new(State { upstream: Some(runner_address), artifacts, ..Default::default() }));
         let stop = Arc::new(AtomicBool::new(false));
         let deadline = Instant::now() + cfg.timeout;
         let server_state = state.clone();
@@ -122,7 +137,7 @@ mod support {
                 result
             })
             .map_err(|e| format!("artifact relay thread: {e}"))?;
-        let outcome = execute(&cfg, &endpoint, &state, deadline);
+        let outcome = execute(&cfg, &endpoint, runner_listener, &state, deadline);
         stop.store(true, Ordering::SeqCst);
         let server_result = server.join().map_err(|_| "artifact relay thread panicked".to_string()).and_then(|r| r);
         let s = locked(&state);
@@ -143,7 +158,7 @@ mod support {
         let result = json!({
             "schema":1, "success":success, "test":MARKER,
             "cargo": outcome.as_ref().err(), "relay":server_result.as_ref().err(), "proofError":checks.as_ref().err(),
-            "upstream":s.upstream.map(|a| format!("http://{a}")), "generatedArtifacts":s.generated,
+            "upstream":s.upstream.map(|a| format!("http://{a}")), "upstreamSource":"configured-nonzero-WASM_BINDGEN_TEST_ADDRESS", "generatedArtifacts":s.generated,
             "relayOrigin":format!("http://{address}"), "artifactSnapshots":s.artifacts, "cors":"null", "sandbox":"allow-scripts",
             "isolation":{"coop":"same-origin","coep":"require-corp"}, "artifactReceipts":s.receipts,
             "childProof":s.proof, "cargoLog":s.log, "parentPositiveCount":s.passed, "exactOnePassSummary":s.summary,
@@ -234,10 +249,14 @@ mod support {
         }
     }
 
-    fn execute(cfg: &Config, endpoint: &str, state: &Arc<Mutex<State>>, deadline: Instant) -> Result<(), String> {
+    fn execute(cfg: &Config, endpoint: &str, runner_listener: TcpListener, state: &Arc<Mutex<State>>, deadline: Instant) -> Result<(), String> {
         let runner = std::env::var_os("CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER").ok_or("bind the exact pinned WASM runner path first")?;
         if !Path::new(&runner).is_absolute() || !Path::new(&runner).is_file() {
             return Err("the WASM runner must be an existing absolute bound executable path".into());
+        }
+        let runner_address = runner_listener.local_addr().map_err(|e| e.to_string())?;
+        if locked(state).upstream != Some(runner_address) {
+            return Err("configured test HTTP address differs from its owned reservation".into());
         }
         let path = cfg.evidence.with_extension("cargo.log");
         let writer = OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
@@ -259,10 +278,10 @@ mod support {
             "--",
             "--nocapture",
         ]);
+        configure_runner_http(&mut command, runner_address)?;
         command
             .env("PHOTOCRAFT_TEST_ORIGIN_RELAY", endpoint)
             .env("WASM_BINDGEN_KEEP_TEST_BUILD", "1")
-            .env("WASM_BINDGEN_TEST_ADDRESS", "127.0.0.1:0")
             .env("WASM_BINDGEN_TEST_TIMEOUT", "900")
             .env("TMPDIR", &cfg.temporary)
             .env("CARGO_BUILD_JOBS", "1")
@@ -276,6 +295,9 @@ mod support {
             .stdout(Stdio::from(writer))
             .stderr(Stdio::inherit())
             .process_group(0);
+        // The official runner must bind this exact address before starting WebDriver. If
+        // another process wins the handoff race, its bind fails: no retry or port scan follows.
+        drop(runner_listener);
         let mut child = OwnedCargo(command.spawn().map_err(|e| format!("cargo browser test: {e}"))?);
         let outcome = loop {
             if let Err(error) = output.drain(&cfg.temporary, state) {
@@ -352,10 +374,12 @@ mod support {
             state.generated = Some(path);
         } else if let Some(origin) = line.strip_prefix("Tests are now available at http://") {
             let address: SocketAddr = origin.parse().map_err(|_| "invalid owned runner origin")?;
-            if address.ip() != Ipv4Addr::LOCALHOST || address.port() == 0 || state.upstream.is_some() {
-                return Err("runner must announce one exact IPv4 loopback origin".into());
+            if state.upstream != Some(address) || state.http_announced {
+                return Err("runner HTTP announcement differs from its configured address or repeats".into());
             }
-            state.upstream = Some(address);
+            state.http_announced = true;
+            // Browser-mode headless runs announce no HTTP origin. Never learn one from the
+            // separate "Running headless tests ..." message: that URL belongs to WebDriver.
         } else if let Some(proof) = line.strip_prefix("PHOTOCRAFT_OPAQUE_CHILD_PROOF ") {
             let proof: Value = serde_json::from_str(proof).map_err(|e| e.to_string())?;
             if state.proof.is_some()
@@ -482,7 +506,7 @@ mod support {
         }
         let (upstream, generated) = {
             let s = locked(state);
-            (s.upstream.ok_or("runner origin not announced")?, s.generated.clone().ok_or("generated directory not announced")?)
+            (s.upstream.ok_or("runner HTTP address not configured")?, s.generated.clone().ok_or("generated directory not announced")?)
         };
         if path == "/" {
             let bytes = index(upstream, stop, deadline)?;
@@ -744,7 +768,68 @@ mod support {
 
     #[cfg(test)]
     mod tests {
-        use super::{Digest, artifact_path, unchunk};
+        use super::{Digest, State, artifact_path, configure_runner_http, observe, unchunk, valid_proof};
+        use std::ffi::OsStr;
+        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use std::path::Path;
+        use std::process::Command;
+
+        #[test]
+        fn runner_http_binding_requires_nonzero_ipv4_loopback() -> Result<(), String> {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 43127));
+            let mut command = Command::new("unexecuted-http-binding-fixture");
+            configure_runner_http(&mut command, address)?;
+            let binding: Vec<_> = command.get_envs().filter(|(key, _)| *key == OsStr::new("WASM_BINDGEN_TEST_ADDRESS")).collect();
+            assert_eq!(binding, [(OsStr::new("WASM_BINDGEN_TEST_ADDRESS"), Some(OsStr::new("127.0.0.1:43127")))]);
+            for address in [
+                SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                SocketAddr::from((Ipv4Addr::UNSPECIFIED, 43127)),
+                SocketAddr::from((Ipv4Addr::new(127, 0, 0, 2), 43127)),
+                SocketAddr::from((Ipv6Addr::LOCALHOST, 43127)),
+            ] {
+                let mut rejected = Command::new("unexecuted-http-binding-fixture");
+                assert!(configure_runner_http(&mut rejected, address).is_err(), "{address}");
+                assert!(rejected.get_envs().next().is_none());
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn headless_driver_stdout_cannot_select_the_test_http_origin() -> Result<(), String> {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 43127));
+            let mut state = State { upstream: Some(address), ..Default::default() };
+            // Exact shape retained from the failed run: this is ChromeDriver's port, not HTTP.
+            observe("Running headless tests in Chrome on `http://127.0.0.1:37189/`", Path::new("."), &mut state)?;
+            assert_eq!(state.upstream, Some(address));
+            assert!(observe("Tests are now available at http://127.0.0.1:37189", Path::new("."), &mut state).is_err());
+            observe("Tests are now available at http://127.0.0.1:43127", Path::new("."), &mut state)?;
+            assert_eq!(state.upstream, Some(address));
+            assert!(observe("Tests are now available at http://127.0.0.1:43127", Path::new("."), &mut state).is_err());
+            let mut unbound = State::default();
+            assert!(observe("Tests are now available at http://127.0.0.1:43127", Path::new("."), &mut unbound).is_err());
+            assert!(unbound.upstream.is_none());
+            Ok(())
+        }
+
+        #[test]
+        fn opaque_proof_must_match_the_configured_http_server_not_webdriver() -> Result<(), String> {
+            let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 43127));
+            let relay = SocketAddr::from((Ipv4Addr::LOCALHOST, 43128));
+            let mut state = State {
+                upstream: Some(address),
+                proof: Some(serde_json::json!({
+                    "parentOrigin":"http://127.0.0.1:43127", "relayOrigin":"http://127.0.0.1:43128",
+                    "marker":"photocraft-provider-opaque-probe", "sandbox":"allow-scripts",
+                    "nonce":"0123456789abcdef0123456789abcdef"
+                })),
+                ..Default::default()
+            };
+            assert!(valid_proof(&state, relay));
+            state.proof.as_mut().ok_or("fixture proof missing")?["parentOrigin"] = "http://127.0.0.1:37189".into();
+            assert!(!valid_proof(&state, relay));
+            Ok(())
+        }
+
         #[test]
         fn artifact_routes_reject_non_generated_and_escaping_inputs() {
             assert_eq!(artifact_path("/token/run.js", "token").ok(), Some("run.js"));

@@ -277,10 +277,18 @@ forged request, then retains all unchanged Host/default-off/cancellation/input-l
 It does not infer the result solely from the parent's access to the child.
 
 The explicit `browser-test-provider-origin` xtask starts a temporary Rust artifact relay on
-127.0.0.1 and an ephemeral port, then runs only the named browser fixture. It obtains the exact
-runner origin and retained generated directory from its own Cargo/runner stdout. It proxies the
-unchanged generated index from that origin and streams only the generated run/module/snippets/
-WASM allowlist from that retained directory. It adds `Access-Control-Allow-Origin: null`
+127.0.0.1 and an ephemeral port, then runs only the named browser fixture. A separate owned
+ephemeral listener chooses a nonzero test HTTP address, passed unchanged through the pinned
+runner's `WASM_BINDGEN_TEST_ADDRESS` setting for both server binding and browser navigation.
+Port zero must not be passed: runner 0.2.129 would navigate headless Chrome to port zero rather
+than the server's assigned port. The temporary HTTP reservation is released immediately before
+the nested Cargo spawn; if another process claims that port, the runner's bind fails without a
+retry or port scan. The ChromeDriver announcement is not an HTTP-server origin. Any HTTP-origin
+announcement must occur at most once and match the configured address. The successful real-child
+proof must name that exact parent origin. Only the retained generated directory is discovered
+from stdout. The helper proxies the unchanged generated index from its configured test HTTP
+origin and streams only the generated run/module/snippets/WASM allowlist from that retained
+directory. It adds `Access-Control-Allow-Origin: null`
 (no wildcard), preserves COOP same-origin and COEP require-corp, and never exposes arbitrary
 workspace files, authentication, storage or provider backends. No application startup or ordinary
 CI command starts this support service. There is no handwritten JS/TS, srcdoc script or Function
@@ -322,7 +330,8 @@ Success requires the original literal fixture marker exactly once, one passed/ze
 ignored, an actual `PHOTOCRAFT_OPAQUE_CHILD_PROOF` from the parent and durable matching index/
 module/WASM receipts. The child has its own generated test context; its output does not replace
 the top-level test result. Missing/unbound support fails rather than silently skipping the
-foreign-origin scenario. New native support regressions cover route escapes, chunk framing and
+foreign-origin scenario. Native support regressions cover the nonzero loopback HTTP binding,
+separation from ChromeDriver's URL, exact proof origin, route escapes, chunk framing and
 streaming SHA256 against the existing implementation.
 
 The existing malformed-open Rust fixture injects an importer failure. It does not demonstrate
