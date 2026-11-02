@@ -1026,6 +1026,7 @@ fn grabbing_the_border_inside_the_active_document_drags_it_without_painting() {
     ev(&mut h, button(to, false));
     h.run_steps(2);
     assert_eq!(steps(&h), before, "the press dragged the border and painted nothing");
+    assert_eq!(h.state().session.active_index(), Some(1), "the active document stays active");
     // And the cells the documents are drawn in follow the border, not just the stored fractions.
     let shown = crate::canvas::arranged_cells(h.state(), area).expect("two documents are arranged");
     assert!((shown[0].1.max.x - to.x).abs() < 2.0, "the left cell ends at the border: {:?}, pointer at {}", shown[0].1, to.x);
