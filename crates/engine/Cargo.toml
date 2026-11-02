@@ -36,6 +36,7 @@ photocraft-plugins = { workspace = true }
 base64 = "0.22"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 photocraft-codecs = { workspace = true }
+imagesize = "0.13"
 flate2 = { workspace = true }
 craft-print = { workspace = true }
 

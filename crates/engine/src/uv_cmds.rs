@@ -19,6 +19,144 @@ use std::{
 
 type PaddingCacheKey = (usize, u32, u32, i32, i32, usize, u64);
 
+// Aggregate worst-case decoded and retained surfaces (five 32-bit channels, two copies).
+const UV_TEXTURE_IMPORT_BUDGET_BYTES: u64 = 3 << 30;
+const UV_TEXTURE_MAX_SOURCE_BYTES: u64 = photocraft_uv::MAX_FILE_BYTES;
+// Unique compressed inputs are capped in total, and the remaining aggregate cap is checked
+// against each file's metadata before its body is allocated.
+const UV_TEXTURE_TOTAL_SOURCE_BYTES: u64 = 1 << 30;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum UvTextureKey {
+    Path(String),
+    Embedded(usize),
+}
+
+type UvTextureResult = std::result::Result<usize, String>;
+type UvTextureCache = std::collections::HashMap<UvTextureKey, UvTextureResult>;
+type ImportedUvTexture = (Document, bool, Vec<String>);
+
+fn uv_texture_key(path: Option<&str>, embedded: Option<&Arc<[u8]>>) -> Option<UvTextureKey> {
+    if let Some(bytes) = embedded {
+        Some(UvTextureKey::Embedded(Arc::as_ptr(bytes) as *const u8 as usize))
+    } else {
+        path.map(|path| UvTextureKey::Path(path.to_owned()))
+    }
+}
+
+fn cached_uv_texture<F>(cache: &mut UvTextureCache, key: UvTextureKey, decode: F) -> UvTextureResult
+where
+    F: FnOnce() -> std::result::Result<usize, String>,
+{
+    if let Some(result) = cache.get(&key) {
+        return result.clone();
+    }
+    let result = decode();
+    cache.insert(key, result.clone());
+    result
+}
+
+fn uv_texture_preflight(bytes: &[u8], remaining: u64) -> std::result::Result<u64, String> {
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| "texture file size is not representable".to_owned())?;
+    if byte_len > UV_TEXTURE_MAX_SOURCE_BYTES {
+        return Err(format!("texture file exceeds the {} MiB automatic import limit", UV_TEXTURE_MAX_SOURCE_BYTES >> 20));
+    }
+    if photocraft_codecs::detect(bytes).is_none() || photocraft_io::raw::is_raw(bytes) {
+        return Err("automatic texture import requires a recognized flat raster image; assign this file explicitly".to_owned());
+    }
+    let (width, height) = photocraft_codecs::probe_size(bytes)
+        .ok()
+        .or_else(|| imagesize::blob_size(bytes).ok().and_then(|size| Some((u32::try_from(size.width).ok()?, u32::try_from(size.height).ok()?))))
+        .ok_or_else(|| "texture dimensions could not be safely checked; assign it explicitly".to_owned())?;
+    if width == 0 || height == 0 {
+        return Err("texture has empty dimensions".to_owned());
+    }
+    let tile_side = photocraft_geom::TILE_SIZE as u64;
+    let padded_width = u64::from(width).checked_add(tile_side - 1).ok_or_else(|| "texture dimensions overflow".to_owned())? / tile_side * tile_side;
+    let padded_height = u64::from(height).checked_add(tile_side - 1).ok_or_else(|| "texture dimensions overflow".to_owned())? / tile_side * tile_side;
+    // Five channels at 32 bits per channel (CMYK plus alpha), doubled to cover the decoded
+    // image and its document surface while both may be live. Padding accounts for complete
+    // raster tiles; the 3 GiB aggregate budget therefore admits one aligned 8K image.
+    let reserve = padded_width
+        .checked_mul(padded_height)
+        .and_then(|pixels| pixels.checked_mul(20))
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or_else(|| "texture decoded-size estimate overflowed".to_owned())?;
+    if reserve > remaining {
+        return Err(format!("texture would exceed the remaining {} MiB automatic import budget", remaining >> 20));
+    }
+    Ok(reserve)
+}
+
+#[derive(Default)]
+struct UvTextureBudget {
+    reserved_bytes: u64,
+    source_bytes: u64,
+}
+
+fn import_uv_texture(name: &str, bytes: &[u8], budget: &mut UvTextureBudget) -> std::result::Result<ImportedUvTexture, String> {
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| "texture file size is not representable".to_owned())?;
+    let total_sources = budget.source_bytes.checked_add(byte_len).ok_or_else(|| "automatic texture input budget overflowed".to_owned())?;
+    if total_sources > UV_TEXTURE_TOTAL_SOURCE_BYTES {
+        budget.source_bytes = UV_TEXTURE_TOTAL_SOURCE_BYTES;
+        return Err("model textures exceed the 1 GiB total automatic input budget".to_owned());
+    }
+    budget.source_bytes = total_sources;
+    let remaining = UV_TEXTURE_IMPORT_BUDGET_BYTES.checked_sub(budget.reserved_bytes).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
+    let reserve = uv_texture_preflight(bytes, remaining)?;
+    budget.reserved_bytes = budget.reserved_bytes.checked_add(reserve).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
+    let options = photocraft_io::ImportOptions { psd_max_pixel_bytes: reserve / 2, ..Default::default() };
+    let imported = photocraft_io::import_with_options(name, bytes, &options).map_err(|e| e.to_string())?;
+    if imported.preview_only {
+        return Err("texture is preview only; assign it explicitly".to_owned());
+    }
+    let actual_storage = uv_document_storage(&imported.document).ok_or_else(|| "texture document storage size overflowed".to_owned())?;
+    let actual_reserve = actual_storage.checked_mul(2).ok_or_else(|| "texture document storage estimate overflowed".to_owned())?;
+    if actual_reserve > reserve {
+        let additional = actual_reserve - reserve;
+        if additional > UV_TEXTURE_IMPORT_BUDGET_BYTES.saturating_sub(budget.reserved_bytes) {
+            return Err("texture document exceeds the remaining automatic import memory budget".to_owned());
+        }
+        budget.reserved_bytes = budget.reserved_bytes.checked_add(additional).ok_or_else(|| "automatic texture memory budget overflowed".to_owned())?;
+    }
+    Ok((imported.document, imported.source_read_only, imported.warnings))
+}
+
+fn uv_surface_storage(surface: &Surface, seen: &mut std::collections::HashSet<usize>) -> Option<u64> {
+    surface.tiles().try_fold(0u64, |total, (_, tile)| {
+        let key = Arc::as_ptr(tile) as usize;
+        if !seen.insert(key) {
+            return Some(total);
+        }
+        total.checked_add(u64::try_from(tile.bytes().len()).ok()?)
+    })
+}
+
+fn uv_layer_storage(layer: &Layer, seen: &mut std::collections::HashSet<usize>) -> Option<u64> {
+    let surface = layer.surface().map_or(Some(0), |surface| uv_surface_storage(surface, seen))?;
+    let mask = layer.mask.as_ref().map_or(Some(0), |mask| uv_surface_storage(&mask.surface, seen))?;
+    let mask_paint = layer.mask.as_ref().and_then(|mask| mask.paint.as_ref()).map_or(Some(0), |paint| {
+        paint.layers.iter().try_fold(uv_surface_storage(&paint.base, seen)?, |total, layer| {
+            let surface = uv_surface_storage(&layer.surface, seen)?;
+            let fill_map = layer.fill_map.as_ref().map_or(Some(0), |surface| uv_surface_storage(surface, seen))?;
+            total.checked_add(surface)?.checked_add(fill_map)
+        })
+    })?;
+    let fill_cache = layer.fill_cache.as_ref().map_or(Some(0), |cache| uv_surface_storage(&cache.surface, seen))?;
+    let children =
+        layer.children().map_or(Some(0), |children| children.iter().try_fold(0u64, |total, child| total.checked_add(uv_layer_storage(child, seen)?)))?;
+    surface.checked_add(mask)?.checked_add(mask_paint)?.checked_add(fill_cache)?.checked_add(children)
+}
+
+fn uv_document_storage(document: &Document) -> Option<u64> {
+    let mut seen = std::collections::HashSet::new();
+    let layers = document.layers.iter().try_fold(0u64, |total, layer| total.checked_add(uv_layer_storage(layer, &mut seen)?))?;
+    let channels = document.channels.iter().try_fold(0u64, |total, channel| total.checked_add(uv_surface_storage(&channel.surface, &mut seen)?))?;
+    let selection = document.selection.as_ref().map_or(Some(0), |surface| uv_surface_storage(surface, &mut seen))?;
+    let quick_mask = document.quick_mask.as_ref().map_or(Some(0), |channel| uv_surface_storage(&channel.surface, &mut seen))?;
+    layers.checked_add(channels)?.checked_add(selection)?.checked_add(quick_mask)
+}
+
 fn require_active_uv_bank(session: &Session) -> Result<()> {
     if session.uv_workspace.initialized && !session.uv_workspace.active {
         return Err(err("Activate the 3D document workspace before changing its documents"));
@@ -468,13 +606,21 @@ impl ModelDirectory {
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn read(&self, path: &str) -> Result<Vec<u8>> {
+        self.read_with_limit(path, photocraft_uv::MAX_FILE_BYTES)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_with_limit(&self, path: &str, limit: u64) -> Result<Vec<u8>> {
         let relative = Path::new(path).strip_prefix(&self.directory).map_err(|_| err("Texture must stay inside the model directory"))?;
         let file = self.open_relative(relative).map_err(|e| err(e.to_string()))?;
-        read_opened_file(file, photocraft_uv::MAX_FILE_BYTES)
+        read_opened_file(file, limit.min(photocraft_uv::MAX_FILE_BYTES))
     }
     #[cfg(target_arch = "wasm32")]
     fn read(&self, path: &str) -> Result<Vec<u8>> {
         read(path)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn read_with_limit(&self, _path: &str, _limit: u64) -> Result<Vec<u8>> {
+        Err(err("UV file import is available in native builds only"))
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn sibling_files(&self) -> std::io::Result<(Vec<PathBuf>, bool)> {
@@ -604,87 +750,109 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let uv_set = uint(p, "uvSet", 0)?;
     let (mut scene, source_stamp, directory) = load_scene(&source, uv_set)?;
     let topology = Topology::build(&scene).map_err(|e| err(e.to_string()))?;
-    let mut documents = Vec::new();
-    // Decode everything before mutating the session; missing textures stay unbound, never
-    // aborting an otherwise valid mesh import.
-    for (i, m) in scene.materials.iter().enumerate() {
-        for (normal, filename, embedded) in [(false, &m.base_color, &m.embedded), (true, &m.normal_map, &m.embedded_normal)] {
-            let Some(bytes) = embedded.clone().or_else(|| filename.as_ref().and_then(|p| directory.read(p).ok()).map(Arc::<[u8]>::from)) else {
-                if let Some(path) = filename {
-                    scene.warnings.push(format!("{}: missing texture {path}; assign a replacement", m.name));
+    let mut documents = Vec::<(Document, Option<String>, bool)>::new();
+    let mut texture_cache = UvTextureCache::new();
+    let mut texture_budget = UvTextureBudget::default();
+    let mut slot_bindings = Vec::<(Channel, usize, usize)>::new();
+    // Read and decode each unique source once, for every material channel, before any session
+    // mutation. A failed preflight or decode is cached too, so repeated references do not repeat
+    // expensive reads or decompression.
+    for (material_index, material) in scene.materials.iter().enumerate() {
+        let mut requested = Vec::<(Channel, Option<&str>, Option<&Arc<[u8]>>)>::new();
+        requested.push((Channel::Color, material.base_color.as_deref(), material.embedded.as_ref()));
+        requested.push((Channel::Normal, material.normal_map.as_deref(), material.embedded_normal.as_ref()));
+        for kind in Channel::MAPS.into_iter().filter(|kind| !matches!(kind, Channel::Color | Channel::Normal)) {
+            if let Some(path) = material.maps.get(&kind) {
+                requested.push((kind, Some(path.as_str()), None));
+            }
+        }
+        for (channel, filename, embedded) in requested {
+            let Some(key) = uv_texture_key(filename, embedded) else { continue };
+            let display_name = filename.unwrap_or("embedded.png");
+            let path = filename.filter(|_| embedded.is_none());
+            let result = cached_uv_texture(&mut texture_cache, key, || {
+                if texture_budget.source_bytes >= UV_TEXTURE_TOTAL_SOURCE_BYTES {
+                    return Err("model textures exceed the 1 GiB total automatic input budget".to_owned());
                 }
-                continue;
-            };
-            match photocraft_io::import(filename.as_deref().unwrap_or("embedded.png"), &bytes) {
-                Ok(imported) if !imported.preview_only => {
-                    if normal && imported.document.mode != ColorMode::Rgb {
-                        scene.warnings.push(format!("{}: normal map must be RGB; assign a replacement", m.name));
-                        continue;
+                if texture_budget.reserved_bytes >= UV_TEXTURE_IMPORT_BUDGET_BYTES {
+                    return Err("model textures exceed the 3 GiB total automatic import memory budget".to_owned());
+                }
+                let owned_bytes = if embedded.is_some() {
+                    None
+                } else {
+                    let remaining_source = UV_TEXTURE_TOTAL_SOURCE_BYTES.saturating_sub(texture_budget.source_bytes);
+                    match filename.and_then(|path| directory.read_with_limit(path, remaining_source).ok()) {
+                        Some(bytes) => Some(Arc::<[u8]>::from(bytes)),
+                        None => return Err("texture file is missing or unreadable; assign it explicitly".to_owned()),
                     }
-                    scene.warnings.extend(imported.warnings);
-                    documents.push((i, normal, imported.document, filename.clone().filter(|_| embedded.is_none() && !imported.source_read_only)));
+                };
+                let bytes = embedded.or(owned_bytes.as_ref());
+                let Some(bytes) = bytes else { return Err("texture bytes are unavailable; assign it explicitly".to_owned()) };
+                let (document, read_only, warnings) = import_uv_texture(display_name, bytes, &mut texture_budget)?;
+                scene.warnings.extend(warnings);
+                let document_index = documents.len();
+                documents.push((document, path.filter(|_| !read_only).map(str::to_owned), read_only));
+                Ok(document_index)
+            });
+            match result {
+                Ok(document_index) => slot_bindings.push((channel, material_index, document_index)),
+                Err(reason) => {
+                    scene.warnings.push(format!("{}: cannot load {} texture {}: {reason}", material.name, channel.label(), filename.unwrap_or("embedded")))
                 }
-                Ok(_) => scene.warnings.push(format!("{}: texture is preview only; relink it", m.name)),
-                Err(e) => scene.warnings.push(format!("{}: cannot open texture: {e}", m.name)),
             }
         }
     }
     let mut bindings = vec![None; scene.materials.len()];
     let mut normal_bindings = vec![None; scene.materials.len()];
-    let mut opened = std::collections::BTreeMap::<String, DocId>::new();
     let mut project_export_guards = std::collections::HashMap::new();
-    for (i, normal, doc, path) in documents {
-        let target = if normal { &mut normal_bindings } else { &mut bindings };
-        if let Some(id) = path.as_ref().and_then(|p| opened.get(p)).copied() {
-            if let Some(b) = target.get_mut(i) {
-                *b = Some(id);
+    let mut valid_slots = Vec::with_capacity(slot_bindings.len());
+    for slot in slot_bindings {
+        let (channel, material_index, document_index) = slot;
+        if channel == Channel::Normal && documents.get(document_index).is_some_and(|(document, _, _)| document.mode != ColorMode::Rgb) {
+            if let Some(material) = scene.materials.get(material_index) {
+                scene.warnings.push(format!("{}: normal map must be RGB; assign a replacement", material.name));
             }
-            continue;
-        }
-        let source_path = path.clone();
-        let index = s.add_document(doc, path);
-        if let Some(id) = s.documents().get(index).map(|d| d.doc.id)
-            && let Some(b) = target.get_mut(i)
-        {
-            *b = Some(id);
-            if let Some(path) = source_path {
-                if let Some(guard) = directory.export_guard(&path) {
-                    project_export_guards.insert(id, guard);
-                }
-                opened.insert(path, id);
-            }
+        } else {
+            valid_slots.push(slot);
         }
     }
+    let used_documents: std::collections::HashSet<_> = valid_slots.iter().map(|(_, _, index)| *index).collect();
+    let mut texture_ids = Vec::with_capacity(documents.len());
+    for (document_index, (document, path, read_only)) in documents.into_iter().enumerate() {
+        if !used_documents.contains(&document_index) {
+            texture_ids.push(None);
+            continue;
+        }
+        let index = s.add_document(document, path.clone());
+        let id = s.documents().get(index).map(|document| document.doc.id);
+        if let Some(id) = id
+            && let Some(path) = path
+            && !read_only
+            && let Some(guard) = directory.export_guard(&path)
+        {
+            project_export_guards.insert(id, guard);
+        }
+        texture_ids.push(id);
+    }
     let mut map_bindings = std::collections::BTreeMap::new();
-    for kind in Channel::MAPS.into_iter().filter(|kind| !matches!(kind, Channel::Color | Channel::Normal)) {
+    for kind in Channel::MAPS {
         let mut target = vec![None; scene.materials.len()];
-        for (i, m) in scene.materials.iter().enumerate() {
-            let Some(path) = m.maps.get(&kind) else { continue };
-            if let Some(id) = opened.get(path) {
-                if let Some(slot) = target.get_mut(i) {
-                    *slot = Some(*id);
-                }
+        for &(channel, material_index, document_index) in &valid_slots {
+            if channel != kind {
                 continue;
             }
-            match directory.read(path).and_then(|bytes| photocraft_io::import(path, &bytes).map_err(|e| err(e.to_string()))) {
-                Ok(imported) if !imported.preview_only => {
-                    let index = s.add_document(imported.document, (!imported.source_read_only).then(|| path.clone()));
-                    if let Some(id) = s.documents().get(index).map(|st| st.doc.id) {
-                        if let Some(slot) = target.get_mut(i) {
-                            *slot = Some(id);
-                        }
-                        opened.insert(path.clone(), id);
-                        if !imported.source_read_only
-                            && let Some(guard) = directory.export_guard(path)
-                        {
-                            project_export_guards.insert(id, guard);
-                        }
-                    }
-                }
-                _ => scene.warnings.push(format!("{}: cannot load {} map {path}", m.name, kind.label())),
+            let id = texture_ids.get(document_index).copied().flatten();
+            if let Some(slot) = target.get_mut(material_index) {
+                *slot = id;
             }
         }
-        map_bindings.insert(kind, target);
+        if kind == Channel::Color {
+            bindings = target;
+        } else if kind == Channel::Normal {
+            normal_bindings = target;
+        } else {
+            map_bindings.insert(kind, target);
+        }
     }
     let active_material = bindings.iter().position(Option::is_some).unwrap_or(0);
     let generation = s.uv.generation.wrapping_add(1);
@@ -1600,6 +1768,10 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     result["view"] = s.uv.project_view.clone();
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "uv_cmds/import_budget_tests.rs"]
+mod import_budget_tests;
 
 pub fn specs() -> Vec<CommandSpec> {
     let spec = |id, label, params, enabled, run| CommandSpec { id, label, params, enabled, run, menu: &[], shortcut: None, journal: id != "uv.inspect" };

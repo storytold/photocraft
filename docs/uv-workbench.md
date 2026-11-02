@@ -27,6 +27,13 @@ tool restores texture editing. Shift adds, Alt subtracts in 2D; Ctrl subtracts i
 
 Static binary FBX 7.4+ and OBJ/MTL import preserves control-point identity, per-corner UV,
 authored split normals, materials, external/embedded base-color and normal textures.
+Automatic material-map loading shares one decoded document for repeated texture references and
+is bounded to 256 MiB per source file, 1 GiB of unique encoded inputs, and a conservative 3 GiB
+aggregate decoded/document-surface reservation. The memory estimate allows five 32-bit channels
+and two simultaneous pixel copies, including tile padding; it admits a single aligned 8K map.
+Automatically referenced files must be recognized flat raster images with safely readable
+dimensions. Other formats remain unbound with a warning and can be assigned through the texture
+cards; explicit texture opening and assignment keep their existing behavior.
 FBX normals use the inverse-transpose transform; mirrored transforms retain outward
 winding. Polygon triangulation preserves source orientation in every projection plane.
 Missing normals use geometric face normals. The preview interpolates authored normals,
