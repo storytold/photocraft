@@ -17,6 +17,11 @@ fn bar() -> Vec<u8> {
     png(32, 32, ChannelLayout::Gray, |x, y| vec![if (4..28).contains(&x) && (14..18).contains(&y) { 255 } else { 0 }])
 }
 
+/// A grain with no gray reading: the brush using it fails after its shape was read.
+fn cmyk_grain() -> Vec<u8> {
+    encode(&Image::from_u8(2, 2, ChannelLayout::Cmyk, vec![0; 16]).unwrap(), Format::Tiff, &Default::default()).unwrap()
+}
+
 fn brush_zip(archive: &[u8], shape: Option<&[u8]>, grain: Option<&[u8]>) -> Vec<u8> {
     let mut z = ZipWriter::new();
     z.add("Brush.archive", archive).unwrap();
@@ -315,13 +320,22 @@ fn names_and_notes_from_a_file_are_capped() {
 /// A skipped brush is reported once, without notes on parts it never got to use.
 #[test]
 fn a_skipped_brush_leaves_no_notes() {
-    // No shape, then a grain with no gray reading: the shape's note comes before the failure.
-    let cmyk = encode(&Image::from_u8(2, 2, ChannelLayout::Cmyk, vec![0; 16]).unwrap(), Format::Tiff, &Default::default()).unwrap();
+    // No shape, so its note comes before the grain fails.
     let skipped = write_archive(&[("name", text("Skipped"))]);
     let good = write_archive(&[("name", text("Good"))]);
-    let imp = read_procreate(&write_brushset("s", &[(skipped, None, Some(cmyk)), (good, Some(bar()), None)]), "g").unwrap();
+    let imp = read_procreate(&write_brushset("s", &[(skipped, None, Some(cmyk_grain())), (good, Some(bar()), None)]), "g").unwrap();
     assert_eq!(imp.presets.len(), 1);
     assert_eq!(imp.warnings, ["brush 1: the image is not grayscale or RGB; skipped"]);
+}
+
+#[test]
+fn a_skipped_brush_spends_no_budget_and_lists_no_settings() {
+    let archive = write_archive(&[("name", text("Skipped")), ("dynamicsMix", Field::Num(0.3))]);
+    let bytes = brush_zip(&archive, Some(&bar()), Some(&cmyk_grain()));
+    let zip = ZipReader::new(&bytes).unwrap();
+    let mut m = Mapper { zip: &zip, unmapped: BTreeSet::new(), kept: 0 };
+    assert!(m.brush("", 0, &mut Vec::new()).is_err());
+    assert_eq!((m.kept, m.unmapped.len()), (0, 0));
 }
 
 /// A brush with no images still spends the budget, so a file can't fill memory with presets.

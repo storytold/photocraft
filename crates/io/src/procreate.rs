@@ -449,11 +449,30 @@ impl Mapper<'_> {
     }
 
     /// The brush in folder `dir` as a name and settings; `None` once the memory budget is spent.
+    /// A brush left out spends no budget and lists no settings.
     fn brush(&mut self, dir: &str, index: usize, notes: &mut Vec<String>) -> Result<Option<(String, BrushSettings)>, String> {
+        let kept = self.kept;
+        let mut unmapped = BTreeSet::new();
+        let brush = self.read_brush(dir, index, notes, &mut unmapped);
+        if matches!(brush, Ok(Some(_))) {
+            self.unmapped.extend(unmapped);
+        } else {
+            self.kept = kept;
+        }
+        brush
+    }
+
+    fn read_brush(
+        &mut self,
+        dir: &str,
+        index: usize,
+        notes: &mut Vec<String>,
+        unmapped: &mut BTreeSet<&'static str>,
+    ) -> Result<Option<(String, BrushSettings)>, String> {
         let bytes = self.zip.read_by_name(&format!("{dir}Brush.archive"), MAX_ARCHIVE).map_err(|e| e.to_string())?;
         let a = Archive::parse(&bytes)?;
         let name = a.text("name").map(|n| capped(n.trim())).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Brush {}", index + 1));
-        let mut b = settings(&a, &mut self.unmapped);
+        let mut b = settings(&a, unmapped);
         match self.image(dir, "Shape.png")? {
             Some(img) => {
                 let invert = a.flag("shapeInverted");
@@ -496,7 +515,7 @@ impl Mapper<'_> {
                 t.brightness = (a.num("textureBrightness").unwrap_or(0.0) * 255.0 / 150.0).clamp(-1.0, 1.0);
                 t.contrast = a.num("textureContrast").unwrap_or(0.0).clamp(-1.0, 1.0);
                 if a.num("grainBlendMode").is_some_and(|m| m != 1.0) {
-                    self.unmapped.insert("Grain Blend Mode");
+                    unmapped.insert("Grain Blend Mode");
                 }
             }
             // Procreate's blank grain is no grain.

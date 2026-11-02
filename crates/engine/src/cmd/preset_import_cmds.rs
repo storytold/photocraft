@@ -205,8 +205,13 @@ fn import_procreate(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.0, "Importing brushes");
             let p = &params;
             let (bytes, stem) = file_bytes(p, cmd, ".brush or .brushset file")?;
+            // Every imported preset copies the group, so its length counts many times over.
+            let max = crate::brush_preset_cmds::MAX_NAME;
             let group = match p.get("group") {
-                Some(v) => Some(v.as_str().map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(cmd, "`group` must be a non-empty string"))?.to_string()),
+                Some(v) => {
+                    let g = v.as_str().map(str::trim).filter(|g| !g.is_empty() && g.chars().count() <= max);
+                    Some(g.ok_or_else(|| bad(cmd, format!("`group` must be a non-empty string of at most {max} characters")))?.to_string())
+                }
                 None => Some(stem).filter(|s| !s.is_empty()),
             };
             ctx.check()?;
@@ -331,7 +336,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Procreate Brushes…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".brush or .brushset file"?,"data":base64 bytes?,"group":string?=file name (with data: the set's name),"replace":bool=false (first delete the non-built-in presets of a group of the same name; false imports beside it as <group> (2)),"select":bool=false (make the first imported preset current)} → {group, imported, count, warnings (missing parts and Procreate settings left out)}"##,
+            params: r##"{"path":".brush or .brushset file"?,"data":base64 bytes?,"group":string (at most 255 characters)?=file name (with data: the set's name),"replace":bool=false (first delete the non-built-in presets of a group of the same name; false imports beside it as <group> (2)),"select":bool=false (make the first imported preset current)} → {group, imported, count, warnings (missing parts and Procreate settings left out)}"##,
             enabled: always,
             run: import_procreate,
             journal: true,
@@ -623,6 +628,19 @@ mod tests {
     }
 
     /// #10640: a second import of a file never drops the group's brushes on its own.
+    #[test]
+    fn a_procreate_group_name_past_the_limit_is_refused() {
+        const CMD: &str = "brush.presets.importProcreate";
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&procreate_set());
+        let before = s.tools.presets.len();
+        let e = s.execute(CMD, json!({"data": data, "group": "g".repeat(256)})).unwrap_err();
+        assert!(e.to_string().contains("at most 255 characters"), "{e}");
+        assert_eq!(s.tools.presets.len(), before, "nothing was imported");
+        let r = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap();
+        assert_eq!(r["group"].as_str().map(str::len), Some(255));
+    }
+
     #[test]
     fn procreate_reimport_keeps_the_groups_brushes_unless_replace() {
         const CMD: &str = "brush.presets.importProcreate";
