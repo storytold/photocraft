@@ -14,6 +14,30 @@ use crate::{EngineError, Result, Session};
 /// Maximum dense RGBA staging pixels in one animated GIF frame. A GIF also keeps the
 /// quantised frame and palette while rendering, so the document canvas limit is not enough.
 const MAX_GIF_FRAME_PIXELS: u64 = 64 << 20;
+/// Largest total an animated GIF render keeps staged before encoding: one index byte per pixel plus
+/// a 768-byte palette for every frame, the same 2 GiB bound as imported footage ([`MAX_FOOTAGE_BYTES`]).
+/// The per-frame cap alone lets `frames × pixels` reach terabytes (a 4000 × 4000 canvas over a
+/// 1,000,000-frame timeline). 1920 × 1080 holds about 1,000 frames and 4096 × 2160 about 240.
+const MAX_GIF_STAGED_BYTES: u64 = MAX_FOOTAGE_BYTES;
+/// The GIF format stores each side as 16 bits.
+const MAX_GIF_SIDE: u64 = 65_535;
+
+/// Reject a GIF render whose canvas or frames-times-canvas staging would be unreasonable, before any
+/// frame is rendered. All sums are checked in `u64`.
+fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), String> {
+    if w > MAX_GIF_SIDE || h > MAX_GIF_SIDE {
+        return Err(format!("{w} × {h} is too large to render as an animated GIF (the GIF format allows {MAX_GIF_SIDE} pixels per side)"));
+    }
+    let pixels = w.checked_mul(h).filter(|p| *p <= MAX_GIF_FRAME_PIXELS);
+    let Some(pixels) = pixels else {
+        return Err(format!("{w} × {h} is too large to render as an animated GIF (limit {MAX_GIF_FRAME_PIXELS} pixels per frame)"));
+    };
+    let per_frame = pixels + 768;
+    if frames.checked_mul(per_frame).is_none_or(|total| total > MAX_GIF_STAGED_BYTES) {
+        return Err(format!("{frames} frames of {w} × {h} are too large to render as an animated GIF (limit {} MiB staged in total); shorten the timeline or reduce the canvas", MAX_GIF_STAGED_BYTES >> 20));
+    }
+    Ok(())
+}
 
 /// Set every video layer's displayed content to its frame at the playhead.
 pub fn sync(doc: &mut Document) {
@@ -540,11 +564,9 @@ pub fn render_video_with(
 
     // Animated GIF: one file, every frame quantised to its own palette.
     if format.eq_ignore_ascii_case("gif") {
-        // The whole canvas is staged as f32 RGBA for each frame; reject over-budget
-        // dimensions before an infallible allocation can abort the process.
-        if (w as u64) * (h as u64) > MAX_GIF_FRAME_PIXELS {
-            return Err(EngineError::Other(format!("{w} × {h} is too large to render as an animated GIF (limit {MAX_GIF_FRAME_PIXELS} pixels per frame)")));
-        }
+        // Each frame is staged as f32 RGBA and every encoded frame is kept until the file is written;
+        // reject over-budget sizes before an infallible allocation can abort the process.
+        check_gif_budget(w as u64, h as u64, frames as u64).map_err(EngineError::Other)?;
         let delay = (100.0 / fps).round().clamp(1.0, 65535.0) as u16;
         let mut gframes = Vec::with_capacity(frames);
         for f in 0..frames {
