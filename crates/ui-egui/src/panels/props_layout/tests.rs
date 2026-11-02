@@ -362,3 +362,22 @@ fn background_in_a_multiple_selection_keeps_align_and_distribute() {
     assert_eq!((b.x0 + b.x1) / 2, 150, "centred on the Background, which spans the canvas: {b:?}");
     assert_eq!(b.y0, 30, "only horizontally");
 }
+
+#[test]
+fn shape_properties_uses_vector_shape_icon() {
+    let (session, layers) = kinds();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+
+    assert!(crate::icons::exists("vector-shape"));
+
+    for (kind, id) in layers {
+        let layer = layer_of(&app, id);
+        let icon = kind_icon(&layer.content);
+
+        if kind == "shape" {
+            assert_eq!(icon, "vector-shape");
+        } else {
+            assert_ne!(icon, "vector-shape");
+        }
+    }
+}
