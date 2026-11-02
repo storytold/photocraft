@@ -557,3 +557,31 @@ fn dragging_with_non_finite_base_points_preserves_mesh() {
         }
     }
 }
+
+#[test]
+fn overflowing_point_drag_preserves_previous_state_and_allows_next_drag() {
+    let mut base = BezierMesh::identity(B, 2, 2);
+    base.points[0][0] = f64::MAX;
+    assert!(base.is_valid());
+    let mut mesh = base.clone();
+    mesh.drag_point(&base.points, 0, [0.0, 2.0]);
+    let before_overflow = mesh.clone();
+    mesh.drag_point(&base.points, 0, [f64::MAX, 0.0]);
+    assert!(mesh.is_valid(), "a finite displacement overflowed a control point");
+    assert_eq!(mesh, before_overflow);
+    mesh.drag_point(&base.points, 0, [0.0, 0.0]);
+    assert_eq!(mesh, base);
+}
+
+#[test]
+fn overflowing_surface_drag_preserves_previous_state_and_allows_next_drag() {
+    let base = BezierMesh::identity(B, 2, 2);
+    let mut mesh = base.clone();
+    mesh.pull(&base.points, 0.3, 0.4, [2.0, -1.0]);
+    let before_overflow = mesh.clone();
+    mesh.pull(&base.points, 0.3, 0.4, [f64::MAX, f64::MAX]);
+    assert!(mesh.is_valid(), "finite displacement overflowed surface fitting");
+    assert_eq!(mesh, before_overflow);
+    mesh.pull(&base.points, 0.3, 0.4, [2.0, -1.0]);
+    assert_eq!(mesh, before_overflow);
+}
