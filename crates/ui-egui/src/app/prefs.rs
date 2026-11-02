@@ -87,6 +87,12 @@ impl PhotocraftApp {
         theme::apply(ctx, &theme);
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
         // (shortcuts.rs), like Photoshop.
-        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        // egui's own quit is Command+Q matched loosely, so Ctrl+Alt+Q (AltGr+Q, `@` on a German
+        // layout) closed the window (#10917). Ctrl+Q still quits through File › Exit, which wants
+        // the exact modifiers; only the Mac keeps egui's ⌘Q.
+        ctx.options_mut(|o| {
+            o.zoom_with_keyboard = false;
+            o.quit_shortcuts = vec![egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q)];
+        });
     }
 }
