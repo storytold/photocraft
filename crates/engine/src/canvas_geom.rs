@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{Document, Fill, Layer, LayerContent, TextLayer};
+use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, TextLayer};
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_raster::Surface;
 
@@ -52,8 +52,12 @@ fn map_angle(a: &Affine, deg: f32) -> f32 {
 }
 
 fn map_fill(a: &Affine, f: &mut Fill) {
-    if let Fill::Gradient { angle, offset, .. } = f {
+    if let Fill::Gradient { angle, offset, style, reverse, .. } = f {
         *angle = map_angle(a, *angle);
+        // An Angle gradient sweeps clockwise from its angle; a mirror turns the sweep around.
+        if *style == GradientStyle::Angle && a.m[0] * a.m[3] - a.m[1] * a.m[2] < 0.0 {
+            *reverse = !*reverse;
+        }
         // The centre offset (a fraction of the frame) turns with the canvas: exact for 90° turns
         // and flips, where the frame's sides swap with the axes. Scale (Image Size) resizes the
         // frame too, so only each axis's direction applies.
