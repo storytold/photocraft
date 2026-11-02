@@ -179,7 +179,12 @@ fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> boo
         }),
         PathRef::Work => st.doc.work_path.clone(),
         PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
-        PathRef::TypePath(_) | PathRef::Pen => None,
+        // The stored id is the layer whose Type Path this is; resolving by it confirms the match.
+        PathRef::TypePath(id) => st.doc.layer(photocraft_doc::LayerId(*id)).and_then(|l| match &l.content {
+            photocraft_doc::LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t),
+            _ => None,
+        }),
+        PathRef::Pen => None,
     };
     path.is_some_and(|p| crate::path_components::selection_signature(&p) == *sig)
 }

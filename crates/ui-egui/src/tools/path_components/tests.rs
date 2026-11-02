@@ -474,3 +474,19 @@ fn the_selection_dies_on_reorder_or_partition_change_even_at_same_counts() {
     .unwrap();
     assert!(super::selected(&app).is_none(), "a same-count partition change (join) clears the selection");
 }
+
+/// A component selection on a type layer's Type Path (#9114) survives unrelated edits like any
+/// other target: the structural fallback resolves the Type Path by its stored layer id.
+#[test]
+fn a_type_path_component_selection_survives_unrelated_edits() {
+    let mut app = app();
+    app.run("type.create", json!({"x": 20, "y": 70, "text": "Hello path", "size": 36, "color": "#000000"})).unwrap();
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[150, 10], [150, 110]]}]}})).unwrap();
+    app.run("type.attachToPath", json!({"start": 4})).unwrap();
+    app.ui.tool = Tool::PathSelection;
+    crate::path_components::press(&mut app, [150.0, 60.0], false);
+    let (r, _, heads) = super::selected(&app).expect("the press selects the type path's component");
+    assert!(matches!(r, PathRef::TypePath(_)) && heads == vec![0]);
+    app.run("path.set", json!({"name": "Other", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [10, 5], [10, 10]]}]}})).unwrap();
+    assert!(super::selected(&app).is_some(), "an unrelated edit keeps the Type Path selection");
+}
