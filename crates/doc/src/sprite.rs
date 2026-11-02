@@ -15,11 +15,16 @@ mod reference;
 #[cfg(test)]
 mod tests;
 
+/// Maximum animation frame count accepted by validation and import.
 pub const MAX_FRAMES: usize = 10_000;
+/// Maximum cel count and retained chunk count across all frames.
 pub const MAX_CELS: usize = 65_536;
+/// Maximum distinct cel pixel and index storage, in bytes.
 pub const MAX_BYTES: usize = 256 << 20;
+/// Maximum retained metadata and palette-name storage, in bytes.
 pub const MAX_METADATA: usize = 32 << 20;
 
+/// One named RGBA8 entry; equal colors may intentionally have different indices.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PaletteEntry {
     pub rgba: [u8; 4],
@@ -43,6 +48,7 @@ pub enum MetadataTarget {
     Frame,
 }
 
+/// An opaque format record retained with its object association.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpriteChunk {
     pub kind: u16,
@@ -50,6 +56,7 @@ pub struct SpriteChunk {
     pub bytes: Arc<Vec<u8>>,
 }
 
+/// Original layer identity and properties independent of a frame's display projection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpriteLayer {
     pub id: LayerId,
@@ -60,6 +67,7 @@ pub struct SpriteLayer {
     pub uuid: Option<[u8; 16]>,
 }
 
+/// A frame's image in one layer, including original geometry and optional exact indices.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpriteCel {
     /// The complete source rectangle, including transparent borders and off-canvas samples.
@@ -76,6 +84,7 @@ pub struct SpriteCel {
     pub precise: Option<[i32; 4]>,
 }
 
+/// One timed frame with its own palette, cels and retained object metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpriteFrame {
     pub duration_ms: u16,
@@ -85,6 +94,7 @@ pub struct SpriteFrame {
     pub metadata: Vec<SpriteChunk>,
 }
 
+/// A named inclusive frame range and its playback direction and repeat count.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpriteTag {
     pub name: String,
@@ -97,6 +107,7 @@ pub struct SpriteTag {
     pub color: [u8; 3],
 }
 
+/// Authoritative animation state; the selected frame projects into ordinary document layers.
 #[derive(Clone, Debug)]
 pub struct Sprite {
     pub frames: Vec<Arc<SpriteFrame>>,
@@ -264,6 +275,7 @@ impl Sprite {
         Ok(())
     }
 
+    /// Selected-frame delay, or zero when the current frame is invalid.
     pub fn frame_duration_ms(&self) -> u16 {
         self.frames.get(self.current).map_or(0, |f| f.duration_ms)
     }
@@ -274,6 +286,7 @@ impl Sprite {
         self.frames.first().and_then(|f| f.metadata.iter().find(|c| c.kind == 0x2004 && c.target == MetadataTarget::Layer(id))).map(|c| c.bytes.as_slice())
     }
 
+    /// Total stored frame duration for one forward pass, without playback scheduling clamps.
     pub fn duration_ms(&self) -> u64 {
         self.frames.iter().map(|f| u64::from(f.duration_ms)).sum()
     }

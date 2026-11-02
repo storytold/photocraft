@@ -380,8 +380,30 @@ fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
             let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
             assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
             // Within the shared budget the embedded drawing renders (its rect is black).
-            let r = open(&embed(250, 250));
+            let within = (svg::MAX_XML_DEPTH - 4) / 2;
+            let r = open(&embed(within, within));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// The old 512-level allowance reached usvg's recursive conversion and aborted on a 1 MiB
+/// stack. Reject that formerly accepted input before conversion in both import paths, while
+/// still drawing a document at the current nesting boundary on the same small stack.
+#[test]
+fn formerly_accepted_svg_depth_is_refused_before_recursive_conversion() {
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let deep = nested(510);
+            assert!(matches!(import("deep.svg", deep.as_bytes()), Err(IoError::Svg(_))));
+            assert!(matches!(svg::rasterize_bounded(deep.as_bytes(), 1.0, 64), Err(IoError::Svg(_))));
+            let legal = nested(svg::MAX_XML_DEPTH - 2);
+            assert!(close(px(&open(&legal).document, 4, 4), [0.0, 0.0, 0.0, 1.0]));
+            let rendered = svg::rasterize_bounded(legal.as_bytes(), 1.0, 64).unwrap();
+            assert!(rendered.px[4 * 8 + 4][3] > 0.99);
         })
         .unwrap()
         .join()

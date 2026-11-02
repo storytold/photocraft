@@ -4,8 +4,9 @@
 
 use roxmltree::{Document, ParsingOptions};
 
-/// Deepest element nesting accepted, the same as for SVG drawings: real files stay far below.
-pub const MAX_DEPTH: usize = crate::svg::MAX_XML_DEPTH;
+/// Deepest element nesting accepted by roxmltree. SVG conversion has a smaller, separate
+/// limit because usvg adds several recursive conversion frames per group.
+pub const MAX_DEPTH: usize = 512;
 
 /// Parses `text`, refusing nesting deeper than [`MAX_DEPTH`] before roxmltree sees it.
 ///
@@ -51,6 +52,13 @@ fn internal_subset(xml: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plain XML does not enter usvg's more stack-intensive conversion path.
+    #[test]
+    fn plain_xml_keeps_its_own_nesting_allowance() {
+        let xml = nested(crate::svg::MAX_XML_DEPTH + 1);
+        assert!(parse(&xml, Default::default()).is_ok());
+    }
 
     fn nested(levels: usize) -> String {
         format!("<a>{}{}</a>", "<g>".repeat(levels), "</g>".repeat(levels))

@@ -140,12 +140,8 @@ properties. These finite tests do not establish compatibility with every real As
 
 ## Visual check
 
-These are workflow captures from this implementation: a blank 2 × 2 document before opening
-anything, then the imported synthetic fixture at the same zoom. The first is not a render of
-an older PhotoCraft version. The second shows the expected pixel colors and the editable
+The imported synthetic fixture shows the expected pixel colors and editable
 Group / Top / Base tree. Captured offscreen with the CPU canvas at 6400% zoom.
-
-![Blank document before opening the fixture](images/aseprite/before-open.png)
 
 ![Imported fixture with editable layers](images/aseprite/after-open.png)
 

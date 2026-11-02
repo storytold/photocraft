@@ -4,6 +4,7 @@ use photocraft_raster::Surface;
 
 use super::{MAX_BYTES, PaletteEntry, SpriteCel};
 
+/// Reject inverted, oversized or over-budget cel bounds before allocating tiles.
 pub fn checked_rect(rect: Rect, bpp: usize) -> Result<(), String> {
     let cost = rect.tile_count().checked_mul((256 * 256 * bpp) as u64).ok_or("sprite cel rectangle overflow")?;
     if rect.x1 < rect.x0 || rect.y1 < rect.y0 || rect.width() > 65_535 || rect.height() > 65_535 || cost > MAX_BYTES as u64 {
@@ -12,6 +13,8 @@ pub fn checked_rect(rect: Rect, bpp: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Expand exact U8 index samples through a frame palette, honoring its transparent index.
+/// Reject samples without a palette entry rather than substituting a color.
 pub fn render_indices(indices: &Surface, rect: Rect, palette: &[PaletteEntry], transparent: Option<u8>) -> Result<Surface, String> {
     checked_rect(rect, 5)?;
     let mut out = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));

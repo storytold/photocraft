@@ -107,8 +107,9 @@ const MAX_NODES: usize = 2_000;
 const MAX_RECURSION: usize = 200;
 /// Deepest element nesting accepted. The XML parser recurses once per level, so a file nested
 /// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
-/// catch; real drawings stay under a hundred levels.
-pub const MAX_XML_DEPTH: usize = 512;
+/// catch. usvg conversion also needs several frames per group: 512 levels overflow a 1 MB
+/// stack even in release builds. Keep the shared outer/embedded budget below that limit.
+pub const MAX_XML_DEPTH: usize = 128;
 /// Largest `.svgz` accepted once inflated (a 1.5 MB gzip can hold 1.5 GB of whitespace).
 pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 

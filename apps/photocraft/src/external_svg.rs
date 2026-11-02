@@ -1377,6 +1377,7 @@ mod native {
 
         #[cfg(unix)]
         #[test]
+        /// Reject symlinks and real FIFO nodes without following or blocking on them.
         fn unix_saved_file_rejects_symlinks_and_fifos_without_blocking() {
             let owned = OwnedSvg::create(b"<svg/>").unwrap();
             let stamp = owned.stamp().unwrap();
@@ -1388,7 +1389,8 @@ mod native {
             assert!(owned.read(&stamp).is_err());
             assert!(owned.overwrite(b"<svg/>").is_err());
             std::fs::remove_file(&owned.file).unwrap();
-            rustix::fs::mkfifoat(rustix::fs::CWD, &owned.file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).unwrap();
+            // rustix does not expose mkfifoat on Apple targets; use the POSIX fixture utility.
+            assert!(std::process::Command::new("mkfifo").args(["-m", "600"]).arg(&owned.file).status().unwrap().success());
             assert!(owned.stamp().is_err());
             let began = Instant::now();
             assert!(owned.read(&stamp).is_err());
