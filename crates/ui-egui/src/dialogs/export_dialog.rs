@@ -208,12 +208,19 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     // is open cannot change which layers get exported.
     let docs: Vec<_> =
         layers.into_iter().map(|id| photocraft_engine::layer_menu_cmds::layer_document(&st.doc, id).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+    let source_id = st.doc.id;
     let suggested = format!("{}.png", export_name(&st.doc.name));
     app.pick_save(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
             return Err("Quick Export as PNG writes .png files".into());
         }
         let paths = batch_paths(&path, &docs);
+        app.with_document(source_id, |app| {
+            for path in &paths {
+                app.check_import_destination(path, false)?;
+            }
+            Ok(())
+        })?;
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(paths) {
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
@@ -1040,6 +1047,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         let ids: Vec<_> = layers.iter().filter_map(Value::as_u64).map(photocraft_doc::LayerId).collect();
         return confirm_layers(app, f, &ids);
     }
+    let source_id = app.session.active().ok_or("no document")?.doc.id;
     let doc = source_document(app, f)?;
     let source_profile = effective_source_profile(app, &doc);
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
@@ -1047,7 +1055,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let suggested = format!("{stem}.{ext}");
     let f = f.clone();
     app.pick_save(&suggested, move |app, path| {
-        let r = write_export(app, &doc, &f, &path, &source_profile)?;
+        let r = write_export(app, source_id, &doc, &f, &path, &source_profile)?;
         // An action being recorded keeps a whole-document export with its destination and
         // settings (#7207). A layer's export isn't recorded: its layer is this document's.
         if !f.contains_key("__layer") {
@@ -1060,7 +1068,15 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 }
 
 /// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
-fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str, source_profile: &Profile) -> Result<Value, String> {
+fn write_export(
+    app: &mut PhotocraftApp,
+    source_id: photocraft_doc::DocId,
+    doc: &Document,
+    f: &Map<String, Value>,
+    path: &str,
+    source_profile: &Profile,
+) -> Result<Value, String> {
+    app.with_document(source_id, |app| app.check_import_destination(path, false))?;
     let out = export_document(doc, f, None, source_profile)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, path, &settings(f))?;
@@ -1090,7 +1106,7 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     let source_profile = effective_source_profile(app, &doc);
-    write_export(app, &doc, &f, path, &source_profile)
+    write_export(app, doc.id, &doc, &f, path, &source_profile)
 }
 
 /// [`confirm`] for several layers: one destination prompt, then each layer exported with the
@@ -1098,6 +1114,7 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
 /// when asked, so changing the selection or document meanwhile can't change what is exported.
 fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photocraft_doc::LayerId]) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
+    let source_id = st.doc.id;
     let source_profile = effective_source_profile(app, &st.doc);
     let docs: Vec<Document> =
         ids.iter().map(|id| photocraft_engine::layer_menu_cmds::layer_document(&st.doc, *id).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
@@ -1108,8 +1125,17 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
     let suggested = format!("{}.{}", export_name(stem), s_fmt(f));
     let (f, settings) = (f.clone(), settings(f));
     app.pick_save(&suggested, move |app, path| {
+        let paths = batch_paths(&path, &docs);
+        // Check every destination before encoding or writing any layer. Derived layer
+        // documents have fresh identities, so protection belongs to the original tab.
+        app.with_document(source_id, |app| {
+            for path in &paths {
+                app.check_import_destination(path, false)?;
+            }
+            Ok(())
+        })?;
         let mut exported = Vec::new();
-        for (doc, path) in docs.iter().zip(batch_paths(&path, &docs)) {
+        for (doc, path) in docs.iter().zip(paths) {
             let out = export_document(doc, &f, None, &source_profile)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(&out, &path, &settings)?;

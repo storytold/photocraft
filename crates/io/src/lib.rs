@@ -394,7 +394,7 @@ impl std::fmt::Display for HistoricalXcfSampleOrderRequest {
 }
 
 /// Detect the historical choice without decoding drawable samples. Wrapped XCFs
-/// use the same bounded transport decoder as import; unrelated files return None.
+/// decode only the fixed header prefix; import validates the full stream. Unrelated files return None.
 pub fn historical_xcf_sample_order_request(name: &str, bytes: &[u8]) -> Result<Option<HistoricalXcfSampleOrderRequest>, IoError> {
     historical_xcf_sample_order_request_with(name, bytes, &photocraft_raster::Interrupt::NONE)
 }
@@ -408,7 +408,7 @@ pub fn historical_xcf_sample_order_request_with(
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let request = if xcf::is_xcf(bytes) {
         xcf::historical_sample_order_request(bytes)?
-    } else if let Some(inflated) = xcf::transport::decode(name, bytes, ctl)? {
+    } else if let Some(inflated) = xcf::transport::header_prefix(name, bytes, ctl)? {
         xcf::historical_sample_order_request(&inflated)?
     } else {
         None

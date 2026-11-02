@@ -49,6 +49,16 @@ pub(crate) fn decode(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Op
 /// Decodes a recognized wrapper under explicit output and decoder-memory limits, propagating cancellation and
 /// malformed streams.
 fn decode_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize) -> Result<Option<Vec<u8>>> {
+    decode_inner(name, bytes, ctl, limit, false)
+}
+
+/// Inflates only the largest fixed XCF header (v4+: signature, version, canvas, precision).
+/// This probe does not validate the stream's remainder; the actual import still does that.
+pub(crate) fn header_prefix(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Vec<u8>>> {
+    decode_inner(name, bytes, ctl, MAGIC.len() + 5 + 4 * 4, true)
+}
+
+fn decode_inner(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, prefix_only: bool) -> Result<Option<Vec<u8>>> {
     let compression = if bytes.starts_with(&[0x1f, 0x8b]) {
         "gzip"
     } else if bytes.starts_with(b"BZh") {
@@ -82,7 +92,12 @@ fn decode_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize
     let mut chunk = [0; CHUNK];
     loop {
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        let count = decoder.read(&mut chunk).map_err(|error| if ctl.cancelled() { IoError::Cancelled } else { invalid(format!("{compression}: {error}")) })?;
+        if prefix_only && output.len() == limit {
+            return Ok(Some(output));
+        }
+        let capacity = if prefix_only { limit.saturating_sub(output.len()).min(CHUNK) } else { CHUNK };
+        let target = chunk.get_mut(..capacity).ok_or_else(|| invalid("invalid decoded output capacity"))?;
+        let count = decoder.read(target).map_err(|error| if ctl.cancelled() { IoError::Cancelled } else { invalid(format!("{compression}: {error}")) })?;
         if count == 0 {
             break;
         }
@@ -94,7 +109,7 @@ fn decode_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize
     // Readers verify every member's checks and attempt another header for trailing data.
     // XZ also accepts standard stream padding. Require complete source consumption.
     drop(decoder);
-    if !input.remaining.is_empty() {
+    if !prefix_only && !input.remaining.is_empty() {
         return Err(invalid(format!("unconsumed data after the {compression} stream")));
     }
     Ok(Some(output))
@@ -137,5 +152,26 @@ mod tests {
         header.splice(10..10, [vec![b'x'; CHUNK * 20], vec![0]].concat());
         checks.store(0, Ordering::Relaxed);
         assert!(matches!(decode("header.xcf.gz", &header, &ctl), Err(IoError::Cancelled)));
+    }
+    /// A probe must stop at the header even when a large, compressible payload follows.
+    #[test]
+    fn header_probe_stops_before_large_payload_and_still_cancels_long_headers() {
+        let bytes = [MAGIC, &[0; 21], &vec![0; 16 * 1024 * 1024]].concat();
+        let wrapped = gzip(&bytes);
+        let checks = AtomicUsize::new(0);
+        let cancelled = || checks.fetch_add(1, Ordering::Relaxed) >= 100;
+        let ctl = Interrupt::cancel_only(&cancelled);
+        assert_eq!(header_prefix("large.xcf.gz", &wrapped, &ctl).unwrap().unwrap(), bytes[..30]);
+        checks.store(0, Ordering::Relaxed);
+        assert!(matches!(decode("large.xcf.gz", &wrapped, &ctl), Err(IoError::Cancelled)));
+
+        let mut header = gzip(&bytes[..30]);
+        header[3] |= 8;
+        header.splice(10..10, [vec![b'x'; CHUNK * 200], vec![0]].concat());
+        checks.store(0, Ordering::Relaxed);
+        assert!(matches!(header_prefix("header.xcf.gz", &header, &ctl), Err(IoError::Cancelled)));
+        checks.store(0, Ordering::Relaxed);
+        let members = [gzip(&[]).repeat(1000), gzip(&bytes[..30])].concat();
+        assert!(matches!(header_prefix("members.xcf.gz", &members, &ctl), Err(IoError::Cancelled)));
     }
 }

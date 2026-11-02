@@ -459,3 +459,37 @@ fn default_requires_explicit_order_before_decoding_and_cancellation_still_wins()
         assert!(before.locks == after.locks && before.effects == after.effects, "modern sample-order override changed native style");
     }
 }
+
+/// Header probing stops before the drawable payload in each wrapper, while import
+/// still rejects a truncated stream. Legacy short headers and bad headers stay distinct.
+#[test]
+fn wrapped_sample_order_probe_reads_only_the_fixed_header() {
+    use std::io::Write;
+    let bytes = image(9, Sample::Float, Order::LittleEndian, false, 1);
+    let expected = photocraft_io::historical_xcf_sample_order_request("source.xcf", &bytes).unwrap();
+    assert!(expected.is_some());
+    let mut payload = bytes.clone();
+    payload.resize(60_000, 0);
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gzip.write_all(&payload).unwrap();
+    for (name, mut wrapped) in
+        [("source.xcf.gz", gzip.finish().unwrap()), ("source.xcf.bz2", crabz2::compress(&payload, crabz2::Level::default())), ("source.xcf.xz", xz(&payload))]
+    {
+        let imported = photocraft_io::import_with_options(name, &wrapped, &opts(Order::LittleEndian)).unwrap();
+        assert_pixels(&imported.document, Sample::Float, false);
+        wrapped.truncate(wrapped.len() - 4);
+        assert_eq!(photocraft_io::historical_xcf_sample_order_request(name, &wrapped).unwrap(), expected, "{name}");
+        assert!(photocraft_io::import_with_options(name, &wrapped, &opts(Order::LittleEndian)).is_err(), "{name}: import validates the remainder");
+    }
+    for (header, valid) in [(&b"gimp xcf file\0\0\0\0\x01\0\0\0\x01\0\0\0\0"[..], true), (&bytes[..29], false)] {
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(header).unwrap();
+        let wrapped = gzip.finish().unwrap();
+        let result = photocraft_io::historical_xcf_sample_order_request("header.xcf.gz", &wrapped);
+        if valid {
+            assert!(result.unwrap().is_none());
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}

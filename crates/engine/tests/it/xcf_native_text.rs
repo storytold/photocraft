@@ -59,11 +59,9 @@ fn compare(imported: &Session, native: &Session) {
 fn first_open_text_prepares_edits_undoes_and_reopens_without_source() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/gimp/text.xcf");
     let bytes = std::fs::read(fixture).expect("run cargo xtask corpus --gimp");
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let directory = std::env::temp_dir().join(format!("photocraft-native-xcf-text-{}-{stamp}", std::process::id()));
-    std::fs::create_dir(&directory).unwrap();
-    let source = directory.join("source.xcf");
-    let saved = directory.join("native.pcraft");
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.xcf");
+    let saved = directory.path().join("native.pcraft");
     std::fs::write(&source, &bytes).unwrap();
     let mut imported = Session::new();
     imported.color.settings.ask_on_missing = false;
@@ -102,6 +100,4 @@ fn first_open_text_prepares_edits_undoes_and_reopens_without_source() {
     reopened.execute("type.edit", json!({"layer":reopened.active().unwrap().doc.layers[1].id.0,"text":"Native work"})).unwrap();
     reopened.execute("edit.undo", json!({})).unwrap();
     compare(&reopened, &native);
-    std::fs::remove_file(saved).unwrap();
-    std::fs::remove_dir(directory).unwrap();
 }

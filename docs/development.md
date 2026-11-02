@@ -568,7 +568,7 @@ fallible reads/allocation; this benchmark bound does not change the importer's p
 | `smoke-graph-f32` |96×65, partial edge tiles|`349e034278072e2065b15767d59b08947385fa6a27de3a90473b22917d1409ab`|
 
 Both graph cases use `id=in over aux=[ref=in invert-linear]`: actual source pixels, native
-Invert and a native Normal join. F32 source RGB spans[-.25,1.75] with fractional alpha[.25,1].
+Invert and a native Normal join. F32 source RGB spans [-0.25, 1.75] with fractional alpha [0.25, 1].
 These named workloads do not establish arbitrary graph-depth/fanout, universal RSS bounds,
 GIMP rendering equivalence or a new importer latency SLA.
 

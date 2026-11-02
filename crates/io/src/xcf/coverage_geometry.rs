@@ -180,7 +180,7 @@ pub(super) fn lens_correction(p: &Value) -> Result<photocraft_algo::lens::LensCo
                 } else {
                     let values = value.as_array().filter(|v| matches!(v.len(), 3 | 4)).ok_or("Native edge color needs RGB or RGBA")?;
                     for (out, input) in color.iter_mut().zip(values) {
-                        *out = input.as_f64().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or("Native edge color is outside0..1")? as f32;
+                        *out = input.as_f64().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or("Native edge color is outside 0..1")? as f32;
                     }
                 }
             }
