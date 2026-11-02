@@ -375,7 +375,7 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 | `placedLayerConvertToLinked` | Layer > Smart Objects > Convert to Linked | `null`: target layer; `Usng`: path of the file written |
 | `placedLayerRelinkToFile` | Layer > Smart Objects > Relink to File | `null`: path; `LyrI`: session layer id |
 | `placedLayerReplaceContents` | Layer > Smart Objects > Replace Contents | `null`: path; `LyrI`: session layer id |
-| `artboardFromLayerGroupEvent` | Layer > New > Artboard from Group | `null` target; `artboard` (object: `guideIDs` list, `artboardPresetName` text, `Clr ` RGB background colour, `artboardBackgroundType` long, 1 = white); `changeBackground` long |
+| `artboardFromLayerGroupEvent` | Layer > New > Artboard from Group | `null` target; `artboard` (object: `guideIDs` list, `artboardPresetName` text, `Clr ` RGB background colour, `artboardBackgroundType` long: 1 white, 2 black, 3 transparent, 4 other = `Clr `); `changeBackground` long. See *Artboard from Group: guides and background* below. |
 | `shapeBlur` | Filter > Blur > Shape Blur | `Rds ` radius in pixels (factory 10); the shape itself comes from the dialog |
 | Make `contentLayer` with `Usng` = reference to `textLayer` `Ordn.Trgt` | Type > Convert to Shape (recorded as Make, not as `convertToShape`) | `null`: class `contentLayer`; `Usng`: the type layer |
 
@@ -388,6 +388,7 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 | Layer > New > Frame from Layers | Make, `null` = class `framedGroupSection`, `From` = layer **by name**, `layerSectionStart`, `layerSectionEnd` long, `Nm  ` text | the dialog also shows width and height, which are not recorded |
 | Layer > New > Artboard from Layers | Make, `null` = class `artboardSection`, `From` = layer target, `layerSectionStart`, `layerSectionEnd`, `Nm  ` | |
 | Layer > New > Artboard | Make, `null` = class `artboardSection`, `layerSectionStart`, `layerSectionEnd`, `Nm  `, `artboardRect` (`Top `, `Left`, `Btom`, `Rght` doubles, pixels) | |
+| Properties panel > Artboard Background Color (Artboard selected) | `editArtboardEvent` | `null` target; `artboard` (object: `artboardRect` `Top `/`Left`/`Btom`/`Rght` pixels, `guideIDs` list, `artboardPresetName` text, `Clr `, `artboardBackgroundType` 1..4 as above); `changeSizes` long (8 when only the background changed), `changeBackground` 1. `Clr ` is only meaningful with type 4: with types 1..3 it holds the previously used colour |
 | Layer > Smart Objects > Stack Mode > mode | `applyImageStackPluginRenderer`: `imageStackPlugin` **class** with the mode's code, `Nm  ` text = the menu name (localised, except "Entropy") | codes: Range `rang`, Entropy `entr`, Kurtosis `kurt`, Maximum `maxx`, Median `medn`, Minimum `minn`, Mean `avrg`, Skewness `skew`, Standard Deviation `stdv`, Summation `summ`, Variance `vari` |
 | Layer > Smart Objects > Stack Mode > None | `imageStackConvertSmartObject` | none |
 | Layer > Video Layers > New Blank Video Layer, Insert Blank Frame, Delete Frame, Show / Hide Altered Video | `addBlankVideoLayer`, `insertBlankFrame`, `deleteFrame`, `showAlteredVideo` / `hideAlteredVideo` | none |
@@ -422,6 +423,20 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 
 **Not recorded:** importing or applying inside Image > Variables > Data Sets (only the separate menu
 commands record).
+
+**Artboard from Group: guides and background** (measured 2026-11-02, script runs and a recording through the menu):
+
+- **Recorded form:** the menu item opens no dialog. The step always has `guideIDs` empty, `artboardPresetName` "", `changeBackground` 1, and the
+  background type and colour **last used** for an artboard (the Properties panel choice is sticky: after picking Black for one artboard, the
+  next Artboard from Group records type 2 and makes a black artboard). Guides in the document do not change the recorded step.
+- **`guideIDs`:** session metadata, not a playback input. Guide ids are a counter for the whole application session (a new document's
+  guides got 5, 6, 7 after an earlier one's 2, 3, 4). Playing the step with the document's own guide ids, an unknown id (99999) or an
+  empty list gives the same result: no error, the guides stay document guides (`kind` document), and the new artboard's `guideIDs` is empty.
+  An implementation can ignore the list on playback and write `[]`.
+- **`changeBackground`:** 1 or absent applies `artboardBackgroundType` and `Clr `. Any other value (0, 2, 3, -1, 7 tried) ignores both and
+  makes a white artboard (type 1, `Clr ` 255/255/255), and the step's result then has no `changeBackground` key.
+  `artboardBackgroundType` absent with `changeBackground` 1 gives type 1 (white).
+- The artboard takes the group's bounds; `Clr ` is stored on the artboard as given even when the type is 1..3.
 
 ## Measured through dialogs and recordings
 
