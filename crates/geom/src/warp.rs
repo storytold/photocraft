@@ -781,7 +781,7 @@ impl BezierMesh {
     /// its anchors and the neighbouring cells and dividers bend with the pull. Then the four inner
     /// control points of the grabbed patch make up the rest, so the grabbed point lands exactly at
     /// its start + `d`. Grabbing near an anchor moves that anchor more, and the inner points less.
-    /// Malformed meshes and non-finite drag inputs are left unchanged.
+    /// Malformed meshes, non-finite inputs and drags whose result overflows are left unchanged.
     pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
         /// Within this distance of the mesh border (in 0..1 box units) a grab starts to drag the
         /// border with it; further in, the border stays exactly where it is.
@@ -797,7 +797,8 @@ impl BezierMesh {
         {
             return;
         }
-        self.points.copy_from_slice(base);
+        // Keep the last displayed grid until the candidate has finite coordinates.
+        let previous_points = std::mem::replace(&mut self.points, base.to_vec());
         let (cols, rows) = (self.us.len() - 1, self.vs.len() - 1);
         let (pi, a) = Self::locate(&self.us, s);
         let (pj, b) = Self::locate(&self.vs, t);
@@ -935,6 +936,9 @@ impl BezierMesh {
                 self.smooth_lines((3 * pi).saturating_sub(3), 3 * pi + 7, (3 * pj).saturating_sub(3), 3 * pj + 7);
             }
         }
+        if !self.points.iter().flatten().all(|v| v.is_finite()) {
+            self.points = previous_points;
+        }
     }
 
     /// Makes the tangent equal on both sides of every interior grid line, for the control points
@@ -976,7 +980,7 @@ impl BezierMesh {
     ///   it on the same anchor turns the other way (with its two neighbours), so the line keeps
     ///   passing straight through the anchor instead of creasing there.
     ///
-    /// Malformed meshes and non-finite drag inputs are left unchanged.
+    /// Malformed meshes, non-finite inputs and drags whose result overflows are left unchanged.
     pub fn drag_point(&mut self, base: &[[f64; 2]], index: usize, d: [f64; 2]) {
         if !self.is_valid()
             || base.len() != self.points.len()
@@ -986,7 +990,8 @@ impl BezierMesh {
         {
             return;
         }
-        self.points.copy_from_slice(base);
+        // Keep the last displayed grid until the candidate has finite coordinates.
+        let previous_points = std::mem::replace(&mut self.points, base.to_vec());
         let (nx, ny) = (self.nx(), self.ny());
         let (i, j) = (index % nx, index / nx);
         let mut shift = |i: isize, j: isize, d: [f64; 2]| {
@@ -1034,6 +1039,9 @@ impl BezierMesh {
             }
             // An inner point of a patch has no handle of its own.
             _ => shift(ii, jj, d),
+        }
+        if !self.points.iter().flatten().all(|v| v.is_finite()) {
+            self.points = previous_points;
         }
     }
 
