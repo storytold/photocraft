@@ -69,29 +69,52 @@ impl CanvasDisplay {
         img
     }
 
-    /// A premultiplied working-space preview sample → premultiplied RGBA8 monitor values.
+    /// Final display encoding: premultiplied working-space floats → premultiplied RGBA8 monitor
+    /// values in the matching `out` slice. Working samples stay float until this texture boundary.
     /// Unpremultiply before the same straight-alpha encoding and transform as [`Self::to_rgba8`];
-    /// quantising a translucent working sample first would lose colour precision.
-    pub fn premultiplied_rgba8(&self, rgba: [f32; 4]) -> [u8; 4] {
+    /// quantising a translucent working sample first would lose colour precision. CMS dispatch is
+    /// batched with fixed stack scratch, independent of the preview or dirty rectangle size.
+    pub fn premultiplied_rgba8(&self, rgba: &[[f32; 4]], out: &mut [[u8; 4]]) {
         let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let alpha = q(rgba[3]);
-        if alpha == 0 {
-            return [0; 4];
-        }
-        if self.is_identity() && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
-            return rgba.map(q);
-        }
+        let identity = self.is_identity();
         let table = self.encode_srgb.then(encode_table);
         let code = |v| table.map_or_else(|| q(v), |t| linear_code(t, v));
-        let mut pixel = [code(rgba[0] / rgba[3]), code(rgba[1] / rgba[3]), code(rgba[2] / rgba[3]), alpha];
-        if let Some(transform) = &self.transform {
-            let source = pixel;
-            transform.convert_u8(&source, 4, &mut pixel, 4, true);
+        const BATCH: usize = 256;
+        let mut source = [[0u8; 4]; BATCH];
+        for (samples, dest) in rgba.chunks(BATCH).zip(out.chunks_mut(BATCH)) {
+            let count = samples.len().min(dest.len());
+            let dest = &mut dest[..count];
+            let mut visible = false;
+            for (rgba, pixel) in samples.iter().zip(dest.iter_mut()) {
+                let alpha = q(rgba[3]);
+                visible |= alpha != 0;
+                *pixel = if alpha == 0 {
+                    [0; 4]
+                } else if identity && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
+                    // Keep the original identity rounding for valid premultiplied samples.
+                    rgba.map(q)
+                } else {
+                    [code(rgba[0] / rgba[3]), code(rgba[1] / rgba[3]), code(rgba[2] / rgba[3]), alpha]
+                };
+            }
+            // Match the scalar transparent fast path, including alpha that rounds to zero.
+            if !visible {
+                continue;
+            }
+            if let Some(transform) = &self.transform {
+                source[..count].copy_from_slice(dest);
+                transform.convert_u8(source[..count].as_flattened(), 4, dest.as_flattened_mut(), 4, true);
+            }
+            for (rgba, pixel) in samples.iter().zip(dest.iter_mut()) {
+                if identity && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
+                    continue;
+                }
+                let alpha = u16::from(pixel[3]);
+                for channel in &mut pixel[..3] {
+                    *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                }
+            }
         }
-        for channel in &mut pixel[..3] {
-            *channel = ((u16::from(*channel) * u16::from(alpha) + 127) / 255) as u8;
-        }
-        pixel
     }
 
     /// GPU canvas: a CPU composite as the texture stores it (sRGB-encoded for linear

@@ -815,6 +815,8 @@ pub struct ProxyImage {
 }
 
 const MAX_FULL_RES_SOURCE_PIXELS: usize = 8 * 1024 * 1024;
+// Bound temporary float samples per worker while amortising display-encoder dispatch.
+const RENDER_BATCH_PIXELS: usize = 256;
 
 impl ProxyImage {
     /// Box-downsamples `src` over `bounds` so the longer side is at most `max_side`.
@@ -863,29 +865,39 @@ impl ProxyImage {
     /// Renders proxy pixels `r` (proxy coordinates) through the field into `out` (premultiplied
     /// RGBA8, `w × h`): bilinear field, bilinear source.
     pub fn render(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]]) {
-        self.render_mapped(field, r, out, |rgba| rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
+        self.render_mapped(field, r, out, |samples, dest| {
+            for (rgba, pixel) in samples.iter().zip(dest) {
+                *pixel = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            }
+        });
     }
 
-    /// Like [`Self::render`], encoding interpolated premultiplied working-space floats only
-    /// after sampling. Display previews can apply their colour transform before quantisation.
-    pub fn render_mapped(&self, field: &LiquifyField, r: [usize; 4], out: &mut [[u8; 4]], encode: impl Fn([f32; 4]) -> [u8; 4] + Sync) {
+    /// Samples interpolated premultiplied working-space floats in bounded batches. `encode`
+    /// receives those floats and the matching destination slice, only inside dirty rectangle `r`.
+    /// The destination format is chosen by the caller; sampling never clips or quantises it.
+    pub fn render_mapped<T: Send>(&self, field: &LiquifyField, r: [usize; 4], out: &mut [T], encode: impl Fn(&[[f32; 4]], &mut [T]) + Sync) {
         let [x0, y0, x1, y1] = [r[0].min(self.w), r[1].min(self.h), r[2].min(self.w), r[3].min(self.h)];
         if x0 >= x1 || y0 >= y1 {
             return;
         }
         let s = self.scale;
         let (bx, by) = (f64::from(self.bounds.x0), f64::from(self.bounds.y0));
-        let row = |y: usize, line: &mut [[u8; 4]]| {
+        let row = |y: usize, line: &mut [T]| {
             let py = by + (y as f64 + 0.5) * s;
-            for (x, slot) in line.iter_mut().enumerate().take(x1).skip(x0) {
-                let px = bx + (x as f64 + 0.5) * s;
-                let d = field.sample(px, py);
-                let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
-                let (iu, iv) = (u.floor(), v.floor());
-                let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
-                let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
-                let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
-                *slot = encode(std::array::from_fn(|k| (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv));
+            let mut samples = [[0.0; 4]; RENDER_BATCH_PIXELS];
+            for (batch, dest) in line[x0..x1].chunks_mut(RENDER_BATCH_PIXELS).enumerate() {
+                for (offset, sample) in samples.iter_mut().take(dest.len()).enumerate() {
+                    let x = x0 + batch * RENDER_BATCH_PIXELS + offset;
+                    let px = bx + (x as f64 + 0.5) * s;
+                    let d = field.sample(px, py);
+                    let (u, v) = ((px + d[0] - bx) / s - 0.5, (py + d[1] - by) / s - 0.5);
+                    let (iu, iv) = (u.floor(), v.floor());
+                    let (fu, fv) = ((u - iu) as f32, (v - iv) as f32);
+                    let at = |x: f64, y: f64| self.px[(y.clamp(0.0, (self.h - 1) as f64) as usize) * self.w + x.clamp(0.0, (self.w - 1) as f64) as usize];
+                    let (a, b, c, e) = (at(iu, iv), at(iu + 1.0, iv), at(iu, iv + 1.0), at(iu + 1.0, iv + 1.0));
+                    *sample = std::array::from_fn(|k| (a[k] * (1.0 - fu) + b[k] * fu) * (1.0 - fv) + (c[k] * (1.0 - fu) + e[k] * fu) * fv);
+                }
+                encode(&samples[..dest.len()], dest);
             }
         };
         let rows = &mut out[y0 * self.w..y1 * self.w];
@@ -911,19 +923,24 @@ impl ProxyImage {
         out: &mut [[u8; 4]],
         source_scratch: &mut Vec<[f32; 4]>,
     ) -> bool {
-        Self::render_full_resolution_mapped(src, field, bounds, region, out, source_scratch, |rgba| rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8))
+        Self::render_full_resolution_mapped(src, field, bounds, region, out, source_scratch, |samples, dest| {
+            for (rgba, pixel) in samples.iter().zip(dest) {
+                *pixel = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            }
+        })
     }
 
     /// Like [`Self::render_full_resolution`], with the same bounded source scratch and dirty
-    /// region, encoding each premultiplied float sample before it becomes a texture byte.
-    pub fn render_full_resolution_mapped(
+    /// region. `encode` consumes batches of premultiplied working-space floats and writes the
+    /// matching destination slice in the caller's format, without intermediate quantisation.
+    pub fn render_full_resolution_mapped<T: Send>(
         src: &Surface,
         field: &LiquifyField,
         bounds: Rect,
         region: Rect,
-        out: &mut [[u8; 4]],
+        out: &mut [T],
         source_scratch: &mut Vec<[f32; 4]>,
-        encode: impl Fn([f32; 4]) -> [u8; 4] + Sync,
+        encode: impl Fn(&[[f32; 4]], &mut [T]) + Sync,
     ) -> bool {
         let bounds = bounds.intersect(&field.bounds);
         let region = region.intersect(&bounds);
@@ -1018,16 +1035,19 @@ impl ProxyImage {
             let (a, b, c, d) = (at(sx0, sy0), at(sx1, sy0), at(sx0, sy1), at(sx1, sy1));
             std::array::from_fn(|channel| (a[channel] * (1.0 - tx) + b[channel] * tx) * (1.0 - ty) + (c[channel] * (1.0 - tx) + d[channel] * tx) * ty)
         };
-        let render_rows = |first_y: usize, rows: &mut [[u8; 4]]| {
+        let render_rows = |first_y: usize, rows: &mut [T]| {
+            let mut samples = [[0.0; 4]; RENDER_BATCH_PIXELS];
             for (offset, row) in rows.chunks_mut(width).enumerate() {
                 let y = bounds.y0 + (first_y + offset) as i32;
                 let Some(dest) = row.get_mut(x0..x1) else { continue };
-                for (offset_x, pixel) in dest.iter_mut().enumerate() {
-                    let x = bounds.x0 + (x0 + offset_x) as i32;
-                    let p = [f64::from(x) + 0.5, f64::from(y) + 0.5];
-                    let d = field.sample(p[0], p[1]);
-                    let rgba = source_at(p[0] + d[0], p[1] + d[1]);
-                    *pixel = encode(rgba);
+                for (batch, dest) in dest.chunks_mut(RENDER_BATCH_PIXELS).enumerate() {
+                    for (offset_x, sample) in samples.iter_mut().take(dest.len()).enumerate() {
+                        let x = bounds.x0 + (x0 + batch * RENDER_BATCH_PIXELS + offset_x) as i32;
+                        let p = [f64::from(x) + 0.5, f64::from(y) + 0.5];
+                        let d = field.sample(p[0], p[1]);
+                        *sample = source_at(p[0] + d[0], p[1] + d[1]);
+                    }
+                    encode(&samples[..dest.len()], dest);
                 }
             }
         };
