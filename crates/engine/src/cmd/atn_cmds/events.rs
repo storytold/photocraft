@@ -884,20 +884,16 @@ const NAME_ALIASES: &[(&str, &str)] = &[("interfaceWhite", "intersectWith"), ("d
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
     let by_name = |name: &str| EVENTS.iter().find(|e| !e.name.is_empty() && e.name == name);
-    match item {
-        AtnEvent::Code(_) => EVENTS
-            .iter()
-            .find(|e| !e.code.is_empty() && e.code.trim_end() == id.trim_end())
-            .or_else(|| LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| by_name(name))),
-        AtnEvent::Name(_) => by_name(&id).or_else(|| NAME_ALIASES.iter().find(|(old, _)| *old == id).and_then(|(_, name)| by_name(name))),
-    }
-    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || e.name == id);
-    find(&id).or_else(|| match item {
+    let found = match item {
+        AtnEvent::Code(_) => EVENTS.iter().find(|e| !e.code.is_empty() && e.code.trim_end() == id.trim_end()),
+        AtnEvent::Name(_) => by_name(&id),
+    };
+    found.or_else(|| match item {
         // An effect run from its own menu item records its id as the event (#10592).
         // By 4-char code or, as newer versions record it, by string ID (`cutout`).
-        _ if super::steps_gallery::is_effect(item) => find("filterGallery"),
-        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
-        AtnEvent::Name(_) => None,
+        _ if super::steps_gallery::is_effect(item) => by_name("filterGallery"),
+        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| by_name(name)),
+        AtnEvent::Name(_) => NAME_ALIASES.iter().find(|(old, _)| *old == id).and_then(|(_, name)| by_name(name)),
     })
 }
 
