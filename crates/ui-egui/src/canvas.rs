@@ -1948,8 +1948,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let painted = if crop_camera {
         None
     } else if canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT {
-        // Only the main window is covered: a floating document window keeps its image.
-        Some((false, painter.add(egui::Shape::Noop), img_rect))
+        // Only the main window is covered: a floating document window keeps its image. No
+        // marching ants either: the selection is under the workspace too.
+        Some((false, painter.add(egui::Shape::Noop), img_rect, Vec::new()))
     } else {
         Some(paint_canvas(app, ui, &display_view, xf, &paint_input))
     };
