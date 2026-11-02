@@ -160,6 +160,7 @@
 	Right:	右:
 	Target:	対象:
 	Selected Artboards	選択したアートボード
+	Artboards	アートボード
 	Center Columns	列を中央に配置
 	Clear Existing Guides	既存のガイドを削除
 	Invalid guide layout	ガイドレイアウトが無効です
@@ -1401,6 +1402,10 @@
 	Master	マスター
 	Matte	マット
 	Median:	中央値:
+	Level:	レベル:
+	Count:	個数:
+	Percentile:	パーセンタイル:
+	Calculating…	計算中…
 	Menus	メニュー
 	Mesh Size	メッシュのサイズ
 	Metadata	メタデータ
@@ -2135,6 +2140,11 @@
 	Sessions only	セッションのみ
 	Sharpen for	シャープの対象
 	Show channels in color	チャンネルをカラーで表示
+	Show Channels in Color	チャンネルをカラーで表示
+	Show Statistics	統計情報を表示
+	Source:	ソース:
+	Uncached Refresh	キャッシュなしで更新
+	Click to refresh histogram with uncached data	クリックすると、キャッシュされていないデータでヒストグラムを更新します
 	Show crosshair in brush tip	ブラシ先端に十字線を表示
 	Show extension panels	拡張パネルを表示
 	Show font names in english	フォント名を英語で表示
@@ -2356,6 +2366,8 @@
 	Rendering Mode	レンダリングモード
 	Automatic (recommended)	自動（推奨）
 	CPU / Compatibility	CPU / 互換性
+	CPU Rendering	CPU 描画
+	Drawn on the CPU: {reason}. Click for System Info.	CPU で描画しています: {reason}。クリックするとシステム情報を表示します。
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	自動モードは利用可能な場合にGPUを使用し、エラー時はCPU描画に切り替えます。
 	Switched to CPU rendering	CPU 描画に切り替えました
 	GPU acceleration could not continue. Your documents are unchanged.	GPU アクセラレーションを継続できませんでした。ドキュメントは変更されていません。
