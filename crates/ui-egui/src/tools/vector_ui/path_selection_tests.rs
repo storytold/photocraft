@@ -537,3 +537,104 @@ fn cmd_shift_and_alt_enter_use_the_path_selected_in_the_paths_panel() {
     press(&mut h, Key::Enter, Modifiers { alt: true, ..command() });
     assert_eq!(selection(&h), Some([40, 40, 20, 20]), "{}", h.state().ui.status);
 }
+
+/// The selected area in pixels (partly selected pixels count in part).
+fn selected_area(h: &Harness<'_, PhotocraftApp>) -> f32 {
+    let d = &h.state().session.active().unwrap().doc;
+    d.selection.as_ref().map_or(0.0, |s| s.read_region(d.bounds()).iter().sum())
+}
+
+/// #7726: as in Photoshop, ⇧⌘↩ adds the path to the selection, ⌥⌘↩ subtracts it and ⇧⌥⌘↩
+/// intersects them. A 100×60 selection and a 100×20 path overlapping it by 40×20.
+#[test]
+fn shift_and_option_with_cmd_enter_combine_the_path_with_the_selection() {
+    let alt = Modifiers { alt: true, ..command() };
+    let shift = Modifiers { shift: true, ..command() };
+    let both = Modifiers { shift: true, ..alt };
+    for (mods, area) in [(shift, 7200.0), (alt, 5200.0), (both, 800.0), (command(), 2000.0)] {
+        let mut h = harness();
+        h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        press(&mut h, Key::Enter, mods);
+        assert!((selected_area(&h) - area).abs() < 0.5, "{mods:?}: {} px, wanted {area}: {}", selected_area(&h), h.state().ui.status);
+    }
+}
+
+/// A press another command's binding takes by the dispatcher's rules stays that command's, even
+/// when the binding isn't written as the chord: Ctrl+Shift+Enter off the Mac (and ⌃⇧⌘↩ on it) is
+/// also ⇧⌘↩ to egui, whose ⌘ is Ctrl there. The user's binding keeps it from Add Path to
+/// Selection's default ⇧⌘↩ too. Both platforms' presses, as egui-winit reports them, on every
+/// platform: the dispatcher doesn't branch on it.
+#[test]
+fn a_binding_matching_the_same_press_keeps_it_from_the_chord() {
+    let mac = Modifiers { command: true, mac_cmd: true, ctrl: true, shift: true, ..Default::default() };
+    let other = Modifiers { command: true, ctrl: true, shift: true, ..Default::default() };
+    for (binding, mods) in [("Ctrl+Cmd+Shift+Enter", mac), ("Ctrl+Shift+Enter", other)] {
+        let mut h = harness();
+        h.state_mut().session.edit_prefs(|p| {
+            p.shortcuts.insert("select.inverse".into(), binding.into());
+        });
+        h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        crate::shortcut_dispatch::take_log(&h.ctx);
+        press(&mut h, Key::Enter, mods);
+        let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(log, ["select.inverse"], "{binding}");
+        assert!((selected_area(&h) - 14000.0).abs() < 0.5, "{binding}: inverted, not added to: {} px", selected_area(&h));
+    }
+}
+
+/// The chords follow the key's position as the bindings do: with Make Selection from Path on ⌘.,
+/// a German layout reports ⇧⌘. as `:`, and the press still adds the path. Type size and Snap,
+/// which would take that press, are unbound.
+#[test]
+fn chords_on_a_positional_key_follow_its_position() {
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("path.toSelection".into(), "Cmd+.".into());
+        p.shortcuts.insert("type.increaseSize".into(), String::new());
+        p.shortcuts.insert("view.snap".into(), String::new());
+    });
+    h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    crate::shortcut_dispatch::take_log(&h.ctx);
+    let m = Modifiers { shift: true, ..command() };
+    h.event(Event::ModifiersChanged(m));
+    h.event(Event::Key { key: Key::Colon, physical_key: Some(Key::Period), pressed: true, repeat: false, modifiers: m });
+    h.event(Event::Key { key: Key::Colon, physical_key: Some(Key::Period), pressed: false, repeat: false, modifiers: m });
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(log, ["path.toSelection"]);
+    assert!((selected_area(&h) - 7200.0).abs() < 0.5, "added: {} px: {}", selected_area(&h), h.state().ui.status);
+}
+
+/// The chords run in order with the frame's other shortcuts (#440): ⌘D then ⇧⌘↩ in one frame
+/// leaves the path alone selected, and ⇧⌘↩ then ⌘D nothing. Pushed straight into the input,
+/// since `Harness::event` runs a frame per event.
+#[test]
+fn chords_run_in_order_with_other_shortcuts_in_the_same_frame() {
+    let shift = Modifiers { shift: true, ..command() };
+    for (keys, area) in [([(Key::D, command()), (Key::Enter, shift)], 2000.0), ([(Key::Enter, shift), (Key::D, command())], 0.0)] {
+        let mut h = harness();
+        h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        let events = &mut h.input_mut().events;
+        for (key, m) in keys {
+            events.push(Event::ModifiersChanged(m));
+            events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
+            events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: m });
+        }
+        events.push(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+        assert!((selected_area(&h) - area).abs() < 0.5, "{keys:?}: {} px, wanted {area}: {}", selected_area(&h), h.state().ui.status);
+    }
+}
