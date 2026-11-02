@@ -109,18 +109,20 @@ fn existing_sidecar_is_ours(_: &str) -> Option<bool> {
 pub(super) fn save_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
     let bytes = photocraft_io::camera_raw_xmp::save(&d.params).into_bytes();
-    app.pick_save("Camera Raw Settings.xmp", move |app, path| {
+    let result = app.pick_save("Camera Raw Settings.xmp", move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         Ok(json!({"path": path}))
-    })
+    })?;
+    app.set_file_dialog_viewport(super::viewport_id());
+    Ok(result)
 }
 
 /// Load Settings…: applies a Camera Raw `.xmp` settings file's supported settings over the
 /// dialog's; the status bar names how many were not supported.
 pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
-    app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
+    let result = app.pick_file_bytes_filtered(&["xmp"], |app, name, bytes| {
         let file = crate::file_open::display_name(&name);
         let d = app.camera_raw.as_mut().ok_or(tl!("Camera Raw isn't open"))?;
         let mut next = d.params.clone();
@@ -142,7 +144,9 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
             crate::i18n::fmt(tl!(template), &[("file", &file), ("n", &report.ignored.len().to_string())])
         };
         Ok(json!({"applied": report.applied, "ignored": report.ignored}))
-    })
+    })?;
+    app.set_file_dialog_viewport(super::viewport_id());
+    Ok(result)
 }
 
 pub(super) fn report_file_error(app: &mut PhotocraftApp, r: Result<Value, String>) {

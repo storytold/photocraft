@@ -49,6 +49,7 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
 }
 
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
+    super::ensure_picker_closed(app)?;
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
@@ -212,13 +213,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
     let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+    ctx.show_viewport_immediate(super::viewport_id(), builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
+        if app.file_dialog_prompt_viewport() == Some(super::viewport_id()) {
+            crate::dialogs::show(app, ui.ctx());
+        }
     });
     if close && app.camera_raw.is_some() {
+        request_close(app, ctx);
+    }
+}
+
+pub(super) fn request_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if super::ensure_picker_closed(app).is_err() {
+        // rfd is still using this window's handles, even if the picker is only queued.
+        ctx.send_viewport_cmd_to(super::viewport_id(), egui::ViewportCommand::CancelClose);
+    } else {
         cancel(app);
     }
 }
@@ -241,10 +254,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
+    let picker_open = super::ensure_picker_closed(app).is_err();
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
+        if picker_open {
+            ui.disable();
+        }
         let Some(d) = app.camera_raw.as_mut() else { return };
-        history_keys(d, ctx);
-        let pointer = ctx.input(|i| i.pointer.primary_down());
+        if !picker_open {
+            history_keys(d, ctx);
+        }
+        let pointer = !picker_open && ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
         }
@@ -495,6 +514,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             d.params = edited;
         }
     });
+    if picker_open {
+        return;
+    }
     crate::camera_raw_scope_ui::persist(app, ctx);
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()

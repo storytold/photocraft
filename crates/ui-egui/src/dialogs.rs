@@ -554,7 +554,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::layer_style::color_picker::prune(app);
     crate::type_panels_ui::color_picker::prune(app);
     crate::edit_history::track_dialogs(app, ctx);
-    let dialogs = app.ui.dialogs.clone();
+    let dialogs: Vec<_> = app
+        .ui
+        .dialogs
+        .iter()
+        .filter(|d| {
+            let owner = if crate::replace_prompt::owns(&d.fields) {
+                app.file_dialog_prompt_viewport().unwrap_or(egui::ViewportId::ROOT)
+            } else {
+                egui::ViewportId::ROOT
+            };
+            ctx.embed_viewports() || owner == ctx.viewport_id()
+        })
+        .cloned()
+        .collect();
     let top = dialogs.last().map(|d| d.id);
     let mut shown = Vec::new();
     for d in dialogs {

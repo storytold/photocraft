@@ -66,7 +66,7 @@ use photocraft_engine::Session;
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse};
-pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
+pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogParent, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 

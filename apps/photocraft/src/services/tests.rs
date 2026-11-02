@@ -70,7 +70,7 @@ fn the_picked_file_type_gives_the_name_its_extension() {
 #[ignore = "requires exclusive use of the Windows clipboard"]
 fn busy_native_clipboard_preserves_copied_shape() {
     for id in ["edit.paste", "edit.pasteSpecial.pasteInPlace"] {
-        let mut native = native(None);
+        let mut native = native(None, Arc::default());
         let services =
             Services { clipboard_set_image: native.clipboard_set_image.take(), clipboard_get_image: native.clipboard_get_image.take(), ..Default::default() };
         let mut app = PhotocraftApp::new(Session::new(), services);
@@ -183,7 +183,7 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
 
 #[test]
 fn native_services_provide_update_transport() {
-    assert!(native(None).check_updates.is_some());
+    assert!(native(None, Arc::default()).check_updates.is_some());
 }
 
 #[test]

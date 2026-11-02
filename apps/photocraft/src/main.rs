@@ -40,6 +40,7 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod file_dialog_probe;
+mod file_dialog_windows;
 mod gpu_startup;
 #[cfg(target_os = "linux")]
 mod icon_theme;
@@ -434,6 +435,8 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
+    let file_dialog_windows = std::sync::Arc::new(file_dialog_windows::FileDialogWindows::default());
+    options.viewport_hooks = Some(file_dialog_windows.clone());
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
     if session == linux_libs::DisplaySession::X11 {
@@ -500,7 +503,7 @@ fn main() -> eframe::Result {
         Box::new(move |cc| {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
-            let mut services = services::native(automation);
+            let mut services = services::native(automation, file_dialog_windows);
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);

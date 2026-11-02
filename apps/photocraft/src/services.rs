@@ -3,7 +3,7 @@
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogParent, FileDialogReply, FileDialogRequest, Recoverable, Services};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -201,11 +201,15 @@ fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
 /// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
 /// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
 /// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
-fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply) {
-    let mut dialog = rfd::AsyncFileDialog::new();
-    if let Some(parent) = parent {
-        dialog = dialog.set_parent(parent);
-    }
+fn show_file_dialog(request: FileDialogRequest, parent: FileDialogParent<'_>, reply: FileDialogReply, windows: &crate::file_dialog_windows::FileDialogWindows) {
+    let window = match windows.picker(parent) {
+        Ok(window) => window,
+        Err(e) => {
+            reply.send(Some(FileDialogAnswer::Unavailable(e)));
+            return;
+        }
+    };
+    let mut dialog = window.dialog;
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
         FileDialogRequest::Open { multiple, initial_dir, extensions } => {
             if let Some(dir) = initial_dir {
@@ -250,10 +254,14 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             // the portal can't show it.
             #[cfg(target_os = "linux")]
             {
-                use eframe::wgpu::rwh::HasWindowHandle;
-                let parent = crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
+                // rfd exports the auxiliary Wayland surface for the portal; our custom Save As
+                // path only has X11 identifiers. Keep image-format selection on the root path.
+                if parent.viewport != egui::ViewportId::ROOT && window.portal_parent.is_empty() {
+                    let picked = dialog.save_file();
+                    return wait_for_dialog(Box::pin(async move { picked.await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo)) }), reply);
+                }
                 let req = crate::portal_save::SaveRequest {
-                    parent,
+                    parent: window.portal_parent,
                     name: dialog_file_name(&suggested, true),
                     suggested: Path::new(&suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
                     folder: dir,
@@ -282,6 +290,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             }
         }
     };
+    wait_for_dialog(answer, reply);
+}
+
+fn wait_for_dialog(answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>>, reply: FileDialogReply) {
     // Without the thread the reply is dropped unanswered, which the app takes as Cancel.
     if let Err(e) = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
         // An empty answer from a system with no dialog backend isn't a Cancel (#3354).
@@ -635,7 +647,10 @@ fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
-pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
+pub fn native(
+    automation: Option<photocraft_automation::AuthorizedWorkspace>,
+    file_dialog_windows: Arc<crate::file_dialog_windows::FileDialogWindows>,
+) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation_read = automation.clone().map(|workspace| {
@@ -678,7 +693,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
         save_file: Some(Arc::new(save_file)),
-        file_dialog: Some(Box::new(show_file_dialog)),
+        file_dialog: Some(Box::new(move |request, parent, reply| show_file_dialog(request, parent, reply, &file_dialog_windows))),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         file_stamp: Some(Box::new(|path: &str| {
             // Follows a symlink, as Save writes through it to the file it points at.
