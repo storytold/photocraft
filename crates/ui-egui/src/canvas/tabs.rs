@@ -765,7 +765,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the
 /// active document fills the area.
-pub(super) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
+pub(crate) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
     (0..app.session.documents().len()).filter(|&doc| !crate::view_cmds::document_is_floating(app, doc)).collect()
 }
 

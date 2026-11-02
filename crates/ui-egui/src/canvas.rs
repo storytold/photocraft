@@ -46,6 +46,8 @@ pub mod snap_ui;
 mod start_screen;
 mod strokes;
 mod tabs;
+#[cfg(test)]
+pub(crate) use tabs::docked_document_indices;
 mod textures;
 pub(super) mod tile_overlay;
 pub(super) mod tool_cursor;
