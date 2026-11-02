@@ -5,8 +5,7 @@ use photocraft_ui_egui::{
     PhotocraftApp, Services,
     file_providers::{self, Host},
 };
-use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
-use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -15,54 +14,8 @@ const API: &str = "photocraftFileProviders";
 const EVENT: &str = "photocraft-file-provider";
 const LIMIT: u32 = 80 * 1024 * 1024;
 
-// This helper is test-only: the product has no handwritten script or postMessage listener.
-// It needs an actual opaque browsing context, which a Rust-only Host fixture cannot model.
-#[wasm_bindgen(inline_js = r#"
-export function probeOpaqueParentApi(parentOrigin, marker) {
-    if (parentOrigin !== window.location.origin || parentOrigin === 'null') {
-        return Promise.reject(new Error('an exact non-opaque parent origin is required'));
-    }
-    return new Promise((resolve, reject) => {
-        const frame = document.createElement('iframe');
-        frame.setAttribute('sandbox', 'allow-scripts');
-        let timer;
-        const cleanup = () => {
-            clearTimeout(timer);
-            window.removeEventListener('message', receive);
-            frame.remove();
-        };
-        const receive = event => {
-            if (event.source !== frame.contentWindow || event.origin !== 'null' ||
-                !event.data || event.data.marker !== marker) {
-                return;
-            }
-            const report = { denied: event.data.denied, errorName: event.data.errorName,
-                senderOrigin: event.origin, attemptedMessage: event.data.attemptedMessage };
-            cleanup();
-            resolve(report);
-        };
-        window.addEventListener('message', receive);
-        const originLiteral = JSON.stringify(parentOrigin);
-        const child = 'let denied = false; let errorName = ""; ' +
-            'try { void parent.photocraftFileProviders; } ' +
-            'catch (error) { denied = true; errorName = error.name; } ' +
-            'parent.postMessage({type:"photocraft-file-provider", method:"registerProvider", ' +
-            'args:["untrusted", "Untrusted storage", "other-account"]}, ' + originLiteral + '); ' +
-            'parent.postMessage({marker:' + JSON.stringify(marker) +
-            ', denied, errorName, attemptedMessage:true}, ' + originLiteral + ');';
-        frame.srcdoc = '<script>' + child + '</script>';
-        timer = setTimeout(() => {
-            cleanup();
-            reject(new Error('opaque iframe did not report its access check'));
-        }, 5000);
-        (document.body || document.documentElement).appendChild(frame);
-    });
-}
-"#)]
-extern "C" {
-    #[wasm_bindgen(js_name = probeOpaqueParentApi)]
-    fn opaque_parent_probe(parent_origin: &str, marker: &str) -> js_sys::Promise;
-}
+#[path = "provider_origin_browser_test.rs"]
+mod origin;
 
 struct InstalledApi {
     window: web_sys::Window,
@@ -148,12 +101,16 @@ fn rejected_without_snapshot_change(host: &Host, api: &JsValue, method: &str, ar
 /// It does not depend on ordering between tests or install a GPU/editor instance.
 #[wasm_bindgen_test]
 pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_opaque_frames() -> Result<(), JsValue> {
+    if origin::child_role()? {
+        return Ok(());
+    }
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("browser window required"))?;
     assert!(!Reflect::has(&window, &API.into())?, "the test page must not auto-start the editor");
     let host = Host::default();
-    crate::file_providers::install(host.clone(), egui::Context::default())?;
+    let installed = crate::file_providers::install(host.clone(), egui::Context::default());
     let api = Reflect::get(&window, &API.into())?;
     let _installed = InstalledApi { window: window.clone(), api: api.clone() };
+    installed?;
     assert_eq!(Reflect::get(&api, &"protocolVersion".into())?.as_f64(), Some(1.0));
     assert_eq!(Reflect::get(&api, &"app".into())?.as_string().as_deref(), Some("photocraft"));
     assert!(Object::is_frozen(api.unchecked_ref::<Object>()));
@@ -175,8 +132,7 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
     // The sandbox deliberately omits allow-same-origin. Its origin is opaque, not the parent's.
     // It both tries the existing parent API and sends a forged request to the exact parent origin.
     let before_probe = host.snapshot();
-    let origin = window.location().origin()?;
-    let report = JsFuture::from(opaque_parent_probe(&origin, "photocraft-provider-opaque-probe")).await?;
+    let report = origin::probe(&window, "photocraft-provider-opaque-probe").await?;
     assert_eq!(Reflect::get(&report, &"denied".into())?.as_bool(), Some(true));
     assert_eq!(Reflect::get(&report, &"errorName".into())?.as_string().as_deref(), Some("SecurityError"));
     assert_eq!(Reflect::get(&report, &"senderOrigin".into())?.as_string().as_deref(), Some("null"));

@@ -451,6 +451,9 @@ fn requested_and_queued_provider_opens_are_busy_but_not_saving() {
     assert!(!host.saving());
     assert!(!app.saving());
     tick_once(&mut app);
+    assert!(host.busy(), "the read terminal retains its connection until publication");
+    assert!(!host.saving(), "a retained read terminal still must not lock unrelated save/discard UI");
+    host.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {});
     assert!(!host.busy());
 }
 
@@ -944,4 +947,196 @@ fn clean_noop_requires_a_resolved_provider_choice_with_the_same_binding_and_revi
     assert!(!host.unchanged_provider_save(doc, 7, "renamed.psd"));
     host.intent(doc, "saveAs");
     assert!(!host.unchanged_provider_save(doc, 7, "one.psd"));
+}
+
+#[test]
+fn delivery_failure_retires_only_the_exact_capture_on_the_application_thread() {
+    let (mut app, host, doc) = app();
+    host.begin(doc, 7, "drawing.psd", vec![1, 2, 3], Vec::new(), false).unwrap();
+    let mut request = String::new();
+    let mut errors = 0;
+    assert!(host.publish_events_with(
+        |metadata, bytes| {
+            assert_eq!(metadata["type"], "save");
+            assert_eq!(bytes.as_deref(), Some([1, 2, 3].as_slice()));
+            request = metadata["requestId"].as_str().unwrap().into();
+            Err("synthetic copy failure")
+        },
+        |_| errors += 1
+    ));
+    assert_eq!(errors, 1);
+    assert!(host.pending_for(doc), "publication cannot consume app state");
+    assert!(host.result(request.clone(), "saved".into(), "resource-one".into()).is_err());
+    app.session.active_mut().unwrap().revision = 8;
+    let source = app.session.active().unwrap().doc.clone();
+    tick_once(&mut app);
+    let state = app.session.active().unwrap();
+    assert!(Arc::ptr_eq(&state.doc, &source));
+    assert_eq!((state.revision, state.saved_revision), (8, 2));
+    assert!(state.is_dirty());
+    assert!(!host.pending_for(doc));
+    assert!(!host.bound(doc));
+    assert!(app.ui.status_error);
+    let terminal = host.take_events();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0].metadata["type"], "saveFailed");
+    assert_eq!(terminal[0].metadata["requestId"], request);
+    assert_eq!(terminal[0].metadata["revision"], "7");
+    assert_eq!(terminal[0].metadata["connectionId"], connection(&host));
+    assert!(host.result(request, "saved".into(), "resource-one".into()).is_err());
+    host.begin(doc, 8, "drawing.psd", vec![4, 5], Vec::new(), false).unwrap();
+    let next = host.take_events().remove(0).metadata["requestId"].as_str().unwrap().to_string();
+    host.result(next, "saved".into(), "resource-one".into()).unwrap();
+    tick_once(&mut app);
+    assert_eq!(app.session.active().unwrap().saved_revision, 8);
+}
+
+#[test]
+fn delivery_failure_uses_reserved_capacity_beside_a_full_real_command_inbox() {
+    let (mut app, host, doc) = app();
+    host.begin(doc, 7, "drawing.psd", vec![1], Vec::new(), false).unwrap();
+    let capture = host.take_events().remove(0);
+    for n in 0..MAX_PENDING {
+        let request = host.request_open(&format!("read-{n}")).unwrap();
+        host.open(request, "bad.png".into(), vec![1]).unwrap();
+    }
+    assert_eq!(host.state().commands.len(), MAX_PENDING);
+    host.delivery_failed(&capture.metadata);
+    host.delivery_failed(&capture.metadata);
+    assert_eq!(host.state().failed_deliveries.len(), 1);
+    assert_eq!(host.state().commands.len(), MAX_PENDING, "independent accepted reads survive");
+    tick_once(&mut app);
+    assert!(!host.pending_for(doc));
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(host.state().failed_deliveries.is_empty());
+    assert_eq!(host.take_events().iter().filter(|event| event.metadata["type"] == "saveFailed").count(), 1);
+}
+
+#[test]
+fn failed_open_dispatch_tombstones_its_read_before_full_queue_terminal_delivery() {
+    let host = host();
+    let request = host.request_open("resource-one").unwrap();
+    let mut delivered = Vec::new();
+    let mut errors = 0;
+    host.publish_events_with(
+        |metadata, _| {
+            if metadata["type"] == "openRequest" {
+                let mut state = host.state();
+                for _ in 0..MAX_EVENTS {
+                    state.event(json!({"type":"fixture-backpressure"}), None);
+                }
+                return Err("synthetic dispatch failure");
+            }
+            delivered.push(metadata.clone());
+            Ok(())
+        },
+        |_| {
+            errors += 1;
+            assert_eq!(host.state().recovery_events.len(), 1);
+            assert!(!host.state().requested_opens.contains_key(&request));
+            assert!(host.open(request.clone(), "late.png".into(), vec![1]).is_err());
+            assert!(host.cancel_open(request.clone(), String::new()).is_err());
+            assert!(host.disconnect().is_err());
+        },
+    );
+    assert_eq!(errors, 1);
+    let failures: Vec<_> = delivered.iter().filter(|event| event["type"] == "openFailed").collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0]["requestId"], request);
+    assert_eq!(failures[0]["resourceId"], "resource-one");
+    assert_eq!(failures[0]["connectionId"], connection(&host));
+    assert!(!host.busy());
+    host.disconnect().unwrap();
+    host.connect("test-provider".into(), "Test files".into(), "account-two".into()).unwrap();
+    assert!(host.open(request, "late.png".into(), vec![1]).is_err());
+}
+
+#[test]
+fn accepted_synchronous_save_and_open_callbacks_survive_dispatch_failure() {
+    let (mut app, host, doc) = app();
+    host.begin(doc, 7, "drawing.psd", vec![1], Vec::new(), false).unwrap();
+    let read = host.request_open("resource-two").unwrap();
+    let mut request = String::new();
+    host.publish_events_with(
+        |metadata, _| {
+            assert!(!host.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {}), "nested publication cannot steal the batch");
+            match metadata["type"].as_str() {
+                Some("save") => {
+                    request = metadata["requestId"].as_str().unwrap().into();
+                    host.result(request.clone(), "saved".into(), "resource-one".into()).unwrap();
+                }
+                Some("openRequest") => host.open(read.clone(), "bad.png".into(), vec![1]).unwrap(),
+                _ => panic!("unexpected terminal"),
+            }
+            Err("throw after accepted callback")
+        },
+        |_| {},
+    );
+    assert!(host.state().failed_deliveries.is_empty());
+    assert_eq!(host.state().commands.len(), 2);
+    assert!(host.result(request.clone(), "cancel".into(), String::new()).is_err());
+    tick_once(&mut app);
+    assert_eq!(app.session.active().unwrap().saved_revision, 7);
+    assert!(host.bound(doc));
+    assert!(host.result(request, "saved".into(), "resource-one".into()).is_err());
+}
+
+#[test]
+fn queued_and_taken_terminals_keep_their_connection_across_reentrant_listeners() {
+    let host = host();
+    let request = host.request_open("cancelled-before-publication").unwrap();
+    host.cancel_open(request.clone(), String::new()).unwrap();
+    assert!(host.state().requested_opens.is_empty());
+    assert!(host.disconnect().is_err(), "a queued terminal retains its connection");
+    let mut delivered = Vec::new();
+    host.publish_events_with(
+        |metadata, _| {
+            assert!(host.state().requested_opens.is_empty());
+            assert!(host.state().events.is_empty(), "the only terminal is already in the taken batch");
+            assert!(host.disconnect().is_err(), "an earlier openRequest listener cannot drop the later taken terminal");
+            assert!(!host.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {}));
+            delivered.push(metadata.clone());
+            Ok::<_, ()>(())
+        },
+        |_| {},
+    );
+    assert_eq!(delivered.len(), 2);
+    assert_eq!(delivered[0]["type"], "openRequest");
+    assert_eq!(delivered[1]["type"], "openCancelled");
+    assert_eq!(delivered[1]["requestId"], request);
+    assert!(delivered.iter().all(|event| event["connectionId"] == connection(&host)));
+    assert!(!host.busy());
+    host.disconnect().unwrap();
+}
+
+#[test]
+fn forged_and_stale_delivery_failures_cannot_retire_a_capture() {
+    let (mut app, host, doc) = app();
+    host.begin(doc, 7, "drawing.psd", vec![1], Vec::new(), false).unwrap();
+    let original = host.take_events().remove(0).metadata;
+    for (field, value) in [
+        ("connectionId", json!("other")),
+        ("namespace", json!("other")),
+        ("documentId", json!("other")),
+        ("revision", json!("8")),
+        ("filename", json!("other.psd")),
+        ("destination", json!("device")),
+        ("resourceId", json!("other")),
+        ("copy", json!(true)),
+        ("intent", json!("saveAs")),
+    ] {
+        let mut forged = original.clone();
+        forged[field] = value;
+        host.delivery_failed(&forged);
+        assert!(host.state().failed_deliveries.is_empty());
+    }
+    host.result(original["requestId"].as_str().unwrap().into(), "cancel".into(), String::new()).unwrap();
+    tick_once(&mut app);
+    host.disconnect().unwrap();
+    host.connect("test-provider".into(), "Test files".into(), "account-two".into()).unwrap();
+    host.begin(doc, 8, "drawing.psd", vec![2], Vec::new(), false).unwrap();
+    host.delivery_failed(&original);
+    assert!(host.state().failed_deliveries.is_empty());
+    assert!(host.pending_for(doc));
 }

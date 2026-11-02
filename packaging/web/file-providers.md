@@ -173,6 +173,16 @@ and does not keep the provider busy. An idle document may remain dirty while ano
 Pointer motion or leaving the editor alone does not block an otherwise idle read; held buttons
 and existing drafts or tool interactions remain protected.
 
+## Event delivery recovery
+
+The browser publisher copies save bytes through a catch-enabled `Uint8Array.from` import. Recoverable JavaScript exceptions in the copy or dispatch path fail only a still-owned matching request and allow the bounded current batch to continue. This does not claim recovery from fatal browser/WASM OOM, process termination, or ordinary DOM listener exceptions that the browser reports without propagating from dispatchEvent.
+
+A save delivery failure retains its exact request/document/revision/account/destination/resource identity until the actual application-thread consumer removes that capture and reports `saveFailed`. It never acknowledges persistence, advances a saved checkpoint, invalidates another resource alias, records a local action/save destination, or completes a close continuation. A late reply for that retired request is rejected. The user can start a fresh save capturing current work. This is distinct from an ordinary accepted `saveResult(..., "failed", ...)`: the existing provider-upload retry keeps that same immutable capture pending and is unchanged.
+
+An undelivered openRequest immediately loses its read-response authority, including under full outbound backpressure. A bounded overflow retains its correlated openFailed terminal until publication can attempt it; later openResource/cancelOpen callbacks cannot admit that retired read. An undelivered chooser releases only its unanswered dialog, sends an unavailable result to the real application dialog receiver, clears that chooser's prepared intent, and permits a fresh chooser after the application consumes the error. A synchronous accepted choice/open/save callback always wins over a subsequent dispatch error.
+
+Queued terminals and the entire currently taken publisher batch retain their connection. A listener cannot disconnect/reconnect midway and silently discard or relabel a later terminal. Nested publication does not drain the outer batch. Reads and retained read terminals remain distinct from save-specific pending state and do not lock unrelated discard answers. Normal local/default-off, provider destination recording, cancel/download/Save a Copy and exact-revision alias/ACK rules remain on their existing paths.
+
 ## Trust boundary and limits
 
 The API is a page-local capability for trusted scripts executing in the editor's own origin. The
@@ -259,21 +269,64 @@ ordering. It checks:
   the existing parent API. It sends a forged registration message to the exact parent origin,
   never a wildcard; that MessageEvent does not change the Host.
 
-The small inline iframe helper is restricted to this test module. It is not a product transport,
-UI or generated hosting script. The existing malformed-open Rust fixture injects an importer
-failure; it does not demonstrate decoding of a real corrupt file. Neither native nor browser
-boundary tests establish remote storage durability, backend authorization or cross-client
-interoperability.
+The opaque child uses Rust code from the same selected generated test module. Before installing
+any API, the child role genuinely attempts the parent API lookup/register call and posts the
+forged request and a nonce-correlated report to the exact parent origin. The parent checks the
+actual iframe WindowProxy, MessageEvent origin `null`, sandbox flags, nonce and exactly one real
+forged request, then retains all unchanged Host/default-off/cancellation/input-limit assertions.
+It does not infer the result solely from the parent's access to the child.
 
-Use a browser WebDriver and wasm-bindgen-test-runner matching the locked wasm-bindgen version
-(0.2.129 for this change). With those tools already available, an example targeted command is:
+The explicit `browser-test-provider-origin` xtask starts a temporary Rust artifact relay on
+127.0.0.1 and an ephemeral port, then runs only the named browser fixture. It obtains the exact
+runner origin and retained generated directory from its own Cargo/runner stdout. It proxies the
+unchanged generated index from that origin and streams only the generated run/module/snippets/
+WASM allowlist from that retained directory. It adds `Access-Control-Allow-Origin: null`
+(no wildcard), preserves COOP same-origin and COEP require-corp, and never exposes arbitrary
+workspace files, authentication, storage or provider backends. No application startup or ordinary
+CI command starts this support service. There is no handwritten JS/TS, srcdoc script or Function
+constructor in the fixture.
+
+The helper requires a Unix managed validation scope, an existing task-owned temporary
+directory and a fresh evidence filename. Bounds are 96 connections, 16 KiB request headers,
+128 KiB index body, 512 MiB per generated artifact, 2 GiB total served bytes, 64 KiB streaming
+buffers, 32 MiB stdout and a configurable 600–3600 second lifetime (1800 by default), with at
+most a 10-second socket-I/O stop grace. The child has a 600-second report deadline and the runner
+a 900-second test timeout. Choose a resource budget that accommodates the actual generated artifact sizes and measured browser time. Every served
+artifact receives a SHA256/length/header receipt and a fresh durable snapshot beside the evidence
+JSON (at most the same 2 GiB total). No snapshot or result is overwritten. The relay is stopped and joined on success or
+failure, and its Cargo subprocess is supervised. Served artifact snapshots and partial logs
+are preserved outside temporary storage for review. The enclosing managed unit must still finalize and prove all
+compiler/driver/Chrome descendants absent.
+
+Use the already pinned wasm-bindgen-test-runner 0.2.129, real Chrome/WebDriver configuration and
+existing Cargo target/cache. For example:
 
 ```sh
-CHROMEDRIVER=/absolute/path/to/chromedriver \
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-cargo test --locked -p photocraft-web --bin photocraft-web --target wasm32-unknown-unknown \
-  page_local_provider_boundary_checks_default_off_inputs_limits_and_opaque_frames
+CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 RAYON_NUM_THREADS=1 \
+CHROMEDRIVER=/absolute/path/to/pinned/chromedriver \
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/absolute/path/to/pinned/wasm-bindgen-test-runner \
+cargo run --locked --offline -p xtask -- browser-test-provider-origin \
+  --tmp-root /absolute/task-owned/tmp \
+  --evidence /absolute/task-owned/evidence/origin.json \
+  --timeout-seconds 1800
 ```
 
-The fixture forces browser execution. Resolving the test-only dependency and running this command
-are separate validation steps; adding these sources does not claim a passing browser result.
+Run this command under process, memory and disk supervision suitable for the test artifacts.
+The helper does not install tools or manage unrelated processes. Keep the temporary root, browser
+profile/cache and evidence paths task-owned, and verify the actual Chrome/WebDriver and matching
+wasm-bindgen versions. Enclosing validation tooling remains responsible for collecting launch
+evidence and confirming that every owned compiler, driver and browser process has terminated. Compilation embeds a fresh test-only relay URL, so this selected
+test target is rebuilt for each invocation in the existing target directory.
+
+Success requires the original literal fixture marker exactly once, one passed/zero failed/zero
+ignored, an actual `PHOTOCRAFT_OPAQUE_CHILD_PROOF` from the parent and durable matching index/
+module/WASM receipts. The child has its own generated test context; its output does not replace
+the top-level test result. Missing/unbound support fails rather than silently skipping the
+foreign-origin scenario. New native support regressions cover route escapes, chunk framing and
+streaming SHA256 against the existing implementation.
+
+The existing malformed-open Rust fixture injects an importer failure. It does not demonstrate
+decoding of a real corrupt file. Neither native nor browser boundary tests establish remote
+storage durability, backend authorization or cross-client interoperability. Adding this source is
+not a syntax, compile or real-browser pass. Actual opaque-origin startup/CORS compatibility,
+resource adequacy and runtime termination remain to be verified on the final published source.

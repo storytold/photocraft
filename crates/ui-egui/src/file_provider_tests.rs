@@ -366,6 +366,9 @@ fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
     crate::discard_ui::answer_control(&mut app, &ctx, "dontSave").unwrap();
     assert!(app.session.documents().is_empty());
     provider.cancel_open(read, String::new()).unwrap();
+    assert!(provider.busy(), "the terminal still owns its original connection");
+    assert!(!provider.saving(), "a cancelled read does not become a save operation");
+    provider.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {});
     assert!(!provider.busy());
 }
 
@@ -454,4 +457,183 @@ fn a_bound_native_project_keeps_its_format_and_resource_on_the_next_save() {
     assert!(written.borrow().is_empty());
     assert!(app.ui.recent_files.is_empty());
     assert!(app.session.active().unwrap().path.is_none());
+}
+
+// Original synthetic PhotoCraft raster/native-resource fixture, MIT OR Apache-2.0.
+#[test]
+fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_retry() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    app.services.export = Some(Box::new(|doc, name, settings| {
+        photocraft_io::export(doc, name, &settings.io_options()).map(|result| (result.bytes, result.warnings)).map_err(|error| error.to_string())
+    }));
+    let image =
+        photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgba, vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 70, 90, 110, 255])
+            .unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let raster = photocraft_io::import("original.png", &png).unwrap().document;
+    {
+        let state = app.session.active_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        doc.layers = raster.layers;
+        doc.metadata.text.push(("Original".into(), "Native delivery fixture".into()));
+        doc.metadata.psd_resources.push((4000, "Original embedded bytes".into(), std::sync::Arc::new(png)));
+    }
+    let doc = app.session.active().unwrap().doc.id;
+    let captured = app.session.active().unwrap().doc.clone();
+    let journal = app.session.journal.clone();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let dialog = event(&provider, "saveDialog");
+    provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "delivery.pcraft").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let mut request = String::new();
+    let mut payload = Vec::new();
+    provider.publish_events_with(
+        |metadata, bytes| {
+            assert_eq!(metadata["type"], "save");
+            request = metadata["requestId"].as_str().unwrap().into();
+            payload = bytes.unwrap();
+            Err("synthetic byte-copy failure")
+        },
+        |_| {},
+    );
+    let reopened = photocraft_io::import("delivery.pcraft", &payload).unwrap().document;
+    assert_eq!(reopened.layers, captured.layers);
+    assert_eq!(reopened.metadata, captured.metadata);
+    assert_eq!(reopened.size, captured.size);
+    let layer = captured.layers.first().unwrap().id;
+    app.live_adjust = Some((layer, json!({"draft":"later, uncommitted"})));
+    app.session.active_mut().unwrap().revision = 8;
+    file_providers::tick(&mut app, &ctx);
+    assert_eq!(app.live_adjust, Some((layer, json!({"draft":"later, uncommitted"}))));
+    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &captured));
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(!provider.pending_for(doc));
+    assert!(!provider.saving());
+    assert!(!provider.bound(doc));
+    assert!(written.borrow().is_empty());
+    assert_eq!(app.session.journal, journal, "delivery recovery must not record a local save destination");
+    assert!(provider.result(request.clone(), "saved".into(), "remote".into()).is_err());
+    assert_eq!(event(&provider, "saveFailed")["requestId"], request);
+
+    app.live_adjust = None; // Explicit fixture cancellation, never a recovery side effect.
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let dialog = event(&provider, "saveDialog");
+    provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "delivery.pcraft").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let mut retry = String::new();
+    provider.publish_events_with(
+        |metadata, bytes| {
+            retry = metadata["requestId"].as_str().unwrap().into();
+            assert_ne!(retry, request);
+            assert_eq!(metadata["revision"], "8");
+            let decoded = photocraft_io::import("delivery.pcraft", &bytes.unwrap()).unwrap().document;
+            assert_eq!(decoded.layers, captured.layers);
+            assert_eq!(decoded.metadata, captured.metadata);
+            provider.result(retry.clone(), "saved".into(), "remote".into()).unwrap();
+            Ok::<_, ()>(())
+        },
+        |_| {},
+    );
+    app.session.active_mut().unwrap().revision = 9;
+    file_providers::tick(&mut app, &ctx);
+    assert_eq!(app.session.active().unwrap().saved_revision, 8);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(provider.bound(doc));
+    assert!(written.borrow().is_empty());
+    assert!(provider.result(retry, "saved".into(), "remote".into()).is_err());
+}
+
+#[test]
+fn failed_provider_chooser_delivery_releases_the_actual_dialog_without_a_local_write() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    let source = app.session.active().unwrap().doc.clone();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let mut request = String::new();
+    assert!(provider.publish_events_with(
+        |metadata, _| {
+            assert_eq!(metadata["type"], "saveDialog");
+            request = metadata["requestId"].as_str().unwrap().into();
+            Err("synthetic chooser dispatch failure")
+        },
+        |_| {}
+    ));
+    app.poll_file_dialog(&ctx, None);
+    file_providers::tick(&mut app, &ctx);
+    assert!(!app.file_dialog_open());
+    assert!(!provider.saving());
+    assert!(!provider.busy());
+    assert!(app.ui.status_error);
+    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(written.borrow().is_empty());
+    assert!(provider.resolve_dialog(&request, "provider", "late.psd").is_err());
+    let retry = start_save(&mut app, &provider, &ctx, "file.saveAs");
+    assert!(provider.pending_for(app.session.active().unwrap().doc.id));
+    provider.result(retry, "cancel".into(), String::new()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    assert!(!provider.saving());
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
+fn accepted_provider_chooser_callback_survives_a_later_dispatch_exception() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    provider.publish_events_with(
+        |metadata, _| {
+            provider.resolve_dialog(metadata["requestId"].as_str().unwrap(), "provider", "drawing.psd").unwrap();
+            Err("throw after accepted choice")
+        },
+        |_| {},
+    );
+    app.poll_file_dialog(&ctx, None);
+    let capture = event(&provider, "save");
+    assert!(provider.pending_for(app.session.active().unwrap().doc.id));
+    assert_eq!(capture["destination"], "provider");
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(written.borrow().is_empty());
+    provider.result(capture["requestId"].as_str().unwrap().into(), "cancel".into(), String::new()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    assert!(!provider.saving());
+}
+
+#[test]
+fn failed_provider_delivery_keeps_save_before_close_retryable_and_preserves_a_later_edit() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let dialog = event(&provider, "saveDialog");
+    provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", "drawing.psd").unwrap();
+    app.poll_file_dialog(&ctx, None);
+    provider.publish_events_with(|_, _| Err("synthetic close-save delivery failure"), |_| {});
+    file_providers::tick(&mut app, &ctx);
+    crate::discard_ui::finish_provider_save(&mut app, &ctx);
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(!app.saving());
+    assert_eq!(event(&provider, "saveFailed")["revision"], "7");
+    crate::discard_ui::answer_control(&mut app, &ctx, "save").unwrap();
+    let retry = resolve_save(&mut app, &provider, &ctx);
+    app.run("layer.new.layer", json!({"name":"After retry capture"})).unwrap();
+    let later = app.session.active().unwrap().doc.clone();
+    provider.result(retry, "saved".into(), "remote".into()).unwrap();
+    file_providers::tick(&mut app, &ctx);
+    crate::discard_ui::finish_provider_save(&mut app, &ctx);
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.active().unwrap().doc.layers, later.layers, "normal ACK filename bookkeeping must preserve the later edit");
+    assert_eq!(app.session.active().unwrap().saved_revision, 7);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(written.borrow().is_empty());
 }

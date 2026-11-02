@@ -47,6 +47,8 @@ struct Save {
     warnings: Vec<String>,
     copy: bool,
     destination: String,
+    intent: String,
+    resource: Option<String>,
     /// This capture predates an overwrite of its document's former provider checkpoint.
     /// Keep the operation busy until it settles, but it cannot restore that stale binding.
     invalidated_resource: Option<String>,
@@ -74,6 +76,10 @@ struct State {
     pending: HashMap<String, Save>,
     events: Vec<Event>,
     commands: Vec<Command>,
+    queued_results: HashSet<String>,
+    failed_deliveries: HashSet<String>,
+    recovery_events: Vec<Event>,
+    publishing: bool,
     resources: Vec<Resource>,
     bindings: HashMap<DocId, String>,
     provider_names: HashMap<DocId, String>,
@@ -94,6 +100,8 @@ impl State {
         !self.pending.is_empty()
             || !self.dialogs.is_empty()
             || !self.destinations.is_empty()
+            || !self.queued_results.is_empty()
+            || !self.failed_deliveries.is_empty()
             || self.commands.iter().any(|command| matches!(command, Command::Result(..)))
     }
 
@@ -105,6 +113,11 @@ impl State {
             || !self.requested_opens.is_empty()
             || self.opening.is_some()
             || !self.opening_docs.is_empty()
+            || !self.queued_results.is_empty()
+            || !self.failed_deliveries.is_empty()
+            || self.publishing
+            || !self.recovery_events.is_empty()
+            || self.events.iter().any(|event| terminal_event(&event.metadata))
     }
 
     fn next_request(&mut self, kind: &str) -> Result<String, String> {
@@ -124,6 +137,19 @@ impl State {
         self.events.push(Event { metadata, bytes });
     }
 
+    // Recovery transfers existing request slots, never payload bytes, to this bounded overflow.
+    // New requests also account for these slots until the next publication drains them.
+    // Each record transfers one of at most MAX_PENDING saves or MAX_PENDING requested reads;
+    // neither path can manufacture another record after that owner has been retired.
+    fn recovery_event(&mut self, metadata: Value) {
+        self.event(metadata, None);
+        if self.events.len() > MAX_EVENTS
+            && let Some(event) = self.events.pop()
+        {
+            self.recovery_events.push(event);
+        }
+    }
+
     fn event_bytes(&self) -> usize {
         self.events.iter().fold(0usize, |sum, e| sum.saturating_add(e.bytes.as_ref().map_or(0, Vec::len)))
     }
@@ -132,6 +158,14 @@ impl State {
 /// A single explicitly registered provider. The default has no storage authority or UI.
 #[derive(Clone, Default)]
 pub struct Host(Arc<Mutex<State>>);
+
+struct Publication(Host);
+
+impl Drop for Publication {
+    fn drop(&mut self) {
+        self.0.state().publishing = false;
+    }
+}
 
 impl Host {
     fn state(&self) -> MutexGuard<'_, State> {
@@ -400,7 +434,7 @@ impl Host {
         if s.provider.is_none() || !s.pending.contains_key(&request) || s.commands.len() >= MAX_PENDING {
             return Err("unknown or already completed file provider save request".into());
         }
-        if s.commands.iter().any(|command| matches!(command, Command::Result(queued, _, _) if *queued == request)) {
+        if s.queued_results.contains(&request) || s.failed_deliveries.contains(&request) {
             return Err("the file provider save result is already queued".into());
         }
         if status == "saved" && !s.pending.get(&request).is_some_and(|p| p.destination == "provider") {
@@ -409,6 +443,7 @@ impl Host {
         if status == "download" && !s.pending.get(&request).is_some_and(|p| p.destination == "device") {
             return Err("a provider save cannot be reported as a device download".into());
         }
+        s.queued_results.insert(request.clone());
         s.commands.push(Command::Result(request, status, resource));
         Ok(())
     }
@@ -420,7 +455,7 @@ impl Host {
             || !valid_name(path)
             || bytes.is_empty()
             || bytes.len() > MAX_BYTES
-            || s.pending.len() >= MAX_PENDING
+            || s.pending.len().saturating_add(s.recovery_events.len()) >= MAX_PENDING
             || s.pending.values().any(|p| p.doc == doc)
             || s.events.len() >= MAX_EVENTS
             || s.event_bytes().saturating_add(bytes.len()) > MAX_BYTES
@@ -434,7 +469,7 @@ impl Host {
         s.resolved_requests.remove(&doc);
         let resource = s.bindings.get(&doc).cloned();
         s.event(json!({"type":"save","requestId":request,"documentId":doc.0.to_string(),"revision":revision.to_string(),"intent":intent,"destination":destination,"resourceId":resource,"filename":path,"copy":copy}), Some(bytes));
-        s.pending.insert(request, Save { doc, revision, path: path.into(), warnings, copy, destination, invalidated_resource: None });
+        s.pending.insert(request, Save { doc, revision, path: path.into(), warnings, copy, destination, intent, resource, invalidated_resource: None });
         Ok(())
     }
 
@@ -492,7 +527,10 @@ impl Host {
         if s.provider.is_none() || !s.enabled {
             return Err("file provider is disabled".into());
         }
-        if s.requested_opens.len() >= MAX_PENDING || s.events.len() >= MAX_EVENTS || s.requested_opens.values().any(|resource| resource == id) {
+        if s.requested_opens.len().saturating_add(s.recovery_events.len()) >= MAX_PENDING
+            || s.events.len() >= MAX_EVENTS
+            || s.requested_opens.values().any(|resource| resource == id)
+        {
             return Err("the file provider resource is already opening or the provider is busy".into());
         }
         let request = s.next_request("open")?;
@@ -523,9 +561,102 @@ impl Host {
         snapshot
     }
 
-    pub fn take_events(&self) -> Vec<Event> {
-        std::mem::take(&mut self.state().events)
+    fn delivery_failed(&self, metadata: &Value) {
+        let mut s = self.state();
+        let Some(identity) = &s.provider else { return };
+        if metadata["connectionId"].as_str() != Some(s.connection_id.as_str())
+            || metadata["providerId"].as_str() != Some(identity.provider_id.as_str())
+            || metadata["namespace"].as_str() != Some(identity.namespace.as_str())
+        {
+            return;
+        }
+        let Some(request) = metadata["requestId"].as_str() else { return };
+        match metadata["type"].as_str() {
+            Some("save") => {
+                // A synchronous accepted callback owns the result even if dispatch then throws.
+                if s.queued_results.contains(request) || s.failed_deliveries.contains(request) {
+                    return;
+                }
+                let owned = s.pending.get(request).is_some_and(|save| {
+                    metadata["documentId"] == save.doc.0.to_string()
+                        && metadata["revision"] == save.revision.to_string()
+                        && metadata["filename"] == save.path
+                        && metadata["copy"] == save.copy
+                        && metadata["destination"] == save.destination
+                        && metadata["intent"] == save.intent
+                        && metadata["resourceId"] == json!(save.resource)
+                });
+                if owned {
+                    // At most MAX_PENDING request IDs, independent of a full command inbox.
+                    // The app thread retires the capture; the publisher never changes a checkpoint.
+                    s.failed_deliveries.insert(request.into());
+                }
+            }
+            Some("openRequest") => {
+                if let Some(resource) = s.requested_opens.get(request).filter(|resource| metadata["resourceId"].as_str() == Some(resource.as_str())).cloned() {
+                    // Tombstone now: later callbacks cannot admit this read even if its terminal
+                    // must wait behind a full event queue. Accepted synchronous bytes already
+                    // removed the requested owner and are not cancelled by this branch.
+                    s.requested_opens.remove(request);
+                    s.recovery_event(json!({"type":"openFailed","requestId":request,"resourceId":resource,
+                        "error":"File provider event delivery failed."}));
+                }
+            }
+            Some("saveDialog") => {
+                let owned = s.dialogs.get(request).is_some_and(|(doc, _)| metadata["documentId"] == json!(doc.map(|doc| doc.0.to_string())));
+                if owned && let Some((doc, reply)) = s.dialogs.remove(request) {
+                    if let Some(doc) = doc {
+                        s.intents.remove(&doc);
+                        s.destinations.remove(&doc);
+                        s.resolved_requests.remove(&doc);
+                    }
+                    reply.send(Some(FileDialogAnswer::Unavailable("File provider save dialog delivery failed; you can retry.".into())));
+                }
+            }
+            _ => {}
+        }
     }
+
+    /// Keep the whole taken batch on its connection, without holding a lock across page callbacks.
+    /// A bounded second pass delivers recovery terminals and synchronous callback events.
+    pub fn publish_events_with<E>(&self, mut dispatch: impl FnMut(&Value, Option<Vec<u8>>) -> Result<(), E>, mut on_error: impl FnMut(E)) -> bool {
+        {
+            let mut s = self.state();
+            if s.publishing {
+                return false;
+            }
+            s.publishing = true;
+        }
+        let _publication = Publication(self.clone());
+        let mut repaint = false;
+        for _ in 0..2 {
+            let events = self.take_events();
+            if events.is_empty() {
+                break;
+            }
+            for event in events {
+                repaint |= terminal_event(&event.metadata);
+                if let Err(error) = dispatch(&event.metadata, event.bytes) {
+                    self.delivery_failed(&event.metadata);
+                    repaint = true;
+                    on_error(error);
+                }
+            }
+        }
+        let s = self.state();
+        repaint || !s.commands.is_empty() || !s.failed_deliveries.is_empty() || !s.events.is_empty() || !s.recovery_events.is_empty()
+    }
+
+    pub fn take_events(&self) -> Vec<Event> {
+        let mut s = self.state();
+        let mut events = std::mem::take(&mut s.events);
+        events.append(&mut s.recovery_events);
+        events
+    }
+}
+
+fn terminal_event(metadata: &Value) -> bool {
+    matches!(metadata["type"].as_str(), Some("opened" | "openFailed" | "openCancelled" | "saveFailed" | "saveUnchanged"))
 }
 
 fn valid_id(value: &str) -> bool {
@@ -553,15 +684,47 @@ fn bounded_error(value: &str) -> String {
 /// Apply queued provider replies on the application thread, then publish a fresh snapshot.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(host) = app.services.file_provider.clone().filter(Host::connected) else { return };
-    let commands = std::mem::take(&mut host.state().commands);
+    let (commands, failures) = {
+        let mut s = host.state();
+        (std::mem::take(&mut s.commands), s.failed_deliveries.iter().cloned().collect::<Vec<_>>())
+    };
     for command in commands {
         match command {
-            Command::Result(request, status, resource) => apply_result(app, ctx, &host, &request, &status, resource),
+            Command::Result(request, status, resource) => {
+                apply_result(app, ctx, &host, &request, &status, resource);
+                host.state().queued_results.remove(&request);
+            }
             Command::Open(opening, bytes) => apply_open(app, ctx, &host, opening, bytes),
         }
     }
+    for request in failures {
+        apply_delivery_failure(app, &host, &request);
+    }
     finish_opens(app, &host);
     capture(app);
+}
+
+fn apply_delivery_failure(app: &mut PhotocraftApp, host: &Host, request: &str) {
+    let save = {
+        let mut s = host.state();
+        if !s.failed_deliveries.remove(request) {
+            return;
+        }
+        let Some(save) = s.pending.remove(request) else { return };
+        s.recovery_event(json!({"type":"saveFailed","requestId":request,"documentId":save.doc.0.to_string(),
+            "revision":save.revision.to_string(),"filename":save.path,"resourceId":save.resource,
+            "error":"File provider event delivery failed; retry creates a fresh capture."}));
+        save
+    };
+    // This is a delivery failure, not a provider persistence answer. No saved_provider call,
+    // alias invalidation, destination recording, close continuation or revision mutation.
+    app.ui.status = crate::i18n::t(if save.destination == "device" {
+        "The device download failed; you can retry."
+    } else {
+        "The file provider save failed; your changes remain unsaved."
+    })
+    .into();
+    app.ui.status_error = true;
 }
 
 fn apply_result(app: &mut PhotocraftApp, ctx: &egui::Context, host: &Host, request: &str, status: &str, resource: String) {

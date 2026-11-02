@@ -4,7 +4,18 @@
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photocraft_ui_egui::file_providers::{Host, Resource};
-use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
+
+thread_local! {
+    static CURRENT_CONTEXT: std::cell::RefCell<Option<egui::Context>> = const { std::cell::RefCell::new(None) };
+}
+
+#[wasm_bindgen]
+extern "C" {
+    // Catch recoverable JavaScript copy exceptions instead of escaping the taken Rust batch.
+    #[wasm_bindgen(catch, js_namespace = Uint8Array, js_name = from)]
+    fn copy_event_bytes(bytes: &[u8]) -> Result<Uint8Array, JsValue>;
+}
 
 const API: &str = "photocraftFileProviders";
 const EVENT: &str = "photocraft-file-provider";
@@ -61,6 +72,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
     random.call1(&crypto, &nonce)?;
     host.set_session(nonce.to_vec().iter().map(|byte| format!("{byte:02x}")).collect()).map_err(error)?;
 
+    CURRENT_CONTEXT.with(|current| *current.borrow_mut() = Some(ctx.clone()));
     let api = Object::new();
     set(&api, "protocolVersion", &1.into())?;
     set(&api, "app", &"photocraft".into())?;
@@ -196,7 +208,7 @@ pub fn install(host: Host, ctx: egui::Context) -> Result<(), JsValue> {
 fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), JsValue> {
     let detail = object(metadata)?;
     if let Some(bytes) = bytes {
-        set(&detail, "bytes", &Uint8Array::from(bytes.as_slice()))?;
+        set(&detail, "bytes", &copy_event_bytes(&bytes)?.into())?;
     }
     let init = web_sys::CustomEventInit::new();
     init.set_detail(&detail);
@@ -206,10 +218,15 @@ fn dispatch(metadata: &serde_json::Value, bytes: Option<Vec<u8>>) -> Result<(), 
 }
 
 pub fn publish(host: &Host) {
-    for event in host.take_events() {
-        if let Err(error) = dispatch(&event.metadata, event.bytes) {
-            // Native pending requests survive a failing provider listener. No implicit ACK.
-            log::error!("file-provider event delivery failed: {error:?}");
-        }
+    if host.publish_events_with(dispatch, |error| log::error!("file-provider event delivery failed: {error:?}")) {
+        CURRENT_CONTEXT.with(|current| {
+            if let Some(ctx) = current.borrow().as_ref() {
+                ctx.request_repaint();
+            }
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "file_provider_delivery_browser_tests.rs"]
+mod delivery_browser_tests;
