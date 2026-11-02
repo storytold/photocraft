@@ -180,7 +180,7 @@ impl PhotocraftApp {
             return;
         }
         let now = ctx.input(|i| i.time);
-        if !self.synthetic.is_empty()
+        if (!self.synthetic.is_empty() || self.synthetic_batch.is_some() || self.captures.any_pending())
             && let Some(s) = &mut self.splash
         {
             s.dismiss();

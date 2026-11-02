@@ -995,6 +995,19 @@ fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
     assert!(h.state().splash.is_none(), "splash must be dismissed so failure notices are not hidden");
 }
 
+#[test]
+fn splash_dismisses_on_synthetic_batch_or_pending_captures() {
+    let mut h = app_harness();
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = 1.0;
+    h.state_mut().splash = Some(splash);
+
+    // If an in-flight synthetic batch exists, splash dismisses immediately
+    h.state_mut().synthetic_batch = Some(Vec::new());
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must dismiss when synthetic batch is active");
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
