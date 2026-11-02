@@ -673,15 +673,13 @@ fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
 /// Tools that keep ⌘ for themselves, and the selection tools (their ⌘ is handled per press in
 /// `canvas`, #896), never become the Move tool this way.
 #[test]
-fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_shape_or_type_tools() {
+fn cmd_is_not_the_move_tool_for_selection_hand_zoom_pen_or_shape_tools() {
     for tool in [
         Tool::Hand,
         Tool::RotateView,
         Tool::Zoom,
         Tool::Pen,
         Tool::Rectangle,
-        Tool::Type,
-        Tool::VerticalType,
         Tool::Crop,
         Tool::PathSelection,
         Tool::DirectSelection,
@@ -756,6 +754,162 @@ fn cmd_mid_pan_or_during_free_transform_is_not_the_hand_tools_zoom() {
     hold_mods(&mut h, Modifiers::COMMAND);
     assert_eq!(held_tool(h.state(), &h.ctx), None);
     hold_mods(&mut h, Modifiers::NONE);
+}
+
+/// The text layer's translation.
+fn text_offset(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId) -> (f64, f64) {
+    match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+        photocraft_doc::LayerContent::Text(t) => (t.transform.m[4], t.transform.m[5]),
+        _ => panic!("not a text layer"),
+    }
+}
+
+/// With a Type tool, ⌘ is the Move tool once the text is committed: ⌘↵ ends the edit and ⌘ still
+/// held then nudges the text layer 1 px with the arrows, 10 px with ⇧, and ⌥ duplicates it first,
+/// from the arrows or a drag. While the text is edited ⌘ stays the type box's.
+#[test]
+fn cmd_after_committing_type_moves_and_duplicates_the_text_layer() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.move_auto_select = false;
+        h.state_mut().ui.extras.snap = false;
+        h.state_mut().ui.view.show.smart_guides = false;
+        let id = photocraft_doc::LayerId(
+            h.state_mut().run("type.create", json!({"text": "HO", "size": 60, "x": 100, "y": 150})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        h.run_steps(2);
+        click(&mut h, 115.0, 130.0, Modifiers::NONE);
+        assert!(h.state().ui.text_edit.is_some(), "{tool:?}: editing");
+        h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+        h.run_steps(1);
+        assert_eq!(held_tool(h.state(), &h.ctx), None, "{tool:?}: ⌘ is the type box's while editing");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(h.state().ui.tool, tool);
+        assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move), "{tool:?}");
+        let (x0, y0) = text_offset(&h, id);
+        key(&mut h, Key::ArrowRight, true, Modifiers::COMMAND);
+        key(&mut h, Key::ArrowRight, false, Modifiers::COMMAND);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0), "{tool:?}: ⌘→ nudges 1 px");
+        key(&mut h, Key::ArrowDown, true, Modifiers::COMMAND | Modifiers::SHIFT);
+        key(&mut h, Key::ArrowDown, false, Modifiers::COMMAND | Modifiers::SHIFT);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: ⌘⇧↓ nudges 10 px");
+        let n0 = h.state().session.active().unwrap().doc.layers.len();
+        key(&mut h, Key::ArrowLeft, true, Modifiers::COMMAND | Modifiers::ALT);
+        key(&mut h, Key::ArrowLeft, false, Modifiers::COMMAND | Modifiers::ALT);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n0 + 1, "{tool:?}: ⌘⌥← duplicates");
+        let copy = st.active_layer.unwrap();
+        assert_ne!(copy, id);
+        assert_eq!(text_offset(&h, id), (x0 + 1.0, y0 + 10.0), "{tool:?}: the original stays");
+        assert_eq!(text_offset(&h, copy), (x0, y0 + 10.0), "{tool:?}: the copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: no new text was started");
+        // ⌘⌥-drag on the copy: another copy, moved by the drag.
+        let (cx, cy) = text_offset(&h, copy);
+        let n1 = h.state().session.active().unwrap().doc.layers.len();
+        drag_raw(&mut h, if cfg!(target_os = "macos") { MAC_CMD_ALT } else { CTRL_ALT }, cx as f32 + 10.0, cy as f32 - 20.0, cx as f32 + 50.0, cy as f32);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), n1 + 1, "{tool:?}: ⌘⌥-drag duplicates");
+        let copy2 = st.active_layer.unwrap();
+        assert_eq!(text_offset(&h, copy), (cx, cy), "{tool:?}: the dragged-from copy stays");
+        assert_eq!(text_offset(&h, copy2), (cx + 40.0, cy + 20.0), "{tool:?}: the new copy moved");
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}");
+        assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool stays");
+    }
+}
+
+/// The layer count of the active document.
+fn layer_count(h: &Harness<'static, PhotocraftApp>) -> usize {
+    h.state().session.active().unwrap().doc.layers.len()
+}
+
+/// An open type box counts as editing whatever is in it, as in Photoshop: ⌘ held is not the Move
+/// tool, ⌘-arrows and ⌘⌥-arrows leave the text layer where it is (no nudge, no copy), a ⌘ press
+/// on a guide does not take it, and the box stays open on `layer`.
+fn assert_cmd_is_the_type_boxs(h: &mut Harness<'static, PhotocraftApp>, tool: Tool, layer: photocraft_doc::LayerId, why: &str) {
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(layer.0), "{tool:?} {why}: the box is open");
+    let (x0, y0) = text_offset(h, layer);
+    let n0 = layer_count(h);
+    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), None, "{tool:?} {why}: ⌘ is not the Move tool");
+    assert_eq!(crate::canvas::command_guide_at(h.state(), tool, [300.0, 100.0], Modifiers::COMMAND), None, "{tool:?} {why}: no guide");
+    for m in [Modifiers::COMMAND, Modifiers::COMMAND | Modifiers::SHIFT, Modifiers::COMMAND | Modifiers::ALT] {
+        key(h, Key::ArrowRight, true, m);
+        key(h, Key::ArrowRight, false, m);
+        assert_eq!(text_offset(h, layer), (x0, y0), "{tool:?} {why}: {m:?}-→ does not nudge the layer");
+        assert_eq!(layer_count(h), n0, "{tool:?} {why}: {m:?}-→ does not duplicate");
+    }
+    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(layer.0), "{tool:?} {why}: still editing");
+    hold_mods(h, Modifiers::NONE);
+}
+
+/// The two in-between cases for #9994's ⌘. (1) A new, empty type box (a click with the Type tool,
+/// no placeholder text) is being edited: ⌘ keeps its editing meaning. Committing it with ⌘↵
+/// removes the empty layer, and only then is ⌘ the Move tool.
+#[test]
+fn cmd_in_an_open_empty_type_box_stays_the_type_boxs() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        let mut h = harness(tool);
+        h.state_mut().session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = false);
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        let n0 = layer_count(&h);
+        click(&mut h, 120.0, 150.0, Modifiers::NONE);
+        let edit = h.state().ui.text_edit.clone().expect("a click opens a type box");
+        assert!(edit.created, "{tool:?}: a new layer");
+        let id = photocraft_doc::LayerId(edit.layer);
+        match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+            photocraft_doc::LayerContent::Text(t) => assert!(t.text.is_empty(), "{tool:?}: the box is empty"),
+            _ => panic!("not a text layer"),
+        }
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "empty box");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(layer_count(&h), n0, "{tool:?}: the empty layer is gone");
+        assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move), "{tool:?}: committed, ⌘ is the Move tool");
+        hold_mods(&mut h, Modifiers::NONE);
+    }
+}
+
+/// (2) Clicking into existing text, or a new box still showing its selected placeholder, without
+/// typing anything is editing too: ⌘ stays the type box's until the text is committed.
+#[test]
+fn cmd_after_clicking_into_type_without_typing_stays_the_type_boxs() {
+    for tool in [Tool::Type, Tool::VerticalType] {
+        // Existing text, clicked into.
+        let mut h = harness(tool);
+        h.state_mut().ui.tool_options.move_auto_select = false;
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        let id = photocraft_doc::LayerId(
+            h.state_mut().run("type.create", json!({"text": "HO", "size": 60, "x": 100, "y": 150})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        h.run_steps(2);
+        let before = h.state().session.active().unwrap().doc.layer(id).unwrap().content.clone();
+        click(&mut h, 115.0, 130.0, Modifiers::NONE);
+        assert!(!h.state().ui.text_edit.as_ref().unwrap().created, "{tool:?}: editing the existing layer");
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "clicked into");
+        let after = &h.state().session.active().unwrap().doc.layer(id).unwrap().content;
+        let text = |c: &photocraft_doc::LayerContent| match c {
+            photocraft_doc::LayerContent::Text(t) => t.text.clone(),
+            _ => panic!("not a text layer"),
+        };
+        assert_eq!(text(after), text(&before), "{tool:?}: nothing typed");
+        key(&mut h, Key::Enter, true, Modifiers::COMMAND);
+        key(&mut h, Key::Enter, false, Modifiers::COMMAND);
+        assert!(h.state().ui.text_edit.is_none(), "{tool:?}: committed");
+        assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move), "{tool:?}: committed, ⌘ is the Move tool");
+        hold_mods(&mut h, Modifiers::NONE);
+
+        // A new box with its placeholder selected, nothing typed over it.
+        let mut h = harness(tool);
+        h.state_mut().session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = true);
+        h.state_mut().run("view.newGuide", json!({"orientation": "vertical", "position": 300})).unwrap();
+        click(&mut h, 120.0, 150.0, Modifiers::NONE);
+        let id = photocraft_doc::LayerId(h.state().ui.text_edit.as_ref().unwrap().layer);
+        assert_cmd_is_the_type_boxs(&mut h, tool, id, "placeholder");
+    }
 }
 
 /// The params of the last brush stroke (`paint.stroke`, or the Pencil's `paint.pencil`).

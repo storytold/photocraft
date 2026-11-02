@@ -153,10 +153,11 @@ fn locked_guides_show_no_guide_cursor_and_do_not_move() {
 }
 
 /// Tools that keep ⌘ for themselves (Photoshop: the Pen's Direct Selection, the Hand, Zoom, Crop,
-/// type, shapes, slices) neither show the guide cursor nor drag the guide.
+/// shapes, slices) neither show the guide cursor nor drag the guide. (Type keeps ⌘ only while
+/// text is being edited.)
 #[test]
 fn tools_with_their_own_command_keep_it() {
-    for tool in [Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Type, Tool::Rectangle, Tool::Slice] {
+    for tool in [Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Rectangle, Tool::Slice] {
         let (cursor, guides) = command_drag(tool, false);
         assert_ne!(cursor, GUIDE, "{tool:?}");
         assert_eq!(guides, vec![200.0], "{tool:?}");
@@ -185,12 +186,12 @@ fn command_guide_at_decides_for_every_tool_that_moves_guides() {
     app.sync_views();
     app.run("view.newGuide", json!({"orientation": "vertical", "position": 200})).unwrap();
     let cmd = Modifiers::COMMAND;
-    for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::PaintBucket, Tool::Eyedropper, Tool::Frame, Tool::Artboard, Tool::MagicWand] {
+    for tool in [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::PaintBucket, Tool::Eyedropper, Tool::Frame, Tool::Artboard, Tool::MagicWand, Tool::Type] {
         assert_eq!(command_guide_at(&app, tool, [200.0, 100.0], cmd), Some((true, 0)), "{tool:?}");
         assert_eq!(command_guide_at(&app, tool, [200.0, 100.0], Modifiers::NONE), None, "{tool:?} without ⌘");
         assert_eq!(command_guide_at(&app, tool, [120.0, 100.0], cmd), None, "{tool:?} off the guide");
     }
-    for tool in [Tool::Move, Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Type, Tool::Rectangle, Tool::Slice, Tool::PathSelection] {
+    for tool in [Tool::Move, Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Rectangle, Tool::Slice, Tool::PathSelection] {
         assert_eq!(command_guide_at(&app, tool, [200.0, 100.0], cmd), None, "{tool:?} keeps ⌘");
     }
     app.ui.extras.lock_guides = true;
