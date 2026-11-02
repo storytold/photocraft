@@ -203,6 +203,10 @@ impl PhotocraftApp {
                 }
                 self.automation_input = false;
                 return;
+            } else if let Some(remaining) = splash.time_until_appearance(now) {
+                // Request repaint when appear delay expires so the splash appears on time
+                // without requiring external user input.
+                ctx.request_repaint_after(remaining);
             }
         }
         let t0 = gpu_canvas::now_ms();

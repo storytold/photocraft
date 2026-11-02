@@ -77,6 +77,20 @@ impl SplashState {
         elapsed >= SPLASH_APPEAR_DELAY && elapsed < self.duration
     }
 
+    /// Returns the remaining duration until the splash screen should appear, or `None` if it has already appeared or is dismissed.
+    pub fn time_until_appearance(&self, now: f64) -> Option<std::time::Duration> {
+        if self.dismissed || self.start_time <= 0.0 {
+            return None;
+        }
+        let elapsed = now - self.start_time;
+        if elapsed < SPLASH_APPEAR_DELAY {
+            let remaining = (SPLASH_APPEAR_DELAY - elapsed).max(0.0);
+            Some(std::time::Duration::from_secs_f64(remaining))
+        } else {
+            None
+        }
+    }
+
     /// Dismisses the splash screen immediately, transitioning to the main workspace.
     pub fn dismiss(&mut self) {
         self.dismissed = true;
@@ -284,5 +298,27 @@ mod tests {
         assert_eq!(default.duration, new.duration);
         assert_eq!(default.dismissed, new.dismissed);
         assert_eq!(default.fonts_preloaded, new.fonts_preloaded);
+    }
+
+    /// Verifies calculation of remaining time until appearance before and after the appear delay threshold.
+    #[test]
+    fn splash_time_until_appearance() {
+        let mut splash = SplashState::new();
+        // Not started yet
+        assert_eq!(splash.time_until_appearance(1.0), None);
+
+        splash.ensure_started(1.0);
+        // Halfway through appear delay
+        let remaining = splash.time_until_appearance(1.0 + SPLASH_APPEAR_DELAY * 0.5);
+        assert!(remaining.is_some());
+        let secs = remaining.unwrap().as_secs_f64();
+        assert!((secs - SPLASH_APPEAR_DELAY * 0.5).abs() < 1e-6);
+
+        // After delay threshold
+        assert_eq!(splash.time_until_appearance(1.0 + SPLASH_APPEAR_DELAY + 0.01), None);
+
+        // Dismissed
+        splash.dismiss();
+        assert_eq!(splash.time_until_appearance(1.0), None);
     }
 }
