@@ -265,7 +265,12 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     }
     let p = params(f);
     f.insert("__previewRects".into(), json!([]));
-    let area = egui::vec2((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0), (ui.available_height() - 48.0).max(180.0));
+    // Whole physical pixels, rounded down: the dialog grows to fit its contents, so a preview a
+    // fraction of a pixel too wide at a fractional scale widened it on every repaint (#10675).
+    let ppp = ui.ctx().pixels_per_point();
+    let floor = |v: f32| (v * ppp).floor() / ppp;
+    let area = egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0)), floor((ui.available_height() - 48.0).max(180.0)));
+    let (half_w, half_h) = (floor(area.x / 2.0 - 4.0), floor(area.y / 2.0 - 4.0));
     ui.horizontal_top(|ui| {
         // Previews grow with the dialog; settings retain their compact width.
         ui.vertical(|ui| {
@@ -275,13 +280,13 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                 "optimized" => web_pane(app, ui, area, Some(&p), f, 1, frame),
                 "2up" => {
                     ui.horizontal(|ui| {
-                        web_pane(app, ui, egui::vec2(area.x / 2.0 - 4.0, area.y), None, f, 0, frame);
-                        web_pane(app, ui, egui::vec2(area.x / 2.0 - 4.0, area.y), Some(&p), f, 1, frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, 0, frame);
+                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, 1, frame);
                     });
                 }
                 _ => {
                     let v = variants(&p);
-                    let cell = egui::vec2(area.x / 2.0 - 4.0, area.y / 2.0 - 4.0);
+                    let cell = egui::vec2(half_w, half_h);
                     ui.horizontal(|ui| {
                         web_pane(app, ui, cell, None, f, 0, frame);
                         web_pane(app, ui, cell, Some(&v[0]), f, 1, frame);

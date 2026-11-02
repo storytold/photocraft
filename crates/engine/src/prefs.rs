@@ -449,7 +449,7 @@ pub use shortcuts::{
     reserved_shortcut,
 };
 use store::read_lenient;
-pub use store::{InvalidPref, PREFS_VERSION, PrefsStore};
+pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
 pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
