@@ -111,6 +111,57 @@ fn elided_label_never_exceeds_its_room() {
     h.run_steps(2);
 }
 
+/// Every text shape drawn in `out`: its (whole) string, where it was drawn and whether it was elided.
+fn drawn_texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect, bool)> {
+    let mut texts = Vec::new();
+    for s in &out.shapes {
+        if let egui::Shape::Text(t) = &s.shape {
+            texts.push((t.galley.text().to_string(), s.shape.visual_bounding_rect(), t.galley.elided));
+        }
+    }
+    texts
+}
+
+/// #9635: the shared dialog label column is as wide as its widest label, between the English
+/// width and a cap, and a label wider than the column elides inside it.
+#[test]
+fn column_label_stays_inside_its_column() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx, crate::theme::ThemeKind::ALL[0]);
+    // German "Canvas extension color": far wider than any column here.
+    let long = "Farbe der Zeichenflächenerweiterung:";
+    let mut col = egui::Rect::NOTHING;
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        assert_eq!(super::label_column_width(ui, &["Fill:"], 90.0, 240.0), 90.0, "never narrower than the English column");
+        let grown = super::label_column_width(ui, &["Fill:", "Dimensione immagine:"], 84.0, 240.0);
+        assert!(grown > 84.0 && grown < 240.0, "widens to the Italian label: {grown}");
+        assert_eq!(super::label_column_width(ui, &[long], 90.0, 100.0), 100.0, "capped");
+        assert_eq!(super::label_column_width(ui, &["Fill:"], 90.0, 10.0), 90.0, "a cap below the minimum keeps the minimum");
+        assert_eq!(super::label_column_width(ui, &[], f32::NAN, f32::INFINITY), 0.0, "bad bounds never panic");
+        ui.horizontal(|ui| col = super::column_label(ui, long, 100.0).rect);
+    });
+    out.textures_delta.clear();
+    assert_eq!(col.width(), 100.0, "the column keeps its width");
+    let texts = drawn_texts(&out);
+    let (_, at, elided) = texts.iter().find(|(t, ..)| t.starts_with("Farbe")).unwrap_or_else(|| panic!("label drawn: {texts:?}"));
+    assert!(*elided, "elided with '…'");
+    assert!(at.left() >= col.left() - 0.5 && at.right() <= col.right() - super::LABEL_COLUMN_GAP + 1.0, "{at:?} inside {col:?}");
+
+    // A label that fits is drawn whole, right-aligned against its field; an empty label draws
+    // nothing, and a bad width or gap never panics.
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        ui.horizontal(|ui| col = super::column_label(ui, "Fill:", 90.0).rect);
+        super::column_label(ui, "", 90.0);
+        super::column_label_padded(ui, "Bad width:", f32::NAN, f32::NAN);
+    });
+    out.textures_delta.clear();
+    let texts = drawn_texts(&out);
+    let (_, at, elided) = texts.iter().find(|(t, ..)| t == "Fill:").unwrap_or_else(|| panic!("label drawn: {texts:?}"));
+    assert!(!*elided, "a label that fits is drawn whole");
+    assert!((at.right() - (col.right() - super::LABEL_COLUMN_GAP)).abs() < 2.5 && at.left() > col.left(), "{at:?} right-aligned in {col:?}");
+}
+
 #[test]
 fn spectrum_popup_style_matches_main_menu_and_preserves_studio() {
     for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::StudioLight] {

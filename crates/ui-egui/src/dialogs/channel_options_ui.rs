@@ -6,12 +6,10 @@
 //! On the layer mask (double-click its Channels row, or Mask Options… on its Layers thumbnail)
 //! it is Photoshop's Layer Mask Display Options: just the rubylith's colour and opacity.
 
-use egui::{Align2, Sense, pos2, vec2};
 use photocraft_doc::ColorIndicates;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
-use crate::theme::Tokens;
 
 pub const COMMAND: &str = "channel.options";
 const MARK: &str = "__channelOptions";
@@ -91,14 +89,22 @@ pub fn params(f: &Map<String, Value>) -> Value {
     Value::Object(p)
 }
 
+/// OK: runs `channel.options` with the dialog's settings ([`params`]).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.run(COMMAND, params(f))
 }
 
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and what the 200 pt name field leaves of the dialog.
+const LABEL_MIN_W: f32 = 84.0;
+const LABEL_MAX_W: f32 = 200.0;
+/// Every label these dialogs put in the column, so Channel Options, Layer Mask Display Options
+/// and New Spot Channel share one width in a language.
+const LABELS: [&str; 2] = ["Name:", "Color:"];
+
+/// A row's label in the shared column, sized for every one of [`LABELS`] in the current language.
 fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    let w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
+    crate::widgets::column_label(ui, text, w);
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {

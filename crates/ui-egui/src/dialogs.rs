@@ -1146,6 +1146,8 @@ pub mod gallery_ui;
 pub mod guide_layout_ui;
 pub mod history_options_ui;
 pub mod jpeg_options_ui;
+#[cfg(test)]
+mod label_column_tests;
 pub mod layer_picker;
 pub mod layer_style;
 pub mod liquify_ui;
