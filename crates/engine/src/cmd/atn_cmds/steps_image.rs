@@ -1,6 +1,6 @@
 use super::descriptors::{
-    PX, Target, ang, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px,
-    ref_class, target, trimmed,
+    PX, Target, ang, boolean, class, code, desc, enm, enumerated, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target,
+    long, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -452,4 +452,220 @@ pub(super) fn radial_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
         return None;
     }
     fields_to(p, RADIAL_BLUR_FIELDS, desc("null"))
+}
+
+// ------------------------------------------------------------------ newer features (#10610)
+
+/// Whether every key of `d` is one of `keys` (codes compare without their space padding).
+fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
+    d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// The step's `key` read by `read` (its space padding ignored, as `only_keys` admits it),
+/// `default` when the step leaves it out, `None` when it holds a value `read` can't take: that
+/// is still the step's setting, so the step is kept rather than played with the default. A key
+/// recorded more than once is `None` too: the step saves one value, so it would drop the other.
+fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default: T) -> Option<T> {
+    let mut found = d.items.iter().filter(|(k, _)| trimmed(k) == key.trim_end());
+    match (found.next(), found.next()) {
+        (Some((_, v)), None) => read(v),
+        (None, _) => Some(default),
+        (Some(_), Some(_)) => None,
+    }
+}
+
+/// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
+fn sets_only(p: &Value, allowed: &[&str]) -> bool {
+    p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
+}
+
+/// Focus Area (`focusMask`) and Remove Background (`removeBackground`): Photoshop runs both with
+/// an empty descriptor. A step that carries settings keeps them as a Photoshop step.
+pub(super) fn bare_from(d: &Descriptor, id: &str) -> Mapped {
+    if d.items.is_empty() { step(id, json!({})) } else { Mapped::Unsupported { harmless: false } }
+}
+
+/// Only a step with no settings writes the empty descriptor; any setting would be lost.
+pub(super) fn bare_to(_: &str, p: &Value) -> Option<Descriptor> {
+    sets_only(p, &[]).then(|| desc("null"))
+}
+
+/// Select Sky (`selectSky`): `sampleAllLayers` only, false when the step leaves it out
+/// (the command's own default is true).
+pub(super) fn select_sky_from(d: &Descriptor) -> Mapped {
+    match setting(d, "sampleAllLayers", boolean, false) {
+        Some(all) if only_keys(d, &["sampleAllLayers"]) => step("select.sky", json!({"sampleAllLayers": all})),
+        _ => Mapped::Unsupported { harmless: false },
+    }
+}
+
+/// The event has no mode, threshold or softness: only their replay values survive.
+pub(super) fn select_sky_to(_: &str, p: &Value) -> Option<Descriptor> {
+    let at = |k: &str, v: Value| p.get(k).is_none_or(|x| x.is_null() || *x == v || (x.as_f64().is_some() && x.as_f64() == v.as_f64()));
+    if !sets_only(p, &["sampleAllLayers", "mode", "threshold", "softness"])
+        || !at("mode", json!("replace"))
+        || !at("threshold", json!(50))
+        || !at("softness", json!(50))
+    {
+        return None;
+    }
+    let all = match p.get("sampleAllLayers") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool()?,
+    };
+    Some(desc("null").with("sampleAllLayers", D::Boolean(all)))
+}
+
+/// A plain double, as Photoshop records Oil Paint's settings and the step saves them back: a
+/// value with a unit, or an integer, would save back as another value.
+fn double(v: &D) -> Option<f64> {
+    match v {
+        D::Double(n) if n.is_finite() => Some(*n),
+        _ => None,
+    }
+}
+
+/// An integer, as Photoshop records Oil Paint's light direction and the step saves it back.
+fn integer(v: &D) -> Option<i32> {
+    match v {
+        D::Integer(n) => Some(*n),
+        _ => None,
+    }
+}
+
+/// Oil Paint's keys in recorded order: (key, param, Photoshop's default, the command's default).
+const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
+    ("stylization", "stylization", 4.0, 4.0),
+    ("cleanliness", "cleanliness", 2.299_999_952_316_28, 5.0),
+    ("brushScale", "scale", 0.800_000_011_920_93, 1.0),
+    ("microBrush", "bristleDetail", 10.0, 5.0),
+];
+
+/// `filter.stylize.oilPaint`'s ranges. The command clamps a value outside them when it plays,
+/// so such a step keeps the Photoshop step on import and is refused on export, rather than
+/// mapping a step that plays clamped and saves back unchanged.
+const OIL_PAINT_LIMITS: &[(&str, f64, f64)] =
+    &[("stylization", 0.1, 10.0), ("cleanliness", 0.0, 10.0), ("scale", 0.1, 10.0), ("bristleDetail", 0.0, 10.0), ("shine", 0.0, 10.0)];
+
+/// Whether `n` is within `filter.stylize.oilPaint`'s range for `param` (a param without one is).
+fn in_oil_paint_limits(param: &str, n: f64) -> bool {
+    OIL_PAINT_LIMITS.iter().all(|(p, min, max)| *p != param || (*min..=*max).contains(&n))
+}
+
+/// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
+/// command's for cleanliness, scale, bristle detail and shine, so they are written out. A
+/// setting of another number type, with a unit, or outside the command's ranges keeps the
+/// Photoshop step.
+pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
+    match oil_paint_params(d) {
+        Some(p) => step("filter.stylize.oilPaint", Value::Object(p)),
+        None => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn oil_paint_params(d: &Descriptor) -> Option<Map<String, Value>> {
+    let keys = ["lightingOn", "stylization", "cleanliness", "brushScale", "microBrush", "LghD", "specularity"];
+    if !only_keys(d, &keys) {
+        return None;
+    }
+    let mut p = Map::new();
+    p.insert("lighting".into(), setting(d, "lightingOn", boolean, true)?.into());
+    for (key, param, ps, _) in OIL_PAINT {
+        p.insert((*param).into(), setting(d, key, double, *ps).filter(|n| in_oil_paint_limits(param, *n))?.into());
+    }
+    p.insert("angle".into(), setting(d, "LghD", |v| integer(v).map(f64::from), -60.0)?.into());
+    p.insert("shine".into(), setting(d, "specularity", double, 1.299_999_952_316_28).filter(|n| in_oil_paint_limits("shine", *n))?.into());
+    Some(p)
+}
+
+/// Every key in recorded order, the command's defaults for what the step leaves out. The light
+/// direction is an integer: a fractional angle would replay rounded, so the step is refused, as
+/// is a setting outside the command's ranges.
+pub(super) fn oil_paint_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !pixel_target(p) || !sets_only(p, &["target", "lighting", "stylization", "cleanliness", "scale", "bristleDetail", "angle", "shine"]) {
+        return None;
+    }
+    let num = |k: &str, default: f64| match p.get(k) {
+        None | Some(Value::Null) => Some(default),
+        Some(v) => v.as_f64().filter(|n| n.is_finite() && in_oil_paint_limits(k, *n)),
+    };
+    let lighting = match p.get("lighting") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool()?,
+    };
+    let angle = num("angle", -60.0)?;
+    if angle.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&angle) {
+        return None;
+    }
+    let mut d = desc("null").with("lightingOn", D::Boolean(lighting));
+    for (key, param, _, ours) in OIL_PAINT {
+        d = d.with(key, D::Double(num(param, *ours)?));
+    }
+    Some(d.with("LghD", D::Integer(angle as i32)).with("specularity", D::Double(num("shine", 1.0)?)))
+}
+
+/// A unit double in `unit`: the step saves `Amnt` in `#Prc` and the radius in `#Pxl`, so a
+/// value in another unit, or without one, would save back as another value.
+fn in_unit(unit: [u8; 4]) -> impl Fn(&D) -> Option<f64> {
+    move |v| match v {
+        D::UnitFloat { unit: u, value } if *u == unit && value.is_finite() => Some(*value),
+        _ => None,
+    }
+}
+
+/// `filter.sharpen.smartSharpen`'s amount and radius limits, in `smart_sharpen_params`' key order.
+/// The command rejects a value outside them, so such a step keeps the Photoshop step on import
+/// and is refused on export, rather than mapping a step that fails when it plays.
+const SMART_SHARPEN_LIMITS: &[(&str, f64, f64)] = &[("amount", 1.0, 500.0), ("radius", 0.1, 64.0)];
+
+/// Smart Sharpen (`smartSharpen`), as Photoshop records it without its dialog: the legacy
+/// filter, removing Lens Blur, with no noise reduction (so `reduceNoise` is 0). A step that
+/// asks for what the command does not do (another blur, More Accurate, the newer filter, a
+/// preset), or an amount or radius in another unit or outside the command's limits, keeps it
+/// as a Photoshop step.
+pub(super) fn smart_sharpen_from(d: &Descriptor) -> Mapped {
+    match smart_sharpen_params(d) {
+        Some(p) => step("filter.sharpen.smartSharpen", Value::Object(p)),
+        None => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn smart_sharpen_params(d: &Descriptor) -> Option<Map<String, Value>> {
+    let keys = ["presetKind", "useLegacy", "Amnt", "Rds", "moreAccurate", "blur"];
+    let as_recorded = only_keys(d, &keys)
+        && setting(d, "presetKind", enumerated, "presetKindCustom".into())? == "presetKindCustom"
+        && setting(d, "useLegacy", boolean, true)?
+        && !setting(d, "moreAccurate", boolean, false)?
+        && setting(d, "blur", enumerated, "lensBlur".into())? == "lensBlur";
+    if !as_recorded {
+        return None;
+    }
+    let mut p = Map::new();
+    for ((key, unit, default), (param, min, max)) in [("Amnt", *b"#Prc", 200.0), ("Rds", PX, 1.0)].into_iter().zip(SMART_SHARPEN_LIMITS) {
+        let n = setting(d, key, in_unit(unit), default).filter(|n| (*min..=*max).contains(n))?;
+        p.insert((*param).into(), n.into());
+    }
+    p.insert("reduceNoise".into(), 0.into());
+    Some(p)
+}
+
+/// Every key in recorded order. The legacy filter has no noise reduction, so only a step that
+/// sets `reduceNoise` to 0 is written (the command reduces noise by 10 when it is left out).
+pub(super) fn smart_sharpen_to(_: &str, p: &Value) -> Option<Descriptor> {
+    if !pixel_target(p) || !sets_only(p, &["target", "amount", "radius", "reduceNoise"]) || p.get("reduceNoise").and_then(Value::as_f64) != Some(0.0) {
+        return None;
+    }
+    let num = |k: &str, default: f64| match p.get(k) {
+        None | Some(Value::Null) => Some(default),
+        Some(v) => v.as_f64().filter(|n| SMART_SHARPEN_LIMITS.iter().any(|(param, min, max)| *param == k && (*min..=*max).contains(n))),
+    };
+    Some(
+        desc("null")
+            .with("presetKind", enm("presetKindType", "presetKindCustom"))
+            .with("useLegacy", D::Boolean(true))
+            .with("Amnt", pct(num("amount", 100.0)?))
+            .with("Rds ", px(num("radius", 1.0)?))
+            .with("moreAccurate", D::Boolean(false))
+            .with("blur", enm("blurType", "lensBlur")),
+    )
 }
