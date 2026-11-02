@@ -45,6 +45,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> R
     }
     let result = app.run(COMMAND, json!({"confirm": true}))?;
     app.ui.actions.selected = None;
+    app.ui.actions.selected_set = None;
     app.ui.actions.selected_step = None;
     app.ui.actions.expanded.clear();
     app.ui.actions.renaming = None;

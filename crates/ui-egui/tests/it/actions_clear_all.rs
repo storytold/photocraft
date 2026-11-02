@@ -17,6 +17,8 @@ fn harness() -> Harness<'static, PhotocraftApp> {
         p.shortcuts.insert("actions.play:A".into(), "F5".into());
     });
     app.ui.actions.selected = Some(0);
+    app.ui.actions.selected_set = Some("One".into());
+    app.session.actions.sets.push("Empty".into());
     app.ui.actions.selected_step = Some(0);
     app.ui.actions.expanded = vec![true, true];
     app.ui.actions.collapsed_sets = vec!["Remember".into()];
@@ -60,12 +62,19 @@ fn cancel_preserves_the_library_and_ok_clears_it_and_panel_selection() {
     h.run_steps(3);
     assert!(h.state().ui.dialogs.is_empty());
     assert!(h.state().session.actions.list.is_empty());
+    assert!(h.state().session.actions.sets.is_empty());
+    assert_eq!(h.state().ui.actions.selected_set, None);
     assert_eq!(h.state().ui.actions.selected, None);
     assert_eq!(h.state().ui.actions.selected_step, None);
     assert!(h.state().ui.actions.expanded.is_empty());
     assert_eq!(h.state().ui.actions.collapsed_sets, ["Remember"]);
     assert!(!h.state().session.prefs().shortcuts.contains_key("actions.play:A"));
     assert_eq!(h.state().session.active().unwrap().revision, revision);
+    h.state_mut().run("actions.newSet", json!({"name": "Only Empty"})).unwrap();
+    open(&mut h);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().session.actions.sets.is_empty(), "Clear also works with no action rows");
 }
 
 /// Deny the concrete destructive command at either authorization boundary.

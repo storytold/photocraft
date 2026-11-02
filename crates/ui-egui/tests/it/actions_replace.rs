@@ -28,6 +28,8 @@ fn harness() -> (Harness<'static, PhotocraftApp>, Picker) {
         p.shortcuts.insert("actions.play:A".into(), "F5".into());
     });
     app.ui.actions.selected = Some(1);
+    app.ui.actions.selected_set = Some("Two".into());
+    app.session.actions.sets.push("Old Empty".into());
     app.ui.actions.selected_step = Some(0);
     app.ui.actions.expanded = vec![true, true];
     let mut h = Harness::builder().with_size(egui::vec2(1000.0, 760.0)).build_ui_state(
@@ -104,6 +106,8 @@ fn cancelling_preserves_actions_and_confirmation_never_rereads_the_source_path()
     assert_eq!(h.state().session.actions.list.len(), 1);
     assert_eq!(h.state().session.actions.list[0].name, "New");
     assert_eq!(h.state().ui.actions.selected, Some(0));
+    assert_eq!(h.state().ui.actions.selected_set, None);
+    assert!(h.state().session.actions.sets.is_empty());
     assert_eq!(h.state().ui.actions.selected_step, None);
     assert_eq!(h.state().ui.actions.expanded, [true]);
     assert!(!h.state().session.prefs().shortcuts.contains_key("actions.play:A"));

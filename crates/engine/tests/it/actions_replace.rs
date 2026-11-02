@@ -15,6 +15,7 @@ fn input() -> Vec<u8> {
 /// Two old sets and owned/unloaded/global bindings distinguish whole from same-set replacement.
 fn session() -> Session {
     let mut s = Session::new();
+    s.execute("actions.newSet", json!({"name": "Old Empty"})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     for (name, set) in [("OldA", "Incoming"), ("OldB", "Other")] {
         let mut a = Action::new(name, vec![("select.deselect".into(), json!({}))]);
@@ -43,6 +44,7 @@ fn replace_preserves_imported_flags_references_and_keys_without_inheriting_old_b
     let result = s.execute("actions.replace", json!({"data": data, "confirm": true})).unwrap();
     assert_eq!(result["actions"], json!(["Caller", "NewChild", "OldA"]));
     assert_eq!(s.actions.list.len(), 3);
+    assert!(s.actions.sets.is_empty(), "old empty folders are replaced too");
     assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some("Incoming")));
     assert_eq!(s.actions.list[0].disabled.iter().copied().collect::<Vec<_>>(), [1]);
     assert_eq!(s.actions.list[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
@@ -61,6 +63,7 @@ fn replace_preserves_imported_flags_references_and_keys_without_inheriting_old_b
     let result = s.execute("actions.replace", json!({"data": photocraft_engine::paint::tile::b64_encode(&empty), "confirm": true})).unwrap();
     assert_eq!(result["set"], "Empty");
     assert!(s.actions.list.is_empty());
+    assert_eq!(s.actions.sets, ["Empty"]);
     assert!(!s.prefs().shortcuts.contains_key("actions.play:NewChild"));
 }
 
@@ -70,6 +73,7 @@ fn invalid_or_unconfirmed_replacement_preserves_the_library_and_preferences() {
     let data = photocraft_engine::paint::tile::b64_encode(&input());
     let mut s = session();
     let list = s.actions.list.clone();
+    let sets = s.actions.sets.clone();
     let shortcuts = s.prefs().shortcuts.clone();
     let revision = s.active().unwrap().revision;
     let rev = s.actions.rev;
@@ -86,6 +90,7 @@ fn invalid_or_unconfirmed_replacement_preserves_the_library_and_preferences() {
     ] {
         assert!(s.execute("actions.replace", params.clone()).is_err(), "{params}");
         assert_eq!(s.actions.list, list);
+        assert_eq!(s.actions.sets, sets);
         assert_eq!(s.prefs().shortcuts, shortcuts);
         assert_eq!(s.actions.rev, rev);
         assert_eq!(s.active().unwrap().revision, revision);

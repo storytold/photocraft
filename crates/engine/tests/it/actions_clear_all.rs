@@ -18,11 +18,14 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
         }
     });
     let definitions = s.actions.list.clone();
+    s.execute("actions.newSet", json!({"name": "Empty"})).unwrap();
+    let sets = s.actions.sets.clone();
     let shortcuts = s.prefs().shortcuts.clone();
     let rev = s.actions.rev;
     for params in [json!({}), json!({"confirm": false}), json!({"confirm": null}), json!({"confirm": "yes"})] {
         assert!(s.execute("actions.clearAll", params.clone()).is_err(), "{params}");
         assert_eq!(s.actions.list, definitions);
+        assert_eq!(s.actions.sets, sets);
         assert_eq!(s.prefs().shortcuts, shortcuts);
         assert_eq!(s.actions.rev, rev);
     }
@@ -43,6 +46,7 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
     let journal = s.journal.clone();
     assert_eq!(s.execute("actions.clearAll", json!({"confirm": true})).unwrap()["cleared"], 3);
     assert!(s.actions.list.is_empty());
+    assert!(s.actions.sets.is_empty());
     assert!(!s.prefs().shortcuts.contains_key("actions.play:A"));
     assert!(!s.prefs().shortcuts.contains_key("actions.play:B"));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Unloaded"), shortcuts.get("actions.play:Unloaded"));
@@ -53,4 +57,9 @@ fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
     let rev = s.actions.rev;
     assert_eq!(s.execute("actions.clearAll", json!({"confirm": true})).unwrap()["cleared"], 0);
     assert_eq!(s.actions.rev, rev);
+    s.execute("actions.newSet", json!({"name": "Only Empty"})).unwrap();
+    let rev = s.actions.rev;
+    s.execute("actions.clearAll", json!({"confirm": true})).unwrap();
+    assert!(s.actions.sets.is_empty());
+    assert_eq!(s.actions.rev, rev + 1);
 }

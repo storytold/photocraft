@@ -104,6 +104,11 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     app.session.authorize = saved;
     let result = result?;
     app.ui.actions.selected = (!app.session.actions.list.is_empty()).then_some(0);
+    app.ui.actions.selected_set = if app.session.actions.list.is_empty() {
+        result.get("set").and_then(Value::as_str).filter(|set| app.session.actions.sets.iter().any(|s| s == set)).map(str::to_string)
+    } else {
+        None
+    };
     app.ui.actions.selected_step = None;
     app.ui.actions.expanded = vec![false; app.session.actions.list.len()];
     if let Some(first) = app.ui.actions.expanded.first_mut() {
