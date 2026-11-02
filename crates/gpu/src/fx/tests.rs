@@ -54,6 +54,29 @@ fn raster_shape_band_matches_reference_at_every_format() {
     }
 }
 
+/// Vector-masked display surfaces must use reference coverage, even without a GPU adapter.
+#[test]
+fn vector_masked_shape_band_matches_reference() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::{Document, Path, Subpath, VectorMask};
+    use photocraft_geom::Size;
+    for depth in SampleType::ALL {
+        let doc = Document::new("vector", Size::new(30, 30), ColorMode::Rgb, depth);
+        let region = doc.bounds();
+        let mut raster = Layer::raster("vector", doc.pixel_format());
+        raster.surface_mut().unwrap().fill_rect(region, &[0.3, 0.4, 0.5, 1.0]);
+        for kind in ["raster", "text", "smart"] {
+            let mut layer = if kind == "raster" { raster.clone() } else { cached_layer(kind, raster.surface().cloned()) };
+            let unmasked = shape_band(&doc, &layer, region);
+            let path = Path::new(vec![Subpath::polygon(&[(3.5, 2.0), (25.0, 6.3), (12.0, 28.7)])]);
+            layer.vector_mask = Some(VectorMask::new(path));
+            let expected = photocraft_compose::layer_shape(&doc, &layer, region);
+            assert_ne!(expected, unmasked, "the mask must change coverage: {kind} {depth:?}");
+            assert_eq!(shape_band(&doc, &layer, region), expected, "{kind} {depth:?}");
+        }
+    }
+}
+
 #[test]
 fn banded_shape_comparison_matches_full_shape_and_detects_edits() {
     use photocraft_color::{ColorMode, SampleType};
