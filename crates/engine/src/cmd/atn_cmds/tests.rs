@@ -497,6 +497,16 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("filter.distort.pinch", json!({"amount": -30})),
+        ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
+        ("filter.distort.spherize", json!({"amount": -50, "mode": "verticalOnly"})),
+        ("filter.distort.twirl", json!({"angle": -200})),
+        (
+            "filter.distort.wave",
+            json!({"type": "square", "generators": 3, "wavelengthMin": 20, "wavelengthMax": 200, "amplitudeMin": 4, "amplitudeMax": 40,
+                "undefinedAreas": "wrap", "seed": 4_000_000_000_u32}),
+        ),
+        ("filter.distort.zigZag", json!({"amount": -20, "ridges": 12, "style": "aroundCenter"})),
         (
             "image.adjustments.levels",
             json!({"inBlack": 5, "inWhite": 250, "gamma": 0.9, "outBlack": 0, "outWhite": 255, "red": {"inBlack": 2, "inWhite": 255, "gamma": 1, "outBlack": 0, "outWhite": 255}}),
@@ -3808,4 +3818,270 @@ fn load_rejects_bad_encodings() {
         assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
     }
     assert!(s.actions.list.is_empty(), "nothing is loaded when the encoding is bad");
+/// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
+fn distort(code: &str, d: Descriptor) -> Mapped {
+    let event = AtnEvent::Code(code.as_bytes().try_into().unwrap());
+    (events::event_for(&event).unwrap_or_else(|| panic!("{code} is unknown")).from)(&d)
+}
+
+fn one_step(m: Mapped) -> (String, Value) {
+    match m {
+        Mapped::Steps(mut s) if s.len() == 1 => s.remove(0),
+        _ => panic!("not one step"),
+    }
+}
+
+/// Photoshop's Distort filter steps load with its defaults for missing keys and its clamping for
+/// out-of-range values, play, and save back with every key in recorded order (#10605).
+#[test]
+fn distort_filter_steps_load_clamp_play_and_save_back() {
+    // Photoshop's defaults, as its steps record them.
+    let wave = desc("null")
+        .with("Wvtp", enm("Wvtp", "WvSn"))
+        .with("NmbG", D::Integer(5))
+        .with("WLMn", D::Integer(10))
+        .with("WLMx", D::Integer(120))
+        .with("AmMn", D::Integer(5))
+        .with("AmMx", D::Integer(35))
+        .with("SclH", D::Integer(100))
+        .with("SclV", D::Integer(100))
+        .with("UndA", enm("UndA", "RptE"))
+        .with("RndS", D::Integer(-7));
+    let zigzag = desc("null").with("Amnt", D::Integer(10)).with("NmbR", D::Integer(5)).with("ZZTy", enm("ZZTy", "PndR"));
+    let cases = [
+        ("Pnch", desc("null").with("Amnt", D::Integer(50)), "filter.distort.pinch", json!({"amount": 50})),
+        ("Plr ", desc("null").with("Cnvr", enm("Cnvr", "RctP")), "filter.distort.polarCoordinates", json!({"mode": "rectangularToPolar"})),
+        (
+            "Sphr",
+            desc("null").with("Amnt", D::Integer(100)).with("SphM", enm("SphM", "Nrml")),
+            "filter.distort.spherize",
+            json!({"amount": 100, "mode": "normal"}),
+        ),
+        ("Twrl", desc("null").with("Angl", D::Integer(50)), "filter.distort.twirl", json!({"angle": 50})),
+        (
+            "Wave",
+            wave,
+            "filter.distort.wave",
+            json!({"type": "sine", "generators": 5, "wavelengthMin": 10, "wavelengthMax": 120, "amplitudeMin": 5, "amplitudeMax": 35,
+                "undefinedAreas": "repeat", "seed": 4_294_967_289_u32}),
+        ),
+        ("ZgZg", zigzag, "filter.distort.zigZag", json!({"amount": 10, "ridges": 5, "style": "pondRipples"})),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    for (code, d, id, params) in cases {
+        let (got, p) = one_step(distort(code, d.clone()));
+        assert_eq!((got.as_str(), &p), (id, &params), "{code}");
+        // Every key, in the order Photoshop records them.
+        assert_eq!(export_item(id, &p, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
+        s.actions.list.push(Action::new(code, vec![(id.to_string(), p)]));
+        let played = s.execute("actions.play", json!({"action": code})).unwrap();
+        assert_eq!(played["ran"], 1, "{code}: {played}");
+    }
+    // A step that leaves its keys out takes Photoshop's defaults: Wave's undefined areas are
+    // Repeat Edge Pixels, where the command's own default is wrap.
+    assert_eq!(one_step(distort("Wave", desc("null"))).1["undefinedAreas"], "repeat");
+    assert_eq!(one_step(distort("Sphr", desc("null"))).1, json!({"amount": 100, "mode": "normal"}));
+    // Out-of-range values are clamped, as Photoshop clamps them.
+    assert_eq!(one_step(distort("Pnch", desc("null").with("Amnt", D::Integer(500)))).1, json!({"amount": 100}));
+    assert_eq!(one_step(distort("Twrl", desc("null").with("Angl", D::Integer(-5000)))).1, json!({"angle": -999}));
+    assert_eq!(one_step(distort("ZgZg", desc("null").with("NmbR", D::Integer(40)))).1["ridges"], 20);
+    assert_eq!(one_step(distort("Wave", desc("null").with("NmbG", D::Integer(0)))).1["generators"], 1);
+}
+
+/// PhotoCraft's renderer draws at most `MAX_WAVE_GENERATORS` (64) generators, so a Wave step
+/// recorded with more keeps the Photoshop step on import and is refused on export, as the PSD
+/// smart-filter mapper does, rather than mapping a step that plays differently (#10605).
+#[test]
+fn wave_generators_past_what_photocraft_draws_keep_the_step() {
+    assert_eq!(photocraft_algo::MAX_WAVE_GENERATORS, 64);
+    let p = one_step(distort("Wave", desc("null").with("NmbG", D::Integer(64)))).1;
+    assert_eq!(p["generators"], 64, "{p}");
+    for n in [65, 999, 1_000_000] {
+        let m = distort("Wave", desc("null").with("NmbG", D::Integer(n)));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "NmbG {n}");
+    }
+    assert!(export_item("filter.distort.wave", &json!({"generators": 65}), "S").is_none());
+    assert!(export_item("filter.distort.wave", &json!({"generators": 64}), "S").is_some());
+}
+
+/// What the commands cannot play keeps the Photoshop step: an unknown enumeration value, a Wave
+/// scaled below 100 % (the command has no scale), or a key the event does not have (#10605).
+#[test]
+fn distort_filter_steps_the_commands_cannot_play_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(distort("Sphr", desc("null").with("SphM", enm("SphM", "Dgnl")))));
+    assert!(kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "Sprl")))));
+    assert!(kept(distort("Wave", desc("null").with("SclH", D::Integer(50)))));
+    assert!(kept(distort("Wave", desc("null").with("UndA", enm("UndA", "Trns")))));
+    assert!(kept(distort("Pnch", desc("null").with("Rds ", D::Integer(3)))));
+    // A scale of 100 % (or above, which Photoshop clamps to 100) plays.
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(250)))));
+}
+
+/// A setting the events cannot hold refuses the step instead of replaying differently: a
+/// fractional amount (the keys are integers), a mask target, a seed past 32 bits (#10605).
+#[test]
+fn distort_filter_steps_that_cannot_be_written_are_refused() {
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": 12.5})),
+        ("filter.distort.twirl", json!({"angle": 10, "target": "mask"})),
+        ("filter.distort.zigZag", json!({"ridges": 2.5})),
+        ("filter.distort.wave", json!({"seed": 4_294_967_296_u64})),
+        ("filter.distort.wave", json!({"undefinedAreas": "transparent"})),
+        ("filter.distort.spherize", json!({"mode": "diagonal"})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // Left out, a setting is written as the command replays it: Wave wraps.
+    let wave = export_item("filter.distort.wave", &json!({}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(get_enum(&wave, "UndA").as_deref(), Some("WrpA"));
+}
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10605).
+#[test]
+fn distort_filter_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Pnch", "Amnt", D::Boolean(true)),
+        ("Twrl", "Angl", text("90")),
+        ("Plr ", "Cnvr", D::Integer(1)),
+        ("Sphr", "SphM", text("HrzO")),
+        ("ZgZg", "NmbR", enm("Ordn", "Trgt")),
+        ("Wave", "NmbG", D::Boolean(false)),
+        ("Wave", "Wvtp", D::Integer(2)),
+        ("Wave", "SclH", text("50")),
+        ("Wave", "SclV", D::Boolean(true)),
+        ("Wave", "UndA", D::Integer(1)),
+        ("Wave", "RndS", text("7")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+}
+
+/// An integer outside the range Photoshop clamps the key to refuses the step: written as is, it
+/// would load back clamped, as another value (#10605).
+#[test]
+fn distort_filter_steps_outside_photoshops_range_are_refused() {
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": 500})),
+        ("filter.distort.spherize", json!({"amount": -101})),
+        ("filter.distort.twirl", json!({"angle": 1000})),
+        ("filter.distort.zigZag", json!({"ridges": 21})),
+        ("filter.distort.zigZag", json!({"ridges": -1})),
+        ("filter.distort.wave", json!({"generators": 0})),
+        ("filter.distort.wave", json!({"amplitudeMax": 1000})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // The limits themselves are written.
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": -100})),
+        ("filter.distort.twirl", json!({"angle": 999})),
+        ("filter.distort.zigZag", json!({"ridges": 0})),
+        ("filter.distort.wave", json!({"generators": 64, "wavelengthMin": 1})),
+    ] {
+        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}
+
+/// Wave's `RndS` is the seed's 32 bits, signed or not: it loads exactly or keeps the step,
+/// never saturated or truncated to another seed (#10605).
+#[test]
+fn wave_seed_loads_its_exact_32_bits_or_keeps_the_step() {
+    let seed = |v: D| match distort("Wave", desc("null").with("RndS", v)) {
+        Mapped::Steps(s) => Some(s[0].1["seed"].clone()),
+        Mapped::Unsupported { .. } => None,
+    };
+    assert_eq!(seed(D::LargeInteger(4_000_000_000)), Some(json!(4_000_000_000_u32)));
+    assert_eq!(seed(D::LargeInteger(-1)), Some(json!(u32::MAX)));
+    assert_eq!(seed(D::Integer(-7)), Some(json!(4_294_967_289_u32)));
+    assert_eq!(seed(D::Double(12.0)), Some(json!(12)));
+    for v in [D::Double(7.5), D::LargeInteger(4_294_967_296), D::LargeInteger(i64::from(i32::MIN) - 1)] {
+        assert_eq!(seed(v.clone()), None, "RndS {v:?} was mapped");
+    }
+}
+
+/// A step recording one of its keys twice can't be saved back with both values, so it stays a
+/// Photoshop step instead of playing the first and dropping the second (#10605).
+#[test]
+fn distort_filter_steps_with_a_repeated_key_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, a, b) in [
+        ("Pnch", "Amnt", D::Integer(10), D::Integer(20)),
+        ("Sphr", "SphM", enm("SphM", "Nrml"), enm("SphM", "HrzO")),
+        ("Plr ", "Cnvr", enm("Cnvr", "RctP"), enm("Cnvr", "RctP")),
+        ("Wave", "NmbG", D::Integer(5), D::Integer(7)),
+        ("Wave", "SclH", D::Integer(100), D::Integer(50)),
+        ("Wave", "UndA", enm("UndA", "WrpA"), enm("UndA", "RptE")),
+        ("Wave", "RndS", D::Integer(1), D::Integer(2)),
+        ("ZgZg", "NmbR", D::Integer(5), D::Integer(6)),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, a.clone()).with(key, b.clone()))), "{code} with {key} twice was mapped");
+    }
+}
+
+/// An enumeration of another type isn't the setting Photoshop records, so the step stays a
+/// Photoshop step instead of loading its value and saving back the expected type (#10605).
+#[test]
+fn distort_filter_steps_with_an_enumeration_of_another_type_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, v) in [
+        ("Plr ", "Cnvr", enm("Ordn", "RctP")),
+        ("Sphr", "SphM", enm("Cnvr", "Nrml")),
+        ("ZgZg", "ZZTy", enm("Ordn", "PndR")),
+        ("Wave", "Wvtp", enm("WvSn", "WvSn")),
+        ("Wave", "UndA", enm("Ordn", "WrpA")),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
+    }
+    assert!(!kept(distort("Plr ", desc("null").with("Cnvr", enm("Cnvr", "PlrR")))));
+    assert!(!kept(distort("Wave", desc("null").with("UndA", enm("UndA", "WrpA")))));
+}
+
+/// Photoshop clamps Wave's wavelengths and amplitudes to 1..999, but `filter.distort.wave`
+/// takes a minimum wavelength of 1..998, a maximum of 2..999 and a minimum amplitude of 1..998.
+/// A value the command rejects keeps the Photoshop step on import and refuses it on export,
+/// rather than mapping a step that fails when it plays; a minimum above its maximum, which the
+/// command takes, maps and plays (#10605).
+#[test]
+fn wave_values_the_command_rejects_are_kept_or_refused() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("WLMn", 999), ("WLMn", 5000), ("WLMx", 1), ("WLMx", 0), ("AmMn", 999), ("AmMn", 1200)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Integer(n)))), "{key} {n} was mapped");
+    }
+    for (param, n) in [("wavelengthMin", 999), ("wavelengthMax", 1), ("amplitudeMin", 999)] {
+        assert!(export_item("filter.distort.wave", &json!({ param: n }), "S").is_none(), "{param} {n} exported");
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
+    s.execute("filter.render.clouds", json!({})).unwrap();
+    let plays = [
+        desc("null").with("WLMn", D::Integer(998)),
+        desc("null").with("WLMx", D::Integer(2)),
+        desc("null").with("AmMn", D::Integer(998)),
+        desc("null").with("WLMn", D::Integer(200)).with("WLMx", D::Integer(100)),
+        desc("null").with("AmMn", D::Integer(40)).with("AmMx", D::Integer(20)),
+    ];
+    for (k, d) in plays.into_iter().enumerate() {
+        let (id, p) = one_step(distort("Wave", d));
+        assert!(export_item(&id, &p, "S").is_some(), "{p} refused");
+        let name = format!("W{k}");
+        s.actions.list.push(Action::new(&name, vec![(id, p.clone())]));
+        let played = s.execute("actions.play", json!({"action": name})).unwrap();
+        assert_eq!(played["ran"], 1, "{p}: {played}");
+    }
+}
+
+/// Wave saves its scales as the integer 100, so a fractional scale, even one that rounds or
+/// clamps to 100, stays a Photoshop step instead of saving back as 100 (#10605).
+#[test]
+fn wave_with_a_fractional_scale_is_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (key, n) in [("SclH", 99.6), ("SclV", 99.5), ("SclH", 100.4)] {
+        assert!(kept(distort("Wave", desc("null").with(key, D::Double(n)))), "{key} {n} was mapped");
+    }
+    assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
 }

@@ -2,6 +2,7 @@ const DIFFUSE_MODE: &[(&str, &str)] = &[("Nrml", "normal"), ("DrkO", "darkenOnly
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
 use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
+use super::steps_distort::{PINCH, POLAR, SPHERIZE, TWIRL, ZIGZAG, keys_from, keys_to, wave_from, wave_to};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
     crop_from, crop_to, export_from, export_to, image_size_from, image_size_to, merge_visible_from, merge_visible_to, open_from, open_to, paste_from, paste_to,
@@ -279,6 +280,48 @@ pub(super) const EVENTS: &[Event] = &[
         "filter.other.offset",
         &[F("Hrzn", "horizontal", Kind::Long), F("Vrtc", "vertical", Kind::Long), F("Fl  ", "undefinedAreas", Kind::Enum("FlMd", OFFSET_FILL))]
     ),
+    // Distort (#10605): every key in recorded order, Photoshop's limits and defaults.
+    Event {
+        code: "Pnch",
+        name: "pinch",
+        label: "Pinch",
+        ids: &["filter.distort.pinch"],
+        from: |d| keys_from(d, "filter.distort.pinch", PINCH),
+        to: |_, p| keys_to(p, PINCH, &[("amount", json!(50))], &[]),
+    },
+    Event {
+        code: "Plr ",
+        name: "polar",
+        label: "Polar Coordinates",
+        ids: &["filter.distort.polarCoordinates"],
+        from: |d| keys_from(d, "filter.distort.polarCoordinates", POLAR),
+        to: |_, p| keys_to(p, POLAR, &[("mode", json!("rectangularToPolar"))], &[]),
+    },
+    Event {
+        code: "Sphr",
+        name: "spherize",
+        label: "Spherize",
+        ids: &["filter.distort.spherize"],
+        from: |d| keys_from(d, "filter.distort.spherize", SPHERIZE),
+        to: |_, p| keys_to(p, SPHERIZE, &[("amount", json!(100)), ("mode", json!("normal"))], &[]),
+    },
+    Event {
+        code: "Twrl",
+        name: "twirl",
+        label: "Twirl",
+        ids: &["filter.distort.twirl"],
+        from: |d| keys_from(d, "filter.distort.twirl", TWIRL),
+        to: |_, p| keys_to(p, TWIRL, &[("angle", json!(50))], &[]),
+    },
+    Event { code: "Wave", name: "wave", label: "Wave", ids: &["filter.distort.wave"], from: wave_from, to: wave_to },
+    Event {
+        code: "ZgZg",
+        name: "zigZag",
+        label: "ZigZag",
+        ids: &["filter.distort.zigZag"],
+        from: |d| keys_from(d, "filter.distort.zigZag", ZIGZAG),
+        to: |_, p| keys_to(p, ZIGZAG, &[("amount", json!(10)), ("ridges", json!(5)), ("style", json!("pondRipples"))], &[]),
+    },
     ev!("Rple", "ripple", "Ripple", "filter.distort.ripple", &[F("Amnt", "amount", Kind::ExactLong), F("RplS", "size", Kind::Enum("RplS", RIPPLE_SIZE))]),
     ev!("Crst", "crystallize", "Crystallize", "filter.pixelate.crystallize", &[F("ClSz", "cellSize", Kind::ExactLong)]),
     ev!("Dfs ", "diffuse", "Diffuse", "filter.stylize.diffuse", &[F("Md  ", "mode", Kind::Enum("DfsM", DIFFUSE_MODE)), F("FlRs", "seed", Kind::Long)]),
