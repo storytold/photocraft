@@ -3756,6 +3756,7 @@ cameraData	Lens	レンズ
 	Sampling Area	サンプリング領域
 	Excluded Area	除外された領域
 	Sampling Area Options	サンプリング領域オプション
+	Paint with the Sampling Brush to add a sampling area.	サンプリングブラシでペイントして、サンプリング領域を追加してください。
 	Rectangular	長方形
 	Fill Settings	塗りつぶし設定
 	Rotation Adaptation	回転への適応

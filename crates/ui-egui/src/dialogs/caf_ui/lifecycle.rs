@@ -1,5 +1,5 @@
 use super::preview::{Base, Preview, cancel_preview, compute_base, plan_params, points_limit, rebase, refresh};
-use super::{CMD, CafOpts, CafTool, CafWorkspace, MAX_CAF_EDITS, MAX_CAF_POINTS, PROXY_SIDE, PhotocraftApp, REMEMBERED, Rect, Step, Value};
+use super::{CMD, CUSTOM_HINT, CafOpts, CafTool, CafWorkspace, MAX_CAF_EDITS, MAX_CAF_POINTS, PROXY_SIDE, PhotocraftApp, REMEMBERED, Rect, Step, Value};
 
 /// Opens the workspace on the active layer and its selection.
 pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
@@ -34,7 +34,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         redo: Vec::new(),
         cur: None,
         lasso: None,
-        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new() },
+        base: Base::new(Rect::EMPTY, Rect::EMPTY, Vec::new(), Vec::new()),
         outline: None,
         k,
         pw,
@@ -42,6 +42,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         base_px: vec![false; pw * ph],
         hole_px: vec![false; pw * ph],
         mask: vec![false; pw * ph],
+        sampled_any: std::cell::Cell::new(None),
         pressed: false,
         texture_limit: 2048,
         image_tex: None,
@@ -80,6 +81,9 @@ fn remember(app: &mut PhotocraftApp, opts: &CafOpts) {
 pub fn apply(app: &mut PhotocraftApp) -> Result<Value, String> {
     let Some(w) = app.distort.caf.as_mut() else { return Err("Content-Aware Fill is not open".into()) };
     w.end_stroke();
+    if w.awaiting_custom_area() {
+        return Err(CUSTOM_HINT.into());
+    }
     let p = plan_params(w, true);
     let opts = w.opts.clone();
     remember(app, &opts);
@@ -100,8 +104,18 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
-/// An Apply or OK that failed: the error in the panel and the status bar.
+/// An Apply or OK that failed: the error in the panel and the status bar. Custom with nothing
+/// to sample isn't an error: the panel already shows the hint, in the hint's style, and the
+/// status bar says the same (#10621).
 pub(super) fn report(app: &mut PhotocraftApp, e: String) {
+    if let Some(w) = app.distort.caf.as_mut()
+        && w.awaiting_custom_area()
+    {
+        w.error = None;
+        app.ui.status = tl!(CUSTOM_HINT).to_string();
+        app.ui.status_error = false;
+        return;
+    }
     if let Some(w) = app.distort.caf.as_mut() {
         w.error = Some(e.clone());
     }

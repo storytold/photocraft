@@ -2,8 +2,8 @@ use super::controls::{pointer, tool_icon, tool_tip};
 use super::lifecycle::{apply, bounds, cancel, commit, fill_edit, report, reset, set_sampling};
 use super::preview::{drive_preview, rebase, refresh};
 use super::{
-    Align2, BAR_H, CafTool, CafWorkspace, Color32, ERect, FontId, LEFT_W, PANEL_W, PREVIEW_W, PhotocraftApp, Pos2, Rect, Sense, Stroke, Tokens, ToolEvent,
-    Value, json, pos2, vec2, widgets,
+    Align2, BAR_H, CUSTOM_HINT, CafTool, CafWorkspace, Color32, ERect, FontId, LEFT_W, PANEL_W, PREVIEW_W, PhotocraftApp, Pos2, Rect, Sense, Stroke, Tokens,
+    ToolEvent, Value, json, pos2, vec2, widgets,
 };
 
 /// A view: screen px per document px and the document point at the centre of `area`.
@@ -204,6 +204,8 @@ fn caf_props_panel(
     });
     if let Some(e) = w.error.as_ref().or(w.preview.error.as_ref()) {
         ui.label(egui::RichText::new(e.as_str()).color(t.danger).size(11.0));
+    } else if w.awaiting_custom_area() {
+        ui.label(egui::RichText::new(tl!(CUSTOM_HINT)).color(t.text_dim).size(11.0));
     }
 }
 
