@@ -3297,9 +3297,14 @@ fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
         ("filter.blur.average", json!({"target": "mask"})),
         ("filter.other.hsbHsl", json!({"inputMode": "lab"})),
         ("filter.video.deInterlace", json!({"eliminate": "allFields"})),
+        ("filter.other.custom", json!([1])),
+        ("filter.blur.average", json!(5)),
+        ("filter.other.hsbHsl", json!("hsl")),
     ] {
         assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
     }
+    // `null` params set nothing.
+    assert!(export_item("filter.blur.average", &Value::Null, "S").is_some());
     // A Custom step without a kernel is the command's identity kernel.
     let d = export_item("filter.other.custom", &json!({}), "S").unwrap().descriptor.unwrap();
     let cells = get_list(&d, "Mtrx").unwrap();
@@ -3352,6 +3357,10 @@ fn custom_outside_the_commands_range_is_kept_and_refused() {
         desc("null").with("Mtrx", kernel(-1000)),
         desc("null").with("Mtrx", D::List((0..26).map(|_| D::Integer(0)).collect())),
         desc("null").with("Mtrx", D::List((0..1000).map(|_| D::Integer(0)).collect())),
+        // Fractions: export writes integers, so Save Actions would refuse the mapped step.
+        desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(1.5)),
+        desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Double(2.5)),
+        desc("null").with("Mtrx", D::List((0..25).map(|i| if i == 12 { D::Double(0.5) } else { D::Integer(0) }).collect())),
     ] {
         assert!(kept(other_step("Cstm", d.clone())), "{:?} was mapped", d.items);
     }
@@ -3363,6 +3372,9 @@ fn custom_outside_the_commands_range_is_kept_and_refused() {
             (&json!(f64::from(scale)), &json!(f64::from(offset)), &json!(f64::from(cell)))
         );
     }
+    // An integral Double is a whole number and still maps.
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", D::Double(2.0))) else { panic!("Scl 2.0 kept") };
+    assert_eq!(steps[0].1["scale"], json!(2.0));
     let mut cells = vec![json!(0); 25];
     cells[12] = json!(1000);
     for params in [json!({"scale": 0}), json!({"scale": 10_000}), json!({"offset": -10_000}), json!({"offset": 10_000}), json!({"kernel": cells})] {

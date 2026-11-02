@@ -23,9 +23,10 @@ fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default
     }
 }
 
-/// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
+/// Whether `p` sets nothing but `allowed` (a `null` counts as unset). Params that are neither an
+/// object nor `null` are no command's params, so they set something no event can hold.
 fn sets_only(p: &Value, allowed: &[&str]) -> bool {
-    p.as_object().is_none_or(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
+    p.is_null() || p.as_object().is_some_and(|m| m.iter().all(|(k, v)| v.is_null() || allowed.contains(&k.as_str())))
 }
 
 /// NTSC Colors, Average and Remove Black / White Matte: Photoshop runs them with an empty
@@ -91,15 +92,15 @@ const CUSTOM_SCALE: RangeInclusive<f64> = 1.0..=9999.0;
 const CUSTOM_OFFSET: RangeInclusive<f64> = -9999.0..=9999.0;
 const CUSTOM_CELL: RangeInclusive<f64> = -999.0..=999.0;
 
-/// A number within `range`.
+/// A whole number within `range`.
 fn within(range: &RangeInclusive<f64>) -> impl Fn(&D) -> Option<f64> + '_ {
-    move |v| num(v).filter(|n| range.contains(n))
+    move |v| num(v).filter(|n| n.fract() == 0.0 && range.contains(n))
 }
 
 /// Custom (`Cstm`): `Mtrx` is the 5 × 5 kernel, row by row. Photoshop takes exactly 25 cells (a
 /// 3 × 3 list makes it fail), so any other matrix keeps the Photoshop step, as does a `Scl `,
-/// `Ofst` or cell that is not a number, or one outside the command's range (it would play
-/// clamped).
+/// `Ofst` or cell that is not a number, one that is not a whole number (export writes integers,
+/// so Save Actions would refuse it), or one outside the command's range (it would play clamped).
 pub(super) fn custom_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     if !only_keys(d, &["Scl", "Ofst", "Mtrx"]) {
