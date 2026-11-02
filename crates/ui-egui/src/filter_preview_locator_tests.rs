@@ -269,3 +269,22 @@ fn a_release_elsewhere_ends_the_locator_press() {
     pointer(&mut h, json!([{"kind": "move", "x": 120, "y": 90}]));
     assert!(near(centre(&h), [60.0, 50.0]), "a release on another dialog ends the press: {:?}", centre(&h));
 }
+
+/// The Crop tool keeps its frame drag apart from `app.drag`: one an agent began before the dialog
+/// opened still ends along its path, so no stale drag reshapes the frame on later hovers.
+#[test]
+fn a_crop_drag_begun_before_the_dialog_still_ends_under_it() {
+    let mut h = harness(None, 0.0);
+    h.state_mut().ui.tool = Tool::Crop;
+    h.run_steps(2);
+    pointer(&mut h, json!([{"kind": "down", "x": 40, "y": 30}, {"kind": "move", "x": 80, "y": 60}]));
+    assert!(h.state().crop.drag.is_some(), "the Crop frame drag is under way");
+    crate::filter_dialog::open(h.state_mut(), "filter.sharpen.smartSharpen").unwrap();
+    h.run_steps(2);
+    pointer(&mut h, json!([{"kind": "move", "x": 160, "y": 120}]));
+    pointer(&mut h, json!([{"kind": "up", "x": 160, "y": 120}]));
+    assert!(h.state().crop.drag.is_none(), "the release reached the Crop tool");
+    let r = h.state().ui.crop_rect.expect("a crop frame");
+    assert!(r[2] > 150.0 && r[3] > 110.0, "the moves under the dialog reached the frame: {r:?}");
+    assert!(near(centre(&h), [200.0, 150.0]), "the drag's moves and release are not locator presses: {:?}", centre(&h));
+}

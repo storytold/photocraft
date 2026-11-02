@@ -195,7 +195,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Trackpad rotate drives Rotate View | done | `rotate_view.rs:136` |
 | Zoom levels to 3200% and beyond | partial | #1813 |
 | Physical 100% at any display scale | done | #1943 |
-| Filter dialogs with a preview window (Smart Sharpen, Unsharp Mask, Reduce Noise…): over the image the pointer is a small square, and a click or drag there centres the dialog's preview on that point (clamped to the image), whatever the tool; it never reaches the tool or the history | done | `dialogs/filter_preview_ui.rs` `center_at`, `filter_preview_locator_tests.rs` (#9648); `ui.pointer` does the same |
+| Filter dialogs with a preview window (Smart Sharpen, Unsharp Mask, Reduce Noise…): over the image the pointer is a small square, and a click or drag there centres the dialog's preview on that point (clamped to the image), whatever the tool; a click or drag the locator starts never reaches the tool or the history, while a tool drag (a Brush stroke, a Crop frame) begun before the dialog opened still ends along its own path | done | `dialogs/filter_preview_ui.rs` `center_at`, `filter_preview_locator_tests.rs` (#9648); `ui.pointer` does the same |
 | ⌃Tab / ⌃⇧Tab switch document tabs | missing | #2340 |
 
 ## Selected colour channels
