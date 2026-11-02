@@ -509,14 +509,17 @@ pub(super) fn align_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// `layer.align.*` as an .atn Align step. `"to": "artboard"` is Photoshop's `alignToCanvas`
+/// flag. PhotoCraft's stricter `"canvas"` has no Photoshop equivalent: the flag would read back
+/// as `artboard` and play differently on a document with artboards, so the step is not exported
+/// (an export error, or a skipped step with `skipUnsupported`) rather than silently changed.
 pub(super) fn align_to(id: &str, p: &Value) -> Option<Descriptor> {
     let a = lookup_back(ALIGN, id.strip_prefix("layer.align.")?)?;
-    Some(
-        desc("null")
-            .with("null", target_ref("Lyr "))
-            .with("Usng", enm("ADSt", a))
-            .with("alignToCanvas", D::Boolean(matches!(jstr(p, "to"), Some("canvas" | "artboard")))),
-    )
+    let to = jstr(p, "to");
+    if to == Some("canvas") {
+        return None;
+    }
+    Some(desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", a)).with("alignToCanvas", D::Boolean(to == Some("artboard"))))
 }
 
 pub(super) fn purge_from(d: &Descriptor) -> Mapped {

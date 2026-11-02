@@ -800,27 +800,35 @@ fn every_mapped_command_exports_and_imports_back() {
 
 /// Review on #10358: Photoshop's `.atn` holds one `alignToCanvas` flag, which means "the board
 /// the layers sit on, else the canvas" — `artboard` here, so that target survives the round trip.
-/// Plain `canvas` is PhotoCraft's own stricter target, which the file cannot say apart: it
-/// exports as the same flag and reads back as `artboard` (the same bounds wherever there is no
-/// artboard), rather than an artboard alignment silently becoming a canvas one.
+/// PhotoCraft's stricter `canvas` target is one the file cannot hold apart (CodeRabbit on
+/// #10358): it is not exported, rather than read back as `artboard`, which plays differently on a
+/// document with artboards.
 #[test]
 fn align_to_an_artboard_survives_the_atn_round_trip() {
-    let back = |to: &str| {
-        let item = export_item("layer.align.leftEdges", &json!({"to": to}), "S").expect("Align exports");
-        let d = item.descriptor.as_ref().expect("Align writes a descriptor");
-        assert_eq!(get_bool(d, "alignToCanvas"), Some(true), "{to}");
-        let e = event_for(&item.event).expect("the event is known");
-        match (e.from)(d) {
-            Mapped::Steps(steps) => steps[0].1.clone(),
-            Mapped::Unsupported { .. } => panic!("{to} does not import back"),
-        }
-    };
-    assert_eq!(back("artboard"), json!({"to": "artboard"}));
-    assert_eq!(back("canvas"), json!({"to": "artboard"}), "the file cannot hold the stricter canvas target");
+    let item = export_item("layer.align.leftEdges", &json!({"to": "artboard"}), "S").expect("Align exports");
+    let d = item.descriptor.as_ref().expect("Align writes a descriptor");
+    assert_eq!(get_bool(d, "alignToCanvas"), Some(true));
+    let e = event_for(&item.event).expect("the event is known");
+    match (e.from)(d) {
+        Mapped::Steps(steps) => assert_eq!(steps[0].1, json!({"to": "artboard"})),
+        Mapped::Unsupported { .. } => panic!("artboard does not import back"),
+    }
+    assert!(export_item("layer.align.leftEdges", &json!({"to": "canvas"}), "S").is_none(), "the file cannot hold the stricter canvas target");
     // Without the flag it stays the default target.
     let item = export_item("layer.align.leftEdges", &json!({}), "S").expect("Align exports");
     let d = item.descriptor.as_ref().expect("Align writes a descriptor");
     assert_eq!(get_bool(d, "alignToCanvas"), Some(false));
+}
+
+/// CodeRabbit on #10358: an action with a step aligned to the canvas does not export unchanged:
+/// the export says which step has no Photoshop equivalent, or leaves it out when asked to.
+#[test]
+fn an_action_aligned_to_the_canvas_does_not_export_as_another_target() {
+    let action = Action::new("Align", vec![("layer.align.leftEdges".into(), json!({"to": "canvas"})), ("select.inverse".into(), json!({}))]);
+    let err = export("S", &[&action], &[], false).expect_err("the canvas target has no Photoshop equivalent");
+    assert!(err.contains("layer.align.leftEdges"), "{err}");
+    let (_, skipped) = export("S", &[&action], &[], true).expect("the rest exports");
+    assert_eq!(skipped.iter().map(|s| (s.step, s.id.as_str())).collect::<Vec<_>>(), [(0, "layer.align.leftEdges")]);
 }
 
 /// `paint.bucket` exported to .atn and imported back → its params, or None when it doesn't export.
