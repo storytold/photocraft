@@ -725,7 +725,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.render.lensFlare",
             "Lens Flare…",
             ["Filter", "Render"],
-            r##"{"brightness":10..300=100,"centerX":number=0.5,"centerY":number=0.5,"lens":"zoom|prime35|prime105|moviePrime"} (normalized center coordinates; positions outside the image are supported)"##
+            r##"{"brightness":10..300=100,"centerX":0..1=0.5,"centerY":0..1=0.5,"lens":"zoom|prime35|prime105|moviePrime"} (normalized centre: 0..1 is the canvas; agents and actions may pass values outside it, which place the flare off the canvas unclamped)"##
         ),
         cmd!(
             "filter.render.lightingEffects",
