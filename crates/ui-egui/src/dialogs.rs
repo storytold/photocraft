@@ -652,7 +652,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_max_width(360.0);
             }
             if color_picker {
-                ui.set_width(crate::color_picker_ui::content_width(ui));
+                ui.set_width(crate::color_picker_ui::content_width(ui, &fields));
             }
             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };

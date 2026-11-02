@@ -4,6 +4,164 @@ use egui_kittest::kittest::Queryable;
 
 use super::*;
 
+/// Opening a float document's tool picker must not quantize or clip its source colour.
+#[test]
+fn float_picker_preserves_opening_components_and_unchanged_ok() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
+    let rgb = [0.12345, 2.0, -0.25];
+    app.run("tools.setColors", json!({"foreground": [rgb[0], rgb[1], rgb[2], 0.375]})).unwrap();
+    let id = open(&mut app, "foreground");
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    assert_eq!(current(&fields).rgb, rgb, "the opening colour keeps float precision and range");
+    confirm(&mut app, &fields).unwrap();
+    assert_eq!(app.session.tools.foreground, [rgb[0], rgb[1], rgb[2], 0.375]);
+}
+
+/// Sampling uses the same point composite as the engine; only OK changes the tool colour.
+#[test]
+fn float_picker_samples_resets_and_cancels_without_changing_the_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "depth": 32, "background": "transparent"})).unwrap();
+    let rgb = [0.12345, 2.0, -0.25];
+    app.run("edit.fill", json!({"contents": "color", "color": rgb})).unwrap();
+    let sample: [f32; 4] = serde_json::from_value(app.run("document.sampleColor", json!({"x": 2, "y": 2, "size": 1, "sampleLayer": "all"})).unwrap()).unwrap();
+    for i in 0..3 {
+        assert!((sample[i] - rgb[i]).abs() < 1e-6, "generated float patch channel {i}: {sample:?}");
+    }
+    let st = app.session.active().unwrap();
+    let before = (st.doc.clone(), st.revision, st.is_dirty(), st.history.entries().len());
+    let original = app.session.tools.foreground;
+    let id = open(&mut app, "foreground");
+    sample_at(&mut app, 2.0, 2.0);
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    assert_eq!(current(&fields).rgb, [sample[0], sample[1], sample[2]]);
+    assert_eq!(app.session.tools.foreground, original);
+    reset(&mut app.ui.dialog_mut(id).unwrap().fields);
+    assert_eq!(current(&app.ui.dialog_mut(id).unwrap().fields).rgb, [original[0], original[1], original[2]]);
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert_eq!(app.session.tools.foreground, original);
+    let st = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before.0, &st.doc));
+    assert_eq!((st.revision, st.is_dirty(), st.history.entries().len()), (before.1, before.2, before.3));
+    let id = open(&mut app, "foreground");
+    sample_at(&mut app, 2.0, 2.0);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.tools.foreground, sample);
+}
+
+/// Decimal typing edits raw float RGB channels, while drawing the picker leaves them intact.
+#[test]
+fn float_picker_rgb_fields_accept_fractional_hdr_and_negative_values() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
+    app.run("tools.setColors", json!({"foreground": [0.12345, 2.0, -0.25]})).unwrap();
+    let id = open(&mut app, "foreground");
+    let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    let mut h = Harness::builder().with_size(vec2(700.0, 500.0)).build_ui_state(
+        |ui, f: &mut Map<String, Value>| {
+            if ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                body(ui, f);
+            }
+        },
+        f,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    assert_eq!(current(h.state()).rgb, [0.12345, 2.0, -0.25], "drawing does not quantize");
+    for (channel, text, value) in [(0, "0.54321", 0.54321), (1, "3.25", 3.25), (2, "-0.125", -0.125)] {
+        h.query_all_by_role(Role::SpinButton).nth(channel + 3).unwrap().click();
+        h.run_steps(1);
+        type_keys(&mut h, text);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(current(h.state()).rgb[channel], value, "channel {channel} typed {text}");
+    }
+}
+
+/// Nested Fill/Stroke pickers preserve float values in the parent, pixels and saved choices.
+#[test]
+fn float_picker_fields_reach_fill_and_stroke_without_hex_conversion() {
+    for (command, swatch) in [("edit.fill", "Fill color"), ("edit.stroke", "Stroke color")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "depth": 32, "background": "transparent"})).unwrap();
+        let rgb = [0.12345, 2.0, -0.25];
+        app.run("tools.setColors", json!({"foreground": rgb})).unwrap();
+        app.run("select.rect", json!({"x": 1, "y": 1, "width": 6, "height": 6})).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let parent = if command == "edit.fill" { crate::fill_ui::open(h.state_mut()) } else { crate::stroke_ui::open(h.state_mut()) };
+        if command == "edit.fill" {
+            h.state_mut().ui.dialog_mut(parent).unwrap().fields.insert("contents".into(), json!("color"));
+        }
+        h.run_steps(3);
+        h.get_by_label(swatch).click();
+        h.run_steps(3);
+        let child = h.state().ui.dialogs.last().unwrap().id;
+        assert_ne!(child, parent);
+        assert_eq!(current(&h.state().ui.dialogs.last().unwrap().fields).rgb, rgb, "{command} opening and passive frames");
+        h.state_mut().ui.dialog_mut(child).unwrap().fields.insert("color".into(), json!([0.54321, 3.0, -0.125]));
+        crate::dialogs::cancel(h.state_mut(), child).unwrap();
+        assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], json!(rgb));
+        h.run_steps(2);
+        h.get_by_label(swatch).click();
+        h.run_steps(3);
+        let child = h.state().ui.dialogs.last().unwrap().id;
+        let chosen = [0.54321, 3.0, -0.125];
+        h.state_mut().ui.dialog_mut(child).unwrap().fields.insert("color".into(), json!(chosen));
+        crate::dialogs::confirm(h.state_mut(), child).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state_mut().ui.dialog_mut(parent).unwrap().fields["color"], json!(chosen));
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+        crate::dialogs::confirm(h.state_mut(), parent).unwrap();
+        let pixel: [f32; 4] = serde_json::from_value(h.state_mut().run("document.sampleColor", json!({"x": 1, "y": 3, "size": 1})).unwrap()).unwrap();
+        for i in 0..3 {
+            assert!((pixel[i] - chosen[i]).abs() < 1e-6, "{command} channel {i}: {pixel:?}");
+        }
+        assert_eq!(h.state().session.prefs().dialogs[command]["color"], json!(chosen));
+        let reopened = if command == "edit.fill" { crate::fill_ui::fields(h.state()) } else { crate::stroke_ui::fields(h.state()) };
+        assert_eq!(reopened["color"], json!(chosen));
+        h.state_mut().run("file.new", json!({"width": 8, "height": 8, "depth": 8})).unwrap();
+        let integer = if command == "edit.fill" { crate::fill_ui::fields(h.state()) } else { crate::stroke_ui::fields(h.state()) };
+        assert_eq!(integer["color"], json!(hex(chosen)), "integer documents retain the bounded colour domain");
+    }
+}
+
+/// Invalid samples and control values cannot replace a valid colour or reach a command.
+#[test]
+fn float_picker_rejects_nonfinite_values_and_keeps_explicit_web_snapping() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
+    let id = open(&mut app, "foreground");
+    let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    set_rgb(&mut f, [0.12345, 2.0, -0.25], Keep::Nothing);
+    let color = f["color"].clone();
+    for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        set_rgb(&mut f, [invalid, 0.0, 0.0], Keep::Nothing);
+        assert_eq!(f["color"], color);
+    }
+    let before = app.session.tools.foreground;
+    for invalid in [json!([1e300, 0, 0]), json!([null, 0, 0]), json!([1, 2]), json!("invalid")] {
+        f.insert("color".into(), invalid);
+        assert!(confirm(&mut app, &f).is_err());
+        assert_eq!(app.session.tools.foreground, before);
+    }
+    let names: Vec<_> = app.session.presets.swatches.iter().flat_map(|g| &g.items).map(|s| s.name.clone()).collect();
+    f.insert("__addSwatch".into(), json!(true));
+    take_add_swatch(&mut app, &mut f);
+    assert_eq!(app.session.presets.swatches.iter().map(|g| g.items.len()).sum::<usize>(), names.len(), "invalid input adds no swatch");
+    set_rgb(&mut f, [0.12345, 2.0, -0.25], Keep::Nothing);
+    f.insert("__addSwatch".into(), json!(true));
+    take_add_swatch(&mut app, &mut f);
+    let added = app.session.presets.swatches.iter().flat_map(|g| &g.items).find(|s| !names.contains(&s.name)).unwrap();
+    let photocraft_engine::presets::swatches::SwatchColor::Rgb(rgb) = &added.color else { panic!("not an RGB swatch") };
+    assert_eq!(*rgb, parse_hex("#1fff00").unwrap(), "the SDR swatch projection is explicit, never a black fallback");
+    f.insert("__webOnly".into(), json!(true));
+    set_rgb(&mut f, [0.12345, 2.0, -0.25], Keep::Nothing);
+    assert_eq!(current(&f).rgb, [0.2, 1.0, 0.0]);
+}
+
 /// #4107: with Only Web Colors on, the field is drawn in flat web-safe bands.
 #[test]
 fn web_only_field_is_flat_web_safe_bands() {
@@ -19,6 +177,68 @@ fn web_only_field_is_flat_web_safe_bands() {
     }
     let distinct: std::collections::HashSet<_> = m.vertices.iter().map(|v| v.color).collect();
     assert!(distinct.len() > 1 && distinct.len() <= 216);
+}
+
+/// Smooth strips retain exact vertices and triangles; flat strips only remove internal cells.
+#[test]
+fn component_strip_preserves_samples_and_smooth_topology() {
+    for rgb in [[0.2, 0.5, 0.8], [0.5; 3], [0.12345, 2.0, -0.25]] {
+        let display = rgb.map(|v: f32| v.clamp(0.0, 1.0));
+        let hsv = rgb_to_hsb(display);
+        let lab = photocraft_color::convert::srgb_to_lab(display);
+        for mode in MODES.iter().chain(LAB_MODES).map(|m| m.0).chain(["unknown"]) {
+            for origin in [pos2(0.0, 0.0), pos2(16.25, 16.375)] {
+                let rect = Rect::from_min_size(origin, vec2(18.0, FIELD));
+                let color = |y| slider_color(mode, 1.0 - y, hsv, rgb, lab);
+                let smooth = strip_mesh(rect, false, color);
+                let original = grid_mesh(rect, 32, |_, y| color(y));
+                assert_eq!(smooth, original, "{mode}, {rgb:?}, {origin:?}");
+                let bands = strip_mesh(rect, true, color);
+                let original = flat_grid_mesh(rect, WEB_CELLS, |_, y| web_safe(color(y)));
+                assert!(bands.is_valid());
+                assert_eq!((bands.vertices.len(), bands.indices.len()), (4 * WEB_CELLS, 6 * WEB_CELLS));
+                assert_eq!(bands.calc_bounds(), original.calc_bounds());
+                for (band, row) in bands.vertices.chunks_exact(4).zip(original.vertices.chunks_exact(4 * WEB_CELLS)) {
+                    for (a, b) in band.iter().zip([&row[0], &row[row.len() - 3], &row[row.len() - 2], &row[3]]) {
+                        assert_eq!((a.pos, a.uv, a.color), (b.pos, b.uv, b.color));
+                    }
+                    assert!(row.iter().all(|v| v.color == band[0].color));
+                }
+            }
+        }
+    }
+}
+
+/// Passive SDR/HDR redraws use the strip builder without rewriting the stored colour.
+#[test]
+fn picker_redraw_uses_component_strips_without_changing_color() {
+    let mut h = picker("#336699");
+    for color in [json!("#336699"), json!([0.12345, 0.5, 0.98765]), json!([0.12345, 2.0, -0.25])] {
+        for web in [false, true] {
+            for mode in MODES.iter().chain(LAB_MODES).map(|m| m.0) {
+                h.state_mut().insert("color".into(), color.clone());
+                h.state_mut().insert("__floatRgb".into(), json!(color.is_array()));
+                h.state_mut().insert("__mode".into(), json!(mode));
+                h.state_mut().insert("__webOnly".into(), json!(web));
+                h.run_steps(2);
+                assert_eq!(h.state()["color"], color);
+                let now = current(h.state());
+                let strip = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Mesh(m) if (m.calc_bounds().width() - 18.0).abs() < 0.01 && (m.calc_bounds().height() - FIELD).abs() < 0.01 => Some(m),
+                        _ => None,
+                    })
+                    .expect("component strip drawn by the picker body");
+                assert_eq!(
+                    strip.as_ref(),
+                    &strip_mesh(Rect::from_min_size(strip.vertices[0].pos, vec2(18.0, FIELD)), web, |y| slider_color(mode, 1.0 - y, now.hsv, now.rgb, now.lab))
+                );
+            }
+        }
+    }
 }
 
 fn picker(color: &str) -> Harness<'static, Map<String, Value>> {
@@ -337,6 +557,28 @@ fn the_picker_window_is_no_bigger_than_photoshops() {
     let widths: Vec<f32> = ["OK", "Cancel", "Add to Swatches"].iter().map(|l| h.get_by_label(l).rect().width()).collect();
     assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5), "one width for all three actions: {widths:?}");
     assert!(widths[0] <= 136.0, "actions {} points wide, Photoshop's about 116", widths[0]);
+}
+
+/// Wider float RGB fields must not leave the title's close box behind the expanded body.
+#[test]
+fn float_picker_keeps_the_close_box_at_the_legacy_window_inset() {
+    if !crate::dialogs::CLOSE_BOX {
+        return;
+    }
+    let mut insets = Vec::new();
+    for depth in [8, 16, 32] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+        let app = PhotocraftApp::new(session, Default::default());
+        let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let id = open(h.state_mut(), "foreground");
+        h.run_steps(6);
+        let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).unwrap();
+        let close = h.get_by_label("Close").rect();
+        insets.push(window.right() - close.right());
+    }
+    assert!((insets[0] - insets[1]).abs() < 1.0 && (insets[0] - insets[2]).abs() < 1.0, "close-box insets at 8/16/32 bits: {insets:?}");
 }
 
 #[test]

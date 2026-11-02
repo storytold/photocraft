@@ -6,6 +6,43 @@ use serde_json::json;
 
 use super::*;
 
+/// A float fill keeps its source precision and alpha through no-op, preview, Cancel and OK.
+#[test]
+fn float_fill_picker_preserves_hdr_preview_and_committed_color() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "depth": 32, "background": "transparent"})).unwrap();
+    let original = Color::rgba(0.12345, 2.0, -0.25, 0.375);
+    let id = LayerId(app.run("layer.newFillLayer.solidColor", json!({"color": [0.12345, 2.0, -0.25, 0.375]})).unwrap()["layer"].as_u64().unwrap());
+    let before = app.session.active().unwrap().doc.clone();
+    let history = app.session.active().unwrap().history.entries().len();
+    let dialog = open(&mut app).unwrap();
+    assert_eq!(color_picker_ui::current(&app.ui.dialog_mut(dialog).unwrap().fields).rgb, original.to_rgb());
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "unchanged OK is a no-op");
+    let chosen = [0.54321, 3.0, -0.125];
+    let dialog = open(&mut app).unwrap();
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(chosen));
+    let (preview, _) = display_doc(&mut app, 0).unwrap();
+    let expected = Color::rgba(chosen[0], chosen[1], chosen[2], original.alpha);
+    assert_eq!(preview.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(expected)));
+    crate::dialogs::cancel(&mut app, dialog).unwrap();
+    assert!(display_doc(&mut app, 0).is_none());
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history);
+    let dialog = open(&mut app).unwrap();
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(chosen));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().content, preview.layer(id).unwrap().content);
+    assert_eq!(app.session.active().unwrap().history.entries().len(), history + 1);
+
+    // Creation must still create when OK receives the exact opening foreground colour.
+    app.run("tools.setColors", json!({"foreground": chosen})).unwrap();
+    let dialog = open_new(&mut app).unwrap();
+    let created = crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let id = LayerId(created["layer"].as_u64().unwrap());
+    assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(Color::rgb(chosen[0], chosen[1], chosen[2]))));
+}
+
 fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": 16})).unwrap();

@@ -1,7 +1,9 @@
 //! Photoshop's Color Picker (Foreground / Background Color) dialog: a 2D colour field and a slider
 //! for the selected component (H, S, B, R, G, B, L, a or b radio), new/current swatches with the
-//! out-of-gamut and web-colour warnings, and HSB, RGB, Lab, CMYK and hex fields. The colour lives in the dialog fields (`color` as `#rrggbb`, plus the HSB
-//! floats so hue survives greys), so `ui.dialog.set` drives it; OK runs `tools.setColors`.
+//! out-of-gamut and web-colour warnings, and HSB, RGB, Lab, CMYK and hex fields. The dialog's
+//! `color` field holds hex for legacy targets and finite RGB floats for supported 32-bit targets.
+//! Hex is an SDR projection of float colours; kept model components retain hue in greys.
+//! `ui.dialog.set` drives the same state; OK runs the target command.
 //! While it is the top dialog the image is its eyedropper, as in Photoshop: the pointer over the
 //! canvas is a pipette, and a click or drag there samples into the new colour ([`sample_at`]).
 
@@ -72,6 +74,61 @@ pub fn parse_hex(s: &str) -> Option<[f32; 3]> {
     Some([c(0)?, c(2)?, c(4)?])
 }
 
+/// Read a picker colour without projecting float components through eight-bit hex.
+pub(crate) fn parse_color(value: &Value) -> Option<[f32; 3]> {
+    let rgb = match value {
+        Value::String(s) => parse_hex(s)?,
+        Value::Array(a) if a.len() == 3 => {
+            let channel = |i: usize| a.get(i).and_then(Value::as_f64).map(|v| v as f32);
+            [channel(0)?, channel(1)?, channel(2)?]
+        }
+        _ => return None,
+    };
+    rgb.iter().all(|v| v.is_finite()).then_some(rgb)
+}
+
+/// Canonical command value, shared by preview and OK. Invalid input never becomes black.
+pub(crate) fn color_value(f: &Map<String, Value>) -> Option<Value> {
+    let rgb = f.get("color").and_then(parse_color)?;
+    if bounded_rgb(f) && rgb.iter().any(|v| !(0.0..=1.0).contains(v)) {
+        return None;
+    }
+    Some(if float_rgb(f) { json!(rgb) } else { json!(hex(rgb)) })
+}
+
+/// Compare colours rather than JSON spelling, including hex edits of a float picker.
+pub(crate) fn unchanged(f: &Map<String, Value>) -> bool {
+    f.get("color").and_then(parse_color).is_some_and(|rgb| f.get("__orig").and_then(parse_color) == Some(rgb))
+}
+
+/// Whether this destination uses float RGB rather than a bounded colour field.
+fn float_rgb(f: &Map<String, Value>) -> bool {
+    f.get("__floatRgb").and_then(Value::as_bool) == Some(true)
+}
+
+/// Gradient fill stops accept fractional RGB but their engine contract is bounded to SDR.
+fn bounded_rgb(f: &Map<String, Value>) -> bool {
+    f.get("__command").and_then(Value::as_str) == Some(photocraft_engine::gradient_fill_cmds::STOP)
+}
+
+/// Colour for an image-content field: float RGB in a float document, otherwise legacy hex.
+pub(crate) fn document_color(app: &PhotocraftApp, rgb: [f32; 3]) -> Value {
+    if app.session.active().is_some_and(|st| st.doc.depth == photocraft_color::SampleType::F32) && rgb.iter().all(|v| v.is_finite()) {
+        json!(rgb)
+    } else {
+        json!(hex(rgb))
+    }
+}
+
+/// Enable float state only for destinations with a matching float command contract.
+pub(crate) fn enable_float(app: &PhotocraftApp, f: &mut Map<String, Value>, rgb: [f32; 3]) {
+    if document_color(app, rgb).is_array() {
+        f.insert("__floatRgb".into(), json!(true));
+        set_rgb(f, rgb, Keep::Nothing);
+        f.insert("__orig".into(), f["color"].clone());
+    }
+}
+
 /// The colour at field position (x, y) in 0..1 (y down) for `mode` with the slider at `z` (0..1),
 /// given the current HSV/RGB (used for the components the field doesn't vary).
 pub fn field_color(mode: &str, z: f32, x: f32, y: f32) -> [f32; 3] {
@@ -132,7 +189,8 @@ fn slider_lab(mode: &str, z: f32, lab: [f32; 3]) -> Option<[f32; 3]> {
     }
 }
 
-fn c32(c: [f32; 3]) -> Color32 {
+/// SDR swatch projection, separate from the stored colour's precision and range.
+pub(crate) fn c32(c: [f32; 3]) -> Color32 {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color32::from_rgb(q(c[0]), q(c[1]), q(c[2]))
 }
@@ -143,6 +201,9 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> u64 {
     let rgb = [c[0], c[1], c[2]];
     let label = if target == "background" { "Color Picker (Background Color)" } else { "Color Picker (Foreground Color)" };
     let mut fields = fields_with_web(app, target, label, rgb);
+    if float_rgb(&fields) {
+        fields.insert("__alpha".into(), json!(c[3]));
+    }
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
     if let Some(cmyk) = app.session.tools.picked_cmyk(rgb) {
         fields.insert("__cmyk".into(), json!(cmyk));
@@ -169,6 +230,9 @@ pub(crate) fn initial_fields(target: &str, label: &str, rgb: [f32; 3]) -> Map<St
 pub(crate) fn fields_with_web(app: &PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Map<String, Value> {
     let mut f = initial_fields(target, label, rgb);
     f.insert("__webOnly".into(), json!(app.ui.color_panel.web_only));
+    if matches!(target, "foreground" | "background") {
+        enable_float(app, &mut f, rgb);
+    }
     if app.ui.color_panel.web_only {
         set_rgb(&mut f, rgb, Keep::Nothing);
         f.insert("__orig".into(), f["color"].clone());
@@ -177,10 +241,22 @@ pub(crate) fn fields_with_web(app: &PhotocraftApp, target: &str, label: &str, rg
 }
 
 /// Open the picker on `rgb` for something other than the tool colours: OK runs `command` with
-/// `params` plus `"color": "#rrggbb"` (e.g. a gradient stop's colour).
+/// `params` plus `color`: RGB floats for supported float-document targets, otherwise hex.
 pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], command: &str, params: Value) -> u64 {
     let mut f = fields_with_web(app, "command", label, rgb);
     f.insert("__command".into(), json!(command));
+    if matches!(
+        command,
+        "type.setStyle"
+            | "layer.fill.solidColor.set"
+            | "layer.newFillLayer.solidColor"
+            | "shape.edit"
+            | "layer.artboard.set"
+            | "count.setGroup"
+            | "gradient.fill.stop"
+    ) {
+        enable_float(app, &mut f, rgb);
+    }
     f.insert("__params".into(), params);
     // The document the picker was opened on: its live canvas preview never shows on another
     // (`color_picker_preview`).
@@ -191,9 +267,14 @@ pub fn open_for_command(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], com
 }
 
 /// Open the picker on `rgb` for a colour field of another dialog (e.g. Edit › Fill's Color…): OK
-/// writes `"#rrggbb"` into `field` of dialog `dialog`, which stays open; Cancel leaves it alone.
+/// writes the colour into `field` of dialog `dialog`, which stays open. Fill and Stroke support
+/// float RGB; other fields keep hex. Cancel leaves the parent alone.
 pub fn open_for_field(app: &mut PhotocraftApp, label: &str, rgb: [f32; 3], dialog: u64, field: &str) -> u64 {
     let mut f = fields_with_web(app, "field", label, rgb);
+    if field == "color" && app.ui.dialogs.iter().find(|d| d.id == dialog).is_some_and(|d| crate::fill_ui::owns(&d.fields) || crate::stroke_ui::owns(&d.fields))
+    {
+        enable_float(app, &mut f, rgb);
+    }
     f.insert("__dialog".into(), json!(dialog));
     f.insert("__field".into(), json!(field));
     app.ui.open_dialog(DialogKind::Command, f)
@@ -231,15 +312,15 @@ pub(crate) fn fixed_title(label: &str, name: &str) -> String {
     if crate::i18n::has(crate::i18n::current(), label) { tl!(label).to_string() } else { title_for(tl!(name)) }
 }
 
-/// The `"#rrggbb"` at `field` of `f` (a key or a JSON pointer).
-fn field_value<'a>(f: &'a Map<String, Value>, field: &str) -> Option<&'a str> {
+/// The colour at `field` of `f` (a key or a JSON pointer).
+fn field_value<'a>(f: &'a Map<String, Value>, field: &str) -> Option<&'a Value> {
     match field.strip_prefix('/') {
         Some(rest) => {
             let (first, tail) = rest.split_once('/').unwrap_or((rest, ""));
             let v = f.get(first)?;
-            if tail.is_empty() { v.as_str() } else { v.pointer(&format!("/{tail}"))?.as_str() }
+            if tail.is_empty() { Some(v) } else { v.pointer(&format!("/{tail}")) }
         }
-        None => f.get(field)?.as_str(),
+        None => f.get(field),
     }
 }
 
@@ -272,7 +353,7 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         }
         _ => return,
     };
-    let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let rgb = field_value(&d.fields, &field).and_then(parse_color).unwrap_or([0.0; 3]);
     open_for_field(app, &title, rgb, id, &field);
 }
 
@@ -285,7 +366,7 @@ pub fn reset(f: &mut Map<String, Value>) {
     if !owns(f) {
         return;
     }
-    let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let orig = f.get("__orig").and_then(parse_color).unwrap_or([0.0; 3]);
     set_rgb(f, orig, Keep::Nothing);
 }
 
@@ -328,31 +409,41 @@ where
     [f32; N]: serde::de::DeserializeOwned,
 {
     let v: [f32; N] = f.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())?;
-    (hex(to_rgb(v)) == hex(rgb)).then_some(v)
+    let converted = to_rgb(v).map(|c| c.clamp(0.0, 1.0));
+    let matches = if float_rgb(f) { converted == rgb } else { hex(converted) == hex(rgb) };
+    matches.then_some(v)
 }
 
 /// The CMYK values typed into the picker, while they still match its colour: the inks a command
 /// should keep in a CMYK document (#4196, #8568).
 pub(crate) fn picked_cmyk(f: &Map<String, Value>) -> Option<[f32; 4]> {
-    let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex)?;
+    let rgb = f.get("color").and_then(parse_color)?;
     kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb)
 }
 
 /// Current colour, keeping the stored HSB, Lab or CMYK values while they still match `color`.
 pub fn current(f: &Map<String, Value>) -> Components {
-    let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let rgb = f.get("color").and_then(parse_color).unwrap_or([0.0; 3]);
+    // The bounded HSB/Lab/CMYK controls and on-screen field show SDR. Merely drawing them
+    // must never clamp the authoritative RGB value.
+    let display = rgb.map(|c| c.clamp(0.0, 1.0));
     Components {
         rgb,
-        hsv: kept(f, "__hsv", rgb, hsb_to_rgb).unwrap_or_else(|| rgb_to_hsb(rgb)),
-        lab: kept(f, "__lab", rgb, photocraft_color::convert::lab_to_srgb).unwrap_or_else(|| photocraft_color::convert::srgb_to_lab(rgb)),
-        cmyk: kept(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(rgb)),
+        hsv: kept(f, "__hsv", rgb, hsb_to_rgb).unwrap_or_else(|| rgb_to_hsb(display)),
+        lab: kept(f, "__lab", rgb, photocraft_color::convert::lab_to_srgb).unwrap_or_else(|| photocraft_color::convert::srgb_to_lab(display)),
+        cmyk: kept(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb).unwrap_or_else(|| photocraft_color::convert::rgb_to_cmyk(display)),
     }
 }
 
+/// Store an explicit finite edit in the destination's representation, applying web-only snapping.
 fn set_rgb(f: &mut Map<String, Value>, rgb: [f32; 3], keep: Keep) {
+    if rgb.iter().any(|v| !v.is_finite()) {
+        return;
+    }
+    let rgb = if bounded_rgb(f) { rgb.map(|v| v.clamp(0.0, 1.0)) } else { rgb };
     let web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
     let (rgb, keep) = if web { (web_safe(rgb), Keep::Nothing) } else { (rgb, keep) };
-    f.insert("color".into(), json!(hex(rgb)));
+    f.insert("color".into(), if float_rgb(f) { json!(rgb) } else { json!(hex(rgb)) });
     for key in ["__hsv", "__lab", "__cmyk"] {
         f.remove(key);
     }
@@ -398,6 +489,48 @@ fn web_safe(c: [f32; 3]) -> [f32; 3] {
     c.map(|v| (v.clamp(0.0, 1.0) * 5.0).round() / 5.0)
 }
 
+/// Reuse each row's colour while preserving the smooth grid's interpolation topology.
+/// Web-safe rows are flat, so each can span the full strip without internal cells.
+fn strip_mesh(rect: Rect, web: bool, color: impl Fn(f32) -> [f32; 3]) -> Mesh {
+    let mut mesh = Mesh::default();
+    if web {
+        let n = WEB_CELLS;
+        let (cw, ch) = (rect.width() / n as f32, rect.height() / n as f32);
+        // Match the original first/last horizontal endpoint arithmetic.
+        let left = rect.left() + 0.0 * cw;
+        let right = rect.left() + (n - 1) as f32 * cw + cw;
+        for j in 0..n {
+            let c = c32(web_safe(color((j as f32 + 0.5) / n as f32)));
+            let y = rect.top() + j as f32 * ch;
+            let a = mesh.vertices.len() as u32;
+            for p in [pos2(left, y), pos2(right, y), pos2(right, y + ch), pos2(left, y + ch)] {
+                mesh.colored_vertex(p, c);
+            }
+            mesh.add_triangle(a, a + 1, a + 2);
+            mesh.add_triangle(a, a + 2, a + 3);
+        }
+    } else {
+        let n = 32;
+        for j in 0..=n {
+            let y = j as f32 / n as f32;
+            let c = c32(color(y));
+            for i in 0..=n {
+                let x = i as f32 / n as f32;
+                mesh.colored_vertex(pos2(rect.left() + x * rect.width(), rect.top() + y * rect.height()), c);
+            }
+        }
+        let w = (n + 1) as u32;
+        for j in 0..n as u32 {
+            for i in 0..n as u32 {
+                let a = j * w + i;
+                mesh.add_triangle(a, a + 1, a + w + 1);
+                mesh.add_triangle(a, a + w + 1, a + w);
+            }
+        }
+    }
+    mesh
+}
+
 /// Like [`grid_mesh`], but every cell is one flat colour sampled at its centre, so a quantized
 /// field shows hard bands instead of blending between the snapped corners.
 fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) -> Mesh {
@@ -419,24 +552,26 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
     m
 }
 
-/// Room for both component columns, including units, without overflowing the title's width; with
-/// the frame and title the window fits Photoshop's (about 534 x 376 points).
+/// Legacy component columns, including units; the framed window fits about 534 by 376 points.
 pub(crate) const CONTENT_WIDTH: f32 = 488.0;
-/// Translated action labels can be substantially wider than their English equivalents.
-pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
+/// Reserve the same width for the title and body, including float fields or translated actions.
+pub(crate) fn content_width(ui: &egui::Ui, fields: &Map<String, Value>) -> f32 {
     let labels = ["OK", "Cancel", "Add to Swatches"];
     let english = crate::i18n::with_language(crate::i18n::Lang::EN, || widgets::button_width(ui, &labels));
     let translated = widgets::button_width(ui, &labels.map(crate::i18n::t));
-    CONTENT_WIDTH + (translated - english).max(0.0)
+    let extra = if float_rgb(fields) { FLOAT_VALUE_W - VALUE_W } else { 0.0 };
+    CONTENT_WIDTH + (translated - english).max(extra)
 }
 /// Side of the colour field (Photoshop's is about 256 points).
 const FIELD: f32 = 200.0;
 /// Width of the component fields.
 const VALUE_W: f32 = 42.0;
+/// Room for decimal RGB components and their sign in a float picker.
+const FLOAT_VALUE_W: f32 = 76.0;
 
 /// Draw the picker and its top-right actions. `Some(true)` confirms, `Some(false)` cancels.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
-    ui.set_width(content_width(ui));
+    ui.set_width(content_width(ui, f));
     ui.spacing_mut().item_spacing.y = 4.0;
     let mut outcome = None;
     ui.horizontal_top(|ui| {
@@ -493,7 +628,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mode = f.get("__mode").and_then(Value::as_str).unwrap_or("h").to_string();
     let now = current(f);
     let (rgb, hsv, lab) = (now.rgb, now.hsv, now.lab);
-    let (fx, fy, fz) = locate(&mode, hsv, rgb, lab);
+    let (fx, fy, fz) = locate(&mode, hsv, rgb.map(|c| c.clamp(0.0, 1.0)), lab);
     // Colour field.
     let (field, resp) = ui.allocate_exact_size(vec2(FIELD, FIELD), Sense::click_and_drag());
     let web_only = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
@@ -522,7 +657,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     // Component slider (hue runs 360° at the top to 0° at the bottom, like Photoshop).
     let (strip, sresp) = ui.allocate_exact_size(vec2(18.0, FIELD), Sense::click_and_drag());
-    ui.painter().add(mesh(strip, &|_, y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
+    ui.painter().add(strip_mesh(strip, web_only, |y| slider_color(&mode, 1.0 - y, hsv, rgb, lab)));
     let sy = strip.top() + (1.0 - fz) * strip.height();
     for (x, dir) in [(strip.left() - 1.0, 1.0f32), (strip.right() + 1.0, -1.0)] {
         let tri = vec![pos2(x, sy), pos2(x - 6.0 * dir, sy - 4.0), pos2(x - 6.0 * dir, sy + 4.0)];
@@ -547,7 +682,7 @@ fn color_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let rgb = current(f).rgb;
-    let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
+    let orig = f.get("__orig").and_then(parse_color).unwrap_or(rgb);
     let (area, _) = ui.allocate_exact_size(vec2(56.0 + 24.0, 92.0), Sense::hover());
     // new / current swatches, labelled above and below.
     let sw = Rect::from_min_size(area.min + vec2(0.0, 16.0), vec2(56.0, 64.0));
@@ -628,9 +763,12 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
 }
 
 /// Component radios and numeric fields: HSB, RGB, Lab, CMYK and hex.
+/// RGB fields edit raw float components for float destinations; other models keep their units.
 fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Components) {
     let t = Tokens::get(ui.ctx());
     let &Components { rgb, hsv, lab, cmyk } = now;
+    let float = float_rgb(f);
+    let bounded = bounded_rgb(f);
     let mut edit: Option<([f32; 3], Keep)> = None;
     let mut new_mode: Option<&str> = None;
     ui.horizontal_top(|ui| {
@@ -647,15 +785,22 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         new_mode = Some(key);
                     }
                     ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
-                    let mut v = vals[i].round();
-                    if widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W).accessible_name(tl!(&label)).changed() {
+                    let float_channel = float && i >= 3;
+                    let mut v = if float_channel { rgb[i - 3] } else { vals[i].round() };
+                    let response = if float_channel {
+                        let range = if bounded { 0.0..=1.0 } else { f32::MIN..=f32::MAX };
+                        widgets::value_field_prec(ui, &mut v, range, "", FLOAT_VALUE_W, 7)
+                    } else {
+                        widgets::value_field(ui, &mut v, ranges[i].clone(), "", VALUE_W)
+                    };
+                    if response.accessible_name(tl!(&label)).changed() {
                         let (mut h, mut c) = (hsv, rgb);
                         if i < 3 {
                             h[i] = if i == 0 { v } else { v / 100.0 };
                             c = hsb_to_rgb(h);
                             edit = Some((c, Keep::Hsv(h)));
                         } else {
-                            c[i - 3] = v / 255.0;
+                            c[i - 3] = if float_channel { v } else { v / 255.0 };
                             edit = Some((c, Keep::Nothing));
                         }
                     }
@@ -772,7 +917,16 @@ fn take_hex_paste(ui: &egui::Ui) -> Option<[f32; 3]> {
 /// Add to Swatches was clicked: add the picked colour to the Swatches panel.
 pub fn take_add_swatch(app: &mut PhotocraftApp, f: &mut Map<String, Value>) {
     if f.remove("__addSwatch").and_then(|v| v.as_bool()) == Some(true) {
-        crate::swatches_ui::add_from_picker(app, f);
+        let Some(rgb) = f.get("color").and_then(parse_color) else {
+            app.ui.status = "not a finite picker colour".into();
+            app.ui.status_error = true;
+            return;
+        };
+        // The swatch library stores SDR colours. Pass that projection explicitly rather
+        // than letting its legacy string reader turn a float colour into black.
+        let mut swatch = f.clone();
+        swatch.insert("color".into(), json!(hex(rgb)));
+        crate::swatches_ui::add_from_picker(app, &swatch);
     }
 }
 
@@ -925,10 +1079,9 @@ pub fn widget_tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// OK: apply the colour to what the picker was opened for, and add it to the Recently Used
 /// Colors, as Photoshop does for a colour picked in the Color Picker.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let rgb = f.get("color").and_then(parse_color).ok_or("not a finite picker colour")?;
     let r = confirm_target(app, f)?;
-    if let Some(rgb) = f.get("color").and_then(Value::as_str).and_then(parse_hex) {
-        crate::paint_picker::remember(app, rgb);
-    }
+    crate::paint_picker::remember(app, rgb);
     Ok(r)
 }
 
@@ -950,11 +1103,13 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
         return crate::shape_fill_ui::confirm(app, f);
     }
     let target = f.get("__colorPicker").and_then(Value::as_str).unwrap_or("foreground");
-    let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
+    let value = color_value(f).ok_or("not a finite picker colour")?;
+    let rgb = f.get("color").and_then(parse_color).ok_or("not a finite picker colour")?;
+    let color = hex(rgb);
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
         let shown = crate::color_picker_preview::shown_for(app, f);
         let mut p = f.get("__params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-        p["color"] = json!(color);
+        p["color"] = value;
         let r = app.run(cmd, p)?;
         // The canvas already shows this edit (the live preview): refresh only what it changed.
         if let Some((doc, key)) = shown {
@@ -967,34 +1122,40 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
             return Err("the Color Picker has no field to set".into());
         };
         let d = app.ui.dialog_mut(dialog).ok_or("the dialog this colour was for is closed")?;
-        set_field(&mut d.fields, field, json!(color))?;
-        return Ok(json!({ "color": color }));
+        set_field(&mut d.fields, field, value.clone())?;
+        return Ok(json!({ "color": value }));
     }
     if target == "widget" {
         let widget = f.get("__widget").and_then(Value::as_u64).ok_or("the Color Picker has no swatch to set")?;
-        let rgb = parse_hex(color).ok_or("not a colour")?;
+        let rgb = parse_hex(&color).ok_or("not a colour")?;
         // OK on the colour it opened with leaves the swatch's own (possibly finer) value alone.
-        if f.get("color") != f.get("__orig") {
+        if !unchanged(f) {
             app.widget_colors.push((widget, rgb));
         }
         return Ok(json!({ "color": color }));
     }
     if target == "cropShield" {
-        crate::crop_shield::set_custom_color(app, color)?;
+        crate::crop_shield::set_custom_color(app, &color)?;
         return Ok(json!({ "color": color }));
     }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
-        app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;
+        app.ui.analysis.note_color = parse_hex(&color).ok_or("not a colour")?;
         return Ok(json!({ "color": color }));
     }
     if target == "pasteboard" {
         // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
         return app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}}));
     }
-    let mut params = json!({ target: color });
+    let tool_color = if float_rgb(f) {
+        let alpha = f.get("__alpha").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(1.0);
+        json!([rgb[0], rgb[1], rgb[2], alpha])
+    } else {
+        value
+    };
+    let mut params = json!({ target: tool_color });
     // The CMYK values the person entered stay the colour's inks: a CMYK document is filled with them (#4196).
-    if let Some(cmyk) = parse_hex(color).and_then(|rgb| kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb)) {
+    if let Some(cmyk) = picked_cmyk(f) {
         params[format!("{target}Cmyk")] = json!(cmyk);
     }
     let r = app.run("tools.setColors", params)?;
