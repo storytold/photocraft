@@ -175,6 +175,7 @@ fn preset_limit_keeps_the_draft_open_and_allows_retry_after_deletion() {
     for i in 0..64 {
         h.state_mut().run("plugin.preset.save", json!({"id":ID,"name":format!("Preset {i}"),"params":{"fine":13}})).unwrap();
     }
+    assert!(h.state_mut().run("plugin.preset.save", json!({"id":ID,"name":"Preset 64","params":{"fine":13}})).is_err());
     let presets = h.state().session.prefs().dialogs[&key].clone();
     h.get_by_label("New…").click();
     h.run_steps(12);
