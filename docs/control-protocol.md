@@ -496,12 +496,14 @@ a host page on the same origin that shows it in an `<iframe>`, uses the commands
 Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
 
-**Who can call it.** `window.photocraft` is on the page's own `window`, so only scripts that run in that
-page can call it: the page's own scripts, anything it includes, and the browser console. A page on another
-origin can't reach it, even one that frames PhotoCraft, because the browser doesn't let it read the frame's
-`window`; and PhotoCraft adds no `message` listener for it. A host that wants to drive a framed PhotoCraft
-serves it from its own origin. The scripts that can call it can already do anything the page can, so it
-adds no one who can control the app.
+**Who can call it.** `window.photocraft` is on the page's own `window`, so it can be called by scripts that
+run in that page (the page's own scripts, anything it includes, the browser console) and by a page on the
+same origin that holds this page's `window` (a parent that frames it, or the page that opened it). A page on
+another origin can't reach it, even one that frames PhotoCraft, because the browser doesn't let it read the
+frame's `window`; and PhotoCraft adds no `message` listener for it. So a host that wants to drive a framed
+PhotoCraft serves it from its own origin, and is then trusted with it; to keep a host out, serve PhotoCraft
+from another origin. The scripts that can call it can already do anything the page can, so it adds no one
+who can control the app.
 
 There is no token. The desktop server needs one because any local process can open its TCP port. In the
 page there is nothing outside it to keep out, and a token kept in the page could be read by the scripts it

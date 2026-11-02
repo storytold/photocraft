@@ -155,6 +155,9 @@ pub fn install() -> Result<(), JsValue> {
         .into_js_value(),
     )?;
     let w = web_sys::window().ok_or("no window")?;
-    js_sys::Reflect::set(&w, &"photocraft".into(), &obj)?;
+    // `false` when the page made `window.photocraft` read-only (or froze `window`) first.
+    if !js_sys::Reflect::set(&w, &"photocraft".into(), &obj)? {
+        return Err("window.photocraft is read-only".into());
+    }
     Ok(())
 }
