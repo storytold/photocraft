@@ -1006,3 +1006,42 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+#[test]
+fn task_tool_helpers_stay_below_their_roots() {
+    let (inside, outside, workspace) = roots("task-helpers");
+    std::fs::write(inside.join("b.png"), b"b").unwrap();
+    std::fs::write(inside.join("a.png"), b"aa").unwrap();
+    std::fs::create_dir(inside.join("sub")).unwrap();
+    std::fs::write(outside.join("secret.png"), b"secret").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.join("secret.png"), inside.join("link.png")).unwrap();
+
+    // Regular files only, sorted; a link out of the root and the subfolder are left out.
+    let (files, truncated) = workspace.list_read_dir(".", 10).unwrap();
+    assert_eq!(files, vec![("a.png".to_owned(), 2), ("b.png".to_owned(), 1)]);
+    assert!(!truncated);
+    assert_eq!(workspace.list_read_dir(inside.to_str().unwrap(), 10).unwrap().0.len(), 2, "the root's absolute spelling");
+    let (files, truncated) = workspace.list_read_dir(".", 1).unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(truncated);
+    for bad in ["..", "../outside", "sub/../..", outside.to_str().unwrap()] {
+        assert!(workspace.list_read_dir(bad, 10).is_err(), "{bad}");
+        assert!(workspace.create_write_dir(bad).is_err(), "{bad}");
+        assert!(workspace.write_target_exists(&format!("{bad}/x.png")).is_err(), "{bad}");
+    }
+
+    assert!(workspace.write_target_exists("a.png").unwrap());
+    assert!(!workspace.write_target_exists("missing.png").unwrap());
+    workspace.create_write_dir("deep/er/dir").unwrap();
+    assert!(inside.join("deep/er/dir").is_dir());
+    workspace.create_write_dir(".").unwrap();
+    workspace.create_write_dir(inside.to_str().unwrap()).unwrap();
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "nothing was created outside");
+
+    // No authority: everything fails closed.
+    let none = AuthorizedWorkspace::default();
+    assert!(none.list_read_dir(".", 10).is_err());
+    assert!(none.create_write_dir("x").is_err());
+    assert!(none.write_target_exists("x.png").is_err());
+}

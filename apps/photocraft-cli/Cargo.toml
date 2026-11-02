@@ -32,6 +32,8 @@ clap = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# PHOTOCRAFT_LOG=info|debug|…: MCP server logs on stderr (stdout carries the protocol).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
 # Synthetic camera raws (#7789).
