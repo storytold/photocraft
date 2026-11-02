@@ -1213,14 +1213,21 @@ fn parse_pointer_event(i: usize, e: &Value) -> std::result::Result<PointerSample
 
 /// Whether a modal tool, picker or context menu took the event instead of the canvas.
 fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
+    let up = matches!(s.ev, ToolEvent::Up { .. });
+    if up {
+        // A child dialog can receive the release after its parent started sampling.
+        for d in app.ui.dialogs.iter_mut().filter(|d| crate::dialogs::skin_smooth_ui::owns(&d.fields)) {
+            d.fields.remove("__pointerDown");
+        }
+    }
     if app.ui.dialogs.last().is_some_and(|d| crate::dialogs::skin_smooth_ui::owns(&d.fields)) {
         let down = matches!(s.ev, ToolEvent::Down { .. });
-        let up = matches!(s.ev, ToolEvent::Up { .. });
+        let guarded = g.space || g.secondary || g.middle;
         let held = app.ui.dialogs.last().and_then(|d| d.fields.get("__pointerDown")).and_then(Value::as_bool).unwrap_or(false);
         if let Some(d) = app.ui.dialogs.last_mut() {
-            d.fields.insert("__pointerDown".into(), json!(!up && (down || held)));
+            d.fields.insert("__pointerDown".into(), json!(!up && ((down && !guarded) || held)));
         }
-        if !up && (down || held) && !g.space && !g.secondary && !g.middle {
+        if !up && (down || held) && !guarded {
             crate::dialogs::skin_smooth_ui::pick(app, [s.x, s.y], g.mods);
         }
         return true;

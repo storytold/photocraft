@@ -242,6 +242,8 @@ fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
     assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical, "the focused duplicate replaced the main view's preview");
     assert!(!app.filter_preview_worker.busy(), "a different duplicate viewport queued redundant filtering");
     assert!(shown, "the duplicate lost the shared canonical preview");
+    let duplicate_filtered = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(896, 64);
+    assert_eq!(duplicate_filtered, filtered, "a disjoint duplicate view must show the filter result, not the original pixels");
     assert!(paint(&mut app, &main, egui::ViewportId::ROOT, true), "the main view lost its filter preview after drawing the duplicate");
     let window = egui::Id::unique("canvas-doc-window");
     ctx.data_mut(|data| data.insert_temp(window, viewport));
@@ -266,11 +268,12 @@ fn plugin_preview_review_regression_keeps_canonical_region_across_views() {
 
     app.ui.windows[0].open = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) {
+    while !paint(&mut app, &main, egui::ViewportId::ROOT, true) || app.filter_preview.as_ref().unwrap().key == floating {
         assert!(std::time::Instant::now() < deadline, "closing the floating window did not restore the main preview");
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    assert_eq!(app.filter_preview.as_ref().unwrap().key, canonical);
+    let restored = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().layer(layer).unwrap().surface().unwrap().pixel(128, 64);
+    assert_eq!(restored, filtered, "closing the floating window restores filtered pixels in the main view");
     assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc), "previewing never edits the document");
 }
 

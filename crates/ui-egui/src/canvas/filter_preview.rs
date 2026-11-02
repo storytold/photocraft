@@ -60,8 +60,12 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     }
     let st = app.session.documents().get(idx)?;
     let k = filter_preview_factor(app, &st.doc, &cmd, &params);
+    let extra_views = app.ui.windows.iter().filter(|w| w.open && w.document == idx);
+    // Duplicates share one preview: each may show a different part of the document.
+    let multiple_views = extra_views.clone().any(|w| !w.floating) || extra_views.count() > 1;
     // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
     if cmd == photocraft_engine::plugin_cmds::RUN
+        && !multiple_views
         && let Some(visible) = ctx.data(|data| data.get_temp::<photocraft_geom::Rect>(egui::Id::unique(("plugin-preview-region", st.doc.id))))
         && let Some(p) = params.as_object_mut()
     {

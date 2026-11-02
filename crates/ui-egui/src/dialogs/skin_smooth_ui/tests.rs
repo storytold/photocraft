@@ -155,6 +155,58 @@ fn control_pointer_review_regression_samples_held_moves() {
     assert!(!app.ui.dialogs[0].fields.contains_key("__pointerDown"), "a source change ends the control gesture");
 }
 
+/// Releasing under a child dialog ends the parent's gesture before it can sample later hover events.
+#[test]
+fn control_pointer_review_regression_releases_under_child_dialog() {
+    let mut app = app();
+    field(&mut app, "__skinTool", json!("add"));
+    let original = app.session.active().unwrap().doc.clone();
+    let ctx = egui::Context::default();
+    let send = |app: &mut PhotocraftApp, kind| {
+        let (request, _) = crate::control::ControlRequest::new("ui.pointer", json!({"events":[{"kind":kind,"x":2,"y":3}]}));
+        crate::control::handle(app, &ctx, &request);
+    };
+    send(&mut app, "down");
+    assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1, "the original press really sampled");
+    let child = app.ui.open_dialog(crate::state::DialogKind::About, Default::default());
+    send(&mut app, "up");
+    crate::dialogs::cancel(&mut app, child).unwrap();
+    field(&mut app, POSITIVE, json!([]));
+    send(&mut app, "move");
+    assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "release under a child left the parent sampling hover events");
+    assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+}
+
+/// Guarded downs cannot arm a later unguarded move, while a guarded move preserves an existing valid drag.
+#[test]
+fn control_pointer_review_regression_guarded_down_does_not_arm_moves() {
+    for guard in [json!({"button":"right"}), json!({"button":"middle"}), json!({"space":true})] {
+        let mut app = app();
+        field(&mut app, "__skinTool", json!("add"));
+        let original = app.session.active().unwrap().doc.clone();
+        let ctx = egui::Context::default();
+        let send = |app: &mut PhotocraftApp, mut params: Value, kind| {
+            params["events"] = json!([{"kind":kind,"x":2,"y":3}]);
+            let (request, _) = crate::control::ControlRequest::new("ui.pointer", params);
+            crate::control::handle(app, &ctx, &request);
+        };
+        send(&mut app, guard.clone(), "down");
+        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "the guarded down itself must not sample");
+        send(&mut app, json!({}), "move");
+        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty(), "{guard}: guarded down armed a later unguarded move");
+        send(&mut app, json!({}), "up");
+
+        send(&mut app, json!({}), "down");
+        field(&mut app, POSITIVE, json!([]));
+        send(&mut app, guard, "move");
+        assert!(colors(&app.ui.dialogs[0].fields, POSITIVE).is_empty());
+        send(&mut app, json!({}), "move");
+        assert_eq!(colors(&app.ui.dialogs[0].fields, POSITIVE).len(), 1, "a guarded move must not cancel a valid held drag");
+        send(&mut app, json!({}), "up");
+        assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    }
+}
+
 /// Supersedes a pending mask, retries the cancelled request and verifies dialog cancellation releases preview state.
 #[test]
 fn background_mask_discards_stale_samples_and_cancel_releases_it() {

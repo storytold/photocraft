@@ -1116,7 +1116,16 @@ pub(crate) fn can_recover_layers(file: &PsdFile) -> bool {
     import_format(file).1 && !file.layers().is_empty()
 }
 
-fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Document, layered: bool, multichannel: bool, warnings: &mut Vec<String>) -> bool {
+/// Reads the document-level metadata; the second value is the allocation failure that stopped a
+/// pattern from being read, which fails the open.
+fn read_initial_metadata(
+    file: &PsdFile,
+    global: &[PsdGlobalBlock],
+    doc: &mut Document,
+    layered: bool,
+    multichannel: bool,
+    warnings: &mut Vec<String>,
+) -> (bool, Option<String>) {
     let header = &file.header;
     for resource in &file.resources {
         match resource.id {
@@ -1174,7 +1183,11 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
             block.key_str()
         ));
     }
-    doc.patterns = crate::pattern_map::from_global_blocks(doc);
+    let mut alloc_error = None;
+    match crate::pattern_map::try_from_global_blocks(doc) {
+        Ok(patterns) => doc.patterns = patterns,
+        Err(error) => alloc_error = Some(format!("patterns: {error}")),
+    }
     warnings.extend(crate::pattern_map::unpaintable_warnings(&doc.patterns));
     doc.notes = crate::annotations_map::notes_from_blocks(doc);
     if crate::annotations_map::anno_unreadable(doc) {
@@ -1184,7 +1197,7 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
         doc.measurement.scale = scale;
     }
     let _ = layered;
-    damaged
+    (damaged, alloc_error)
 }
 
 /// [`psd_to_document_with`] with the merged image already decoded (by
@@ -1231,7 +1244,7 @@ fn psd_to_document_global(
         warnings.push(format!("unknown color mode {}; importing as RGB", h.color_mode.as_u16()));
     }
     let mut doc = Document::new("Untitled", Size::new(h.width, h.height), mode, depth);
-    let damaged = read_initial_metadata(file, &global, &mut doc, layered, multichannel, &mut warnings);
+    let (damaged, pattern_error) = read_initial_metadata(file, &global, &mut doc, layered, multichannel, &mut warnings);
 
     let fmt = doc.pixel_format();
     let cc = fmt.mode.color_channels();
@@ -1259,6 +1272,9 @@ fn psd_to_document_global(
         uniform: Default::default(),
         total: file.layers().len(),
     };
+    if let Some(error) = pattern_error {
+        cx.allocation_failed(error);
+    }
     for (_, key, data) in cx.global.clone().iter().filter(|(_, key, _)| matches!(key, b"FEid" | b"FXid")) {
         // Smart-filter caches can be large: a cancelled open stops between blocks.
         if ctl.cancelled() {
@@ -1348,7 +1364,9 @@ fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mu
 fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Vec<u8>>>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if let Some(Ok(all)) = merged {
         let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();
-        crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings);
+        if let Err(error) = crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings) {
+            cx.fatal_error.get_or_insert(error);
+        }
     }
     if !file.layers().is_empty() {
         cx.warn(format!("Multichannel documents have no layers: {} layer records were not imported", file.layers().len()));
