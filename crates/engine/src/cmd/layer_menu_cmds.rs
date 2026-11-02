@@ -316,6 +316,8 @@ fn remove_matte(s: &mut Session, white: bool) -> Result<Value> {
     })
 }
 
+/// Extracts the alpha channel of `surf` within bounds `r` into a GRAY8 surface,
+/// preserving default alpha for unallocated tiles intersecting `r`.
 fn decontamination_alpha(surf: &Surface, r: Rect) -> Surface {
     let mut alpha = Surface::new(photocraft_color::PixelFormat::GRAY8);
     let default_alpha = to_rgba(&surf.format(), &surf.default_pixel())[3].clamp(0.0, 1.0);

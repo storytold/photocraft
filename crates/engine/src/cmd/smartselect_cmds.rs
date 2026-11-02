@@ -99,6 +99,7 @@ fn points(p: &Value) -> Vec<(f32, f32)> {
 /// edges and removes blockiness.
 const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 15.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
 
+/// Expands a selection around sampled points using image gradients, optionally enhancing edges.
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = points(p);
     if pts.is_empty() {

@@ -367,10 +367,12 @@ struct Coverage {
 }
 
 impl Coverage {
+    /// Creates an empty coverage buffer with zero outside default.
     fn empty() -> Coverage {
         Coverage { values: Surface::new(PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32)), outside: 0.0 }
     }
 
+    /// Reads sparse mask coverage from `s` within `canvas`, preserving shared tile buffers.
     fn read(s: Option<&Surface>, canvas: Rect) -> Coverage {
         let Some(s) = s else { return Coverage::empty() };
         let outside = s.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
@@ -399,6 +401,7 @@ impl Coverage {
         out
     }
 
+    /// Computes the morphological edge band of `s` within `canvas` with radius `r`.
     fn edge_band(s: Option<&Surface>, canvas: Rect, r: usize) -> Coverage {
         let Some(s) = s else { return Coverage::empty() };
         let reach = i32::try_from(r).unwrap_or(i32::MAX).saturating_add(1);
@@ -431,10 +434,12 @@ impl Coverage {
         out
     }
 
+    /// Returns the coverage value at canvas coordinate `(x, y)`.
     fn at(&self, x: i32, y: i32) -> f32 {
         self.values.sample_channel(x, y, 0)
     }
 
+    /// Blends painted brush additions and restorations into the coverage buffer.
     fn with_brush(mut self, brush: Option<&photocraft_algo::matting::EdgeBrush>, canvas: Rect) -> Coverage {
         let Some(brush) = brush else { return self };
         for tc in brush.tile_coords() {
@@ -454,6 +459,7 @@ impl Coverage {
         self
     }
 
+    /// Converts float coverage to an 8-bit GRAY8 surface using mapping function `f`.
     fn surface(&self, f: impl Fn(f32) -> f32) -> Surface {
         let g = |v: f32| f(v).clamp(0.0, 1.0);
         let mut s = Surface::with_default(PixelFormat::GRAY8, &[g(self.outside)]);

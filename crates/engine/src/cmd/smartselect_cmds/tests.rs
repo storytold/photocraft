@@ -555,6 +555,7 @@ fn refine_edge_accepts_huge_sparse_and_solid_selections() {
     for coordinate in [100, 50_000, 99_990] {
         assert!(diagonal.sample_channel(coordinate, coordinate, 0) > 0.5, "diagonal stroke missing at {coordinate}");
     }
+    assert!(diagonal.sample_channel(100, 150, 0) < 0.01, "off-stroke pixel inside a touched tile was filled");
     s.execute("select.all", json!({})).unwrap();
     s.execute("select.refineEdge", json!({"radius": 4})).expect("solid refine");
     let all = s.active().and_then(|d| d.doc.selection.as_ref()).expect("selected");

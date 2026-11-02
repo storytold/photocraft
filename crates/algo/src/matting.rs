@@ -423,6 +423,7 @@ pub fn refine_mask_brushed(
     refine_mask_with(sampler, mask, content, canvas, p, brush)
 }
 
+/// Internal helper for dense refinement test oracles.
 #[cfg(test)]
 fn refine_mask_with(
     sampler: &dyn Sampler,
@@ -756,6 +757,7 @@ pub fn region_surface(reg: &Region) -> Surface {
     s
 }
 
+/// Partitions an area into fixed-size tile rectangles.
 #[cfg(test)]
 fn tiles_of(area: Rect) -> Vec<Rect> {
     let mut tiles = Vec::new();
@@ -771,6 +773,7 @@ fn tiles_of(area: Rect) -> Vec<Rect> {
     tiles
 }
 
+/// Maps a function over tile rectangles in parallel on native targets.
 #[cfg(test)]
 fn par_tiles<T: Send>(tiles: &[Rect], f: impl Fn(&Rect) -> Option<T> + Sync + Send) -> Vec<T> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1041,6 +1044,37 @@ mod tests {
         assert!(cancelled.load(Ordering::Relaxed), "guide must trigger cancellation");
         assert!(result.is_none(), "partial refinement must be discarded");
         assert_eq!(mask, before);
+
+        // Multi-batch cancellation: an earlier batch flushes and writes output, and a later
+        // guide sample triggers cancellation. The partial output must be discarded.
+        let multi_cancelled = AtomicBool::new(false);
+        let multi_cancel = || multi_cancelled.load(Ordering::Relaxed);
+        let multi_interrupt = photocraft_raster::Interrupt::cancel_only(&multi_cancel);
+        struct MultiBatchGuide<'a> {
+            cancelled: &'a AtomicBool,
+            samples: std::sync::atomic::AtomicUsize,
+            cancel_after: usize,
+        }
+        impl Sampler for MultiBatchGuide<'_> {
+            fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
+                let prev = self.samples.fetch_add(1, Ordering::SeqCst);
+                if prev >= self.cancel_after {
+                    self.cancelled.store(true, Ordering::Relaxed);
+                }
+                vec![[0.2, 0.4, 0.7, 1.0]; r.width() as usize * r.height() as usize]
+            }
+        }
+        // 32 mixed blocks along x exceed MAX_FILTER_BATCH (24), forcing at least one completed flush.
+        let multi_canvas = Rect::new(0, 0, 32 * 256, 256);
+        let mut multi_mask = Surface::new(PixelFormat::GRAY8);
+        multi_mask.fill_rect(Rect::new(0, 0, 32 * 256, 128), &[1.0]);
+        let multi_before = multi_mask.clone();
+        let multi_guide = MultiBatchGuide { cancelled: &multi_cancelled, samples: std::sync::atomic::AtomicUsize::new(0), cancel_after: 24 };
+        let multi_result = refine_surface_with_interrupt(&multi_guide, &multi_mask, multi_canvas, &params, None, &multi_interrupt).unwrap();
+        assert!(multi_cancelled.load(Ordering::Relaxed), "later guide call must trigger cancellation");
+        assert!(multi_guide.samples.load(Ordering::SeqCst) > 24, "cancellation must occur after the initial batch");
+        assert!(multi_result.is_none(), "partial output from completed flush must be discarded upon cancellation");
+        assert_eq!(multi_mask, multi_before);
     }
 
     #[test]
@@ -1085,6 +1119,7 @@ mod tests {
         let sampler = crate::segment::SurfaceSampler(&source);
         let mask = Surface::with_default(PixelFormat::GRAY8, &[1.0]);
         let output = refine_surface(&sampler, &mask, canvas, &RefineParams::default(), None).expect("allocation").expect("selected");
+        assert_eq!(output.sample_channel(0, 0, 0), 1.0);
         assert_eq!(output.sample_channel(99_999, 99_999, 0), 1.0);
         assert_eq!(output.sample_channel(100_000, 100_000, 0), 0.0);
         assert!(std::sync::Arc::ptr_eq(
