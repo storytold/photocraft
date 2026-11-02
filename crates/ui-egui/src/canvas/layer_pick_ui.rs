@@ -359,8 +359,14 @@ mod tests {
         let short = width(&h);
         // The same two layer ids at the same place, one of them renamed to something far longer.
         let long = "A layer with a decidedly long name".to_owned();
-        h.state_mut().ui.layer_menu = Some(LayerMenu { pos: at, layers: vec![(1, long), (2, "B".into())] });
+        h.state_mut().ui.layer_menu = Some(LayerMenu { pos: at, layers: vec![(1, long.clone()), (2, "B".into())] });
         h.run_steps(4);
         assert!(width(&h) > short + 20.0, "the menu widened for the longer name: {short} to {}", width(&h));
+        // CodeRabbit on #10498: as wide as the new name needs, laid out in the buttons' font with
+        // their padding, up to the menu's widest.
+        let style = h.ctx.style();
+        let text = h.ctx.fonts_mut(|f| f.layout_no_wrap(long, egui::TextStyle::Button.resolve(&style), Color32::WHITE).size().x);
+        let needed = (text + 2.0 * style.spacing.button_padding.x).min(360.0);
+        assert!(width(&h) >= needed, "{} wide for a name that needs {needed}", width(&h));
     }
 }
