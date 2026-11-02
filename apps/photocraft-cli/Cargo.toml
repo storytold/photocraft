@@ -10,6 +10,8 @@ build = "build.rs"
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
+# AVIF encode (forwarded to photocraft-codecs; see its `avif` feature).
+avif = ["photocraft-codecs/avif"]
 
 [lints]
 workspace = true

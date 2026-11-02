@@ -22,7 +22,7 @@
 //! - `methods`: this list.
 
 use std::io::{BufRead, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -347,7 +347,13 @@ fn serve_tcp_until_idle(
     ready: impl FnOnce(std::net::SocketAddr),
     idle: Duration,
 ) -> Result<(), AutomationError> {
-    let listener = TcpListener::bind(addr).map_err(|e| AutomationError::Io(format!("bind {addr}: {e}")))?;
+    // Resolve and check the address before binding, so a non-loopback socket is never opened,
+    // not even for the moment between `bind` and the check.
+    let resolved = addr.to_socket_addrs().map_err(|e| AutomationError::Io(format!("resolve {addr}: {e}")))?.collect::<Vec<_>>();
+    if resolved.is_empty() || !resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Err(bad(format!("{addr} is not a loopback address")));
+    }
+    let listener = TcpListener::bind(&resolved[..]).map_err(|e| AutomationError::Io(format!("bind {addr}: {e}")))?;
     let local = listener.local_addr().map_err(|e| AutomationError::Io(e.to_string()))?;
     if !local.ip().is_loopback() {
         return Err(bad(format!("{addr} is not a loopback address")));

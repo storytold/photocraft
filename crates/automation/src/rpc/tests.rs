@@ -902,6 +902,17 @@ fn tcp_serves_loopback() {
     assert!(v["result"].as_array().unwrap().iter().any(|m| m == "batch"));
 }
 
+/// #9361: the address is checked after resolution and before the bind, so a routable address
+/// is refused by the check itself (BadRequest) rather than by the bind failing (or, where the
+/// OS would allow it, briefly succeeding on every interface).
+#[test]
+fn tcp_refuses_a_non_loopback_address_before_binding() {
+    let h = Arc::new(Mutex::new(Headless::new()));
+    let err = serve_tcp("8.8.8.8:0", h, "0".repeat(64), |_| {}).unwrap_err();
+    assert!(matches!(err, AutomationError::BadRequest(_)), "{err:?}");
+    assert!(err.to_string().contains("loopback"), "{err}");
+}
+
 /// #4965: a connection that keeps sending without authenticating is closed at the deadline,
 /// and one that authenticated in time keeps being served after it.
 #[test]
