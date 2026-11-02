@@ -652,3 +652,25 @@ fn blur_halos_follow_the_clamped_radius_and_never_overflow() {
     let gaussian = FilterParams::GaussianBlur { radius: f32::INFINITY };
     assert_eq!(gaussian.halo(), Halo::Radius(i32::MAX));
 }
+
+/// Radial Blur reads past the frame as its edge pixels, as Photoshop does (#10542): a Spin arc
+/// leaves the canvas near the corners, and an opaque layer stays opaque there instead of fading.
+/// Photoshop 2025, Spin 10 on an opaque 200 × 200 layer: every pixel keeps full alpha.
+#[test]
+fn radial_spin_keeps_an_opaque_layer_opaque_at_the_corners() {
+    let b = Rect::new(0, 0, 64, 64);
+    let mut src = crate::image::Image::new(b, 4);
+    for px in src.data.as_chunks_mut::<4>().0 {
+        px.copy_from_slice(&[0.8, 0.5, 0.2, 1.0]);
+    }
+    let ctx = Ctx { bounds: b, mode: photocraft_color::ColorMode::Rgb, alpha: true };
+    for method in [RadialMethod::Spin, RadialMethod::Zoom] {
+        let params = FilterParams::RadialBlur { amount: 10.0, method, quality: RadialQuality::Good, center_x: 0.5, center_y: 0.5 };
+        let out = kernel(&params, &src, b, &ctx);
+        for (i, px) in out.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = (i % 64, i / 64);
+            assert!((px[3] - 1.0).abs() < 1e-5, "{method:?} at ({x}, {y}): alpha {}", px[3]);
+            assert!((px[0] - 0.8).abs() < 1e-5, "{method:?} at ({x}, {y}): red {}", px[0]);
+        }
+    }
+}

@@ -391,7 +391,10 @@ pub(crate) fn boxed(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> 
     }
 }
 
-fn average_samples(src: &Image, out: Rect, ctx: &Ctx, offsets: impl Fn(f32, f32, &mut Vec<(f32, f32)>) + Sync) -> Vec<f32> {
+/// The mean of `src` at the points `offsets` gives for each output pixel. A point past `area`
+/// reads as `edge` says (Radial Blur repeats its frame's edge pixels; the motion reference reads
+/// transparency past the source).
+fn average_samples(src: &Image, out: Rect, ctx: &Ctx, (edge, area): (Edge, Rect), offsets: impl Fn(f32, f32, &mut Vec<(f32, f32)>) + Sync) -> Vec<f32> {
     let n = src.ch;
     let (ow, oh) = (out.width() as usize, out.height() as usize);
     let mut res = vec![0.0; ow * oh * n];
@@ -410,7 +413,7 @@ fn average_samples(src: &Image, out: Rect, ctx: &Ctx, offsets: impl Fn(f32, f32,
                 *a = 0.0;
             }
             for &(sx, sy) in &pts {
-                src.sample(sx, sy, Edge::Transparent, src.rect, ctx.alpha, &mut tmp);
+                src.sample(sx, sy, edge, area, ctx.alpha, &mut tmp);
                 // Accumulate premultiplied.
                 let a = if ctx.alpha { tmp[n - 1] } else { 1.0 };
                 for c in 0..n {
@@ -538,7 +541,10 @@ pub(crate) fn radial(src: &Image, out: Rect, ctx: &Ctx, amount: f32, method: Rad
     let b = ctx.bounds;
     let (cx, cy) = (b.x0 as f32 + b.width() as f32 * center.0, b.y0 as f32 + b.height() as f32 * center.1);
     let amount = amount.clamp(0.0, 100.0);
-    average_samples(src, out, ctx, |x, y, pts| {
+    // Samples past the frame repeat its edge pixels, as Photoshop's do: a Spin arc leaves the
+    // canvas near its corners, and reading transparency there faded an opaque layer's corners
+    // (#10542).
+    average_samples(src, out, ctx, (Edge::Repeat, ctx.bounds), |x, y, pts| {
         let (dx, dy) = (x - cx, y - cy);
         let r = (dx * dx + dy * dy).sqrt();
         match method {
