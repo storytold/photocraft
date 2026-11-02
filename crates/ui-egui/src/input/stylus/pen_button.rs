@@ -7,11 +7,18 @@ use egui::{Context, Event, PointerButton, Pos2, RawInput};
 pub(crate) struct PenButton {
     down: bool,
     suppressed_contact: bool,
+    /// A native secondary event means the driver already handled this barrel press. Its service
+    /// can lag behind that event, so do not reinterpret later primary input until it reports up.
+    wait_for_barrel_up: bool,
     position: Option<Pos2>,
 }
 
 impl PenButton {
     pub fn normalize(&mut self, ctx: &Context, raw: &mut RawInput, barrel_down: bool) {
+        if !barrel_down {
+            self.wait_for_barrel_up = false;
+        }
+        let active_barrel = barrel_down && !self.wait_for_barrel_up;
         let (primary_down, secondary_down, hover) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down(), i.pointer.hover_pos()));
         self.position = hover.or(self.position);
         let mut modifiers = ctx.input(|i| i.modifiers);
@@ -35,7 +42,7 @@ impl PenButton {
                 }
                 if *button == PointerButton::Primary {
                     if *pressed {
-                        self.suppressed_contact = barrel_down || self.down;
+                        self.suppressed_contact = active_barrel || self.down;
                     }
                     let suppress = self.suppressed_contact;
                     if !*pressed {
@@ -48,9 +55,10 @@ impl PenButton {
         });
         // Drivers which already deliver right-clicks need no additional events. Do not
         // interrupt a primary stroke which began before the barrel button was pressed.
-        let down = barrel_down && !lost && (!primary_down || self.suppressed_contact || self.down);
+        let down = active_barrel && !lost && (!primary_down || self.suppressed_contact || self.down);
         if native_secondary {
             self.down = false;
+            self.wait_for_barrel_up = barrel_down;
         } else if down != self.down
             && (!down || !secondary_down)
             && let Some(pos) = self.position
@@ -117,6 +125,29 @@ mod tests {
             pen.normalize(&ctx, &mut raw, down);
             assert_eq!(raw.events, expected);
         }
+    }
+
+    #[test]
+    fn stale_barrel_state_after_native_secondary_does_not_swallow_a_left_click() {
+        let ctx = Context::default();
+        let mut pen = PenButton::default();
+        let native = vec![button(PointerButton::Secondary, true), button(PointerButton::Secondary, false)];
+        let mut raw = RawInput { events: native.clone(), ..Default::default() };
+        pen.normalize(&ctx, &mut raw, true);
+        assert_eq!(raw.events, native, "the driver's own right click is untouched");
+
+        // The Windows service may still report the old barrel state for another frame. A genuine
+        // tip/left click in that frame must remain primary, not disappear or become secondary.
+        let primary = vec![button(PointerButton::Primary, true), button(PointerButton::Primary, false)];
+        let mut raw = RawInput { events: primary.clone(), ..Default::default() };
+        pen.normalize(&ctx, &mut raw, true);
+        assert_eq!(raw.events, primary);
+
+        // Once the service catches up, the next barrel press is eligible for normalization again.
+        pen.normalize(&ctx, &mut RawInput::default(), false);
+        let mut raw = RawInput { events: vec![Event::PointerMoved(pos2(50.0, 50.0))], ..Default::default() };
+        pen.normalize(&ctx, &mut raw, true);
+        assert!(matches!(raw.events.last(), Some(Event::PointerButton { button: PointerButton::Secondary, pressed: true, .. })));
     }
 
     #[test]
