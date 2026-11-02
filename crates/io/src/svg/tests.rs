@@ -682,7 +682,7 @@ fn missing_svg_font_uses_an_available_generic_instead_of_dropping_text() {
 
 #[test]
 fn resolve_data_rejects_oversized_and_malformed_embedded_png_and_webp() {
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
+    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, Default::default());
     let resolve = &opt.image_href_resolver.resolve_data;
     let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, vec![255; 12]).unwrap();
     let valid_png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
@@ -714,7 +714,7 @@ fn jpeg_dimensions_come_from_the_frame_header_and_oversized_jpegs_are_refused() 
     assert_eq!(jpeg_dimensions(&jpeg(40_000, 30_000)), Some((30_000, 40_000)));
     assert_eq!(jpeg_dimensions(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]), None);
     assert_eq!(jpeg_dimensions(&[0xFF, 0xD8]), None);
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
+    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, Default::default());
     let resolve = &opt.image_href_resolver.resolve_data;
     // 1.2 billion pixels would be 4.8 GB of RGBA before resvg scaled anything down.
     assert!(resolve("image/jpeg", Arc::new(jpeg(40_000, 30_000)), &opt).is_none());
@@ -729,7 +729,7 @@ fn resolve_data_rejects_nested_gzip_and_handles_text_plain_svgz() {
         e.write_all(bytes).unwrap();
         e.finish().unwrap()
     }
-    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
+    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH, Default::default());
     let resolve = &opt.image_href_resolver.resolve_data;
     let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\"/></svg>";
     let once = gz(svg);

@@ -289,7 +289,7 @@ fn font_resolver() -> usvg::FontResolver<'static> {
 /// `~/.ssh/...`) into the document. Embedded SVG images get no `<image>` resolution at all
 /// (`usvg` already blanks it for sub-SVGs). An embedded SVG may nest `depth_left` levels: it is
 /// parsed on top of the drawing's own recursion, so the two depths share [`MAX_XML_DEPTH`].
-fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
+fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize, warnings: Arc<Mutex<Vec<String>>>) -> usvg::Options<'static> {
     let default_resolver = usvg::ImageHrefResolver::default_data_resolver();
     let resolve_data: usvg::ImageHrefDataResolverFn<'static> = Box::new(move |mime, data, opts| {
         // Reject embedded images whose decoded RGBA storage would exceed the budget before
@@ -318,6 +318,10 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Opti
                 _ => return None,
             };
             if nesting_depth(&xml, depth_left) > depth_left {
+                let mut warnings = warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if warnings.is_empty() {
+                    warnings.push("SVG: an embedded SVG image exceeded the shared nesting limit and was omitted".into());
+                }
                 return None;
             }
             return default_resolver(mime, xml, opts);
@@ -337,6 +341,8 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Opti
 #[derive(Debug)]
 struct Parsed {
     tree: usvg::Tree,
+    /// Input discarded by a resolver must stay visible in the imported document's warnings.
+    warnings: Vec<String>,
     /// The drawing has text but no font at all was available to shape it. `usvg` then drops the
     /// text while parsing, before any node reaches the conversion, so this is the only place
     /// that knows why the text is missing.
@@ -361,13 +367,15 @@ fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Resul
     let has_text = xml.windows(4).any(|w| w == b"text");
     let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
     let fontless_text = has_text && fontdb.faces().next().is_none();
-    let opt = options(fontdb, MAX_XML_DEPTH.saturating_sub(depth));
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let opt = options(fontdb, MAX_XML_DEPTH.saturating_sub(depth), warnings.clone());
     // Parse the already-bounded-and-decoded text with from_str, not from_data: from_data
     // re-checks the gzip magic and would decompress a second time without our size limit if
     // the inflated content happened to start with a nested gzip stream.
     let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
     let tree = usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Svg(e.to_string()))?;
-    Ok(Parsed { tree, fontless_text })
+    let warnings = std::mem::take(&mut *warnings.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    Ok(Parsed { tree, warnings, fontless_text })
 }
 
 const MAX_BOUNDED_SVG_BYTES: u64 = 16 << 20;
@@ -385,6 +393,7 @@ struct ImageBudget {
     repeatable_raster: bool,
     repeatable_svg: bool,
     fontless_text: bool,
+    warnings: Vec<String>,
     /// An embedded image that can't be read fails the drawing instead of being left out. A
     /// stored display preview must draw completely, or it isn't used.
     strict: bool,
@@ -393,8 +402,11 @@ struct ImageBudget {
 
 /// Leave out an embedded image that can't be read, or with a strict budget record `error`.
 fn unreadable_image(budget: &Mutex<ImageBudget>, error: &str) -> Option<usvg::ImageKind> {
-    if budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).strict {
-        image_error(budget, error);
+    let mut budget = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if budget.strict {
+        budget.error.get_or_insert_with(|| error.to_owned());
+    } else if budget.warnings.is_empty() {
+        budget.warnings.push(format!("SVG: an embedded image was omitted: {error}"));
     }
     None
 }
@@ -616,7 +628,7 @@ fn parse_image_bounded_with(
         budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner).fontless_text = true;
     }
     // The resolver below replaces `options`' own, so its embedded-SVG depth argument is unused.
-    let mut opt = options(fontdb, 0);
+    let mut opt = options(fontdb, 0, Default::default());
     let shared = budget.clone();
     let image_xml_left = xml_left.saturating_sub(nesting);
     opt.image_href_resolver.resolve_data = Box::new(move |mime, data, options| bounded_data_image(mime, data, options, &shared, depth, image_xml_left));
@@ -738,6 +750,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
         repeatable_raster: false,
         repeatable_svg: false,
         fontless_text: false,
+        warnings: Vec::new(),
         strict,
         error: None,
     }));
@@ -745,7 +758,7 @@ fn parse_bounded_work_with(bytes: &[u8], max_pixels: u64, strict: bool, fonts: f
     let counter = budget.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let decoded = max_pixels.min(MAX_RASTER_PIXELS).saturating_sub(counter.pixels);
     Ok(ParsedWork {
-        parsed: Parsed { tree, fontless_text: counter.fontless_text },
+        parsed: Parsed { tree, warnings: counter.warnings.clone(), fontless_text: counter.fontless_text },
         svg_images: counter.svg_images,
         svg_chain: counter.svg_chain,
         decoded,
@@ -1002,8 +1015,7 @@ fn import_parsed_with_limits(
     reject_cache_overflow: bool,
     pixel_budget: u64,
 ) -> Result<ImportResult, IoError> {
-    let Parsed { tree, fontless_text } = parsed;
-    let mut warnings = Vec::new();
+    let Parsed { tree, fontless_text, mut warnings } = parsed;
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
     }

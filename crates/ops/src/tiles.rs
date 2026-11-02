@@ -71,6 +71,9 @@ pub(crate) fn blocks(doc: &Document, mut visit: impl FnMut(usize, usize)) {
             visit(Arc::as_ptr(profile) as usize, profile.len());
         }
         for frame in &sprite.frames {
+            if frame.metadata.capacity() != 0 {
+                visit(frame.metadata.as_ptr() as usize, frame.metadata.capacity().saturating_mul(std::mem::size_of::<photocraft_doc::sprite::SpriteChunk>()));
+            }
             let palette_bytes = frame
                 .palette
                 .iter()

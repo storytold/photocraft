@@ -9,6 +9,7 @@ use photocraft_doc::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Require cel animation and an editable sample depth/color model before exposing sprite edits.
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let doc = &s.active().ok_or("no document open")?.doc;
     if doc.sprite.is_none() {
@@ -22,6 +23,7 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// Apply inherited Lock All checks in addition to the sprite capability check.
 fn cel_enabled(s: &Session) -> std::result::Result<(), String> {
     enabled(s)?;
     let state = s.active().ok_or("no document open")?;
@@ -29,6 +31,7 @@ fn cel_enabled(s: &Session) -> std::result::Result<(), String> {
     crate::commands::check_all_unlocked(&state.doc, id).map_err(|e| e.to_string())
 }
 
+/// Require unlocked ancestors while allowing explicit rasterization to remove the tilemap's own lock.
 fn check_tilemap_parent(doc: &photocraft_doc::Document, id: LayerId) -> Result<()> {
     let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
     let parents = path.get(..path.len().saturating_sub(1)).ok_or_else(|| bad("layer path is missing"))?;
@@ -38,6 +41,7 @@ fn check_tilemap_parent(doc: &photocraft_doc::Document, id: LayerId) -> Result<(
     Ok(())
 }
 
+/// Enable rasterization only for a retained tilemap with editable parent groups.
 fn tilemap_enabled(s: &Session) -> std::result::Result<(), String> {
     enabled(s)?;
     let state = s.active().ok_or("no document open")?;
@@ -50,9 +54,11 @@ fn tilemap_enabled(s: &Session) -> std::result::Result<(), String> {
 fn bad(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "sprite".into(), msg: message.into() }
 }
+/// Reject missing, negative, fractional and out-of-range command integers before conversion.
 fn integer(p: &Value, key: &str, max: u64) -> Result<u64> {
     p.get(key).and_then(Value::as_u64).filter(|n| *n <= max).ok_or_else(|| bad(format!("`{key}` must be an integer from 0 to {max}")))
 }
+/// Capture pending raster edits and validate one sprite mutation inside a single undo transaction.
 fn mutate(s: &mut Session, label: &str, f: impl FnOnce(&mut Sprite) -> Result<()>) -> Result<Value> {
     s.edit(label, |doc, _| {
         doc.capture_sprite_frame().map_err(EngineError::Other)?;
@@ -70,6 +76,7 @@ fn mutate(s: &mut Session, label: &str, f: impl FnOnce(&mut Sprite) -> Result<()
     info(s)
 }
 
+/// Describe exact frame timing, palette and tag state without adding history.
 fn info(s: &Session) -> Result<Value> {
     let sprite = s.active().and_then(|d| d.doc.sprite.as_ref()).ok_or_else(|| bad("no cel animation"))?;
     Ok(json!({"frames":sprite.frames.len(),"current":sprite.current,"indexed":sprite.indexed,
@@ -78,6 +85,7 @@ fn info(s: &Session) -> Result<Value> {
         "palette":sprite.frames.get(sprite.current).map(|f|f.palette.as_ref())}))
 }
 
+/// Set one validated frame delay, defaulting to the selected frame.
 fn duration(s: &mut Session, p: &Value) -> Result<Value> {
     let duration = integer(p, "durationMs", 65535)? as u16;
     mutate(s, "Frame Delay", |sprite| {
@@ -87,6 +95,7 @@ fn duration(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Edit a palette entry and rebuild indexed display caches without changing stored index identity.
 fn palette(s: &mut Session, p: &Value) -> Result<Value> {
     let index = integer(p, "index", 255)? as usize;
     let rgba = p.get("rgba").and_then(Value::as_array).filter(|a| a.len() == 4).ok_or_else(|| bad("need rgba:[r,g,b,a] with 4 bytes"))?;
@@ -124,6 +133,7 @@ fn palette(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Edit bounded cel properties while honoring inherited position and edit locks.
 fn cel(s: &mut Session, p: &Value) -> Result<Value> {
     let layer = LayerId(integer(p, "layer", u64::MAX)?);
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
@@ -172,6 +182,7 @@ fn cel(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Make the selected cel independent without changing its current appearance.
 fn unlink(s: &mut Session, p: &Value) -> Result<Value> {
     let id = LayerId(integer(p, "layer", u64::MAX)?);
     crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
@@ -182,6 +193,7 @@ fn unlink(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Replace validated tag definitions unless retained user properties depend on their original order.
 fn tags(s: &mut Session, p: &Value) -> Result<Value> {
     let value = p.get("tags").ok_or_else(|| bad("need tags:[{name,from,to,direction,repeat,color}]"))?;
     if !value.as_array().is_some_and(|v| v.len() <= 65535) {
@@ -200,12 +212,13 @@ fn tags(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Insert an independent cel frame, shifting links/tags only when retained slice keys permit it.
 fn duplicate(s: &mut Session) -> Result<Value> {
     mutate(s, "Duplicate Cel Frame", |sprite| {
         if sprite.frames.len() >= photocraft_doc::sprite::MAX_FRAMES {
             return Err(bad("frame limit reached"));
         }
-        if sprite.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022)) {
+        if sprite.has_slices() {
             return Err(bad("slices have frame keys; remove slices from a copy before inserting frames"));
         }
         let at = sprite.current + 1;
@@ -238,13 +251,14 @@ fn duplicate(s: &mut Session) -> Result<Value> {
     })
 }
 
+/// Remove a frame and repair links/ranges without discarding frame-keyed metadata silently.
 fn remove_frame(s: &mut Session) -> Result<Value> {
     mutate(s, "Delete Cel Frame", |sprite| {
         use photocraft_doc::sprite::MetadataTarget;
         if sprite.frames.len() <= 1 {
             return Err(bad("a sprite must keep at least one frame"));
         }
-        if sprite.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022 || c.target == MetadataTarget::Tags)) {
+        if sprite.has_slices() || sprite.frames.iter().any(|f| f.metadata.iter().any(|c| c.target == MetadataTarget::Tags)) {
             return Err(bad("slice keys or tag properties depend on frame ranges; remove that metadata from a copy before deleting frames"));
         }
         let at = sprite.current;
@@ -296,6 +310,7 @@ fn detach(s: &mut Session) -> Result<Value> {
     Ok(json!({"sprite":null,"keptSelectedFrame":true}))
 }
 
+/// Replace the requested layer's retained map records with editable raster cels.
 fn rasterize_tilemap(s: &mut Session, p: &Value) -> Result<Value> {
     let id = LayerId(integer(p, "layer", u64::MAX)?);
     s.edit("Rasterize Tilemap", |doc, _| {
@@ -325,6 +340,7 @@ macro_rules! spec {
         CommandSpec { id: $id, label: $label, menu: &[], shortcut: None, params: $params, enabled, journal: true, run: $run }
     };
 }
+/// Register sprite queries and edits for the shared UI, CLI and control command registry.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

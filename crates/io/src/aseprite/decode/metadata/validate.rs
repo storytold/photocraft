@@ -3,6 +3,7 @@
 
 use super::{Reader, Result, invalid};
 
+/// Validate retained record structure before it enters native storage or a later export.
 pub(in crate::aseprite) fn validate(kind: u16, data: &[u8]) -> Result<()> {
     let mut r = Reader::new(data);
     match kind {
@@ -84,6 +85,7 @@ pub(in crate::aseprite) fn validate(kind: u16, data: &[u8]) -> Result<()> {
     r.end()
 }
 
+/// Bound typed-property counts and recursion while validating each declared value.
 fn properties(r: &mut Reader<'_>, depth: usize, budget: &mut usize) -> Result<()> {
     if depth > 128 {
         return Err(invalid("nested user properties exceed 128 levels"));
@@ -98,6 +100,7 @@ fn properties(r: &mut Reader<'_>, depth: usize, budget: &mut usize) -> Result<()
     Ok(())
 }
 
+/// Consume one supported typed value with checked lengths and a shared nesting/entry budget.
 fn value(r: &mut Reader<'_>, kind: u16, depth: usize, budget: &mut usize) -> Result<()> {
     if depth > 128 {
         return Err(invalid("nested user properties exceed 128 levels"));

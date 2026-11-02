@@ -4,6 +4,7 @@
 use super::{SpriteCel, pixels};
 use crate::{Rect, Surface};
 
+/// Render precise fixed-point reference bounds into a bounded nearest-neighbor display cache.
 pub(super) fn projection(cel: &SpriteCel) -> Result<Surface, String> {
     let Some([x, y, w, h]) = cel.precise else { return Ok(cel.pixels.clone()) };
     if w <= 0 || h <= 0 {

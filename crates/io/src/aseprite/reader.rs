@@ -18,11 +18,13 @@ impl<'a> Reader<'a> {
     pub(super) fn remaining(&self) -> usize {
         self.bytes.len()
     }
+    /// Advance within the current record only when its complete declared byte range is present.
     pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let data = self.bytes.get(..n).ok_or_else(|| invalid("truncated record"))?;
         self.bytes = self.bytes.get(n..).ok_or_else(|| invalid("truncated record"))?;
         Ok(data)
     }
+    /// Read one bounded byte, returning a format error on truncated input.
     pub(super) fn u8(&mut self) -> Result<u8> {
         self.take(1)?.first().copied().ok_or_else(|| invalid("truncated byte"))
     }
@@ -39,11 +41,13 @@ impl<'a> Reader<'a> {
         let len = usize::from(self.u16()?);
         std::str::from_utf8(self.take(len)?).map(str::to_string).map_err(|_| invalid("layer name is not UTF-8"))
     }
+    /// Reject unconsumed bytes when the record has a fixed supported layout.
     pub(super) fn end(&self) -> Result<()> {
         if self.bytes.is_empty() { Ok(()) } else { Err(invalid("unexpected trailing record data")) }
     }
 }
 
+/// Decode bounded raw/zlib cel rows into a surface without allocating a second full image.
 pub(super) fn pixels(r: &mut Reader<'_>, compressed: bool, rect: Rect, surface: &mut Surface, ctl: &Interrupt<'_>) -> Result<()> {
     let data = r.take(r.remaining())?;
     if compressed {
@@ -66,6 +70,7 @@ pub(super) fn pixels(r: &mut Reader<'_>, compressed: bool, rect: Rect, surface: 
     Ok(())
 }
 
+/// Write exact-sized pixel rows with cancellation between rows and format-consistent samples.
 fn rows(input: &mut impl Read, rect: Rect, surface: &mut Surface, ctl: &Interrupt<'_>) -> Result<()> {
     let mut row = vec![0; rect.width() as usize * surface.format().bytes_per_pixel()];
     for y in rect.y0..if rect.is_empty() { rect.y0 } else { rect.y1 } {

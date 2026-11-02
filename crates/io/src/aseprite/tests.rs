@@ -12,6 +12,7 @@ fn chunk(kind: u16, data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Build a synthetic file header and frame packet with declared sizes derived from its chunks.
 fn sprite(depth: u16, flags: u32, chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut h = vec![0; 128];
     h[4..6].copy_from_slice(&0xa5e0u16.to_le_bytes());
@@ -34,6 +35,7 @@ fn sprite(depth: u16, flags: u32, chunks: &[Vec<u8>]) -> Vec<u8> {
     h
 }
 
+/// Build a minimal layer record with independently controllable format flags.
 fn layer(name: &str, kind: u16, level: u16, flags: u16, blend: u16, opacity: u8) -> Vec<u8> {
     let mut b = Vec::new();
     for n in [flags, kind, level, 0, 0, blend] {
@@ -45,6 +47,7 @@ fn layer(name: &str, kind: u16, level: u16, flags: u16, blend: u16, opacity: u8)
     chunk(0x2004, &b)
 }
 
+/// Build raw/compressed source cels with known offsets and byte samples.
 fn cel(index: u16, size: [u16; 2], at: [i16; 2], opacity: u8, data: &[u8], compressed: bool) -> Vec<u8> {
     let mut b = index.to_le_bytes().to_vec();
     for n in at {
@@ -64,6 +67,7 @@ fn read(bytes: &[u8]) -> Result<ImportResult> {
     crate::import("t.aseprite", bytes)
 }
 
+/// Sniffing must validate a plausible header/frame before routing an ambiguous extension as a document.
 #[test]
 fn document_detection_requires_a_plausible_header_and_frame_not_just_two_magic_bytes() {
     let good = include_bytes!("../../tests/fixtures/aseprite/layers.aseprite");
@@ -77,6 +81,7 @@ fn document_detection_requires_a_plausible_header_and_frame_not_just_two_magic_b
     }
 }
 
+/// Raw/zlib imports preserve hidden samples, cel geometry and independent layer properties.
 #[test]
 fn raw_and_compressed_gray_and_rgba_keep_hidden_colors_offsets_opacity_and_locks() {
     for gray in [false, true] {
@@ -96,6 +101,7 @@ fn raw_and_compressed_gray_and_rgba_keep_hidden_colors_offsets_opacity_and_locks
     }
 }
 
+/// Group hierarchy and the file-wide compositing policy retain original rendering order.
 #[test]
 fn groups_keep_bottom_to_top_order_and_header_compositing_policy() {
     for flags in [0, 1, 3] {
@@ -126,6 +132,7 @@ fn groups_keep_bottom_to_top_order_and_header_compositing_policy() {
     }
 }
 
+/// Unrepresentable rendering records return explicit errors rather than incomplete artwork.
 #[test]
 fn unsupported_rendering_features_are_errors_instead_of_flattening_or_dropping_them() {
     let plain = layer("L", 0, 0, 3, 0, 255);
@@ -146,6 +153,7 @@ fn unsupported_rendering_features_are_errors_instead_of_flattening_or_dropping_t
     assert_eq!(result.document.sprite.unwrap().frames[0].cels.values().next().unwrap().z_index, 1);
 }
 
+/// Hostile hierarchy, cel references and decoded sizes fail before unbounded traversal or allocation.
 #[test]
 fn nesting_references_and_tile_allocation_are_bounded() {
     let plain = layer("L", 0, 0, 3, 0, 255);
@@ -164,6 +172,7 @@ fn nesting_references_and_tile_allocation_are_bounded() {
     assert!(read(&sprite(32, 1, &chunks)).is_err());
 }
 
+/// Pixel decompression rejects short/long output, bad checksums and extra compressed input.
 #[test]
 fn zlib_is_checked_for_exact_size_checksum_and_trailing_bytes() {
     let plain = layer("L", 0, 0, 3, 0, 255);
@@ -183,6 +192,7 @@ fn zlib_is_checked_for_exact_size_checksum_and_trailing_bytes() {
     assert!(read(&sprite(32, 1, &[plain, good])).is_ok());
 }
 
+/// Construct controlled color-profile records for model/gamma/ICC validation.
 fn profile(kind: u16, flags: u16, gamma: u32, icc: &[u8]) -> Vec<u8> {
     let mut b = kind.to_le_bytes().to_vec();
     b.extend(flags.to_le_bytes());
@@ -195,6 +205,7 @@ fn profile(kind: u16, flags: u16, gamma: u32, icc: &[u8]) -> Vec<u8> {
     chunk(0x2007, &b)
 }
 
+/// Profile round trips follow the document color model and retain explicit untagged semantics.
 #[test]
 fn profiles_are_preserved_or_generated_for_the_actual_color_model() {
     for depth in [16, 32] {
@@ -237,6 +248,7 @@ fn known_metadata_is_preserved_and_external_references_are_never_followed() {
     assert_eq!(back.document.sprite.as_ref().unwrap().frames[0].metadata.len(), 2);
 }
 
+/// Construct named palette records with exact duplicate-color indices.
 fn palette(colors: &[[u8; 4]]) -> Vec<u8> {
     let mut b = (colors.len() as u32).to_le_bytes().to_vec();
     b.extend(0u32.to_le_bytes());
@@ -252,6 +264,7 @@ fn palette(colors: &[[u8; 4]]) -> Vec<u8> {
     chunk(0x2019, &b)
 }
 
+/// Assemble synthetic frame packets with independently specified millisecond delays.
 fn frames(depth: u16, frames: &[(u16, Vec<Vec<u8>>)]) -> Vec<u8> {
     let mut b = sprite(depth, 3, &[])[..128].to_vec();
     b[6..8].copy_from_slice(&(frames.len() as u16).to_le_bytes());
@@ -271,6 +284,7 @@ fn frames(depth: u16, frames: &[(u16, Vec<Vec<u8>>)]) -> Vec<u8> {
     b
 }
 
+/// Construct a link to a chosen frame while retaining this cel's own position.
 fn linked(index: u16, at: [i16; 2], frame: u16) -> Vec<u8> {
     let mut b = index.to_le_bytes().to_vec();
     for n in at {
@@ -283,6 +297,7 @@ fn linked(index: u16, at: [i16; 2], frame: u16) -> Vec<u8> {
     chunk(0x2005, &b)
 }
 
+/// Indexed animation preserves index identity, links and metadata through edits and native saves.
 #[test]
 fn animated_indexed_sprite_roundtrips_indices_links_palettes_tags_and_native_edits() {
     let first = [[0, 0, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 255, 128]];
@@ -336,6 +351,7 @@ fn animated_indexed_sprite_roundtrips_indices_links_palettes_tags_and_native_edi
     assert_eq!(back.layers[0].surface().unwrap().tile_count(), 0);
 }
 
+/// Forward links are supported; cyclic and missing targets return errors without recursion.
 #[test]
 fn forward_links_resolve_and_link_cycles_or_missing_targets_fail() {
     let good = frames(32, &[(17, vec![layer("L", 0, 0, 3, 0, 255), linked(0, [-2, 1], 1)]), (83, vec![cel(0, [1, 1], [0, 0], 255, &[1, 2, 3, 255], true)])]);
@@ -347,6 +363,7 @@ fn forward_links_resolve_and_link_cycles_or_missing_targets_fail() {
     }
 }
 
+/// Legacy component precision and modern palette precedence follow their documented chunk semantics.
 #[test]
 fn legacy_palette_component_ranges_and_modern_palette_precedence_follow_the_spec() {
     for (kind, sample, expected) in [(0x0004, 200, 200), (0x0011, 63, 255)] {
@@ -365,6 +382,7 @@ fn legacy_palette_component_ranges_and_modern_palette_precedence_follow_the_spec
 
 #[test]
 fn export_places_sprite_data_before_layers_and_completes_tileset_user_data_sequences() {
+    /// Extract encoded chunk identifiers for metadata-ordering assertions.
     fn kinds(bytes: &[u8]) -> Vec<u16> {
         let mut r = reader::Reader::new(&bytes[144..]);
         let mut out = Vec::new();
@@ -396,6 +414,7 @@ fn empty_documents_roundtrip_without_inventing_layers() {
     assert_eq!(back.size, doc.size);
 }
 
+/// An explicitly empty cel remains distinguishable from a missing cel after export/import.
 #[test]
 fn explicit_empty_cels_are_distinct_from_absent_cels_and_survive_roundtrips() {
     for compressed in [false, true] {
@@ -415,6 +434,7 @@ fn explicit_empty_cels_are_distinct_from_absent_cels_and_survive_roundtrips() {
     }
 }
 
+/// Indexed tilemaps retain a nonzero empty index and original per-tile sample identity.
 #[test]
 fn indexed_tilemaps_keep_nonzero_empty_index_and_tile_samples() {
     let mut definition = layer("Tiles", 2, 0, 3, 0, 255);
@@ -465,6 +485,7 @@ fn indexed_tilemaps_keep_nonzero_empty_index_and_tile_samples() {
     assert!(read(&out.bytes).is_ok());
 }
 
+/// Reference display scaling must not overwrite original cel samples or stored aspect/bounds.
 #[test]
 fn precise_reference_and_pixel_aspect_survive_export_without_replacing_original_samples() {
     let mut extra = 1u32.to_le_bytes().to_vec();
@@ -489,6 +510,7 @@ fn precise_reference_and_pixel_aspect_survive_export_without_replacing_original_
     assert_eq!(cel.pixels.to_interleaved(cel.rect), [12, 34, 56, 255]);
 }
 
+/// Typed object properties and slice keys round trip only after structural validation.
 #[test]
 fn typed_properties_and_slice_keys_are_retained_and_malformed_metadata_is_rejected() {
     let mut props = 1u32.to_le_bytes().to_vec();
@@ -524,6 +546,7 @@ fn typed_properties_and_slice_keys_are_retained_and_malformed_metadata_is_reject
     }
 }
 
+/// Unsupported export depths return errors while the source document remains unchanged.
 #[test]
 fn export_refuses_16_bit_and_float_samples_without_modifying_the_document() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
@@ -546,6 +569,7 @@ fn export_refuses_16_bit_and_float_samples_without_modifying_the_document() {
     }
 }
 
+/// All documented blend IDs retain layer/cel opacity across Aseprite and native saves.
 #[test]
 fn every_documented_blend_identifier_survives_aseprite_and_native_roundtrips() {
     for mode in 0..19u16 {
@@ -561,6 +585,7 @@ fn every_documented_blend_identifier_survives_aseprite_and_native_roundtrips() {
     }
 }
 
+/// Truncated records, bad packet sizes and cancellation terminate import with actionable errors.
 #[test]
 fn truncation_and_bad_chunk_sizes_are_errors_and_cancellation_is_cooperative() {
     let good = include_bytes!("../../tests/fixtures/aseprite/layers.aseprite");
@@ -581,6 +606,7 @@ fn truncation_and_bad_chunk_sizes_are_errors_and_cancellation_is_cooperative() {
 
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config::with_cases(128))]
+    /// Deterministic byte mutations must produce a document or error without escaping a panic.
     #[test]
     fn mutated_records_never_panic(edits in proptest::collection::vec((0usize..304,proptest::prelude::any::<u8>()),0..12)) {
         let mut b=include_bytes!("../../tests/fixtures/aseprite/layers.aseprite").to_vec();
@@ -589,6 +615,7 @@ proptest::proptest! {
     }
 }
 
+/// Export refuses unsupported channels/metadata instead of silently deleting user data.
 #[test]
 fn export_refuses_extra_channels_and_unrepresentable_document_metadata() {
     let original = read(include_bytes!("../../tests/fixtures/aseprite/layers.aseprite")).unwrap().document;
@@ -622,6 +649,7 @@ fn export_refuses_a_group_owning_a_retained_cel() {
     assert!(crate::export(&doc, "aseprite", &Default::default()).unwrap_err().to_string().contains("group layer cannot own"));
 }
 
+/// Invalid or mismatched ICC data is rejected before export returns encoded bytes.
 #[test]
 fn exported_icc_profiles_are_validated_before_a_file_is_written() {
     let original = read(include_bytes!("../../tests/fixtures/aseprite/layers.aseprite")).unwrap().document;
@@ -649,6 +677,7 @@ fn opaque_indexed_document() -> photocraft_doc::Document {
     doc
 }
 
+/// Unused transparent indices preserve ordinary-layer editing and only the real Background flag.
 #[test]
 fn opaque_indexed_export_reserves_transparency_and_keeps_only_the_real_background_locked() {
     for background in [false, true] {
@@ -674,6 +703,7 @@ fn opaque_indexed_export_reserves_transparency_and_keeps_only_the_real_backgroun
     }
 }
 
+/// An opaque indexed table must not quantize erased or partially transparent samples into opaque pixels.
 #[test]
 fn indexed_export_without_a_transparent_entry_refuses_erased_or_partial_pixels() {
     for alpha in [0.0, 0.5] {
@@ -700,6 +730,7 @@ fn a_full_opaque_palette_needs_a_spare_index_only_on_ordinary_layers() {
     assert_eq!(back.layers[0].surface().unwrap().to_interleaved(back.bounds()), pixels);
 }
 
+/// Unrepresentable path/note/XMP data requires a native copy and leaves the source intact.
 #[test]
 fn export_refuses_named_paths_notes_and_layer_xmp_without_changing_the_source() {
     let original = read(include_bytes!("../../tests/fixtures/aseprite/layers.aseprite")).unwrap().document;
@@ -725,6 +756,7 @@ fn export_refuses_named_paths_notes_and_layer_xmp_without_changing_the_source() 
     }
 }
 
+/// Opaque RGB/grayscale Background layers retain their properties through repeated saves.
 #[test]
 fn rgb_and_grayscale_backgrounds_keep_their_background_traits_on_export_and_resave() {
     for fmt in [PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true)] {
@@ -756,6 +788,7 @@ fn rgb_or_gray_background(fmt: PixelFormat) -> photocraft_doc::Document {
     read(&out.bytes).unwrap().document
 }
 
+/// A transparent off-playhead Background cel must also prevent a lossy export.
 #[test]
 fn transparency_in_any_background_frame_is_refused_without_changing_the_source() {
     for fmt in [PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true)] {

@@ -44,6 +44,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, _params: &Value) -> Option<Result
     None
 }
 
+/// Coalesce numeric edits within one gesture/focus session and end the history key between sessions.
 fn delay_control(ui: &mut egui::Ui, document: u64, frame: usize, ms: u16) -> Option<Value> {
     ui.push_id(("sprite-frame-delay", document, frame), |ui| {
         let mut delay = f32::from(ms);
@@ -281,6 +282,7 @@ mod tests {
         h.state().session.active().unwrap().doc.sprite.as_ref().unwrap().frame_duration_ms()
     }
 
+    /// Separate delay drags must create separate reversible history entries.
     #[test]
     fn delay_drags_are_separate_single_undo_steps_with_redo() {
         let mut h = sprite_timeline();
@@ -315,6 +317,7 @@ mod tests {
         }
     }
 
+    /// Typed delay changes coalesce only while their numeric field keeps the same editing session.
     #[test]
     fn delay_typing_coalesces_per_focus_session() {
         let mut h = sprite_timeline();
@@ -337,6 +340,7 @@ mod tests {
         assert_eq!(delay(&h), 123);
     }
 
+    /// Timeline scheduling follows exact delays and stops on the final frame of finite tag playback.
     #[test]
     fn aseprite_timeline_uses_millisecond_delays_and_stops_at_a_finite_tag_end() {
         let doc = photocraft_io::import("animation.aseprite", include_bytes!("../../../io/tests/fixtures/aseprite/animation.aseprite")).unwrap().document;
@@ -360,6 +364,7 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), 0, "playback adds no history");
     }
 
+    /// Navigation pauses playback, Pause retains the displayed frame and a second Stop rewinds.
     #[test]
     fn stop_step_and_scrub_pause_playback_and_second_stop_rewinds() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -425,6 +430,7 @@ mod review_tests {
     use egui_kittest::{Harness, kittest::Queryable};
     use std::sync::Arc;
 
+    /// Create a small imported animation for offscreen Timeline interaction tests.
     fn app() -> PhotocraftApp {
         let mut doc = photocraft_io::import("animation.aseprite", include_bytes!("../../../io/tests/fixtures/aseprite/animation.aseprite")).unwrap().document;
         let sprite = doc.sprite.as_mut().unwrap();

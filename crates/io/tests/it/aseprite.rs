@@ -4,6 +4,7 @@ use photocraft_doc::LayerContent;
 
 const LAYERS: &[u8] = include_bytes!("../fixtures/aseprite/layers.aseprite");
 
+/// Compare every imported/native/re-exported frame with original application-rendered PNG oracles.
 #[test]
 fn aseprite_application_authored_frames_and_tilemaps_match_application_rendered_oracles() {
     for (name, source, png) in [
@@ -52,6 +53,7 @@ fn aseprite_application_authored_frames_and_tilemaps_match_application_rendered_
     }
 }
 
+/// Tilemap round trips retain object data and independently checked pixels for all tile transforms.
 #[test]
 fn aseprite_tilemaps_keep_ids_tilesets_properties_and_all_transform_pixels_through_native_saves() {
     let bytes = include_bytes!("../fixtures/aseprite/tiles.aseprite");
@@ -83,6 +85,7 @@ fn aseprite_tilemaps_keep_ids_tilesets_properties_and_all_transform_pixels_throu
     }
 }
 
+/// Independent fixtures preserve exact indices, timing, links and metadata through both save formats.
 #[test]
 fn aseprite_independent_animation_writer_fixture_survives_native_and_aseprite_export() {
     use photocraft_doc::sprite::MetadataTarget;
@@ -116,6 +119,7 @@ fn aseprite_independent_animation_writer_fixture_survives_native_and_aseprite_ex
     }
 }
 
+/// The layered fixture retains editable hierarchy, cel offsets and hand-computable pixel samples.
 #[test]
 fn aseprite_layers_open_with_their_tree_offsets_and_original_pixels() {
     let r = photocraft_io::import("layers.aseprite", LAYERS).unwrap();
@@ -140,6 +144,7 @@ fn aseprite_layers_open_with_their_tree_offsets_and_original_pixels() {
     }
 }
 
+/// Selected-frame interchange preserves layer pixels while native storage retains the complete sprite.
 #[test]
 fn aseprite_native_and_psd_round_trips_preserve_pixels_and_layers() {
     let r = photocraft_io::import("layers.ase", LAYERS).unwrap();

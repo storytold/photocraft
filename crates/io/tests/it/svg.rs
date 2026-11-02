@@ -532,3 +532,25 @@ fn image_hrefs_to_local_files_are_never_read() {
         LayerContent::Raster(_)
     ));
 }
+
+/// A depth-limited embedded image can be omitted, but ordinary and bounded imports report it.
+#[test]
+fn omitted_embedded_svg_depth_is_reported_without_losing_valid_siblings() {
+    let inner = base64_data_url("image/svg+xml", nested(70).as_bytes());
+    let images = format!("<image width=\"8\" height=\"8\" href=\"{inner}\"/>").repeat(2);
+    let xml = format!(
+        "<svg {NS} width=\"16\" height=\"8\">{}{}{}<rect x=\"8\" width=\"8\" height=\"8\" fill=\"blue\"/></svg>",
+        "<g>".repeat(60),
+        images,
+        "</g>".repeat(60)
+    );
+    for result in [import("depth.svg", xml.as_bytes()).unwrap(), svg::import_svg_bounded("depth", xml.as_bytes(), 128).unwrap()] {
+        assert!(px(&result.document, 4, 4)[3] < 0.01);
+        assert!(close(px(&result.document, 12, 4), [0.0, 0.0, 1.0, 1.0]));
+        assert_eq!(result.warnings.iter().filter(|w| w.contains("omitted")).count(), 1, "{:?}", result.warnings);
+    }
+    let legal = format!("<svg {NS} width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"{inner}\"/></svg>");
+    let result = import("legal.svg", legal.as_bytes()).unwrap();
+    assert!(px(&result.document, 4, 4)[3] > 0.99);
+    assert!(!result.warnings.iter().any(|w| w.contains("omitted")));
+}

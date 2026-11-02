@@ -106,6 +106,7 @@ pub fn capture_indices(cel: &mut SpriteCel, edited: &Surface, palette: &[Palette
     Ok(())
 }
 
+/// Apply the transparent-index override to a palette entry's stored RGBA8 color.
 fn color(entry: &PaletteEntry, index: u8, transparent: Option<u8>) -> [u8; 4] {
     let mut value = entry.rgba;
     if transparent == Some(index) {

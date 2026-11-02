@@ -607,8 +607,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         check_resample_budget("image.crop", &d.doc, tw, th, "")?;
     }
-    let retained_slices =
-        s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022))));
+    let retained_slices = s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.has_slices()));
     if let Some(a) = crop_angle(p)? {
         if retained_slices {
             return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before rotating the crop".into()));

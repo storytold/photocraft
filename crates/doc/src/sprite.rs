@@ -32,6 +32,7 @@ pub struct PaletteEntry {
 }
 
 impl Default for PaletteEntry {
+    /// New palette slots are opaque black until their color and name are assigned.
     fn default() -> Self {
         Self { rgba: [0, 0, 0, 255], name: String::new() }
     }
@@ -124,6 +125,7 @@ pub struct Sprite {
 }
 
 impl PartialEq for Sprite {
+    /// Shared frame snapshots compare by identity before inspecting their cel data.
     fn eq(&self, other: &Self) -> bool {
         let Self { frames, current, layers, indexed, transparent_index, pixel_aspect, grid, tags, profile } = self;
         frames.len() == other.frames.len()
@@ -140,6 +142,14 @@ impl PartialEq for Sprite {
 }
 
 impl Sprite {
+    /// Retained Aseprite slice records contain both canvas coordinates and frame keys.
+    pub const SLICE_CHUNK: u16 = 0x2022;
+
+    /// Whether any frame has slice coordinates that geometry/frame edits must preserve.
+    pub fn has_slices(&self) -> bool {
+        self.frames.iter().any(|frame| frame.metadata.iter().any(|chunk| chunk.kind == Self::SLICE_CHUNK))
+    }
+
     /// Validate native/command-created state before any projection, editing or export.
     /// Counts distinct allocated tiles, including boundary tiles and linked image storage.
     pub fn validate(&self) -> Result<(), String> {

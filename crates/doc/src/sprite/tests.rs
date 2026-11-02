@@ -183,3 +183,55 @@ fn sprite_equality_preserves_value_semantics_with_shared_and_distinct_frames() {
     copy.current = 1;
     assert_ne!(original, copy);
 }
+
+/// A failed direct capture/navigation preserves the authoritative sprite for a later retry.
+#[test]
+fn failed_capture_keeps_transparency_and_linked_caches_unchanged() {
+    let mut doc = indexed();
+    doc.sprite.as_mut().unwrap().layers[0].flags |= 64;
+    doc.layers[0].locks.all = true;
+    doc.restore_sprite_frame().unwrap();
+    doc.color_table.as_mut().unwrap().transparent = Some(1);
+    doc.layers[0].locks.all = false;
+    let before = doc.clone();
+    assert!(doc.capture_sprite_frame().is_err());
+    assert_eq!(doc, before);
+    assert!(doc.select_sprite_frame(1).is_err());
+    assert_eq!(doc, before);
+    doc.layers[0].locks.all = true;
+    doc.capture_sprite_frame().unwrap();
+    let sprite = doc.sprite.as_ref().unwrap();
+    assert_eq!(sprite.transparent_index, 1);
+    for frame in &sprite.frames {
+        for cel in frame.cels.values() {
+            assert_eq!(cel.pixels.pixel(cel.rect.x0, cel.rect.y0)[3], 0.0);
+        }
+    }
+}
+
+/// Editing layer opacity on an absent cel remains global without manufacturing a new cel.
+#[test]
+fn opacity_on_an_empty_frame_survives_capture_and_navigation() {
+    let mut doc = indexed();
+    let id = doc.layers[0].id;
+    Arc::make_mut(&mut doc.sprite.as_mut().unwrap().frames[1]).cels.remove(&id);
+    doc.select_sprite_frame(1).unwrap();
+    doc.layers[0].opacity = 0.5;
+    doc.capture_sprite_frame().unwrap();
+    assert_eq!(doc.sprite.as_ref().unwrap().layers[0].opacity, 128);
+    assert!(!doc.sprite.as_ref().unwrap().frames[1].cels.contains_key(&id));
+    for frame in [0, 1] {
+        doc.select_sprite_frame(frame).unwrap();
+        assert!((doc.layers[0].opacity - 128.0 / 255.0).abs() < 1e-6);
+    }
+}
+
+/// Slice guards inspect every frame, including an off-playhead metadata-only frame.
+#[test]
+fn retained_slices_are_detected_outside_the_selected_frame() {
+    let mut doc = indexed();
+    let sprite = doc.sprite.as_mut().unwrap();
+    assert!(!sprite.has_slices());
+    Arc::make_mut(&mut sprite.frames[1]).metadata.push(SpriteChunk { kind: Sprite::SLICE_CHUNK, target: MetadataTarget::Frame, bytes: Arc::new(vec![]) });
+    assert!(sprite.has_slices());
+}

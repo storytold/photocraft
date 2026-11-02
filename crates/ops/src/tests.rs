@@ -997,9 +997,17 @@ fn sprite_memory_counts_off_playhead_tiles_indices_and_metadata_shared_with_hist
     });
     let mut cur = Arc::new(doc);
     let mut h = History { max_bytes: usize::MAX, ..History::default() };
-    assert_eq!(h.pixel_bytes(&cur), 2 * 256 * 256 * 5 + 400 + palette_bytes + 200 + tag_bytes, "display/cels/frame aliases count once");
+    assert_eq!(
+        h.pixel_bytes(&cur),
+        2 * 256 * 256 * 5 + 400 + palette_bytes + 200 + tag_bytes + 2 * std::mem::size_of::<SpriteChunk>(),
+        "display/cels/frame aliases count once"
+    );
     edit(&mut h, &mut cur, "Remove animation", |doc| doc.sprite = None);
-    assert_eq!(h.pixel_bytes(&cur), 2 * 256 * 256 * 5 + 400 + palette_bytes + 200 + tag_bytes, "undo still owns indices and metadata");
+    assert_eq!(
+        h.pixel_bytes(&cur),
+        2 * 256 * 256 * 5 + 400 + palette_bytes + 200 + tag_bytes + 2 * std::mem::size_of::<SpriteChunk>(),
+        "undo still owns indices and metadata"
+    );
     edit(&mut h, &mut cur, "Rename", |doc| doc.name = "Static".into());
     h.max_bytes = 10 * 256 * 256;
     h.trim(&cur);
@@ -1274,4 +1282,45 @@ fn a_new_step_or_purge_forgets_the_cleared_states() {
     assert!(h.purge_last());
     assert!(!h.can_undo() && !h.is_cleared());
     assert!(!h.clear_states(), "a single state can't be cleared");
+}
+
+/// COW delay edits own new metadata vectors but share payloads; aliases count each vector once.
+#[test]
+fn sprite_frame_metadata_allocations_are_counted_and_trimmed() {
+    use photocraft_doc::sprite::{MetadataTarget, Sprite, SpriteChunk, SpriteFrame};
+    let mut doc = Document::new("Metadata", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let payload = Arc::new(vec![0; 17]);
+    let frame = Arc::new(SpriteFrame {
+        duration_ms: 17,
+        palette: Arc::new(vec![]),
+        cels: Default::default(),
+        metadata: vec![SpriteChunk { kind: 0x2020, target: MetadataTarget::Sprite, bytes: payload }; 1024],
+    });
+    let allocation = frame.metadata.capacity() * std::mem::size_of::<SpriteChunk>();
+    doc.sprite = Some(Sprite {
+        frames: vec![frame.clone(), frame],
+        current: 0,
+        layers: vec![],
+        indexed: false,
+        transparent_index: 0,
+        pixel_aspect: [1, 1],
+        grid: [0; 4],
+        tags: vec![],
+        profile: None,
+    });
+    let mut cur = Arc::new(doc);
+    let mut h = History { max_bytes: usize::MAX, ..History::default() };
+    assert_eq!(h.pixel_bytes(&cur), allocation + 17);
+    edit(&mut h, &mut cur, "Delay", |d| Arc::make_mut(&mut d.sprite.as_mut().unwrap().frames[0]).duration_ms = 83);
+    assert_eq!(h.pixel_bytes(&cur), 2 * allocation + 17);
+    edit(&mut h, &mut cur, "Rename metadata", |d| d.name = "Delay edited".into());
+    h.max_bytes = 4 * allocation + 17;
+    h.trim(&cur);
+    assert_counter(&h, &cur);
+    edit(&mut h, &mut cur, "Detach", |d| d.sprite = None);
+    edit(&mut h, &mut cur, "Rename", |d| d.name = "Static".into());
+    h.max_bytes = 1;
+    h.trim(&cur);
+    assert_eq!(h.pixel_bytes(&cur), 0);
+    assert_counter(&h, &cur);
 }

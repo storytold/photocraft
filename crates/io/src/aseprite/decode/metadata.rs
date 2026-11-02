@@ -4,6 +4,7 @@ use photocraft_doc::sprite::SpriteChunk;
 pub(in crate::aseprite) mod validate;
 
 impl Decoder<'_> {
+    /// Attach bounded raw metadata to the preceding format object rather than a transient array slot.
     pub(super) fn retain(&mut self, kind: u16, bytes: &[u8]) -> Result<()> {
         validate::validate(kind, bytes)?;
         self.metadata_bytes = self.metadata_bytes.checked_add(bytes.len()).ok_or_else(|| invalid("metadata size overflow"))?;
@@ -17,6 +18,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Attach valid fixed-point reference bounds to the preceding cel.
     pub(super) fn precise(&mut self, r: &mut Reader<'_>) -> Result<()> {
         let MetadataTarget::Cel(id) = self.target else { return Err(invalid("cel extra record has no preceding cel")) };
         let flags = r.u32()?;
@@ -35,6 +37,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Retain the original profile payload and expose its validated document color profile.
     pub(super) fn profile(&mut self, data: &[u8], r: &mut Reader<'_>) -> Result<()> {
         if self.profile_seen {
             return Err(invalid("duplicate color profile"));
@@ -48,6 +51,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Apply legacy/modern palette records while preserving exact entry indices and names.
     pub(super) fn palette(&mut self, kind: u16, r: &mut Reader<'_>) -> Result<()> {
         self.palette_seen = true;
         // A tiny partial palette update can copy a large named palette from an earlier
@@ -113,6 +117,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Read bounded frame ranges, playback directions and repeat counts.
     pub(super) fn tags(&mut self, r: &mut Reader<'_>) -> Result<()> {
         if !self.tags.is_empty() {
             return Err(invalid("duplicate animation tags"));
@@ -137,6 +142,7 @@ impl Decoder<'_> {
     }
 }
 
+/// Validate ICC/model compatibility and map explicit sRGB or fixed gamma without assuming a profile.
 pub(in super::super) fn color_profile(r: &mut Reader<'_>, gray: bool) -> Result<Option<Arc<Vec<u8>>>> {
     use photocraft_cms::{Builtin, ColorSpace, Curve, Profile};
     let (kind, flags, gamma) = (r.u16()?, r.u16()?, r.u32()? as i32);

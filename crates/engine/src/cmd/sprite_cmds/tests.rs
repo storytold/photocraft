@@ -63,6 +63,7 @@ fn assert_refused_unchanged(s: &mut Session, command: &str, params: Value) {
     assert_eq!(state.active_layer, active, "{command}: target");
 }
 
+/// Sprite-only controls must disable cleanly on ordinary documents and unsupported sample types.
 #[test]
 fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
     let mut empty = Session::new();
@@ -84,6 +85,7 @@ fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
     }
 }
 
+/// Each mutating sprite command records one reversible transaction with exact document restoration.
 #[test]
 fn every_sprite_edit_adds_one_history_step_and_roundtrips_undo_redo() {
     for command in [
@@ -127,6 +129,7 @@ fn every_sprite_edit_adds_one_history_step_and_roundtrips_undo_redo() {
     }
 }
 
+/// Delay gestures have independent undo boundaries; information and playback queries are history-free.
 #[test]
 fn frame_delay_gestures_coalesce_separately_and_queries_add_no_history() {
     let mut s = session();
@@ -145,6 +148,7 @@ fn frame_delay_gestures_coalesce_separately_and_queries_add_no_history() {
     }
 }
 
+/// Cel edits respect target/parent locks, and refused edits preserve the history and selection.
 #[test]
 fn cel_edits_respect_target_and_inherited_locks_without_mutating_history() {
     for inherited in [false, true] {
@@ -224,6 +228,7 @@ fn sprite_edits_and_frame_navigation_keep_cels_and_undo() {
     assert!(s.active().unwrap().doc.sprite.is_some());
 }
 
+/// Adversarial sprite parameters must return errors without altering document or undo state.
 #[test]
 fn malformed_sprite_commands_never_modify_the_document() {
     let mut s = session();
@@ -297,6 +302,7 @@ fn shrinking_an_indexed_palette_cannot_leave_locked_reference_cels_out_of_range(
     photocraft_io::import("reference.aseprite", &out.bytes).unwrap();
 }
 
+/// Every right-angle turn/flip must refuse stale retained slice coordinates before editing pixels.
 #[test]
 fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
@@ -320,6 +326,7 @@ fn turns_refuse_retained_slice_coordinates_before_pixels_or_history_change() {
     ordinary.execute("edit.undo", json!({})).unwrap();
 }
 
+/// A same-size crop must not bypass the retained-slice origin guard.
 #[test]
 fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_size() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
@@ -343,6 +350,7 @@ fn crops_with_retained_slices_cannot_move_the_canvas_origin_even_at_the_same_siz
     ordinary.execute("edit.undo", json!({})).unwrap();
 }
 
+/// Resampling a crop invalidates retained slices even when the final dimensions are unchanged.
 #[test]
 fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unchanged() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
@@ -371,6 +379,7 @@ fn slice_coordinates_prevent_crop_resampling_even_when_final_canvas_size_is_unch
     assert_eq!(ordinary.active().unwrap().doc, before);
 }
 
+/// Arbitrary rotation protects slice coordinates while preserving a true full-turn no-op.
 #[test]
 fn arbitrary_canvas_rotation_refuses_slices_for_same_size_turns_and_allows_a_noop() {
     use photocraft_doc::sprite::{MetadataTarget, SpriteChunk};
@@ -397,6 +406,7 @@ fn arbitrary_canvas_rotation_refuses_slices_for_same_size_turns_and_allows_a_noo
     ordinary.execute("edit.undo", json!({})).unwrap();
 }
 
+/// Removing Background status must survive native/Aseprite round trips without restoring the lock.
 #[test]
 fn rgb_and_gray_layer_from_background_stays_unlocked_after_aseprite_export() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale] {

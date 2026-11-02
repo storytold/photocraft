@@ -86,6 +86,7 @@ pub fn is_aseprite(bytes: &[u8]) -> bool {
         && word(132) == Some(0xf1fa)
 }
 
+/// Map only documented Aseprite blend identifiers; unsupported identifiers are import errors.
 fn blend_mode(mode: u16) -> Result<BlendMode> {
     use BlendMode as B;
     // IDs are specified by the format, not PhotoCraft's enum discriminants.

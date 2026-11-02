@@ -29,7 +29,7 @@ pub struct CommandSpec {
 
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
-    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.frames.iter().any(|f| f.metadata.iter().any(|c| c.kind == 0x2022)))) {
+    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.has_slices())) {
         return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before turning the canvas".into()));
     }
     if let Some(d) = s.active() {

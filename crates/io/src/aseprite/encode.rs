@@ -10,6 +10,7 @@ use photocraft_raster::Interrupt;
 
 use super::{ExportResult, IoError, MAX_FILE, MAX_LAYERS, Result, blend_mode, invalid, reader::Reader};
 
+/// Validate representability and write a captured copy so export never mutates the source document.
 pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult> {
     let losses = super::losses(doc);
     if !losses.is_empty() {
@@ -137,6 +138,7 @@ pub(super) fn export(doc: &Document, ctl: &Interrupt<'_>) -> Result<ExportResult
     Ok(ExportResult { bytes, warnings })
 }
 
+/// Represent a supported ordinary document as one sprite frame without flattening its layer tree.
 fn from_document(doc: &Document) -> Result<Sprite> {
     let indexed = doc.mode == ColorMode::Indexed;
     let mut palette = Arc::new(if indexed {
@@ -214,6 +216,7 @@ fn require_opaque(pixels: &photocraft_raster::Surface, rect: Rect) -> Result<()>
 
 // Background is a layer-wide flag. Check each frame's used pixels once per shared tile
 // region, excluding transparent padding outside the cel rectangle.
+/// Reject transparent Background samples in every frame instead of discarding alpha on export.
 fn require_opaque_background(sprite: &Sprite, id: LayerId, ctl: &Interrupt<'_>) -> Result<()> {
     let mut checked = std::collections::HashSet::new();
     for frame in &sprite.frames {
@@ -252,6 +255,7 @@ fn require_opaque_background(sprite: &Sprite, id: LayerId, ctl: &Interrupt<'_>) 
     Ok(())
 }
 
+/// Find an unused palette slot for ordinary indexed layers without changing Background semantics.
 fn reserve_transparent_index(palette: &mut Vec<sprite::PaletteEntry>, layers: &[SpriteLayer], cels: &BTreeMap<LayerId, Arc<SpriteCel>>) -> Result<u8> {
     // Aseprite reserves the header index on every non-Background layer, even if the
     // source has no transparency. Reserve an unused entry so opaque index zero stays ink.
@@ -281,6 +285,7 @@ fn reserve_transparent_index(palette: &mut Vec<sprite::PaletteEntry>, layers: &[
 }
 
 fn layers<'a>(doc: &'a Document, sprite: &Sprite) -> Result<Vec<(&'a Layer, usize)>> {
+    /// Traverse export layers in source order with bounded group nesting and supported content checks.
     fn walk<'a>(layers: &'a [Layer], sprite: &Sprite, depth: usize, out: &mut Vec<(&'a Layer, usize)>) -> Result<()> {
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(invalid("group depth limit exceeded"));
@@ -300,6 +305,7 @@ fn layers<'a>(doc: &'a Document, sprite: &Sprite) -> Result<Vec<(&'a Layer, usiz
     Ok(out)
 }
 
+/// Encode retained layer flags while reflecting current visibility, opacity and transparency locks.
 fn layer_chunk(layer: &Layer, level: usize, sprite: &Sprite, flags: u32, background: bool, ctl: &Interrupt<'_>) -> Result<Vec<u8>> {
     let source = sprite.layers.iter().find(|l| l.id == layer.id);
     let retained = source.map_or(0, |s| s.flags) & (8 | 16 | 64);
@@ -348,6 +354,7 @@ fn layer_chunk(layer: &Layer, level: usize, sprite: &Sprite, flags: u32, backgro
     chunk(0x2004, data)
 }
 
+/// Encode image/link cels or retained tilemap records with exact geometry and separate cel opacity.
 fn cel_chunk(index: usize, cel: &SpriteCel, indexed: bool, tilemap: Option<&[u8]>, ctl: &Interrupt<'_>) -> Result<Vec<u8>> {
     let mut data = u16::try_from(index).map_err(|_| invalid("layer index overflow"))?.to_le_bytes().to_vec();
     for n in [cel.rect.x0, cel.rect.y0] {
@@ -385,6 +392,7 @@ fn cel_chunk(index: usize, cel: &SpriteCel, indexed: bool, tilemap: Option<&[u8]
     chunk(0x2005, data)
 }
 
+/// Write named RGBA palette entries without collapsing duplicate colors or index positions.
 fn palette(entries: &[sprite::PaletteEntry]) -> Result<Vec<u8>> {
     let mut data = (entries.len() as u32).to_le_bytes().to_vec();
     data.extend(0u32.to_le_bytes());
@@ -400,6 +408,7 @@ fn palette(entries: &[sprite::PaletteEntry]) -> Result<Vec<u8>> {
     chunk(0x2019, data)
 }
 
+/// Encode inclusive tag ranges, direction and repeat counts in the public format layout.
 fn tags(sprite: &Sprite) -> Result<Vec<u8>> {
     let mut data = u16::try_from(sprite.tags.len()).map_err(|_| invalid("too many animation tags"))?.to_le_bytes().to_vec();
     data.extend([0; 8]);
@@ -416,6 +425,7 @@ fn tags(sprite: &Sprite) -> Result<Vec<u8>> {
     chunk(0x2018, data)
 }
 
+/// Preserve compatible source profiles or encode the document's actual RGB/grayscale profile.
 fn profile(doc: &Document, sprite: &Sprite) -> Result<Option<Vec<u8>>> {
     if let Some(raw) = &sprite.profile {
         let expected = super::decode::metadata::color_profile(&mut Reader::new(raw), doc.mode == ColorMode::Grayscale)?;
@@ -435,6 +445,7 @@ fn profile(doc: &Document, sprite: &Sprite) -> Result<Option<Vec<u8>>> {
     Ok(Some(data))
 }
 
+/// Emit retained records beside their owners, normalizing sprite and per-tile user-data ordering.
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, metadata: &[SpriteChunk], target: &MetadataTarget) -> Result<()> {
     let mut records = metadata.iter().filter(|c| &c.target == target).peekable();
     while let Some(c) = records.next() {
@@ -468,6 +479,7 @@ fn append_metadata(chunks: &mut Vec<Vec<u8>>, metadata: &[SpriteChunk], target: 
     Ok(())
 }
 
+/// Refuse edits that would make retained tilemap descriptors disagree with their display cels.
 fn validate_tilemaps(sprite: &Sprite, mode: ColorMode, ctl: &Interrupt<'_>) -> Result<()> {
     use super::decode::tilemap;
     let fmt = photocraft_color::PixelFormat::new(if sprite.indexed { ColorMode::Grayscale } else { mode }, SampleType::U8, !sprite.indexed);
@@ -514,6 +526,7 @@ fn string(out: &mut Vec<u8>, s: &str) -> Result<()> {
     out.extend(s.as_bytes());
     Ok(())
 }
+/// Wrap a payload in a checked chunk header, rejecting unrepresentable encoded sizes.
 fn chunk(kind: u16, data: Vec<u8>) -> Result<Vec<u8>> {
     let n = data.len().checked_add(6).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| invalid("chunk size overflow"))?;
     let mut out = n.to_le_bytes().to_vec();
@@ -524,6 +537,7 @@ fn chunk(kind: u16, data: Vec<u8>) -> Result<Vec<u8>> {
 fn word(out: &mut [u8], at: usize, n: u16) -> Result<()> {
     put(out, at, &n.to_le_bytes())
 }
+/// Write one header field only when its checked byte range fits the existing output buffer.
 fn put(out: &mut [u8], at: usize, data: &[u8]) -> Result<()> {
     let end = at.checked_add(data.len()).ok_or_else(|| invalid("header offset overflow"))?;
     out.get_mut(at..end).ok_or_else(|| invalid("invalid header field"))?.copy_from_slice(data);

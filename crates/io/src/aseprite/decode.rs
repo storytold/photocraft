@@ -44,6 +44,7 @@ struct Decoder<'a> {
     ctl: &'a Interrupt<'a>,
 }
 
+/// Parse bounded frame/chunk records, resolve cel links and project the editable sprite document.
 pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
     if bytes.len() > MAX_FILE {
         return Err(invalid("file exceeds 512 MiB"));
@@ -192,6 +193,7 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
 }
 
 impl Decoder<'_> {
+    /// Dispatch known records while refusing unknown chunks that could change rendering.
     fn chunk(&mut self, kind: u16, data: &[u8], frame: usize) -> Result<()> {
         let mut r = Reader::new(data);
         match kind {
@@ -234,12 +236,14 @@ impl Decoder<'_> {
         r.end()
     }
 
+    /// Reserve decoded pixel/index storage with checked aggregate accounting before allocation.
     fn charge(&mut self, rect: Rect, bpp: usize) -> Result<()> {
         let n = usize::try_from(rect.tile_count()).ok().and_then(|n| n.checked_mul(256 * 256 * bpp)).ok_or_else(|| invalid("cel tile size overflow"))?;
         self.budget = self.budget.checked_sub(n).ok_or_else(|| invalid("decoded sprite tiles exceed 256 MiB"))?;
         Ok(())
     }
 
+    /// Read bounded layer hierarchy and original flags without exceeding document group depth.
     fn layer(&mut self, r: &mut Reader<'_>) -> Result<()> {
         if self.nodes.len() >= MAX_LAYERS {
             return Err(invalid("layer count exceeds 4096"));
@@ -286,6 +290,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Read one bounded cel image/link, retaining offsets, opacity and z-order separately.
     fn cel(&mut self, r: &mut Reader<'_>) -> Result<()> {
         let index = usize::from(r.u16()?);
         let (x, y, opacity, kind, z_index) = (i32::from(r.i16()?), i32::from(r.i16()?), r.u8()?, r.u16()?, r.i16()?);
@@ -326,6 +331,7 @@ impl Decoder<'_> {
         Ok(())
     }
 
+    /// Resolve forward links iteratively and reject cycles or missing same-layer targets.
     fn resolve_links(&mut self) -> Result<()> {
         let mut resolved = std::collections::BTreeSet::new();
         let keys: Vec<_> = self.frames.iter().enumerate().flat_map(|(f, frame)| frame.cels.keys().map(move |id| (f, *id))).collect();

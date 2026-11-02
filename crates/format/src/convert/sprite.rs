@@ -14,6 +14,7 @@ use photocraft_doc::{
 use super::{FormatError, Loader, Result, Sink, surface_m};
 use crate::manifest::{SpriteCelM, SpriteChunkM, SpriteFrameM, SpriteM};
 
+/// Store sprite surfaces through the tile sink and retain object metadata as bounded blobs.
 pub(super) fn encode(sprite: &Sprite, sink: &mut dyn Sink) -> SpriteM {
     let mut palettes = Vec::new();
     let mut palette_ids = HashMap::new();
@@ -62,6 +63,7 @@ pub(super) fn encode(sprite: &Sprite, sink: &mut dyn Sink) -> SpriteM {
 }
 
 impl Loader<'_> {
+    /// Reconstruct and validate sprite state before projecting its selected frame into the document.
     pub(super) fn sprite(&mut self, m: &SpriteM) -> Result<Sprite> {
         let bad = |message: &str| FormatError::corrupt(message);
         if m.frames.is_empty()
@@ -129,6 +131,7 @@ impl Loader<'_> {
 }
 
 // Hash/sample pairs match Loader::surface's allocation cache.
+/// Check declared tile storage before fetching blobs, deduplicating shared tile hashes.
 fn check_tile_budget(m: &SpriteM) -> Result<()> {
     let bad = |message: &str| FormatError::corrupt(message);
     // Preflight distinct tile allocations before fetching any cel surface. The bundle's
@@ -157,6 +160,7 @@ mod tests {
     };
     use photocraft_color::PixelFormat;
 
+    /// Build a minimal sprite manifest for storage-limit tests without allocating the claimed tiles.
     fn manifest(unique: bool) -> SpriteM {
         let cel = SpriteCelM {
             layer: 1,
@@ -186,6 +190,7 @@ mod tests {
         }
     }
 
+    /// Reject excessive declared storage before reads while accepting aliased tiles within the exact budget.
     #[test]
     fn sprite_budget_is_checked_before_fetching_tiles_and_shared_hashes_count_once() {
         struct FetchSpy(usize);

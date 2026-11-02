@@ -10,12 +10,14 @@ use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use super::{MetadataTarget, Sprite, SpriteCel, SpriteLayer, pixels};
 use crate::{ColorTable, Document, Layer, LayerContent, LayerId, Surface};
 
+/// Combine stable source-layer order with this frame's signed cel z-order.
 fn order(layer: &Layer, sprite: &Sprite, frame: usize) -> (i64, i16) {
     let rank = sprite.layers.iter().position(|l| l.id == layer.id).unwrap_or(sprite.layers.len());
     let z = sprite.frames.get(frame).and_then(|f| f.cels.get(&layer.id)).map_or(0, |c| c.z_index);
     (rank as i64 + i64::from(z), z)
 }
 
+/// Build the projected depth-first layer order without exceeding the document nesting cap.
 fn display_order(layers: &[Layer], sprite: &Sprite, frame: usize, depth: usize, out: &mut Vec<LayerId>) -> Result<(), String> {
     if depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite group nesting limit exceeded".into());
@@ -31,6 +33,7 @@ fn display_order(layers: &[Layer], sprite: &Sprite, frame: usize, depth: usize, 
     Ok(())
 }
 
+/// Project one frame into raster layers, retaining source cels behind reference display caches.
 fn project(layers: &mut [Layer], sprite: &Sprite, frame: usize, fmt: PixelFormat, depth: usize) -> Result<(), String> {
     if depth > crate::MAX_GROUP_DEPTH {
         return Err("sprite layer groups exceed the nesting limit".into());
@@ -59,15 +62,16 @@ fn project(layers: &mut [Layer], sprite: &Sprite, frame: usize, fmt: PixelFormat
 }
 
 impl Document {
-    /// Commit the displayed raster edits before navigating/saving. The session calls this
-    /// inside the transaction so a failed bounds/palette check cannot leave a partial edit.
+    /// Capture displayed edits before navigating/saving. Stage the sprite and its projection
+    /// so a failed bounds/palette check leaves the authoritative state and display intact.
     pub fn capture_sprite_frame(&mut self) -> Result<(), String> {
-        let Some(mut sprite) = self.sprite.take() else { return Ok(()) };
-        let result = self.capture_sprite(&mut sprite);
+        let Some(mut sprite) = self.sprite.clone() else { return Ok(()) };
+        self.capture_sprite(&mut sprite)?;
         self.sprite = Some(sprite);
-        result
+        Ok(())
     }
 
+    /// Stage displayed edits, reconcile links and palettes, then refresh the selected projection.
     fn capture_sprite(&mut self, sprite: &mut Sprite) -> Result<(), String> {
         sprite.validate()?;
         let expected_mode = if self.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb };
@@ -162,6 +166,10 @@ impl Document {
                 precise: None,
             });
             if source.is_none() && surface.tile_count() == 0 {
+                // An absent cel projects the layer opacity alone, so retain a global edit.
+                if (layer.opacity - f32::from(base.opacity) / 255.0).abs() > 1e-6 {
+                    base.opacity = (layer.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
                 continue;
             }
             let expected = f32::from(base.opacity) / 255.0 * f32::from(cel.opacity) / 255.0;
@@ -228,10 +236,13 @@ impl Document {
         self.apply_sprite(sprite, current)
     }
 
+    /// Build a frame projection before replacing layers so a failed projection leaves the display intact.
     fn apply_sprite(&mut self, sprite: &Sprite, index: usize) -> Result<(), String> {
         let frame = sprite.frames.get(index).ok_or("sprite frame is missing")?;
         let fmt = PixelFormat::new(if self.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb }, SampleType::U8, true);
-        project(&mut self.layers, sprite, index, fmt, 0)?;
+        let mut layers = self.layers.clone();
+        project(&mut layers, sprite, index, fmt, 0)?;
+        self.layers = layers;
         if sprite.indexed {
             self.color_table = Some(ColorTable {
                 colors: frame.palette.iter().map(|e| [e.rgba[0], e.rgba[1], e.rgba[2]]).collect(),
@@ -275,6 +286,7 @@ impl Document {
 }
 
 impl Sprite {
+    /// Follow validated links with a frame-count bound instead of recursive traversal.
     fn root_frame(&self, mut frame: usize, id: LayerId) -> usize {
         for _ in 0..self.frames.len() {
             match self.frames.get(frame).and_then(|f| f.cels.get(&id)).and_then(|c| c.linked_frame) {
@@ -285,6 +297,7 @@ impl Sprite {
         frame
     }
 
+    /// Propagate edited image samples while preserving each linked cel's offset and frame palette.
     fn update_linked_images(&mut self, current: usize, id: LayerId, old: &BTreeMap<LayerId, Arc<SpriteCel>>, edited: &SpriteCel) -> Result<(), String> {
         let root = self.root_frame(current, id);
         let old_rect = old.get(&id).map_or(edited.rect, |c| c.rect);

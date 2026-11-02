@@ -71,6 +71,7 @@ fn native_sprite_preserves_exact_indices_delays_metadata_and_remaps_all_layer_re
     assert_eq!(sprite.layers[0].uuid, Some([7; 16]));
 }
 
+/// Native save captures live raster edits and uses version 2 only when sprite preservation needs it.
 #[test]
 fn native_save_captures_displayed_cel_edits_and_versions_only_sprite_bundles() {
     use photocraft_doc::{LayerContent, sprite::*};

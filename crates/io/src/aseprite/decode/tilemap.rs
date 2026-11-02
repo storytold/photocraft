@@ -15,6 +15,7 @@ pub(in crate::aseprite) struct Tileset {
     pub pixels: Option<Vec<u8>>,
 }
 
+/// Inflate exactly the declared byte count, checking cancellation, checksum and trailing input.
 pub(in crate::aseprite) fn inflate(data: &[u8], expected: usize, ctl: &Interrupt<'_>) -> Result<Vec<u8>> {
     if expected > sprite::MAX_BYTES {
         return Err(invalid("tile data exceeds 256 MiB"));
@@ -37,6 +38,7 @@ pub(in crate::aseprite) fn inflate(data: &[u8], expected: usize, ctl: &Interrupt
     Ok(pixels)
 }
 
+/// Extend decoded tile storage only after checked size and budget validation.
 fn append_bounded(pixels: &mut Vec<u8>, block: &[u8], expected: usize) -> Result<()> {
     let size = pixels.len().checked_add(block.len()).filter(|n| *n <= expected).ok_or_else(|| invalid("inflated tile data exceeds its declared size"))?;
     if size > pixels.capacity() {
@@ -49,6 +51,7 @@ fn append_bounded(pixels: &mut Vec<u8>, block: &[u8], expected: usize) -> Result
     Ok(())
 }
 
+/// Parse embedded/external tileset descriptors and enforce the remaining decoded-image budget first.
 pub(in crate::aseprite) fn tileset(data: &[u8], bpp: usize, budget: usize, ctl: &Interrupt<'_>) -> Result<Tileset> {
     let mut r = Reader::new(data);
     let id = r.u32()?;
@@ -107,6 +110,7 @@ pub(in crate::aseprite) struct Map {
     pub masks: [u32; 4],
     pub tiles: Vec<u8>,
 }
+/// Decode bounded tile IDs and transformation masks from a retained map cel.
 pub(in crate::aseprite) fn map(data: &[u8], ctl: &Interrupt<'_>) -> Result<Map> {
     let mut r = Reader::new(data);
     r.take(7)?;
@@ -136,6 +140,7 @@ pub(in crate::aseprite) fn map(data: &[u8], ctl: &Interrupt<'_>) -> Result<Map> 
     Ok(Map { width, height, masks, tiles })
 }
 
+/// Render supported tile transformations while refusing invalid IDs and non-square diagonal tiles.
 pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), fmt: PixelFormat, transparent: Option<u8>) -> Result<(Rect, Surface)> {
     let data =
         tileset.pixels.as_ref().ok_or_else(|| invalid("tilemap needs an external-only tileset; embed it in Aseprite first (no external files were read)"))?;
@@ -191,6 +196,7 @@ pub(in crate::aseprite) fn render(map: &Map, tileset: &Tileset, at: (i32, i32), 
 }
 
 impl Decoder<'_> {
+    /// Retain tile records and their object targets within the aggregate metadata limit.
     pub(super) fn retain_tile_record(&mut self, kind: u16, data: &[u8], target: MetadataTarget) -> Result<()> {
         self.metadata_bytes = self.metadata_bytes.checked_add(data.len()).ok_or_else(|| invalid("tile metadata size overflow"))?;
         if self.metadata_bytes > sprite::MAX_METADATA {
@@ -199,6 +205,7 @@ impl Decoder<'_> {
         self.frame.metadata.push(SpriteChunk { kind, target, bytes: Arc::new(data.to_vec()) });
         Ok(())
     }
+    /// Preflight combined tileset storage before inflation, then build locked frame display caches.
     pub(super) fn render_tilemaps(&mut self) -> Result<()> {
         let mut sets = std::collections::BTreeMap::new();
         let source_bpp = if self.indexed { 1 } else { self.fmt.bytes_per_pixel() };
@@ -260,6 +267,7 @@ mod cancellation_tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    /// Build synthetic tileset records for exact-boundary allocation tests.
     fn record(data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         for n in [0u32, 2, 4] {
@@ -273,6 +281,7 @@ mod cancellation_tests {
         out
     }
 
+    /// Budget refusal must precede malformed compressed data, while an exact-sized tileset still decodes.
     #[test]
     fn tileset_budget_is_checked_before_inflation_and_accepts_the_exact_remaining_size() {
         let checks = AtomicUsize::new(0);
@@ -304,6 +313,7 @@ mod cancellation_tests {
         assert_eq!(pixels.capacity(), 5, "successful growth is capped at the declared length");
     }
 
+    /// Cancellation remains responsive without accepting bad checksums or trailing compressed bytes.
     #[test]
     fn inflation_checks_cancellation_between_blocks_without_weakening_zlib_validation() {
         let raw = vec![7; 1024 * 1024];
@@ -323,6 +333,7 @@ mod cancellation_tests {
         assert!(inflate(&trailing, raw.len(), &Interrupt::NONE).is_err());
     }
 
+    /// Multiple tilesets share one decoded budget; reject aggregate overflow before decoding the next image.
     #[test]
     fn render_tilemaps_rejects_combined_tileset_overflow_before_inflating_the_second() {
         use photocraft_doc::sprite::SpriteFrame;
