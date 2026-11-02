@@ -50,10 +50,10 @@ craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.
 # `photocraft_engine::genai`. One revision for all four, never mixed with craft-libs' ai-core.
 # Until storytold/craft-ai-integrations#120 (FLUX.1 Fill, Gemini fill, `Plan::provider`) merges,
 # this is that pull request's head commit; it moves to the merge commit on main then.
-craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "4829d844a5be80fd3314c6ee9a0b42fe834ea06c" }
-craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "4829d844a5be80fd3314c6ee9a0b42fe834ea06c" }
-craft-ai-features = { git = "https://github.com/storytold/craft-ai-integrations", rev = "4829d844a5be80fd3314c6ee9a0b42fe834ea06c" }
-craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "4829d844a5be80fd3314c6ee9a0b42fe834ea06c" }
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d0d76d4c6d879fe67a763c8503008fed6b6319b5" }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d0d76d4c6d879fe67a763c8503008fed6b6319b5" }
+craft-ai-features = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d0d76d4c6d879fe67a763c8503008fed6b6319b5" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d0d76d4c6d879fe67a763c8503008fed6b6319b5" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
