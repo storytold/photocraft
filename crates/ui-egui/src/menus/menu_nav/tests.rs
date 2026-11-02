@@ -826,8 +826,8 @@ fn bowed(a: egui::Pos2, b: egui::Pos2, bow: f32) -> impl Fn(f32) -> egui::Pos2 {
 }
 
 /// #1218: heading from Image › Mode for a row low in its submenu, the pointer crosses the
-/// Adjustments row. On a diagonal, a bowed path or with a short pause on the way, Mode's submenu
-/// stays open and Adjustments' doesn't open; arriving, Mode is the highlighted row.
+/// Adjustments row. On a diagonal, a bowed path or with a very short pause on the way, Mode's
+/// submenu stays open and Adjustments' doesn't open; arriving, Mode is the highlighted row.
 #[test]
 fn a_submenu_stays_open_while_the_pointer_heads_for_it() {
     struct Path {
@@ -840,7 +840,7 @@ fn a_submenu_stays_open_while_the_pointer_heads_for_it() {
     }
     let paths = [
         Path { name: "straight", frames: 36, pause: None, bow: 0.0 },
-        Path { name: "hesitate", frames: 36, pause: Some((0.3, 18)), bow: 0.0 },
+        Path { name: "hesitate", frames: 36, pause: Some((0.3, 3)), bow: 0.0 },
         Path { name: "bowed", frames: 42, pause: None, bow: 0.2 },
         Path { name: "slow and bowed", frames: 96, pause: None, bow: 0.2 },
     ];
@@ -882,7 +882,7 @@ fn resting_on_another_row_or_moving_away_switches_submenus() {
     let mut h = harness_dt(1.0 / 120.0);
     let (from, adjustments, _) = rest_on_mode(&mut h);
     // Head for the submenu, but stop on Adjustments on the way.
-    let stop = egui::pos2(from.x + 15.0, adjustments.center().y);
+    let stop = egui::pos2(from.x + (adjustments.center().y - from.y) + 2.0, adjustments.center().y);
     glide(&mut h, 12, None, |t| from + (stop - from) * t);
     assert_eq!(image_submenu(&h), "Mode", "just arrived on Adjustments, still heading for Mode's submenu");
     h.run_steps((super::AIM_REST * 120.0) as usize + 12);
@@ -900,6 +900,21 @@ fn resting_on_another_row_or_moving_away_switches_submenus() {
         assert_eq!(image_submenu(&h), "Adjustments", "moving away ({dx}) from Mode's submenu opens Adjustments'");
         only_adjustments_lit(&h, adjustments, "moving away");
     }
+}
+
+#[test]
+fn a_stride_times_stopping_and_staying_on_a_row() {
+    let start = egui::pos2(100.0, 100.0);
+    let s = super::Stride::start(start, 0.0, Some(1));
+    assert_eq!(s.next(start + egui::vec2(1.0, 2.0), 1.0, Some(1), false).moved_at, 0.0, "a drifting hand isn't movement");
+    let moved = s.next(start + egui::vec2(8.0, 0.0), 1.0, Some(1), false);
+    assert!(moved.moved_at == 1.0 && moved.over_at == 0.0, "moving along a row doesn't restart the time on it");
+    assert_eq!(s.next(start, 1.0, Some(2), false).over_at, 1.0, "another row does");
+    assert_eq!(s.next(start, 1.0, None, false).over_at, 1.0, "so does a separator");
+    let dwell = f64::from(super::AIM_DWELL);
+    let moving = super::Stride { moved_at: dwell - 0.05, ..s };
+    assert!(moving.left(dwell - 0.05, false) > 0.0 && moving.left(dwell - 0.05, false) <= super::AIM_DWELL, "both timers count");
+    assert!(moving.left(dwell + 0.01, false) < 0.0, "the row's time ran out");
 }
 
 #[test]
@@ -1026,10 +1041,39 @@ fn a_step_down_after_sliding_toward_the_arrow_switches_at_once() {
 fn resting_while_heading_for_a_submenu_switches_after_aim_rest() {
     let mut h = harness_dt(1.0 / 120.0);
     let (from, adjustments, _) = rest_on_mode(&mut h);
-    let to = egui::pos2(from.x + 10.0, adjustments.center().y);
+    let to = egui::pos2(from.x + (adjustments.center().y - from.y) + 2.0, adjustments.center().y);
     let waited = frames_to_switch(&mut h, 6, |t| from + (to - from) * t);
     let rest = (super::AIM_REST * 120.0).round() as usize;
     assert!(waited.is_some_and(|k| k + 2 >= rest && k <= rest + 2), "switched {waited:?} frames after the pointer stopped, AIM_REST is {rest}");
+}
+
+/// A hand never holds a mouse perfectly still: a pixel of drift while resting on Adjustments isn't
+/// the pointer moving on, so it doesn't push the switch back. Any movement restarted the wait, so
+/// the submenu could stay for as long as the pointer drifted.
+#[test]
+fn drifting_a_pixel_while_resting_still_switches_submenus() {
+    let mut h = harness_dt(1.0 / 120.0);
+    let (from, adjustments, _) = rest_on_mode(&mut h);
+    let to = egui::pos2(from.x + (adjustments.center().y - from.y) + 2.0, adjustments.center().y);
+    glide(&mut h, 6, None, |t| from + (to - from) * t);
+    for k in 0..=(super::AIM_REST * 120.0) as usize + 12 {
+        h.event(egui::Event::PointerMoved(to + egui::vec2(0.0, (k % 2) as f32)));
+        h.run_steps(1);
+    }
+    assert_eq!(image_submenu(&h), "Adjustments", "the pointer has stopped on Adjustments, give or take a pixel");
+}
+
+/// Moving on along another row, inside the triangle, doesn't keep a submenu for longer than
+/// `AIM_DWELL`: the wait starts when the pointer reaches the row, and moving doesn't restart it.
+#[test]
+fn staying_on_a_row_switches_submenus_even_while_moving() {
+    let mut h = harness_dt(1.0 / 120.0);
+    let (from, adjustments, _) = rest_on_mode(&mut h);
+    let y = adjustments.center().y;
+    let start = egui::pos2(from.x, y);
+    let frames = (super::AIM_DWELL * 120.0) as usize + 6;
+    glide(&mut h, frames, None, |t| start + egui::vec2(36.0 * t, 0.0));
+    assert_eq!(image_submenu(&h), "Adjustments", "moving along Adjustments for longer than AIM_DWELL");
 }
 
 /// While a submenu is held, the highlight is on the row under the pointer, the submenu stays open
@@ -1231,11 +1275,13 @@ fn a_submenu_let_go_while_the_pointer_rests_disappears() {
         let src = all.iter().position(|r| r.command.is_none() && r.enabled).expect("a submenu row");
         let (dest, _) = all.iter().enumerate().skip(src + 1).filter(|(_, r)| r.command.is_some() && r.enabled).nth(nth_command - 1).expect("a command row below it");
         let (from, to) = (all[src].rect, all[dest].rect);
-        let rest = egui::pos2(from.right() - 60.0, from.center().y);
+        // As far across as down, so it counts as heading for the submenu.
+        let down = to.center().y - from.center().y;
+        let rest = egui::pos2(from.right() - down - 16.0, from.center().y);
         glide(&mut h, 12, None, |t| rest - egui::vec2(30.0 * (1.0 - t), 0.0));
         h.run_steps(60);
         assert_eq!(open_submenu_row(&h), Some(src), "{menu}: resting on row {src} opens its submenu");
-        let end = egui::pos2(rest.x + 40.0, to.center().y);
+        let end = egui::pos2(rest.x + down + 2.0, to.center().y);
         glide(&mut h, 4, None, |t| rest + (end - rest) * t);
         assert_eq!(open_submenu_row(&h), Some(src), "{menu}: heading for it keeps the submenu open");
         run_until_idle(&mut h);
@@ -1815,4 +1861,44 @@ fn an_accessibility_click_opens_a_submenu_while_the_keys_have_the_highlight() {
     h.get_by_label_contains("Adjustments").click_accesskit();
     h.run_steps(10);
     assert_eq!(image_submenu(&h), "Adjustments");
+}
+
+/// Mode's submenu held for the pointer stopping on Adjustments, with More time to reach submenus on.
+fn longer_hold() -> (Harness<'static, PhotocraftApp>, egui::Pos2, egui::Pos2) {
+    let mut h = harness_dt(1.0 / 120.0);
+    h.state_mut().run("prefs.set", serde_json::json!({"path": "interface.moreTimeToReachSubmenus", "value": true})).unwrap();
+    let (from, adjustments, _) = rest_on_mode(&mut h);
+    let to = egui::pos2(from.x + (adjustments.center().y - from.y) + 2.0, adjustments.center().y);
+    (h, from, to)
+}
+
+#[test]
+fn more_time_to_reach_submenus_waits_for_a_longer_stop() {
+    let (mut h, from, to) = longer_hold();
+    let waited = frames_to_switch(&mut h, 6, |t| from + (to - from) * t);
+    let rest = (super::AIM_REST_LONGER * 120.0).round() as usize;
+    assert!(waited.is_some_and(|k| k + 2 >= rest && k <= rest + 2), "switched {waited:?} frames after the pointer stopped, the option waits {rest}");
+}
+
+/// Any movement counts as moving: a drifting hand keeps the submenu open, for someone who can't
+/// hold the pointer still.
+#[test]
+fn more_time_to_reach_submenus_counts_a_drifting_hand_as_moving() {
+    let (mut h, from, to) = longer_hold();
+    glide(&mut h, 6, None, |t| from + (to - from) * t);
+    for k in 0..=(super::AIM_REST_LONGER * 120.0) as usize + 12 {
+        h.event(egui::Event::PointerMoved(to + egui::vec2(0.0, (k % 2) as f32)));
+        h.run_steps(1);
+    }
+    assert_eq!(image_submenu(&h), "Mode");
+}
+
+/// No limit on staying on one row, however slowly the pointer crosses it.
+#[test]
+fn more_time_to_reach_submenus_has_no_limit_on_a_row() {
+    let (mut h, from, to) = longer_hold();
+    glide(&mut h, 6, None, |t| from + (to - from) * t);
+    let frames = (super::AIM_DWELL * 120.0) as usize + 12;
+    glide(&mut h, frames, None, |t| to + egui::vec2(14.0 * t, 0.0));
+    assert_eq!(image_submenu(&h), "Mode", "still moving after longer than AIM_DWELL");
 }

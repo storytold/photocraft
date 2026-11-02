@@ -8,10 +8,10 @@
 //! The highlight is view state only (egui memory), per top-level menu; it follows the pointer too,
 //! so the mouse and the keyboard share one highlighted row like a native menu.
 //!
-//! An open submenu stays open while the pointer heads for it (#1218), as in macOS and Photoshop
-//! menus: crossing the rows between its row and the submenu, on a diagonal, a curved path or with
-//! a pause on the way, the highlight follows the pointer, but no row crossed opens its submenu.
-//! The pointer resting on another row, or moving away from the submenu, switches as before.
+//! An open submenu stays open while the pointer heads for it (#1218), as in native menus: the
+//! highlight follows the pointer across the rows on the way, but none of them opens its submenu.
+//! The pointer stopping on another row ([`AIM_REST`]), staying on it ([`AIM_DWELL`]) or moving away
+//! from the submenu switches.
 
 use egui::containers::menu::{MenuState, SubMenu, find_menu_root};
 use egui::{Id, Key, Modifiers, Pos2, Rect, Sense, Ui, pos2, vec2};
@@ -25,8 +25,16 @@ const SPEED: f32 = 600.0;
 /// How far above and below an open submenu the pointer may aim and still be heading for it.
 const AIM_SLACK: f32 = 24.0;
 /// How long the pointer may rest on another row, heading for an open submenu, before that row
-/// takes over (macOS waits about as long).
-const AIM_REST: f32 = 0.3;
+/// takes over: long enough to tell it has stopped from a pause on the way, also on a slow move.
+const AIM_REST: f32 = 0.15;
+/// How long the pointer may stay on another row, heading for an open submenu and moving or not,
+/// before that row takes over.
+const AIM_DWELL: f32 = 0.5;
+/// How far the pointer has to go to count as moving: less is a hand resting on the mouse.
+const AIM_STEP: f32 = 6.0;
+/// [`AIM_REST`] with More time to reach submenus on, where any movement counts as moving and
+/// [`AIM_DWELL`] doesn't apply.
+const AIM_REST_LONGER: f32 = 0.3;
 
 /// The pointer heading for the open submenu of a row (#1218).
 #[derive(Clone, Debug)]
@@ -43,9 +51,47 @@ struct Aim {
     /// The pointer reached the submenu: the trip is over, and leaving the submenu for another
     /// row of this menu doesn't hold it (`from` is where the pointer left the row on the way in).
     arrived: bool,
-    /// When the pointer last moved (`InputState::time`). Resting is timed from here, not from
-    /// egui's smoothed velocity, which reads "moving" for about 0.1 s after the pointer stops.
+    /// How the pointer has been moving since it left the row.
+    stride: Stride,
+}
+
+/// Where and since when the pointer has been, for how long it may keep a submenu open.
+#[derive(Clone, Copy, Debug)]
+struct Stride {
+    /// Where the pointer last counted as moving ([`AIM_STEP`]).
+    mark: Pos2,
+    /// When (`InputState::time`). Resting is timed from here, not from egui's smoothed velocity,
+    /// which reads "moving" for about 0.1 s after the pointer stops.
     moved_at: f64,
+    /// The row it is on, and since when.
+    over: Option<usize>,
+    over_at: f64,
+}
+
+impl Stride {
+    fn start(p: Pos2, now: f64, over: Option<usize>) -> Self {
+        Stride { mark: p, moved_at: now, over, over_at: now }
+    }
+
+    /// With the pointer at `p` on row `over` now.
+    fn next(self, p: Pos2, now: f64, over: Option<usize>, longer: bool) -> Self {
+        let mut stride = self;
+        if if longer { p != self.mark } else { (p - self.mark).length() >= AIM_STEP } {
+            (stride.mark, stride.moved_at) = (p, now);
+        }
+        if over != self.over {
+            (stride.over, stride.over_at) = (over, now);
+        }
+        stride
+    }
+
+    /// Seconds until the pointer has rested or stayed long enough to let a submenu go.
+    fn left(self, now: f64, longer: bool) -> f32 {
+        if longer {
+            return AIM_REST_LONGER - (now - self.moved_at) as f32;
+        }
+        (AIM_REST - (now - self.moved_at) as f32).min(AIM_DWELL - (now - self.over_at) as f32)
+    }
 }
 
 /// One actionable row of a menu level: a command or a submenu.
@@ -108,6 +154,8 @@ pub struct Nav {
     keyboard: bool,
     /// Help's search field has text this frame.
     pub(crate) search_text: bool,
+    /// More time to reach submenus is on.
+    pub(crate) longer: bool,
 }
 
 fn nav_id() -> Id {
@@ -280,6 +328,7 @@ impl Nav {
         let ctx = &r.ctx;
         let sub = SubMenu::id_from_widget_id(r.id);
         let target = self.views.get(level + 1).copied();
+        let (over, longer) = (self.row_at(level, p), self.longer);
         // On this menu's rows or separators, not its border (egui's own test for "on the menu").
         let on_rows = ctx.layer_id_at(p) == Some(r.layer_id) && self.last_views.get(level).is_some_and(|v| v.contains(p));
         let Some(slot) = self.aims.get_mut(level) else { return false };
@@ -289,15 +338,13 @@ impl Nav {
             }
             return false;
         }
-        let (now, moved) = ctx.input(|i| (i.time, i.pointer.delta() != egui::Vec2::ZERO));
+        let now = ctx.input(|i| i.time);
         if on_row(r.interact_rect, p) {
-            *slot = Some(Aim { row: r.id, index, from: p, rect: r.interact_rect, held: false, arrived: false, moved_at: now });
+            *slot = Some(Aim { row: r.id, index, from: p, rect: r.interact_rect, held: false, arrived: false, stride: Stride::start(p, now, over) });
             return false;
         }
         let Some(aim) = slot.as_mut().filter(|a| a.row == r.id) else { return false };
-        if moved {
-            aim.moved_at = now;
-        }
+        aim.stride = aim.stride.next(p, now, over, longer);
         let kept = MenuState::from_id(ctx, root, |s| s.open_item) == Some(sub);
         // Off this menu's rows (on the submenu, the menu's border, or anywhere else): egui
         // decides, and the row stays lit while the submenu is open.
@@ -313,8 +360,8 @@ impl Nav {
         // move along), and judges the direction over the last 0.1 s, so a slide toward the arrow
         // and then a step down still reads as heading for it. A click or a key closes menus as
         // usual; so does resting on the other row.
-        let rest = (now - aim.moved_at) as f32;
-        if aim.arrived || !keeps(ctx, aim.from, p, target, rest) {
+        let left = aim.stride.left(now, longer);
+        if aim.arrived || !keeps(ctx, aim.from, p, target, left) {
             if kept {
                 MenuState::from_id(ctx, root, |s| s.open_item = None);
             }
@@ -324,7 +371,7 @@ impl Nav {
             MenuState::from_id(ctx, root, |s| s.open_item = Some(sub));
         }
         aim.held = true;
-        ctx.request_repaint_after_secs(AIM_REST - rest);
+        ctx.request_repaint_after_secs(left);
         true
     }
 
@@ -362,9 +409,14 @@ impl Nav {
         if on_row(aim.rect, p) || !on_rows {
             return None;
         }
-        let (now, moved) = ctx.input(|i| (i.time, i.pointer.delta() != egui::Vec2::ZERO));
-        let rest = if moved { 0.0 } else { (now - aim.moved_at) as f32 };
-        Some(!aim.arrived && keeps(ctx, aim.from, p, self.last_views.get(level + 1).copied(), rest))
+        let now = ctx.input(|i| i.time);
+        let left = aim.stride.next(p, now, self.row_at(level, p), self.longer).left(now, self.longer);
+        Some(!aim.arrived && keeps(ctx, aim.from, p, self.last_views.get(level + 1).copied(), left))
+    }
+
+    /// The row of `level` the pointer at `p` is on, where the rows were last frame.
+    fn row_at(&self, level: usize, p: Pos2) -> Option<usize> {
+        self.last_rows.get(level)?.iter().rposition(|r| on_row(*r, p))
     }
 
     /// After a row is drawn: the pointer moving onto it highlights it; a keyboard move scrolls
@@ -593,11 +645,11 @@ pub(crate) fn on_row(rect: Rect, p: Pos2) -> bool {
 }
 
 /// Does a submenu at `target` stay open with the pointer at `p` on another part of its parent
-/// menu, having left the submenu's row at `from` and rested `rest` seconds? Only while it heads
-/// for the submenu and hasn't rested [`AIM_REST`]; a click or a key closes menus as usual.
-fn keeps(ctx: &egui::Context, from: Pos2, p: Pos2, target: Option<Rect>, rest: f32) -> bool {
+/// menu, having left the submenu's row at `from`, with `left` seconds left ([`Stride::left`])? Only
+/// while it heads for the submenu and has time left; a click or a key closes menus as usual.
+fn keeps(ctx: &egui::Context, from: Pos2, p: Pos2, target: Option<Rect>, left: f32) -> bool {
     let acted = ctx.input(|i| i.pointer.any_pressed() || i.pointer.any_click() || !i.keys_down.is_empty());
-    !acted && rest < AIM_REST && target.is_some_and(|target| heading(from, p, target))
+    !acted && left > 0.0 && target.is_some_and(|target| heading(from, p, target))
 }
 
 /// Is the pointer at `p`, having left a submenu's row at `from`, heading for the submenu at

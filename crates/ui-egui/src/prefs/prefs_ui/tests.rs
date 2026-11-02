@@ -2044,3 +2044,12 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+/// More time to reach submenus is off by default, and Preferences › Interface lists it.
+#[test]
+fn more_time_to_reach_submenus_is_an_interface_option_that_starts_off() {
+    assert!(!photocraft_engine::prefs::Interface::default().more_time_to_reach_submenus);
+    assert_eq!(humanize("moreTimeToReachSubmenus"), "More time to reach submenus");
+    let values = serde_json::to_value(photocraft_engine::prefs::Interface::default()).unwrap();
+    assert_eq!(values["moreTimeToReachSubmenus"], false);
+}
