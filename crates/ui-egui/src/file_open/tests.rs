@@ -993,6 +993,12 @@ fn drag_and_drop_in_the_running_app() {
     pointer.set(h.state().drop_canvas_rect.expect("the canvas is shown").center());
     h.input_mut().dropped_files.push(dropped(file, Err("read from the path".into())));
     h.run_steps(2);
+    // Placement runs on a worker; frame count does not imply completion.
+    let started = std::time::Instant::now();
+    while h.state().jobs.place.is_some() && started.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+    assert!(h.state().jobs.place.is_none(), "placement completed");
     assert_eq!(h.state().session.documents().len(), 3, "no new document");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers + 1);
     assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
