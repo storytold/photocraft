@@ -11,6 +11,7 @@
 //! missing some.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -199,6 +200,9 @@ pub fn poll(log: &EventLog, p: &Value) -> Result<Batch, String> {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub document: Option<u64>,
+    /// Holding the pre-command document makes a revision-only view change distinguishable from
+    /// a content edit. Edits use copy-on-write and get a different Arc while this is held.
+    pub content: Option<Arc<photocraft_doc::Document>>,
     pub revision: u64,
     pub saved_revision: u64,
     pub history: usize,
@@ -224,6 +228,7 @@ impl Snapshot {
         let Some(st) = st else { return Snapshot::default() };
         Snapshot {
             document: Some(st.doc.id.0),
+            content: Some(Arc::clone(&st.doc)),
             revision: st.revision,
             saved_revision: st.saved_revision,
             history: st.history.past_len(),
@@ -242,7 +247,8 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
     let Some(st) = st.filter(|st| before.document == Some(st.doc.id.0)) else { return };
     let doc = st.doc.id.0;
     let src = Some(id);
-    if st.revision != before.revision {
+    let view_only_revision = st.revision != before.revision && before.content.as_ref().is_some_and(|old| Arc::ptr_eq(old, &st.doc));
+    if st.revision != before.revision && !view_only_revision {
         let now: Vec<u64> = st.doc.walk().iter().map(|(_, _, l)| l.id.0).collect();
         let added: Vec<u64> = now.iter().copied().filter(|l| !before.layers.contains(l)).collect();
         let removed: Vec<u64> = before.layers.iter().copied().filter(|l| !now.contains(l)).collect();
@@ -288,7 +294,7 @@ pub fn after_command(log: &mut EventLog, id: &str, before: &Snapshot, st: Option
             json!({"action": action, "states": history, "canUndo": st.history.can_undo(), "canRedo": st.history.can_redo()}),
         );
     }
-    if st.saved_revision != before.saved_revision && st.saved_revision == st.revision {
+    if st.saved_revision != before.saved_revision && st.saved_revision == st.revision && !view_only_revision {
         log.push("document.saved", Some(doc), src, json!({"path": st.path, "revision": st.revision}));
     }
 }
@@ -354,6 +360,18 @@ mod tests {
         s.restore_layer_selection(None, &[], None).unwrap();
         let restored = kinds(&s, cursor);
         assert!(restored.iter().any(|(kind, data)| *kind == "layers.selected" && data["active"].is_null()), "{restored:?}");
+    }
+
+    #[test]
+    fn layer_navigation_does_not_report_a_document_edit_or_save() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+        assert!(s.document_saved(0, "/tmp/nav.psd".into(), None));
+        let cursor = s.events.last();
+        s.execute("layer.selectBelow", json!({})).unwrap();
+        let events = kinds(&s, cursor);
+        assert_eq!(events.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(), ["layers.selected"], "{events:?}");
     }
 
     #[test]
