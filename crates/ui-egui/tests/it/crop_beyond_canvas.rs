@@ -173,11 +173,11 @@ fn editing_a_crop_frame_shows_the_pixels_past_the_canvas() {
         assert!(c[0] > 230 && c[1] < 40, "at x = {x}: {c:?}");
     }
 
-    // Esc cancels: back to the canvas alone.
+    // Esc cancels: the border hides until the next draw, as in Photoshop (#10370).
     h.event(egui::Event::PointerGone);
     h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
     let img = render(&mut h);
-    assert_eq!(h.state().ui.crop_rect, Some([0.0, 0.0, 200.0, 100.0]));
+    assert_eq!(h.state().ui.crop_rect, None);
     assert_eq!(shown(&h, &img), was, "hidden again after Esc");
 }
