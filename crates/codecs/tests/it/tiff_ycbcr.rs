@@ -130,6 +130,52 @@ fn sixteen_bit_ycbcr_reads_as_rgb() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
+fn sixteen_bit_ycbcr_bands_match_whole_decode_with_a_missing_last_strip() {
+    // On 32-bit targets max_alloc also bounds the whole image, so a small allocation cap
+    // cannot force these tiny strips into separate output groups there.
+    let (w, h, rows) = (4u32, 5u32, 2u32);
+    let pixels = [[0u16, 32768, 32768], [65535, 32768, 32768], [19595, 21710, 65535], [32768, 40960, 24576]];
+    let samples: Vec<u16> = (0..w * h).flat_map(|i| pixels[i as usize % pixels.len()]).collect();
+    let weights = [rational(1, 4), rational(1, 2), rational(1, 4)];
+    let icc = sample_icc(512);
+    for little in [true, false] {
+        for missing in [false, true] {
+            let dir = strips(w, h, 16, 3, 6, rows, &u16s(&samples, little))
+                .tag(SUBSAMPLING, SHORT, &[1, 1])
+                .tag(YCBCR_COEFFICIENTS, RATIONAL, &weights)
+                .bytes(ICC_PROFILE, UNDEFINED, &icc);
+            let mut file = build(little, false, &[dir], &[0]);
+            if missing {
+                let past = file.bytes.len() as u64 + 4096;
+                patch_value(&mut file, little, false, 0, 273, 2, past);
+            }
+            let want = decode_with(&file.bytes, &DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
+            let limits = Limits { max_alloc: u64::from(w * rows * 3 * 2), ..Limits::banded() };
+            let mut bands = TiffBands::open(&file.bytes, None, &limits).unwrap();
+            assert_eq!((bands.dimensions(), bands.layout(), bands.sample_type()), ((w, h), ChannelLayout::Rgb, SampleType::U16));
+            let mut got = Image::new(w, h, bands.layout(), bands.sample_type()).unwrap();
+            let mut positions = Vec::new();
+            bands
+                .decode(|x, y, group: &Image| -> Result<(), CodecError> {
+                    positions.push((x, y, group.height()));
+                    assert_eq!((x, group.width(), group.layout(), group.sample_type()), (0, w, ChannelLayout::Rgb, SampleType::U16));
+                    let at = y as usize * w as usize * 3 * 2;
+                    got.data_mut()[at..at + group.data().len()].copy_from_slice(group.data());
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(positions, [(0, 0, 2), (0, 2, 2), (0, 4, 1)], "one output group per strip, including the short last strip");
+            assert_eq!(got.data(), want.data(), "little endian: {little}, missing last strip: {missing}");
+            assert_eq!(bands.icc, want.icc);
+            assert_eq!(bands.meta, want.meta);
+            assert_eq!(bands.warnings, want.warnings);
+            assert_eq!(bands.warnings.iter().any(|w| matches!(w, DecodeWarning::Truncated { .. })), missing);
+        }
+    }
+}
+
+#[test]
 fn unsupported_ycbcr_files_fail_cleanly() {
     // Four samples (an extra sample next to YCbCr).
     let four = strips(1, 1, 8, 4, 6, 1, &[128, 128, 128, 255]).tag(SUBSAMPLING, SHORT, &[1, 1]);
