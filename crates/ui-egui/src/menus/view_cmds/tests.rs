@@ -263,6 +263,24 @@ fn dragged_arrange_borders_resize_the_cells_beside_them() {
     drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(800.0, 0.0));
     let c = cells("threeUpVertical", rect, 3, &splits).unwrap();
     assert!((c[0].max.x - (600.0 - MIN_CELL)).abs() < 0.01 && (c[1].width() - MIN_CELL).abs() < 0.01);
+
+    // #10101 review: the limit is MIN_CELL itself, not the even spacing. On a 300 pt axis a
+    // 2-up cell may still be dragged down to 80 pt, where capping the gap at 0.5/(n+1) would
+    // have stopped it at 75.
+    let narrow = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(300.0, 200.0));
+    let mut splits = Vec::new();
+    drag_border("twoUpVertical", narrow, 2, &mut splits, 0, egui::pos2(-100.0, 0.0));
+    assert!((cells("twoUpVertical", narrow, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
+
+    // And when the neighbours leave no room for a cell of that width, the border stays put and
+    // the list keeps its order rather than taking a value from the wrong side of them.
+    let tight = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 200.0));
+    let mut splits = vec![0.45, 0.55];
+    drag_border("threeUpVertical", tight, 3, &mut splits, 1, egui::pos2(10.0, 0.0));
+    assert_eq!(splits, vec![0.45, 0.55], "no room: unchanged");
+    let mut splits = vec![0.45, 0.55];
+    drag_border("threeUpVertical", tight, 3, &mut splits, 0, egui::pos2(190.0, 0.0));
+    assert_eq!(splits, vec![0.45, 0.55], "and from the other side too");
 }
 
 #[test]

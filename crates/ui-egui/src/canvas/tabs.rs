@@ -85,8 +85,12 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(shown) = arranged_cells(app, rect) {
         app.arrange_start = shown.first().map_or(0, |(d, _)| *d);
         let t = crate::theme::Tokens::get(ui.ctx());
-        // A press on a border grip drags the border (`drag_borders`); it activates no document.
+        // A press on a border grip drags the border (`drag_borders`): it activates no document,
+        // and the canvas under it takes no tool input from it either — a grip overlaps the
+        // active document's edge, where a press would otherwise start a stroke (#10101 review).
         let grips: Vec<Rect> = border_grips(app, rect).into_iter().map(|(_, grip)| grip).collect();
+        app.arrange_grip_press =
+            ui.input(|i| (i.pointer.any_pressed() || i.pointer.any_down()) && i.pointer.press_origin().is_some_and(|p| grips.iter().any(|g| g.contains(p))));
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();

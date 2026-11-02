@@ -215,11 +215,18 @@ pub fn drag_border(layout: &str, rect: egui::Rect, n: usize, splits: &mut Vec<f3
     }
     let own = fractions.get(first..first + count).map(<[f32]>::to_vec).unwrap_or_default();
     let k = split - first;
-    let gap = (MIN_CELL / axis_len).min(0.5 / own.len().saturating_add(1) as f32);
+    // [`MIN_CELL`] in fractions of this axis, whatever the number of cells: capping it by the
+    // even spacing would let a cell fall under the minimum on a long axis (#10101 review).
+    let gap = MIN_CELL / axis_len;
     let lo = if k == 0 { 0.0 } else { own.get(k - 1).copied().unwrap_or(0.0) } + gap;
     let hi = own.get(k + 1).copied().unwrap_or(1.0) - gap;
+    // The neighbours leave no room for a cell of the minimum width: the border stays where it is,
+    // rather than taking a value out of order that would invalidate the whole list.
+    if lo > hi {
+        return;
+    }
     if let Some(f) = fractions.get_mut(split) {
-        *f = ((pos - axis_start) / axis_len).clamp(lo.min(hi), hi.max(lo));
+        *f = ((pos - axis_start) / axis_len).clamp(lo, hi);
     }
     *splits = fractions;
 }

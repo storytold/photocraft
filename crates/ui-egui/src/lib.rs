@@ -465,6 +465,9 @@ pub struct PhotocraftApp {
     /// Window › Arrange: the first document of the shown run of tiles, when there are more
     /// documents than tiles (`canvas::arranged_cells`).
     pub(crate) arrange_start: usize,
+    /// Window › Arrange: this frame's pointer press began on a border grip, so the canvases take
+    /// no tool input from it — the press drags the border (`canvas::tabs::drag_borders`, #10101).
+    pub(crate) arrange_grip_press: bool,
     /// Physical pixels per egui point of the canvas last frame (`ctx.pixels_per_point`, which
     /// folds in both the display scale and Interface › UI Scale). The canvas maps document pixels
     /// to physical pixels, so point-space geometry divides the view zoom by this (see
