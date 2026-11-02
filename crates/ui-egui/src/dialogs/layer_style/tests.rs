@@ -33,6 +33,42 @@ fn dragging_on_the_image_moves_the_selected_shadow() {
     assert_eq!(params(&f, "fx1"), (120.0, 0.0));
 }
 
+/// #10763: with a Gradient Overlay page selected, a drag on the image moves the gradient: its
+/// centre follows the pointer as a fraction of the layer's bounds.
+#[test]
+fn dragging_on_the_image_moves_the_selected_gradient_overlay() {
+    let mut f = Map::new();
+    f.insert("selected".into(), json!("fx1"));
+    f.insert(
+        "effects".into(),
+        json!([
+            {"id": "fx1", "kind": "gradientOverlay", "on": true, "params": {"angle": 90.0, "scale": 100.0}},
+            {"id": "fx2", "kind": "gradientOverlay", "on": true, "params": {"angle": 90.0, "offset": [0.1, 0.1]}},
+        ]),
+    );
+    assert!(drags_gradient(&f));
+    let offset = |f: &Map<String, Value>, id: &str| entry(f, id).unwrap()["params"].get("offset").cloned();
+    // The press keeps the gradient where it is (centred, no offset yet); 50 × 25 px on a
+    // 200 × 100 layer move it a quarter of the way each.
+    drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([0.0, 0.0])));
+    drag_gradient(&mut f, false, [50.0, 25.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([0.25, 0.25])));
+    assert_eq!(offset(&f, "fx2"), Some(json!([0.1, 0.1])), "another instance is left alone");
+    // Back and past the start: the way the pointer went, from where the drag began.
+    drag_gradient(&mut f, false, [-100.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([-0.5, 0.0])));
+    // A new drag starts from the offset the last one left.
+    drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
+    drag_gradient(&mut f, false, [20.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([-0.4, 0.0])));
+    // Not on a gradient page: nothing moves.
+    f.insert("selected".into(), json!(BLENDING));
+    assert!(!drags_gradient(&f));
+    drag_gradient(&mut f, true, [50.0, 50.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx1"), Some(json!([-0.4, 0.0])));
+}
+
 fn session() -> photocraft_engine::Session {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();

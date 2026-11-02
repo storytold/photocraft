@@ -324,6 +324,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
             set(&mut v, gradient_field::KEY, gradient_field::stops_json(stops));
             set(&mut v, gradient_field::OPACITY_KEY, gradient_field::opacity_json(&g.opacity_stops));
             set(&mut v, "reverse", json!(g.reverse));
+            set(&mut v, "offset", json!([g.offset.0, g.offset.1]));
             set(
                 &mut v,
                 "style",
@@ -533,6 +534,37 @@ pub fn drag_shadow(f: &mut Map<String, Value>, start: bool, total: [f64; 2]) {
     let new_angle = if d >= 0.5 { oy.atan2(-ox).to_degrees().round() } else { angle };
     set_param(f, &id, "angle", json!(new_angle));
     set_param(f, &id, "distance", json!(d.round().clamp(0.0, 30000.0)));
+}
+
+/// Whether the selected page is a Gradient Overlay, which a drag on the image moves while the
+/// dialog is open, as in Photoshop (#10763; [`drag_gradient`]).
+pub fn drags_gradient(f: &Map<String, Value>) -> bool {
+    let selected = f.get("selected").and_then(Value::as_str).unwrap_or_default();
+    entry(f, selected).and_then(|e| e.get("kind")).and_then(Value::as_str) == Some("gradientOverlay")
+}
+
+/// A drag on the image with a Gradient Overlay page selected: `start` is true on the press (it
+/// records the gradient's offset then), `total` the pointer's movement since in document pixels
+/// and `bounds` the layer's width and height. The gradient's centre moves with the pointer, kept
+/// as a fraction of the layer's bounds (`offset`, what the renderer takes), to a thousandth.
+pub fn drag_gradient(f: &mut Map<String, Value>, start: bool, total: [f64; 2], bounds: [f64; 2]) {
+    const KEY: &str = "__gradientDrag";
+    let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_gradient(f)) else { return };
+    let Some(p) = entry(f, &id).and_then(|e| e.get("params")) else { return };
+    if start || f.get(KEY).is_none() {
+        let at = p
+            .get("offset")
+            .and_then(Value::as_array)
+            .map_or([0.0, 0.0], |a| [a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)]);
+        f.insert(KEY.into(), json!(at));
+    }
+    let Some([x0, y0]) = f.get(KEY).and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?])) else { return };
+    let [w, h] = [bounds[0].max(1.0), bounds[1].max(1.0)];
+    let (x, y) = (x0 + total[0] / w, y0 + total[1] / h);
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    set_param(f, &id, "offset", json!([(x * 1000.0).round() / 1000.0, (y * 1000.0).round() / 1000.0]));
 }
 
 pub fn initial_fields(layer: &Layer, select: Option<&str>, light: f32) -> Map<String, Value> {

@@ -676,6 +676,15 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
     }
+    // The gradient's centre as a fraction of the layer's bounds, `[x, y]` (0: centred); a drag on
+    // the image with the Layer Style dialog on the page moves it (#10763).
+    if let Some(a) = p.get("offset").and_then(Value::as_array)
+        && let (Some(x), Some(y)) = (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64))
+        && x.is_finite()
+        && y.is_finite()
+    {
+        g.offset = (x.clamp(-4.0, 4.0) as f32, y.clamp(-4.0, 4.0) as f32);
+    }
 }
 
 /// Applies the params present in `p` onto an existing effect, in the command's
