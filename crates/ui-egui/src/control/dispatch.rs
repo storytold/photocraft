@@ -1228,15 +1228,17 @@ fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &P
 /// (#9648). A press or drag with the primary button centres the window there; every other event
 /// is consumed too, so nothing reaches the tool under the dialog, except the moves and release of
 /// a tool gesture begun before the dialog opened, which finish it along the path they draw. A Crop
-/// frame or Straighten drag is one too, though the Crop tool keeps it apart from `app.drag`.
+/// frame or Straighten drag is one too, though the Crop tool keeps it apart from `app.drag`. While
+/// one is open, a second primary press (no mouse can make one) is dropped: it neither centres the
+/// window nor reaches the tool, so no locator press splits the gesture's moves and release.
 fn preview_locator_took(app: &mut PhotocraftApp, g: &PointerGesture, s: &PointerSample) -> bool {
     if crate::filter_preview_ui::locator(app).is_none() {
         return false;
     }
     let (down, up) = (matches!(s.ev, ToolEvent::Down { .. }), matches!(s.ev, ToolEvent::Up { .. }));
     let tool_gesture = app.drag.is_some() || app.crop.drag.is_some() || app.crop.straighten.line.is_some();
-    if !down && !g.secondary && !g.middle && tool_gesture {
-        return false;
+    if !g.secondary && !g.middle && tool_gesture {
+        return down;
     }
     if !g.secondary && !g.middle && !g.space {
         crate::filter_preview_ui::pointer_event(app, down, up, s.x, s.y);

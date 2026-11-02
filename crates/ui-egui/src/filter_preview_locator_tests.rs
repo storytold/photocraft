@@ -282,9 +282,34 @@ fn a_crop_drag_begun_before_the_dialog_still_ends_under_it() {
     crate::filter_dialog::open(h.state_mut(), "filter.sharpen.smartSharpen").unwrap();
     h.run_steps(2);
     pointer(&mut h, json!([{"kind": "move", "x": 160, "y": 120}]));
+    let r = h.state().ui.crop_rect.expect("a crop frame");
+    assert!(r[2] > 150.0 && r[3] > 110.0, "the move under the dialog reached the frame before the release: {r:?}");
     pointer(&mut h, json!([{"kind": "up", "x": 160, "y": 120}]));
     assert!(h.state().crop.drag.is_none(), "the release reached the Crop tool");
     let r = h.state().ui.crop_rect.expect("a crop frame");
     assert!(r[2] > 150.0 && r[3] > 110.0, "the moves under the dialog reached the frame: {r:?}");
     assert!(near(centre(&h), [200.0, 150.0]), "the drag's moves and release are not locator presses: {:?}", centre(&h));
+}
+
+/// A second press while an agent's Brush stroke is still open (no mouse can make one) is dropped:
+/// it neither centres the preview nor reaches the Brush, and the stroke's own moves and release
+/// still finish it.
+#[test]
+fn a_press_during_an_open_tool_gesture_is_dropped() {
+    let mut h = harness(None, 0.0);
+    let before = edits(&h);
+    pointer(&mut h, json!([{"kind": "down", "x": 40, "y": 30}, {"kind": "move", "x": 80, "y": 30}]));
+    crate::filter_dialog::open(h.state_mut(), "filter.sharpen.smartSharpen").unwrap();
+    h.run_steps(2);
+    let points = h.state().drag.as_ref().map(|d| d.points.len()).unwrap_or_default();
+    pointer(&mut h, json!([{"kind": "down", "x": 300, "y": 200}]));
+    assert!(near(centre(&h), [200.0, 150.0]), "the extra press doesn't centre the preview: {:?}", centre(&h));
+    assert_eq!(h.state().drag.as_ref().map(|d| d.points.len()), Some(points), "nor does it reach the open stroke");
+    pointer(&mut h, json!([{"kind": "move", "x": 80, "y": 120}]));
+    assert!(near(centre(&h), [200.0, 150.0]), "the stroke's moves are not a locator drag: {:?}", centre(&h));
+    let pts = h.state().drag.as_ref().map(|d| d.points.clone()).unwrap_or_default();
+    assert!(pts.iter().any(|p| p[1] > 100.0), "the move reached the stroke: {pts:?}");
+    pointer(&mut h, json!([{"kind": "up", "x": 80, "y": 120}]));
+    assert!(h.state().drag.is_none(), "the release ended the stroke");
+    assert_eq!(edits(&h).1, before.1 + 1, "the stroke is one history step");
 }
