@@ -265,6 +265,121 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
 }
 
 #[test]
+fn actual_gap_after_a_nested_subtree_anchors_to_the_trailing_parent_card() {
+    for (offset, upper) in [(-1.0, true), (1.0, false)] {
+        let mut groups = nested_group_tree();
+        groups.push(group("D", vec![]));
+        let mut h = harness_with_state(groups, vec2(520.0, 900.0), with_b_nested_in_a());
+        let source = h.get_by_label("D").rect().center();
+        let lower_header = h.get_by_label("C").rect();
+        let point = pos2(lower_header.center().x, lower_header.top() + offset);
+        pointer_drag(&mut h, source, point);
+
+        if upper {
+            let a = &h.state().0.hierarchy_order[PANEL]["A"];
+            let d_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("D".into())).expect("D should join A's sibling sequence");
+            let last_card_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a3".into())).unwrap();
+            assert!(d_index > last_card_index, "upper half should append after A's trailing card, not inside B: {a:?}");
+            assert!(!h.state().0.hierarchy_order[PANEL].get("").is_some_and(|root| root.contains(&HierarchyOrderEntry::Group("D".into()))));
+        } else {
+            let root = &h.state().0.hierarchy_order[PANEL][""];
+            let d_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("D".into())).unwrap();
+            let c_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
+            assert!(d_index < c_index, "lower half should insert D before C at the root level: {root:?}");
+        }
+    }
+}
+
+#[test]
+fn actual_gap_between_a_group_and_root_card_offers_append_and_root_sibling_destinations() {
+    for (offset, append_into_group) in [(-1.0, true), (1.0, false)] {
+        let groups = vec![group("A", vec![item("a1", "A card", &[])]), group("B", vec![item("b1", "B card", &[])])];
+        let mut h = harness_with_state(groups, vec2(520.0, 900.0), with_root_item_between_groups("B", "b1"));
+        let group_card = h.get_by_label("A card").rect();
+        let source_rect = h.get_by_label("B card").rect();
+        let source = source_rect.center();
+        let boundary = (group_card.bottom() + source_rect.top()) * 0.5;
+        let point = pos2(group_card.center().x, boundary + offset);
+        pointer_drag(&mut h, source, point);
+
+        let a = h.state().0.hierarchy_order[PANEL].get("A").cloned().unwrap_or_default();
+        let root = h.state().0.hierarchy_order[PANEL].get("").cloned().unwrap_or_default();
+        if append_into_group {
+            assert!(a.contains(&HierarchyOrderEntry::Item("b1".into())), "upper half should append the root card to Group A: {a:?}; root={root:?}; all={:?}", h.state().0.hierarchy_order);
+            assert!(!root.contains(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }));
+        } else {
+            assert!(!a.contains(&HierarchyOrderEntry::Item("b1".into())), "lower half should keep the card at the root level: {a:?}");
+            let group_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
+            let card_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }).unwrap();
+            assert_eq!(card_index, group_index + 1, "root card should remain immediately after Group A: {root:?}");
+        }
+    }
+}
+
+#[test]
+fn actual_gap_between_nested_group_and_its_sibling_card_works_at_nested_depth() {
+    for (offset, append_into_group) in [(-1.0, true), (1.0, false)] {
+        let groups = vec![
+            group("A", vec![item("a1", "A card", &[])]),
+            group("B", vec![item("b1", "B card", &[])]),
+            group("C", vec![item("c1", "C card", &[])]),
+        ];
+        let mut initial = PresetUi::default();
+        initial.nest_group(PANEL, &["A".into(), "B".into(), "C".into()], "A", Some("B"));
+        initial.set_hierarchy_order(
+            PANEL,
+            "B",
+            vec![
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::Item("b1".into()),
+            ],
+        );
+        let mut h = harness_with_state(groups, vec2(520.0, 900.0), initial);
+        let group_card = h.get_by_label("A card").rect();
+        let sibling_card = h.get_by_label("B card").rect();
+        let source = h.get_by_label("C card").rect().center();
+        let group_header = h.get_by_label("A").rect();
+        let boundary = (group_card.bottom() + sibling_card.top()) * 0.5;
+        let point = pos2(group_card.center().x, boundary + offset);
+        if append_into_group {
+            pointer_drag(&mut h, source, point);
+        } else {
+            h.event(Event::PointerMoved(source));
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            for step in 1..=8 {
+                h.event(Event::PointerMoved(source + (point - source) * (step as f32 / 8.0)));
+                h.run_steps(1);
+            }
+            let accent = crate::theme::Tokens::get(&h.ctx).accent;
+            let ppp = h.ctx.pixels_per_point();
+            let image = h.render().expect("render lower group-boundary drop preview");
+            let x = (group_header.center().x * ppp).round() as u32;
+            let y = (group_card.bottom() * ppp).round() as u32;
+            assert!(
+                (y.saturating_sub(2)..=(y + 2)).any(|py| x < image.width() && py < image.height() && image.get_pixel(x, py).0[..3] == accent.to_array()[..3]),
+                "lower half should paint a horizontal marker on Group A's lower border, not a vertical card-edge marker"
+            );
+            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+        }
+
+        if append_into_group {
+            let children = &h.state().0.hierarchy_order[PANEL]["A"];
+            assert!(children.contains(&HierarchyOrderEntry::Item("c1".into())), "upper half should append into nested Group A: {children:?}");
+        } else {
+            let siblings = &h.state().0.hierarchy_order[PANEL]["B"];
+            let group_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
+            let moved_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("c1".into())).unwrap();
+            let next_card_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("b1".into())).unwrap();
+            assert_eq!(moved_index, group_index + 1, "lower half should insert immediately after Group A at parent X: {siblings:?}");
+            assert_eq!(next_card_index, moved_index + 1, "the existing sibling card should remain after the moved card: {siblings:?}");
+        }
+    }
+}
+
+#[test]
 fn actual_nested_group_drag_cannot_create_self_or_descendant_cycles() {
     for (source, target) in [("A", "B"), ("B", "B")] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());

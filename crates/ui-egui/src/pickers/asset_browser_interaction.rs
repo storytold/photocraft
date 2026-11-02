@@ -164,8 +164,13 @@ pub(crate) fn group_gap_drop_hits(
 ) -> Vec<DropHitRegion> {
     debug_assert!((rect.height() - 6.0).abs() < f32::EPSILON);
     let middle = rect.center().y;
-    let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), rect.top()), Pos2::new(upper_bounds.right(), middle));
-    let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), middle), Pos2::new(lower_bounds.right(), rect.bottom()));
+    // The six-pixel gap is the hit area, not the marker thickness. Keep both four-pixel
+    // previews vertically centered in that area; only their horizontal extents follow the
+    // corresponding adjacent element and therefore the destination hierarchy level.
+    let marker_top = rect.top() + 1.0;
+    let marker_bottom = rect.bottom() - 1.0;
+    let upper_line = Rect::from_min_max(Pos2::new(upper_bounds.left(), marker_top), Pos2::new(upper_bounds.right(), marker_bottom));
+    let lower_line = Rect::from_min_max(Pos2::new(lower_bounds.left(), marker_top), Pos2::new(lower_bounds.right(), marker_bottom));
     vec![
             DropHitRegion {
                 target: Some(upper),
@@ -188,27 +193,27 @@ pub(crate) fn group_gap_drop_hits(
     ]
 }
 
-/// Return the last direct card in an upper group's child sequence, or the group itself when empty.
-/// This is a fallback for gap layouts where the lower group's parent sequence has no preceding node.
-pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, upper_group: &NodeId) -> (NodeId, usize) {
-    let Some(group) = hierarchy.node(upper_group).filter(|node| node.is_group()) else {
-        return (upper_group.clone(), 0);
-    };
-    let depth = hierarchy
-        .parent_of(upper_group)
-        .map(|mut parent| {
-            let mut depth = 0;
-            while let ContainerId::Group(id) = parent {
-                depth += 1;
-                parent = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
+/// Vertical trailing-edge marker for appending after a card in the grid layout.
+pub(crate) fn card_trailing_marker_rect(rect: Rect) -> Rect {
+    let x = rect.right();
+    Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
+}
+
+/// Return the last visible hierarchy node immediately before a lower group in depth-first order.
+/// Its parent is the meeting container, so inserting after it preserves the node's sibling level.
+pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, lower_group: &NodeId) -> Option<(NodeId, usize)> {
+    fn flatten(nodes: &[HierarchyNode], depth: usize, out: &mut Vec<(NodeId, usize)>) {
+        for node in nodes {
+            out.push((node.id().clone(), depth));
+            if node.is_group() {
+                flatten(node.children(), depth + 1, out);
             }
-            depth
-        })
-        .unwrap_or(0);
-    group.children().iter().rev().find_map(|node| match node {
-        HierarchyNode::Item(id) => Some((id.clone(), depth + 1)),
-        HierarchyNode::Group { .. } => None,
-    }).unwrap_or((upper_group.clone(), depth))
+        }
+    }
+    let mut visible_order = Vec::new();
+    flatten(hierarchy.roots(), 0, &mut visible_order);
+    let index = visible_order.iter().position(|(id, _)| id == lower_group)?;
+    index.checked_sub(1).and_then(|previous| visible_order.get(previous).cloned())
 }
 
 /// Capture the explicit end of the root sibling sequence, including an empty browser's drop area.
@@ -284,7 +289,7 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{card_drop_hit, card_drop_hits, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
+    use super::{card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
     use egui::{Pos2, Rect};
@@ -297,6 +302,13 @@ mod insertion_marker_tests {
 
         assert_eq!(marker.height(), 4.0);
         assert_eq!(marker.center().y, row.top() - 1.0);
+    }
+
+    #[test]
+    fn card_trailing_marker_is_vertical_and_matches_the_card_height() {
+        let card = Rect::from_min_max(Pos2::new(40.0, 20.0), Pos2::new(140.0, 80.0));
+        let marker = card_trailing_marker_rect(card);
+        assert_eq!(marker, Rect::from_min_max(Pos2::new(138.0, 20.0), Pos2::new(142.0, 80.0)));
     }
 
     #[test]
@@ -391,8 +403,10 @@ mod insertion_marker_tests {
         assert_eq!(split[1].region, PointerRegion::LeadingEdge);
         assert_eq!(split[1].target, Some(NodeId::from("lower")));
         assert_eq!(split[1].hit_rect.height(), 3.0);
-        assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 100.0), Pos2::new(131.0, 103.0)));
-        assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 103.0), Pos2::new(231.0, 106.0)));
+        assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 101.0), Pos2::new(131.0, 105.0)));
+        assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 101.0), Pos2::new(231.0, 105.0)));
+        assert_eq!(split[0].indicator_rect.height(), 4.0);
+        assert_eq!(split[1].indicator_rect.height(), 4.0);
 
         for (upper_depth, lower_depth) in [(0, 1), (0, 0), (1, 0)] {
             let split = group_gap_drop_hits(
@@ -443,8 +457,10 @@ mod insertion_marker_tests {
                     assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 3.0), gap.max));
                     assert_eq!(hits[0].hit_rect.height(), 3.0);
                     assert_eq!(hits[1].hit_rect.height(), 3.0);
-                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top), Pos2::new(left + 3.0 + width * 0.4, top + 3.0)));
-                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 3.0), Pos2::new(left + 3.0 + width * 0.8, top + 6.0)));
+                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 1.0), Pos2::new(left + 3.0 + width * 0.4, top + 5.0)));
+                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left + 3.0, top + 1.0), Pos2::new(left + 3.0 + width * 0.8, top + 5.0)));
+                    assert_eq!(hits[0].indicator_rect.height(), 4.0);
+                    assert_eq!(hits[1].indicator_rect.height(), 4.0);
                     assert_eq!(hits[0].depth, 0);
                     assert_eq!(hits[1].depth, 1);
                     assert_eq!(hits[0].order + 1, hits[1].order);
@@ -469,18 +485,23 @@ mod insertion_marker_tests {
     }
 
     #[test]
-    fn group_gap_anchor_prefers_last_card_in_upper_group_and_falls_back_to_group() {
+    fn group_gap_anchor_uses_the_actual_previous_mixed_sibling() {
         use crate::pickers::picker_browser_model::{HierarchyNode as Node, PickerBrowserHierarchy};
         let hierarchy = PickerBrowserHierarchy::new(vec![
-            Node::group("outer", vec![Node::group("inner", vec![Node::group("child", vec![]), Node::item("first"), Node::item("last")])]),
+            Node::group("outer", vec![
+                Node::group("inner", vec![Node::group("child", vec![]), Node::item("first"), Node::item("last")]),
+                Node::item("meeting-card"),
+                Node::group("lower", vec![]),
+            ]),
         ]).unwrap();
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), (NodeId::from("last"), 2));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower")), Some((NodeId::from("meeting-card"), 1)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), Some((NodeId::from("outer"), 0)));
         let empty = PickerBrowserHierarchy::new(vec![Node::group("outer", vec![Node::group("empty", vec![])])]).unwrap();
-        assert_eq!(group_gap_upper_anchor(&empty, &NodeId::from("empty")), (NodeId::from("empty"), 1));
+        assert_eq!(group_gap_upper_anchor(&empty, &NodeId::from("empty")), Some((NodeId::from("outer"), 0)));
     }
 
     #[test]
-    fn group_gap_upper_anchor_uses_the_last_direct_card_at_each_nesting_level() {
+    fn group_gap_upper_anchor_tracks_the_previous_group_or_card_at_each_nesting_level() {
         use crate::pickers::picker_browser_model::HierarchyNode as Node;
 
         let hierarchy = PickerBrowserHierarchy::new(vec![
@@ -490,14 +511,14 @@ mod insertion_marker_tests {
                     Node::item("root-first"),
                     Node::group("nested", vec![Node::item("nested-first"), Node::group("deep", vec![]), Node::item("nested-last")]),
                     Node::item("root-last"),
+                    Node::group("lower-root", vec![]),
                 ],
             ),
         ])
         .unwrap();
 
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("root")), (NodeId::from("root-last"), 1));
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("nested")), (NodeId::from("nested-last"), 2));
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("deep")), (NodeId::from("deep"), 2));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower-root")), Some((NodeId::from("root-last"), 1)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("deep")), Some((NodeId::from("nested-first"), 2)));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::pickers::asset_browser_interaction::{
     asset_browser_take_release,
     asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_header_drop_hit, header_drop_before, hierarchy_group_drop,
-    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
     root_prepend_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
@@ -1585,7 +1585,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             // group after its last direct child; the lower half inserts before the lower group.
             if canonical_hierarchy_drag {
                 for pair in gap_headers.windows(2) {
-                    let (upper_id, _upper_rect, upper_depth, _upper_open) = &pair[0];
+                    let (upper_id, _upper_rect, _upper_depth, _upper_open) = &pair[0];
                     let (lower_id, lower_rect, lower_depth, _) = &pair[1];
                     let gap_rect = Rect::from_min_max(
                         pos2(lower_rect.left(), lower_rect.top() - GROUP_GAP_DROP_HEIGHT * 0.5),
@@ -1597,31 +1597,151 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             ui.id().with(("group-gap", panel, upper_id, lower_id)),
                             Sense::hover(),
                         );
-                        let (upper_anchor, upper_anchor_depth) = group_gap_upper_anchor(&hierarchy, upper_id);
-                        let upper_bounds = canonical_node_bounds.borrow().get(&upper_anchor).copied().unwrap_or(*_upper_rect);
+                        let upper_anchor = group_gap_upper_anchor(&hierarchy, lower_id);
+                        let upper_parent = hierarchy.parent_of(lower_id).unwrap_or(ContainerId::Root);
+                        let parent_depth = match &upper_parent {
+                            ContainerId::Root => 0,
+                            ContainerId::Group(parent_id) => {
+                                let mut depth = 0;
+                                let mut ancestor = hierarchy.parent_of(parent_id).unwrap_or(ContainerId::Root);
+                                while let ContainerId::Group(id) = ancestor {
+                                    depth += 1;
+                                    ancestor = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
+                                }
+                                depth
+                            }
+                        };
+                        let upper_bounds = upper_anchor
+                            .as_ref()
+                            .and_then(|(anchor, _)| canonical_node_bounds.borrow().get(anchor).copied())
+                            .or_else(|| match &upper_parent {
+                                ContainerId::Root => None,
+                                ContainerId::Group(parent_id) => canonical_node_bounds.borrow().get(parent_id).copied(),
+                            })
+                            .unwrap_or(*_upper_rect);
+                        let upper_target = upper_anchor.as_ref().map(|(anchor, _)| anchor.clone()).unwrap_or_else(|| upper_id.clone());
                         let lower_bounds = canonical_node_bounds.borrow().get(lower_id).copied().unwrap_or(*lower_rect);
                         let mut hits = group_gap_drop_hits(
                             gap_rect,
-                            upper_anchor,
+                            upper_target,
                             lower_id.clone(),
                             upper_bounds,
                             lower_bounds,
-                            upper_anchor_depth.max(*upper_depth),
+                            upper_anchor.as_ref().map(|(_, depth)| *depth).unwrap_or(parent_depth),
                             *lower_depth,
                             canonical_drop_hits.borrow().len(),
                         );
-                        // The gap immediately before a visible child group is also the parent's
-                        // append target. This remains valid when the dragged group is already a
-                        // child of that parent: AppendTo reorders it to the end of the same list.
-                        if hierarchy.parent_of(lower_id) == Some(ContainerId::Group(upper_id.clone())) {
+                        // A card's trailing edge is a vertical insertion point (the same
+                        // orientation used when inserting after a card in the grid). Group
+                        // anchors retain the horizontal boundary marker spanning the header.
+                        if let Some((anchor, _)) = upper_anchor.as_ref()
+                            && hierarchy.node(anchor).is_some_and(|node| !node.is_group())
+                        {
+                            hits[0].indicator_rect = card_trailing_marker_rect(upper_bounds);
+                        }
+                        // If the lower group is first in its sibling sequence, append to its parent.
+                        // Otherwise insert after the actual preceding sibling (card or group).
+                        let anchor_is_parent = upper_anchor.as_ref().is_some_and(|(anchor, _)| {
+                            upper_parent == ContainerId::Group(anchor.clone())
+                        });
+                        if let Some((anchor, _)) = upper_anchor.filter(|_| !anchor_is_parent) {
+                            hits[0].target = Some(anchor);
+                            hits[0].container = None;
+                            hits[0].region = PointerRegion::TrailingEdge;
+                        } else {
                             hits[0].target = None;
-                            hits[0].container = Some(ContainerId::Group(upper_id.clone()));
+                            hits[0].container = Some(upper_parent);
                             hits[0].region = PointerRegion::ContainerEnd;
                         }
                         for hit in hits {
                             canonical_drop_hits.borrow_mut().push((hit, response.clone()));
                         }
                     }
+                }
+                // Any group may be followed by a card at the same sibling level, including
+                // inside arbitrarily nested parent groups. Offer a split boundary after the
+                // complete preceding group subtree: append into that group, or insert after
+                // the group while remaining in its parent container.
+                fn collect_group_item_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(NodeId, NodeId)>) {
+                    for pair in nodes.windows(2) {
+                        if matches!(pair, [HierarchyNode::Group { .. }, HierarchyNode::Item(_)]) {
+                            out.push((pair[0].id().clone(), pair[1].id().clone()));
+                        }
+                    }
+                    for node in nodes {
+                        if node.is_group() {
+                            collect_group_item_sibling_pairs(node.children(), out);
+                        }
+                    }
+                }
+                let mut group_item_pairs = Vec::new();
+                collect_group_item_sibling_pairs(hierarchy.roots(), &mut group_item_pairs);
+                for (group_id, item_id) in group_item_pairs {
+                    let Some(group_header) = canonical_node_bounds.borrow().get(&group_id).copied() else {
+                        continue;
+                    };
+                    let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
+                        continue;
+                    };
+                    let mut subtree_nodes = Vec::new();
+                    fn collect_group_nodes(node: &HierarchyNode, out: &mut Vec<NodeId>) {
+                        out.push(node.id().clone());
+                        for child in node.children() {
+                            collect_group_nodes(child, out);
+                        }
+                    }
+                    let Some(group_node) = hierarchy.node(&group_id) else {
+                        continue;
+                    };
+                    collect_group_nodes(group_node, &mut subtree_nodes);
+                    let subtree_bounds: Vec<(NodeId, Rect)> = subtree_nodes
+                        .iter()
+                        .filter_map(|id| canonical_node_bounds.borrow().get(id).copied().map(|rect| (id.clone(), rect)))
+                        .collect();
+                    let Some(group_bottom) = subtree_bounds.iter().map(|(_, rect)| rect.bottom()).max_by(f32::total_cmp) else {
+                        continue;
+                    };
+                    let boundary_y = (group_bottom + item_bounds.top()) * 0.5;
+                    let gap = Rect::from_min_max(
+                        pos2(ui.clip_rect().left(), boundary_y - GROUP_GAP_DROP_HEIGHT * 0.5),
+                        pos2(ui.clip_rect().right(), boundary_y + GROUP_GAP_DROP_HEIGHT * 0.5),
+                    );
+                    let response = ui.interact(gap, ui.id().with(("group-root-card-gap", panel, &group_id, &item_id)), Sense::hover());
+                    let marker_y = group_bottom;
+                    let append_marker = Rect::from_min_max(
+                        pos2(group_header.left(), marker_y - 2.0),
+                        pos2(group_header.right(), marker_y + 2.0),
+                    );
+                    let order = canonical_drop_hits.borrow().len();
+                    canonical_drop_hits.borrow_mut().push((
+                        DropHitRegion {
+                            target: None,
+                            container: Some(ContainerId::Group(group_id.clone())),
+                            region: PointerRegion::ContainerEnd,
+                            hit_rect: Rect::from_min_max(gap.min, pos2(gap.right(), gap.center().y)),
+                            indicator_rect: append_marker,
+                            // This boundary takes precedence over overlapping neighboring card
+                            // edge regions at every hierarchy depth.
+                            depth: usize::MAX,
+                            order,
+                        },
+                        response.clone(),
+                    ));
+                    canonical_drop_hits.borrow_mut().push((
+                        DropHitRegion {
+                            target: Some(group_id),
+                            container: None,
+                            region: PointerRegion::TrailingEdge,
+                            hit_rect: Rect::from_min_max(pos2(gap.left(), gap.center().y), gap.max),
+                            // This is an after-group sibling insertion, so show the group's
+                            // horizontal lower border rather than the last card's vertical edge.
+                            indicator_rect: append_marker,
+                            // See the append half above: this boundary wins overlapping card hits.
+                            depth: usize::MAX,
+                            order: order.saturating_add(1),
+                        },
+                        response,
+                    ));
                 }
             }
             // `dnd_release_payload` takes the one global egui payload. Resolve the card target
