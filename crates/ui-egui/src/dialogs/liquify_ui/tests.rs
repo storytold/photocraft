@@ -1217,7 +1217,7 @@ fn premultiplied_preview_samples_match_the_straight_canvas_display() {
         let samples: Vec<_> = pixels.iter().map(|p| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]).collect();
         let mut out = vec![[0; 4]; samples.len()];
         display.premultiplied_rgba8(&samples, &mut out);
-        for ((straight, got), pixel) in pixels.iter().zip(out).zip(image.pixels.chunks_exact(4)) {
+        for ((straight, got), pixel) in pixels.iter().zip(out).zip(image.pixels.as_chunks::<4>().0.iter()) {
             let a = pixel[3];
             let expected = [0, 1, 2].map(|k| ((u16::from(pixel[k]) * u16::from(a) + 127) / 255) as u8);
             assert_eq!(got[3], a);
