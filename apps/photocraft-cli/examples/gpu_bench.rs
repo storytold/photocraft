@@ -176,7 +176,7 @@ fn sample_doc(w: u32, h: u32, layer_count: usize) -> Document {
         let rw = (w as i32 - x0).max(1);
         let rh = (h as i32 - y0).max(1);
         s.fill_rect(Rect::new(x0, y0, x0 + rw, y0 + rh), &[0.3, 0.5, 0.7, 0.8]);
-        let mut layer = Layer::new(&format!("Layer {}", idx + 1), LayerContent::Raster(s));
+        let mut layer = Layer::new(format!("Layer {}", idx + 1), LayerContent::Raster(s));
         layer.opacity = 0.85;
         layer.blend = blend_modes[idx % blend_modes.len()];
         doc.layers.push(layer);
