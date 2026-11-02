@@ -84,6 +84,59 @@ fn disabled_provider_keeps_new_saves_local() {
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
 }
 
+/// The admitted capture must still belong to the first chooser before any durable ACK.
+fn assert_queued_save_capture_is_owned_by_first_document(
+    app: &PhotocraftApp,
+    provider: &Host,
+    written: &Written,
+    capture: &file_providers::Event,
+    first: photocraft_doc::DocId,
+    second: photocraft_doc::DocId,
+) {
+    assert_eq!(capture.metadata["type"], "save");
+    assert_eq!(capture.metadata["documentId"], first.0.to_string());
+    assert_eq!(capture.metadata["revision"], "7");
+    assert_eq!(capture.metadata["filename"], "first.psd");
+    assert_eq!(capture.metadata["destination"], "provider");
+    assert_eq!(capture.bytes.as_deref(), Some([10, 20, 30].as_slice()));
+    assert!(provider.pending_for(first));
+    assert!(!provider.pending_for(second));
+    assert_eq!(app.session.documents().iter().find(|state| state.doc.id == first).unwrap().saved_revision, 2);
+    assert!(written.borrow().is_empty());
+}
+
+/// Only the first capture's checkpoint may change when its provider ACK is consumed.
+fn assert_queued_save_ack_preserves_other_document(
+    app: &PhotocraftApp,
+    provider: &Host,
+    written: &Written,
+    first: photocraft_doc::DocId,
+    second: photocraft_doc::DocId,
+    second_document: &std::sync::Arc<photocraft_doc::Document>,
+) {
+    let saved = app.session.documents().iter().find(|state| state.doc.id == first).unwrap();
+    assert_eq!(saved.revision, 7);
+    assert_eq!(saved.saved_revision, 7);
+    assert!(!saved.is_dirty());
+    assert_eq!(saved.doc.name, "first.psd");
+    assert!(saved.path.is_none());
+    assert!(provider.bound(first));
+    assert!(!provider.bound(second));
+    assert!(!provider.pending_for(first));
+    assert!(!provider.pending_for(second));
+    let selected = app.session.active().unwrap();
+    assert_eq!(selected.doc.id, second);
+    assert!(std::sync::Arc::ptr_eq(&selected.doc, second_document));
+    assert_eq!(selected.revision, 11);
+    assert_eq!(selected.saved_revision, 3);
+    assert!(selected.is_dirty());
+    assert!(selected.path.is_none());
+    assert!(app.ui.recent_files.is_empty());
+    assert!(written.borrow().is_empty());
+    assert!(!app.file_dialog_open());
+    assert!(!app.saving());
+}
+
 #[test]
 fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
     let ctx = egui::Context::default();
@@ -114,40 +167,11 @@ fn a_rejected_queued_save_cannot_retarget_the_first_provider_dialog() {
     let events = provider.take_events();
     assert_eq!(events.len(), 1);
     let capture = events.into_iter().next().unwrap();
-    assert_eq!(capture.metadata["type"], "save");
-    assert_eq!(capture.metadata["documentId"], first.0.to_string());
-    assert_eq!(capture.metadata["revision"], "7");
-    assert_eq!(capture.metadata["filename"], "first.psd");
-    assert_eq!(capture.metadata["destination"], "provider");
-    assert_eq!(capture.bytes.as_deref(), Some([10, 20, 30].as_slice()));
-    assert!(provider.pending_for(first));
-    assert!(!provider.pending_for(second));
-    assert_eq!(app.session.documents().iter().find(|state| state.doc.id == first).unwrap().saved_revision, 2);
-    assert!(written.borrow().is_empty());
+    assert_queued_save_capture_is_owned_by_first_document(&app, &provider, &written, &capture, first, second);
 
     provider.result(capture.metadata["requestId"].as_str().unwrap().into(), "saved".into(), "resource-first".into()).unwrap();
     file_providers::tick(&mut app, &ctx);
-    let saved = app.session.documents().iter().find(|state| state.doc.id == first).unwrap();
-    assert_eq!(saved.revision, 7);
-    assert_eq!(saved.saved_revision, 7);
-    assert!(!saved.is_dirty());
-    assert_eq!(saved.doc.name, "first.psd");
-    assert!(saved.path.is_none());
-    assert!(provider.bound(first));
-    assert!(!provider.bound(second));
-    assert!(!provider.pending_for(first));
-    assert!(!provider.pending_for(second));
-    let selected = app.session.active().unwrap();
-    assert_eq!(selected.doc.id, second);
-    assert!(std::sync::Arc::ptr_eq(&selected.doc, &second_document));
-    assert_eq!(selected.revision, 11);
-    assert_eq!(selected.saved_revision, 3);
-    assert!(selected.is_dirty());
-    assert!(selected.path.is_none());
-    assert!(app.ui.recent_files.is_empty());
-    assert!(written.borrow().is_empty());
-    assert!(!app.file_dialog_open());
-    assert!(!app.saving());
+    assert_queued_save_ack_preserves_other_document(&app, &provider, &written, first, second, &second_document);
 }
 
 #[test]
