@@ -1374,7 +1374,7 @@ mod tests {
             fill.blend = branch.blend;
             doc.layers.push(fill);
         }
-        let pixels = photocraft_compose::render(&doc, doc.bounds()).px;
+        let pixels = photocraft_compose::render(&doc, doc.bounds()).into_px();
         assert_eq!(pixels[0], [0.; 4]);
         for (pixel, alpha) in pixels.iter().skip(1).zip([0.25, 0.75, 1.]) {
             assert_eq!(*pixel, [0.25, 0.25, 0.25, alpha]);

@@ -506,7 +506,7 @@ mod tests {
                     doc.layers.push((*layer).clone());
                     let mut counterpart = Document::new("Independent native minimum", doc.size, doc.mode, depth);
                     counterpart.layers.push(Layer::new("Native minimum", LayerContent::Fill(expected.clone())));
-                    let pixels = photocraft_compose::render(&doc, doc.bounds()).px;
+                    let pixels = photocraft_compose::render(&doc, doc.bounds()).into_px();
                     assert!(pixels.iter().any(|pixel| pixel[3] > 0.));
                     assert_eq!(pixels, photocraft_compose::render(&counterpart, counterpart.bounds()).px);
                     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -643,7 +643,7 @@ mod tests {
             expected.layers.push(shape("Expected", vec![photocraft_doc::Subpath::polygon(&[(2., 3.), (7., 3.), (7., 7.), (2., 7.)])], paint));
             prepare_shapes(&mut actual);
             prepare_shapes(&mut expected);
-            let before = photocraft_compose::render(&actual, actual.bounds()).px;
+            let before = photocraft_compose::render(&actual, actual.bounds()).into_px();
             assert_eq!(before, photocraft_compose::render(&expected, expected.bounds()).px);
             assert_eq!(before[0], [0.; 4]);
             assert!(

@@ -199,8 +199,8 @@ fn compare(imported: &Session, native: &Session) {
         assert!(actual_shape.cache.is_some(), "first open and edits prepare a native shape cache");
         assert_eq!(&actual, b, "native geometry, paint/stroke, cache, placement and layer state");
     }
-    let actual = photocraft_compose::flatten(a).px;
-    let expected = photocraft_compose::flatten(b).px;
+    let actual = photocraft_compose::flatten(a).into_px();
+    let expected = photocraft_compose::flatten(b).into_px();
     assert_eq!(actual, expected, "ordinary native rendering, not the unrelated source pixel cache");
     assert!(actual.iter().any(|pixel| pixel[3] > 0.0));
 }

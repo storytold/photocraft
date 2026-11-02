@@ -403,8 +403,8 @@ mod tests {
             };
             let actual = build(actual_mask);
             let expected = build(expected_mask);
-            let before = photocraft_compose::render(&actual, area).px;
-            let counterpart = photocraft_compose::render(&expected, area).px;
+            let before = photocraft_compose::render(&actual, area).into_px();
+            let counterpart = photocraft_compose::render(&expected, area).into_px();
             if depth == SampleType::F32 {
                 // Native Curves samples its pencil ramp into a 4096-entry
                 // float LUT, then interpolates that LUT during evaluation.

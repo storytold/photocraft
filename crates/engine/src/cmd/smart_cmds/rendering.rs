@@ -341,7 +341,7 @@ pub(crate) fn prepared_source_image(doc: &Document, fmt: PixelFormat, mode: Opti
             let mut one = l.clone();
             one.blend = BlendMode::Normal;
             one.clipped = false;
-            photocraft_compose::render_layer(&one, bounds).px
+            photocraft_compose::render_layer(&one, bounds).into_px()
         })
         .collect();
     if frames.is_empty() {

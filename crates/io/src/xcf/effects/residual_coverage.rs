@@ -386,7 +386,7 @@ mod tests {
                 let mut top = Layer::new("Wind", LayerContent::Raster(changed));
                 top.opacity = opacity;
                 document.layers.push(top);
-                let pixels = photocraft_compose::render(&document, bounds).px.into_iter().flatten().collect::<Vec<_>>();
+                let pixels = photocraft_compose::render(&document, bounds).into_px().into_iter().flatten().collect::<Vec<_>>();
                 let mut result = Surface::new(input.format());
                 result.write_region(bounds, &pixels);
                 result

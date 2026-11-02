@@ -163,7 +163,7 @@ fn concatenated_bzip2_xz_and_xz_padding_form_one_source_stream() {
     let split = 3;
     let bz = [bzip2(&source[..split]), bzip2(&source[split..])].concat();
     let xz = [xz(&source[..split], 0), vec![0; 8], xz(&source[split..], 0), vec![0; 4]].concat();
-    let expected = photocraft_compose::flatten(&photocraft_io::import("plain.xcf", &source).unwrap().document).px;
+    let expected = photocraft_compose::flatten(&photocraft_io::import("plain.xcf", &source).unwrap().document).into_px();
     for wrapped in [bz, xz] {
         assert_eq!(photocraft_compose::flatten(&photocraft_io::import("members.pcraft", &wrapped).unwrap().document).px, expected);
     }

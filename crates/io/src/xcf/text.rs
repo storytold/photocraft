@@ -1200,7 +1200,7 @@ mod tests {
                 engine.render_layer(actual, 72., format);
                 engine.render_layer(&mut expected, 72., format);
                 assert_eq!(actual.cache, expected.cache);
-                let pixels = photocraft_compose::render(&doc, doc.bounds()).px;
+                let pixels = photocraft_compose::render(&doc, doc.bounds()).into_px();
                 assert!(pixels.iter().any(|pixel| pixel[3] > 0.), "independent native text must render visible glyphs");
                 let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
                 let mut reopened = photocraft_format::load_from_bytes(&saved).unwrap();

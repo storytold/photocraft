@@ -513,7 +513,7 @@ fn finite_default_operations_prepare_and_reopen_or_report_retained_source() {
             assert!(smart.cache.is_some(), "{operation}: first-open native cache not prepared");
         }
         assert_current_native_commands(&state.doc, operation, 0);
-        let pixels = photocraft_compose::flatten(&state.doc).px;
+        let pixels = photocraft_compose::flatten(&state.doc).into_px();
         assert!(pixels.iter().flatten().all(|sample| sample.is_finite()), "{operation}: nonfinite native output");
         let report = state.doc.metadata.import_conversion.clone();
         let saved = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
@@ -569,13 +569,13 @@ fn transparent_native_paper_replaces_full_stage_and_partial_stage_uses_native_un
         session.color.settings.ask_on_missing = false;
         open_bytes_as(&mut session, "transparent-paper.xcf", &bytes, None, None).unwrap();
         let state = session.active().unwrap();
-        let actual = photocraft_compose::flatten(&state.doc).px;
+        let actual = photocraft_compose::flatten(&state.doc).into_px();
         let expected = if opacity == 1.0 {
             vec![[0.0; 4]; 8 * 6]
         } else {
             // Ordinary native source-over of a transparent result reveals its
             // unchanged native underlay, including the original fractional alpha.
-            photocraft_compose::flatten(&independently_native_chain(&[])).px
+            photocraft_compose::flatten(&independently_native_chain(&[])).into_px()
         };
         assert_eq!(actual, expected, "opacity {opacity}");
         let Some(ImportConversion::Report(report)) = state.doc.metadata.import_conversion.as_deref() else { panic!("missing report") };
@@ -617,8 +617,8 @@ fn noncommuting_stored_order_and_omitted_siblings_match_independent_native_comma
             ("image.adjustments.invert", json!({})),
             ("image.adjustments.exposure", json!({"exposure":1.0,"offset":0.0,"gamma":1.0})),
         ]);
-        let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).px;
-        let expected = photocraft_compose::flatten(&expected).px;
+        let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).into_px();
+        let expected = photocraft_compose::flatten(&expected).into_px();
         assert_ne!(expected, photocraft_compose::flatten(&reversed).px, "oracle must distinguish order");
         assert!(pixels.iter().zip(&expected).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2.0 / 255.0)), "omitted{omitted}");
         let Some(ImportConversion::Report(report)) = session.active().unwrap().doc.metadata.import_conversion.as_deref() else { panic!() };
@@ -657,7 +657,7 @@ fn source_alpha_extraction_becomes_an_ordinary_native_alpha_to_color_filter() {
         }
         commands.push(("filter.other.alphaToColor", json!({})));
         let expected = independently_native_chain(&commands);
-        let actual = photocraft_compose::flatten(&session.active().unwrap().doc).px;
+        let actual = photocraft_compose::flatten(&session.active().unwrap().doc).into_px();
         assert_eq!(actual, photocraft_compose::flatten(&expected).px);
         let Some(ImportConversion::Report(report)) = session.active().unwrap().doc.metadata.import_conversion.as_deref() else { panic!() };
         let outcome = report.entries.iter().find(|entry| entry.feature_code == "xcf.layer_effect").unwrap();
@@ -693,7 +693,7 @@ fn malformed_optional_effect_mask_and_unknown_component_are_retained_without_app
         session.color.settings.ask_on_missing = false;
         open_bytes_as(&mut session, "optional.xcf", &source, None, None).unwrap();
         let expected = independently_native_chain(&[("image.adjustments.exposure", json!({"exposure":1.0,"offset":0.0,"gamma":1.0}))]);
-        let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).px;
+        let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).into_px();
         assert_eq!(pixels, photocraft_compose::flatten(&expected).px, "unknown_component{unknown_component}");
         let Some(ImportConversion::Report(report)) = session.active().unwrap().doc.metadata.import_conversion.as_deref() else { panic!() };
         let outcomes: Vec<_> = report.entries.iter().filter(|entry| entry.feature_code == "xcf.layer_effect").collect();
@@ -786,7 +786,7 @@ fn nondefault_native_source_in_mode(step: Step<'_>, required_commands: &[&str], 
     if requires_mask {
         assert!(masks > 0, "{operation}: native optical coverage missing");
     }
-    let actual = photocraft_compose::flatten(&state.doc).px;
+    let actual = photocraft_compose::flatten(&state.doc).into_px();
     assert!(actual.iter().flatten().all(|v| v.is_finite()), "{operation}: nonfinite native samples");
     assert!(actual.iter().all(|v| (0. ..=1.).contains(&v[3])), "{operation}: invalid native coverage");
     assert!(actual.iter().any(|v| v[3] > 0.), "{operation}: meaningful source variant unexpectedly empty");
@@ -1304,7 +1304,7 @@ fn graph_pixels_match(actual: &Document, expected: &Document, label: &str) {
 }
 /// Check edit/undo and source-independent native reopening while preserving inert conversion history.
 fn graph_lifecycle(mut session: Session, expected: &Document, label: &str) {
-    let actual = photocraft_compose::flatten(&session.active().unwrap().doc).px;
+    let actual = photocraft_compose::flatten(&session.active().unwrap().doc).into_px();
     graph_pixels_match(&session.active().unwrap().doc, expected, label);
     assert_current_native_commands(&session.active().unwrap().doc, label, 0);
     let report = session.active().unwrap().doc.metadata.import_conversion.clone();

@@ -1615,7 +1615,7 @@ mod tests {
                 ColorMode::Rgb,
             );
             let mut result = Surface::new(format);
-            result.write_region(bounds, &buffer.px.into_iter().flatten().collect::<Vec<_>>());
+            result.write_region(bounds, &buffer.into_px().into_iter().flatten().collect::<Vec<_>>());
             result
         };
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {

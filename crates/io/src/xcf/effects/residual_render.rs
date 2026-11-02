@@ -1313,7 +1313,7 @@ mod tests {
         }
         let mut doc = Document::new("native transparent paper", original.size, original.mode, original.depth);
         doc.layers.push(Layer::group("native paper", layers));
-        let full = photocraft_compose::render(&doc, doc.bounds()).px;
+        let full = photocraft_compose::render(&doc, doc.bounds()).into_px();
         assert!(full.iter().any(|p| p[3] == 0.));
         assert!(full.iter().any(|p| p[3] == 1.));
         let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
         blue.fill_rect(doc.bounds(), &[0., 0., 1., 1.]);
         doc.layers[0].opacity = 0.4;
         doc.layers.insert(0, Layer::new("ordinary native underlay", LayerContent::Raster(blue)));
-        let mixed = photocraft_compose::render(&doc, doc.bounds()).px;
+        let mixed = photocraft_compose::render(&doc, doc.bounds()).into_px();
         for (a, b) in full.iter().zip(&mixed) {
             assert_eq!(b[3], 1.);
             if a[3] == 0. {
@@ -1442,7 +1442,7 @@ mod tests {
         let mut doc = Document::new("Native pattern", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
         doc.layers.push(layer);
         doc.patterns = mapping.patterns;
-        let pixels = photocraft_compose::render(&doc, doc.bounds()).px;
+        let pixels = photocraft_compose::render(&doc, doc.bounds()).into_px();
         for (p, a) in pixels.iter().zip([0.25, 0.5, 0.75]) {
             assert!((p[3] - a).abs() < 1e-6);
         }
@@ -1647,7 +1647,7 @@ mod tests {
         stroke.effects.items = branches[1].layer_effects.clone();
         let mut inside = Document::new("native outline", Size::new(32, 24), ColorMode::Rgb, SampleType::F32);
         inside.layers.push(stroke);
-        let outline = photocraft_compose::render(&inside, inside.bounds()).px;
+        let outline = photocraft_compose::render(&inside, inside.bounds()).into_px();
         assert_eq!(outline[12 * 32 + 16][3], 0.);
         assert!(outline.iter().any(|p| p[3] > 0.));
         let mut cache = Surface::new(PixelFormat::RGBA32F);
@@ -1657,7 +1657,7 @@ mod tests {
         let mut layer = Layer::new("native outline result", LayerContent::Raster(cache));
         layer.effects.items = branches[1].post_layer_effects.clone();
         outside.layers.push(layer);
-        let result = photocraft_compose::render(&outside, outside.bounds()).px;
+        let result = photocraft_compose::render(&outside, outside.bounds()).into_px();
         assert_eq!(result[12 * 32 + 16][3], 0.);
         assert!(result.iter().any(|p| p[3] > 0.));
         let bytes = photocraft_format::save_to_bytes(&outside, &Default::default()).unwrap();
@@ -1716,7 +1716,7 @@ mod tests {
                     if !branch.post_layer_effects.is_empty() {
                         let mut inner = Document::new("Native pre-bevel", Size::new(32, 24), ColorMode::Rgb, SampleType::F32);
                         inner.layers.push(layer);
-                        let pixels = photocraft_compose::render(&inner, r).px;
+                        let pixels = photocraft_compose::render(&inner, r).into_px();
                         let mut cache = Surface::new(PixelFormat::RGBA32F);
                         cache.write_region(r, &pixels.iter().flatten().copied().collect::<Vec<_>>());
                         layer = Layer::new("Native outer bevel", LayerContent::Raster(cache));
@@ -1728,7 +1728,7 @@ mod tests {
                     layer.clipped = branch.clipped;
                     native.layers.push(layer);
                 }
-                let result = photocraft_compose::render(&native, r).px;
+                let result = photocraft_compose::render(&native, r).into_px();
                 assert_eq!(result[12 * 32 + 16], [1., 0., 0., 1.]);
                 assert!(result[12 * 32 + 18][3] > 0.);
                 if !bevel {
@@ -1741,7 +1741,7 @@ mod tests {
                 let mut outside = Document::new("Native outer scope", Size::new(32, 24), ColorMode::Rgb, SampleType::F32);
                 outside.layers.push(Layer::new("Unrelated blue", LayerContent::Raster(background)));
                 outside.layers.push(Layer::new("Isolated outline", LayerContent::Raster(cache)));
-                let before = photocraft_compose::render(&outside, r).px;
+                let before = photocraft_compose::render(&outside, r).into_px();
                 assert_eq!(before[0], [0., 0., 1., 1.]);
                 let bytes = photocraft_format::save_to_bytes(&outside, &Default::default()).unwrap();
                 let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
@@ -1784,7 +1784,7 @@ mod tests {
             layer.effects.items = mapping.layer_effects;
             let mut native = Document::new("Native range", Size::new(32, 24), ColorMode::Rgb, SampleType::F32);
             native.layers.push(layer);
-            let before = photocraft_compose::render(&native, native.bounds()).px;
+            let before = photocraft_compose::render(&native, native.bounds()).into_px();
             let saved = photocraft_format::save_to_bytes(&native, &Default::default()).unwrap();
             let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
             assert_eq!(before, photocraft_compose::render(&reopened, reopened.bounds()).px);

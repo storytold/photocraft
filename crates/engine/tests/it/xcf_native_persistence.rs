@@ -68,7 +68,7 @@ fn misnamed_and_gzip_inputs_keep_source_protection_and_native_reopen_independenc
                     assert_eq!(std::fs::read(destination).unwrap(), *bytes);
                 }
                 session.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
-                let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).px;
+                let pixels = photocraft_compose::flatten(&session.active().unwrap().doc).into_px();
                 let report = session.active().unwrap().doc.metadata.import_conversion.clone();
                 session.execute("file.saveACopy", json!({"path": native})).unwrap();
                 std::fs::remove_file(&input).unwrap();
@@ -138,7 +138,7 @@ fn native_work_reopens_and_remains_editable_after_its_source_copy_is_removed() {
     let screen = s.active().unwrap().doc.layers.iter().find(|l| l.name == "Screen off-canvas").unwrap().id;
     s.execute("layer.select", json!({"layer": screen.0})).unwrap();
     s.execute("paint.stroke", json!({"points": [[2, 22], [8, 25]], "size": 3, "color": "#ff0000"})).unwrap();
-    let edited = photocraft_compose::flatten(&s.active().unwrap().doc).px;
+    let edited = photocraft_compose::flatten(&s.active().unwrap().doc).into_px();
     s.execute("edit.undo", json!({})).unwrap();
     assert_ne!(photocraft_compose::flatten(&s.active().unwrap().doc).px, edited);
     s.execute("edit.redo", json!({})).unwrap();

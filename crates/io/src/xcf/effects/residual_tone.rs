@@ -1235,7 +1235,7 @@ mod tests {
                 );
             }
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
-            surface.write_region(bounds, &buffer.px.into_iter().flatten().collect::<Vec<_>>());
+            surface.write_region(bounds, &buffer.into_px().into_iter().flatten().collect::<Vec<_>>());
             let mut layer = Layer::new("Native grid branch", LayerContent::Raster(surface));
             layer.vector_mask = branch.vector_mask;
             layer.clipped = branch.clipped;

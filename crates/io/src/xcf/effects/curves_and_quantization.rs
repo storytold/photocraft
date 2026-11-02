@@ -356,7 +356,7 @@ fn native_alpha_curve(params: &Value) -> Result<Vec<f32>, String> {
         Some(photocraft_color::SampleType::F32),
         ColorMode::Grayscale,
     );
-    let values: Vec<_> = ramp.px.into_iter().map(|[value, ..]| value).collect();
+    let values: Vec<_> = ramp.into_px().into_iter().map(|[value, ..]| value).collect();
     if values.len() != 256 || values.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
         return Err("Native alpha Curves transfer is not a finite normalized 256-sample table".into());
     }

@@ -108,8 +108,8 @@ fn destination() -> Session {
 
 /// Compare native composition at storage precision, with short diagnostics rather than entire document dumps.
 fn assert_pixels(actual: &Document, expected: &Document) {
-    let a = photocraft_compose::flatten(actual).px;
-    let b = photocraft_compose::flatten(expected).px;
+    let a = photocraft_compose::flatten(actual).into_px();
+    let b = photocraft_compose::flatten(expected).into_px();
     assert_eq!(a.len(), b.len());
     for (index, (a, b)) in a.iter().zip(b).enumerate() {
         assert!(a.iter().zip(b).all(|(a, b)| (*a - b).abs() <= 1.0 / 255.0), "native pixel {index}: {a:?} != {b:?}");

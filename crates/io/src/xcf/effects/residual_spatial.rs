@@ -1604,7 +1604,7 @@ mod tests {
             layer.advanced = branch.advanced;
             doc.layers.push(layer);
         }
-        let out = photocraft_compose::render(&doc, doc.bounds()).px;
+        let out = photocraft_compose::render(&doc, doc.bounds()).into_px();
         for y in 8..12 {
             for x in 8..12 {
                 assert_eq!(out[y * 32 + x][3], 0.);
@@ -1658,7 +1658,7 @@ mod tests {
             layer.effects.enabled = true;
             doc.layers.push(layer);
         }
-        let before = photocraft_compose::render(&doc, doc.bounds()).px;
+        let before = photocraft_compose::render(&doc, doc.bounds()).into_px();
         assert_eq!(before[0], [0., 0., 0., 1.]);
         assert!(before[7 * 32 + 7][0] > 0.5);
         let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -1694,7 +1694,7 @@ mod tests {
             assert!((paint.c[0] - expected).abs() < 1e-5);
             let mut document = Document::new("Native constant sinusoid", Size::new(3, 2), ColorMode::Rgb, SampleType::F32);
             document.layers.push(*layer);
-            let rendered = photocraft_compose::render(&document, document.bounds()).px;
+            let rendered = photocraft_compose::render(&document, document.bounds()).into_px();
             assert!(rendered.windows(2).all(|p| p[0] == p[1]));
             let bytes = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
             let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
@@ -1805,7 +1805,7 @@ mod tests {
                         let adjustment = photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome };
                         let mut buffer = photocraft_compose::Buffer { rect: b, px: surface.read_region(b).as_chunks::<4>().0.to_vec() };
                         photocraft_compose::adjust::apply_with(&adjustment, &mut buffer, photocraft_compose::adjust::Transfer::Gamma(1.));
-                        surface.write_region(b, &buffer.px.into_iter().flatten().collect::<Vec<_>>());
+                        surface.write_region(b, &buffer.into_px().into_iter().flatten().collect::<Vec<_>>());
                     }
                 }
                 let mut layer = Layer::new("Editable native derivative", LayerContent::Raster(surface));
@@ -1813,7 +1813,7 @@ mod tests {
                 layer.clipped = branch.clipped;
                 doc.layers.push(layer);
             }
-            let raw = photocraft_compose::render(&doc, b).px;
+            let raw = photocraft_compose::render(&doc, b).into_px();
             // Independent plane h=(x+2y)/8: centered differences are .25/.5;
             // native Custom divides by4 and adds.5, independently of alpha.
             for (actual, expected) in raw[4].into_iter().zip([0.5625, 0.625, 1., alpha]) {
@@ -2239,7 +2239,7 @@ mod tests {
             let mut doc = Document::new("Native angle data", Size::new(5, 1), ColorMode::Rgb, depth);
             doc.icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
             doc.layers.push(Layer::new("Native pixels", LayerContent::Raster(native)));
-            let before = photocraft_compose::render(&doc, b).px;
+            let before = photocraft_compose::render(&doc, b).into_px();
             let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
             let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
             assert_eq!(photocraft_compose::render(&reopened, b).px, before);
@@ -2384,7 +2384,7 @@ mod tests {
                     ColorMode::Rgb,
                 );
                 pixels = Surface::new(source.format());
-                pixels.write_region(b, &buffer.px.into_iter().flatten().collect::<Vec<_>>());
+                pixels.write_region(b, &buffer.into_px().into_iter().flatten().collect::<Vec<_>>());
             }
             let mut layer = Layer::new("Ordinary native screened pixels", LayerContent::Raster(pixels));
             layer.blend = branch.blend;
@@ -2670,7 +2670,7 @@ mod tests {
                 layer.clipped = branch.clipped;
                 doc.layers.push(layer);
             }
-            let before = photocraft_compose::render(&doc, b).px;
+            let before = photocraft_compose::render(&doc, b).into_px();
             assert!(
                 before.iter().zip(painted.read_region(b).as_chunks::<4>().0).any(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(a, b)| (a - b).abs() > 0.005)),
                 "native common vs independent fields must distinguish use-inten at{depth:?}"

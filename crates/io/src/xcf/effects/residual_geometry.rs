@@ -1856,15 +1856,15 @@ mod tests {
             for saturation in [0.5, 2.] {
                 let actual = render(saturation, false);
                 let expected = render(saturation, true);
-                let pixels = photocraft_compose::render(&actual, bounds).px;
-                let expected_pixels = photocraft_compose::render(&expected, bounds).px;
+                let pixels = photocraft_compose::render(&actual, bounds).into_px();
+                let expected_pixels = photocraft_compose::render(&expected, bounds).into_px();
                 assert!(pixels.iter().flatten().zip(expected_pixels.iter().flatten()).all(|(a, b)| (a - b).abs() < 1e-6));
                 let bytes = photocraft_format::save_to_bytes(&actual, &Default::default()).unwrap();
                 let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
                 assert_eq!(photocraft_compose::render(&reopened, bounds).px, pixels);
             }
-            let small = photocraft_compose::render(&render(0.5, false), bounds).px;
-            let expanded = photocraft_compose::render(&render(2., false), bounds).px;
+            let small = photocraft_compose::render(&render(0.5, false), bounds).into_px();
+            let expanded = photocraft_compose::render(&render(2., false), bounds).into_px();
             assert_ne!(small, expanded);
             assert!(expanded.iter().map(|p| p[3]).sum::<f32>() > small.iter().map(|p| p[3]).sum::<f32>());
             assert_eq!(source.read_region(bounds), original);

@@ -48,10 +48,10 @@ use paths::openable_name;
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::same_open_files;
 pub use paths::{
-    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, same_file, saves_in_place, template_name,
-    untitled_name,
+    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_file,
+    saves_in_place, template_name, untitled_name,
 };
-pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, portable_device_name, read_file, sanitize, stem, write_file};
+pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, sanitize, stem, write_file};
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};

@@ -2809,7 +2809,7 @@ mod tests {
                 }
                 let mut cached = Surface::new(format);
                 let mut values = Vec::new();
-                for pixel in rendered.px {
+                for &pixel in &rendered.px {
                     let mut row = [0.; 8];
                     let n = photocraft_raster::from_rgba_into(&format, pixel, &mut row);
                     values.extend_from_slice(&row[..n]);

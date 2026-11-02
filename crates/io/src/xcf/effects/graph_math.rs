@@ -221,7 +221,7 @@ mod tests {
             };
             let doc = build(actual);
             let expected = build(expected);
-            let before = photocraft_compose::render(&doc, doc.bounds()).px;
+            let before = photocraft_compose::render(&doc, doc.bounds()).into_px();
             assert_eq!(before, photocraft_compose::render(&expected, expected.bounds()).px);
             assert!((before[0][3] - 0.5).abs() < 0.01);
             let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -282,8 +282,8 @@ mod tests {
                         };
                         let actual = build(curve(points.clone()));
                         let independent = build(curve(expected.clone()));
-                        let rendered = photocraft_compose::render(&actual, actual.bounds()).px;
-                        let expected = photocraft_compose::render(&independent, independent.bounds()).px;
+                        let rendered = photocraft_compose::render(&actual, actual.bounds()).into_px();
+                        let expected = photocraft_compose::render(&independent, independent.bounds()).into_px();
                         for (actual, expected) in rendered.iter().zip(&expected) {
                             for (a, b) in actual.iter().zip(expected) {
                                 assert!((a - b).abs() < 0.00002, "native gamma {mode:?}/{depth:?}: {a}!={b}");

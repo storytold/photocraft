@@ -596,7 +596,7 @@ mod tests {
                 };
                 prepare(&mut actual);
                 prepare(&mut counterpart);
-                let before = photocraft_compose::render(&actual, actual.bounds()).px;
+                let before = photocraft_compose::render(&actual, actual.bounds()).into_px();
                 assert!(before.iter().any(|pixel| pixel[0] > 0.9 && pixel[3] > 0.9), "real bound input remains visible");
                 assert_eq!(before, photocraft_compose::render(&counterpart, counterpart.bounds()).px);
                 let bytes = photocraft_format::save_to_bytes(&actual, &Default::default()).unwrap();
