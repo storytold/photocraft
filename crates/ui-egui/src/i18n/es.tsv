@@ -4426,3 +4426,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Establecer transparente
+	{count} transparent pixels were made opaque	{count} píxeles transparentes se volvieron opacos
+	Clear Transparency	Quitar transparencia
+	Color Picker (First Color)	Selector de color (primer color)
+	Color Picker (Last Color)	Selector de color (último color)
+	Pick a Palette Colour From the Image	Elegir un color de la paleta de la imagen
+	Table Color	Color de la tabla
+	Palette Color	Color de la paleta

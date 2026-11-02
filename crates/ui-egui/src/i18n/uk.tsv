@@ -4225,3 +4225,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Зробити прозорим
+	{count} transparent pixels were made opaque	{count} прозорких пікселів стали непрозорими
+	Clear Transparency	Прибрати прозорість
+	Color Picker (First Color)	Вибір кольору (перший колір)
+	Color Picker (Last Color)	Вибір кольору (останній колір)
+	Pick a Palette Colour From the Image	Оберіть колір палітри з зображення
+	Table Color	Колір таблиці
+	Palette Color	Колір палітри

@@ -3902,6 +3902,14 @@ curves	Smooth	Tasoita
 # Color Table (.act) dialog
 	There is no color table to save.	Tallennettavaa väritaulukkoa ei ole.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Tallennettu {n} väri tiedostoon {file}|Tallennettu {n} väriä tiedostoon {file}
+	Set Transparent	Aseta läpinäkyväksi
+	{count} transparent pixels were made opaque	{count} läpinäkyvää pikseliä muuttuivat epäläpinäkyviksi
+	Clear Transparency	Tyhjennä läpinäkyvyys
+	Color Picker (First Color)	Värinvalitsin (ensimmäinen väri)
+	Color Picker (Last Color)	Värinvalitsin (viimeinen väri)
+	Pick a Palette Colour From the Image	Valitse paletin väri kuvasta
+	Table Color	Taulukon väri
+	Palette Color	Paletin väri
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Näytönohjain

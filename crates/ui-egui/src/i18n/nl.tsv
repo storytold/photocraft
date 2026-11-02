@@ -4271,3 +4271,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparant instellen
+	{count} transparent pixels were made opaque	{count} transparante pixels werden ondoorzichtig
+	Clear Transparency	Transparantie opheffen
+	Color Picker (First Color)	Kleurkiezer (eerste kleur)
+	Color Picker (Last Color)	Kleurkiezer (laatste kleur)
+	Pick a Palette Colour From the Image	Een paletkleur uit de afbeelding kiezen
+	Table Color	Tabelkleur
+	Palette Color	Paletkleur

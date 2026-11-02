@@ -3199,3 +3199,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	设为透明
+	{count} transparent pixels were made opaque	{count} 个透明像素已变为不透明
+	Clear Transparency	清除透明
+	Color Picker (First Color)	拾色器（第一个颜色）
+	Color Picker (Last Color)	拾色器（最后一个颜色）
+	Pick a Palette Colour From the Image	从图像中选取调色板颜色
+	Table Color	表格颜色
+	Palette Color	调色板颜色

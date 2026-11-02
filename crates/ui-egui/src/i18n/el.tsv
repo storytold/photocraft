@@ -4214,3 +4214,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ορισμός διαφάνειας
+	{count} transparent pixels were made opaque	{count} διαφανή εικονοστοιχεία έγιναν αδιαφανή
+	Clear Transparency	Καθαρισμός διαφάνειας
+	Color Picker (First Color)	Επιλογέας χρώματος (Πρώτο χρώμα)
+	Color Picker (Last Color)	Επιλογέας χρώματος (Τελευταίο χρώμα)
+	Pick a Palette Colour From the Image	Επιλέξτε ένα χρώμα παλέτας από την εικόνα
+	Table Color	Χρώμα πίνακα
+	Palette Color	Χρώμα παλέτας

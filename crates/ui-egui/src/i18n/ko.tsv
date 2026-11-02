@@ -3734,3 +3734,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	투명으로 설정
+	{count} transparent pixels were made opaque	{count}개의 투명 픽셀이 불투명이 되었습니다
+	Clear Transparency	투명성 해제
+	Color Picker (First Color)	색상 선택기 (첫 번째 색상)
+	Color Picker (Last Color)	색상 선택기 (마지막 색상)
+	Pick a Palette Colour From the Image	이미지에서 팔레트 색상을 선택하세요
+	Table Color	테이블 색상
+	Palette Color	팔레트 색상
