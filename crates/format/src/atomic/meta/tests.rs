@@ -36,7 +36,7 @@ fn assert_no_temp(dir: &Path) {
 
 // ---------------------------------------------------------------- extended attributes (Unix)
 
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 mod xattrs {
     use super::*;
 
@@ -164,6 +164,7 @@ fn replacing_a_file_keeps_its_mode() {
     atomic_write(&p, b"second").unwrap();
 
     assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_no_temp(&d.0);
 }
 
 // ----------------------------------------------------------------------------- ACL (macOS)

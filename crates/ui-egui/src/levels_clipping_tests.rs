@@ -328,7 +328,7 @@ fn alt_drag_on_the_black_and_white_sliders_turns_the_display_on() {
     let original = h.state().session.active().unwrap().doc.clone();
     let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.levels").unwrap();
     h.run_steps(3);
-    let track = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::new(("adjust-dialog", "levels")).with("levels-slider"))).unwrap();
+    let track = h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("adjust-dialog", "levels")).with("levels-slider"))).unwrap();
     let at = |level: f32| egui::pos2(track.left() + level / 255.0 * track.width(), track.center().y + 4.0);
     let alt = egui::Modifiers::ALT;
     // Black slider: on while Alt and the button are held, off with either.

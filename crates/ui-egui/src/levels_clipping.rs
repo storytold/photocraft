@@ -287,7 +287,8 @@ fn dialog(app: &PhotocraftApp) -> Option<&Map<String, Value>> {
 fn request(app: &PhotocraftApp, idx: usize) -> Option<Request> {
     let fields = dialog(app)?;
     let end = ClipEnd::parse(fields.get(FIELD))?;
-    if app.session.active_index() != Some(idx) || crate::adjust_preview::targets_channel(app, idx, "levels") {
+    let params = crate::filter_dialog::params_of(fields);
+    if app.session.active_index() != Some(idx) || crate::adjust_preview::targets_channel(app, idx, "levels", &params) {
         return None;
     }
     let st = app.session.documents().get(idx)?;
@@ -298,7 +299,7 @@ fn request(app: &PhotocraftApp, idx: usize) -> Option<Request> {
     if !matches!(st.doc.layer(target).map(|l| &l.content), Some(LayerContent::Raster(_))) {
         return None;
     }
-    let adj = photocraft_engine::adjust_params::from_params("levels", &crate::filter_dialog::params_of(fields), None, st.doc.mode).ok()?;
+    let adj = photocraft_engine::adjust_params::from_params("levels", &params, None, st.doc.mode).ok()?;
     Some(Request { end, adj, doc: st.doc.clone(), revision: st.revision, target })
 }
 
