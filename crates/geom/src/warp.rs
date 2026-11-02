@@ -410,7 +410,12 @@ fn bernstein(t: f64) -> [f64; 4] {
 }
 
 fn lerp(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+    std::array::from_fn(|i| {
+        // Split parameters lie in [0, 1]. Opposite-sign endpoints can overflow b - a;
+        // their weighted terms have opposite signs, so that form cannot overflow.
+        // For same-sign endpoints, the difference is finite and keeps the usual rounding.
+        if a[i].is_sign_negative() != b[i].is_sign_negative() { (1.0 - t) * a[i] + t * b[i] } else { a[i] + (b[i] - a[i]) * t }
+    })
 }
 
 /// De Casteljau split of a cubic at `t`: 7 points (left 0..=3, right 3..=6).
