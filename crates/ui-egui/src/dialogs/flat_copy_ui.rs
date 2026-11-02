@@ -133,6 +133,7 @@ mod tests {
     #[test]
     fn a_flat_save_asks_first_and_writes_a_copy() {
         let (mut h, writes) = harness("flat.png");
+        h.state_mut().run("channel.new", json!({"name": "Alpha 1"})).unwrap();
         h.state_mut().save_as(None).unwrap();
         h.run_steps(3);
         assert!(h.state().flat_copy.is_some(), "it asks");
@@ -197,6 +198,7 @@ mod tests {
     #[test]
     fn a_flat_jpeg_is_remembered_once_its_options_are_answered() {
         let (mut h, writes) = harness("flat.jpg");
+        h.state_mut().run("channel.new", json!({"name": "Alpha 1"})).unwrap();
         h.state_mut().save_as(None).unwrap();
         h.run_steps(3);
         h.get_by_label("OK").click();
@@ -268,11 +270,50 @@ mod tests {
         let (mut h, _) = harness("unused.png");
         let doc = h.state().active_doc_id().unwrap();
         let revision = h.state().session.active().unwrap().revision;
-        h.state_mut().flat_copy_docs.insert(doc);
         h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
-        assert!(h.state().flat_copy_docs.contains(&doc));
+        assert!(h.state().flat_copy_docs.contains(&doc), "a first flat save counts");
+        h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
+        assert!(h.state().flat_copy_docs.contains(&doc), "and a later one keeps it");
         h.state_mut().saved_automation(doc, revision, "art.psd", &[], false);
         assert!(!h.state().flat_copy_docs.contains(&doc));
+    }
+
+    /// A plain document loses nothing to a flat file, so there's nothing for the close prompt to say.
+    #[test]
+    fn an_automation_flat_save_of_a_plain_document_is_not_a_flat_copy() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().run("file.new", json!({"width": 4, "height": 4, "name": "Plain", "background": "white"})).unwrap();
+        let doc = h.state().active_doc_id().unwrap();
+        let revision = h.state().session.active().unwrap().revision;
+        h.state_mut().saved_automation(doc, revision, "flat.png", &[], false);
+        assert!(!h.state().flat_copy_docs.contains(&doc));
+    }
+
+    /// The document's own OpenRaster file counts only if it holds the document.
+    #[test]
+    fn an_openraster_file_that_cant_hold_the_document_is_no_full_save() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().run("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+        let doc = h.state().active_doc_id().unwrap();
+        h.state_mut().session.active_mut().unwrap().path = Some("art.ora".into());
+        assert!(!photocraft_engine::file_cmds::holds_at(&h.state().session.active().unwrap().doc, "art.ora"));
+        h.state_mut().flat_copy_docs.insert(doc);
+        assert!(h.state().only_saved_flat(doc));
+        h.state_mut().session.active_mut().unwrap().path = Some("art.psd".into());
+        assert!(!h.state().only_saved_flat(doc));
+    }
+
+    /// The question covers one save: the next to the same path gets its notice.
+    #[test]
+    fn a_confirmed_save_uses_up_its_confirmation() {
+        let (mut h, _) = harness("unused.png");
+        h.state_mut().run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+        h.state_mut().flat_copy_confirmed = Some("flat.png".into());
+        let settings = crate::ExportSettings::default();
+        h.state_mut().write_flat_aware("flat.png".into(), &settings, true).unwrap();
+        assert!(h.state().ui.notices.iter().all(|n| n.title != "Saving a copy"));
+        h.state_mut().write_flat_aware("flat.png".into(), &settings, true).unwrap();
+        assert!(h.state().ui.notices.iter().any(|n| n.title == "Saving a copy"));
     }
 
     /// A command with a path never waits on a person.

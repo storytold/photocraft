@@ -528,8 +528,8 @@ impl PhotocraftApp {
     /// Whether the close prompt should say the document's content is in no file: its last save was
     /// such a copy, and it has no file of its own that holds it.
     pub(crate) fn only_saved_flat(&self, doc: DocId) -> bool {
-        let own = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.as_deref());
-        self.flat_copy_docs.contains(&doc) && !own.is_some_and(photocraft_engine::file_cmds::saves_in_place)
+        let st = self.session.documents().iter().find(|st| st.doc.id == doc);
+        self.flat_copy_docs.contains(&doc) && !st.is_some_and(|st| st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p)))
     }
 
     /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:
@@ -551,8 +551,9 @@ impl PhotocraftApp {
     pub(crate) fn write_flat_aware(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
         // The exporter reports flattened layers, but not these. Up front, as a background save ends
         // later.
+        let confirmed = self.flat_copy_confirmed.take().as_deref() == Some(path.as_str());
         let doc = self.session.active().map(|st| &*st.doc);
-        if copy && self.flat_copy_confirmed.as_deref() != Some(path.as_str()) && doc.is_some_and(|doc| !flat_file_keeps_extras(doc, &path)) {
+        if copy && !confirmed && doc.is_some_and(|doc| !flat_file_keeps_extras(doc, &path)) {
             let line = tl!(
                 "This file type can't hold the document's alpha channels, saved paths, layer comps or Quick Mask. The document stays open, with its changes unsaved."
             );
@@ -659,7 +660,9 @@ impl PhotocraftApp {
         if !copy && arm {
             self.flat_copy_docs.remove(&doc);
         }
-        if self.flat_copy_saves.remove(&(doc, path.to_string())) && copy {
+        // An automation save the file can't hold stays unsaved, like a copy.
+        let automation_copy = !copy && !arm && self.with_document(doc, |app| Ok(app.save_loses_content(path))).unwrap_or(false);
+        if (self.flat_copy_saves.remove(&(doc, path.to_string())) && copy) || automation_copy {
             self.flat_copy_docs.insert(doc);
         }
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
