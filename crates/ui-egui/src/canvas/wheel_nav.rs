@@ -138,6 +138,13 @@ pub fn configure(ctx: &Context) {
 /// unless it comes within [`PINCH_GAP`] of a pinch step. `last` is the time of the previous pinch
 /// step; returns the time of the latest one.
 pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32) -> Option<f64> {
+    ctrl_wheel_to_zoom(events, now, last, notch, speed, false)
+}
+
+/// [`legacy_pinch_to_zoom`], with `always`: every Ctrl + wheel event is a pinch step, whole notches
+/// included. For touchpad drivers that send a pinch as whole notches, which cannot be told from a
+/// mouse wheel with Ctrl held (Preferences › Enhanced Controls › Ctrl Scroll Acts As Pinch, #2463).
+pub fn ctrl_wheel_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32, always: bool) -> Option<f64> {
     let ctrl_wheel = |e: &Event| match e {
         Event::MouseWheel { unit: MouseWheelUnit::Line, delta, modifiers, .. } if modifiers.ctrl => Some((*delta, false)),
         // Wayland precision touchpads can use point units. These are already actual
@@ -146,8 +153,9 @@ pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, n
         _ => None,
     };
     let fraction = |d: Vec2| d.x.fract() != 0.0 || d.y.fract() != 0.0;
-    let pinching =
-        last.is_some_and(|t| (0.0..PINCH_GAP).contains(&(now - t))) || events.iter().filter_map(ctrl_wheel).any(|(d, high_res)| high_res || fraction(d));
+    let pinching = always
+        || last.is_some_and(|t| (0.0..PINCH_GAP).contains(&(now - t)))
+        || events.iter().filter_map(ctrl_wheel).any(|(d, high_res)| high_res || fraction(d));
     if !pinching {
         return last;
     }
@@ -167,7 +175,8 @@ fn pinch_id() -> Id {
 }
 
 /// [`legacy_pinch_to_zoom`] for one frame's raw input (`raw_input_hook`, Windows and Linux).
-pub fn fold_legacy_pinch(ctx: &Context, raw: &mut RawInput) {
+/// `always`: treat every Ctrl + wheel as a pinch ([`ctrl_wheel_to_zoom`]); a native pinch still wins.
+pub fn fold_legacy_pinch(ctx: &Context, raw: &mut RawInput, always: bool) {
     // Native gesture events already carry their own magnification. Some backends
     // also emit a Ctrl-wheel event in the same frame: folding that wheel event
     // would apply the same pinch twice. End any legacy continuation as well,
@@ -179,7 +188,7 @@ pub fn fold_legacy_pinch(ctx: &Context, raw: &mut RawInput) {
     let (notch, speed) = ctx.options(|o| (o.input_options.line_scroll_speed, o.input_options.scroll_zoom_speed));
     let now = raw.time.unwrap_or_else(|| ctx.input(|i| i.time));
     let last = ctx.data(|d| d.get_temp::<f64>(pinch_id()));
-    let latest = legacy_pinch_to_zoom(&mut raw.events, now, last, notch, speed);
+    let latest = ctrl_wheel_to_zoom(&mut raw.events, now, last, notch, speed, always);
     if latest != last
         && let Some(t) = latest
     {

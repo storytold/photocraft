@@ -923,11 +923,22 @@ pub struct EnhancedControls {
     pub touch_gestures: bool,
     pub zoom_with_trackpad_pinch: bool,
     pub rotate_view_with_trackpad: bool,
+    /// Some touchpad drivers (older ELAN and Synaptics) send a pinch as Ctrl + whole-notch wheel,
+    /// which looks exactly like a mouse wheel with Ctrl held and so scrolls sideways (#2463).
+    /// With this on, every Ctrl + wheel is a pinch. Off by default: a mouse keeps Photoshop's
+    /// Ctrl + wheel = sideways scroll.
+    pub ctrl_scroll_acts_as_pinch: bool,
 }
 
 impl Default for EnhancedControls {
     fn default() -> Self {
-        Self { scrubby_slider_acceleration: true, touch_gestures: true, zoom_with_trackpad_pinch: true, rotate_view_with_trackpad: false }
+        Self {
+            scrubby_slider_acceleration: true,
+            touch_gestures: true,
+            zoom_with_trackpad_pinch: true,
+            rotate_view_with_trackpad: false,
+            ctrl_scroll_acts_as_pinch: false,
+        }
     }
 }
 

@@ -22,6 +22,12 @@ fn gesture(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool) -> (Vec
 }
 
 fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, animated_zoom: bool) -> (Vec2, f32, i32) {
+    gesture_folding(frames, zoom_with_wheel, legacy.then_some(false), animated_zoom)
+}
+
+/// [`gesture_with`] with the pinch fold's `always` choice: `None` skips the fold, `Some(true)` is
+/// Preferences › Enhanced Controls › Ctrl scroll acts as pinch.
+fn gesture_folding(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, fold: Option<bool>, animated_zoom: bool) -> (Vec2, f32, i32) {
     let owner = Id::unique("test-gesture");
     let ctx = Context::default();
     configure(&ctx);
@@ -29,8 +35,8 @@ fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, an
     let mut frames = frames.into_iter();
     for n in 0..60 {
         let mut raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events: frames.next().unwrap_or_default(), ..Default::default() };
-        if legacy {
-            fold_legacy_pinch(&ctx, &mut raw);
+        if let Some(always) = fold {
+            fold_legacy_pinch(&ctx, &mut raw, always);
         }
         let mut out = ctx.run_ui(raw, |ui| match read(ui.ctx(), zoom_with_wheel, true, animated_zoom, owner, true) {
             Some(Wheel::Pan(d)) => pan += d,
@@ -631,6 +637,52 @@ fn pinch_zooms_and_ctrl_wheel_pans() {
     assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "Ctrl + mouse wheel scrolls sideways: {pan:?} {zoom}");
 }
 
+/// Old ELAN and Synaptics drivers send a pinch as whole-notch Ctrl + wheel (#2463). With
+/// Ctrl Scroll Acts As Pinch on, those zoom; with it off they scroll sideways, as before.
+#[test]
+fn ctrl_scroll_acts_as_pinch_turns_whole_notches_into_zoom() {
+    let mut notch = [wheel(Vec2::new(0.0, 1.0), CTRL)];
+    assert_eq!(ctrl_wheel_to_zoom(&mut notch, 1.0, None, 40.0, 0.005, true), Some(1.0));
+    assert!(matches!(notch[0], Event::Zoom(f) if (f - (0.005f32 * 40.0).exp()).abs() < 1e-5), "{notch:?}");
+    // Scrolling the other way zooms out.
+    let mut back = [wheel(Vec2::new(0.0, -1.0), CTRL)];
+    ctrl_wheel_to_zoom(&mut back, 2.0, None, 40.0, 0.005, true);
+    assert!(matches!(back[0], Event::Zoom(f) if f < 1.0), "{back:?}");
+    // Off: the same notch stays a wheel event.
+    let mut off = [wheel(Vec2::new(0.0, 1.0), CTRL)];
+    assert_eq!(ctrl_wheel_to_zoom(&mut off, 3.0, None, 40.0, 0.005, false), None);
+    assert!(matches!(off[0], Event::MouseWheel { .. }));
+    // Only Ctrl + wheel is touched: plain, Shift and Alt wheel keep their meaning.
+    for m in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT] {
+        let mut ev = [wheel(Vec2::new(0.0, 1.0), m)];
+        ctrl_wheel_to_zoom(&mut ev, 4.0, None, 40.0, 0.005, true);
+        assert!(matches!(ev[0], Event::MouseWheel { .. }), "{m:?}: {ev:?}");
+    }
+}
+
+/// End to end through egui: a whole-notch Ctrl + wheel pans sideways by default and zooms once
+/// the preference folds it into a pinch.
+#[test]
+fn whole_notch_ctrl_wheel_zooms_only_with_the_preference() {
+    let ctrl_notch = || vec![vec![wheel(Vec2::new(0.0, 1.0), CTRL)]];
+    let (pan, zoom, _) = gesture_folding(ctrl_notch(), false, Some(false), false);
+    assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "default: sideways scroll: {pan:?} {zoom}");
+
+    let (pan, zoom, _) = gesture_folding(ctrl_notch(), false, Some(true), false);
+    assert!(pan == Vec2::ZERO && zoom > 1.0, "with the preference a whole notch zooms in, not sideways: {pan:?} {zoom}");
+}
+
+/// A native pinch (macOS, browsers) already carries its magnification: with the preference on
+/// or off, a Ctrl + wheel event in the same frame must not zoom a second time (#5080).
+#[test]
+fn native_pinch_wins_with_the_ctrl_scroll_preference_on_or_off() {
+    for always in [false, true] {
+        let frame = vec![vec![Event::Zoom(1.2), wheel(Vec2::new(0.0, 1.0), CTRL)]];
+        let (_, zoom, _) = gesture_folding(frame, false, Some(always), false);
+        assert!((zoom - 1.2).abs() < 1e-4, "always={always}: native zoom must win over the fold: {zoom}");
+    }
+}
+
 #[test]
 fn linux_wayland_point_unit_pinch_keeps_mouse_notches_for_sideways_scroll() {
     // Some Wayland compositors report fractional Ctrl-wheel pinch steps in points
@@ -659,18 +711,18 @@ fn native_pinch_is_not_zoomed_twice_when_ctrl_wheel_arrives_in_the_same_frame() 
 fn native_pinch_resets_legacy_gesture_continuation() {
     let ctx = Context::default();
     let mut legacy = RawInput { time: Some(1.0), events: vec![wheel(Vec2::new(0.0, 0.25), CTRL)], ..Default::default() };
-    fold_legacy_pinch(&ctx, &mut legacy);
+    fold_legacy_pinch(&ctx, &mut legacy, false);
     assert!(matches!(legacy.events[0], Event::Zoom(_)));
 
     // Native magnification takes over before the synthetic gesture times out.
     let mut native = RawInput { time: Some(1.1), events: vec![Event::Zoom(1.1), wheel(Vec2::new(0.0, 0.25), CTRL)], ..Default::default() };
-    fold_legacy_pinch(&ctx, &mut native);
+    fold_legacy_pinch(&ctx, &mut native, false);
     assert!(matches!(native.events[0], Event::Zoom(f) if (f - 1.1).abs() < 1e-5));
     assert!(matches!(native.events[1], Event::MouseWheel { .. }));
 
     // A notched mouse scroll must no longer inherit the previous pinch.
     let mut notch = RawInput { time: Some(1.12), events: vec![wheel(Vec2::new(0.0, 1.0), CTRL)], ..Default::default() };
-    fold_legacy_pinch(&ctx, &mut notch);
+    fold_legacy_pinch(&ctx, &mut notch, false);
     assert!(matches!(notch.events[0], Event::MouseWheel { .. }));
 }
 

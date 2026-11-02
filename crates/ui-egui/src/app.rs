@@ -250,9 +250,14 @@ impl eframe::App for PhotocraftApp {
         }
         // Windows precision touchpads and some Linux Wayland compositors send pinches
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
-        // Leave Ctrl+whole-notch mouse scrolling alone, and honour the pinch preference.
-        if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
-            wheel_nav::fold_legacy_pinch(ctx, raw_input);
+        // Leave Ctrl+whole-notch mouse scrolling alone (unless Ctrl scroll acts as pinch is on,
+        // for drivers that send a pinch as whole notches, #2463), and honour the pinch preference.
+        let (pinch, ctrl_is_pinch) = {
+            let p = &self.session.prefs().enhanced_controls;
+            (p.zoom_with_trackpad_pinch, p.ctrl_scroll_acts_as_pinch)
+        };
+        if pinch && (cfg!(any(target_os = "windows", target_os = "linux")) || ctrl_is_pinch) {
+            wheel_nav::fold_legacy_pinch(ctx, raw_input, ctrl_is_pinch);
         }
         self.inject_synthetic(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
