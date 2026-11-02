@@ -651,3 +651,32 @@ fn removing_tiny_split_preserves_mesh_when_extrapolation_overflows() {
         assert_eq!(mesh, before);
     }
 }
+
+#[test]
+fn inverse_mapping_refines_points_near_right_and_bottom_edges() {
+    let mesh = BezierMesh::identity(B, 1, 1);
+    for (s, t) in [(0.99, 0.347), (0.382, 0.99), (0.999, 0.999), (1.0, 0.347), (0.382, 1.0), (0.001, 0.001)] {
+        let (u, v) = mesh.param_at(mesh.eval(s, t));
+        assert!((u - s).abs() < 1e-8 && (v - t).abs() < 1e-8, "({s}, {t}) mapped back to ({u}, {v})");
+    }
+}
+
+#[test]
+fn inverse_mapping_refines_curved_mesh_near_edges() {
+    let mut mesh = BezierMesh::identity(B, 1, 1);
+    mesh.points[5] = [25.0, 28.0];
+    mesh.points[6] = [95.0, 32.0];
+    for (s, t) in [(0.999, 0.347), (0.382, 0.999), (0.999, 0.999), (1.0, 0.347), (0.382, 1.0)] {
+        let (u, v) = mesh.param_at(mesh.eval(s, t));
+        assert!((u - s).abs() < 1e-7 && (v - t).abs() < 1e-7, "({s}, {t}) mapped back to ({u}, {v})");
+    }
+}
+
+#[test]
+fn clicked_split_near_edge_does_not_snap_to_boundary() {
+    let mut mesh = BezierMesh::identity(B, 2, 2);
+    let (u, v) = mesh.param_at(mesh.eval(0.99, 0.99));
+    assert!(mesh.split_u(u));
+    assert!(mesh.split_v(v));
+    assert!(mesh.is_valid());
+}
