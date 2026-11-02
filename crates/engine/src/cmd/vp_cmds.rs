@@ -173,6 +173,10 @@ pub fn visible_image(doc: &Document) -> Surface {
 
 fn has_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
+    // Photoshop greys Vanishing Point out while a mask or channel is targeted (#10457).
+    if crate::channel_cmds::filters_target_a_channel(s) {
+        return Err("Vanishing Point isn't available while a mask or channel is targeted".into());
+    }
     match d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content) {
         Some(LayerContent::Raster(_)) => Ok(()),
         Some(other) => Err(format!("Vanishing Point needs a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),

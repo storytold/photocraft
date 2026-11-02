@@ -116,19 +116,54 @@ fn edits_mask(id: &str) -> bool {
         // Copying a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.cut" | "edit.clear")
         || crate::fill_key_cmds::IDS.contains(&id)
+        // Liquify (#10457) and Puppet Warp deform a targeted mask.
+        || id == crate::distort_cmds::LIQUIFY
+        || id == crate::distort_cmds::PUPPET
 }
 
-/// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
-/// layer needs a mask. None when another precondition applies.
+fn has_mask(s: &Session) -> std::result::Result<(), String> {
+    crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) })
+}
+
+/// Filters that work on a layer's pixels only: Lens Correction, Adaptive Wide Angle and Vanishing
+/// Point, which Photoshop greys out while a mask or channel is targeted (#10457).
+fn refuses_masks(id: &str) -> bool {
+    matches!(id, crate::lens_cmds::LENS | crate::lens_cmds::WIDE | crate::vp_cmds::VP)
+}
+
+/// The precondition of `id` for the target in `p` (named by the caller or filled in from the
+/// Channels panel), when the target decides it: Lens Correction, Adaptive Wide Angle and Vanishing
+/// Point refuse any mask or channel; what edits a smart object's filter mask needs one; and what
+/// edits a targeted layer mask (`"target":"mask"`) needs the layer to have a mask, whatever its
+/// content, plus an RGB or Grayscale document for the Camera Raw Filter; and Liquify and Camera
+/// Raw on an alpha channel or the Quick Mask need that channel, not a pixel layer. None when the
+/// command's own precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
+        // Photoshop greys these out on a targeted mask or channel, so a target named in the params
+        // is refused as one from the Channels panel is (#10457).
+        t if t != Target::Pixels && refuses_masks(id) => Some(Err("not available while a mask or channel is targeted".into())),
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
         }
-        Target::Mask if edits_mask(id) => {
-            Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+        Target::Mask if edits_mask(id) => Some(has_mask(s)),
+        // The Camera Raw Filter filters a targeted mask too (#10457), in the document modes it
+        // takes on a layer.
+        Target::Mask if id == crate::lens_cmds::RAW => Some(has_mask(s).and_then(|()| crate::lens_cmds::raw_mode(s))),
+        // An alpha channel or the Quick Mask named in the params takes Liquify and the Camera Raw
+        // Filter on any layer, as one targeted in the Channels panel does (#10457).
+        t @ (Target::Alpha(_) | Target::QuickMask) if id == crate::distort_cmds::LIQUIFY || id == crate::lens_cmds::RAW => {
+            let st = s.active()?;
+            let exists = match t {
+                Target::Alpha(i) => i < st.doc.channels.len(),
+                _ => st.doc.quick_mask.is_some(),
+            };
+            if !exists {
+                return Some(Err("the targeted channel doesn't exist".into()));
+            }
+            Some(if id == crate::lens_cmds::RAW { crate::lens_cmds::raw_mode(s) } else { Ok(()) })
         }
         _ => None,
     }
@@ -354,6 +389,14 @@ pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32
     }
     let (surf, _) = target_surface(doc, None, target)?;
     crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
+}
+
+/// Whether a filter would edit a mask or channel instead of the layer's pixels: a targeted layer
+/// mask, alpha channel or Quick Mask (what [`inject_target`] adds to a filter's params). Photoshop
+/// greys out Lens Correction, Adaptive Wide Angle and Vanishing Point then (#10457). A set of
+/// colour channels is still the layer's pixels.
+pub(crate) fn filters_target_a_channel(s: &Session) -> bool {
+    target_of(&inject_target(s, "filter.liquify", Value::Null)) != Target::Pixels
 }
 
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands

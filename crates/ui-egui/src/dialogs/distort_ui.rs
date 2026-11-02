@@ -61,14 +61,30 @@ impl Distort {
 
 /// The active layer's pixels (a pixel layer, or a smart object's rendering) and its id.
 pub(crate) fn active_pixels(app: &PhotocraftApp) -> Result<(LayerId, Surface, bool), String> {
+    active_pixels_ref(app).map(|(id, surf, smart)| (id, surf.clone(), smart))
+}
+
+/// [`active_pixels`] without the copy, for checks.
+fn active_pixels_ref(app: &PhotocraftApp) -> Result<(LayerId, &Surface, bool), String> {
     let st = app.session.active().ok_or("no document")?;
     let id = st.active_layer.ok_or("no active layer")?;
     let l = st.doc.layer(id).ok_or("no layer")?;
     match &l.content {
-        LayerContent::Raster(s) => Ok((id, s.clone(), false)),
-        LayerContent::Smart(sm) => sm.cache.clone().map(|c| (id, c, true)).ok_or_else(|| "the smart object has no pixels".to_string()),
+        LayerContent::Raster(s) => Ok((id, s, false)),
+        LayerContent::Smart(sm) => sm.cache.as_ref().map(|c| (id, c, true)).ok_or_else(|| "the smart object has no pixels".to_string()),
         other => Err(format!("needs a pixel layer or smart object (active layer is {} {} layer)", other.article(), other.kind_name())),
     }
+}
+
+/// Whether the Liquify or Camera Raw Filter dialog (`id`) can open: it previews the active layer's
+/// pixels ([`active_pixels`]), and Camera Raw also needs what its command needs on the layer (an
+/// RGB or Grayscale document). The engine filters an adjustment layer's targeted mask, but these
+/// dialogs can't show a mask yet (#10457), so their menu items and shortcuts stay greyed there.
+pub(crate) fn dialog_can_open(app: &PhotocraftApp, id: &str) -> Result<(), String> {
+    if id == photocraft_engine::lens_cmds::RAW {
+        photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
+    }
+    active_pixels_ref(app).map(|_| ())
 }
 
 /// The colour set full-window filters capture, or Null when none is targeted: the command then
@@ -525,6 +541,38 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    /// #10457 (review of #10469): the engine filters an adjustment layer's targeted mask with
+    /// Liquify and the Camera Raw Filter, but their dialogs preview the layer's pixels and can't open
+    /// on one yet, so those menu items (and their shortcuts) stay greyed there. A pixel layer's
+    /// targeted mask keeps them live.
+    #[test]
+    fn liquify_and_camera_raw_grey_out_where_their_dialogs_cannot_open() {
+        let ids = [photocraft_engine::distort_cmds::LIQUIFY, photocraft_engine::lens_cmds::RAW];
+        let masked = |adjustment: bool| {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+            if adjustment {
+                app.run("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+            } else {
+                app.run("layer.new.layer", json!({})).unwrap();
+                paint_bar(&mut app);
+            }
+            app.run("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+            app.run("layer.layerMask.revealSelection", json!({})).unwrap();
+            app.run("channel.target", json!({"channel": "mask"})).unwrap();
+            app
+        };
+        let app = masked(true);
+        for id in ids {
+            assert!(app.session.is_enabled(id), "{id}: the engine takes the mask");
+            assert!(!crate::menus::is_enabled(&app, id), "{id}: greyed on an adjustment layer's mask");
+        }
+        let app = masked(false);
+        for id in ids {
+            assert!(crate::menus::is_enabled(&app, id), "{id}: live on a pixel layer's mask");
+        }
     }
 
     /// #5115: Puppet Warp is per-document. Switching tabs drops the session so Ctrl+Z and

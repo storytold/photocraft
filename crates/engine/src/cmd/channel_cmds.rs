@@ -125,8 +125,9 @@ use selection::{load_selection, quick_mask, save_selection};
 use spot::{merge, merge_spot, mergeable, split};
 use targeting::{SLOT_KEY, target_cmd, target_slot};
 pub(crate) use targeting::{
-    Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target, invert_region,
-    is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface, targeted_channel,
+    Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, filters_target_a_channel,
+    inject_target, invert_region, is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_of, target_surface,
+    targeted_channel,
 };
 pub use targeting::{follows_filter_mask, follows_target, read_target_surface};
 pub(crate) use view::fix_view;

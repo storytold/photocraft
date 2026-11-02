@@ -99,7 +99,8 @@ impl Session {
         if let Some(why) = color_channels::refusal(self, id, &run_params) {
             return Err(EngineError::Disabled(id.into(), why));
         }
-        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+        // Both judge the target the command runs with, as `is_enabled_with` does (#10469).
+        if let Err(why) = self.explicit_layer_enabled(spec, &run_params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         if let Some(why) = self.job_conflict(id, spec.journal) {

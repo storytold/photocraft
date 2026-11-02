@@ -941,6 +941,8 @@ fn liquify_that_cannot_be_applied_reports_the_error() {
 /// Liquify, Adaptive Wide Angle and the Filter Gallery open on the layer when no colour set is
 /// targeted, as before colour sets: with its mask, an alpha channel or the Quick Mask targeted.
 /// OK sends the command no `target`, so it routes the targeted surface exactly as it did then.
+/// Adaptive Wide Angle is greyed out on an alpha channel or the Quick Mask, as in Photoshop
+/// (#10457).
 #[test]
 fn workspaces_open_on_the_layer_with_a_mask_channel_or_quick_mask_targeted() {
     let setup = |case: &str| {
@@ -957,7 +959,11 @@ fn workspaces_open_on_the_layer_with_a_mask_channel_or_quick_mask_targeted() {
                 app.run("channel.new", json!({"fill": "black"})).unwrap();
                 app.run("channel.target", json!({"channel": 0})).unwrap();
             }
-            _ => drop(app.run("select.editInQuickMaskMode", json!({"on": true})).unwrap()),
+            _ => {
+                // Liquify deforms the Quick Mask (#10457): give it an edge for the stroke to move.
+                app.run("select.rect", json!({"x": 24, "y": 12, "width": 16, "height": 24})).unwrap();
+                app.run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+            }
         }
         app.sync_views();
         app
@@ -976,7 +982,12 @@ fn workspaces_open_on_the_layer_with_a_mask_channel_or_quick_mask_targeted() {
     for case in ["mask", "alpha", "quickMask"] {
         let mut app = setup(case);
         assert!(crate::canvas::paint_target(&app).get("colors").is_none(), "{case}");
-        crate::wide_angle_ui::open(&mut app, &ctx).unwrap_or_else(|e| panic!("{case}: Adaptive Wide Angle: {e}"));
+        let wide = crate::wide_angle_ui::open(&mut app, &ctx);
+        if case == "mask" {
+            wide.unwrap_or_else(|e| panic!("{case}: Adaptive Wide Angle: {e}"));
+        } else {
+            assert!(wide.is_err(), "{case}: Adaptive Wide Angle is greyed out on a channel");
+        }
         crate::gallery_ui::open(&mut app).unwrap_or_else(|e| panic!("{case}: Filter Gallery: {e}"));
         open(&mut app, &ctx).unwrap_or_else(|e| panic!("{case}: Liquify: {e}"));
         let d = app.distort.liquify.as_mut().unwrap();

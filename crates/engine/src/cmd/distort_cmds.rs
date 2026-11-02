@@ -227,6 +227,46 @@ type MaskFn<'a> = Option<&'a dyn Fn(&Surface, Option<&Surface>) -> Result<Surfac
 /// Deforms a layer's pixels (with the selection and canvas); an `Err` leaves the layer as it was.
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
+/// Whether `cmd` deforms the mask or channel `p` targets instead of the layer, as in Photoshop:
+/// Liquify a layer mask, alpha channel or the Quick Mask (#10457), Puppet Warp a layer mask (Adobe
+/// documents it on layer masks). Perspective Warp and the smart-object warps ignore a target, and
+/// a smart object's filter mask takes none of them: Liquify adds a smart filter there, as from the
+/// menu (`follows_filter_mask`).
+fn follows_target(cmd: &str, p: &Value) -> bool {
+    use crate::channel_cmds::Target;
+    match crate::channel_cmds::target_of(p) {
+        Target::Pixels | Target::FilterMask => false,
+        Target::Mask => cmd == LIQUIFY || cmd == PUPPET,
+        _ => cmd == LIQUIFY,
+    }
+}
+
+/// `out`, a deformed mask or channel, in the format of `like`, the surface it was made from. A
+/// warp that lifts the values with an alpha (Puppet Warp's) leaves the area it vacated at the
+/// mask's default value, as a linked mask moved with its layer does (`render_mask`).
+fn onto_default(out: Surface, like: &Surface) -> Result<Surface> {
+    let fmt = like.format();
+    if out.format() == fmt {
+        return Ok(out);
+    }
+    if fmt.channels() != 1 || out.format() != PixelFormat::new(fmt.mode, fmt.sample, true) {
+        return Err(EngineError::Other("the deformed mask has an unexpected format".into()));
+    }
+    let default = like.default_pixel().first().copied().unwrap_or(0.0);
+    let mut flat = Surface::with_default(fmt, &[default]);
+    let b = out.content_bounds();
+    if !b.is_empty() {
+        let px = crate::allocation::read_region(&out, b, "flattening a deformed mask")?;
+        let mut v = crate::allocation::filled(px.len() / 2, 0.0, "flattening a deformed mask")?;
+        for (d, p) in v.iter_mut().zip(px.as_chunks::<2>().0) {
+            *d = p[0] * p[1] + default * (1.0 - p[1]);
+        }
+        flat.try_write_region(b, &v)?;
+    }
+    flat.prune();
+    Ok(flat)
+}
+
 fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
     let id = target(s, p)?;
     let colors = crate::color_channels::target(s, p)?.is_some();
@@ -234,9 +274,16 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
     if let Value::Object(m) = &mut params {
         m.remove("layer");
     }
+    let on_channel = follows_target(cmd, p);
     s.edit(label, |doc: &mut Document, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
+        if on_channel {
+            let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
+            let out = f(surf, selection.as_ref(), canvas)?;
+            *surf = onto_default(out, surf)?;
+            return Ok(());
+        }
         let group = crate::transform_cmds::group_locks(doc, id);
         // A Background gains transparency when the distortion moves pixels (as in Photoshop).
         if moves && !colors {
@@ -330,8 +377,10 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let it = interp(p);
     let too_far = || bad(cmd, "the pins stretch the content too far: the result would cover more than 2^30 pixels");
     // A linked layer mask moves with the pixels on the same mesh (#4910): the layer's warp
-    // solves the mesh once and leaves the moved mask here for the mask step.
-    let linked = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).filter(|m| m.linked).map(|m| m.surface.clone());
+    // solves the mesh once and leaves the moved mask here for the mask step. A targeted mask is
+    // warped by itself.
+    let linked =
+        s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).filter(|m| m.linked && !follows_target(cmd, p)).map(|m| m.surface.clone());
     let moved_mask: RefCell<Option<Surface>> = RefCell::new(None);
     let layer_fn = |surf: &Surface, sel: Option<&Surface>, _: Rect| {
         deform_selected(surf, sel, &|x| {
