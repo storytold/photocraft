@@ -439,7 +439,8 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
         .map(|p| f(p, noto))
         .collect();
         // Individual standalone Noto CJK fonts for distros that package scripts separately
-        // (Arch Linux, openSUSE, Fedora).
+        // (Arch Linux: noto-fonts-cjk, openSUSE: noto-sans-cjk-fonts, Fedora: google-noto-sans-cjk-fonts,
+        // Debian/Ubuntu: fonts-noto-cjk). Paths documented by upstream distribution package manifests.
         match script {
             Japanese => v.extend([
                 f("/usr/share/fonts/noto-cjk/NotoSansJP-Regular.otf", ""),
@@ -477,7 +478,7 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", ""),
                 f("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", ""),
                 f("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf", ""),
-                // VL-Gothic: common on Arch Linux, openSUSE and lightweight distros.
+                // VL-Gothic: documented package paths for Arch Linux (vlgothic), openSUSE (vlgothic-fonts), Debian/Ubuntu (fonts-vlgothic).
                 f("/usr/share/fonts/vlgothic/VL-PGothic-Regular.ttf", ""),
                 f("/usr/share/fonts/vlgothic/VL-Gothic-Regular.ttf", ""),
                 f("/usr/share/fonts/VL-Gothic/VL-PGothic-Regular.ttf", ""),
@@ -492,7 +493,7 @@ pub fn font_files(script: CjkScript) -> Vec<FontFile> {
                 f("/usr/share/fonts/wenquanyi/wqy-zenhei/wqy-zenhei.ttc", ""),
             ],
             Korean => vec![
-                // Arch Linux uses uppercase /usr/share/fonts/TTF.
+                // Documented distribution packages: Arch Linux (ttf-nanum, ttf-unfonts-core, ttf-baekmuk under /usr/share/fonts/TTF), Debian/Ubuntu (fonts-nanum, fonts-unfonts-core, fonts-baekmuk).
                 f("/usr/share/fonts/TTF/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/truetype/nanum/NanumGothic.ttf", ""),
                 f("/usr/share/fonts/nanum/NanumGothic.ttf", ""),

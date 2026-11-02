@@ -564,6 +564,7 @@ fn craft_provider_id() -> egui::Id {
 /// An English UI on a Japanese, Korean or Chinese OS therefore uses that OS script, not the
 /// migration baseline's manifest-first face. The baseline applies only when the effective locale
 /// is non-CJK or unknown.
+#[cfg(not(target_arch = "wasm32"))]
 fn effective_locale(ui_code: &str, os_locale: Option<&str>) -> Option<String> {
     match ui_code {
         "ja" | "ko" | "zh-hans" | "zh-hant" => Some(ui_code.to_owned()),
@@ -630,6 +631,7 @@ pub struct CjkFallback {
     /// Non-CJK scripts whose candidates were tried (each at most once per install).
     scripts_tried: Vec<Script>,
     loaded: Vec<PathBuf>,
+    failed_paths: std::collections::HashSet<PathBuf>,
     /// Fonts registered so far: (name, path, face index).
     pub registered: Vec<(String, PathBuf, u32)>,
 }
@@ -644,6 +646,7 @@ impl CjkFallback {
             last_resort_tried: false,
             scripts_tried: Vec::new(),
             loaded: Vec::new(),
+            failed_paths: std::collections::HashSet::new(),
             registered: Vec::new(),
         }
     }
@@ -729,10 +732,13 @@ impl CjkFallback {
             if reads >= MAX_SCRIPT_READS {
                 break;
             }
-            if self.loaded.contains(&path) {
+            if self.loaded.contains(&path) || self.failed_paths.contains(&path) {
                 continue;
             }
-            let Some(bytes) = read_font(&path) else { continue };
+            let Some(bytes) = read_font(&path) else {
+                self.failed_paths.insert(path.clone());
+                continue;
+            };
             reads += 1;
             if !cjk::font_file_is_readable(&bytes) {
                 continue;
@@ -791,10 +797,13 @@ impl CjkFallback {
     /// the character.
     fn load_first(&mut self, files: &[FontFile], c: char) -> Option<(String, FontData)> {
         for f in files {
-            if self.loaded.contains(&f.path) {
+            if self.loaded.contains(&f.path) || self.failed_paths.contains(&f.path) {
                 continue;
             }
-            let Some(bytes) = read_font(&f.path) else { continue };
+            let Some(bytes) = read_font(&f.path) else {
+                self.failed_paths.insert(f.path.clone());
+                continue;
+            };
             // Register only what the text engine can actually parse. A readable collection may
             // still have a selected face whose `cmap` is valid while another table points outside
             // the file; `font_face_is_readable` below rejects such a face before registration.

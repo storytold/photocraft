@@ -1079,6 +1079,9 @@
 	Delete current channel	حذف القناة الحالية
 	Delete current state	حذف الحالة الحالية
 	Delete effect layer	حذف طبقة التأثير
+	Delete effect	حذف التأثير
+	Move effect up	تحريك التأثير لأعلى
+	Move effect down	تحريك التأثير لأسفل
 
 # Layers-panel trash confirmation
 	Delete layer ‘{name}’?	هل تريد حذف الطبقة «{name}»؟
