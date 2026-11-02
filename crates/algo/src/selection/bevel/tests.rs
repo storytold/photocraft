@@ -113,10 +113,45 @@ fn inconsistent_input_changes_nothing() {
     bevel_corners(&mut g, &m, 0, 0, 4);
     bevel_corners(&mut g[..50], &m, 10, 10, 4);
     assert_eq!(g, before);
-    // A reach far past the canvas cuts as much as one the canvas size.
-    let mut huge = expand(&m, 10, 10, 30.0);
-    bevel_corners(&mut huge, &m, 10, 10, usize::MAX);
-    let mut ten = expand(&m, 10, 10, 30.0);
-    bevel_corners(&mut ten, &m, 10, 10, 10);
-    assert_eq!(huge, ten);
+}
+
+#[test]
+fn a_reach_past_the_canvas_cuts_only_what_its_own_cut_reaches() {
+    // A pixel in a 10 × 10 canvas's corner, grown 30 px: the cut (dx + dy > 31) lies off the
+    // canvas, whose farthest pixel is 9 + 9 out, so nothing in it is cut, at any larger reach
+    // too. Capping the reach at the canvas width (10) used to cut (9, 9).
+    let m = mask(10, 10, |x, y| (x, y) == (0, 0));
+    for r in [30, 1000, usize::MAX] {
+        let mut g = expand(&m, 10, 10, 30.0);
+        bevel_corners(&mut g, &m, 10, 10, r);
+        assert_eq!(g, expand(&m, 10, 10, 30.0), "reach {r}");
+    }
+    // Within the canvas the cut is as before: at 8 px, (4, 5) is on it and (5, 5) past it.
+    let g = bevelled(&m, 10, 10, 8);
+    assert_eq!((g[5 * 10 + 4], g[5 * 10 + 5]), (1.0, 0.0));
+}
+
+#[test]
+fn a_selection_beyond_reach_leaves_the_corner_cut() {
+    // A square and a pixel diagonally past its corner, 2r out on each axis: about 1.41 r from
+    // the corner's r × r quadrant, beyond the r + 1 the grow reaches, so it can't fill the
+    // quadrant and the corner is cut; so can't pixels r + 1 past the box on one axis (2r + 1
+    // out), which the old square scan still counted.
+    let (n, r) = (120usize, 20usize);
+    let rect = (20, 49, 20, 49);
+    for far in [(49 + 2 * r, 49 + 2 * r), (49 + 2 * r + 1, 59), (59, 49 + 2 * r + 1)] {
+        let m = mask(n, n, |x, y| (rect.0..=rect.1).contains(&x) && (rect.2..=rect.3).contains(&y) || (x, y) == far);
+        let g = bevelled(&m, n, n, r);
+        let round = expand(&m, n, n, r as f32);
+        // Past the cut at the bottom-right corner but within its round grow: 11 px out on both
+        // axes.
+        let past = (49 + 11) * n + 49 + 11;
+        assert_eq!((g[past], round[past] > 0.0), (0.0, true), "{far:?}");
+        // The far pixel keeps its own grow.
+        assert!(g[far.1 * n + far.0 + 1] > 0.0, "{far:?}");
+    }
+    // A pixel just within reach of the quadrant still keeps the corner round.
+    let near = (49 + r + 1, 49 + r);
+    let m = mask(n, n, |x, y| (rect.0..=rect.1).contains(&x) && (rect.2..=rect.3).contains(&y) || (x, y) == near);
+    assert!(bevelled(&m, n, n, r)[(49 + 11) * n + 49 + 11] > 0.0);
 }

@@ -23,8 +23,9 @@ pub fn bevel_corners(grown: &mut [f32], m: &[f32], w: usize, h: usize, r: usize)
     if r < 2 || w == 0 || h == 0 || w.checked_mul(h) != Some(m.len()) || grown.len() != m.len() {
         return;
     }
-    // Past the canvas size a larger reach finds no more seeds and cuts no more pixels.
-    let r = r.min(w.max(h));
+    // From w + h on, every in-canvas pixel is within reach and the cut (dx + dy > r + 1)
+    // lies off the canvas, so a larger reach changes nothing.
+    let r = r.min(w.saturating_add(h));
     let selected = |x: isize, y: isize| -> bool {
         if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
             return false;
@@ -73,23 +74,26 @@ pub fn bevel_corners(grown: &mut [f32], m: &[f32], w: usize, h: usize, r: usize)
 }
 
 /// Whether nothing but the pixels behind corner `(x, y)` (on or behind it on both axes) is
-/// selected within reach of its quadrant: pixels `i`, `j` steps towards `(sx, sy)` with `i`
-/// and `j` in `-r..=2r + 1`, which holds every pixel less than `r + 1` from the quadrant's
-/// `r` × `r` box. Rows nearest the corner are read first, so a selection that goes on
-/// beyond the corner is found quickly.
+/// selected within reach of its quadrant: less than `r + 1` from the quadrant's `r` × `r` box,
+/// the farthest a selected pixel can be and still grow into it. Rows nearest the corner are
+/// read first, so a selection that goes on beyond the corner is found quickly.
 fn quadrant_is_clear(m: &[f32], (w, h): (usize, usize), (x, y): (usize, usize), (sx, sy): (isize, isize), r: usize) -> bool {
     let r = r as isize;
     let (x, y) = (x as isize, y as isize);
-    // The x span of the row `j` steps out, clipped to the canvas: from the column past the
-    // corner when the row is level with or behind it, from `r` columns behind it otherwise.
+    let reach = (i128::from(r as i64) + 1).pow(2);
+    // The x span of the row `j` steps out, clipped to the canvas: the columns `i` less than
+    // r + 1 from the box (`i`, `j` in 1..=r), and only past the corner when the row is level
+    // with or behind it (the pixels behind it on both axes are its own).
     let span = |j: isize| -> Option<(usize, usize)> {
-        let near = if j <= 0 { 1 } else { -r };
-        let (a, b) = (x + sx * near, x + sx * (2 * r + 1));
+        let gy = i128::from((1 - j).max(j - r).max(0) as i64);
+        let gx = (reach - 1 - gy * gy).max(0).isqrt() as isize;
+        let near = if j <= 0 { 1 } else { 1 - gx };
+        let (a, b) = (x + sx * near, x + sx * (r + gx));
         let (lo, hi) = (a.min(b).max(0), a.max(b).min(w as isize - 1));
         (lo <= hi).then_some((lo as usize, hi as usize))
     };
-    // j = 0, 1, -1, 2, -2, … out to -r and 2r + 1.
-    let order = (0..=2 * r + 1).flat_map(|k| [k, -k].into_iter().take(if k == 0 || k > r { 1 } else { 2 }));
+    // j = 0, 1, -1, 2, -2, … out to 1 - r and 2r: the rows less than r + 1 from the box.
+    let order = (0..=2 * r).flat_map(|k| [k, -k].into_iter().take(if k == 0 || k >= r { 1 } else { 2 }));
     for j in order {
         let py = y + sy * j;
         if py < 0 || py as usize >= h {
