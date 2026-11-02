@@ -377,6 +377,7 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     }))
 }
 
+/// Edit a shape and refresh its cache as one undoable operation.
 pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
@@ -385,8 +386,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         }
     }
     s.edit(label, |doc, _| {
-        let snapshot = doc.clone();
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        // Retain the slot while the callback edits the layer, then refresh with full document resources.
+        let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+        let l = doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))?;
         if !matches!(l.content, LayerContent::Shape(_)) {
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a shape layer", id.0, l.content.article(), l.content.kind_name())));
         }
@@ -395,9 +397,9 @@ pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl F
         };
         let r = f(&mut sh, l);
         if r.is_ok() {
-            refresh_shape(&snapshot, &mut sh);
+            refresh_shape(doc, &mut sh);
         }
-        l.content = LayerContent::Shape(sh);
+        doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))?.content = LayerContent::Shape(sh);
         r
     })
 }
@@ -540,20 +542,26 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     shape_info(s, id)
 }
 
+/// Replace a shape with its document-format cached pixels in one undoable edit.
 pub(super) fn shape_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_id(s, p)?;
     s.edit("Rasterize Shape", |doc, _| {
-        let snapshot = doc.clone();
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let LayerContent::Shape(sh) = &mut l.content else {
-            return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
+        let fmt = doc.pixel_format();
+        let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+        let l = doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))?;
+        let mut sh = match std::mem::replace(&mut l.content, LayerContent::Fill(Fill::Solid(Color::BLACK))) {
+            LayerContent::Shape(sh) => sh,
+            content => {
+                l.content = content;
+                return Err(EngineError::Other(format!("layer {} is not a shape layer", id.0)));
+            }
         };
         if sh.cache.is_none() {
-            refresh_shape(&snapshot, sh);
+            refresh_shape(doc, &mut sh);
         }
-        let fmt = snapshot.pixel_format();
         let surface = sh.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(fmt));
         let surface = if surface.format() == fmt { surface } else { surface.convert(fmt) };
+        let l = doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))?;
         l.content = LayerContent::Raster(surface);
         l.psd_blocks.retain(|(k, _)| !SHAPE_BLOCKS.contains(&k));
         Ok(())
@@ -656,9 +664,8 @@ fn merge_shape_layers(s: &mut Session, ids: &[LayerId], op: Option<PathOp>, labe
             }
         }
         let path = path.ok_or_else(|| EngineError::Other("Combine Shapes needs two or more shape layers".into()))?;
-        let snapshot = doc.clone();
-        let l = doc.layer_mut(keep).ok_or(EngineError::NoLayer(keep))?;
-        let LayerContent::Shape(sh) = &mut l.content else {
+        let l = doc.layer(keep).ok_or(EngineError::NoLayer(keep))?;
+        let LayerContent::Shape(sh) = &l.content else {
             return Err(EngineError::Other(format!("layer {} is not a shape layer", keep.0)));
         };
         let mut merged = ShapeLayer { path, live: None, psd_raw: None, cache: None, ..sh.clone() };
@@ -666,8 +673,8 @@ fn merge_shape_layers(s: &mut Session, ids: &[LayerId], op: Option<PathOp>, labe
             bake_components(&mut merged, tol)?;
         }
         vector::flatten::validate_shape(&merged.path, merged.stroke.as_ref()).map_err(|e| bad(label, e))?;
-        refresh_shape(&snapshot, &mut merged);
-        *sh = merged;
+        refresh_shape(doc, &mut merged);
+        doc.layer_mut(keep).ok_or(EngineError::NoLayer(keep))?.content = LayerContent::Shape(merged);
         for id in ids.iter().filter(|id| **id != keep) {
             doc.remove(*id);
         }
