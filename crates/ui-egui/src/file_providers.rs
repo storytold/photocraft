@@ -578,8 +578,10 @@ impl Host {
                     return;
                 }
                 let owned = s.pending.get(request).is_some_and(|save| {
-                    metadata["documentId"] == save.doc.0.to_string()
-                        && metadata["revision"] == save.revision.to_string()
+                    let document_id = save.doc.0.to_string();
+                    let revision = save.revision.to_string();
+                    metadata["documentId"].as_str() == Some(document_id.as_str())
+                        && metadata["revision"].as_str() == Some(revision.as_str())
                         && metadata["filename"] == save.path
                         && metadata["copy"] == save.copy
                         && metadata["destination"] == save.destination
