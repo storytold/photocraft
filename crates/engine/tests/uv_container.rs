@@ -277,6 +277,8 @@ fn restored_external_writeback_requires_explicit_rebinding() {
     s.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
     assert_eq!(s.execute("file.uv.saveAllTextures", json!({})).unwrap()["saved"], 0);
     assert!(!texture.exists());
+    // Loading an external path clears it. Explicitly choose the destination again before binding.
+    s.active_mut().unwrap().saved_to(texture.to_string_lossy().into_owned());
     s.execute("uv.texture.bind", json!({"material":0})).unwrap();
     assert_eq!(s.execute("file.uv.saveAllTextures", json!({})).unwrap()["saved"], 1);
     assert!(texture.is_file());

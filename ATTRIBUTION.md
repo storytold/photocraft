@@ -120,7 +120,8 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+`corpus/` is gitignored and no test fixtures are committed to the repository, except the small
+synthetic parser fixtures listed under *Synthetic parser test fixtures* below.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:
@@ -168,6 +169,13 @@ Binary distributions using these dependencies must retain the applicable license
 copyright notices. The retained MIT and ISC texts include the notices supplied by the
 packages; MIT is an available licensing option for glam and fbxcel. This section does not
 replace the notices required for other PhotoCraft dependencies.
+
+## Synthetic parser test fixtures
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/psd/tests/fixtures/atn/*.atn` | Independently encoded ATN version-16 parser fixtures | PhotoCraft contributors | Original synthetic test data; wire layout documented in `crates/psd/src/atn.rs`; provenance in the adjacent README | MIT OR Apache-2.0 |
+
 ## Embedded-vector editor source
 
 The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change
