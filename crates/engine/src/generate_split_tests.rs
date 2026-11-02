@@ -43,6 +43,8 @@ fn split_by_subjects_cuts_each_instance_out_over_a_repainted_background() {
     };
     let r = s.execute(SPLIT, json!({"seed": 3})).unwrap();
     assert_eq!(r["count"], 3, "the background and the two subjects: {r}");
+    // The fake's "matte" is opaque everywhere, which disagrees with the detector: refined edges.
+    assert_eq!(r["edges"], "refine", "{r}");
     let ids: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
     let d = s.active().unwrap();
     assert_eq!(d.doc.layers.len(), before + 3, "the fill's own layer is folded into the background");
@@ -99,4 +101,36 @@ fn split_validates_its_parameters_and_has_no_similar() {
         p.integrations.allow_research_models = false;
     });
     assert!(!empty.is_enabled(SPLIT));
+}
+
+#[test]
+fn split_takes_hair_from_the_matte_around_each_subject() {
+    // The detector finds the top-left quarter; the matte keeps a little more (x < 38, y < 28):
+    // the "hair" just past the mask is kept, nothing far from it.
+    let fake = FakeNative::start_with(photocraft_genai::fake::Options {
+        segments: vec![[0.0, 0.0, 0.5, 0.5]],
+        matte: Some([0.0, 0.0, 0.6, 0.6]),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut s = session(&fake.url);
+    s.execute("edit.fill", json!({"use": "color", "color": [200, 40, 40]})).ok();
+    let r = s.execute(SPLIT, json!({"layers": 2, "seed": 1})).unwrap();
+    assert_eq!(r["edges"], "matte", "{r}");
+    let subject = LayerId(r["layers"][1].as_u64().unwrap());
+    assert_eq!(alpha_at(&s, subject, 5, 5), 1.0, "inside the mask");
+    assert!(alpha_at(&s, subject, 34, 5) > 0.9, "the matte's fringe past the mask");
+    assert_eq!(alpha_at(&s, subject, 60, 40), 0.0, "nothing far away");
+    let st = fake.state();
+    assert!(st.runs.iter().any(|r| r.request["model"] == DEFAULT_MATTE_TEMPLATE || r.request["template"] == DEFAULT_MATTE_TEMPLATE), "the matte ran");
+    drop(st);
+    // The other edge sources, by name.
+    let r = s.execute(SPLIT, json!({"layers": 2, "edges": "refine"})).unwrap();
+    assert_eq!(r["edges"], "refine", "{r}");
+    let r = s.execute(SPLIT, json!({"layers": 2, "edges": "soft:2"})).unwrap();
+    assert_eq!(r["edges"], "soft", "{r}");
+    assert!(fake.state().runs.iter().any(|r| r.request["task"] == "segment" && r.request["params"]["softEdge"] == 2.0), "the detector asked for soft edges");
+    for bad in ["soft:0", "soft:x", "bogus"] {
+        assert!(matches!(s.execute(SPLIT, json!({"edges": bad})), Err(EngineError::BadParams { .. })), "{bad}");
+    }
 }

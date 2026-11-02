@@ -4262,7 +4262,8 @@ fn run_split(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(SPLIT, "`seed` must be a whole number"))?),
     };
     let name = opt_str(SPLIT, p, "name", 200)?.map(str::to_string);
-    split_subjects::run(s, split_subjects::SubjectsPlan { prompt, subjects: (layers - 1).min(split_subjects::MAX_SUBJECTS), seed, name })
+    let edges = split_subjects::Edges::parse(opt_str(SPLIT, p, "edges", 40)?).map_err(|e| bad(SPLIT, e))?;
+    split_subjects::run(s, split_subjects::SubjectsPlan { prompt, subjects: (layers - 1).min(split_subjects::MAX_SUBJECTS), seed, name, edges })
 }
 
 /// Edit › Purge › Generative Models: the server unloads its models and frees their memory. A
@@ -4703,7 +4704,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // Placed by the menu catalogue under Edit, with the other generative items.
             menu: &[],
             shortcut: None,
-            params: r#"{"layers":2..8=3,"prompt":text,"seed":{u64?=random},"name":{str?}} → {"layers":[id],"count","subjects","foundBy","template","seed","width","height","fillMs","ms"} (SAM 3.1 finds what the picture is of (prompt = what to cut out, e.g. "the dog"; empty = the main subject, then a person, an animal, an object) and each instance, the largest first and up to layers - 1 of them, becomes its own layer with the picture's pixels and an edge-refined alpha, above one background layer: the picture with the subjects repainted away by the generative removal (the fill template the preferences give); new layers above the active one, one undo step; a background job; needs the native worker with SAM 3.1 and a fill model)"#,
+            params: r#"{"layers":2..8=3,"prompt":text,"seed":{u64?=random},"name":{str?},"edges":{str?=auto}} → {"layers":[id],"count","subjects","foundBy","template","seed","width","height","fillMs","ms","edges"} (SAM 3.1 finds what the picture is of (prompt = what to cut out, e.g. "the dog"; empty = the main subject, then a person, an animal, an object) and each instance, the largest first and up to layers - 1 of them, becomes its own layer with the picture's pixels and an edge-refined alpha, above one background layer: the picture with the subjects repainted away by the generative removal (the fill template the preferences give); new layers above the active one, one undo step; a background job; needs the native worker with SAM 3.1 and a fill model)"#,
             enabled: split_enabled,
             run: run_split,
             journal: true,

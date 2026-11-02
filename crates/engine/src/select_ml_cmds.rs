@@ -325,6 +325,9 @@ struct Prompting {
     points: Vec<[f64; 2]>,
     negatives: Vec<[f64; 2]>,
     bbox: Option<Rect>,
+    /// Soft mask edges from the detector (`softEdge`: its logits through a sigmoid at this
+    /// temperature); 0 asks for the usual hard mask.
+    soft_edge: f64,
 }
 
 /// Ask the detector: the masks it returned, at the request size.
@@ -351,6 +354,9 @@ fn detect(
     };
     let mut params = BTreeMap::new();
     params.insert("threshold".to_string(), json!(pr.threshold));
+    if pr.soft_edge > 0.0 {
+        params.insert("softEdge".to_string(), json!(pr.soft_edge));
+    }
     if pr.declared.contains("points") {
         params.insert("points".to_string(), Value::String(scaled(&pr.points)));
     }
@@ -518,6 +524,7 @@ fn prompting(plan: &Plan) -> Prompting {
         points: plan.points.clone(),
         negatives: plan.negatives.clone(),
         bbox: plan.bbox,
+        soft_edge: 0.0,
     }
 }
 
@@ -764,6 +771,7 @@ fn prompting_for(s: &Session, cmd: &str, template: &str, prompt: &str) -> Option
         points: Vec::new(),
         negatives: Vec::new(),
         bbox: None,
+        soft_edge: 0.0,
     };
     Some((backend, server, prompting))
 }
@@ -854,6 +862,12 @@ pub(crate) fn subject_finder(s: &Session, prompt: Option<&str>) -> Result<Subjec
 }
 
 impl SubjectFinder {
+    /// Ask the detector for soft mask edges at temperature `t` (see [`Prompting::soft_edge`]).
+    pub(crate) fn soft_edges(mut self, t: f64) -> Self {
+        self.prompting.soft_edge = t;
+        self
+    }
+
     /// The instances found in the picture (`all_layers`: the composite, else the active layer)
     /// and the prompt that found them.
     pub(crate) fn instances(&self, doc: &Document, active: Option<LayerId>, all_layers: bool, ctx: &JobCtx) -> Result<(Vec<Instance>, String)> {
