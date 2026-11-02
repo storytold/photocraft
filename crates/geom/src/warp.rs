@@ -779,13 +779,14 @@ impl BezierMesh {
     /// its anchors and the neighbouring cells and dividers bend with the pull. Then the four inner
     /// control points of the grabbed patch make up the rest, so the grabbed point lands exactly at
     /// its start + `d`. Grabbing near an anchor moves that anchor more, and the inner points less.
+    /// Malformed meshes are left unchanged.
     pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
         /// Within this distance of the mesh border (in 0..1 box units) a grab starts to drag the
         /// border with it; further in, the border stays exactly where it is.
         const BORDER_ZONE: f64 = 0.12;
         /// Falloff radius, in the grabbed patch's size.
         const REACH: f64 = 1.8;
-        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
+        if !self.is_valid() || base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
             return;
         }
         self.points.copy_from_slice(base);
@@ -966,8 +967,10 @@ impl BezierMesh {
     /// - a handle moves with the two points beside it across its line, and the handle opposite
     ///   it on the same anchor turns the other way (with its two neighbours), so the line keeps
     ///   passing straight through the anchor instead of creasing there.
+    ///
+    /// Malformed meshes are left unchanged.
     pub fn drag_point(&mut self, base: &[[f64; 2]], index: usize, d: [f64; 2]) {
-        if base.len() != self.points.len() || index >= base.len() || !d.iter().all(|v| v.is_finite()) {
+        if !self.is_valid() || base.len() != self.points.len() || index >= base.len() || !d.iter().all(|v| v.is_finite()) {
             return;
         }
         self.points.copy_from_slice(base);
