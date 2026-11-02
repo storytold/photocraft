@@ -1492,6 +1492,9 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
+    let opened = call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["document.opened"]}));
+    assert_eq!(opened["result"]["events"][0]["data"]["path"], "in/warn.psd", "{opened}");
+    assert_eq!(opened["result"]["events"][0]["source"], "ui");
     assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
@@ -1512,6 +1515,8 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "in/card.psdt"}));
     assert_eq!(r["result"]["name"], "Untitled-1", "{r}");
     assert_eq!(app.session.active().unwrap().path, None);
+    let opened = call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["document.opened"]}));
+    assert_eq!(opened["result"]["events"].as_array().and_then(|events| events.last()).map(|event| &event["data"]["path"]), Some(&Value::Null));
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "{r}");
 }

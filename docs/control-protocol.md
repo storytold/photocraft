@@ -118,7 +118,9 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 What changed, for tools that must react without polling the whole state (#4939). The engine keeps
 the last 4096 committed changes in a log; every event is `{seq, event, document?, source?, time, data}`:
 `seq` its position (from 1), `event` its kind, `document` the document's id where there is one,
-`source` the command id that caused it (or `ui` for the shell), `time` milliseconds since the
+`source` the command id for events emitted by command dispatch. Events emitted directly by the
+session's open, save and close helpers use `ui`, including automation callers; shell events also
+use `ui`. `time` is milliseconds since the
 epoch, `data` the kind's fields. Only committed changes are logged, never previews (a brush stroke
 appears when it lands, a dragged slider when the dialog commits).
 

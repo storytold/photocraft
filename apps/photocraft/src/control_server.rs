@@ -76,6 +76,8 @@ fn ask(
 struct PushWriter {
     stop: Sender<()>,
     ready: Sender<()>,
+    done: Receiver<()>,
+    interrupt: TcpStream,
     handle: std::thread::JoinHandle<()>,
 }
 
@@ -83,9 +85,12 @@ impl PushWriter {
     fn start(out: Arc<Mutex<TcpStream>>, push: Receiver<String>) -> std::io::Result<Self> {
         let (stop_tx, stop_rx) = channel();
         let (ready_tx, ready_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        let interrupt = out.lock().unwrap_or_else(PoisonError::into_inner).try_clone()?;
         let handle = std::thread::Builder::new().name("photocraft-event-writer".into()).spawn(move || {
             // The subscribe reply must be the first line before any pushed event.
             if ready_rx.recv().is_err() {
+                let _ = done_tx.send(());
                 return;
             }
             loop {
@@ -106,8 +111,9 @@ impl PushWriter {
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
+            let _ = done_tx.send(());
         })?;
-        Ok(Self { stop: stop_tx, ready: ready_tx, handle })
+        Ok(Self { stop: stop_tx, ready: ready_tx, done: done_rx, interrupt, handle })
     }
 
     fn begin(&self) {
@@ -118,6 +124,11 @@ impl PushWriter {
         let _ = self.stop.send(());
         // Also release a writer that has not yet sent its subscribe reply.
         let _ = self.ready.send(());
+        // A healthy subscriber keeps its connection for the unsubscribe reply. Only close a
+        // stalled writer's socket after its normal receive interval has had time to finish.
+        if self.done.recv_timeout(PUSH_STEP * 2).is_err() {
+            let _ = self.interrupt.shutdown(std::net::Shutdown::Both);
+        }
         if self.handle.join().is_err() {
             eprintln!("photocraft: event writer stopped unexpectedly");
         }
@@ -279,6 +290,27 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
 mod tests {
     use super::*;
     use std::io::BufRead;
+
+    #[test]
+    fn stopping_a_stalled_push_writer_does_not_wait_for_socket_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+        let out = Arc::new(Mutex::new(server));
+        let (tx, rx) = sync_channel(1);
+        let writer = PushWriter::start(Arc::clone(&out), rx).unwrap();
+        writer.begin();
+        tx.send("x".repeat(8 * 1024 * 1024)).unwrap();
+        let start = Instant::now();
+        while out.try_lock().is_ok() {
+            assert!(start.elapsed() < Duration::from_secs(5), "writer never began sending");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let stop = Instant::now();
+        writer.stop();
+        assert!(stop.elapsed() < Duration::from_secs(1), "stop waited for a blocked socket write: {:?}", stop.elapsed());
+    }
 
     /// #6427: with port 0 the log names the port the OS bound, which a client can connect to.
     #[test]

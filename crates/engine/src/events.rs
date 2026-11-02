@@ -6,7 +6,8 @@
 //! Only committed changes are logged (a command that ran, a job that landed, a document that
 //! opened, saved or closed, undo and redo), never previews. Every event carries the document it
 //! concerns (`document`, the document id) where there is one and its `source`: the command id
-//! for a command, `"ui"` for the shell. The log keeps the last [`CAPACITY`] events; a reader
+//! for events emitted by command dispatch, `"ui"` for direct session lifecycle and shell events.
+//! The log keeps the last [`CAPACITY`] events; a reader
 //! that falls further behind is told so (`gap`), as the proposal asks, rather than silently
 //! missing some.
 
