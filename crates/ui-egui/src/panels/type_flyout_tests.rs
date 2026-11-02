@@ -429,10 +429,39 @@ fn long_press_y_button_selects_art_history() {
 
 #[test]
 fn next_slot_tool_wraps_around_the_flyout() {
+    // One-tool slot: Alt-click is a no-op (still “cycles” to itself).
+    assert_eq!(next_slot_tool(&[Tool::Frame], Tool::Frame), Tool::Frame);
+    // Two-tool slot (Hand ↔ RotateView).
+    let two = [Tool::Hand, Tool::RotateView];
+    assert_eq!(next_slot_tool(&two, Tool::Hand), Tool::RotateView);
+    assert_eq!(next_slot_tool(&two, Tool::RotateView), Tool::Hand, "wrap");
+    // Three-tool slot.
+    let three = [Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso];
+    assert_eq!(next_slot_tool(&three, Tool::Lasso), Tool::PolygonLasso);
+    assert_eq!(next_slot_tool(&three, Tool::PolygonLasso), Tool::MagneticLasso);
+    assert_eq!(next_slot_tool(&three, Tool::MagneticLasso), Tool::Lasso, "wrap");
+    // Four-tool marquee flyout: starts from the current tool, not always the first.
     let slot = [Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee];
     assert_eq!(next_slot_tool(&slot, Tool::RectMarquee), Tool::EllipseMarquee);
+    assert_eq!(next_slot_tool(&slot, Tool::EllipseMarquee), Tool::SingleRowMarquee);
     assert_eq!(next_slot_tool(&slot, Tool::SingleColumnMarquee), Tool::RectMarquee);
     assert_eq!(next_slot_tool(&slot, Tool::Brush), Tool::EllipseMarquee, "unknown from → after the first");
+}
+
+/// Edit › Toolbar hidden tools shrink the Alt-click cycle to the remaining flyout members.
+#[test]
+fn visible_sections_drop_hidden_tools_from_alt_click_slots() {
+    let hidden = vec!["EllipseMarquee".into(), "SingleRowMarquee".into()];
+    let sections = visible_sections(&hidden);
+    let marquee = sections
+        .iter()
+        .flat_map(|s| s.iter())
+        .find(|(_, tools)| tools.contains(&Tool::RectMarquee))
+        .map(|(_, tools)| tools.as_slice())
+        .expect("marquee slot remains");
+    assert_eq!(marquee, &[Tool::RectMarquee, Tool::SingleColumnMarquee]);
+    assert_eq!(next_slot_tool(marquee, Tool::RectMarquee), Tool::SingleColumnMarquee);
+    assert_eq!(next_slot_tool(marquee, Tool::SingleColumnMarquee), Tool::RectMarquee, "wrap over the visible pair");
 }
 
 /// Photoshop: Alt/Option-click a toolbar button cycles its flyout tools without opening the menu.
