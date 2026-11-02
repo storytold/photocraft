@@ -886,6 +886,59 @@ fn a_clipped_layer_copied_without_its_base_pastes_released() {
     assert!(s.active().unwrap().doc.layer(text).unwrap().clipped, "the source is untouched");
 }
 
+/// #9736: a clipped layer's base is the nearest unclipped layer below it, not the next one, and a
+/// clipped group is released like a layer.
+#[test]
+fn a_clipped_layer_keeps_its_clip_with_its_base_however_far_below() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let add = |s: &mut Session| {
+        let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": id.0, "clipped": true})).unwrap();
+        id
+    };
+    let (c1, c2, inner) = (add(&mut s), add(&mut s), add(&mut s));
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": group.0, "clipped": true})).unwrap();
+    assert_eq!(crate::clip_group::base_of(&s.active().unwrap().doc, group), Some(base));
+    let inner_clipped = s.active().unwrap().doc.layer(inner).unwrap().clipped;
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        let inner_clipped = top.iter().find_map(|l| match &l.content {
+            LayerContent::Group(g) => g.children.first().map(|c| c.clipped),
+            _ => None,
+        });
+        assert!(s.undo());
+        (clipped, inner_clipped)
+    };
+    assert_eq!(pasted(&mut s, &[base, c2]).0, [false, true], "c1 between them left behind: c2 still clips to the base");
+    assert_eq!(pasted(&mut s, &[c1, c2]).0, [false, false], "two clipped layers without their base");
+    assert_eq!(pasted(&mut s, &[group]), (vec![false], Some(inner_clipped)), "the group is released, its contents untouched");
+    assert_eq!(pasted(&mut s, &[base, group]).0, [false, true], "the group with its base");
+    s.set_active(0);
+    let doc = &s.active().unwrap().doc;
+    assert!([c1, c2, group].iter().all(|id| doc.layer(*id).unwrap().clipped), "the source is untouched");
+    assert_eq!(doc.layer(inner).unwrap().clipped, inner_clipped);
+}
+
 /// #2478: the Background in a multi-layer copy pastes as an ordinary, unlocked layer.
 #[test]
 fn copying_the_background_with_another_layer_pastes_an_ordinary_layer() {
