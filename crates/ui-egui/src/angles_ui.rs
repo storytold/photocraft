@@ -69,7 +69,7 @@ fn camera_pos(c: Pos2, r: f32, rotation: u32, tilt: i32) -> Pos2 {
 
 /// The orbit widget; true when the camera moved.
 fn orbit(ui: &mut egui::Ui, a: &mut AnglesUi, t: &Tokens) -> bool {
-    let size = vec2(ui.available_width().min(240.0), 150.0);
+    let size = vec2(ui.available_width().min(300.0), 160.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let c = rect.center() + vec2(0.0, 18.0);
     let r = (size.x * 0.38).min(78.0);
@@ -132,46 +132,78 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut open = true;
     let mut generate = false;
     let mut a = app.ui.angles.clone();
-    egui::Window::new(tl!("Generative Angles")).id(egui::Id::unique("generative-angles")).open(&mut open).resizable(false).default_width(260.0).show(
+    egui::Window::new(tl!("Generative Angles")).id(egui::Id::unique("generative-angles")).open(&mut open).resizable(false).default_width(300.0).show(
         ctx,
         |ui| {
+            use crate::generate_panel::{SECTION_GAP, Seg, callout, section, segmented, setting_row};
+            ui.set_width(300.0);
             ui.spacing_mut().item_spacing.y = 6.0;
-            orbit(ui, &mut a, &t);
-            let row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
-                ui.horizontal(|ui| {
-                    ui.add_sized(vec2(64.0, 20.0), egui::Label::new(egui::RichText::new(label).color(t.text_dim)));
-                    add(ui);
-                });
-            };
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                crate::icons::paint(ui, r, "rotate-cw", 16.0, t.accent);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(tl!("The picture seen from another camera. Drag the camera around the subject.")).color(t.text_dim))
+                        .wrap(),
+                );
+            });
+            ui.add_space(4.0);
+            ui.vertical_centered(|ui| orbit(ui, &mut a, &t));
+            // What the camera is set to, in the words the model gets.
+            let word = |list: &[(i64, &'static str)], v: i64| list.iter().find(|(d, _)| *d == v).map_or("", |(_, w)| tl!(*w));
+            let rot: Vec<(i64, &str)> = ANGLE_ROTATIONS.iter().map(|(d, w)| (i64::from(*d), *w)).collect();
+            let tilt: Vec<(i64, &str)> = ANGLE_TILTS.iter().map(|(d, w)| (i64::from(*d), *w)).collect();
+            let zoom: Vec<(i64, &str)> = ANGLE_ZOOMS.iter().map(|(d, w)| (i64::from(*d), *w)).collect();
+            let words = [word(&rot, i64::from(a.rotation)), word(&tilt, i64::from(a.tilt)), word(&zoom, i64::from(a.zoom))].join(" · ");
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new(words).small().color(t.text_dim));
+            });
+            ui.add_space(SECTION_GAP - 4.0);
+            section(ui, &t, tl!("Camera"), None);
             let dirs: Vec<(u32, &str)> = ANGLE_ROTATIONS.iter().map(|(d, w)| (*d, tl!(*w))).collect();
-            row(ui, tl!("Direction"), &mut |ui| {
-                crate::widgets::dropdown(ui, "angles-rotation", tl!("Rotation"), &mut a.rotation, &dirs, 170.0);
+            setting_row(ui, tl!("Direction"), |ui| {
+                let w = ui.available_width();
+                crate::widgets::dropdown(ui, "angles-rotation", tl!("Rotation"), &mut a.rotation, &dirs, w);
             });
-            let tilts: Vec<(i32, &str)> = ANGLE_TILTS.iter().map(|(d, w)| (*d, tl!(*w))).collect();
-            row(ui, tl!("Height"), &mut |ui| {
-                crate::widgets::dropdown(ui, "angles-tilt", tl!("Tilt"), &mut a.tilt, &tilts, 170.0);
+            setting_row(ui, tl!("Height"), |ui| {
+                let options = [
+                    Seg::new(-30, tl!("Low")).tip(tl!("low-angle shot")),
+                    Seg::new(0, tl!("Eye")).tip(tl!("eye-level shot")),
+                    Seg::new(30, tl!("Raised")).tip(tl!("elevated shot")),
+                    Seg::new(60, tl!("High")).tip(tl!("high-angle shot")),
+                ];
+                if let Some(v) = segmented(ui, &a.tilt, &options, 0.0) {
+                    a.tilt = v;
+                }
             });
-            let zooms: Vec<(u32, &str)> = ANGLE_ZOOMS.iter().map(|(d, w)| (*d, tl!(*w))).collect();
-            row(ui, tl!("Distance"), &mut |ui| {
-                crate::widgets::dropdown(ui, "angles-zoom", tl!("Zoom"), &mut a.zoom, &zooms, 170.0);
+            setting_row(ui, tl!("Distance"), |ui| {
+                let options = [Seg::new(0u32, tl!("Wide")), Seg::new(5, tl!("Medium")), Seg::new(10, tl!("Close-up"))];
+                if let Some(v) = segmented(ui, &a.zoom, &options, 0.0) {
+                    a.zoom = v;
+                }
             });
-            row(ui, tl!("Variations"), &mut |ui| {
-                crate::widgets::dropdown(ui, "angles-variations", tl!("Variations"), &mut a.variations, &[(1u8, "1"), (2, "2"), (3, "3"), (4, "4")], 50.0);
+            setting_row(ui, tl!("Variations"), |ui| {
+                let options: Vec<Seg<'_, u8>> = [(1u8, "1"), (2, "2"), (3, "3"), (4, "4")].into_iter().map(|(n, l)| Seg::new(n, l)).collect();
+                if let Some(v) = segmented(ui, &a.variations, &options, 0.0) {
+                    a.variations = v;
+                }
             });
             if missing {
-                ui.label(
-                    egui::RichText::new(tl!(
-                        "Needs qwen-image-edit-2511-multiple-angles-lora.safetensors in the Models folder’s loras subfolder (fal, Apache-2.0)"
-                    ))
-                    .small()
-                    .color(t.warning),
+                ui.add_space(4.0);
+                callout(
+                    ui,
+                    &t,
+                    "triangle-alert",
+                    tl!("Needs qwen-image-edit-2511-multiple-angles-lora.safetensors in the Models folder’s loras subfolder (fal, Apache-2.0)"),
+                    t.warning,
                 );
             }
-            ui.add_space(2.0);
-            ui.horizontal(|ui| match &running {
+            ui.add_space(SECTION_GAP - 4.0);
+            let w = ui.available_width();
+            match &running {
                 Some(j) => {
                     let label = format!("{} · {:.0}%", tl!("Cancel"), j.progress.clamp(0.0, 1.0) * 100.0);
-                    if crate::widgets::secondary_button(ui, &label, 150.0).clicked() {
+                    if crate::widgets::secondary_button(ui, &label, w).clicked() {
                         crate::jobs_ui::cancel(app, j.id);
                     }
                 }
@@ -180,9 +212,10 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         Some(e) => format!("{} · {e}", tl!("Generate")),
                         None => tl!("Generate").to_string(),
                     };
-                    generate = crate::widgets::primary_button(ui, &label, 150.0).clicked();
+                    generate = crate::widgets::primary_button(ui, &label, w).clicked();
                 }
-            });
+            }
+            ui.label(egui::RichText::new(tl!("The window stays open; results land in the Variations strip.")).small().color(t.text_faint));
         },
     );
     a.job = app.ui.angles.job;

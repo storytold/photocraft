@@ -123,6 +123,12 @@ pub(super) fn first_field_id() -> egui::Id {
     egui::Id::unique("pc-focus-first-field")
 }
 
+/// Whether the dialog opening asks for its first field to take the keyboard, claiming it for a
+/// field that is not a number field (a generative dialog's prompt box).
+pub fn take_first_field(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false)
+}
+
 /// While `on`, the next number field drawn takes the keyboard focus with its text selected (a
 /// dialog opening on its first value, as in Photoshop). Turn it off once the body is laid out.
 pub fn focus_first_field(ctx: &egui::Context, on: bool) {

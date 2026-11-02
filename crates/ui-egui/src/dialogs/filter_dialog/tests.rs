@@ -1660,3 +1660,136 @@ fn a_generative_dialog_never_turns_an_optional_range_into_its_minimum() {
         .map(|p| p.kind);
     assert!(matches!(tries, Some(Kind::Range { min, max, default }) if min == 1.0 && max == 4.0 && default == 1.0), "{tries:?}");
 }
+
+/// Every Edit-menu generative dialog (and the Angles window) as PNGs in the folder that
+/// `PHOTOCRAFT_GENERATIVE_DIALOG_SNAPSHOTS` names, in a dark and a light theme (pixel review,
+/// not a golden test; skipped without it).
+#[test]
+fn capture_generative_dialog_snapshots() {
+    use egui_kittest::Harness;
+    let Some(directory) = std::env::var_os("PHOTOCRAFT_GENERATIVE_DIALOG_SNAPSHOTS").map(std::path::PathBuf::from) else { return };
+    let _gpu = photocraft_testkit::gpu_lock();
+    std::fs::create_dir_all(&directory).unwrap();
+    let fake = photocraft_genai::fake::FakeNative::start().unwrap();
+    let commands =
+        ["generate.fill", "generate.image", "generate.expand", "generate.edit", "generate.removeBackground", "generate.splitLayers", "generate.angles"];
+    for kind in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::ProLight] {
+        for command in commands {
+            let mut s = photocraft_engine::Session::new();
+            s.execute("file.new", json!({"width": 640, "height": 480})).unwrap();
+            s.execute("select.rect", json!({"x": 100, "y": 80, "width": 200, "height": 150})).unwrap();
+            let url = fake.url.clone();
+            s.edit_prefs(|p| {
+                p.integrations.models_path = url;
+                p.integrations.runtime_path = "fake".into();
+            });
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.sync_views();
+            if command == "generate.angles" {
+                crate::angles_ui::menu(&mut app, command, &json!({})).unwrap().unwrap();
+            } else {
+                let id = open(&mut app, command).unwrap();
+                // Show the parts a fresh dialog folds away: Fill's Advanced, an Expand amount.
+                let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+                match command {
+                    "generate.fill" => {
+                        d.fields.insert("__advanced".into(), json!(true));
+                        d.fields.insert("prompt".into(), json!("a wooden bench with a red cushion"));
+                    }
+                    "generate.expand" => {
+                        for (k, v) in [("left", 160), ("top", 0), ("right", 160), ("bottom", 0)] {
+                            d.fields.insert(k.into(), json!(v));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut h = Harness::builder().with_size(egui::vec2(760.0, 860.0)).wgpu().build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        return;
+                    }
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, t.canvas);
+                    crate::dialogs::show(app, ui.ctx());
+                    crate::angles_ui::window(app, ui.ctx());
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(8);
+            let name = command.trim_start_matches("generate.");
+            h.render().unwrap().save(directory.join(format!("{name}-{}.png", kind.id()))).unwrap();
+        }
+    }
+}
+
+/// The generative dialogs get their own layout, say what OK does, and Expand cannot confirm
+/// until a side grows (an untouched form used to run and fail with "nothing to add").
+#[test]
+fn generative_dialogs_name_their_action_and_expand_needs_a_side() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let fields = |app: &PhotocraftApp, id: u64| app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    for (command, ok) in [
+        ("generate.fill", "Generate"),
+        ("generate.image", "Generate"),
+        ("generate.edit", "Generate"),
+        ("generate.expand", "Expand"),
+        ("generate.removeBackground", "Remove Background"),
+        ("generate.splitLayers", "Split"),
+    ] {
+        let id = open(&mut app, command).unwrap();
+        let f = fields(&app, id);
+        assert!(generative::owns(&f), "{command}");
+        assert_eq!(generative::ok_label(&f), Some(ok), "{command}");
+        assert_eq!(f[generative::DOC_SIZE], json!([64, 48]), "{command}: the opener gives the picture's size");
+    }
+    let id = open(&mut app, "select.byText").unwrap();
+    assert!(!generative::owns(&fields(&app, id)), "other prompt dialogs keep the schema form");
+    let id = open(&mut app, "generate.expand").unwrap();
+    let mut f = fields(&app, id);
+    for k in ["left", "top", "right", "bottom"] {
+        f.insert(k.into(), json!(0));
+    }
+    assert!(!generative::can_confirm(&f), "nothing to add");
+    f.insert("right".into(), json!(64));
+    assert!(generative::can_confirm(&f));
+    assert!(!params_of(&f).as_object().unwrap().keys().any(|k| k.starts_with("__")), "dialog state is never sent");
+}
+
+/// The body draws every generative dialog headless, keeps steps and guidance at 0 (the
+/// model's own) until Custom is picked, and never sends Expand's margin.
+#[test]
+fn generative_dialog_body_keeps_auto_values() {
+    use egui_kittest::Harness;
+    for command in generative::COMMANDS {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let id = open(&mut app, command).unwrap();
+        app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("__advanced".into(), json!(true));
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(
+            |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    crate::dialogs::show(app, ui.ctx());
+                }
+            },
+            &mut app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        drop(h);
+        let f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+        let p = params_of(&f);
+        for k in ["steps", "guidance"] {
+            if let Some(v) = p.get(k) {
+                assert_eq!(v.as_f64(), Some(0.0), "{command}.{k}: Auto");
+            }
+        }
+        if *command == "generate.expand" {
+            assert!(p.get("margin").is_none(), "Expand's margin is the template's");
+        }
+    }
+}
