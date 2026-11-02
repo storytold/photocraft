@@ -455,6 +455,8 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
             }
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
+        // Downloads never replace the original filesystem entry.
+        write_protected: Some(Box::new(|path, bytes, _| download(path, bytes))),
         // A download may be cancelled and never reports back: it doesn't save the document.
         write_unconfirmed: true,
         encode_png: Some(Box::new(|w, h, rgba| {

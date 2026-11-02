@@ -222,8 +222,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
         for (doc, path) in docs.iter().zip(paths) {
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
-            let write = app.services.write.as_mut().ok_or("no writer configured")?;
-            write(&path, &bytes)?;
+            publish_export(app, protected_source.as_deref(), &path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
             exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
         }
@@ -1073,6 +1072,18 @@ fn check_export_destination(protected_source: Option<&str>, path: &str) -> Resul
     Ok(())
 }
 
+/// Only the platform writer can enforce identity while publishing, after encoding and
+/// earlier batch writes have had an opportunity to change destination paths.
+fn publish_export(app: &mut PhotocraftApp, protected_source: Option<&str>, path: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Some(source) = protected_source {
+        let write = app.services.write_protected.as_mut().ok_or("no source-protecting writer configured")?;
+        write(path, bytes, source)
+    } else {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(path, bytes)
+    }
+}
+
 /// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
 fn write_export(
     app: &mut PhotocraftApp,
@@ -1086,8 +1097,7 @@ fn write_export(
     let out = export_document(doc, f, None, source_profile)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, path, &settings(f))?;
-    let write = app.services.write.as_mut().ok_or("no writer configured")?;
-    write(path, &bytes)?;
+    publish_export(app, protected_source, path, &bytes)?;
     let template = "Exported {path} ({size})";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
     app.ui.status_error = false;
@@ -1144,8 +1154,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
             let out = export_document(doc, &f, None, &source_profile)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(&out, &path, &settings)?;
-            let write = app.services.write.as_mut().ok_or("no writer configured")?;
-            write(&path, &bytes)?;
+            publish_export(app, protected_source.as_deref(), &path, &bytes)?;
             let template = "Exported {path}";
             let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(&path))]);
             crate::notices::io_warnings(app, &what, &warnings);

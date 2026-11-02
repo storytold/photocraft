@@ -186,6 +186,12 @@ pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<
 
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 
+/// Publish bytes while protecting an import source. The implementation must enforce
+/// source identity at publication, including destination aliases changed after preflight.
+/// Arguments are destination, bytes, and protected source.
+/// An ordinary path check followed by `write` does not satisfy this contract.
+pub type ProtectedWriteFn = Box<dyn FnMut(&str, &[u8], &str) -> Result<(), String>>;
+
 /// What a file on disk looked like when a document last read or wrote it: File › Save asks
 /// before replacing a file another app changed since (#6596).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,6 +393,9 @@ pub struct Services {
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    /// Native identity-protected publication, or a browser download which cannot replace
+    /// the source. Protected exports fail closed when this service is unavailable.
+    pub write_protected: Option<ProtectedWriteFn>,
     /// Size and modification time of a file (native); `None` on the web, where Save never
     /// writes back to a file.
     pub file_stamp: Option<FileStampFn>,
