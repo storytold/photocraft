@@ -214,7 +214,7 @@ what an agent can't finish alone.
 - **Started (2026-11-02):** Edit › Generative Fill… through the Craft suite's shared AI layer
   (craft-ai-integrations, the catalogue's `generative-fill` tool): the person's chosen model,
   consent before anything leaves the computer, three variations, Generate More; see
-  `docs/generative-ai.md`. OpenAI's image models and FLUX.1 Fill do `image.inpaint` today.
+  `docs/generative-ai.md`. OpenAI's image models, FLUX.1 Fill and Gemini do `image.inpaint` today.
 - **Missing:** Generative Expand, Generative Upscale, Neural Filters, Sky Replacement,
   Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
   exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).

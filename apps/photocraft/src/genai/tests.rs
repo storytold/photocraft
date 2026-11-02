@@ -329,3 +329,21 @@ fn connecting_a_service_checks_it_and_keeps_the_key_out_of_the_settings_file() {
     let settings = std::fs::read_to_string(scene.shared.path()).unwrap();
     assert!(!settings.contains("sk-test-not-real"), "the key lives in the key store only");
 }
+
+#[test]
+fn every_service_setup_offers_is_a_preset_of_the_shared_layer() {
+    for kind in ServiceKind::ALL {
+        let preset = craft_ai_core::PRESETS.iter().find(|p| p.key == super::preset_key(kind));
+        let preset = preset.unwrap_or_else(|| panic!("{kind:?} has no preset"));
+        assert_eq!(preset.needs_key, kind.needs_key(), "{kind:?}");
+    }
+    let gemini = craft_ai_core::PRESETS.iter().find(|p| p.key == "gemini").unwrap();
+    assert_eq!(gemini.endpoint, "https://generativelanguage.googleapis.com/v1beta");
+}
+
+#[test]
+fn gemini_is_offered_for_generative_fill() {
+    let fill = craft_ai_features::builtin().into_iter().find(|f| f.id == "generative-fill").unwrap();
+    assert!(fill.cloud.iter().any(|c| c.preset == "gemini"));
+    assert!(fill.cloud.iter().any(|c| c.preset == "bfl"));
+}

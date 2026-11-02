@@ -28,18 +28,20 @@ Edit › Preferences › AI Integrations… › Generative AI:
 - **Connections** lists the saved connections, with where they run and what is wrong with one
   (no key saved, the key can't be read, switched off), and removes one (the choices that used it
   go with it).
-- **Connect a service**: OpenAI or Black Forest Labs with an API key, or a ComfyUI server by its
-  address. Connect first asks the service for its models with that key (nothing from any
-  document is sent), and saves the connection only when that works. The key is handed to the
+- **Connect a service**: OpenAI, Black Forest Labs or Google Gemini with an API key, or a ComfyUI
+  server by its address. Connect first asks the service for its models with that key (nothing from
+  any document is sent), and saves the connection only when that works. The key is handed to the
   shared layer once, which keeps it in the OS keychain; it is never in PhotoCraft's preferences,
   in a dialog's fields (`ui.inspect`) or in the control channel.
 
 Which services can fill today: at the pinned revision, the layer lists for `image.inpaint`
-OpenAI's image models (GPT Image, and DALL·E 2, which takes square pictures only) and Black
-Forest Labs' FLUX.1 Fill [pro]. A ComfyUI connection offers whatever inpainting workflows were
-imported into the layer's workflow library, and an OpenAI-compatible server the inpainting models
-declared for it in the launcher. PhotoCraft asks OpenAI for quality "high"; left to choose, it
-returned soft fills.
+OpenAI's image models (GPT Image, and DALL·E 2, which takes square pictures only), Black Forest
+Labs' FLUX.1 Fill [pro] and Google Gemini's image models (with an AI Studio key for the Gemini
+API, not Vertex). Gemini takes no mask: it is shown the selection as a second picture with an
+instruction, so it may change the picture outside it; PhotoCraft keeps only the selected part of
+what comes back. A ComfyUI connection offers whatever inpainting workflows were imported into the
+layer's workflow library, and an OpenAI-compatible server the inpainting models declared for it in
+the launcher. PhotoCraft asks OpenAI for quality "high"; left to choose, it returned soft fills.
 
 The shared folder (connections, consent, history) is the layer's: `CRAFT_AI_DIR` moves it, which
 is what tests do so they never touch a person's real settings.

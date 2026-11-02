@@ -2,7 +2,7 @@
 //! shared AI layer, until the Craft launcher has its own Set up AI window. It shows whether
 //! Generative Fill can run (the layer's reason as it is when it can't), lets the person pick the
 //! model it uses (the suite's choice, as the launcher's), lists the saved connections, and
-//! connects OpenAI or Black Forest Labs with a key, or a ComfyUI server by its address.
+//! connects OpenAI, Black Forest Labs or Google Gemini with a key, or a ComfyUI server by its address.
 //!
 //! Connections, keys and the choice are the shared layer's, not PhotoCraft's preferences: a key is
 //! typed into a buffer outside the dialog's fields (so `ui.inspect` and the control channel never
@@ -35,6 +35,7 @@ fn kind_name(k: ServiceKind) -> &'static str {
     match k {
         ServiceKind::OpenAi => "OpenAI",
         ServiceKind::BlackForestLabs => "Black Forest Labs",
+        ServiceKind::Gemini => "Google Gemini",
         ServiceKind::ComfyUi => "ComfyUI",
     }
 }

@@ -233,11 +233,7 @@ impl GenerativeAi for CraftAi {
     }
 
     fn connect(&self, kind: ServiceKind, value: &str) -> Result<(), AiFailure> {
-        let key = match kind {
-            ServiceKind::OpenAi => "openai",
-            ServiceKind::BlackForestLabs => "bfl",
-            ServiceKind::ComfyUi => "comfyui",
-        };
+        let key = preset_key(kind);
         let preset = PRESETS
             .iter()
             .find(|p| p.key == key)
@@ -278,6 +274,16 @@ impl GenerativeAi for CraftAi {
         let r = self.desk().and_then(|d| d.choose(&self.role, &connection, &model)).map_err(failure);
         self.forget_status();
         r
+    }
+}
+
+/// The shared layer's connection preset for a service PhotoCraft's setup offers.
+fn preset_key(kind: ServiceKind) -> &'static str {
+    match kind {
+        ServiceKind::OpenAi => "openai",
+        ServiceKind::BlackForestLabs => "bfl",
+        ServiceKind::Gemini => "gemini",
+        ServiceKind::ComfyUi => "comfyui",
     }
 }
 

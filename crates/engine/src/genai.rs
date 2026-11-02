@@ -222,12 +222,14 @@ pub enum ServiceKind {
     OpenAi,
     /// Black Forest Labs, with the person's own API key.
     BlackForestLabs,
+    /// Google Gemini (the Gemini API, not Vertex), with the person's own AI Studio API key.
+    Gemini,
     /// A ComfyUI server, by address (on this computer, usually).
     ComfyUi,
 }
 
 impl ServiceKind {
-    pub const ALL: [ServiceKind; 3] = [ServiceKind::OpenAi, ServiceKind::BlackForestLabs, ServiceKind::ComfyUi];
+    pub const ALL: [ServiceKind; 4] = [ServiceKind::OpenAi, ServiceKind::BlackForestLabs, ServiceKind::Gemini, ServiceKind::ComfyUi];
 
     /// Does connecting it take a key (else an address)?
     pub fn needs_key(self) -> bool {
