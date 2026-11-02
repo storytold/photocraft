@@ -78,6 +78,11 @@ A server that recognises the gzip in a part and sends it with `Content-Encoding:
 the page then uses it as it is. (That holds while the app ships as one part, as it does today:
 such a server labels only the first part, the one that starts with gzip's header.)
 
+An optional [external file-provider bridge](file-providers.md) lets a trusted host supply its
+own document storage. It remains inactive until explicitly registered and does not add a
+server, accounts or a particular cloud service to PhotoCraft. The local flow above remains
+the default. The bridge candidate's validation status is documented separately.
+
 To verify the browser deployment, open the page, open an image and save/export it.
 
 ## Sizes

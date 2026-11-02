@@ -373,8 +373,10 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);
     }
     close_after_saves(app, ctx);
-    if app.saving() || app.printing() {
+    if !app.jobs.saves.is_empty() || app.printing() {
         // Keep checking on a cancelled save's worker until it returns.
+        // External providers wake the app when their reply arrives; a network wait alone
+        // must not force the editor to redraw twenty times a second.
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
     if !keep_polling(app, ctx) {

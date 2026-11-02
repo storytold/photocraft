@@ -79,6 +79,16 @@ impl PhotocraftApp {
             let (doc, warnings) = import(name, bytes, &opts)?;
             (doc, warnings, false)
         };
+        // A provider acknowledges a document instance, not an identity persisted inside a
+        // file that the user can open more than once.
+        if let Some(provider) = self.services.file_provider.as_ref().filter(|host| host.connected()) {
+            let mut id = photocraft_doc::DocId::fresh();
+            while self.session.documents().iter().any(|state| state.doc.id == id) || self.held_opens.iter().any(|held| held.doc.id == id) {
+                id = photocraft_doc::DocId::fresh();
+            }
+            doc.id = id;
+            provider.opening_document(doc.id);
+        }
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -169,10 +179,24 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
-        // Edit Contents documents save back into their smart object.
+        // Edit Contents documents save back into their smart object, not to a file provider.
         if path.is_none() && self.session.is_enabled("layer.smartObjects.saveContents") {
+            if let (Some(provider), Some(doc)) = (&self.services.file_provider, self.session.active().map(|state| state.doc.id)) {
+                provider.clear_intent(doc);
+            }
             self.run("layer.smartObjects.saveContents", serde_json::json!({}))?;
             return Ok(serde_json::json!({"path": "smart object", "warnings": []}));
+        }
+        let provider = self.services.file_provider.clone().filter(|host| host.enabled());
+        if let (Some(provider), Some(doc)) = (&provider, self.session.active().map(|state| state.doc.id)) {
+            provider.ensure_intent(doc, if plain_save { "save" } else { "saveAs" });
+            if provider.pending_for(doc) {
+                return Err("Wait for the pending save to finish before saving again".into());
+            }
+            if let Some(path) = path.as_ref().filter(|_| !provider.prepared_for(doc)) {
+                let suggested = path.clone();
+                return self.pick_save(&suggested, move |app, path| app.with_document(doc, |app| app.save_to(path, choices)));
+            }
         }
         if let Some(path) = path {
             return self.save_to(path, choices);
@@ -184,18 +208,22 @@ impl PhotocraftApp {
         // (including an unlocked transparent PNG) can keep its flat format; editable contents,
         // masks and layer appearance settings need a layered format even with just one layer.
         let flat = plain_raster(&st.doc).is_some();
-        let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
+        // A provider binding owns a filename, never a local path. It still determines the
+        // next Save's format; a .pcraft project must not silently become a PSD on the next save.
+        let provider_name = provider.as_ref().and_then(|provider| provider.bound_filename(st.doc.id));
+        let source_path = st.path.as_deref().or(provider_name.as_deref());
+        let ext = source_path.and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
-        let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
+        let holds_ora = source_path.is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
                 || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
-        let suggested = match &st.path {
-            Some(p) if writable => p.clone(),
+        let suggested = match source_path {
+            Some(p) if writable => p.to_owned(),
             p => {
-                let source = p.as_deref().unwrap_or(&st.doc.name);
+                let source = p.unwrap_or(&st.doc.name);
                 let ext = match photocraft_engine::file_cmds::extension(source).as_deref() {
                     Some("pdn") => "pcraft",
                     Some("kra" | "krz") => "ora",
@@ -228,6 +256,16 @@ impl PhotocraftApp {
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
         if self.smart_svg.modal_open() {
             return Err("Answer Edit SVG Contents before starting a save".into());
+        }
+        if let (Some(provider), Some(doc)) = (self.services.file_provider.as_ref(), self.session.active())
+            && !doc.is_dirty()
+            && choices == FormatChoices::default()
+            && provider.unchanged_provider_save(doc.doc.id, doc.revision, &path)
+        {
+            provider.finish_unchanged(doc.doc.id, doc.revision, &path);
+            self.ui.status = tl!("The file provider already has this revision").into();
+            self.ui.status_error = false;
+            return Ok(serde_json::json!({"saved": true, "unchanged": true}));
         }
         // An RGB Targa asks for its bits per pixel, a DDS texture for its compression, and a JPEG
         // for its quality and format, unless the caller chose them; the save continues from the
@@ -264,7 +302,20 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
+        if let (Some(provider), Some(doc)) = (self.services.file_provider.clone().filter(|host| host.enabled()), self.session.active()) {
+            if provider.pending_for(doc.doc.id) {
+                return Err("Wait for the pending save to finish before saving again".into());
+            }
+            if !provider.prepared_for(doc.doc.id) {
+                provider.ensure_intent(doc.doc.id, "save");
+                return self.save_dialog_flow(Some(path), choices, true);
+            }
+        }
+        let provider_mediated = self.provider_save_prepared();
         let r = self.write_save(path, None, choices)?;
+        if provider_mediated {
+            return Ok(r);
+        }
         // JPEG Options are recorded only where they change something
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
@@ -276,7 +327,13 @@ impl PhotocraftApp {
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+        let provider_mediated = self.provider_save_prepared();
         let r = self.write_save(path.clone(), tiff_layers, choices)?;
+        // A captured provider/account destination cannot be replayed as a device path.
+        // Until Actions has a provider-aware step, omit this side effect from its journal.
+        if provider_mediated {
+            return Ok(r);
+        }
         let mut step = serde_json::json!({"path": path});
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
@@ -291,6 +348,13 @@ impl PhotocraftApp {
     /// parked behind Targa, DDS or JPEG Options hasn't been journaled yet: it is recorded as
     /// File › Save once answered.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
+        if let (Some(provider), Some(doc)) = (&self.services.file_provider, self.session.active())
+            && (provider.enabled() || provider.pending_for(doc.doc.id))
+        {
+            // There was no new local Save As entry to relabel. In particular, leave a
+            // previous local entry with this same display filename intact.
+            return;
+        }
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
@@ -385,7 +449,8 @@ impl PhotocraftApp {
         let st = self.session.active().ok_or("no document")?;
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
         let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || tiff(path);
-        let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
+        let provider_name = self.services.file_provider.as_ref().filter(|provider| provider.enabled()).and_then(|provider| provider.bound_filename(st.doc.id));
+        let lives_layered = st.path.as_deref().or(provider_name.as_deref()).is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
         Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered)))
     }
 
@@ -408,6 +473,28 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        let provider = self.services.file_provider.clone();
+        let document = self.session.active().map(|state| state.doc.id);
+        if let (Some(provider), Some(doc)) = (&provider, document)
+            && provider.pending_for(doc)
+        {
+            return Err("Wait for the pending save to finish before writing another copy".into());
+        }
+        // Only a Save/Save As destination answered by the provider can enter this path.
+        // Exports and Save a Copy keep the regular writer even while a provider is connected.
+        if let (Some(provider), Some(doc)) = (provider, document)
+            && provider.prepared_for(doc)
+        {
+            let state = self.session.active().ok_or("no document")?;
+            let revision = state.revision;
+            let export = self.services.export.as_ref().ok_or("no exporter configured")?;
+            let (bytes, warnings) = export(&state.doc, &path, settings)?;
+            let device = provider.prepared_device(doc);
+            provider.begin(doc, revision, &path, bytes, warnings, copy)?;
+            self.ui.status = if device { tl!("Preparing the device download…") } else { tl!("Saving through the file provider…") }.into();
+            self.ui.status_error = false;
+            return Ok(None);
+        }
         if self.background_jobs
             && let Some(save) = self.services.save_file.clone()
         {
@@ -419,6 +506,9 @@ impl PhotocraftApp {
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
+        if let Some(provider) = self.services.file_provider.as_ref() {
+            provider.clear_intent(doc);
+        }
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
@@ -477,6 +567,31 @@ impl PhotocraftApp {
     /// [`Self::saved`] for automation saves: no user-configured hooks (docs/control-protocol.md).
     pub(crate) fn saved_automation(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool) {
         self.saved_inner(doc, revision, path, warnings, copy, SaveKind::Automation);
+    }
+
+    /// Apply a provider's acknowledgement to its captured revision only. A provider resource
+    /// is not a local path: it neither overwrites another tab's local file nor enters local
+    /// Recents, and user-configured filesystem hooks do not run for it.
+    pub(crate) fn saved_provider(&mut self, doc: DocId, revision: u64, filename: &str, warnings: &[String], copy: bool) {
+        if !self.session.documents().iter().any(|state| state.doc.id == doc) {
+            return;
+        }
+        if !copy {
+            let _ = self.with_document(doc, |app| {
+                if let Some(state) = app.session.active_mut() {
+                    std::sync::Arc::make_mut(&mut state.doc).name = filename.to_string();
+                    state.path = None;
+                    state.saved_revision = revision;
+                }
+                app.disk_stamps.remove(&doc);
+                Ok(())
+            });
+        }
+        let status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", filename)]);
+        self.ui.status = status.clone();
+        self.ui.status_error = false;
+        notices::io_warnings(self, &status, warnings);
+        self.sync_views();
     }
 
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
@@ -558,8 +673,9 @@ impl PhotocraftApp {
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
+        let provider_mediated = self.services.file_provider.as_ref().is_some_and(|provider| provider.prepared_for(doc));
         let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
-        if written.is_ok() {
+        if written.is_ok() && !provider_mediated {
             self.session.journal.push((step.0.into(), step.1));
         }
         match written {
@@ -580,7 +696,14 @@ impl PhotocraftApp {
 
     /// A save is running in the background.
     pub(crate) fn saving(&self) -> bool {
-        !self.jobs.saves.is_empty()
+        !self.jobs.saves.is_empty() || self.services.file_provider.as_ref().is_some_and(|provider| provider.saving())
+    }
+
+    fn provider_save_prepared(&self) -> bool {
+        match (&self.services.file_provider, self.session.active()) {
+            (Some(provider), Some(doc)) => provider.prepared_for(doc.doc.id),
+            _ => false,
+        }
     }
 
     /// Save through the control session's capability-scoped writer. No file
