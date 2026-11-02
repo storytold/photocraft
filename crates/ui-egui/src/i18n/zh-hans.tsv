@@ -3168,6 +3168,85 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Profile	配置文件
 	Target	目标
 	Units	单位
+
+	Generated palette	生成调色板
+	Palette library	调色板库
+	Search palettes…	搜索调色板…
+	Import GPL…	导入 GPL…
+	Import ACT…	导入 ACT…
+	No bundled palette matches this search.	没有符合此搜索的内置调色板。
+	{name}  ·  {n} entries	{name}  ·  {n} 个条目
+	Use generated palette	使用生成的调色板
+	Fixed snapshot	固定快照
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	已选择生成的调色板。选择内置调色板或导入 GPL/ACT 文件，以固定并保留顺序的快照。
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	未选择固定调色板；将使用引擎默认调色板。选择内置调色板或导入 GPL/ACT 以固定快照。
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	已导入快照 · 保留源顺序和重复条目
+	Algorithm	算法
+	Ingredient {n}	成分 {n}
+	Phase	相位
+	Custom threshold matrix (0–1)	自定义阈值矩阵 (0–1)
+	Mapping settings are invalid: {error}	映射设置无效：{error}
+	Mapping	映射
+	Threshold ingredients	阈值成分
+	Add ingredient	添加成分
+	Import matrix…	导入矩阵…
+	Generated palette options	生成调色板选项
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	固定调色板仅用于 GIF/PNG-8；JPEG/PNG-24 会忽略它。
+	Clear snapshot and choose generated palette	清除快照并选择生成的调色板
+	Palette invalid: {error}	调色板无效：{error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} 有 {entries} 个条目，但此格式预留一个透明槽后最多允许 {limit} 个。
+	{name} has {entries} entries, but this format allows {limit}.	{name} 有 {entries} 个条目，但此格式最多允许 {limit} 个。
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	已启用有意缩减；引擎会为此格式量化快照，而不更改保存的快照。
+	Do not reduce (reject oversized palette)	不缩减（拒绝过大的调色板）
+	Reduce to {limit} for this conversion/export	为此转换/导出缩减到 {limit} 个
+	Palette reduction is enabled for this adapter.	此格式已启用调色板缩减。
+	threshold matrix must be UTF-8 text	阈值矩阵必须是 UTF-8 文本
+	invalid threshold value `{token}`	无效的阈值 `{token}`
+	threshold values must be finite and between 0 and 1	阈值必须是有限数，并且介于 0 和 1 之间
+	threshold matrices are limited to 256 entries	阈值矩阵最多包含 256 个条目
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	阈值矩阵每边必须是 2、4、8 或 16 个条目的正方形
+	palette dialog was closed	调色板对话框已关闭
+	threshold ingredient no longer exists	阈值成分已不存在
+	Bayer	拜耳
+	Clustered Dot	聚簇点
+	Floyd–Steinberg	弗洛伊德–斯坦伯格
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	蓝噪声
+	White Noise	白噪声
+	Riemersma	Riemersma
+	Serpentine traversal	蛇形遍历
+	Decay	衰减
+	Binary	二值
+	Matrix	矩阵
+	Palette source	调色板来源
+	Generate from image	从图像生成
+	Choose a palette	选择调色板
+	Find a palette for this image.	为此图像查找调色板。
+	Use a built-in or imported palette.	使用内置或导入的调色板。
+	Generation method	生成方法
+	Required colors	所需颜色
+	Dithering	仿色
+	Combine dither patterns	组合仿色图案
+	Preserve transparency	保留透明度
+	Transparency dithering	透明度仿色
+	Resulting palette	结果调色板
+	Before	前
+	After	后
+	Updating preview…	正在更新预览…
+	Preview is off	预览已关闭。
+	Move up	上移
+	Move down	下移
+	Disable	禁用
+	Seed	种子
+@id	filter.paletteMap	调色板映射…
+	Palette Map…	调色板映射…
+	Approximate preview	近似预览
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设

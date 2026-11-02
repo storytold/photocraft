@@ -4565,6 +4565,81 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+
+	Generated palette	Generisana paleta
+	Palette library	Biblioteka paleta
+	Search palettes…	Pretraži palete…
+	Import GPL…	Uvezi GPL…
+	Import ACT…	Uvezi ACT…
+	No bundled palette matches this search.	Nema ugrađene palete koja odgovara ovoj pretrazi.
+	{name}  ·  {n} entries	{name}  ·  {n} stavki
+	Use generated palette	Koristi generisanu paletu
+	Fixed snapshot	Fiksirani snimak
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Izabrana je generisana paleta. Izaberite ugrađenu paletu ili uvezite GPL/ACT datoteku za fiksirani snimak koji čuva redosled.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Fiksirana paleta nije izabrana; koristiće se podrazumevana paleta motora. Izaberite ugrađenu paletu ili uvezite GPL/ACT da fiksirate snimak.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Uvezeni snimak · sačuvani su izvorni redosled i duplikati
+	Algorithm	Algoritam
+	Ingredient {n}	Sastojak {n}
+	Phase	Faza
+	Custom threshold matrix (0–1)	Prilagođena matrica praga (0–1)
+	Mapping settings are invalid: {error}	Podešavanja mapiranja nisu ispravna: {error}
+	Mapping	Mapiranje
+	Threshold ingredients	Sastojci praga
+	Add ingredient	Dodaj sastojak
+	Import matrix…	Uvezi matricu…
+	Generated palette options	Opcije generisane palete
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Fiksirana paleta koristi se samo za GIF/PNG-8; JPEG/PNG-24 je zanemaruju.
+	Clear snapshot and choose generated palette	Obriši snimak i izaberi generisanu paletu
+	Palette invalid: {error}	Paleta nije ispravna: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} ima {entries} stavki, ali ovaj format dozvoljava {limit} uz rezervisano mesto za prozirnost.
+	{name} has {entries} entries, but this format allows {limit}.	{name} ima {entries} stavki, ali ovaj format dozvoljava {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Namerno smanjenje je uključeno; motor će kvantizovati ovaj snimak za format bez promene sačuvanog snimka.
+	Do not reduce (reject oversized palette)	Ne smanjuj (odbaci preveliku paletu)
+	Reduce to {limit} for this conversion/export	Smanji na {limit} za ovu konverziju/izvoz
+	Palette reduction is enabled for this adapter.	Smanjenje palete je uključeno za ovaj format.
+	threshold matrix must be UTF-8 text	matrica praga mora biti UTF-8 tekst
+	invalid threshold value `{token}`	neispravna vrednost praga `{token}`
+	threshold values must be finite and between 0 and 1	vrednosti praga moraju biti konačne i između 0 i 1
+	threshold matrices are limited to 256 entries	matrice praga ograničene su na 256 stavki
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	matrica praga mora biti kvadratna, sa 2, 4, 8 ili 16 stavki po strani
+	palette dialog was closed	dijalog palete je zatvoren
+	threshold ingredient no longer exists	sastojak praga više ne postoji
+	Bayer	Bajer
+	Clustered Dot	Grupisana tačka
+	Floyd–Steinberg	Flojd–Stajnberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Plavi šum
+	White Noise	Beli šum
+	Riemersma	Rimersma
+	Serpentine traversal	Serpentinasto obilaženje
+	Decay	Opadanje
+	Binary	Binarno
+	Matrix	Matrica
+	Palette source	Izvor palete
+	Generate from image	Generiši iz slike
+	Choose a palette	Izaberi paletu
+	Find a palette for this image.	Pronađi paletu za ovu sliku.
+	Use a built-in or imported palette.	Koristi ugrađenu ili uvezenu paletu.
+	Generation method	Način generisanja
+	Required colors	Potrebne boje
+	Dithering	Diterovanje
+	Combine dither patterns	Kombinuj šare diterovanja
+	Preserve transparency	Očuvaj providnost
+	Transparency dithering	Diterovanje providnosti
+	Resulting palette	Rezultujuća paleta
+	Updating preview…	Ažuriranje pregleda…
+	Preview is off	Pregled je isključen.
+	Move up	Pomeri nagore
+	Move down	Pomeri nadole
+@id	filter.paletteMap	Mapa palete…
+	Palette Map…	Mapa palete…
+	Approximate preview	Približan pregled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova

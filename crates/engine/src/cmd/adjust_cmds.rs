@@ -339,7 +339,7 @@ pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p
         visible: true,
     };
     let sel = s.active().and_then(|d| d.doc.selection.clone());
-    s.edit(label, |doc, _| crate::smart_cmds::add_smart_filter(doc, id, sf, sel.as_ref()))?;
+    s.edit(label, |doc, _| crate::smart_cmds::add_smart_filter(doc, id, sf, sel.as_ref(), None))?;
     Ok(true)
 }
 

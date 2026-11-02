@@ -3515,6 +3515,84 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+
+	Generated palette	Generierte Palette
+	Palette library	Palettenbibliothek
+	Search palettes…	Paletten suchen…
+	Import GPL…	GPL importieren…
+	Import ACT…	ACT importieren…
+	No bundled palette matches this search.	Keine eingebundene Palette passt zu dieser Suche.
+	{name}  ·  {n} entries	{name}  ·  {n} Einträge
+	Use generated palette	Generierte Palette verwenden
+	Fixed snapshot	Fester Schnappschuss
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Generierte Palette ausgewählt. Wählen Sie eine eingebundene Palette oder importieren Sie eine GPL/ACT-Datei für einen festen Schnappschuss mit beibehaltener Reihenfolge.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Keine feste Palette ausgewählt; die Standardpalette der Engine wird verwendet. Wählen Sie eine eingebundene Palette oder importieren Sie GPL/ACT, um einen Schnappschuss zu fixieren.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Importierter Schnappschuss · Quellreihenfolge und doppelte Einträge bleiben erhalten
+	Algorithm	Algorithmus
+	Ingredient {n}	Bestandteil {n}
+	Phase	Phase
+	Custom threshold matrix (0–1)	Benutzerdefinierte Schwellenwertmatrix (0–1)
+	Mapping settings are invalid: {error}	Zuordnungseinstellungen sind ungültig: {error}
+	Mapping	Zuordnung
+	Threshold ingredients	Schwellenwertbestandteile
+	Add ingredient	Bestandteil hinzufügen
+	Import matrix…	Matrix importieren…
+	Generated palette options	Optionen der generierten Palette
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Eine feste Palette wird nur für GIF/PNG-8 verwendet; JPEG/PNG-24 ignorieren sie.
+	Clear snapshot and choose generated palette	Schnappschuss löschen und generierte Palette wählen
+	Palette invalid: {error}	Palette ungültig: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} enthält {entries} Einträge, aber dieses Format erlaubt {limit} mit einem reservierten Transparenzplatz.
+	{name} has {entries} entries, but this format allows {limit}.	{name} enthält {entries} Einträge, aber dieses Format erlaubt {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Die beabsichtigte Reduzierung ist aktiviert; die Engine quantisiert diesen Schnappschuss für das Format, ohne den gespeicherten Schnappschuss zu ändern.
+	Do not reduce (reject oversized palette)	Nicht reduzieren (zu große Palette ablehnen)
+	Reduce to {limit} for this conversion/export	Für diese Konvertierung/diesen Export auf {limit} reduzieren
+	Palette reduction is enabled for this adapter.	Palettenreduzierung ist für dieses Format aktiviert.
+	threshold matrix must be UTF-8 text	Schwellenwertmatrix muss UTF-8-Text sein
+	invalid threshold value `{token}`	Ungültiger Schwellenwert `{token}`
+	threshold values must be finite and between 0 and 1	Schwellenwerte müssen endlich und zwischen 0 und 1 liegen
+	threshold matrices are limited to 256 entries	Schwellenwertmatrizen sind auf 256 Einträge begrenzt
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	Schwellenwertmatrix muss ein Quadrat mit 2, 4, 8 oder 16 Einträgen pro Seite sein
+	palette dialog was closed	Palettendialog wurde geschlossen
+	threshold ingredient no longer exists	Schwellenwertbestandteil ist nicht mehr vorhanden
+	Bayer	Bayer
+	Clustered Dot	Clusterpunkt
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Blaues Rauschen
+	White Noise	Weißes Rauschen
+	Riemersma	Riemersma
+	Serpentine traversal	Schlangenförmiger Durchlauf
+	Decay	Abklingen
+	Binary	Binär
+	Matrix	Matrix
+	Palette source	Palettenquelle
+	Generate from image	Aus Bild generieren
+	Choose a palette	Palette auswählen
+	Find a palette for this image.	Eine Palette für dieses Bild finden.
+	Use a built-in or imported palette.	Eine eingebundene oder importierte Palette verwenden.
+	Generation method	Generierungsmethode
+	Required colors	Benötigte Farben
+	Dithering	Dithering
+	Combine dither patterns	Dither-Muster kombinieren
+	Preserve transparency	Transparenz beibehalten
+	Transparency dithering	Transparenz-Dithering
+	Resulting palette	Resultierende Palette
+	Before	Vorher
+	After	Nachher
+	Updating preview…	Vorschau wird aktualisiert…
+	Preview is off	Vorschau ist deaktiviert.
+	Move up	Nach oben verschieben
+	Move down	Nach unten verschieben
+	Disable	Deaktivieren
+@id	filter.paletteMap	Palettenzuordnung…
+	Palette Map…	Palettenzuordnung…
+	Approximate preview	Angenäherte Vorschau
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben

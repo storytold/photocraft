@@ -239,6 +239,24 @@ fn filter_preview_factor_caps_at_the_view_without_overriding_the_preference() {
     }
 }
 
+#[test]
+fn palette_map_preview_stays_bounded_at_any_canvas_zoom() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 2400, "height": 2200, "background": "#123456"})).unwrap();
+    assert_eq!(crate::proxy::preview_factor(&app.session.active().unwrap().doc, true), 2, "big enough for a proxy");
+    crate::filter_dialog::open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    let ctx = egui::Context::default();
+    let preview_at = |app: &mut PhotocraftApp, zoom: f32| {
+        app.ui.views.get_mut(0).expect("the new document's view").zoom = zoom;
+        assert_eq!(app.current_zoom(), zoom);
+        let (k, _, size) = ensure_filter_preview(app, 0, &ctx).expect("a Palette Map preview");
+        (k, size)
+    };
+    assert_eq!(preview_at(&mut app, 1.0), (2, [1200, 1100]), "100 % stays bounded by the document proxy");
+    assert_eq!(preview_at(&mut app, 4.0), (2, [1200, 1100]), "zooming in does not expand the mapping work");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
@@ -369,6 +387,156 @@ fn drive_until(app: &mut PhotocraftApp, ctx: &egui::Context, what: &str, done: i
         ensure_filter_preview(app, 0, ctx);
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn gated_palette_map_preview(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+) -> (std::sync::mpsc::Sender<()>, serde_json::Value, std::sync::mpsc::Receiver<bool>) {
+    let d = app.ui.dialogs.first().expect("a dialog is open");
+    let st = app.session.active().expect("a document is active");
+    let command = "filter.paletteMap";
+    let params = app.with_mask_target(command, crate::filter_dialog::params_of(&d.fields));
+    assert_eq!(crate::filter_dialog::preview_factor(command, &params, 1), 1, "the small document keeps k = 1");
+    let key = crate::filter_dialog::FilterPreviewKey {
+        doc: st.doc.id,
+        revision: st.revision,
+        dialog: d.id,
+        active: st.active_layer,
+        target: st.channel_view.target,
+        command: command.into(),
+        params,
+        k: 1,
+    };
+    let doc = app.session.documents()[0].doc.clone();
+    let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
+    let old_amount = key.params.get("amount").cloned().unwrap_or_else(|| json!(75));
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let (cancelled, cancelled_rx) = std::sync::mpsc::channel::<bool>();
+    let task = key.clone();
+    app.filter_preview_worker
+        .start(key, ctx.clone(), move |job| {
+            // The renderer below is real; this gate only makes the supersession race
+            // deterministic instead of depending on a small image beating a frame.
+            wait.recv_timeout(std::time::Duration::from_secs(60)).expect("the test releases the job");
+            let _ = cancelled.send(job.cancelled());
+            let result = crate::filter_dialog::preview_document_for_target(
+                &doc,
+                task.active,
+                &task.command,
+                &task.params,
+                task.k,
+                Some(job),
+                task.target,
+                &documents,
+                &Default::default(),
+            )
+            .map(|d| {
+                let buffer = photocraft_compose::flatten(&d);
+                (std::sync::Arc::new(d), buffer)
+            });
+            crate::dialogs::filter_preview_worker::Computed { result, ms: 0.0 }
+        })
+        .expect("the worker starts");
+    (release, old_amount, cancelled_rx)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_superseded_palette_map_preview_never_reaches_the_canvas() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "#3366cc"})).unwrap();
+    app.background_jobs = true;
+    crate::filter_dialog::open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    let ctx = egui::Context::default();
+    let (release, old_amount, _) = gated_palette_map_preview(&mut app, &ctx);
+    app.ui.dialogs[0].fields.insert("amount".into(), json!(0.0));
+    release.send(()).expect("released");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        ensure_filter_preview(&mut app, 0, &ctx);
+        if let Some(preview) = &app.filter_preview {
+            assert_ne!(preview.key.params.get("amount"), Some(&old_amount), "the stale Palette Map frame was published");
+            if preview.key.params.get("amount") == Some(&json!(0.0)) && preview.result.is_some() {
+                break;
+            }
+        }
+        assert!(std::time::Instant::now() < deadline, "the current Palette Map preview never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancelled_palette_map_preview_is_discarded_when_values_revert() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "#3366cc"})).unwrap();
+    app.background_jobs = true;
+    crate::filter_dialog::open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    let ctx = egui::Context::default();
+    let (release, original_amount, cancelled) = gated_palette_map_preview(&mut app, &ctx);
+
+    // Cancel A with B, then return to A before the cancelled completion is drained.
+    app.ui.dialogs[0].fields.insert("amount".into(), json!(0.0));
+    ensure_filter_preview(&mut app, 0, &ctx);
+    app.ui.dialogs[0].fields.insert("amount".into(), original_amount.clone());
+    release.send(()).expect("released");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut saw_cancelled = false;
+    loop {
+        ensure_filter_preview(&mut app, 0, &ctx);
+        if let Ok(was_cancelled) = cancelled.try_recv() {
+            assert!(was_cancelled, "the first Palette Map request was cancelled");
+            saw_cancelled = true;
+        }
+        if let Some(preview) = &app.filter_preview
+            && preview.key.params.get("amount") == Some(&original_amount)
+        {
+            if preview.result.is_none() {
+                assert!(app.filter_preview_worker.busy(), "a cancelled None must not be cached for the reverted request");
+            } else if saw_cancelled {
+                break;
+            }
+        }
+        assert!(std::time::Instant::now() < deadline, "the reverted Palette Map preview never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(saw_cancelled);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn closing_palette_map_dialog_cancels_its_preview_worker() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "#3366cc"})).unwrap();
+    app.background_jobs = true;
+    crate::filter_dialog::open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    let dialog = app.ui.dialogs[0].id;
+    let ctx = egui::Context::default();
+    let (release, _, cancelled) = gated_palette_map_preview(&mut app, &ctx);
+    crate::dialogs::cancel(&mut app, dialog).expect("dialog cancels");
+    release.send(()).expect("released");
+    assert!(cancelled.recv_timeout(std::time::Duration::from_secs(10)).expect("worker reports cancellation"));
+    assert!(app.filter_preview.is_none(), "closing the dialog clears its preview");
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 64, "height": 48, "background": "#3366cc"})).unwrap();
+    app.background_jobs = true;
+    crate::filter_dialog::open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    let ctx = egui::Context::default();
+    let (release, _, cancelled) = gated_palette_map_preview(&mut app, &ctx);
+    app.ui.dialogs[0].fields.insert("__preview".into(), json!(false));
+    crate::dialogs::filter_preview_worker::discard_closed(&mut app);
+    release.send(()).expect("released");
+    assert!(cancelled.recv_timeout(std::time::Duration::from_secs(10)).expect("worker reports cancellation"));
+    assert!(app.filter_preview.is_none(), "turning Preview off clears its result");
+    app.ui.dialogs[0].fields.insert("__preview".into(), json!(true));
+    drive_until(&mut app, &ctx, "Palette Map preview after toggling Preview back on", |app| {
+        app.filter_preview.as_ref().is_some_and(|preview| preview.result.is_some())
+    });
 }
 
 #[cfg(not(target_arch = "wasm32"))]

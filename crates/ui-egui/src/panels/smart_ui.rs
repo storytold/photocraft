@@ -508,11 +508,22 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
         return;
     };
     if let Some(d) = app.ui.dialog_mut(id) {
+        let palette_map = f.command == "filter.paletteMap";
         d.fields.insert("__smartFilter".into(), target);
         if let Value::Object(p) = &f.params {
             for (k, v) in p {
                 if !k.starts_with("__") {
                     d.fields.insert(k.clone(), v.clone());
+                }
+            }
+            // Palette Map's editor owns these optional fields instead of rendering generic
+            // schema controls.  Overlay recorded values explicitly so editing a smart filter
+            // never falls back to the newly opened dialog's bundled default palette or mapping.
+            if palette_map {
+                for key in ["paletteId", "paletteSnapshot", "mapping", "sourceProfile"] {
+                    if let Some(value) = p.get(key) {
+                        d.fields.insert(key.into(), value.clone());
+                    }
                 }
             }
         }
@@ -859,6 +870,49 @@ mod tests {
             "filter.blur.average",
         ] {
             assert_eq!(app.with_mask_target(cmd, json!({}))["target"], "filterMask", "{cmd}");
+        }
+    }
+    /// Palette Map keeps its palette snapshot, mapping and hidden source profile when a smart
+    /// filter is reopened.  A real edit is then applied to the smart object's pixels rather than
+    /// merely copying fields into a new dialog.
+    #[test]
+    fn palette_map_smart_filter_reopens_state_and_reapplies_pixels() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "#808080"})).unwrap();
+        let id = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute(
+            "filter.paletteMap",
+            json!({
+                "paletteId": "photocraft-rgb-cube",
+                "paletteSnapshot": {"name": "saved", "colors": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]},
+                "mapping": {"method": "bayer", "matrixSize": 4, "amount": 1},
+            }),
+        )
+        .unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let smart = |doc: &Document| match &doc.layer(LayerId(id)).unwrap().content {
+            LayerContent::Smart(sm) => sm.clone(),
+            other => panic!("expected a smart object, got {other:?}"),
+        };
+        let sm = smart(&app.session.active().unwrap().doc);
+        let before: Vec<_> = (0..16).map(|i| sm.cache.as_ref().unwrap().pixel(i % 4, i / 4)).collect();
+        open_editor(&mut app, &egui::Context::default(), id, &sm, 0);
+        let dialog_id = app.ui.dialogs.last().expect("the Palette Map editor opened").id;
+        crate::dialogs::confirm(&mut app, dialog_id).unwrap();
+        let reopened = smart(&app.session.active().unwrap().doc);
+        let after: Vec<_> = (0..16).map(|i| reopened.cache.as_ref().unwrap().pixel(i % 4, i / 4)).collect();
+        assert_eq!(after, before, "confirming unchanged settings must retain the embedded palette and Bayer pattern");
+
+        open_editor(&mut app, &egui::Context::default(), id, &reopened, 0);
+        let dialog = app.ui.dialogs.last_mut().expect("the second Palette Map editor opened");
+        dialog.fields.insert("paletteSnapshot".into(), json!({"name": "edited", "colors": [[0.0, 1.0, 0.0]]}));
+        let dialog_id = dialog.id;
+        crate::dialogs::confirm(&mut app, dialog_id).unwrap();
+        let updated = smart(&app.session.active().unwrap().doc);
+        assert_eq!(updated.smart_filters.len(), 1, "editing replaces the existing filter");
+        for i in 0..16 {
+            let pixel = updated.cache.as_ref().expect("smart cache after edit").pixel(i % 4, i / 4);
+            assert!(pixel[1] > 0.99 && pixel[0] < 0.01 && pixel[2] < 0.01, "edited palette applied: {pixel:?}");
         }
     }
 }

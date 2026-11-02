@@ -1,5 +1,7 @@
 use super::settings::{WebFormat, WebMetadata, WebSettings};
 use super::{Dither, Document, EngineError, Forced, PaletteKind, Rect, Result, Session, Value, json, other, quantize};
+use photocraft_algo::palette_map::{AlphaMode, Palette};
+use std::borrow::Cow;
 
 // ---------- the image ----------
 
@@ -208,100 +210,315 @@ pub fn optimize(
             (bytes, None)
         }
         WebFormat::Wbmp => {
-            let mut gray: Vec<f32> = region()
-                .map(|p| {
-                    let q = over(p);
-                    0.299 * q[0] + 0.587 * q[1] + 0.114 * q[2]
-                })
-                .collect();
-            let method = match st.dither {
-                Dither::None => quantize::BitmapMethod::Threshold,
-                Dither::Pattern => quantize::BitmapMethod::Pattern,
-                _ => quantize::BitmapMethod::Diffusion,
-            };
-            quantize::to_bitmap(&mut gray, w, method);
-            let white: Vec<bool> = gray.iter().map(|v| *v > 0.5).collect();
-            if preview {
-                look = white.iter().flat_map(|b| if *b { [255, 255, 255, 255] } else { [0, 0, 0, 255] }).collect();
-            }
-            (photocraft_codecs::web::encode_wbmp(ww, hh, &white).map_err(e)?, Some(2))
-        }
-        WebFormat::Gif | WebFormat::Png8 => {
-            let transparent = st.transparency && region().any(|p| p[3] < 0.5);
-            // Partially transparent edges blend with the matte; with transparency off everything does.
-            let mut work: Vec<[f32; 4]> = region()
-                .map(|p| {
-                    if st.transparency && p[3] < 0.5 {
-                        [0.0, 0.0, 0.0, 0.0]
-                    } else if st.transparency && st.matte.is_none() {
-                        [p[0], p[1], p[2], 1.0]
-                    } else {
-                        over(p)
-                    }
-                })
-                .collect();
-            let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
-            let mut pal = if let Some(table) = &st.color_table {
-                if table.is_empty() || table.len() > if transparent { 255 } else { 256 } {
-                    return Err(other("colorTable has too many entries for this image's transparency"));
-                }
-                table.clone()
-            } else {
-                // Large images: build adaptive palettes from an even ~1 MP sample (Exact needs all).
-                let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
-                let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
-                let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
-                if src.is_empty() {
-                    src = work.clone();
-                }
-                quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?
-            };
-            if st.web_snap > 0.0 && st.color_table.is_none() {
-                let tol = (st.web_snap * 255.0) as u8;
-                for c in &mut pal {
-                    let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
-                    if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
-                        *c = snap;
-                    }
-                }
-            }
-            if transparent {
-                pal.truncate(255);
-            }
-            let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
-            color_table = pal.clone();
-            let t = transparent.then(|| {
-                pal.push(first);
-                pal.len() - 1
-            });
-            transparent_index = t;
-            let idx = quantize_rows(&mut work, w, &pal, st.dither, st.dither_amount, t);
-            for (index, color) in &st.color_table_edits {
-                let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
-                *slot = *color;
-            }
-            if preview {
-                look = idx
-                    .iter()
-                    .flat_map(|k| {
-                        let c = pal.get(*k as usize).copied().unwrap_or(first);
-                        [c[0], c[1], c[2], if Some(*k as usize) == t { 0 } else { 255 }]
+            if !st.uses_custom_mapping() {
+                let mut gray: Vec<f32> = region()
+                    .map(|p| {
+                        let q = over(p);
+                        0.299 * q[0] + 0.587 * q[1] + 0.114 * q[2]
                     })
                     .collect();
-            }
-            let tt = t.map(|v| v as u8);
-            let bytes = if st.format == WebFormat::Gif {
-                photocraft_codecs::web::encode_gif_indexed(ww, hh, &idx, &pal, tt, st.interlaced).map_err(e)?
+                let method = match st.dither {
+                    Dither::None => quantize::BitmapMethod::Threshold,
+                    Dither::Pattern => quantize::BitmapMethod::Pattern,
+                    _ => quantize::BitmapMethod::Diffusion,
+                };
+                quantize::to_bitmap(&mut gray, w, method);
+                let white: Vec<bool> = gray.iter().map(|v| *v > 0.5).collect();
+                if preview {
+                    look = white.iter().flat_map(|b| if *b { [255, 255, 255, 255] } else { [0, 0, 0, 255] }).collect();
+                }
+                (photocraft_codecs::web::encode_wbmp(ww, hh, &white).map_err(e)?, Some(2))
             } else {
-                photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt, None, None).map_err(e)?
-            };
-            if preview {
-                indices = idx;
+                let mut work: Vec<[f32; 4]> = region().map(over).collect();
+                let profile = indexed_profile(icc)?;
+                convert_working_rgb(&mut work, profile.as_ref())?;
+                for p in &mut work {
+                    let gray = 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+                    *p = [gray, gray, gray, 1.0];
+                }
+                let palette = Palette { name: "Black and white".into(), colors: vec![[0.0; 3], [1.0; 3]] };
+                let mut mapping = st.mapping_settings();
+                mapping.alpha = AlphaMode::Binary;
+                let mapped = photocraft_algo::palette_map::render(&mut work, w, &palette, &mapping, [rect.x0, rect.y0], None).map_err(other)?;
+                let white: Vec<bool> = mapped.iter().map(|index| *index == 1).collect();
+                if preview {
+                    look = white.iter().flat_map(|b| if *b { [255, 255, 255, 255] } else { [0, 0, 0, 255] }).collect();
+                }
+                (photocraft_codecs::web::encode_wbmp(ww, hh, &white).map_err(e)?, Some(2))
             }
-            (bytes, Some(pal.len()))
+        }
+        WebFormat::Gif | WebFormat::Png8 => {
+            if !st.uses_custom_mapping() {
+                // This is the historical Save for Web path. Keep its alpha preparation, palette
+                // sampling, and quantizer together: ordinary GIF/PNG-8 exports must not pay for
+                // the general palette-map renderer.
+                let transparent = st.transparency && region().any(|p| p[3] < 0.5);
+                let mut work: Vec<[f32; 4]> = region()
+                    .map(|p| {
+                        if st.transparency && p[3] < 0.5 {
+                            [0.0, 0.0, 0.0, 0.0]
+                        } else if st.transparency && st.matte.is_none() {
+                            [p[0], p[1], p[2], 1.0]
+                        } else {
+                            over(p)
+                        }
+                    })
+                    .collect();
+                let mut pal = stock_indexed_palette(&work, st, transparent)?;
+                if transparent {
+                    pal.truncate(255);
+                }
+                let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
+                color_table = pal.clone();
+                let t = transparent.then(|| {
+                    pal.push(first);
+                    pal.len() - 1
+                });
+                transparent_index = t;
+                let idx = quantize_rows(&mut work, w, &pal, st.dither, st.dither_amount, t);
+                for (index, color) in &st.color_table_edits {
+                    let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
+                    *slot = *color;
+                }
+                if preview {
+                    look = idx
+                        .iter()
+                        .flat_map(|k| {
+                            let c = pal.get(*k as usize).copied().unwrap_or(first);
+                            [c[0], c[1], c[2], if Some(*k as usize) == t { 0 } else { 255 }]
+                        })
+                        .collect();
+                }
+                let tt = t.map(|v| v as u8);
+                let bytes = if st.format == WebFormat::Gif {
+                    photocraft_codecs::web::encode_gif_indexed(ww, hh, &idx, &pal, tt, st.interlaced).map_err(e)?
+                } else {
+                    photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt, None, None).map_err(e)?
+                };
+                if preview {
+                    indices = idx;
+                }
+                (bytes, Some(pal.len()))
+            } else {
+                let mut mapping = st.mapping_settings();
+                mapping.validate().map_err(other)?;
+                // Indexed formats have binary alpha. Preserve remains useful for RGB filters,
+                // but here it means the established hard threshold, unless alpha dithering is chosen.
+                if mapping.alpha == AlphaMode::Preserve {
+                    mapping.alpha = AlphaMode::Binary;
+                }
+                let transparent = st.transparency && region().any(|p| p[3] < if mapping.alpha == AlphaMode::Dither { 1.0 } else { 0.5 });
+                let mut work: Vec<[f32; 4]> = region()
+                    .map(|p| {
+                        if !st.transparency {
+                            over(p)
+                        } else if st.matte.is_some() {
+                            let mut q = over(p);
+                            q[3] = p[3];
+                            q
+                        } else {
+                            *p
+                        }
+                    })
+                    .collect();
+                let profile = indexed_profile(icc)?;
+                let mut pal = mapped_indexed_palette(&work, st, transparent, profile.as_ref())?;
+                let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
+                color_table = pal.clone();
+                let t = transparent.then(|| {
+                    pal.push(first);
+                    pal.len() - 1
+                });
+                transparent_index = t;
+                let mut palette = Palette { name: "Export".into(), colors: pal.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+                if let Some(profile) = &profile {
+                    convert_palette(&mut palette, profile, photocraft_cms::Builtin::Srgb.profile())?;
+                }
+                convert_working_rgb(&mut work, profile.as_ref())?;
+                let mapped = photocraft_algo::palette_map::render(&mut work, w, &palette, &mapping, [rect.x0, rect.y0], t).map_err(other)?;
+                let idx = mapped.into_iter().map(|index| u8::try_from(index).map_err(other)).collect::<Result<Vec<_>>>()?;
+                for (index, color) in &st.color_table_edits {
+                    let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
+                    *slot = *color;
+                }
+                if preview {
+                    look = idx
+                        .iter()
+                        .flat_map(|k| {
+                            let c = pal.get(*k as usize).copied().unwrap_or(first);
+                            [c[0], c[1], c[2], if Some(*k as usize) == t { 0 } else { 255 }]
+                        })
+                        .collect();
+                }
+                let tt = t.map(|v| v as u8);
+                let bytes = if st.format == WebFormat::Gif {
+                    photocraft_codecs::web::encode_gif_indexed(ww, hh, &idx, &pal, tt, st.interlaced).map_err(e)?
+                } else {
+                    photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt, None, None).map_err(e)?
+                };
+                if preview {
+                    indices = idx;
+                }
+                (bytes, Some(pal.len()))
+            }
         }
     };
     Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
+}
+
+/// Match the stock opaque sampling rule without copying unsampled input. Exact must see every
+/// colour, and the quantizer already excludes transparent RGB values from its histogram.
+fn palette_source(work: &[[f32; 4]], kind: PaletteKind) -> Cow<'_, [[f32; 4]]> {
+    const LIMIT: usize = 1 << 20;
+    if !matches!(kind, PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective) || work.len() <= LIMIT {
+        return Cow::Borrowed(work);
+    }
+    let opaque = work.iter().filter(|pixel| pixel[3] >= 0.5).count();
+    if opaque <= LIMIT {
+        return Cow::Borrowed(work);
+    }
+    let step = opaque / LIMIT + 1;
+    Cow::Owned(work.iter().filter(|pixel| pixel[3] >= 0.5).step_by(step).copied().collect())
+}
+
+fn palette_error(error: EngineError) -> EngineError {
+    match error {
+        EngineError::BadParams { msg, .. } => super::bad("file.export.saveForWebLegacy", msg),
+        other => other,
+    }
+}
+
+fn stock_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool) -> Result<Vec<[u8; 3]>> {
+    let capacity = if transparent { 255 } else { 256 };
+    let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
+    let pal = if let Some(table) = &st.color_table {
+        if table.is_empty() {
+            return Err(other("colorTable must contain at least one opaque entry"));
+        }
+        if table.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    table.len()
+                )));
+            }
+            if !st.color_table_edits.is_empty() {
+                return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
+            }
+            let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, capacity).map_err(palette_error)?.colors.iter().map(|color| color.map(to8)).collect()
+        } else {
+            table.clone()
+        }
+    } else {
+        let src = palette_source(work, st.palette);
+        let mut pal = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
+        if st.web_snap > 0.0 {
+            let tol = (st.web_snap * 255.0) as u8;
+            for c in &mut pal {
+                let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
+                if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
+                    *c = snap;
+                }
+            }
+        }
+        pal
+    };
+    Ok(pal)
+}
+
+fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool, profile: Option<&photocraft_cms::Profile>) -> Result<Vec<[u8; 3]>> {
+    let capacity = 256 - usize::from(transparent);
+    let fixed = st.color_table.is_some() || st.palette_snapshot.is_some();
+    // BlackWhite has two opaque entries, independently of the total indexed colour count.
+    let generated_black_white = !fixed && st.palette == PaletteKind::BlackWhite;
+    let room = if generated_black_white { 2 } else { st.colors.saturating_sub(usize::from(transparent)).clamp(1, capacity) };
+    let mut pal = if let Some(table) = &st.color_table {
+        if table.is_empty() {
+            return Err(other("colorTable must contain at least one opaque entry"));
+        }
+        if table.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "colorTable has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    table.len()
+                )));
+            }
+            if !st.color_table_edits.is_empty() {
+                return Err(other("reducing colorTable changes its indices; clear colorTableEdits before reducing the palette"));
+            }
+            let palette = Palette { name: "Color Table".into(), colors: table.iter().map(|color| color.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, capacity).map_err(palette_error)?.colors.iter().map(|color| color.map(to8)).collect()
+        } else {
+            table.clone()
+        }
+    } else if let Some(snapshot) = &st.palette_snapshot {
+        snapshot.validate().map_err(other)?;
+        let palette = if snapshot.colors.len() > capacity {
+            if !st.reduce_palette {
+                return Err(other(format!(
+                    "palette has {} entries; this image allows {capacity}. Enable Reduce Palette explicitly or choose a smaller palette",
+                    snapshot.colors.len()
+                )));
+            }
+            crate::palette_cmds::reduce_palette(snapshot, capacity).map_err(palette_error)?
+        } else {
+            snapshot.clone()
+        };
+        // Snapshots are sRGB; encode their entries in the export document's profile.
+        let mut palette = palette;
+        if let Some(profile) = profile {
+            convert_palette(&mut palette, photocraft_cms::Builtin::Srgb.profile(), profile)?;
+        }
+        palette.colors.iter().map(|color| color.map(to8)).collect()
+    } else {
+        let src = palette_source(work, st.palette);
+        let generated = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
+        if !generated_black_white && generated.len() > room {
+            let palette = Palette { name: "Generated".into(), colors: generated.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+            crate::palette_cmds::reduce_palette(&palette, room).map_err(palette_error)?.colors.iter().map(|c| c.map(to8)).collect()
+        } else {
+            generated
+        }
+    };
+    if st.web_snap > 0.0 && !fixed {
+        let tol = (st.web_snap * 255.0) as u8;
+        for c in &mut pal {
+            let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
+            if c.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= tol) {
+                *c = snap;
+            }
+        }
+    }
+    Ok(pal)
+}
+
+/// Save for Web has already converted its source to RGB, but may retain a non-sRGB profile.
+fn indexed_profile(icc: Option<&[u8]>) -> Result<Option<photocraft_cms::Profile>> {
+    let Some(bytes) = icc else { return Ok(None) };
+    let profile = photocraft_cms::Profile::parse(bytes).map_err(other)?;
+    if profile.color_space != photocraft_cms::ColorSpace::Rgb {
+        return Err(other("indexed export requires an RGB source profile"));
+    }
+    Ok(Some(profile))
+}
+
+fn convert_working_rgb(pixels: &mut [[f32; 4]], source: Option<&photocraft_cms::Profile>) -> Result<()> {
+    let Some(source) = source else { return Ok(()) };
+    let target = photocraft_cms::Builtin::Srgb.profile();
+    if source.content_hash() != target.content_hash() {
+        let transform = photocraft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
+        transform.apply(pixels.as_flattened_mut(), 4);
+    }
+    Ok(())
+}
+
+fn convert_palette(palette: &mut Palette, source: &photocraft_cms::Profile, target: &photocraft_cms::Profile) -> Result<()> {
+    if source.content_hash() != target.content_hash() {
+        let transform = photocraft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
+        transform.apply(palette.colors.as_flattened_mut(), 3);
+    }
+    Ok(())
 }
 
 /// Nearest palette entry through a lazily filled 6-bit-per-channel inverse colour map: each
@@ -353,6 +570,9 @@ fn hash01(x: usize, y: usize) -> f32 {
 /// `algo::quantize::quantize` but through [`InverseMap`]. `y0` keeps patterns continuous across
 /// bands. Pixels with alpha < ½ take index `t`.
 fn quantize_band(px: &mut [[f32; 4]], w: usize, y0: usize, pal: &[[u8; 3]], dither: Dither, amount: f32, t: Option<usize>) -> Vec<u8> {
+    if pal.is_empty() {
+        return vec![0; px.len()];
+    }
     let h = px.len() / w.max(1);
     let mut map = InverseMap::new(pal, t);
     let mut idx = vec![0u8; px.len()];
@@ -427,4 +647,37 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
     // Single-threaded on wasm (the early return above always takes this path there).
     #[cfg(target_arch = "wasm32")]
     quantize_band(px, w, 0, pal, dither, amount, t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapped_generation_matches_stock_sampling_but_exact_keeps_unsampled_colors() {
+        const LIMIT: usize = 1 << 20;
+        let mut pixels: Vec<[f32; 4]> = (0..LIMIT + 2).map(|i| if i % 2 == 0 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 0.0, 1.0, 1.0] }).collect();
+        let mut settings = WebSettings { palette: PaletteKind::Adaptive, colors: 2, ..WebSettings::default() };
+        let both = vec![[0, 0, 255], [255, 0, 0]];
+        assert_eq!(mapped_indexed_palette(&pixels[..LIMIT], &settings, false, None).unwrap(), both);
+        let sampled = mapped_indexed_palette(&pixels, &settings, false, None).unwrap();
+        assert_eq!(sampled, [[255, 0, 0]], "the opaque stride above the stock limit samples the even red pixels");
+        assert_eq!(sampled, stock_indexed_palette(&pixels, &settings, false).unwrap());
+
+        settings.palette = PaletteKind::Exact;
+        assert_eq!(mapped_indexed_palette(&pixels, &settings, false, None).unwrap(), both, "Exact retains the unsampled blue pixels");
+
+        settings.palette = PaletteKind::Adaptive;
+        settings.colors = 3;
+        pixels.fill([0.0, 1.0, 0.0, 0.0]);
+        pixels[1] = [1.0, 0.0, 0.0, 0.5];
+        pixels[LIMIT] = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(mapped_indexed_palette(&pixels, &settings, true, None).unwrap(), both, "the sampling limit counts opaque pixels, not transparent RGB");
+        pixels.fill([0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(
+            mapped_indexed_palette(&pixels, &settings, true, None).unwrap(),
+            [[0, 0, 0]],
+            "empty opaque histograms retain the quantizer's black fallback"
+        );
+    }
 }

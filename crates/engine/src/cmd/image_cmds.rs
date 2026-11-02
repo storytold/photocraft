@@ -1015,7 +1015,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.rgb",
             "RGB Color",
             ["Image", "Mode"],
-            r##"{"profile":"<builtin id>|working|/path/to/profile.icc"=working,"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true}"##,
+            r##"{"profile":"<builtin id>|working|/path/to/profile.icc"=working,"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true} (Indexed Color → RGB with no explicit profile keeps its document ICC bytes and encoded RGB samples)"##,
             has_doc,
             |s, p| convert_mode(s, ColorMode::Rgb, p)
         ),

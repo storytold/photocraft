@@ -5,8 +5,9 @@
 //! cropped region of the filtered proxy with − / + zoom and a percentage readout, drag to pan, a
 //! click to centre the view on a document point, and press-and-hold to compare with the unfiltered
 //! image. The proxy is drawn scaled by its reduction factor, so 100% is one *document* pixel per
-//! point whatever the proxy factor. The Preview checkbox keeps toggling the on-canvas live result
-//! (`canvas::ensure_filter_preview`), unchanged.
+//! point whatever the proxy factor. Palette Map additionally uses the same renderer for a
+//! synchronized Before/After comparison; the Preview checkbox keeps toggling the on-canvas live
+//! result (`canvas::ensure_filter_preview`), unchanged.
 
 use egui::{Color32, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use photocraft_doc::Document;
@@ -27,10 +28,18 @@ const ZOOM_FIELD: &str = "__pvZoom";
 const CENTER_X_FIELD: &str = "__pvCx";
 const CENTER_Y_FIELD: &str = "__pvCy";
 
-/// Draw the filter dialog's in-dialog preview window below its parameters (its `fields` `f`). A
-/// no-op for dialogs without a preview and for Select and Mask, which has its own view.
+/// Draw the generic filter dialog's cropped preview.
 pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    if !shows(f) {
+    draw_window(app, dialog, ui, f, None);
+}
+
+/// Palette conversion compares the same document region before and after, using the canvas worker.
+pub(crate) fn comparison(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>, height: f32) {
+    draw_window(app, dialog, ui, f, Some(height));
+}
+
+fn draw_window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>, comparison_height: Option<f32>) {
+    if !shows(f) || (comparison_height.is_some() && f.get("__preview").and_then(Value::as_bool) != Some(true)) {
         return;
     }
     let Some(cmd) = f.get("__command").and_then(Value::as_str).map(str::to_owned) else { return };
@@ -42,10 +51,39 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // the dialog keeps a stacked dialog from showing another's preview; the Preview checkbox still
     // decides whether the filtered result (rather than the original) is shown.
     let preview_on = f.get("__preview").and_then(Value::as_bool) == Some(true);
+    let preview_request = (if f.contains_key("__smartFilter") {
+        crate::smart_filter_dialog::edit_command(app, f).ok()
+    } else {
+        Some((cmd.clone(), app.with_mask_target(&cmd, crate::filter_dialog::params_of(f))))
+    })
+    .and_then(|(command, mut params)| {
+        if crate::select_mask_view::owns(f) {
+            if crate::select_mask_view::hides_view(f) {
+                return None;
+            }
+            params = crate::select_mask_view::request_params(f, params);
+        }
+        Some((command, params))
+    });
     let filtered: Option<(FilterPreviewKey, std::sync::Arc<Document>)> = app.filter_preview.as_ref().and_then(|p| {
         // An edited smart filter previews as `layer.smartFilter.setParams` (#6324).
         let previewed = crate::smart_ui::preview_command(f, &cmd);
-        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed)
+        // Palette Map is strict even while a request is being superseded: a previous mapping is
+        // not an honest comparison for the current fields, factor, channel, or document state.
+        let palette_exact = if cmd == "filter.paletteMap" {
+            preview_request.as_ref().is_some_and(|(command, params)| {
+                let k = crate::canvas::filter_preview_factor(app, &st.doc, command, params);
+                p.key.command.as_str() == command.as_str()
+                    && &p.key.params == params
+                    && p.key.k == k
+                    && p.key.revision == revision
+                    && p.key.active == st.active_layer
+                    && p.key.target == st.channel_view.target
+            })
+        } else {
+            true
+        };
+        (preview_on && p.key.dialog == dialog && p.key.doc == doc_id && p.key.command == previewed && palette_exact)
             .then(|| p.result.clone().map(|r| (p.key.clone(), r)))
             .flatten()
     });
@@ -55,10 +93,10 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // uncapped factor built a proxy the canvas never asked for, then rebuilt it (a full-size copy
     // and upload on the UI thread at 100 %) the moment the first result arrived, shifting this
     // window's 100 % mapping and pan clamp for a frame.
-    let base_k = filtered.as_ref().map(|(k, _)| k.k).unwrap_or_else(|| {
-        let params = app.with_mask_target(&cmd, crate::filter_dialog::params_of(f));
-        crate::canvas::filter_preview_factor(app, &st.doc, &cmd, &params)
-    });
+    let base_k = filtered
+        .as_ref()
+        .map(|(k, _)| k.k)
+        .unwrap_or_else(|| preview_request.as_ref().map_or(1, |(command, params)| crate::canvas::filter_preview_factor(app, &st.doc, command, params)));
 
     let t = Tokens::get(ui.ctx());
     let cache_id = egui::Id::unique(("filter-preview-ui", dialog));
@@ -99,54 +137,118 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     // The proxy is the document reduced by `base_k`, so the view works in *document* pixels: at
     // 100% one document pixel covers one point, whatever the proxy factor (#3769).
     let doc = document_size([img_w, img_h], base_k);
+    let compare = comparison_height.is_some();
+    let approximate = compare && cmd == "filter.paletteMap" && base_k > 1;
+    let width = ui.available_width().max(if compare { 1.0 } else { 140.0 });
+    let pane_width = if compare { ((width - ui.spacing().item_spacing.x) / 2.0).max(1.0) } else { width };
+    let height = comparison_height.unwrap_or(PREVIEW_H).max(1.0);
+    let physical_scale = if compare { ui.ctx().pixels_per_point() } else { 1.0 };
+    let fit_zoom = (pane_width / doc.x).min(height / doc.y).min(MAX_ZOOM / physical_scale);
+    let fitting = compare && f.get("__pvFit").and_then(Value::as_bool).unwrap_or(true);
+    let minimum = if compare { (MIN_ZOOM / physical_scale).min(fit_zoom) } else { MIN_ZOOM };
 
     // View state, sanitised: a corrupt field must not divide by zero or draw off the texture.
     let mut zoom = f.get(ZOOM_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|z| z.is_finite() && *z > 0.0).unwrap_or(DEFAULT_ZOOM);
-    zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    zoom = if fitting { fit_zoom } else { zoom.clamp(minimum, MAX_ZOOM / physical_scale) };
     let mut cx = f.get(CENTER_X_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(doc.x / 2.0);
     let mut cy = f.get(CENTER_Y_FIELD).and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite()).unwrap_or(doc.y / 2.0);
     (cx, cy) = clamp_center(cx, cy, doc.x, doc.y);
 
-    let width = ui.available_width().max(140.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, PREVIEW_H), Sense::click_and_drag());
-    let (x0, y0, sw, sh) = source_rect(cx, cy, zoom, rect.size(), doc);
-    let (dest, uv) = placement(rect, (x0, y0, sw, sh), zoom, doc);
-
-    // Press-and-hold shows the unfiltered image, as Photoshop's preview does.
-    let holding = response.is_pointer_button_down_on();
-    let shown = if holding { orig.as_ref() } else { filt.as_ref().or(orig.as_ref()) };
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, t.radius_sm, t.canvas);
-    if let Some((tex, _)) = shown {
-        crate::widgets::checker(&painter, dest, 8.0);
-        painter.image(tex.id(), dest, uv, Color32::WHITE);
-    }
-    painter.rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
-
-    // Drag to pan (the image follows the pointer); a plain click centres on the clicked point.
-    if response.dragged() {
-        let d = response.drag_delta();
-        cx -= d.x / zoom;
-        cy -= d.y / zoom;
-    }
-    if response.clicked()
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        (cx, cy) = point_to_source(p - rect.min, x0, y0, zoom, doc);
+    let mut draw = |ui: &mut egui::Ui, texture: Option<&(egui::TextureHandle, [u32; 2])>, original: bool| {
+        let (rect, response) = ui.allocate_exact_size(vec2(pane_width, height), Sense::click_and_drag());
+        if compare {
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, if original { tl!("Before") } else { tl!("After") }));
+        }
+        let (mut x0, mut y0, sw, sh) = source_rect(cx, cy, zoom, rect.size(), doc);
+        if compare && zoom * physical_scale >= 1.0 {
+            x0 = x0.round();
+            y0 = y0.round();
+        }
+        let (mut dest, uv) = placement(rect, (x0, y0, sw, sh), zoom, doc);
+        // At 100% a document pixel must land on a physical pixel, not a fractional screen point.
+        if compare && zoom * physical_scale >= 1.0 {
+            let scale = ui.ctx().pixels_per_point();
+            let aligned = pos2((dest.min.x * scale).round() / scale, (dest.min.y * scale).round() / scale);
+            dest = dest.translate(aligned - dest.min);
+        }
+        let holding = response.is_pointer_button_down_on();
+        let shown = if holding && !original { orig.as_ref() } else { texture };
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, t.radius_sm, t.canvas);
+        if let Some((tex, _)) = shown {
+            crate::widgets::checker(&painter, dest, 8.0);
+            painter.image(tex.id(), dest, uv, Color32::WHITE);
+        } else if compare {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                if preview_on { tl!("Updating preview…") } else { tl!("Preview is off") },
+                egui::TextStyle::Body.resolve(ui.style()),
+                t.text_dim,
+            );
+        }
+        painter.rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+        if response.dragged() {
+            let d = response.drag_delta();
+            cx -= d.x / zoom;
+            cy -= d.y / zoom;
+        }
+        if response.clicked()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            (cx, cy) = point_to_source(p - rect.min, x0, y0, zoom, doc);
+        }
+    };
+    if compare {
+        ui.columns(2, |columns| {
+            columns[0].label(tl!("Before"));
+            draw(&mut columns[0], orig.as_ref(), true);
+            columns[1].horizontal(|ui| {
+                ui.label(tl!("After"));
+                if approximate {
+                    ui.weak(tl!("Approximate preview"));
+                }
+            });
+            draw(&mut columns[1], filt.as_ref(), false);
+        });
+    } else {
+        draw(ui, filt.as_ref().or(orig.as_ref()), false);
     }
     (cx, cy) = clamp_center(cx, cy, doc.x, doc.y);
 
-    ui.horizontal(|ui| {
+    let mut fitting = fitting;
+    let controls = |ui: &mut egui::Ui| {
+        if compare {
+            if ui.selectable_label(fitting, tl!("Fit")).clicked() {
+                fitting = true;
+                zoom = fit_zoom;
+                (cx, cy) = (doc.x / 2.0, doc.y / 2.0);
+            }
+            if ui.selectable_label(!fitting && (zoom * physical_scale - 1.0).abs() < 1e-3, tl!("100%")).clicked() {
+                fitting = false;
+                zoom = 1.0 / physical_scale;
+            }
+        }
         if crate::icons::button(ui, "minus", 22.0, false, tl!("Zoom out")).clicked() {
-            zoom = step_zoom(zoom, false);
+            fitting = false;
+            zoom = step_zoom(zoom * physical_scale, false) / physical_scale;
         }
-        ui.label(egui::RichText::new(format!("{}%", crate::widgets::fmt_num(zoom as f64 * 100.0))).color(t.text_dim));
+        ui.label(egui::RichText::new(format!("{}%", crate::widgets::fmt_num((zoom * physical_scale) as f64 * 100.0))).color(t.text_dim));
         if crate::icons::button(ui, "plus", 22.0, false, tl!("Zoom in")).clicked() {
-            zoom = step_zoom(zoom, true);
+            fitting = false;
+            zoom = step_zoom(zoom * physical_scale, true) / physical_scale;
         }
-    });
+    };
+    if compare {
+        ui.horizontal_wrapped(controls);
+    } else {
+        ui.horizontal(controls);
+    }
 
-    f.insert(ZOOM_FIELD.into(), json!(zoom.clamp(MIN_ZOOM, MAX_ZOOM)));
+    if compare {
+        f.insert("__pvFit".into(), json!(fitting));
+    }
+    f.insert(ZOOM_FIELD.into(), json!(zoom.clamp(minimum, MAX_ZOOM / physical_scale)));
     f.insert(CENTER_X_FIELD.into(), json!(cx));
     f.insert(CENTER_Y_FIELD.into(), json!(cy));
 }
@@ -381,6 +483,23 @@ mod tests {
     }
 
     #[test]
+    fn only_filter_dialogs_get_the_preview_window() {
+        let fields = |cmd: &str| json!({"__preview": true, "__command": cmd}).as_object().cloned().unwrap();
+        assert!(shows(&fields("filter.blur.gaussianBlur")));
+        assert!(reserved_height(&fields("filter.blur.gaussianBlur")) > 0.0);
+        // Photoshop's Rotate Canvas and adjustment dialogs have no preview window.
+        assert!(!shows(&fields("image.rotation.arbitrary")));
+        assert_eq!(reserved_height(&fields("image.rotation.arbitrary")), 0.0);
+        assert!(!shows(&fields("adjust.levels")));
+        // Indexed Color keeps its stock on-canvas preview, not the generic in-dialog preview.
+        assert!(!shows(&fields("image.mode.indexedColor")));
+        assert_eq!(reserved_height(&fields("image.mode.indexedColor")), 0.0);
+        // No Preview checkbox or no command: no window.
+        assert!(!shows(json!({"__command": "filter.blur.gaussianBlur"}).as_object().unwrap()));
+        assert!(!shows(json!({"__preview": true}).as_object().unwrap()));
+    }
+
+    #[test]
     fn zoom_steps_walk_the_levels_and_stay_in_bounds() {
         assert_eq!(step_zoom(1.0, true), 2.0);
         assert_eq!(step_zoom(1.0, false), 0.5);
@@ -390,20 +509,6 @@ mod tests {
         assert_eq!(step_zoom(MIN_ZOOM, false), MIN_ZOOM, "clamped at the bottom");
         assert_eq!(step_zoom(0.0, true), MIN_ZOOM, "a corrupt zoom recovers upward");
         assert_eq!(step_zoom(f32::NAN, false), MIN_ZOOM);
-    }
-
-    #[test]
-    fn only_filter_dialogs_get_the_preview_window() {
-        let fields = |cmd: &str| json!({"__preview": true, "__command": cmd}).as_object().cloned().unwrap();
-        assert!(shows(&fields("filter.blur.gaussianBlur")));
-        assert!(reserved_height(&fields("filter.blur.gaussianBlur")) > 0.0);
-        // Photoshop's Rotate Canvas and adjustment dialogs have no preview window.
-        assert!(!shows(&fields("image.rotation.arbitrary")));
-        assert_eq!(reserved_height(&fields("image.rotation.arbitrary")), 0.0);
-        assert!(!shows(&fields("adjust.levels")));
-        // No Preview checkbox or no command: no window.
-        assert!(!shows(json!({"__command": "filter.blur.gaussianBlur"}).as_object().unwrap()));
-        assert!(!shows(json!({"__preview": true}).as_object().unwrap()));
     }
 
     #[test]

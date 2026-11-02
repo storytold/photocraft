@@ -4,6 +4,7 @@ use super::{
     BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, blend_from_str, json,
     layer_param, other,
 };
+use crate::jobs::JobCtx;
 
 pub(super) fn smart(doc: &Document, id: LayerId) -> Result<&SmartObject> {
     match &doc.layer(id).ok_or(EngineError::NoLayer(id))?.content {
@@ -60,7 +61,13 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 /// Appends a smart filter (from a `filter.*` command) and re-renders. A selection becomes the
 /// filter mask, as in Photoshop. Without a renderable source the filter is applied to the cached
 /// pixels (and still recorded).
-pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
+pub(crate) fn add_smart_filter(
+    doc: &mut Document,
+    id: LayerId,
+    sf: photocraft_doc::SmartFilter,
+    selection: Option<&Surface>,
+    ctx: Option<&JobCtx>,
+) -> Result<()> {
     let canvas = doc.bounds();
     let renderable = source_bytes(&doc.metadata, &smart(doc, id)?.source).is_some();
     let sm = smart_mut(doc, id)?;
@@ -71,11 +78,14 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
             sm.filter_mask = Some(mask_from_selection(sel));
         }
         sm.smart_filters.push(sf);
-        return refresh_or_fail(doc, id);
+        return match ctx {
+            Some(ctx) => refresh_or_fail_in(doc, id, ctx),
+            None => refresh_or_fail(doc, id),
+        };
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)?
+    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas, &|| ctx.is_some_and(JobCtx::cancelled))?
         .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
     sm.cache = Some(out);
     sm.smart_filters.push(sf);

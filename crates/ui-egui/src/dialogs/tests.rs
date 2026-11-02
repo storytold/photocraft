@@ -55,6 +55,115 @@ fn a_filters_preview_stays_on_screen_until_its_job_lands() {
     assert_eq!(crate::canvas::committed_filter_preview(&mut app, 0), None);
 }
 
+fn palette_dialog(background: bool) -> (PhotocraftApp, u64) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = background;
+    app.run("file.new", serde_json::json!({"width": 512, "height": 384, "background": "#123456"})).unwrap();
+    let id = open_command_dialog(&mut app, "filter.paletteMap", "Palette Map");
+    (app, id)
+}
+
+#[test]
+fn palette_map_apply_cancel_is_transactional_and_commit_lands() {
+    let (mut app, id) = palette_dialog(true);
+    let before_doc = app.session.active().unwrap().doc.clone();
+    let before_revision = app.session.active().unwrap().revision;
+    let before_history = app.session.active().unwrap().history.past_len();
+    confirm(&mut app, id).expect("Palette Map applies");
+    let doc = app.session.active().unwrap().doc.id;
+    let job = app.session.job_on(doc).expect("Palette Map uses a background edit job").id;
+    assert_eq!(app.session.active().unwrap().revision, before_revision);
+    assert!(std::sync::Arc::ptr_eq(&before_doc, &app.session.active().unwrap().doc), "the job is transactional before it lands");
+    assert!(app.session.cancel_job(job));
+    assert_eq!(app.session.active().unwrap().revision, before_revision);
+    assert_eq!(app.session.active().unwrap().history.past_len(), before_history);
+    assert!(std::sync::Arc::ptr_eq(&before_doc, &app.session.active().unwrap().doc), "cancelling leaves the document unchanged");
+
+    let (mut app, id) = palette_dialog(true);
+    let before_revision = app.session.active().unwrap().revision;
+    let before_history = app.session.active().unwrap().history.past_len();
+    confirm(&mut app, id).expect("Palette Map applies");
+    let doc = app.session.active().unwrap().doc.id;
+    let job = app.session.job_on(doc).expect("Palette Map uses a background edit job").id;
+    app.session.wait_job(job).expect("Palette Map commits");
+    assert_ne!(app.session.active().unwrap().revision, before_revision);
+    assert!(app.session.active().unwrap().history.past_len() > before_history);
+}
+
+#[test]
+fn indexed_color_uses_stock_dialog_controls_and_commits() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = dialog_harness(egui::vec2(640.0, 560.0), "image.mode.indexedColor");
+    h.state_mut().run("edit.fill", json!({"contents":"color","color":"#123456"})).unwrap();
+    {
+        let fields = &mut h.state_mut().ui.dialogs[0].fields;
+        fields.insert("palette".into(), json!("uniform"));
+        fields.insert("colors".into(), json!(2));
+        fields.insert("forced".into(), json!("blackWhite"));
+        fields.insert("dither".into(), json!("none"));
+    }
+    h.run_steps(4);
+    assert!(h.query_by_label("Palette source").is_none());
+    assert!(h.query_by_label("Palette library").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Image, "Before").is_none());
+    assert!(h.get_by_role_and_label(egui::accesskit::Role::Slider, "Colors").rect().is_positive());
+    h.get_by_label("Transparency").click();
+    h.run_steps(2);
+
+    h.get_by_label("Preview").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs[0].fields.get("__preview"), Some(&json!(false)));
+    h.get_by_label("Preview").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs[0].fields.get("__preview"), Some(&json!(true)));
+
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty());
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed);
+    let table = doc.color_table.as_ref().unwrap();
+    assert_eq!(table.transparent, None, "disabling Transparency must not reserve a palette entry");
+    let pixels = photocraft_compose::flatten(doc);
+    for pixel in pixels.px {
+        let rgb = pixel[..3].iter().map(|value| (value * 255.0).round() as u8).collect::<Vec<_>>();
+        assert!(table.colors.iter().any(|entry| entry.as_slice() == rgb), "committed pixel is outside the Color Table");
+    }
+}
+
+#[test]
+fn palette_map_owns_library_preview_and_apply_controls() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = dialog_harness(egui::vec2(1100.0, 740.0), "filter.paletteMap");
+    h.state_mut().run("edit.fill", json!({"contents":"color","color":"#123456"})).unwrap();
+    h.run_steps(4);
+    let card = h.get_all_by_role(egui::accesskit::Role::RadioButton).next().expect("palette library card");
+    card.click();
+    h.run_steps(2);
+    let palette: photocraft_algo::palette_map::Palette = serde_json::from_value(h.state().ui.dialogs[0].fields["paletteSnapshot"].clone()).unwrap();
+    let before = photocraft_compose::flatten(&h.state().session.active().unwrap().doc);
+
+    h.get_by_label("Preview").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs[0].fields.get("__preview"), Some(&json!(false)));
+    h.get_by_label("Preview").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs[0].fields.get("__preview"), Some(&json!(true)));
+
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty());
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!(doc.mode, photocraft_color::ColorMode::Rgb);
+    let after = photocraft_compose::flatten(doc);
+    assert_ne!(after, before, "applying the selected library must remap the source");
+    for pixel in after.px {
+        assert!(palette.colors.iter().any(|color| color.iter().zip(pixel).all(|(expected, actual)| (expected - actual).abs() <= 1.0 / 255.0)));
+    }
+}
+
 /// #5496: a pointer click on the title bar's close box does what Cancel does: the dialog
 /// closes, the live preview goes and nothing reaches the document or the journal. On macOS
 /// dialogs have no close box.
