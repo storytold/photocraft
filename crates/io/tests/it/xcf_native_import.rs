@@ -78,7 +78,7 @@ fn compare(actual: Document, expected: Document) {
     }
     let a = photocraft_compose::flatten(&actual);
     let b = photocraft_compose::flatten(&expected);
-    assert!(a.px.iter().zip(b.px).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2.0 / 255.0)), "ordinary native composition");
+    assert!(a.px.iter().zip(&b.px).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2.0 / 255.0)), "ordinary native composition");
 }
 
 /// Verify public RGB sources translate to the same independently authored native layer data in both source transfer spaces.
@@ -231,7 +231,7 @@ fn ordinary_psd_and_flat_exports_keep_native_output_and_disclose_report_loss() {
             let rendered = photocraft_compose::flatten(&reopened);
             assert_eq!(native.px.len(), rendered.px.len());
             assert!(
-                native.px.iter().zip(rendered.px).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2.5 / 255.0)),
+                native.px.iter().zip(&rendered.px).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 2.5 / 255.0)),
                 "native {name} -> {extension} output"
             );
             assert!(!reopened.metadata.text.iter().any(|(name, _)| name.contains("source_property") || name.contains("importConversion")));
