@@ -147,6 +147,11 @@ fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: String, mut presets
         let groups: std::collections::HashSet<&str> = s.tools.presets.iter().map(|x| x.group.as_str()).collect();
         free_group(&group, |g| groups.contains(g))
     };
+    // The group commands refuse a longer name, so this group could never be renamed or deleted.
+    let max = crate::brush_preset_cmds::MAX_NAME;
+    if group.chars().count() > max {
+        return Err(bad(cmd, format!("the group name is longer than {max} characters after numbering")));
+    }
     let replaced = |x: &photocraft_paint::BrushPreset| replace && !x.builtin && x.group == group;
     // An imported brush can reuse the name, and Update Brush Preset would then overwrite it.
     let current_goes = s.tools.current_preset.as_ref().is_some_and(|c| s.tools.presets.iter().any(|x| replaced(x) && x.name.eq_ignore_ascii_case(c)));
@@ -639,6 +644,12 @@ mod tests {
         assert_eq!(s.tools.presets.len(), before, "nothing was imported");
         let r = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap();
         assert_eq!(r["group"].as_str().map(str::len), Some(255));
+        // A clash would number it past what the group commands accept.
+        let before = s.tools.presets.len();
+        let e = s.execute(CMD, json!({"data": data, "group": "g".repeat(255)})).unwrap_err();
+        assert!(e.to_string().contains("after numbering"), "{e}");
+        assert_eq!(s.tools.presets.len(), before, "nothing was imported");
+        s.execute("brush.presets.deleteGroup", json!({"group": "g".repeat(255)})).unwrap();
     }
 
     #[test]
