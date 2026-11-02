@@ -215,13 +215,14 @@ fn ref_adjust(adj: &Adjustment, p: Cmyka) -> Cmyka {
 
 /// An adjustment layer `l` (adjusting `p`, then `clipped` onto that) mixed into `p` in its blend
 /// mode by its opacity and mask; coverage stays. In the special eight below 100% Fill, Fill is
-/// part of the blend (`psblend::blend_rgb_fill`, on brightness) and Opacity alone mixes it in.
-fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32, y: i32) -> Cmyka {
+/// part of the blend (`psblend::blend_rgb_fill`, on brightness) and Opacity alone mixes it in,
+/// unless the adjustment is itself `is_clipped` (then Fill is coverage in every mode).
+fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32, y: i32, is_clipped: bool) -> Cmyka {
     let mut a = ref_adjust(adj, p);
     if p[4] > 0.0 {
         a = ref_clip(clipped, a, x, y);
     }
-    let special = l.fill_opacity < 1.0 && crate::psblend::fill_is_special(l.blend);
+    let special = !is_clipped && l.fill_opacity < 1.0 && crate::psblend::fill_is_special(l.blend);
     let (opacity, fill) = if special { (l.opacity, l.fill_opacity) } else { (l.opacity * l.fill_opacity, 1.0) };
     let k = opacity * ref_mask(l, x, y);
     if l.blend == BlendMode::Dissolve {
@@ -240,7 +241,7 @@ fn ref_adjusted(l: &Layer, adj: &Adjustment, clipped: &[Layer], p: Cmyka, x: i32
 fn ref_clip(clipped: &[Layer], mut content: Cmyka, x: i32, y: i32) -> Cmyka {
     for c in clipped.iter().filter(|c| c.visible) {
         if let LayerContent::Adjustment(adj) = &c.content {
-            content = ref_adjusted(c, adj, &[], content, x, y);
+            content = ref_adjusted(c, adj, &[], content, x, y, true);
         } else if content[4] > 0.0 {
             let a = content[4];
             let r = over_layer(c, [content[0], content[1], content[2], content[3], 1.0], ref_own(c, x, y), c.opacity * c.fill_opacity, Some((x, y)));
@@ -296,7 +297,7 @@ fn ref_layer(l: &Layer, clipped: &[Layer], x: i32, y: i32, b: Cmyka) -> Cmyka {
             o[4] = a;
             return o;
         }
-        LayerContent::Adjustment(adj) => return ref_adjusted(l, adj, clipped, b, x, y),
+        LayerContent::Adjustment(adj) => return ref_adjusted(l, adj, clipped, b, x, y, false),
         LayerContent::Group(g) => {
             let mut c = ref_stack(&g.children, x, y, [0.0; 5]);
             c[4] *= ref_mask(l, x, y);
@@ -1136,6 +1137,29 @@ fn invert_and_posterize_work_ink_by_ink() {
     d.layers.push(adjustment(Adjustment::Posterize { levels: 2 }));
     // Two levels: brightness below half goes dark (full ink), above half light (no ink).
     assert_eq!(render1(&d, 0, 0), [0.0, 0.0, 1.0, 1.0, 1.0]);
+}
+
+/// A clipped adjustment layer takes Fill as coverage in every mode, the special eight included,
+/// as the RGB compositor and the GPU do: Posterize(2) clipped at 46% Fill in Linear Light takes
+/// 87% black to 93%, not to full black.
+#[test]
+fn clipped_adjustments_take_fill_as_coverage() {
+    for mode in SEPARABLE.iter().copied().filter(|m| crate::psblend::fill_is_special(*m)) {
+        let mut d = doc(2, 2);
+        let base = layer(&[(Rect::new(0, 0, 1, 1), [0.0, 0.0, 0.0, 0.8656, 1.0])]);
+        let mut post = adjustment(Adjustment::Posterize { levels: 2 });
+        post.blend = mode;
+        post.fill_opacity = 0.4617;
+        post.clipped = true;
+        d.layers.push(Layer::group("g", vec![base, post]));
+        assert!(supports(&d) && split::supports(&d), "{mode:?}");
+        let via = split_render(&d);
+        let exact = render_cmyk(&d, via.rect).unwrap_or_else(|| panic!("supported"));
+        for (g, w) in via.px.iter().zip(&exact.px) {
+            assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() <= 1e-5), "{mode:?}: split route {g:?} vs {w:?}");
+        }
+        assert_matches_reference(&d);
+    }
 }
 
 /// Levels' composite record changes every ink, the black record only K; channels a record

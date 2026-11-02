@@ -406,9 +406,11 @@ fn adjust_inks(adj: &Adjustment, buf: &mut CmykBuffer, depth: SampleType) {
 
 /// Mixes an adjustment's result back into `base` in the layer's blend mode, by its opacity and
 /// mask; coverage is unchanged (the compositor's adjustment mix). Fill below 100% in one of the
-/// special eight is part of the blend and leaves the mix to Opacity, as on the RGB compositor.
-fn mix_adjusted(l: &Layer, base: &mut CmykBuffer, adjusted: &CmykBuffer, cx: &Ctx) {
-    let special = l.fill_opacity < 1.0 && super::psblend::fill_is_special(l.blend);
+/// special eight is part of the blend and leaves the mix to Opacity, as on the RGB compositor;
+/// a `clipped` adjustment takes Fill as coverage in every mode, as the RGB compositor's
+/// `composite_atop` (and the GPU's clipped `AdjMix`) do.
+fn mix_adjusted(l: &Layer, base: &mut CmykBuffer, adjusted: &CmykBuffer, cx: &Ctx, clipped: bool) {
+    let special = !clipped && l.fill_opacity < 1.0 && super::psblend::fill_is_special(l.blend);
     let (opacity, fill) = if special { (l.opacity, l.fill_opacity) } else { (l.opacity * l.fill_opacity, 1.0) };
     let rect = base.rect;
     let w = (rect.width() as usize).max(1);
@@ -455,7 +457,7 @@ fn composite_clipped(clipped: &[Layer], base: &mut CmykBuffer, cx: &Ctx) {
         if let LayerContent::Adjustment(adj) = &c.content {
             let mut adjusted = base.clone();
             adjust_inks(adj, &mut adjusted, cx.depth);
-            mix_adjusted(c, base, &adjusted, cx);
+            mix_adjusted(c, base, &adjusted, cx, true);
             continue;
         }
         let content = layer_content(c, base.rect, cx);
@@ -558,7 +560,7 @@ fn composite_layer(l: &Layer, clipped: &[Layer], backdrop: &mut CmykBuffer, cx: 
         let mut adjusted = backdrop.clone();
         adjust_inks(adj, &mut adjusted, cx.depth);
         composite_clipped(clipped, &mut adjusted, cx);
-        mix_adjusted(l, backdrop, &adjusted, cx);
+        mix_adjusted(l, backdrop, &adjusted, cx, false);
         return;
     }
     let mut content = layer_content(l, rect, cx);
