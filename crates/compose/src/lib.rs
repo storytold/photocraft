@@ -47,6 +47,7 @@ mod content;
 mod ctx;
 mod extents;
 mod fx_cache;
+mod prefix;
 mod reduced;
 mod render;
 
@@ -71,6 +72,7 @@ use extents::{mask_k, shapeless_stroke_bounds, trim_to_painted};
 pub use fx_cache::{DEFAULT_FX_CACHE_BUDGET, effect_cache_budget, effect_cache_bytes, purge_effect_cache, set_effect_cache_budget};
 #[cfg(test)]
 use fx_cache::{effect_maps, effect_region, fx_region_bytes};
+pub use prefix::{PREFIX_CACHE_BYTES, PrefixCache};
 pub use reduced::{PROXY_THUMBNAIL_PIXELS, render_reduced, render_reduced_damage, render_reduced_rect, thumbnail, thumbnail_buffer, thumbnail_size};
 #[cfg(test)]
 use reduced::{ReducedStats, render_reduced_in_bands, render_reduced_with};
@@ -79,8 +81,8 @@ use render::in_blend_space;
 use render::render_tiled_with;
 pub(crate) use render::visible_layers;
 pub use render::{
-    BAND_PIXELS, MAX_RENDER_PIXELS, band_rows_for, cmyk_space, composite_to_surface, flatten, flatten_to_surface, render, render_bands, render_layer,
-    render_layer_in, render_tiled,
+    BAND_PIXELS, MAX_RENDER_PIXELS, band_rows_for, cmyk_space, composite_to_surface, flatten, flatten_to_surface, render, render_bands, render_bands_cached,
+    render_cached, render_layer, render_layer_in, render_tiled,
 };
 
 /// Straight-alpha RGBA float buffer covering a rectangle.
@@ -136,6 +138,8 @@ impl Buffer {
     }
 }
 
+#[cfg(test)]
+mod prefix_tests;
 #[cfg(test)]
 mod soft_shape_tests;
 #[cfg(test)]

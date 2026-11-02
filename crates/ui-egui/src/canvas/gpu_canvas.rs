@@ -166,6 +166,9 @@ pub struct GpuCanvas {
     /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
     camera_raw: crate::camera_raw_gpu::Slot,
     camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The CPU compositor's composite of the lowest root layers, for the redraws the wgpu
+    /// compositor leaves to it (#6533): an edit high in the stack then composites from it up.
+    cpu_prefix: std::sync::Arc<photocraft_compose::PrefixCache>,
 }
 
 /// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
@@ -223,7 +226,17 @@ impl GpuCanvas {
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
+        Self {
+            rs: rs.clone(),
+            tile,
+            high,
+            health,
+            vram,
+            canvas_budget: budget,
+            camera_raw: Default::default(),
+            camera_raw_started: Default::default(),
+            cpu_prefix: Default::default(),
+        }
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
@@ -245,6 +258,12 @@ impl GpuCanvas {
             return None;
         }
         Some(crate::camera_raw_gpu::CameraRawGpu::new(self.rs.device.clone(), self.rs.queue.clone(), self.health.clone(), self.camera_raw.clone()))
+    }
+
+    /// The CPU compositor's prefix cache of the GPU canvas's documents (the background redraw
+    /// composites through it too).
+    pub(crate) fn cpu_prefix(&self) -> std::sync::Arc<photocraft_compose::PrefixCache> {
+        std::sync::Arc::clone(&self.cpu_prefix)
     }
 
     /// Whether [`Self::camera_raw`] started building the pass.
@@ -798,7 +817,7 @@ impl GpuCanvas {
                 out.kind = "rect";
                 return out;
             }
-            let buf = photocraft_compose::render(doc, r);
+            let buf = if key == doc.id.0 { photocraft_compose::render_cached(doc, r, &self.cpu_prefix) } else { photocraft_compose::render(doc, r) };
             let t1 = now_ms();
             if self.upload_buffer_rect(key, &texture_buffer(display, &buf)) {
                 out.kind = "rect";
@@ -823,7 +842,15 @@ impl GpuCanvas {
         let Some(format) = self.prepare_texture(key, doc) else { return };
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut rgba = Vec::new();
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+        let no_prefix;
+        // Only the document's own texture: a preview would take the cache over.
+        let prefix = if key == doc.id.0 {
+            &*self.cpu_prefix
+        } else {
+            no_prefix = photocraft_compose::PrefixCache::with_budget(0);
+            &no_prefix
+        };
+        let _ = photocraft_compose::render_bands_cached(doc, doc.bounds(), 0, prefix, |band| -> Result<(), ()> {
             if !self.health.is_ok() {
                 return Err(());
             }
@@ -881,6 +908,7 @@ impl GpuCanvas {
         if let Some(c) = res.compositor.as_mut() {
             c.retain_docs(|d| live.contains(&d.0));
         }
+        self.cpu_prefix.retain(|d| live.contains(&d.0));
         // LUTs and identity-transform signatures can outlive document textures. Prune both,
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
         res.luts.retain(|k, _| live.contains(&k.0));

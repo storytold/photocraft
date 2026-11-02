@@ -328,7 +328,11 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(
+        app,
+        ctx,
+        Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep, prefix: gpu.cpu_prefix() },
+    );
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
@@ -457,6 +461,8 @@ struct Spawn {
     fallback: Option<crate::render_path::CpuReason>,
     /// Blocks collected for [`Kept`], their bytes, and the cap.
     keep: (Vec<Option<Vec<u8>>>, u64, u64),
+    /// The GPU canvas's CPU prefix cache the blocks composite through.
+    prefix: Arc<photocraft_compose::PrefixCache>,
 }
 
 fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
@@ -472,6 +478,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         since: (started_ms, drawn),
         fallback,
         keep: (collected, collected_bytes, cap),
+        prefix,
     } = s;
     let id = doc.id;
     let kept_doc = doc.clone();
@@ -491,9 +498,9 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         // A panic stops the redraw: the receiver sees the worker gone and drops it.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             #[cfg(test)]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
+            draw(&doc, display.as_deref(), &prefix, format, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
             #[cfg(not(test))]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx);
+            draw(&doc, display.as_deref(), &prefix, format, &blocks, &todo, &stop, &tx, &ctx);
         }));
         ctx.request_repaint();
     });
@@ -533,6 +540,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
 fn draw(
     doc: &Document,
     display: Option<&CanvasDisplay>,
+    prefix: &photocraft_compose::PrefixCache,
     format: eframe::wgpu::TextureFormat,
     blocks: &[Rect],
     todo: &[usize],
@@ -559,7 +567,10 @@ fn draw(
         #[cfg(target_arch = "wasm32")]
         let batch = batch.iter();
         let pieces: Vec<Piece> = batch
-            .map(|&block| Piece { block, texels: crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render(doc, blocks[block])) })
+            .map(|&block| Piece {
+                block,
+                texels: crate::gpu_canvas::display_texels(format, display, &photocraft_compose::render_cached(doc, blocks[block], prefix)),
+            })
             .collect();
         for p in pieces {
             if stop.load(Ordering::Relaxed) || tx.send(p).is_err() {

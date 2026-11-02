@@ -1,7 +1,8 @@
 use super::composite::composite_stack_at;
 use super::content::RENDER_TILE;
 use super::ctx::{Ctx, RenderVectorMasks, prepare_effects, prepare_tones};
-use super::{Buffer, Document, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native, native_lab, pattern, psblend};
+use super::prefix::Prepared;
+use super::{Buffer, Document, Layer, PrefixCache, Rect, Surface, adjust, advanced, cmyk, multichannel, native, native_lab, pattern, psblend};
 
 /// Every layer the compositor draws, groups before their children: hidden layers and everything
 /// inside hidden groups are left out.
@@ -38,6 +39,52 @@ pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Buffer {
 }
 
 pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer {
+    render_tiled_prefix(doc, rect, tile, cx, None)
+}
+
+/// [`render`] through a [`PrefixCache`]: the tiles resume from the composite of the lowest root
+/// layers the cache holds for them, unchanged since its last render, and keep it for the next.
+/// The pixels are the ones [`render`] gives.
+pub fn render_cached(doc: &Document, rect: Rect, cache: &PrefixCache) -> Buffer {
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let cx = Ctx::for_doc(doc, &patterns);
+    render_tiled_prefix(doc, rect, RENDER_TILE, &cx, Some(cache))
+}
+
+/// Tile `t` of `doc`: its backdrop and the root stack, through `prefix` (the cache and the root
+/// layer index this render captures at) when given.
+fn render_tile(doc: &Document, t: Rect, cx: &Ctx, prefix: Option<(&PrefixCache, Prepared)>) -> Buffer {
+    let Some((cache, p)) = prefix else {
+        let mut b = multichannel::backdrop(doc, t);
+        composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT);
+        return b;
+    };
+    // The highest composite cached for the tile: the root stack below `from` is unchanged.
+    let at = p.at;
+    let (mut b, from) = match cache.lookup(t, p) {
+        Some((from, buf)) if from <= doc.layers.len() => (Buffer::clone(&buf), from),
+        _ => (multichannel::backdrop(doc, t), 0),
+    };
+    if from < at {
+        composite_stack_at(&doc.layers[from..at], &mut b, cx, advanced::Scope::ROOT);
+        if on_grid(doc, t) {
+            cache.store(t, p, &b);
+        }
+    }
+    composite_stack_at(&doc.layers[from.max(at)..], &mut b, cx, advanced::Scope::ROOT);
+    b
+}
+
+/// Whether `t` is a whole tile of the [`RENDER_TILE`] grid, cut at the document's edge: the
+/// tiles a full refresh or a background redraw block draws. Others (a brush stroke's damage)
+/// would never hit again, and only fill the cache.
+fn on_grid(doc: &Document, t: Rect) -> bool {
+    let (w, h) = (doc.size.width as i32, doc.size.height as i32);
+    let edge = |v: i32, end: i32| v.rem_euclid(RENDER_TILE) == 0 || v == end;
+    t.x0.rem_euclid(RENDER_TILE) == 0 && t.y0.rem_euclid(RENDER_TILE) == 0 && edge(t.x1, w) && edge(t.y1, h)
+}
+
+fn render_tiled_prefix(doc: &Document, rect: Rect, tile: i32, cx: &Ctx, cache: Option<&PrefixCache>) -> Buffer {
     let tile = tile.max(1);
     // Lab documents mix Normal blending in CIELAB, as Photoshop does (psblend::LAB_MIX); 32-bit
     // documents don't clip Add / Divide or Hue / Saturation / Color / Luminosity at 1 (psblend::HDR).
@@ -62,24 +109,11 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         return buf;
     }
     cx.set_fx_clip(rect);
+    let prefix = cache.and_then(|c| c.prepare(doc).map(|p| (c, p)));
+    let run = |t: Rect| photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, || render_tile(doc, t, cx, prefix)));
     if i64::from(rect.width()) <= i64::from(tile) && i64::from(rect.height()) <= i64::from(tile) {
-        return photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut buf = multichannel::backdrop(doc, rect);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut buf, cx, advanced::Scope::ROOT));
-            buf
-        });
+        return run(rect);
     }
-    // Effect maps are built once, here, before any tile needs them (#276).
-    prepare_effects(&doc.layers, rect, cx, |f| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
-    });
-    let run = |t: Rect| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut b = multichannel::backdrop(doc, t);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT));
-            b
-        })
-    };
     // Tiles are written straight into the output, one row of tiles (a band) at a time, so the
     // peak is the output plus the tiles in flight, not a second full-size copy.
     let w = rect.width() as usize;
@@ -102,6 +136,12 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
             band[o..o + pw].copy_from_slice(src);
         }
     };
+    // Effect maps are built once, here, before any tile needs them (#276): only those of the
+    // layers above the cached composite when it covers every tile.
+    let skip = prefix.filter(|&(c, p)| c.covers(tile_rects(rect, tile), p)).map_or(0, |(_, p)| p.at);
+    prepare_effects(&doc.layers[skip..], rect, cx, |f| {
+        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
+    });
     let band_len = w * tile as usize;
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -136,6 +176,23 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
         for t in band_tiles(y0) {
             put(band, y0, &run(t));
         }
+    }
+    out
+}
+
+/// The tiles a render of `rect` draws, row by row.
+fn tile_rects(rect: Rect, tile: i32) -> Vec<Rect> {
+    let mut out = Vec::new();
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let y1 = y.saturating_add(tile).min(rect.y1);
+        let mut x = rect.x0;
+        while x < rect.x1 {
+            let x1 = x.saturating_add(tile).min(rect.x1);
+            out.push(Rect::new(x, y, x1, y1));
+            x = x1;
+        }
+        y = y1;
     }
     out
 }
@@ -176,6 +233,23 @@ pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: imp
     while y < rect.y1 {
         let y1 = y.saturating_add(rows).min(rect.y1);
         sink(render_tiled_with(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx))?;
+        y = y1;
+    }
+    Ok(())
+}
+
+/// [`render_bands`] through a [`PrefixCache`] (see [`render_cached`]).
+pub fn render_bands_cached<E>(doc: &Document, rect: Rect, band_rows: i32, cache: &PrefixCache, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), E> {
+    if rect.is_empty() {
+        return Ok(());
+    }
+    let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+    let cx = Ctx::for_doc(doc, &patterns);
+    let rows = band_rows_for(rect.width(), band_rows);
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let y1 = y.saturating_add(rows).min(rect.y1);
+        sink(render_tiled_prefix(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx, Some(cache)))?;
         y = y1;
     }
     Ok(())

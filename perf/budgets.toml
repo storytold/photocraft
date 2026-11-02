@@ -745,6 +745,15 @@ budget_ms = 30
 enforce = false  # new; as P61
 
 [[scenario]]
+id = "P83"
+title = "Change the top adjustment layer's settings among 150 full-canvas layers, 6 MP, GPU budget forced to 512 MB (CPU fallback)"
+issue = 6533
+bench = "perf_scenarios"
+row = "change the top adjustment layer's settings among many full-canvas layers, over the GPU budget + refresh"
+budget_ms = 30
+enforce = false  # new; no baseline yet
+
+[[scenario]]
 id = "P79"
 title = "Zoomed-out reduced composite of a 30000x30000 document with one painted layer (#9330 target: 60000x60000)"
 issue = 1015
