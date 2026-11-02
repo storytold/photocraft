@@ -30,3 +30,23 @@ fn mapped_native_coverage_matches_unwarped_strokes_at_every_depth() {
         }
     }
 }
+
+#[test]
+fn mapped_batch_rejects_invalid_samples_before_changing_coverage() {
+    let format = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let brush = BrushSettings { size: 5.0, ..Default::default() };
+    let dab = dabs(&Stroke { brush: brush.clone(), points: vec![StrokePoint::new(0.0, 0.0, 1.0)] }).remove(0);
+    let rect = Rect::from_xywh(0, 0, 2, 2);
+    let coverage = [1.0; 4];
+    let zeros = [0.0; 4];
+    let invalid = [f32::NAN, 0.0, 0.0, 0.0];
+    let batch = [
+        photocraft_paint::MappedDab { rect, coverage: &coverage, dual_coverage: &zeros, depth: &zeros, dab: &dab },
+        photocraft_paint::MappedDab { rect, coverage: &invalid, dual_coverage: &zeros, depth: &zeros, dab: &dab },
+    ];
+    let mut renderer = StrokeRenderer::new(&brush, Some(format), 1.0);
+    assert!(!renderer.accumulate_mapped_batch(&batch));
+    assert!(renderer.bounds().is_empty());
+    assert!(renderer.accumulate_mapped_batch(&[batch[0]]));
+    assert!(!renderer.bounds().is_empty());
+}

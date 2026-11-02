@@ -478,7 +478,7 @@ fn symmetry_hit(ctx: &egui::Context, view: &View<'_>, hit: &photocraft_uv::prepa
     if !source_distance.is_finite() || source_distance.abs() <= view.geometry.diameter * 1e-7 {
         return None;
     }
-    let mirrored = view.geometry.mirror_hit(view.scene, view.camera, view.maps, hit, axis, plane, view.size, view.geometry.diameter * 0.02)?;
+    let mirrored = view.geometry.mirror_hit(view.maps, hit, axis, plane, view.geometry.diameter * 0.02)?;
     let target_distance = mirrored.position[axis] - plane;
     (target_distance.is_finite() && source_distance * target_distance < 0.0 && mirrored.uv.iter().all(|value| (0.0..=1.0).contains(value))).then_some(mirrored)
 }

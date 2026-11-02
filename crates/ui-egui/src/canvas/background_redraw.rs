@@ -339,12 +339,6 @@ pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCan
     }
 }
 
-/// Whether a running background redraw is using the CPU fallback, which needs flattened mask
-/// stacks in each replacement document snapshot.
-pub(crate) fn needs_materialized_masks(app: &PhotocraftApp, doc: DocId) -> bool {
-    app.redraws.get(&doc).is_some_and(|redraw| redraw.fallback.is_some())
-}
-
 /// Upload the blocks document `doc`'s redraw has finished since the last frame. When the last one
 /// lands, the redraw is recorded like the synchronous refresh it replaces (and explained once if
 /// it was slow).
@@ -491,15 +485,22 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
     let worker_generation = NEXT_WORKER_GENERATION.fetch_add(1, Ordering::SeqCst);
     #[cfg(test)]
     let worker_hold = reached_hold.clone();
+    let worker_fallback = fallback.clone();
     let work = (blocks.clone(), stop.clone(), ctx.clone());
     let spawned = std::thread::Builder::new().name("canvas-redraw".into()).spawn(move || {
         let (blocks, stop, ctx) = work;
         // A panic stops the redraw: the receiver sees the worker gone and drops it.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let redraw_doc = if worker_fallback.is_some() && doc.walk().iter().any(|(_, _, layer)| layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some()))
+            {
+                Arc::new(crate::gpu_canvas::materialize_paint_masks(&doc))
+            } else {
+                doc
+            };
             #[cfg(test)]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
+            draw(&redraw_doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx, &worker_hold);
             #[cfg(not(test))]
-            draw(&doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx);
+            draw(&redraw_doc, display.as_deref(), format, &blocks, &todo, &stop, &tx, &ctx);
         }));
         ctx.request_repaint();
     });

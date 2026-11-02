@@ -108,6 +108,16 @@ pub struct Dab {
     pub mix: f32,
 }
 
+/// One geometry-projected dab supplied to the native stroke renderer.
+#[derive(Clone, Copy)]
+pub struct MappedDab<'a> {
+    pub rect: Rect,
+    pub coverage: &'a [f32],
+    pub dual_coverage: &'a [f32],
+    pub depth: &'a [f32],
+    pub dab: &'a Dab,
+}
+
 impl Dab {
     /// A plain round dab.
     pub fn round(center: Point, radius: f32, alpha: f32) -> Self {

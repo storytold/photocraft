@@ -81,7 +81,7 @@ fn document_banks_keep_identity_undo_and_normal_documents_when_project_closes() 
         assert_eq!(s.active().unwrap().doc.id, texture);
     }
     s.execute("edit.undo", json!({})).unwrap();
-    s.execute("uv.project.close", json!({})).unwrap();
+    s.execute("uv.project.close", json!({"discard":true})).unwrap();
     s.execute("uv.workspace.activate", json!({"active":false})).unwrap();
     assert_eq!(s.active().unwrap().doc.id, normal);
 }

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use super::display::{GPU_OUTPUT, cache_key, canvas_display, display_doc, display_image, texture_key};
 use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
@@ -597,13 +595,10 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if r.kind == crate::gpu_canvas::REFRESH_DEFERRED {
         // Composited off the UI thread, the visible part first (#4024).
         let region = if partial { damage.unwrap_or(doc.bounds()) } else { doc.bounds() };
-        let redraw_doc = if r.fallback.is_some() { Arc::new(crate::gpu_canvas::materialize_paint_masks(&doc)) } else { doc.clone() };
-        crate::background_redraw::start(app, ctx, &gpu, redraw_doc, display.clone(), visible, region, r.fallback.clone());
+        crate::background_redraw::start(app, ctx, &gpu, doc.clone(), display.clone(), visible, region, r.fallback.clone());
     } else if partial {
         // The edit drew its damage; blocks of a running redraw still to come follow the edit.
-        let redraw_doc =
-            if crate::background_redraw::needs_materialized_masks(app, id) { Arc::new(crate::gpu_canvas::materialize_paint_masks(&doc)) } else { doc.clone() };
-        crate::background_redraw::restart(app, ctx, &gpu, redraw_doc, display.clone(), visible);
+        crate::background_redraw::restart(app, ctx, &gpu, doc.clone(), display.clone(), visible);
     } else {
         crate::background_redraw::cancel(app, id);
     }

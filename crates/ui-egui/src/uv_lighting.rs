@@ -245,7 +245,7 @@ pub(crate) fn refresh_impl_with_budget(app: &mut PhotocraftApp, maps: &mut Surfa
         }
     }
     if !skipped.is_empty() {
-        maps.budget_status = Some(format!("Skipped UV maps to stay within the 4 GiB CPU map limit: {}", skipped.join(", ")));
+        maps.budget_status = Some(crate::i18n::fmt(tl!("Skipped UV maps to stay within the 4 GiB CPU map limit: {maps}"), &[("maps", &skipped.join(", "))]));
     }
     Ok(())
 }

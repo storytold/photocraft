@@ -807,7 +807,7 @@ impl GpuCanvas {
         }
         // Paint-mask previews are GPU-first and intentionally leave `mask.surface` untouched.
         // Materialize only for a synchronous CPU draw. Deferred jobs take one durable flattened
-        // snapshot in `textures::ensure_gpu` after this method returns.
+        // snapshot on the background-redraw worker after this method returns.
         let has_paint_masks = doc.walk().iter().any(|(_, _, layer)| layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some()));
         let cpu_doc = out.fallback.as_ref().filter(|_| has_paint_masks).map(|_| match damage {
             Some(region) => materialize_paint_masks_region(doc, region),

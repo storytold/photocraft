@@ -672,6 +672,7 @@ fn texture_create(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"document":id.0}))
 }
 fn texture_bind(s: &mut Session, p: &Value) -> Result<Value> {
+    require_active_uv_bank(s)?;
     let material = material(s, p)?;
     let normal = channel(p, s.uv.current_channel())?;
     if normal == Channel::Normal && s.active().is_some_and(|d| d.doc.mode != ColorMode::Rgb) {
@@ -1522,7 +1523,7 @@ mod asset_path_tests {
     }
 
     #[test]
-    fn document_import_and_creation_are_rejected_while_uv_bank_is_parked() {
+    fn document_mutations_are_rejected_while_uv_bank_is_parked() {
         let mut session = crate::Session::new();
         session.add_document(super::Document::new("Parked UV", super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
         let original_id = session.active().unwrap().doc.id;
@@ -1530,6 +1531,10 @@ mod asset_path_tests {
         session.active = None;
         session.uv_workspace.initialized = true;
         session.uv_workspace.active = false;
+        let bindings = session.uv.bindings.clone();
+        let bind_error = super::texture_bind(&mut session, &json!({})).unwrap_err();
+        assert!(bind_error.to_string().contains("Activate the 3D document workspace"));
+        assert_eq!(session.uv.bindings, bindings);
 
         for (command, params) in [
             ("uv.texture.create", json!({"width":8,"height":8})),

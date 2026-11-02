@@ -294,19 +294,9 @@ impl Geometry {
     /// Pick the nearest surface point to the reflection anywhere in the prepared geometry.
     ///
     /// `max_distance` is measured in the source model's coordinates. The returned `Hit::position`
-    /// remains in those coordinates. `scene`, `camera` and `size` are retained for call-site
-    /// compatibility; correspondence is geometric and does not depend on visibility or viewport.
-    pub fn mirror_hit(
-        &self,
-        _scene: &Scene,
-        _camera: Camera,
-        maps: &Materials<'_>,
-        source: &Hit,
-        axis: usize,
-        offset: f64,
-        _size: [u32; 2],
-        max_distance: f64,
-    ) -> Option<Hit> {
+    /// remains in those coordinates. Correspondence is geometric and does not depend on
+    /// visibility, camera or viewport.
+    pub fn mirror_hit(&self, maps: &Materials<'_>, source: &Hit, axis: usize, offset: f64, max_distance: f64) -> Option<Hit> {
         if !max_distance.is_finite() || max_distance < 0.0 {
             return None;
         }
@@ -487,9 +477,7 @@ mod symmetry_tests {
         let scene = symmetric_scene();
         let topology = Topology::build(&scene)?;
         let geometry = Geometry::new(&scene, &topology)?;
-        let mut camera = Camera::default();
-        camera.yaw = 0.0;
-        camera.pitch = 0.0;
+        let camera = Camera { yaw: 0.0, pitch: 0.0, ..Camera::default() };
         let maps = Materials::default();
         let size = [400, 400];
         let source_normalized = (DVec3::new(9.5, 4.75, -3.0) - DVec3::from_array(geometry.center)) / geometry.diameter;
@@ -501,7 +489,7 @@ mod symmetry_tests {
         let frontmost = geometry.hit(&scene, camera, &maps, target_screen, size).ok_or("target surface was not picked")?;
         assert_eq!(frontmost.triangle, 2);
 
-        let reflected = geometry.mirror_hit(&scene, camera, &maps, &source, 0, 10.0, size, 0.1).ok_or("near reflected surface was not picked")?;
+        let reflected = geometry.mirror_hit(&maps, &source, 0, 10.0, 0.1).ok_or("near reflected surface was not picked")?;
         assert_eq!(reflected.triangle, 1);
         assert!((reflected.position[0] - 10.5).abs() < 1e-5);
         assert!((reflected.position[1] - 4.75).abs() < 1e-5);
@@ -518,14 +506,12 @@ mod symmetry_tests {
         let topology = Topology::build(&scene)?;
         let geometry = Geometry::new(&scene, &topology)?;
         let source = Hit { triangle: 0, uv: [0.5, 0.5], position: [9.5, 4.75, -3.0] };
-        let mut camera = Camera::default();
-        camera.pan = [10_000.0, -10_000.0];
         let mut maps = Materials::default();
-        let reflected = geometry.mirror_hit(&scene, camera, &maps, &source, 0, 10.0, [0, 0], 0.1).ok_or("offscreen backface was not picked")?;
+        let reflected = geometry.mirror_hit(&maps, &source, 0, 10.0, 0.1).ok_or("offscreen backface was not picked")?;
         assert_eq!(reflected.triangle, 1);
 
         maps.hidden.insert(0);
-        assert!(geometry.mirror_hit(&scene, camera, &maps, &source, 0, 10.0, [0, 0], 0.1).is_none());
+        assert!(geometry.mirror_hit(&maps, &source, 0, 10.0, 0.1).is_none());
         Ok(())
     }
 }

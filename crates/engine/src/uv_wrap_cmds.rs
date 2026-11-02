@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 
 const MAX_BATCH_STAMPS: usize = 256;
+const MAX_BATCH_MAPPED_TILES: usize = 1024;
 
 #[derive(Clone, Copy)]
 struct SurfaceStamp {
@@ -84,28 +85,50 @@ fn parse_stamps(p: &Value) -> Result<Vec<SurfaceStamp>> {
     }
 }
 
-/// Add one surface sample to the accumulated wrapped renderer. `true` means the
-/// legacy single-sample path would have proceeded to composite its accumulated stroke.
-fn accumulate_stamp(
-    s: &mut Session,
-    scene: &photocraft_uv::Scene,
-    mesh: &photocraft_uv::wrap::Mesh,
+struct StrokeCursor {
+    previous: Option<[f64; 3]>,
+    pixels_per_unit: Option<f64>,
+    index: u64,
+}
+
+struct MappedTile {
+    rect: Rect,
+    coverage: Vec<f32>,
+    dual: Vec<f32>,
+    depth: Vec<f32>,
+}
+
+struct PreparedStamp {
+    dab: photocraft_paint::Dab,
+    tiles: Vec<MappedTile>,
+}
+
+struct StampPreparation<'a> {
+    session: &'a mut Session,
+    scene: &'a photocraft_uv::Scene,
+    mesh: &'a photocraft_uv::wrap::Mesh,
     size: [u32; 2],
     material: usize,
-    stroke: &mut WrappedStroke,
-    sample: SurfaceStamp,
-) -> Result<bool> {
+    brush_settings: &'a BrushSettings,
+    cursor: &'a mut StrokeCursor,
+    renderer_has_bounds: bool,
+}
+
+/// Prepare geometry and coverage without mutating the accumulated stroke renderer. A whole input
+/// batch can therefore be validated before any of its samples are committed.
+fn prepare_stamp(context: &mut StampPreparation<'_>, sample: SurfaceStamp) -> Result<Option<PreparedStamp>> {
+    let StampPreparation { session, scene, mesh, size, material, brush_settings, cursor, renderer_has_bounds } = context;
     let SurfaceStamp { triangle, position, pressure } = sample;
-    if let (Some(prev), Some(scale)) = (stroke.previous, stroke.pixels_per_unit) {
+    if let (Some(prev), Some(scale)) = (cursor.previous, cursor.pixels_per_unit) {
         let travelled = prev.iter().zip(position).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
-        if travelled * scale < f64::from(stroke.brush.size * stroke.brush.spacing).max(0.5) {
-            return Ok(false);
+        if travelled * scale < f64::from(brush_settings.size * brush_settings.spacing).max(0.5) {
+            return Ok(None);
         }
     }
-    let mut brush = stroke.brush.clone();
-    brush.seed = brush.seed.wrapping_add(stroke.index);
+    let mut brush = brush_settings.clone();
+    brush.seed = brush.seed.wrapping_add(cursor.index);
     let dabs = photocraft_paint::dabs(&Stroke { brush: brush.clone(), points: vec![StrokePoint::new(0.0, 0.0, pressure)] });
-    let Some(dab) = dabs.first() else { return Ok(false) };
+    let Some(dab) = dabs.first() else { return Ok(None) };
     let ctx = BrushContext::new(&brush);
     let rect = ctx.dab_rect(dab, false).union(&ctx.dab_rect(dab, true));
     let count = u64::from(rect.width()) * u64::from(rect.height());
@@ -113,7 +136,7 @@ fn accumulate_stamp(
         return Err(bad("Wrap stamp exceeds 4M pixels; reduce brush size"));
     }
     let reach = [rect.x0, rect.y0, rect.x1, rect.y1].into_iter().map(|v| f64::from(v).abs()).fold(0.0, f64::max) + 1.0;
-    let patches = mesh.chart_scaled(scene, triangle, position, size, reach, stroke.pixels_per_unit).map_err(|e| bad(e.to_string()))?;
+    let patches = mesh.chart_scaled(scene, triangle, position, *size, reach, cursor.pixels_per_unit).map_err(|e| bad(e.to_string()))?;
     if let Some(root) = patches.first() {
         let t = scene.triangles.get(root.triangle).ok_or_else(|| bad("Missing triangle"))?;
         let (Some(a), Some(b)) = (t.corners.first().and_then(|c| scene.positions.get(c.vertex)), t.corners.get(1).and_then(|c| scene.positions.get(c.vertex)))
@@ -123,13 +146,13 @@ fn accumulate_stamp(
         let distance = a.iter().zip(b).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
         let pixels = (root.plane[0][0] - root.plane[1][0]).hypot(root.plane[0][1] - root.plane[1][1]);
         if distance > 1e-14 {
-            stroke.pixels_per_unit = Some(pixels / distance);
+            cursor.pixels_per_unit = Some(pixels / distance);
         }
     }
-    if let (Some(prev), Some(scale)) = (stroke.previous, stroke.pixels_per_unit) {
+    if let (Some(prev), Some(scale)) = (cursor.previous, cursor.pixels_per_unit) {
         let travelled = prev.iter().zip(position).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
         if travelled * scale < f64::from(brush.size * brush.spacing).max(0.5) {
-            return Ok(false);
+            return Ok(None);
         }
     }
     let (mut cov, mut depth, mut dual) = (Vec::new(), Vec::new(), Vec::new());
@@ -144,12 +167,12 @@ fn accumulate_stamp(
     let mut visited = 0usize;
     let mut over_budget = false;
     for patch in patches {
-        let topology = s.uv.topology.as_ref().cloned().ok_or_else(|| bad("Missing UV topology"))?;
+        let topology = session.uv.topology.as_ref().cloned().ok_or_else(|| bad("Missing UV topology"))?;
         let shell = topology.triangle_shell.get(patch.triangle).copied().ok_or_else(|| bad("Missing UV shell ownership"))?;
-        let padding = s.uv.padding;
-        let apron = crate::uv_cmds::cached_padding(s, material, size[0], size[1], [0, 0], shell, padding)?;
+        let padding = session.uv.padding;
+        let apron = crate::uv_cmds::cached_padding(session, *material, size[0], size[1], [0, 0], shell, padding)?;
         patch
-            .rasterize_with_padding(scene, size, reach, Some(&apron), padding, |x, y, at| {
+            .rasterize_with_padding(scene, *size, reach, Some(&apron), padding, |x, y, at| {
                 visited = visited.saturating_add(1);
                 if visited > 4_194_304 {
                     over_budget = true;
@@ -171,19 +194,25 @@ fn accumulate_stamp(
             return Err(bad("Wrap footprint exceeds 4M texels; reduce brush size"));
         }
     }
+    if tiles.len() > MAX_BATCH_MAPPED_TILES {
+        return Err(bad("Wrap stamp exceeds the mapped coverage budget; reduce brush size"));
+    }
+    let mut mapped_tiles = Vec::with_capacity(tiles.len());
     for ((x, y), tile) in tiles {
         let rect = Rect::from_xywh(x * 64, y * 64, 64, 64);
-        let channels: [Vec<f32>; 3] = std::array::from_fn(|i| tile.iter().map(|p| p[i]).collect());
-        if !stroke.renderer.accumulate_mapped(rect, &channels[0], &channels[1], &channels[2], dab) {
-            return Err(bad("Invalid mapped brush coverage"));
-        }
+        mapped_tiles.push(MappedTile {
+            rect,
+            coverage: tile.iter().map(|p| p[0]).collect(),
+            dual: tile.iter().map(|p| p[1]).collect(),
+            depth: tile.iter().map(|p| p[2]).collect(),
+        });
     }
-    if stroke.renderer.bounds().is_empty() {
-        return Ok(false);
+    if mapped_tiles.is_empty() && !*renderer_has_bounds {
+        return Ok(None);
     }
-    stroke.previous = Some(position);
-    stroke.index = stroke.index.wrapping_add(1);
-    Ok(true)
+    cursor.previous = Some(position);
+    cursor.index = cursor.index.wrapping_add(1);
+    Ok(Some(PreparedStamp { dab: *dab, tiles: mapped_tiles }))
 }
 fn stamp(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("end").and_then(Value::as_bool) == Some(true) {
@@ -250,22 +279,63 @@ fn stamp(s: &mut Session, p: &Value) -> Result<Value> {
         s.uv.wrap_mesh = Some(Arc::new(photocraft_uv::wrap::Mesh::new(&scene).map_err(|e| bad(e.to_string()))?));
     }
     let mesh = s.uv.wrap_mesh.as_ref().cloned().ok_or_else(|| bad("Missing wrap topology"))?;
-    let mut should_composite = false;
-    let checkpoint = stroke.clone();
+    let mut cursor = StrokeCursor { previous: stroke.previous, pixels_per_unit: stroke.pixels_per_unit, index: stroke.index };
+    let mut renderer_has_bounds = !stroke.renderer.bounds().is_empty();
+    let mut prepared = Vec::with_capacity(stamps.len());
+    let mut staged_tiles = 0usize;
     for (sample, material) in stamps.into_iter().zip(materials) {
-        match accumulate_stamp(s, &scene, &mesh, size, material, &mut stroke, sample) {
-            Ok(changed) => should_composite |= changed,
+        let mut context = StampPreparation {
+            session: s,
+            scene: &scene,
+            mesh: &mesh,
+            size,
+            material,
+            brush_settings: &stroke.brush,
+            cursor: &mut cursor,
+            renderer_has_bounds,
+        };
+        let result = prepare_stamp(&mut context, sample);
+        match result {
+            Ok(Some(plan)) => {
+                staged_tiles = staged_tiles.saturating_add(plan.tiles.len());
+                if staged_tiles > MAX_BATCH_MAPPED_TILES {
+                    s.uv.wrapped_stroke = Some(stroke);
+                    return Err(bad("Wrap batch exceeds the mapped coverage budget; split the batch"));
+                }
+                renderer_has_bounds |= !plan.tiles.is_empty();
+                prepared.push(plan);
+            }
+            Ok(None) => {}
             Err(error) => {
-                // Roll back every sample in this batch while keeping prior successful calls.
-                s.uv.wrapped_stroke = Some(checkpoint);
+                // Preparation has not mutated the renderer or the stroke cursor.
+                s.uv.wrapped_stroke = Some(stroke);
                 return Err(error);
             }
         }
     }
-    if !should_composite || stroke.renderer.bounds().is_empty() {
+    let mapped: Vec<_> = prepared
+        .iter()
+        .flat_map(|plan| {
+            plan.tiles.iter().map(|tile| photocraft_paint::MappedDab {
+                rect: tile.rect,
+                coverage: &tile.coverage,
+                dual_coverage: &tile.dual,
+                depth: &tile.depth,
+                dab: &plan.dab,
+            })
+        })
+        .collect();
+    if !stroke.renderer.accumulate_mapped_batch(&mapped) {
+        s.uv.wrapped_stroke = Some(stroke);
+        return Err(bad("Invalid mapped brush coverage"));
+    }
+    stroke.pixels_per_unit = cursor.pixels_per_unit;
+    if prepared.is_empty() || stroke.renderer.bounds().is_empty() {
         s.uv.wrapped_stroke = Some(stroke);
         return Ok(Value::Null);
     }
+    stroke.previous = cursor.previous;
+    stroke.index = cursor.index;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut probe = (*st.doc).clone();
     let selection = probe.selection.clone();

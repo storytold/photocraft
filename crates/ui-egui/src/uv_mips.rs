@@ -1,11 +1,21 @@
 //! GPU mip generation for full-resolution model maps, restricted to changed texels.
 use eframe::{egui_wgpu::RenderState, wgpu};
+use std::sync::Mutex;
+
+struct ScratchSet {
+    format: wgpu::TextureFormat,
+    size: [u32; 2],
+    levels: usize,
+    textures: Vec<wgpu::Texture>,
+}
+
 pub(crate) struct Mips {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     color: wgpu::RenderPipeline,
     data: wgpu::RenderPipeline,
     separate: bool,
+    scratch: Mutex<Option<ScratchSet>>,
 }
 impl Mips {
     pub fn new(rs: &RenderState) -> Self {
@@ -62,11 +72,29 @@ impl Mips {
         });
         let info = rs.adapter.get_info();
         let separate = crate::gpu_canvas::separate_mip_targets(info.backend, info.vendor, std::env::var("PHOTOCRAFT_SEPARATE_MIPS").ok().as_deref());
-        Self { layout, sampler, color, data, separate }
+        Self { layout, sampler, color, data, separate, scratch: Mutex::new(None) }
     }
     pub fn regenerate(&self, rs: &RenderState, texture: &wgpu::Texture, size: [u32; 2], levels: &[wgpu::TextureView], region: [u32; 4]) {
         if levels.len() < 2 {
             return;
+        }
+        let mut scratch_cache = self.scratch.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.separate && scratch_cache.as_ref().is_none_or(|cache| cache.format != texture.format() || cache.size != size || cache.levels != levels.len()) {
+            let textures = (1..levels.len())
+                .map(|level| {
+                    rs.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("uv mip scratch"),
+                        size: wgpu::Extent3d { width: (size[0] >> level).max(1), height: (size[1] >> level).max(1), depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: texture.format(),
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    })
+                })
+                .collect();
+            *scratch_cache = Some(ScratchSet { format: texture.format(), size, levels: levels.len(), textures });
         }
         let mut encoder = rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("uv mip update") });
         let [mut x, mut y, w, h] = region;
@@ -88,19 +116,8 @@ impl Mips {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 ],
             });
-            let scratch = self.separate.then(|| {
-                rs.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("uv mip scratch"),
-                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: texture.format(),
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                })
-            });
-            let scratch_view = scratch.as_ref().map(|t| t.create_view(&Default::default()));
+            let scratch = if self.separate { scratch_cache.as_ref().and_then(|cache| cache.textures.get(level - 1)) } else { None };
+            let scratch_view = scratch.map(|t| t.create_view(&Default::default()));
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("uv mip"),
@@ -117,7 +134,7 @@ impl Mips {
                 pass.set_scissor_rect(x, y, (x1 - x).max(1), (y1 - y).max(1));
                 pass.draw(0..3, 0..1);
             }
-            if let Some(scratch) = &scratch {
+            if let Some(scratch) = scratch {
                 let origin = wgpu::Origin3d { x, y, z: 0 };
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo { texture: scratch, mip_level: 0, origin, aspect: wgpu::TextureAspect::All },

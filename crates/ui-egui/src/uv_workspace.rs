@@ -673,7 +673,10 @@ pub(crate) fn restore_parked_dock(app: &mut PhotocraftApp) {
     app.ui.docking_kept = parked.kept;
     app.ui.docking_collapsed = parked.collapsed;
     app.ui.dock_tabs = parked.tabs;
+    let (rail, menu_bar) = (app.ui.panels.rail, app.ui.panels.menu_bar);
     app.ui.panels = parked.panels;
+    app.ui.panels.rail = rail;
+    app.ui.panels.menu_bar = menu_bar;
     app.ui.panels.dock = parked.dock_visible;
     app.ui.uv_workbench.open = parked.uv_open;
 }
@@ -948,6 +951,9 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, "window.workspace.painting", Value::Null).unwrap();
         assert!(!app.session.uv_workspace.active);
         assert_ne!(app.ui.docking, docking, "the Painting preset keeps its normal layout policy");
+        let (rail, menu_bar) = (!app.ui.panels.rail, !app.ui.panels.menu_bar);
+        app.ui.panels.rail = rail;
+        app.ui.panels.menu_bar = menu_bar;
         crate::menus::invoke(&mut app, &ctx, "window.workspace.threeD", Value::Null).unwrap();
 
         assert!(app.session.uv_workspace.active);
@@ -958,6 +964,8 @@ mod tests {
         assert_eq!(app.ui.docking_collapsed, collapsed);
         assert_eq!(app.ui.dock_tabs, tabs);
         assert_eq!(app.ui.panels.dock, dock_visible);
+        assert_eq!(app.ui.panels.rail, rail);
+        assert_eq!(app.ui.panels.menu_bar, menu_bar);
         assert!(app.ui.uv_workbench.open);
 
         crate::menus::invoke(&mut app, &ctx, "window.uvWorkbench", Value::Null).unwrap();

@@ -4867,3 +4867,4 @@ shape	Appearance	Оформление
 	The mask Paint preview document is unavailable	Документ предпросмотра маски Paint недоступен
 	Discarded an outdated mask Paint opacity preview	Устаревший предпросмотр непрозрачности маски Paint отменён
 	Click to select · Shift to add · ⌘ to subtract	Щелчок — выбрать · Shift — добавить · ⌘ — вычесть
+	Skipped UV maps to stay within the 4 GiB CPU map limit: {maps}	Карты UV пропущены, чтобы не превысить лимит CPU-памяти 4 ГиБ: {maps}

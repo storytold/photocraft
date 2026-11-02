@@ -144,7 +144,12 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
                         .and_then(|stack| stack.layers.get(stack.active))
                         .is_some_and(|layer| matches!(&layer.kind, photocraft_doc::mask_paint::EffectKind::Paint));
                 if mask.paint.is_some() && id != "edit.copy" && !paint_stroke {
-                    return Err("Select a Paint sublayer before using Brush, Pencil or tangent-wrap on an editable mask stack".into());
+                    let brush_command = matches!(id, "paint.stroke" | "paint.pencil" | "paint.uvWrap");
+                    return Err(if brush_command {
+                        "Select a Paint sublayer before using Brush, Pencil or tangent-wrap on an editable mask stack".into()
+                    } else {
+                        "This command cannot edit an editable mask stack; use Brush, Pencil or tangent-wrap on a Paint sublayer".into()
+                    });
                 }
                 Ok(())
             }))
