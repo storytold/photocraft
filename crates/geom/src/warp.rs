@@ -768,8 +768,12 @@ impl BezierMesh {
         for _ in 0..12 {
             let h = 1e-5;
             let q = self.eval(s, t);
-            let (qs, qt) = (self.eval(s + h, t), self.eval(s, t + h));
-            let (a, b, c, d) = ((qs[0] - q[0]) / h, (qt[0] - q[0]) / h, (qs[1] - q[1]) / h, (qt[1] - q[1]) / h);
+            // eval clamps parameters to the box. Step inward near the upper edges;
+            // stepping outside would yield a zero derivative and stop refinement.
+            let hs = if s + h <= 1.0 { h } else { -h };
+            let ht = if t + h <= 1.0 { h } else { -h };
+            let (qs, qt) = (self.eval(s + hs, t), self.eval(s, t + ht));
+            let (a, b, c, d) = ((qs[0] - q[0]) / hs, (qt[0] - q[0]) / ht, (qs[1] - q[1]) / hs, (qt[1] - q[1]) / ht);
             let det = a * d - b * c;
             if det.abs() < 1e-12 {
                 break;
