@@ -115,8 +115,12 @@ pub(crate) fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, St
             if let Err(e) = uv_ui::reveal(app) {
                 return Some(Err(e));
             }
-            uv_ui::reimport(app);
-            Ok(Value::Null)
+            if app.session.uv.source_authorized {
+                uv_ui::reimport(app);
+                Ok(Value::Null)
+            } else {
+                uv_ui::pick_file(app, "reimport", 0, false)
+            }
         }
         "file.uv.settings" => {
             if let Err(e) = uv_ui::reveal(app) {

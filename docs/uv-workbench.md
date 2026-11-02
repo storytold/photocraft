@@ -118,9 +118,14 @@ changes. Unique material names preserve both texture document bindings and hidde
 across reordered slots. Existing documents, layers, pixel edits and history are not reopened
 or replaced; new/ambiguous names remain unbound. Shell selection resets and changed UVs warn
 about retained seam masks. `uv.model.checkSource` compares size/mtime at roughly 1s UI intervals,
-outside active strokes, showing a notification without automatically replacing geometry. The
-baseline and chosen UV set round-trip in pcuv; legacy projects establish a baseline on first
-check. Malformed, unavailable or mid-write files retain the old mesh. Both source-reading
+outside active strokes, showing a notification without automatically replacing geometry.
+Projects retain the model path as provenance, but opening a `.pcuv` does not access it or
+automatically check it. Choose the model again through **File > 3D Import > Reimport** to enable
+source checks and reimport; this also works for legacy projects. A saved texture destination is
+restored only when its path is lexically inside the project folder. Export checks that it still
+resolves to a file inside that folder; other saved destinations stay blocked until the texture
+is explicitly reopened and bound again.
+Malformed, unavailable or mid-write files retain the old mesh and its edits. Source-reading
 commands stay behind the remote ambient-filesystem gate.
 
 The 3D Draw/Shells controls select surface painting or island picking. Surface painting feeds

@@ -383,6 +383,43 @@ mod container_tests {
         assert!(app.ui.uv_workbench.status.contains("Choose the map again"));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn reimport_picker_reauthorizes_a_model_restored_from_a_project() {
+        use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("mesh.obj");
+        let project = temp.path().join("scene.pcuv");
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        std::fs::copy(fixture, &source).unwrap();
+
+        let mut session = photocraft_engine::Session::new();
+        session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        session.execute("uv.model.import", json!({"path":source})).unwrap();
+        session.execute("uv.project.save", json!({"path":project})).unwrap();
+
+        let mut restored = photocraft_engine::Session::new();
+        restored.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        restored.execute("uv.project.load", json!({"path":project})).unwrap();
+        assert!(!restored.uv.source_authorized);
+        assert_eq!(restored.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], false);
+
+        let (dialog, asked) = crate::file_dialog::fake(vec![Some(FileDialogAnswer::Paths(vec![source.to_string_lossy().into_owned()]))]);
+        let mut app = PhotocraftApp::new(restored, crate::Services { file_dialog: Some(dialog), ..Default::default() });
+        app.ui.workspace = "3D".into();
+        crate::menus::apply_workspace(&mut app);
+        let ctx = egui::Context::default();
+        assert!(crate::uv_workspace::menu(&mut app, "file.uv.reimport").unwrap().is_ok());
+        app.poll_file_dialog(&ctx, None);
+
+        assert_eq!(asked.borrow().len(), 1);
+        assert!(matches!(&asked.borrow()[0], FileDialogRequest::Open { multiple: false, .. }));
+        assert!(app.session.uv.source_authorized);
+        assert_eq!(app.session.uv.source, source.to_string_lossy().into_owned());
+        assert_eq!(app.session.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], true);
+    }
+
     fn app() -> PhotocraftApp {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width":16,"height":16})).unwrap();

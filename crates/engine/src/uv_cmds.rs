@@ -11,7 +11,11 @@ use photocraft_uv::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 type PaddingCacheKey = (usize, u32, u32, i32, i32, usize, u64);
 
@@ -49,6 +53,9 @@ pub struct UvState {
     pub(crate) wrap_mesh: Option<Arc<photocraft_uv::wrap::Mesh>>,
     pub(crate) wrapped_stroke: Option<crate::uv_wrap_cmds::WrappedStroke>,
     pub source: String,
+    /// A source path restored from a project is only a hint. It becomes usable after the user
+    /// selects that model again (or explicitly supplies a path to `uv.model.reimport`).
+    pub source_authorized: bool,
     pub uv_set: usize,
     pub source_stamp: Option<crate::uv_reload_cmds::SourceStamp>,
     pub bindings: Vec<Option<DocId>>,
@@ -298,6 +305,19 @@ fn boolean(p: &Value, key: &str, default: bool) -> Result<bool> {
 fn path(p: &Value) -> Result<&str> {
     p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| err("path is required"))
 }
+pub(super) fn model_path(p: &Value) -> Result<String> {
+    validate_model_path(path(p)?)
+}
+fn validate_model_path(value: &str) -> Result<String> {
+    if value.is_empty() || value.len() > 32768 || value.contains('\0') {
+        return Err(err("Invalid model path"));
+    }
+    let normalized = value.replace('\\', "/").to_ascii_lowercase();
+    if normalized.starts_with("//./") || normalized.starts_with("//?/") || normalized.starts_with("/??/") || normalized.starts_with("/device/") {
+        return Err(err("Device paths are not valid model files"));
+    }
+    Ok(value.to_owned())
+}
 fn material(s: &Session, p: &Value) -> Result<usize> {
     let i = uint(p, "material", s.uv.material)?;
     if s.uv.scene.as_ref().is_some_and(|s| i < s.materials.len()) { Ok(i) } else { Err(err("material is out of range")) }
@@ -338,18 +358,75 @@ fn model_directory(source: &str) -> &Path {
     Path::new(source).parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
+/// Windows network shares, device namespaces, rooted paths and drive-qualified paths are never
+/// valid model-relative material references. Check their spelling before any filesystem call:
+/// `canonicalize` on a UNC path can contact a remote server.
+fn is_network_or_device_path(name: &str) -> bool {
+    let normalized = name.replace('\\', "/").to_ascii_lowercase();
+    normalized.starts_with("//") || normalized.starts_with("/??/") || normalized.starts_with("/device/")
+}
+
+fn unsafe_model_reference(name: &str) -> bool {
+    let normalized = name.replace('\\', "/");
+    is_network_or_device_path(name) || normalized.starts_with('/') || name.contains(':') || name.contains('\0')
+}
+
+/// Resolve a regular file below a trusted, canonical directory without following any child
+/// symlink or junction. Each ancestor is checked before descending into it.
+fn regular_file_beneath(root: &Path, relative: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = relative.components().collect();
+    if components.is_empty() || components.iter().any(|component| !matches!(component, std::path::Component::Normal(_))) {
+        return None;
+    }
+    let mut resolved = root.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        let std::path::Component::Normal(name) = component else { return None };
+        resolved.push(name);
+        let metadata = std::fs::symlink_metadata(&resolved).ok()?;
+        if metadata.file_type().is_symlink() {
+            return None;
+        }
+        let is_last = index + 1 == components.len();
+        if (is_last && !metadata.is_file()) || (!is_last && !metadata.is_dir()) {
+            return None;
+        }
+    }
+    Some(resolved)
+}
+
+/// Restore only a lexical in-project texture destination. Do not touch the path here: it came
+/// from serialized project data. The explicit export command checks canonical identity again.
+fn restored_project_texture_path(project_directory: &Path, canonical_project_directory: &Path, source: &str) -> Option<(PathBuf, PathBuf)> {
+    if is_network_or_device_path(source) || source.contains('\0') {
+        return None;
+    }
+    let source_path = Path::new(source);
+    if source_path.components().any(|component| match component {
+        std::path::Component::Normal(name) => name.to_string_lossy().contains(':'),
+        _ => false,
+    }) {
+        return None;
+    }
+    let candidate = if source_path.is_absolute() { source_path.to_path_buf() } else { project_directory.join(source_path) };
+    let relative = candidate.strip_prefix(project_directory).ok()?;
+    if relative.as_os_str().is_empty() || relative.components().any(|component| !matches!(component, std::path::Component::Normal(_))) {
+        return None;
+    }
+    Some((project_directory.join(relative), canonical_project_directory.join(relative)))
+}
+
 /// Resolve model-provided references only to regular files within the model directory.
 fn resolved(source: &str, name: &str) -> String {
+    if unsafe_model_reference(name) {
+        return String::new();
+    }
     let base = model_directory(source);
     let Ok(base) = base.canonicalize() else { return String::new() };
     let name = name.replace('\\', "/");
-    let candidate = base.join(&name);
-    let nearby = base.join(Path::new(&name).file_name().unwrap_or_default());
-    for path in [candidate, nearby] {
-        if let Ok(path) = path.canonicalize()
-            && path.starts_with(&base)
-            && path.is_file()
-        {
+    let relative = Path::new(&name);
+    let nearby = relative.file_name().map(Path::new);
+    for relative in std::iter::once(relative).chain(nearby) {
+        if let Some(path) = regular_file_beneath(&base, relative) {
             return path.to_string_lossy().into_owned();
         }
     }
@@ -357,6 +434,7 @@ fn resolved(source: &str, name: &str) -> String {
 }
 
 pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<crate::uv_reload_cmds::SourceStamp>)> {
+    validate_model_path(source)?;
     let stamp = crate::uv_reload_cmds::SourceStamp::read(source)?;
     let bytes = read(source)?;
     let mut scene = photocraft_uv::import::load(source, &bytes, uv_set, |name| read(&resolved(source, name)).map_err(|e| photocraft_uv::Error(e.to_string())))
@@ -434,7 +512,7 @@ pub(super) fn load_scene(source: &str, uv_set: usize) -> Result<(Scene, Option<c
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     require_active_uv_bank(s)?;
     let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
-    let source = path(p)?.to_owned();
+    let source = model_path(p)?;
     let uv_set = uint(p, "uvSet", 0)?;
     let (mut scene, source_stamp) = load_scene(&source, uv_set)?;
     let topology = Topology::build(&scene).map_err(|e| err(e.to_string()))?;
@@ -522,6 +600,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         topology: Some(Arc::new(topology)),
         wrap_mesh,
         source,
+        source_authorized: true,
         uv_set,
         source_stamp,
         bindings,
@@ -1213,6 +1292,10 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     if project.version != 1 {
         return Err(err("Unsupported UV project version"));
     }
+    if project.source.len() > 32768 || project.source.contains('\0') {
+        project.source.clear();
+        project.source_stamp = None;
+    }
     validate_view(&project.view)?;
     if project.normal_documents.is_empty() {
         project.normal_documents = vec![None; project.scene.materials.len()];
@@ -1326,21 +1409,17 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                 let writeback = project.dirty_documents.as_ref().map_or(source.is_some(), |dirty| name.as_ref().is_some_and(|name| dirty.contains(name)));
                 // Preserve in-project destinations, but external paths are untrusted provenance
                 // and must be explicitly rebound before export or ordinary Save can target them.
-                let canonical_source = source.as_ref().and_then(|source| Path::new(source).canonicalize().ok());
-                let in_project =
-                    canonical_source.as_ref().is_some_and(|file| project_export_root.as_ref().is_some_and(|base| file.starts_with(base) && file.is_file()));
+                let restored_path = source.as_deref().and_then(|source| {
+                    project_export_root.as_ref().and_then(|root| restored_project_texture_path(model_directory(project_path), root, source))
+                });
+                let in_project = restored_path.is_some();
                 let external = source.is_some() && !in_project;
-                let project_export_path = if in_project {
-                    source.as_ref().zip(canonical_source.as_ref()).map(|(source, canonical)| (Path::new(source).to_path_buf(), canonical.clone()))
-                } else {
-                    None
-                };
-                let index = s.add_document(doc, if external { None } else { source });
+                let index = s.add_document(doc, restored_path.as_ref().map(|(path, _)| path.to_string_lossy().into_owned()));
                 if external && let Some(st) = s.uv_documents().get(index) {
                     blocked_exports.insert(st.doc.id);
                 }
                 if let Some(st) = s.uv_documents().get(index) {
-                    if let (Some(root), Some((original_path, original_identity))) = (project_export_root.as_ref(), project_export_path) {
+                    if let (Some(root), Some((original_path, original_identity))) = (project_export_root.as_ref(), restored_path) {
                         project_export_guards.insert(st.doc.id, (root.clone(), original_path, original_identity));
                     }
                     exported_revisions.insert(st.doc.id, if writeback { 0 } else { st.revision });
@@ -1380,6 +1459,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
         scene: Some(scene),
         topology: Some(Arc::new(topology)),
         source: project.source,
+        source_authorized: false,
         uv_set: project.uv_set,
         source_stamp: project.source_stamp,
         normal_bindings,
@@ -1506,6 +1586,38 @@ mod asset_path_tests {
         assert!(super::resolved(source, "../outside.png").is_empty());
         assert!(super::resolved(source, root.path().join("outside.png").to_str().unwrap()).is_empty());
         assert!(super::resolved(source, ".").is_empty());
+    }
+
+    #[test]
+    fn serialized_external_path_forms_are_rejected_before_resolution() {
+        for path in [
+            r"\\server\share\map.png",
+            "//server/share/map.png",
+            r"\\?\UNC\server\share\map.png",
+            r"\\.\PhysicalDrive0",
+            r"\??\C:\private\map.png",
+            r"\Device\HarddiskVolume1\private\map.png",
+        ] {
+            assert!(super::is_network_or_device_path(path), "{path}");
+            assert!(super::unsafe_model_reference(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn restored_texture_destinations_are_checked_lexically_without_filesystem_access() {
+        let root = tempfile::tempdir().unwrap();
+        let project_dir = root.path().join("project");
+        std::fs::create_dir(&project_dir).unwrap();
+        let canonical = project_dir.canonicalize().unwrap();
+
+        assert_eq!(
+            super::restored_project_texture_path(&project_dir, &canonical, "not-created-yet/map.png"),
+            Some((project_dir.join("not-created-yet/map.png"), canonical.join("not-created-yet/map.png")))
+        );
+        assert!(super::restored_project_texture_path(&project_dir, &canonical, "../outside.png").is_none());
+        assert!(super::restored_project_texture_path(&project_dir, &canonical, r"\\server\share\map.png").is_none());
+        assert!(super::restored_project_texture_path(&project_dir, &canonical, r"C:\outside\map.png").is_none());
+        assert!(super::restored_project_texture_path(&project_dir, &canonical, "maps:secret.png").is_none());
     }
 
     #[test]

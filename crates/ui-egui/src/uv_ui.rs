@@ -341,6 +341,11 @@ fn check_source(app: &mut PhotocraftApp) {
     if app.session.uv.scene.is_none() || app.drag.is_some() || crate::uv_mask_paint_preview::pending(app).is_some() {
         return;
     }
+    if !app.session.uv.source_authorized {
+        app.uv_cache.source_message =
+            if app.session.uv.source.is_empty() { String::new() } else { tl!("Choose the model file again to enable source checking and reimport.").into() };
+        return;
+    }
     if app.uv_cache.source_generation == app.session.uv.generation && app.uv_cache.source_checked.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) {
         return;
     }
@@ -980,7 +985,7 @@ pub(crate) fn pick_file(app: &mut PhotocraftApp, kind: &'static str, material: u
 fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, channel: Channel) -> Result<serde_json::Value, String> {
     use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
     let extensions = match kind {
-        "model" => vec!["fbx", "obj"],
+        "model" | "reimport" => vec!["fbx", "obj"],
         "project" => vec!["pcuv"],
         _ => vec!["png", "tga", "jpg", "jpeg", "tif", "tiff", "dds", "exr", "bmp", "pcraft"],
     }
@@ -1007,6 +1012,7 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
         let path = paths.first().ok_or("No file selected")?;
         let (id, params) = match kind {
             "model" => ("uv.model.import", json!({"path":path,"uvSet":uv_set})),
+            "reimport" => ("uv.model.reimport", json!({"path":path,"uvSet":uv_set})),
             "project" => ("uv.project.load", json!({"path":path})),
             _ => ("uv.texture.open", json!({"path":path,"material":material,"channel":channel.key()})),
         };
@@ -1015,13 +1021,27 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
         match &result {
             Ok(_) => {
                 app.ui.uv_workbench.status.clear();
-                if kind == "model" {
+                if kind == "model" || kind == "reimport" {
                     app.ui.uv_workbench.model_path = path.clone();
-                    app.ui.uv_workbench.project_path.clear();
                     app.ui.uv_workbench.view_3d = true;
+                    app.uv_cache.source_message.clear();
+                    app.uv_cache.source_checked = None;
+                    if kind == "model" {
+                        app.ui.uv_workbench.project_path.clear();
+                    } else {
+                        let message: String = if result.as_ref().is_ok_and(|value| value["uvChanged"] == true) {
+                            tl!("Mesh reimported. UVs changed: check existing seam protection masks.").into()
+                        } else {
+                            tl!("Mesh reimported; textures and layers preserved.").into()
+                        };
+                        app.ui.uv_workbench.status = message.clone();
+                        app.ui.status = message;
+                        app.ui.status_error = false;
+                    }
                 }
                 if kind == "project" {
                     app.ui.uv_workbench.project_path = path.clone();
+                    app.ui.uv_workbench.model_path = app.session.uv.source.clone();
                     app.ui.uv_workbench.view_3d = true;
                 }
                 app.ui.uv_workbench.guard = app.session.uv.guard;

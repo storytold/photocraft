@@ -150,7 +150,7 @@ fn reimport_rebuilds_bound_blur_cache_for_new_topology_without_adding_history() 
     std::fs::remove_file(path).unwrap();
 }
 #[test]
-fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
+fn restored_model_source_stays_inert_until_explicitly_reimported() {
     let (_temp, path) = file();
     let project = path.with_extension("pcuv");
     let mut s = Session::new();
@@ -159,13 +159,26 @@ fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
     rewrite_with_different_size(&path, obj("A", "B", 123.456789));
     let mut loaded = Session::new();
     loaded.execute("uv.project.load", json!({"path":project})).unwrap();
-    assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
+    let source_check = loaded.execute("uv.model.checkSource", json!({})).unwrap();
+    assert_eq!(source_check["authorized"], false, "a project path is provenance, not permission to probe a file");
+    assert_eq!(source_check["available"], false);
+    assert_eq!(source_check["changed"], false);
+    assert!(loaded.execute("uv.model.reimport", json!({})).is_err(), "reimport asks for a newly chosen source path");
+    loaded.execute("uv.model.reimport", json!({"path":path})).unwrap();
+    let source_check = loaded.execute("uv.model.checkSource", json!({})).unwrap();
+    assert_eq!(source_check["authorized"], true);
+    assert_eq!(source_check["changed"], false);
+
     remove_project_source_stamp(&project);
     let mut loaded = Session::new();
     loaded.execute("uv.project.load", json!({"path":project})).unwrap();
-    assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], false);
+    assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["authorized"], false);
     rewrite_with_different_size(&path, obj("A", "B", 1234.56789));
-    assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
+    assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], false, "legacy projects also defer source access");
+    loaded.execute("uv.model.reimport", json!({"path":path})).unwrap();
+    let source_check = loaded.execute("uv.model.checkSource", json!({})).unwrap();
+    assert_eq!(source_check["authorized"], true, "explicit reimport establishes a fresh source stamp");
+    assert_eq!(source_check["changed"], false);
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(project).unwrap();
 }

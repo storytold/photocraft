@@ -71,7 +71,7 @@ pub(crate) fn refresh_bound_mask_cache_for_document(
             if shell_ids.is_none() {
                 shell_ids = Some(
                     topology
-                        .shell_id_map_for_materials(scene, canvas.width() as u32, canvas.height() as u32, materials, [0, 0])
+                        .shell_id_map_for_materials(scene, canvas.width(), canvas.height(), materials, [0, 0])
                         .map_err(|error| EngineError::Other(format!("Could not prepare UV shell ownership for mask Blur: {error}")))?,
                 );
             }
@@ -137,18 +137,21 @@ impl SourceStamp {
     }
 }
 fn enabled(s: &Session) -> std::result::Result<(), String> {
-    if s.uv.scene.is_some() && !s.uv.source.is_empty() { Ok(()) } else { Err("Import a model with a source file first".into()) }
+    if s.uv.scene.is_some() { Ok(()) } else { Err("Import a model first".into()) }
 }
 fn check(s: &mut Session, _: &Value) -> Result<Value> {
+    if !s.uv.source_authorized || s.uv.source.is_empty() {
+        return Ok(json!({"changed":false,"tracked":false,"available":false,"authorized":false}));
+    }
     match SourceStamp::read(&s.uv.source) {
         Ok(now) => {
             let changed = s.uv.source_stamp.is_some() && now != s.uv.source_stamp;
             if s.uv.source_stamp.is_none() {
                 s.uv.source_stamp = now;
             }
-            Ok(json!({"changed":changed,"tracked":s.uv.source_stamp.is_some(),"available":true}))
+            Ok(json!({"changed":changed,"tracked":s.uv.source_stamp.is_some(),"available":true,"authorized":true}))
         }
-        Err(error) => Ok(json!({"changed":false,"available":false,"error":error.to_string()})),
+        Err(error) => Ok(json!({"changed":false,"available":false,"authorized":true,"error":error.to_string()})),
     }
 }
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
@@ -159,7 +162,12 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
             value.as_u64().and_then(|v| usize::try_from(v).ok()).filter(|v| *v <= 31).ok_or_else(|| EngineError::Other("uvSet must be in 0..31".into()))?
         }
     };
-    let (mut scene, stamp) = crate::uv_cmds::load_scene(&s.uv.source, uv_set)?;
+    let (source, authorized) = match p.get("path") {
+        Some(_) => (crate::uv_cmds::model_path(p)?, true),
+        None if s.uv.source_authorized && !s.uv.source.is_empty() => (s.uv.source.clone(), true),
+        None => return Err(EngineError::Other("Choose the source model again before reimporting".into())),
+    };
+    let (mut scene, stamp) = crate::uv_cmds::load_scene(&source, uv_set)?;
     let topology = photocraft_uv::topology::Topology::build(&scene).map_err(|e| EngineError::Other(e.to_string()))?;
     let uv_changed = s.uv.uv_set != uv_set
         || old.triangles.len() != scene.triangles.len()
@@ -202,6 +210,8 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     s.uv.wrap_mesh = wrap_mesh;
     s.uv.wrapped_stroke = None;
     s.uv.scene = Some(scene);
+    s.uv.source = source;
+    s.uv.source_authorized = authorized;
     s.uv.topology = Some(Arc::new(topology));
     s.uv.bindings = bindings;
     s.uv.normal_bindings = normal_bindings;
@@ -278,7 +288,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec {
             id: "uv.model.reimport",
             label: "Reimport model geometry",
-            params: r#"{"uvSet":int?}"#,
+            params: r#"{"uvSet":int?,"path":string?}"#,
             enabled,
             run: reload,
             menu: &[],

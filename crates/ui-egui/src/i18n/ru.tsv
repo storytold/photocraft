@@ -4781,6 +4781,7 @@ shape	Appearance	Оформление
 	Mesh reimported. UVs changed: check existing seam protection masks.	Меш обновлён. UV изменилась: проверьте существующие маски защиты швов.
 	Mesh reimported; textures and layers preserved.	Меш обновлён; текстуры и слои сохранены.
 	The source model is unavailable. The current mesh is retained.	Исходная модель недоступна. Текущий меш сохранён.
+	Choose the model file again to enable source checking and reimport.	Выберите файл модели ещё раз, чтобы проверять его изменения и повторно импортировать.
 	The source model changed — click ReImport	Исходная модель изменена — нажмите ReImport
 	Source maps require more than 4 GiB of CPU cache. Remove unused material bindings; maps are not downscaled automatically.	Исходные карты требуют более 4 GiB CPU-кэша. Освободите ненужные привязки материалов; карты не уменьшаются автоматически.
 	Marquee:	Рамка:
