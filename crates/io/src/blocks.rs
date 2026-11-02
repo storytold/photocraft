@@ -318,13 +318,16 @@ pub(crate) fn gradient_stops_editable(grad: &Descriptor, method: Option<&[u8]>) 
     raw
 }
 
-/// The exact, constant-RGB subset of Photoshop noise gradients. If every RGB component has the
-/// same minimum and maximum, the generated field is constant regardless of seed or roughness.
-/// Other models, transparency, and varying ranges are not approximated.
-fn constant_rgb_noise_color(grad: &Descriptor) -> Option<Color> {
-    if enum_of(grad, "GrdF")? != b"ClNs" || enum_of(grad, "ClrS")? != b"RGBC" || bool_of(grad, "ShTr") {
+/// The exact, constant-colour subset of Photoshop noise gradients. If every colour component
+/// has the same minimum and maximum, the generated field is constant regardless of seed or
+/// roughness. RGB, HSB and Lab convert through the same descriptor path as solid colours
+/// ([`color_from_desc`]), so a constant noise fill matches a solid fill with the same values;
+/// other models, transparency, and varying ranges are not approximated.
+fn constant_noise_color(grad: &Descriptor) -> Option<Color> {
+    if enum_of(grad, "GrdF")? != b"ClNs" || bool_of(grad, "ShTr") {
         return None;
     }
+    let space = enum_of(grad, "ClrS")?;
     let components = |key: &str| -> Option<[f32; 4]> {
         let Some(Value::List(values)) = grad.get(key) else { return None };
         if values.len() != 4 {
@@ -338,7 +341,17 @@ fn constant_rgb_noise_color(grad: &Descriptor) -> Option<Color> {
     if min.iter().zip(max).take(3).any(|(a, b)| !a.is_finite() || *a < 0.0 || *a > 100.0 || *a != b) {
         return None;
     }
-    Some(Color::rgb(min[0] / 100.0, min[1] / 100.0, min[2] / 100.0))
+    let d = |v: f32| Value::Double(f64::from(v));
+    match space {
+        b"RGBC" => Some(Color::rgb(min[0] / 100.0, min[1] / 100.0, min[2] / 100.0)),
+        // `HSBl`: hue a percentage of the circle, saturation and brightness percent.
+        b"HSBl" => color_from_desc(&Descriptor::new("HSBC").with("H   ", d(min[0] / 100.0 * 360.0)).with("Strt", d(min[1])).with("Brgh", d(min[2]))),
+        // `LbCl`: L percent of 100, a and b percent of the 0..255 byte range around 128.
+        b"LbCl" => color_from_desc(
+            &Descriptor::new("LbCl").with("Lmnc", d(min[0])).with("A   ", d(min[1] / 100.0 * 255.0 - 128.0)).with("B   ", d(min[2] / 100.0 * 255.0 - 128.0)),
+        ),
+        _ => None,
+    }
 }
 
 fn gradient_stops_raw(grad: &Descriptor) -> RawStops {
@@ -471,7 +484,7 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 opacity_stops.clear();
             }
             if stops.is_empty() {
-                // A provably constant-RGB noise gradient renders one exact colour. Any other
+                // A provably constant noise gradient renders one exact colour. Any other
                 // noise gradient (variable ranges, transparency, other models) has no stops to
                 // read: keep the placeholder ramp rather than failing the whole fill — the
                 // layer stays a fill layer, Photoshop's own pixels ride along as `fill_cache`,
@@ -479,7 +492,7 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
                 // here would import the layer as pixels and drop `GdFl` on save (#6272).
                 stops = gradient
                     .filter(|g| enum_of(g, "GrdF") == Some(b"ClNs"))
-                    .and_then(constant_rgb_noise_color)
+                    .and_then(constant_noise_color)
                     .map(|color| vec![(0.0, color), (1.0, color)])
                     .unwrap_or_else(|| vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]);
             }

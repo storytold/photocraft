@@ -52,3 +52,41 @@ fn variable_noise_gradient_stays_a_fill_layer_and_keeps_its_gdfl() {
     let rec = back.layers().iter().find(|l| l.block(b"GdFl").is_some()).expect("the re-saved layer carries its GdFl");
     assert_eq!(rec.block(b"GdFl").unwrap().data, gdfl, "the raw GdFl survives the round trip byte for byte");
 }
+
+/// psd-tools `gradients/noise-gradient-{rgb,lab}.psd`: each file's `hsb-noise` / `lab-noise`
+/// layer is constant noise (min == max), and PhotoCraft re-renders Photoshop's stored pixels
+/// within one level. The same fills in the other documents' colour spaces are not asserted:
+/// their stored pixels depend on Photoshop's working and CMYK profiles (the untagged RGB file
+/// stores Lab(60, 25, 25) as 178/126/102, within a level of Adobe RGB; PhotoCraft's sRGB gives
+/// 195/127/102).
+#[cfg(feature = "corpus")]
+#[test]
+fn constant_noise_fills_match_photoshop_stored_pixels() {
+    use std::path::PathBuf;
+    for (file, layer_name) in [("noise-gradient-rgb.psd", "hsb-noise"), ("noise-gradient-lab.psd", "lab-noise")] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd-tools/gradients").join(file);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}: run `cargo xtask corpus --all`", path.display()));
+        let doc = import(file, &bytes).expect("opens").document;
+        let layer = doc.layers.iter().find(|l| l.name == layer_name).unwrap_or_else(|| panic!("{file}: layer {layer_name}"));
+        let LayerContent::Fill(fill @ Fill::Gradient { stops, .. }) = &layer.content else { panic!("{file}: {layer_name} is not a gradient fill") };
+        assert!(stops.len() >= 2 && stops.iter().all(|(_, c)| *c == stops[0].1), "{file}: {layer_name} stops are constant");
+        let cache = layer.fill_cache.as_ref().expect("Photoshop's stored pixels");
+        let buf = photocraft_compose::render_fill_content(layer, fill, doc.bounds(), &[]);
+        let bounds = cache.surface.content_bounds();
+        assert!(!bounds.is_empty(), "{file}: {layer_name} has stored pixels");
+        let (mut max, mut sum, mut n) = (0.0f32, 0.0f32, 0u32);
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                let ours = photocraft_raster::from_rgba(&cache.surface.format(), buf.get(x, y));
+                let stored = cache.surface.pixel(x, y);
+                for d in ours.iter().zip(&stored).take(3).map(|(a, b)| (a * 255.0).round() - (b * 255.0).round()) {
+                    max = max.max(d.abs());
+                    sum += d.abs();
+                    n += 1;
+                }
+            }
+        }
+        eprintln!("{file} {layer_name}: max {max} mean {:.3}", sum / n as f32);
+        assert!(max <= 1.0, "{file}: {layer_name} max {max} > 1 level");
+    }
+}
