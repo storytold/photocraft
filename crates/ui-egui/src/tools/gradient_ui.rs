@@ -73,6 +73,9 @@ pub struct LiveGradient {
     /// Pending edit from the Gradient Editor window's current-gradient strip
     /// (`gradient.presets.stop`, previewed the same way).
     preset_stop: Option<Value>,
+    /// The Gradient Editor window's selected colour stop (sorted index), set each frame the window
+    /// shows: a colour picked in the Color or Swatches panel goes to it, not to the foreground (#10783).
+    editor_stop: Option<(Sink, usize)>,
     /// Cached preview document by key.
     preview: Option<(u64, Arc<Document>)>,
 }
@@ -621,6 +624,7 @@ fn selected_gradient(app: &PhotocraftApp) -> Option<Layer> {
 /// stop controls edit the tool's current gradient and offer saving it as a preset.
 pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.panels.gradient_editor {
+        app.gradient.editor_stop = None;
         return;
     }
     let mut open = true;
@@ -657,9 +661,63 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if show_panel {
         let _ = crate::preset_panels::menu(app, "window.panel.gradients", &Value::Null);
     }
+    // The colour stop the Color and Swatches panels pick for: none while an opacity stop or a
+    // midpoint is selected, or once the window is closed.
+    let sink = layer.as_ref().map_or(Sink::Preset, |l| Sink::Layer(l.id));
+    let selection_key = strip_key(app, sink).with("selection");
+    app.gradient.editor_stop = match ctx.data(|d| d.get_temp::<Marker>(selection_key)) {
+        Some(Marker::Color(i)) if open => Some((sink, i)),
+        _ => None,
+    };
     if !open {
         app.ui.panels.gradient_editor = false;
     }
+}
+
+/// The Gradient Editor's selected colour stop and its colour, while the window is open.
+fn editor_target(app: &PhotocraftApp) -> Option<(Sink, usize, [f32; 3])> {
+    if !app.ui.panels.gradient_editor {
+        return None;
+    }
+    let (sink, i) = app.gradient.editor_stop?;
+    let Some(Fill::Gradient { mut stops, .. }) = sink.fill(app) else { return None };
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (_, c) = stops.get(i)?;
+    Some((sink, i, c.to_rgb()))
+}
+
+/// The colour of the Gradient Editor's selected colour stop while the window is open: the colour
+/// the Color panel shows and edits in place of the foreground (#10783).
+pub(crate) fn editor_stop_color(app: &PhotocraftApp) -> Option<[f32; 3]> {
+    editor_target(app).map(|(.., c)| c)
+}
+
+/// A colour picked in the Color or Swatches panel while the Gradient Editor window is open with a
+/// colour stop selected recolours that stop, as Photoshop's editor takes the colour clicked there,
+/// with the same command as the editor's own stop Color Picker (`gradient.fill.stop` or
+/// `gradient.presets.stop`, `color`); the foreground stays (#10783). Picks of one `gesture` (a
+/// Color panel drag) share one history step. `false` when the editor has no colour stop selected:
+/// the caller then sets the foreground as usual.
+pub(crate) fn panel_color_picked(app: &mut PhotocraftApp, rgb: [f32; 3], gesture: Option<String>) -> bool {
+    let Some((sink, i, current)) = editor_target(app) else { return false };
+    let hex = |c: [f32; 3]| {
+        let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        format!("#{r:02x}{g:02x}{b:02x}")
+    };
+    // A held, unmoved press repeats the pick: only a new colour is an edit.
+    if hex(rgb) == hex(current) {
+        return true;
+    }
+    let key = match gesture {
+        Some(g) => format!("gradient-editor-color-{g}"),
+        None => format!("gradient-editor-color-{}", app.ui.alloc_id()),
+    };
+    let p = sink.params(json!({"action": "color", "index": i, "color": hex(rgb), "coalesce": key}));
+    if let Err(e) = app.run(sink.cmd(), p) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
 }
 
 /// Live mode: style, reverse, dither and blend mode changes in the options bar also edit the selected

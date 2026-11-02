@@ -144,3 +144,103 @@ fn preset_editor_opacity_fields_do_not_edit_document_history() {
     assert_eq!(h.state().session.active().unwrap().doc, before);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
 }
+
+/// The sorted colour stops of the sink's gradient, as 8-bit hex.
+fn stop_hexes(app: &PhotocraftApp, sink: Sink) -> Vec<String> {
+    let Some(Fill::Gradient { mut stops, .. }) = sink.fill(app) else { panic!("a gradient") };
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    stops.iter().map(|(_, c)| hex3(c.to_rgb())).collect()
+}
+
+fn hex3(c: [f32; 3]) -> String {
+    let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// A swatch's name and its colour as `swatches.use` sets it: the first that differs from the
+/// stops', the foreground's and the Color panel picks' test colours.
+fn first_swatch(app: &PhotocraftApp) -> (String, [f32; 3]) {
+    let conv = photocraft_engine::presets::swatches::SwatchConv::new(&app.session);
+    let taken = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#000000"];
+    let sw = app.session.presets.swatches[0].items.iter().find(|s| !taken.contains(&hex3(conv.rgb(&s.color)).as_str())).unwrap();
+    (sw.name.clone(), conv.rgb(&sw.color))
+}
+
+/// #10783: with the Gradient Editor open on a colour stop, a Color panel pick and a swatch click
+/// recolour that stop (the editor shows it at once), as the editor's own Color Picker does, and
+/// leave the foreground alone, as in Photoshop; the Color panel shows the stop's colour. A layer's
+/// stop is one undo step per pick and Undo restores the gradient.
+#[test]
+fn color_and_swatches_panels_recolour_the_selected_editor_stop() {
+    for layer in [true, false] {
+        let (mut h, sink) = editor(layer);
+        select(&mut h, 0.5, false);
+        assert_eq!(h.state().gradient.editor_stop, Some((sink, 1)));
+        let foreground = h.state().session.tools.foreground;
+        let history = h.state().session.active().unwrap().history.past_len();
+        let before = sink.fill(h.state()).unwrap();
+        assert_eq!(hex3(crate::color_panel_ui::active(h.state())), "#00ff00", "the Color panel shows the stop");
+        let ctx = h.ctx.clone();
+        crate::color_panel_ui::set_color(h.state_mut(), &ctx, false, [1.0, 1.0, 0.0]);
+        h.run_steps(2);
+        assert_eq!(stop_hexes(h.state(), sink), ["#ff0000", "#ffff00", "#0000ff"]);
+        assert_eq!(h.state().session.tools.foreground, foreground, "the foreground stays");
+        assert_eq!(hex3(crate::color_panel_ui::active(h.state())), "#ffff00");
+        let (name, rgb) = first_swatch(h.state());
+        crate::swatches_ui::use_swatch(h.state_mut(), &name, false);
+        h.run_steps(2);
+        assert_eq!(stop_hexes(h.state(), sink), ["#ff0000".to_string(), hex3(rgb), "#0000ff".to_string()]);
+        assert_eq!(h.state().session.tools.foreground, foreground, "a swatch leaves the foreground too");
+        if layer {
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2, "one step per pick");
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(sink.fill(h.state()).unwrap(), before, "Undo restores the gradient");
+        } else {
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "the tool gradient is not in the document");
+        }
+    }
+}
+
+/// The picks of one Color panel drag are one history step.
+#[test]
+fn a_color_panel_drag_on_an_editor_stop_is_one_step() {
+    let (mut h, sink) = editor(true);
+    select(&mut h, 1.0, false);
+    let history = h.state().session.active().unwrap().history.past_len();
+    for g in [0.2, 0.4, 0.6] {
+        assert!(panel_color_picked(h.state_mut(), [g, g, g], Some("press-1".into())));
+    }
+    assert_eq!(stop_hexes(h.state(), sink)[2], hex3([0.6; 3]));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+}
+
+/// Without a selected colour stop (an opacity stop selected, or the editor closed) the Color and
+/// Swatches panels set the foreground as before and the gradient doesn't change.
+#[test]
+fn without_a_selected_editor_color_stop_the_panels_set_the_foreground() {
+    for layer in [true, false] {
+        let (mut h, sink) = editor(layer);
+        let before = sink.fill(h.state()).unwrap();
+        select(&mut h, 0.5, true);
+        assert_eq!(h.state().gradient.editor_stop, None, "an opacity stop takes no colour");
+        let ctx = h.ctx.clone();
+        crate::color_panel_ui::set_color(h.state_mut(), &ctx, false, [1.0, 1.0, 0.0]);
+        h.run_steps(2);
+        assert_eq!(hex3(crate::color_panel_ui::active(h.state())), "#ffff00");
+        let fg = h.state().session.tools.foreground;
+        assert_eq!(hex3([fg[0], fg[1], fg[2]]), "#ffff00", "the Color panel sets the foreground");
+        assert_eq!(sink.fill(h.state()).unwrap(), before, "the gradient doesn't change");
+        // Closed editor: a colour stop was selected, but nothing in the gradient changes.
+        select(&mut h, 0.5, false);
+        h.state_mut().ui.panels.gradient_editor = false;
+        h.run_steps(2);
+        assert_eq!(h.state().gradient.editor_stop, None);
+        let (name, rgb) = first_swatch(h.state());
+        crate::swatches_ui::use_swatch(h.state_mut(), &name, false);
+        let fg = h.state().session.tools.foreground;
+        assert_eq!(hex3([fg[0], fg[1], fg[2]]), hex3(rgb), "the swatch sets the foreground");
+        assert!(!panel_color_picked(h.state_mut(), [0.0, 0.0, 0.0], None));
+        assert_eq!(sink.fill(h.state()).unwrap(), before, "the gradient doesn't change");
+    }
+}
