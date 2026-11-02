@@ -54,8 +54,9 @@ pub fn revision() -> u64 {
     REVISION.load(Ordering::Relaxed)
 }
 
-/// Opens `path` for reading without waiting on a FIFO or device that has no writer.
-#[cfg(unix)]
+/// Opens `path` for reading without waiting on a FIFO or device that has no writer. Only
+/// `load_file` calls it, and that is not built for wasm32.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     // O_NONBLOCK: opening a writer-less FIFO read-only returns at once; the caller then sees it
@@ -63,7 +64,7 @@ fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().read(true).custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32).open(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
 fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
