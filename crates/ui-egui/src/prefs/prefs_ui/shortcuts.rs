@@ -64,6 +64,14 @@ pub fn reserved_shortcut(sc: &str) -> bool {
     prefs::reserved_shortcut(sc)
 }
 
+/// Is a shortcut field in the front dialog (Edit › Keyboard Shortcuts) waiting for keys? Then
+/// the key pressed is the shortcut to record, so nothing else may take it first (#8965): not the
+/// dialog's own ⌘Z (#9487), the view keys that work under dialogs (⌘0, ⌘+…), or the macOS menu
+/// bar, which swallows the key equivalent of a disabled item.
+pub(crate) fn capturing_shortcut(app: &PhotocraftApp) -> bool {
+    app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::Command && d.fields.get("capture").and_then(Value::as_bool) == Some(true))
+}
+
 /// Text of a key press for the shortcut editor (`Cmd+Shift+K`), `None` for bare modifiers.
 pub fn shortcut_text(key: egui::Key, m: egui::Modifiers) -> Option<String> {
     if is_modifier_key(key) {

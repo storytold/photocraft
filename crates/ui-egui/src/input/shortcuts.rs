@@ -511,6 +511,12 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if crate::menu_nav::is_open(ctx) || crate::menu_keys::is_focused(ctx) || crate::widgets::dropdown_list_open(ctx) {
         return false;
     }
+    // A Keyboard Shortcuts field waiting for keys records the key pressed, whatever it is: no
+    // shortcut runs first, not even the view keys that work under dialogs (#8965: ⌘0, ⌘+ zoomed
+    // instead of being recorded).
+    if crate::prefs_ui::capturing_shortcut(app) {
+        return false;
+    }
     // ⌘Z in a filter or adjustment dialog steps the dialog's settings, not the document (#4697).
     crate::edit_history::keys(app, ctx);
     // Stroke Options owns plain navigation/activation keys, including while its child
