@@ -246,9 +246,16 @@ fn workspace_of(app: &PhotocraftApp) -> Result<Workspace, String> {
     Ok(workspace)
 }
 
+/// Freeze the displayed native arrangement after an explicit fallback edit.
+pub(crate) fn native_fallback(app: &PhotocraftApp) -> Option<Workspace> {
+    let workspace = workspace_of(app).ok()?;
+    valid_workspace(&workspace).then_some(workspace)
+}
+
 fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
     app.ui.docking = Some(workspace);
+    crate::dock::discard_retained_layout(app);
     app.ui.docking_returns = returns;
     app.ui.panels.dock = true;
     sync_visibility(app);
