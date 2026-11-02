@@ -15,7 +15,7 @@ use crate::pickers::asset_browser_interaction::{
     asset_browser_take_release,
     asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_header_drop_hit, header_drop_before, hierarchy_group_drop,
-    card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    card_drop_hit, card_drop_hits, card_leading_marker_rect, card_trailing_marker_rect, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
     root_prepend_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
@@ -923,14 +923,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             let mut item_hierarchy_targets: Vec<(egui::Response, Rect, bool, bool, usize, String, Vec<String>)> = Vec::new();
             // The root is a real sibling sequence, not merely the area after the final group.
             // Give its leading edge an overlay drop target; it must not reserve vertical layout space.
-            if canonical_hierarchy_drag && let Some(first @ HierarchyNode::Group { .. }) = hierarchy.roots().first() {
+            if canonical_hierarchy_drag && let Some(first) = hierarchy.roots().first() {
                 let top = ui.cursor().min.y;
                 let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), top), pos2(ui.clip_rect().right(), top + 1.0));
                 let response = ui.interact(rect, ui.id().with(("root-leading-group-drop", panel)), Sense::hover());
-                let indicator = Rect::from_min_max(
-                    pos2(rect.left(), top - 0.5),
-                    pos2(rect.right(), top + 0.5),
-                );
+                let indicator = if first.is_group() {
+                    // The top boundary is flush with the viewport's clip edge. Paint all four
+                    // pixels inward so the shell/ScrollArea clip cannot trim the outer half.
+                    Rect::from_min_max(pos2(ui.clip_rect().left(), top), pos2(ui.clip_rect().right(), top + 4.0))
+                } else {
+                    card_leading_marker_rect(rect)
+                };
                 // The leading border is the insertion boundary itself. Give it precedence over
                 // the group-body hit registered immediately afterward, without adding layout space.
                 canonical_drop_hits.borrow_mut().push((root_prepend_hit(rect, indicator, first.id().clone(), usize::MAX), response));
@@ -1833,15 +1836,32 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
             }
             if canonical_hierarchy_drag {
+                // The leading target is registered before rows are laid out. Resolve a card's
+                // actual edge now that its final grid bounds are available.
+                if let Some(first) = hierarchy.roots().first()
+                    && !first.is_group()
+                    && let Some(bounds) = canonical_node_bounds.borrow().get(&first.id()).copied()
+                    && let Some((hit, _)) = canonical_drop_hits
+                        .borrow_mut()
+                        .iter_mut()
+                        .find(|(hit, _)| hit.region == PointerRegion::LeadingEdge && hit.target.as_ref() == Some(&first.id()))
+                {
+                    hit.indicator_rect = card_leading_marker_rect(bounds);
+                }
                 // The whole trailing blank area is the root append target, not just a narrow
                 // sixteen-pixel strip immediately after the final node. This lets users drop in
                 // the whitespace below the last group while keeping the indicator at its top edge.
                 let root_end_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(32.0);
                 let (root_end_rect, root_end_response) = ui.allocate_exact_size(vec2(ui.available_width(), root_end_height), Sense::hover());
-                let indicator = Rect::from_min_max(
-                    pos2(root_end_rect.left(), root_end_rect.top() - 2.0),
-                    pos2(root_end_rect.right(), root_end_rect.top() + 2.0),
-                );
+                let indicator = match hierarchy.roots().last() {
+                    Some(last) if !last.is_group() => canonical_node_bounds
+                        .borrow()
+                        .get(&last.id())
+                        .copied()
+                        .map(card_trailing_marker_rect)
+                        .unwrap_or_else(|| Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0))),
+                    _ => Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0)),
+                };
                 let hit_index = canonical_drop_hits.borrow().len();
                 let visible_root_end = root_end_rect.intersect(ui.clip_rect());
                 if visible_root_end.is_positive() {
@@ -1850,7 +1870,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             }
         });
     let browser_view_clip = Rect::from_min_max(
-        pos2(browser_parent_clip.left(), scroll.inner_rect.top()),
+        pos2(browser_parent_clip.left(), browser_parent_clip.top()),
         pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()),
     )
     .intersect(browser_parent_clip);

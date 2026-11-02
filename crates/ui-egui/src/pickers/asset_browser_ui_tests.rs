@@ -496,6 +496,151 @@ fn actual_nested_card_drop_at_root_append_area_promotes_card_to_root_level() {
 }
 
 #[test]
+fn root_append_indicator_spans_the_full_browser_width() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let source = h.get_by_label("B card 1").rect().center();
+    let last_card = h.get_by_label("C card 1").rect();
+    let target = pos2(last_card.center().x, last_card.bottom() + 8.0);
+
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render root append preview");
+    let ppp = h.ctx.pixels_per_point();
+    let y = (last_card.bottom() * ppp).round() as i32;
+    let has_accent_at = |x: u32| {
+        (y - 3..=y + 3).any(|py| {
+            py >= 0 && (py as u32) < image.height() && image.get_pixel(x, py as u32).0[..3] == accent[..3]
+        })
+    };
+    assert!(has_accent_at(2), "root append marker should reach the left edge of the browser; image width={}", image.width());
+    assert!(has_accent_at(image.width() - 3), "root append marker should reach the right edge of the browser; image width={}", image.width());
+}
+
+#[test]
+fn root_end_after_a_card_uses_the_cards_vertical_trailing_marker() {
+    let mut state = with_b_nested_in_a();
+    state.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::Group("A".into()),
+            HierarchyOrderEntry::Group("C".into()),
+            HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+        ],
+    );
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), state);
+    let source = h.get_by_label("A").rect().center();
+    let last_card = h.get_by_label("B card 1").rect();
+    let target = pos2(last_card.center().x, last_card.bottom() + 8.0);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render root card append preview");
+    let ppp = h.ctx.pixels_per_point();
+    let x = (last_card.right() * ppp).round() as i32;
+    let y = (last_card.center().y * ppp).round() as i32;
+    let has_accent = |px: i32, py: i32| {
+        (px - 2..=px + 2).any(|x| {
+            (py - 2..=py + 2).any(|y| {
+                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height()
+                    && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
+            })
+        })
+    };
+    assert!(has_accent(x, y), "root append after a card should show its vertical trailing edge; last_card={last_card:?}, ppp={ppp}, image={}x{}, order={:?}", image.width(), image.height(), h.state().0.hierarchy_order[PANEL]);
+    assert!(!has_accent(2, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
+    assert!(!has_accent(image.width() as i32 - 3, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
+}
+
+#[test]
+fn root_leading_group_marker_renders_all_four_pixels_inside_the_picker_clip() {
+    let mut h = harness(nested_group_tree(), vec2(520.0, 900.0));
+    let first_header = h.get_by_label("A").rect();
+    let source = h.get_by_label("B card 1").rect().center();
+    let target = pos2(first_header.center().x, first_header.top() + 0.5);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render root leading preview");
+    let ppp = h.ctx.pixels_per_point();
+    let left = (first_header.left() * ppp).round() as u32;
+    let right = (first_header.right() * ppp).round() as u32;
+    let top = (first_header.top() * ppp).round() as i32;
+    let has_accent_at = |x: u32, y: i32| {
+        y >= 0 && (y as u32) < image.height() && image.get_pixel(x, y as u32).0[..3] == accent[..3]
+    };
+    let rows: Vec<bool> = (top - 8..=top + 12).map(|y| has_accent_at(left + 4, y)).collect();
+    assert!(rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)), "leading group marker should render four consecutive pixels at the left edge; first_header={first_header:?}, top={top}, rows={rows:?}, image={}x{}", image.width(), image.height());
+    let right_rows: Vec<bool> = (top - 8..=top + 12).map(|y| has_accent_at(image.width() - 5, y)).collect();
+    assert!(right_rows.windows(4).any(|window| window.iter().all(|pixel| *pixel)), "leading group marker should span the full browser width; rows={right_rows:?}, first_header={first_header:?}, right={right}");
+}
+
+#[test]
+fn root_leading_card_uses_its_vertical_leading_marker() {
+    let mut state = with_root_item_between_groups("A", "a1");
+    state.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+            HierarchyOrderEntry::Group("A".into()),
+            HierarchyOrderEntry::Group("B".into()),
+            HierarchyOrderEntry::Group("C".into()),
+        ],
+    );
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), state);
+    let first_card = h.get_by_label("A card 1").rect();
+    let source = h.get_by_label("A card 2").rect().center();
+    let target = pos2(first_card.center().x, first_card.top() + 0.5);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render root leading card preview");
+    let ppp = h.ctx.pixels_per_point();
+    let x = (first_card.left() * ppp).round() as i32;
+    let y = (first_card.center().y * ppp).round() as i32;
+    let has_accent = |px: i32, py: i32| {
+        (px - 2..=px + 2).any(|x| {
+            (py - 2..=py + 2).any(|y| {
+                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height()
+                    && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3]
+            })
+        })
+    };
+    assert!(has_accent(x, y), "root prepend before a card should show its vertical leading edge");
+    assert!(!has_accent(image.width() as i32 - 3, y), "card prepend should not draw a full-width horizontal line; first_card={first_card:?}, ppp={ppp}, image={}x{}", image.width(), image.height());
+}
+
+#[test]
 fn actual_nested_card_drop_between_root_groups_promotes_card_to_root_level() {
     let mut h = harness(nested_group_tree(), vec2(520.0, 900.0));
     let source = h.get_by_label("A card 1").rect().center();

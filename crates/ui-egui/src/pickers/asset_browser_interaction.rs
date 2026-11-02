@@ -199,6 +199,12 @@ pub(crate) fn card_trailing_marker_rect(rect: Rect) -> Rect {
     Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
 }
 
+/// Vertical leading-edge marker for inserting before a card in the grid layout.
+pub(crate) fn card_leading_marker_rect(rect: Rect) -> Rect {
+    let x = rect.left();
+    Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
+}
+
 /// Return the last visible hierarchy node immediately before a lower group in depth-first order.
 /// Its parent is the meeting container, so inserting after it preserves the node's sibling level.
 pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, lower_group: &NodeId) -> Option<(NodeId, usize)> {
@@ -237,7 +243,9 @@ pub(crate) fn root_prepend_hit(rect: Rect, indicator_rect: Rect, first: NodeId, 
         region: PointerRegion::LeadingEdge,
         hit_rect: rect,
         indicator_rect,
-        depth: 0,
+        // This one-pixel boundary overlaps the first node's own leading-edge hit. It is the
+        // root sibling boundary, so it must win arbitration over that card/header body edge.
+        depth: usize::MAX,
         order,
     }
 }
