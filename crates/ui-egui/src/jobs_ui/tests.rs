@@ -980,6 +980,43 @@ fn splash_active_blocks_escape_job_cancellation() {
     let _ = h.state_mut().session.cancel_job(job);
 }
 
+/// Verifies that jobs UI allows cancelling active jobs via Escape when synthetic input is pending even if splash exists.
+#[test]
+fn splash_synthetic_batch_allows_escape_job_cancellation() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    assert!(h.state().session.job(job).is_some());
+
+    // Enable splash screen
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = 1.0;
+    splash.fonts_preloaded = true;
+    h.state_mut().splash = Some(splash);
+
+    // Queue a synthetic batch
+    h.state_mut().synthetic_batch = Some(Vec::new());
+
+    // Press Escape key via Context input
+    let ctx = h.ctx.clone();
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        })
+    });
+
+    // Run tick; jobs_ui SHOULD cancel the job because synthetic_batch is present (splash_active is false)
+    super::tick(h.state_mut(), &ctx);
+    assert!(h.state().session.job(job).is_none(), "job must be cancelled when synthetic batch is present");
+
+    // Clean up
+    gate.store(true, Ordering::Relaxed);
+}
+
 /// Verifies that splash dismisses immediately when failure notices arrive so errors are never hidden.
 #[test]
 fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
