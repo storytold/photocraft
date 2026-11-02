@@ -125,9 +125,38 @@ fn crossings(pts: &[(f64, f64)], at: [f64; 2]) -> usize {
         .count()
 }
 
-/// Knot count per subpath: the structure a component selection's indices address.
-pub(crate) fn knot_signature(path: &photocraft_doc::Path) -> Vec<usize> {
-    path.subpaths.iter().map(|s| s.knots.len()).collect()
+/// The structure a component selection's indices address: per-subpath identity (knot count and
+/// geometry, in order — a reorder or a same-count swap is a structural change) plus the component
+/// partition ([`photocraft_doc::Path::components`] ranges), so a same-count edit that merges
+/// components with `PathOp::Join` clears the selection too. Operation-only edits that leave both
+/// untouched (e.g. `path.setOperation` with subtract) keep it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SelectionSignature {
+    /// Per-subpath identity: knot count and geometry, in order.
+    subpaths: Vec<u64>,
+    /// The component partition as `(start, end)` subpath ranges.
+    components: Vec<(usize, usize)>,
+}
+
+/// The signature of `path` that a component selection binds to.
+pub(crate) fn selection_signature(path: &photocraft_doc::Path) -> SelectionSignature {
+    SelectionSignature {
+        subpaths: path.subpaths.iter().map(subpath_id).collect(),
+        components: path.components().into_iter().map(|c| (c.start, c.end)).collect(),
+    }
+}
+
+/// A subpath's identity: its knot count and the knot geometry (anchors and handles). Deliberately
+/// excludes the operation: `path.setOperation` on a whole component leaves the partition and the
+/// geometry alone, and the selection stays meaningful.
+fn subpath_id(sp: &photocraft_doc::vector::Subpath) -> u64 {
+    let mut h = (sp.knots.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for k in &sp.knots {
+        for v in [k.anchor.x, k.anchor.y, k.in_ctrl.x, k.in_ctrl.y, k.out_ctrl.x, k.out_ctrl.y] {
+            h = (h ^ v.to_bits()).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+    h
 }
 
 /// Path Selection's press at `at`: selects the component there (⇧ adds or removes it). Pressing a
@@ -167,7 +196,7 @@ pub(crate) fn press(app: &mut PhotocraftApp, at: [f64; 2], shift: bool) {
             target: Some(r),
             anchors,
             owner: crate::direct_select::Owner::current(app),
-            signature: Some(knot_signature(&path)),
+            signature: Some(selection_signature(&path)),
             ..Default::default()
         }
     };

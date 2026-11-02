@@ -435,3 +435,42 @@ fn a_pressed_component_marks_itself_on_the_canvas() {
     // …the unselected component's anchor (20, 20) stays a hollow (white) square.
     assert_eq!(&px(xf.to_screen(20.0, 20.0))[..3], &[255, 255, 255], "the unselected component's anchor is hollow");
 }
+
+/// A same-count reorder, or a same-count edit that merges components (op "join"), still clears
+/// the selection: the stored indices would address a different component (review on the
+/// selection-fix PR).
+#[test]
+fn the_selection_dies_on_reorder_or_partition_change_even_at_same_counts() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 120.0);
+    app.ui.tool_options.pen_path_op = "combine".into();
+    square(&mut app, 60.0, 60.0, 40.0);
+    let (id, _) = shape(&app);
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    app.ui.tool = Tool::PathSelection;
+
+    // Reorder: swap the two same-count subpaths (outer 20..140, inner 60..100).
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    app.run(
+        "shape.edit",
+        json!({"layer": id.0, "path": {"subpaths": [
+            {"closed": true, "knots": [k(60.0, 60.0), k(100.0, 60.0), k(100.0, 100.0), k(60.0, 100.0)]},
+            {"closed": true, "knots": [k(20.0, 20.0), k(140.0, 20.0), k(140.0, 140.0), k(20.0, 140.0)]},
+        ]}}),
+    )
+    .unwrap();
+    assert!(super::selected(&app).is_none(), "reordering same-count subpaths clears the selection");
+
+    // Partition change: same counts, but the second subpath becomes a Join of the first.
+    crate::path_components::press(&mut app, [80.0, 80.0], false);
+    assert!(super::selected(&app).is_some());
+    app.run(
+        "shape.edit",
+        json!({"layer": id.0, "path": {"subpaths": [
+            {"closed": true, "knots": [k(20.0, 20.0), k(140.0, 20.0), k(140.0, 140.0), k(20.0, 140.0)]},
+            {"closed": true, "op": "join", "knots": [k(60.0, 60.0), k(100.0, 60.0), k(100.0, 100.0), k(60.0, 100.0)]},
+        ]}}),
+    )
+    .unwrap();
+    assert!(super::selected(&app).is_none(), "a same-count partition change (join) clears the selection");
+}

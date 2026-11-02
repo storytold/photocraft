@@ -85,12 +85,12 @@ pub struct DirectSelection {
     pub(crate) owner: Option<Owner>,
     #[serde(skip)]
     pub(crate) cancelled_drag: bool,
-    /// Path Selection only: knot count per subpath of the target path when the selection was
-    /// made — a structural identity that survives history revisions (a click activates the
-    /// layer, colours change, components move), so the component selection lives until the
-    /// path's structure changes (#10854).
+    /// Path Selection only: the target path's [`crate::path_components::SelectionSignature`] when
+    /// the selection was made — a structural identity that survives history revisions (a click
+    /// activates the layer, colours change, components move), so the component selection lives
+    /// until the path's structure changes (#10854).
     #[serde(skip)]
-    pub(crate) signature: Option<Vec<usize>>,
+    pub(crate) signature: Option<crate::path_components::SelectionSignature>,
 }
 
 /// Runtime selection ownership is never restored from settings onto another document.
@@ -181,7 +181,7 @@ fn component_selection_matches(app: &PhotocraftApp, ds: &DirectSelection) -> boo
         PathRef::Saved(i) => st.doc.paths.get(*i).map(|p| p.path.clone()),
         PathRef::TypePath(_) | PathRef::Pen => None,
     };
-    path.is_some_and(|p| crate::path_components::knot_signature(&p) == *sig)
+    path.is_some_and(|p| crate::path_components::selection_signature(&p) == *sig)
 }
 
 /// Clear stale anchors and gestures, keeping the pointer until the old release arrives. True
