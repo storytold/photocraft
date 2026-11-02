@@ -796,12 +796,16 @@ impl CjkFallback {
     /// covers `c`. A family miss skips the file rather than using whichever face happens to cover
     /// the character.
     fn load_first(&mut self, files: &[FontFile], c: char) -> Option<(String, FontData)> {
+        let pending = (self.sources.pending)();
         for f in files {
             if self.loaded.contains(&f.path) || self.failed_paths.contains(&f.path) {
                 continue;
             }
             let Some(bytes) = read_font(&f.path) else {
-                self.failed_paths.insert(f.path.clone());
+                if !pending {
+                    self.failed_paths.insert(f.path.clone());
+                }
+
                 continue;
             };
             // Register only what the text engine can actually parse. A readable collection may

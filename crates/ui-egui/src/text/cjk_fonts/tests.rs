@@ -1987,10 +1987,7 @@ fn empty_glyph_candidate_is_skipped_in_favor_of_usable_face() {
 
     // 1. Eager provider system_insert_files
     let provider = test_provider(|| Some("en".into()));
-    let candidates = vec![
-        FontFile { path: empty_path.clone(), family: String::new() },
-        FontFile { path: usable_path.clone(), family: String::new() },
-    ];
+    let candidates = vec![FontFile { path: empty_path.clone(), family: String::new() }, FontFile { path: usable_path.clone(), family: String::new() }];
     let insert = provider.system_insert_files(candidates.clone(), 'ก').expect("the usable alternative is reached");
     assert_eq!(insert.data.bytes(), usable_bytes.as_slice(), "system_insert_files skips empty glyph candidate");
 
@@ -2023,10 +2020,7 @@ fn ideographic_space_requires_character_map_coverage() {
 
     // 1. Eager provider system_insert_files
     let provider = test_provider(|| Some("en".into()));
-    let candidates = vec![
-        FontFile { path: non_covering_path.clone(), family: String::new() },
-        FontFile { path: covering_path.clone(), family: String::new() },
-    ];
+    let candidates = vec![FontFile { path: non_covering_path.clone(), family: String::new() }, FontFile { path: covering_path.clone(), family: String::new() }];
     let insert = provider.system_insert_files(candidates.clone(), ideographic_space).expect("covering face is reached");
     assert_eq!(insert.data.bytes(), covering_bytes.as_slice());
 
