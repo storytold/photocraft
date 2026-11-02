@@ -73,6 +73,128 @@ fn point_and_paragraph_conversion_keep_the_text_in_place() {
     }
 }
 
+/// #9945: trailing spaces must reserve room in the new box for subsequent typing.
+#[test]
+fn point_to_paragraph_keeps_trailing_space_extent() {
+    for depth in [8, 16, 32] {
+        for align in ["left", "center", "right"] {
+            for spaces in [0, 1, 4] {
+                let mut s = session(depth);
+                let original = format!("H{}", " ".repeat(spaces));
+                let r = s.execute("type.create", json!({"x": 150, "y": 70, "text": original, "font": "Inter", "size": 48, "align": align})).unwrap();
+                let id = LayerId(r["layer"].as_u64().unwrap());
+                let point = text(&s, id).clone();
+                let before = ink(&s, id);
+                s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
+                let paragraph = text(&s, id).clone();
+                assert_eq!(paragraph.text, original);
+                assert_eq!(ink(&s, id), before, "conversion moved the text: {depth}/{align}/{spaces}");
+                assert!(s.undo());
+                assert_eq!(text(&s, id), &point);
+                assert!(s.redo());
+                assert_eq!(text(&s, id), &paragraph);
+
+                let edited = format!("{original}I");
+                s.execute("type.edit", json!({"layer": id.0, "text": edited})).unwrap();
+                let st = s.active().unwrap();
+                let l = layout(&st.doc, text(&s, id));
+                assert_eq!(l.lines.len(), 1, "unexpected wrap: {depth}/{align}/{spaces}");
+                assert_eq!(l.lines[0].range.end, edited.len(), "appended I is hidden: {depth}/{align}/{spaces}");
+                assert_eq!(text(&s, id).text, edited);
+                // Point text has no frame to clip the I: compare actual pixels with that control.
+                let mut visible = point.clone();
+                replace_text(&mut visible, original.len(), original.len(), "I");
+                refresh_at(st.doc.resolution_dpi, st.doc.pixel_format(), &mut visible);
+                let visible = visible.cache.as_ref().unwrap();
+                let edited_layer = text(&s, id).clone();
+                let edited_ink = ink(&s, id);
+                let region = visible.content_bounds().union(&edited_ink);
+                assert!(
+                    edited_layer.cache.as_ref().unwrap().read_region(region) == visible.read_region(region),
+                    "rendering differs from the visible-I point-text control: {depth}/{align}/{spaces}"
+                );
+                assert!(s.undo());
+                assert_eq!(text(&s, id), &paragraph);
+                assert_eq!(ink(&s, id), before);
+                assert!(s.redo());
+                assert_eq!(text(&s, id), &edited_layer);
+                assert_eq!(ink(&s, id), edited_ink);
+            }
+        }
+    }
+}
+
+#[test]
+fn point_to_paragraph_reserves_spaces_on_each_line() {
+    for align in ["left", "center", "right"] {
+        let mut s = session(8);
+        let r = s.execute("type.create", json!({"x": 150, "y": 50, "text": "H    \nHH", "font": "Inter", "size": 48, "align": align})).unwrap();
+        let id = LayerId(r["layer"].as_u64().unwrap());
+        let point = text(&s, id).clone();
+        let before = ink(&s, id);
+        s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
+        assert_eq!(ink(&s, id), before, "conversion moved multiline text: {align}");
+        s.execute("type.edit", json!({"layer": id.0, "text": "H    I\nHH"})).unwrap();
+        let st = s.active().unwrap();
+        let l = layout(&st.doc, text(&s, id));
+        assert_eq!(l.lines.len(), 2, "unexpected wrap: {align}");
+        assert_eq!(l.lines[0].range, 0..6, "appended I moved off the first line: {align}");
+        assert_eq!(l.lines[1].range, 7..9, "second line was clipped: {align}");
+        let mut visible = point;
+        replace_text(&mut visible, "H    ".len(), "H    ".len(), "I");
+        refresh_at(st.doc.resolution_dpi, st.doc.pixel_format(), &mut visible);
+        let visible = visible.cache.as_ref().unwrap();
+        let edited_layer = text(&s, id).clone();
+        let region = visible.content_bounds().union(&ink(&s, id));
+        assert!(
+            edited_layer.cache.as_ref().unwrap().read_region(region) == visible.read_region(region),
+            "rendering differs from the visible-I point-text control: {align}"
+        );
+    }
+}
+
+/// Mixed paragraph alignments share a point anchor, not the first paragraph's box edge.
+#[test]
+fn point_to_paragraph_preserves_mixed_alignment_positions() {
+    for depth in [8, 16, 32] {
+        for first in [TextAlign::Center, TextAlign::Right] {
+            let mut s = session(depth);
+            let r = s.execute("type.create", json!({"x": 150, "y": 50, "text": "H    \nHH    ", "font": "Inter", "size": 30})).unwrap();
+            let id = LayerId(r["layer"].as_u64().unwrap());
+            with_text(&mut s, &json!({"layer": id.0}), "Mixed alignment", |t, _| {
+                t.paragraphs = vec![
+                    photocraft_doc::text::ParagraphRun { len: 6, style: photocraft_doc::text::ParagraphStyle { align: first, ..Default::default() } },
+                    photocraft_doc::text::ParagraphRun { len: 6, style: Default::default() },
+                ];
+                Ok(())
+            })
+            .unwrap();
+            let point = text(&s, id).clone();
+            s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
+            let paragraph = text(&s, id).clone();
+            let before = point.cache.as_ref().unwrap();
+            let after = paragraph.cache.as_ref().unwrap();
+            let region = before.content_bounds().union(&after.content_bounds());
+            assert!(before.read_region(region) == after.read_region(region), "conversion moved mixed paragraphs: {depth}/{first:?}");
+            assert!(s.undo());
+            assert_eq!(text(&s, id), &point);
+            assert!(s.redo());
+            assert_eq!(text(&s, id), &paragraph);
+            s.execute("type.edit", json!({"layer": id.0, "text": "H    \nHH    I"})).unwrap();
+            let mut control = point;
+            let end = control.text.len();
+            replace_text(&mut control, end, end, "I");
+            let st = s.active().unwrap();
+            refresh_at(st.doc.resolution_dpi, st.doc.pixel_format(), &mut control);
+            let expected = control.cache.as_ref().unwrap();
+            let actual = text(&s, id).cache.as_ref().unwrap();
+            let region = expected.content_bounds().union(&actual.content_bounds());
+            assert!(actual.read_region(region) == expected.read_region(region), "appended glyph differs: {depth}/{first:?}");
+            assert_eq!(layout(&st.doc, text(&s, id)).lines.len(), 2);
+        }
+    }
+}
+
 /// Issue #446: vertical type renders vertically (see the test below), so the command's description
 /// must not claim it stays horizontal.
 #[test]
