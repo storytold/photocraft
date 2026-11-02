@@ -1,4 +1,4 @@
-use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
+use super::defaults::{apply, default_color, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
 use super::editing::{cancel, commit_with};
 use super::fonts::{font_picker, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
@@ -115,7 +115,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.spacing_mut().item_spacing.x = 8.0;
     crate::widgets::vline(ui, 22.0);
-    // Text colour swatch with a picker popup.
+    // Text colour swatch with a picker popup: the target's colour, else new type's.
     let c = shown
         .as_ref()
         .map(|s| s.3)
@@ -123,7 +123,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = c.to_rgb();
             [v[0], v[1], v[2], 1.0]
         })
-        .unwrap_or(app.session.tools.foreground);
+        .unwrap_or_else(|| crate::color_picker_ui::parse_hex(&default_color(app)).map_or(app.session.tools.foreground, |v| [v[0], v[1], v[2], 1.0]));
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 18.0), egui::Sense::click());
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));

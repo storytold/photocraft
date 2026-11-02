@@ -41,21 +41,26 @@ fn opentype_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photocraft_doc::
 
 /// Runs an OpenType toggle command on the Character panel's scope: the edited layer's selected
 /// characters (or its whole text) while typing, else every selected type layer. The new state
-/// is explicit, so it follows the button the user saw rather than the layer's first run.
+/// is explicit, so it follows the button the user saw rather than the layer's first run. The
+/// new state is also the next layer's (#9938).
 pub(crate) fn toggle_opentype(app: &mut PhotocraftApp, id: &str, shown_on: bool) {
+    let props = OPENTYPE_BUTTONS.iter().find(|(_, command, _)| *command == id).map(|(tag, _, _)| match *tag {
+        "liga" => json!({"ligatures": !shown_on}),
+        "dlig" => json!({"discretionaryLigatures": !shown_on}),
+        _ => json!({"features": { (*tag): !shown_on }}),
+    });
     let Some(mut p) = formatting_params(app) else {
-        if let Some((tag, _, _)) = OPENTYPE_BUTTONS.iter().find(|(_, command, _)| *command == id) {
-            let props = match *tag {
-                "liga" => json!({"ligatures": !shown_on}),
-                "dlig" => json!({"discretionaryLigatures": !shown_on}),
-                _ => json!({"features": { (*tag): !shown_on }}),
-            };
+        if let Some(props) = props {
             apply_defaults(app, &props);
         }
         return;
     };
     p["on"] = json!(!shown_on);
-    let _ = app.run(id, p);
+    if app.run(id, p).is_ok()
+        && let Some(props) = props
+    {
+        apply_defaults(app, &props);
+    }
 }
 
 /// Small glyph labels for the OpenType buttons (drawn here, no Adobe artwork): fi, st, ct with

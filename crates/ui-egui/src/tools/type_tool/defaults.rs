@@ -78,7 +78,8 @@ fn drag_key(ctx: &egui::Context) -> Option<String> {
 
 /// The styles a new Type-tool layer will receive. Use the same command parameters for the
 /// panels and creation so defaults also survive action recording/replay. The older options-bar
-/// fields remain authoritative, and text colour continues to follow the foreground colour.
+/// fields remain authoritative, and text colour follows the foreground colour unless a text
+/// colour was picked since it last changed ([`default_color`]).
 pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     let o = &app.ui.tool_options;
     let mut p = json!({});
@@ -107,8 +108,25 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     p["size"] = json!(o.type_size);
     p["align"] = json!(o.type_align);
     p["direction"] = json!(o.type_direction);
-    p["color"] = json!(hex(app.session.tools.foreground));
+    p["color"] = json!(default_color(app));
     p
+}
+
+/// New type's colour, `#rrggbb`: the text colour last picked in the Type tool's Color Picker
+/// while the foreground colour is still the one it was picked over, else the foreground colour.
+pub(super) fn default_color(app: &PhotocraftApp) -> String {
+    let foreground = hex(app.session.tools.foreground);
+    match &app.ui.tool_options.type_color {
+        // A hand-edited setting that is not a colour falls back to the foreground.
+        Some((color, over)) if *over == foreground && crate::color_picker_ui::parse_hex(color).is_some() => color.clone(),
+        _ => foreground,
+    }
+}
+
+/// OK in the Type tool's Color Picker (`color_picker_ui::TEXT_COLOR`): the colour is also the
+/// next layer's, as in Photoshop (#9938), until the foreground colour changes.
+pub fn text_color_chosen(app: &mut PhotocraftApp, color: &str) {
+    app.ui.tool_options.type_color = Some((color.to_owned(), hex(app.session.tools.foreground)));
 }
 
 /// Style numbers become f32 in the engine. JSON itself permits finite f64 values too large
@@ -202,10 +220,25 @@ pub(super) fn apply_defaults(app: &mut PhotocraftApp, props: &serde_json::Value)
     }
 }
 
-/// Apply only the supplied properties to the text-edit scope or selected type layers; without
-/// a type target, prepare the defaults for the next layer instead.
+/// A character setting the user gave a type target also becomes the next layer's, as in
+/// Photoshop (#9938). Paragraph settings stay with their paragraphs (TYPE-218-2); the options
+/// bar sets alignment and direction for new type itself.
+fn remember_character_defaults(app: &mut PhotocraftApp, props: &serde_json::Value) {
+    let Some(props) = props.as_object() else { return };
+    let chars: serde_json::Map<String, serde_json::Value> = props
+        .iter()
+        .filter(|(key, value)| !photocraft_engine::type_cmds::apply_para_props(&mut photocraft_doc::text::ParagraphStyle::default(), &json!({ (*key): value })))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    apply_defaults(app, &serde_json::Value::Object(chars));
+}
+
+/// Apply only the supplied properties to the text-edit scope or selected type layers, and keep
+/// their character settings for the next layer; without a type target, only the latter.
 pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_json::Value) {
+    // A font chosen at a caret is for the letters typed next there, and for new type.
     if insertion_style::set_font(app, &props) {
+        remember_character_defaults(app, &props);
         return;
     }
     app.ui.type_insertion_style = None;
@@ -221,17 +254,27 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, props: serde_j
     if let Some(key) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()).or_else(|| drag_key(ctx)) {
         p["coalesce"] = json!(key);
     }
-    let _ = app.run("type.setStyle", p);
+    if app.run("type.setStyle", p).is_ok() {
+        remember_character_defaults(app, &props);
+    }
 }
 
 /// Open the shared Color Picker with a snapshot of the text target. Sampling or cancelling
-/// the dialog never changes the text selection, tool colours, or document history.
+/// the dialog never changes the text selection, tool colours, or document history. OK also
+/// makes the colour new type's ([`text_color_chosen`]).
 pub fn open_color_picker(app: &mut PhotocraftApp, rgb: [f32; 3]) -> u64 {
-    if let Some(params) = formatting_params(app) {
+    let id = if let Some(params) = formatting_params(app) {
         crate::color_picker_ui::open_for_command(app, "Color Picker (Text Color)", rgb, "type.setStyle", params)
-    } else {
+    } else if default_color(app) == hex(app.session.tools.foreground) {
         crate::color_picker_ui::open(app, "foreground")
+    } else {
+        // Starting from the colour new type will get, as the swatch shows it.
+        crate::color_picker_ui::open_for_target(app, "foreground", "Color Picker (Foreground Color)", rgb)
+    };
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields.insert(crate::color_picker_ui::TEXT_COLOR.into(), json!(true));
     }
+    id
 }
 
 /// While characters are selected in a type layer, a new foreground colour (Color and Swatches

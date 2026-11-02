@@ -47,6 +47,11 @@ pub struct ToolOptions {
     /// OpenType features and variable-font axes are merged per tag/axis.
     #[serde(default)]
     pub type_style_defaults: serde_json::Map<String, serde_json::Value>,
+    /// Type tool: the text colour last picked in its Color Picker and the foreground colour then,
+    /// both `#rrggbb` (#9938). New type takes it until the foreground colour changes, and the
+    /// foreground colour otherwise.
+    #[serde(default)]
+    pub type_color: Option<(String, String)>,
     /// Type tool: paragraph direction of new type, "auto" (from the first strong character),
     /// "ltr" or "rtl" (TYPE-218-2).
     pub type_direction: String,
@@ -394,6 +399,7 @@ impl Default for ToolOptions {
             type_aa: "sharp".into(),
             type_align: "left".into(),
             type_style_defaults: serde_json::Map::new(),
+            type_color: None,
             type_direction: "auto".into(),
             clone_aligned: true,
             pattern_stamp_aligned: true,

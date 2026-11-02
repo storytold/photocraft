@@ -35,7 +35,7 @@ mod pointer;
 use defaults::apply;
 #[cfg(test)]
 use defaults::{default_style_params, default_styles, shown_scale};
-pub use defaults::{foreground_changed, open_color_picker};
+pub use defaults::{foreground_changed, open_color_picker, text_color_chosen};
 pub(crate) use defaults::{formatting_params, target, target_text, type_unit};
 use editing::selected_styles;
 #[cfg(test)]
@@ -134,7 +134,11 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
 mod canvas_tests;
 
 #[cfg(test)]
+mod defaults_tests;
+
+#[cfg(test)]
 mod font_commit_tests;
+
 #[cfg(test)]
 mod font_picker_tests;
 
