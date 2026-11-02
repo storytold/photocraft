@@ -163,8 +163,10 @@ pub fn render_png_with_renderer(doc: &Document, max_side: u32, mut renderer: Opt
                 &photocraft_raster::Interrupt::NONE,
                 Some(r),
             );
-            if let Ok(res) = res {
-                return Ok(res.bytes);
+            match res {
+                Ok(res) => return Ok(res.bytes),
+                Err(photocraft_io::IoError::Cancelled) => return Err(AutomationError::Other("rendering was cancelled".into())),
+                Err(_) => {}
             }
         }
     }

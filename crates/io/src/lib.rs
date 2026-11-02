@@ -155,6 +155,7 @@ impl From<RenderError> for IoError {
     fn from(e: RenderError) -> Self {
         match e {
             RenderError::Cancelled => IoError::Cancelled,
+            RenderError::Sink(io) => *io,
             other => IoError::Render(other),
         }
     }

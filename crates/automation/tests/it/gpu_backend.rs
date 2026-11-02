@@ -3,16 +3,15 @@
 #[cfg(feature = "gpu")]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
 
-    use photocraft_codecs::{ChannelLayout, Format, Image, decode};
-    use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
-    use photocraft_doc::{Document, Effect, Layer, LayerContent};
+    use photocraft_codecs::decode;
+    use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, LayerContent};
     use photocraft_geom::{Rect, Size};
     use photocraft_raster::Surface;
 
     use photocraft_automation::workspace::AuthorizedWorkspace;
-    use photocraft_automation::{AutomationError, Headless};
+    use photocraft_automation::{GpuRenderer, Headless};
 
     fn make_test_doc(w: u32, h: u32, depth: SampleType) -> Document {
         let mut doc = Document::with_background("test_doc", Size::new(w, h), ColorMode::Rgb, depth, Color::WHITE);
@@ -97,6 +96,11 @@ mod tests {
 
     #[test]
     fn cpu_gpu_parity_over_synthetic_documents() {
+        if GpuRenderer::new().is_err() {
+            eprintln!("skipping cpu_gpu_parity test: no GPU adapter available");
+            return;
+        }
+
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let doc = make_test_doc(96, 96, depth);
 

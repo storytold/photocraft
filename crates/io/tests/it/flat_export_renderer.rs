@@ -52,8 +52,39 @@ impl BandRenderer for FailingRenderer {
         .map_err(|e| match e {
             IoError::Render(r) => r,
             IoError::Cancelled => RenderError::Cancelled,
-            other => RenderError::Execution(other.to_string()),
+            other => RenderError::sink(other),
         })
+    }
+}
+
+struct GeometryViolatingRenderer {
+    violation: &'static str,
+}
+
+impl BandRenderer for GeometryViolatingRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        _band_rows: i32,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        let (w, h) = (rect.width(), rect.height());
+        match self.violation {
+            "wrong_pixels" => {
+                sink(RenderBand { rect: Rect::new(0, 0, w as i32, h as i32), pixels: vec![[0.0; 4]; (w as usize * h as usize).saturating_sub(10)] })
+                    .map_err(RenderError::sink)
+            }
+            "out_of_order" => {
+                // Yield band starting at y=10 instead of 0
+                sink(RenderBand { rect: Rect::new(0, 10, w as i32, 20), pixels: vec![[0.0; 4]; (w as usize * 10)] }).map_err(RenderError::sink)
+            }
+            "wrong_width" => {
+                sink(RenderBand { rect: Rect::new(0, 0, (w as i32).saturating_sub(5), 10), pixels: vec![[0.0; 4]; ((w as usize).saturating_sub(5) * 10)] })
+                    .map_err(RenderError::sink)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -112,6 +143,49 @@ fn cancellation_is_not_retried() {
     let res = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut failing));
 
     assert!(matches!(res, Err(IoError::Cancelled)), "cancelled render must not restart on CPU");
+}
+
+#[test]
+fn encoder_and_sink_failures_are_not_retried_on_cpu() {
+    struct SinkFailingRenderer;
+    impl BandRenderer for SinkFailingRenderer {
+        fn render_bands(
+            &mut self,
+            _doc: &Document,
+            rect: Rect,
+            _band_rows: i32,
+            sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+        ) -> Result<(), RenderError> {
+            let res = sink(RenderBand { rect, pixels: vec![[1.0; 4]; rect.width() as usize * rect.height() as usize] });
+            match res {
+                Ok(()) => Ok(()),
+                Err(e) => Err(RenderError::sink(e)),
+            }
+        }
+    }
+
+    let doc = synthetic_doc();
+    let opts = ExportOptions::default();
+    // Simulate interrupt cancellation during encode
+    let mut renderer = SinkFailingRenderer;
+    let cancelled_interrupt = Interrupt::cancel_only(&|| true);
+    let res = export_flat_with_renderer(&doc, Format::Png, &opts, &cancelled_interrupt, Some(&mut renderer));
+    assert!(matches!(res, Err(IoError::Cancelled)), "sink cancellation must not trigger CPU retry");
+}
+
+#[test]
+fn band_geometry_violations_are_rejected() {
+    let doc = synthetic_doc();
+    let opts = ExportOptions::default();
+
+    for violation in ["wrong_pixels", "out_of_order", "wrong_width"] {
+        let mut renderer = GeometryViolatingRenderer { violation };
+        let res = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer));
+        assert!(
+            matches!(res, Err(IoError::Render(RenderError::Execution(_)))),
+            "violation '{violation}' must be rejected before codec consumes corrupt data: {res:?}"
+        );
+    }
 }
 
 #[test]

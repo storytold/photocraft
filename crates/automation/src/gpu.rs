@@ -47,10 +47,10 @@ impl GpuRenderer {
 
     /// Set maximum in-flight staging bytes for bounded readback.
     pub fn set_max_staging_bytes(&mut self, bytes: usize) {
-        self.max_staging_bytes = bytes.max(256 * 1024);
+        self.max_staging_bytes = bytes;
     }
 
-    fn ensure_init(&mut self) -> Result<(&Arc<NativeContext>, &mut Compositor), RenderError> {
+    fn ensure_init(&mut self) -> Result<(), RenderError> {
         if let Some(err) = &self.init_error {
             return Err(RenderError::Unavailable(err.clone()));
         }
@@ -75,10 +75,7 @@ impl GpuRenderer {
                 }
             }
         }
-
-        let ctx = self.context.as_ref().ok_or_else(|| RenderError::Unavailable("GPU context missing".into()))?;
-        let comp = self.compositor.as_mut().ok_or_else(|| RenderError::Unavailable("GPU compositor missing".into()))?;
-        Ok((ctx, comp))
+        Ok(())
     }
 
     /// The underlying GPU context if initialized.
@@ -123,13 +120,15 @@ impl GpuRenderer {
 impl BandRenderer for GpuRenderer {
     fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
         let max_staging = self.max_staging_bytes;
-        let (ctx, comp) = self.ensure_init()?;
+        self.ensure_init()?;
 
+        let ctx = self.context.clone().ok_or_else(|| RenderError::Unavailable("GPU context missing".into()))?;
         if !ctx.is_healthy() {
             let fault = ctx.health().fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string());
             return Err(RenderError::Device(fault));
         }
 
+        let comp = self.compositor.as_mut().ok_or_else(|| RenderError::Unavailable("GPU compositor missing".into()))?;
         if let Err(unsupported) = comp.supports(doc) {
             return Err(RenderError::Unsupported(unsupported.0));
         }
@@ -152,6 +151,7 @@ impl BandRenderer for GpuRenderer {
                 readback::ReadbackError::MappingFailed(s) => RenderError::Device(s),
                 readback::ReadbackError::Cancelled => RenderError::Cancelled,
                 readback::ReadbackError::Execution(s) => RenderError::Execution(s),
+                readback::ReadbackError::Sink(io) => RenderError::sink(io),
             })
     }
 }

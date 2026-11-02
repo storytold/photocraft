@@ -1,12 +1,11 @@
 use std::fmt;
-use std::time::Duration;
 
 use super::textures::Stats;
 use super::{Compositor, Document, Rect, Unsupported};
 
 /// Errors encountered during GPU readback.
 #[derive(Debug, thiserror::Error)]
-pub enum ReadbackError {
+pub enum ReadbackError<E = String> {
     #[error("unsupported document or feature: {0}")]
     Unsupported(String),
     #[error("GPU device was lost: {0}")]
@@ -19,9 +18,11 @@ pub enum ReadbackError {
     Cancelled,
     #[error("readback failed: {0}")]
     Execution(String),
+    #[error("sink error: {0}")]
+    Sink(E),
 }
 
-impl From<Unsupported> for ReadbackError {
+impl<E> From<Unsupported> for ReadbackError<E> {
     fn from(e: Unsupported) -> Self {
         ReadbackError::Unsupported(e.0)
     }
@@ -46,25 +47,56 @@ pub fn render_to_vec_stats(
     rect: Rect,
 ) -> Result<(Vec<[f32; 4]>, Stats), Unsupported> {
     let rect = rect.intersect(&doc.bounds());
-    let mut out = vec![[0.0f32; 4]; rect.width() as usize * rect.height() as usize];
-    let w = rect.width() as usize;
-
-    render_bands(comp, device, queue, doc, rect, 0, DEFAULT_MAX_STAGING_BYTES, |band_rect, band_pixels| {
-        let bw = band_rect.width() as usize;
-        for by in 0..band_rect.height() as usize {
-            let dst_y = (band_rect.y0 - rect.y0) as usize + by;
-            let dst_row = dst_y * w + (band_rect.x0 - rect.x0) as usize;
-            let src_row = by * bw;
-            out[dst_row..dst_row + bw].copy_from_slice(&band_pixels[src_row..src_row + bw]);
-        }
-        Ok::<(), std::convert::Infallible>(())
-    })
-    .map_err(|e| match e {
-        ReadbackError::Unsupported(s) => Unsupported(s),
-        other => Unsupported(other.to_string()),
+    let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
+    let mut bpp = 16u32;
+    let stats = comp.render(device, queue, doc, rect, |enc, out| {
+        // Bytes per pixel of the accumulation format (Rgba32Float = 16, Rgba16Float = 8).
+        bpp = if out.texture.format() == wgpu::TextureFormat::Rgba32Float { 16 } else { 8 };
+        let row = (out.rect.width() * bpp).div_ceil(256) * 256;
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pc_readback"),
+            size: (row * out.rect.height()) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: out.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(out.rect.height()) },
+            },
+            wgpu::Extent3d { width: out.rect.width(), height: out.rect.height(), depth_or_array_layers: 1 },
+        );
+        staging.push((out.rect, buf, row));
     })?;
-
-    Ok((out, Stats::default()))
+    for (_, b, _) in &staging {
+        b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    }
+    match comp.health() {
+        Some(h) if !h.wait(device, None) => return Err(Unsupported(h.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string()))),
+        Some(_) => {}
+        None => {
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        }
+    }
+    let w = rect.width() as usize;
+    let mut out = vec![[0.0f32; 4]; w * rect.height() as usize];
+    for (r, b, row) in &staging {
+        let data = b.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
+        for y in 0..r.height() as usize {
+            for x in 0..r.width() as usize {
+                let o = y * *row as usize + x * bpp as usize;
+                let px: [f32; 4] = if bpp == 16 {
+                    std::array::from_fn(|i| f32::from_le_bytes([data[o + i * 4], data[o + i * 4 + 1], data[o + i * 4 + 2], data[o + i * 4 + 3]]))
+                } else {
+                    std::array::from_fn(|i| half::f16::from_le_bytes([data[o + i * 2], data[o + i * 2 + 1]]).to_f32())
+                };
+                let (dx, dy) = ((r.x0 - rect.x0) as usize + x, (r.y0 - rect.y0) as usize + y);
+                out[dy * w + dx] = px;
+            }
+        }
+    }
+    Ok((out, stats))
 }
 
 /// Readback of a composite in bounded horizontal bands.
@@ -82,7 +114,7 @@ pub fn render_bands<E>(
     band_rows: i32,
     max_staging_bytes: usize,
     mut sink: impl FnMut(Rect, Vec<[f32; 4]>) -> Result<(), E>,
-) -> Result<(), ReadbackError>
+) -> Result<(), ReadbackError<E>>
 where
     E: fmt::Display,
 {
@@ -91,12 +123,40 @@ where
         return Ok(());
     }
 
-    let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u32 } else { 8u32 };
-    let row_bytes = (rect.width() * bpp).div_ceil(256) * 256;
-    let max_staging = max_staging_bytes.max(256 * 1024);
+    let max_dim = comp.limits().max_texture_dimension_2d;
+    if rect.width() > max_dim || rect.height() > max_dim {
+        return Err(ReadbackError::Unsupported(format!("requested bounds ({} x {}) exceed max 2D texture dimension {}", rect.width(), rect.height(), max_dim)));
+    }
 
-    let want_rows = if band_rows > 0 { band_rows as u32 } else { (max_staging / row_bytes.max(1) as usize).max(1) as u32 };
-    let step_rows = want_rows.min((max_staging / row_bytes.max(1) as usize).max(1) as u32).min(rect.height());
+    let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
+    let max_staging = if max_staging_bytes == 0 { DEFAULT_MAX_STAGING_BYTES } else { max_staging_bytes };
+    if max_staging < 256 {
+        return Err(ReadbackError::AllocationFailed(format!("staging budget {max_staging} bytes is smaller than device minimum row alignment (256 bytes)")));
+    }
+
+    // Account for actual aligned chunks staging across the horizontal span.
+    let chunk_size = comp.chunk() as i32;
+    let mut row_staging_bytes: u64 = 0;
+    let mut x = rect.x0.div_euclid(chunk_size) * chunk_size;
+    while x < rect.x1 {
+        let x_end = (x + chunk_size).min(rect.x1);
+        let chunk_w = (x_end - x.max(rect.x0)) as u64;
+        let chunk_row = (chunk_w.checked_mul(bpp).ok_or_else(|| ReadbackError::AllocationFailed("dimension overflow".into()))?)
+            .checked_add(255)
+            .ok_or_else(|| ReadbackError::AllocationFailed("dimension overflow".into()))?
+            / 256
+            * 256;
+        row_staging_bytes = row_staging_bytes.checked_add(chunk_row).ok_or_else(|| ReadbackError::AllocationFailed("staging bytes overflow".into()))?;
+        x += chunk_size;
+    }
+
+    if row_staging_bytes > max_staging as u64 {
+        return Err(ReadbackError::Unsupported(format!("staging budget {max_staging} bytes cannot fit a full output row ({row_staging_bytes} bytes)")));
+    }
+
+    let max_rows = (max_staging as u64 / row_staging_bytes.max(1)) as u32;
+    let want_rows = if band_rows > 0 { (band_rows as u32).min(max_rows) } else { max_rows };
+    let step_rows = want_rows.min(rect.height()).max(1);
 
     let mut y = rect.y0;
     while y < rect.y1 {
@@ -108,10 +168,41 @@ where
         }
 
         let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
+        let mut accumulated_staging: u64 = 0;
+        let mut alloc_err: Option<ReadbackError<E>> = None;
+
         comp.render(device, queue, doc, band_rect, |_enc, out| {
-            let chunk_bpp = if out.texture.format() == wgpu::TextureFormat::Rgba32Float { 16u32 } else { 8u32 };
-            let chunk_row = (out.rect.width() * chunk_bpp).div_ceil(256) * 256;
-            let size = (chunk_row * out.rect.height()) as u64;
+            if alloc_err.is_some() {
+                return;
+            }
+            let chunk_bpp = if out.texture.format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
+            let chunk_w = out.rect.width() as u64;
+            let chunk_h = out.rect.height() as u64;
+            let chunk_row = match (chunk_w.checked_mul(chunk_bpp)).and_then(|v| v.checked_add(255)) {
+                Some(v) => (v / 256 * 256) as u32,
+                None => {
+                    alloc_err = Some(ReadbackError::AllocationFailed("row byte calculation overflow".into()));
+                    return;
+                }
+            };
+            let size = match (chunk_row as u64).checked_mul(chunk_h) {
+                Some(s) => s,
+                None => {
+                    alloc_err = Some(ReadbackError::AllocationFailed("staging buffer size overflow".into()));
+                    return;
+                }
+            };
+
+            accumulated_staging = match accumulated_staging.checked_add(size) {
+                Some(acc) if acc <= max_staging as u64 => acc,
+                _ => {
+                    alloc_err = Some(ReadbackError::AllocationFailed(format!(
+                        "accumulated staging bytes ({accumulated_staging} + {size}) exceeds strict cap {max_staging}"
+                    )));
+                    return;
+                }
+            };
+
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("pc_bounded_readback"),
                 size,
@@ -129,17 +220,21 @@ where
             staging.push((out.rect, buf, chunk_row));
         })?;
 
+        if let Some(err) = alloc_err {
+            return Err(err);
+        }
+
         for (_, b, _) in &staging {
             b.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         }
 
         match comp.health() {
-            Some(h) if !h.wait(device, Some(Duration::from_secs(30))) => {
+            Some(h) if !h.wait(device, None) => {
                 return Err(ReadbackError::DeviceLost(h.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
             }
             Some(_) => {}
             None => {
-                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(Duration::from_secs(30)) });
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
         }
 
@@ -149,24 +244,61 @@ where
 
         let band_w = band_rect.width() as usize;
         let band_h = band_rect.height() as usize;
-        let mut band_pixels = vec![[0.0f32; 4]; band_w * band_h];
+        let total_px = band_w.checked_mul(band_h).ok_or_else(|| ReadbackError::AllocationFailed("band pixel count overflow".into()))?;
+        let mut band_pixels: Vec<[f32; 4]> = Vec::new();
+        band_pixels.try_reserve_exact(total_px).map_err(|e| ReadbackError::AllocationFailed(format!("failed to allocate band pixels: {e}")))?;
+        band_pixels.resize(total_px, [0.0f32; 4]);
 
         for (r, b, chunk_row) in &staging {
             let data = b.slice(..).get_mapped_range().map_err(|e| ReadbackError::MappingFailed(format!("GPU readback map failed: {e:?}")))?;
             let chunk_bpp = bpp as usize;
             for cy in 0..r.height() as usize {
                 for cx in 0..r.width() as usize {
-                    let offset = cy * *chunk_row as usize + cx * chunk_bpp;
+                    let offset = cy
+                        .checked_mul(*chunk_row as usize)
+                        .and_then(|o| o.checked_add(cx.checked_mul(chunk_bpp)?))
+                        .ok_or_else(|| ReadbackError::Execution("offset overflow".into()))?;
+                    let slice = data.get(offset..offset + chunk_bpp).ok_or_else(|| ReadbackError::Execution("mapped range out of bounds".into()))?;
                     let px: [f32; 4] = if chunk_bpp == 16 {
-                        std::array::from_fn(|i| {
-                            f32::from_le_bytes([data[offset + i * 4], data[offset + i * 4 + 1], data[offset + i * 4 + 2], data[offset + i * 4 + 3]])
-                        })
+                        [
+                            f32::from_le_bytes(slice.get(0..4).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?),
+                            f32::from_le_bytes(slice.get(4..8).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?),
+                            f32::from_le_bytes(
+                                slice.get(8..12).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            ),
+                            f32::from_le_bytes(
+                                slice.get(12..16).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            ),
+                        ]
                     } else {
-                        std::array::from_fn(|i| half::f16::from_le_bytes([data[offset + i * 2], data[offset + i * 2 + 1]]).to_f32())
+                        [
+                            half::f16::from_le_bytes(
+                                slice.get(0..2).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            )
+                            .to_f32(),
+                            half::f16::from_le_bytes(
+                                slice.get(2..4).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            )
+                            .to_f32(),
+                            half::f16::from_le_bytes(
+                                slice.get(4..6).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            )
+                            .to_f32(),
+                            half::f16::from_le_bytes(
+                                slice.get(6..8).and_then(|s| s.try_into().ok()).ok_or_else(|| ReadbackError::Execution("slice bounds".into()))?,
+                            )
+                            .to_f32(),
+                        ]
                     };
                     let dx = (r.x0 - band_rect.x0) as usize + cx;
                     let dy = (r.y0 - band_rect.y0) as usize + cy;
-                    band_pixels[dy * band_w + dx] = px;
+                    let dst_idx =
+                        dy.checked_mul(band_w).and_then(|i| i.checked_add(dx)).ok_or_else(|| ReadbackError::Execution("dst index overflow".into()))?;
+                    if let Some(target) = band_pixels.get_mut(dst_idx) {
+                        *target = px;
+                    } else {
+                        return Err(ReadbackError::Execution("destination pixel out of bounds".into()));
+                    }
                 }
             }
             drop(data);
@@ -174,7 +306,7 @@ where
         }
         drop(staging);
 
-        sink(band_rect, band_pixels).map_err(|e| ReadbackError::Execution(e.to_string()))?;
+        sink(band_rect, band_pixels).map_err(ReadbackError::Sink)?;
         y = y1;
     }
     Ok(())

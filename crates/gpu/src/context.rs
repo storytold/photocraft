@@ -36,7 +36,8 @@ pub struct NativeContextOptions {
     pub force_fallback_adapter: bool,
     /// Allowed backend flags. Default is all available native backends.
     pub backends: wgpu::Backends,
-    /// Optional timeout for adapter/device initialization.
+    /// Bounded timeout for adapter/device initialization. When set, requests exceeding
+    /// this duration return [`GpuContextError::NoAdapter`]. Default is 10 seconds.
     pub timeout: Option<Duration>,
 }
 
@@ -83,32 +84,56 @@ impl NativeContext {
 
     /// Request an adapter and device matching `options`.
     pub fn request(options: &NativeContextOptions) -> Result<Self, GpuContextError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor { backends: options.backends, ..wgpu::InstanceDescriptor::new_without_display_handle_from_env() });
+        let opts = options.clone();
+        let init_work = move || -> Result<Self, GpuContextError> {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: opts.backends, ..wgpu::InstanceDescriptor::new_without_display_handle_from_env() });
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: options.power_preference,
-            force_fallback_adapter: options.force_fallback_adapter,
-            compatible_surface: None,
-        }))
-        .map_err(|e| GpuContextError::NoAdapter(format!("request_adapter failed: {e}")))?;
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: opts.power_preference,
+                force_fallback_adapter: opts.force_fallback_adapter,
+                compatible_surface: None,
+                ..Default::default()
+            }))
+            .map_err(|e| GpuContextError::NoAdapter(format!("request_adapter failed: {e}")))?;
 
-        let info = adapter.get_info();
-        log::info!("GPU native context: selected adapter '{}' ({:?}, {:?})", info.name, info.backend, info.device_type);
+            let info = adapter.get_info();
+            log::info!("GPU native context: selected adapter '{}' ({:?}, {:?})", info.name, info.backend, info.device_type);
 
-        let limits = adapter.limits();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("pc_headless_gpu"),
-            required_features: wgpu::Features::empty(),
-            required_limits: limits.clone(),
-            memory_hints: Default::default(),
-        }))
-        .map_err(|e| GpuContextError::RequestDevice(format!("request_device failed for '{}': {e}", info.name)))?;
+            let limits = adapter.limits();
+            let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("pc_headless_gpu"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits.clone(),
+                ..Default::default()
+            }))
+            .map_err(|e| GpuContextError::RequestDevice(format!("request_device failed for '{}': {e}", info.name)))?;
 
-        let health = DeviceHealth::watch(&device);
-        let acc_format = Compositor::preferred_acc_format(&adapter);
+            let health = DeviceHealth::watch(&device);
+            let acc_format = Compositor::preferred_acc_format(&adapter);
 
-        Ok(Self { device: Arc::new(device), queue: Arc::new(queue), adapter_info: info, health, acc_format, limits })
+            Ok(Self { device: Arc::new(device), queue: Arc::new(queue), adapter_info: info, health, acc_format, limits })
+        };
+
+        if let Some(timeout) = options.timeout {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let thread_res = std::thread::Builder::new().name("pc_gpu_init".into()).spawn(move || {
+                let res = init_work();
+                let _ = tx.send(res);
+            });
+            match thread_res {
+                Ok(_handle) => match rx.recv_timeout(timeout) {
+                    Ok(res) => res,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        Err(GpuContextError::NoAdapter(format!("timed out after {timeout:?} requesting GPU adapter/device")))
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(GpuContextError::NoAdapter("GPU initialization thread disconnected".into())),
+                },
+                Err(_) => init_work(),
+            }
+        } else {
+            init_work()
+        }
     }
 
     /// Build a new [`Compositor`] wired to this context's device and health flag.
@@ -179,6 +204,6 @@ impl NativeContext {
 
     /// Whether the device is healthy and has not reported a lost device or uncaptured error.
     pub fn is_healthy(&self) -> bool {
-        self.health.is_healthy()
+        self.health.is_ok()
     }
 }

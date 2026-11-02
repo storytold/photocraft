@@ -362,7 +362,7 @@ impl Headless {
         Ok(photocraft_engine::inspect::document(&self.session.documents()[i]))
     }
 
-    pub fn render_png(&self, index: Option<usize>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+    pub fn render_png(&mut self, index: Option<usize>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
         let i = self.doc_index(index)?;
         let doc = &self.session.documents()[i].doc;
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
