@@ -289,6 +289,7 @@ pub(crate) fn decode_channels(bytes: &[u8], index: usize, names: &[&str], limits
     img.map_err(|e| CodecError::encode(F, e))
 }
 
+/// Encode an image as named floating-point EXR channels using the requested compression.
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = (img.width() as usize, img.height() as usize);
@@ -304,16 +305,16 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     let mut list: Vec<AnyChannel<FlatSamples>> = Vec::with_capacity(nc);
     match img.sample_type() {
         SampleType::F16 => {
-            let s = img.to_f16_samples().unwrap_or_default();
+            let samples = img.data().as_chunks::<2>().0;
             for (ci, n) in names.iter().enumerate() {
-                let v: Vec<f16> = s.iter().skip(ci).step_by(nc).copied().collect();
+                let v: Vec<f16> = samples.iter().skip(ci).step_by(nc).map(|bytes| f16::from_bits(u16::from_ne_bytes(*bytes))).collect();
                 list.push(AnyChannel::new(*n, FlatSamples::F16(v)));
             }
         }
         SampleType::F32 => {
-            let s = img.to_f32_samples().unwrap_or_default();
+            let samples = img.data().as_chunks::<4>().0;
             for (ci, n) in names.iter().enumerate() {
-                let v: Vec<f32> = s.iter().skip(ci).step_by(nc).copied().collect();
+                let v: Vec<f32> = samples.iter().skip(ci).step_by(nc).map(|bytes| f32::from_ne_bytes(*bytes)).collect();
                 list.push(AnyChannel::new(*n, FlatSamples::F32(v)));
             }
         }
