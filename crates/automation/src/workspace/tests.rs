@@ -435,6 +435,7 @@ fn apply_data_set_is_judged_by_the_values_it_applies() {
     assert!(!visible(&headless));
 }
 
+/// Path-reading commands are refused before access; inline data keeps its precedence.
 #[test]
 fn automation_rejects_ambient_path_commands_and_preferences() {
     for (id, params) in [
@@ -448,6 +449,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
         ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
         ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
+        ("actions.replace", serde_json::json!({"path": "/outside/set.atn", "confirm": true})),
         ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
         ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
         ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
@@ -465,6 +467,8 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"data": "QUJD"})),
         ("swatches.export", serde_json::json!({"format": "ase"})),
         ("actions.load", serde_json::json!({"data": "QUJD"})),
+        ("actions.replace", serde_json::json!({"data": "QUJD", "confirm": true})),
+        ("actions.replace", serde_json::json!({"data": "QUJD", "path": "/outside/unused.atn", "confirm": true})),
         ("actions.save", serde_json::json!({"set": "S"})),
         ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),

@@ -55,7 +55,7 @@ use descriptors::{jbool, jstr};
 use events::{EVENTS, event_and_descriptor, event_for};
 #[cfg(test)]
 use fields::Mapped;
-use files::{load, save};
+use files::{load, replace, save};
 pub use menu_item::{MENU_ITEM, menu_item_command};
 #[cfg(test)]
 use steps_doc::crop_from;
@@ -108,6 +108,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"path":".atn file"?,"data":base64 bytes?,"set":name? (override the file's set name),"replace":bool=true (replace the actions of a set of the same name)} → {set, actions:[names], steps, unsupported:[{action, step, event, name}], functionKeys:[{action, key}], warnings}. Photoshop steps PhotoCraft cannot play become actions.photoshopStep steps (kept for Save Actions; they fail at playback with the step's name); tool selections and other steps with no document effect are imported switched off. Layer references by name replay in any document."##,
             enabled: always,
             run: load,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.replace",
+            label: "Replace Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"path":".atn file"?,"data":base64 bytes?,"set":name?,"confirm":true} → {set,actions:[names],steps,unsupported,functionKeys,warnings}. Parse and validate the file before replacing the entire action library and its function-key bindings. Requires explicit confirmation and stopped recording/playback. Other shortcuts and the document are unchanged."##,
+            enabled: always,
+            run: replace,
             journal: false,
         },
         CommandSpec {

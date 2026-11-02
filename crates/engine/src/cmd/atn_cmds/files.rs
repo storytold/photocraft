@@ -1,8 +1,25 @@
 use super::convert::{UniqueNames, export, import};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
+/// Load with the existing append or same-named-set replacement semantics.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "actions.load";
+    import_actions(s, p, false)
+}
+
+/// Whole-library replacement requires explicit consent before reading or changing anything.
+pub(super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad("actions.replace", "replacing all actions requires `confirm`: true"));
+    }
+    if p.get("replace").is_some() {
+        return Err(bad("actions.replace", "use `confirm`: true; `replace` belongs to actions.load's same-set mode"));
+    }
+    import_actions(s, p, true)
+}
+
+/// Prepare names, references and shortcuts before committing either import mode.
+fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
+    let cmd = if whole { "actions.replace" } else { "actions.load" };
     if s.actions.recording.is_some() || s.actions.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
@@ -23,10 +40,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
-    if replace {
-        s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
-    }
-    let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    let retained = s.actions.list.iter().filter(|a| !whole && (!replace || a.set.as_deref() != Some(imp.set.as_str())));
+    let mut taken = UniqueNames::new(retained.map(|a| a.name.clone()));
     let mut names = Vec::with_capacity(imp.actions.len());
     // The file's name of each action that had to be renamed, and its new name.
     let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -58,10 +73,21 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    s.actions.list.extend(added);
     let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
-    if !keys.is_empty() {
+    let removed_keys: std::collections::HashSet<_> =
+        if whole { s.actions.list.iter().map(|a| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)).collect() } else { Default::default() };
+    // Everything that can reject the input has completed. No callbacks or I/O split this commit.
+    if whole {
+        s.actions.list.clear();
+    } else if replace {
+        s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
+    }
+    s.actions.list.extend(added);
+    if !keys.is_empty() || !removed_keys.is_empty() {
         s.edit_prefs(|prefs| {
+            if !removed_keys.is_empty() {
+                prefs.shortcuts.retain(|key, _| !removed_keys.contains(key));
+            }
             for (name, key) in &keys {
                 // A function key belongs to one action.
                 prefs.shortcuts.retain(|k, v| !(k.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && v == key));

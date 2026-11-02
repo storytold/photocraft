@@ -2,6 +2,7 @@
 
 mod actions_clear_all;
 mod actions_duplicate;
+mod actions_replace;
 mod affinity;
 mod artboard_export_names;
 mod atn_crystallize_cell_size;
