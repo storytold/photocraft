@@ -110,7 +110,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Note => "message-square",
         Tool::Count => "circle-dot",
         Tool::Lasso => "lasso",
-        Tool::PolygonLasso => "pentagon",
+        // A lasso drawn in straight segments, not the Polygon tool's pentagon (#8584).
+        Tool::PolygonLasso => "lasso-polygon",
         Tool::MagneticLasso => "lasso-magnetic",
         Tool::MagicWand => "wand-sparkles",
         Tool::Crop => "crop",
@@ -234,6 +235,28 @@ mod tests {
         }
         assert_eq!(tool_icon(Tool::Gradient), "gradient");
         assert_ne!(tool_icon(Tool::Gradient), tool_icon(Tool::PaintBucket));
+    }
+
+    /// #8584: the Polygonal Lasso and the Polygon tool had the same pentagon; Photoshop draws the
+    /// Polygonal Lasso as a lasso in straight segments. Its glyph rasterizes, with the lasso's knot.
+    #[test]
+    fn polygonal_lasso_has_its_own_lasso_glyph() {
+        assert_eq!(tool_icon(Tool::PolygonLasso), "lasso-polygon");
+        assert_ne!(tool_icon(Tool::PolygonLasso), tool_icon(Tool::Polygon));
+        let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(tool_icon(Tool::PolygonLasso)) else {
+            panic!("icon source must be embedded bytes");
+        };
+        let image = egui_extras::image::load_svg_bytes_with_size(
+            bytes.as_ref(),
+            egui::load::SizeHint::Size { width: 24, height: 24, maintain_aspect_ratio: true },
+            &Default::default(),
+        )
+        .unwrap();
+        let ink = |x: usize, y: usize| image[(x, y)].a() > 64;
+        // The knot (centre 5, 16.4, radius 2) and the loop's top edge.
+        assert!(ink(3, 16) && ink(7, 16), "the knot");
+        assert!(ink(12, 3), "the loop's top segment");
+        assert!(!ink(12, 9), "the loop is open inside");
     }
 
     #[test]
