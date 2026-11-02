@@ -619,6 +619,12 @@ mod window_geometry_tests {
             [0.0, 0.0, f32::INFINITY, 700.0],
             [f32::NEG_INFINITY, 0.0, 1000.0, 700.0],
             [0.0, 0.0, 1.0e9, 700.0],
+            // CodeRabbit on #10400: finite but past MAX_COORD in every other slot too.
+            [0.0, 0.0, 1000.0, 1.0e9],
+            [1.0e9, 0.0, 1000.0, 700.0],
+            [0.0, 1.0e9, 1000.0, 700.0],
+            [-1.0e9, 0.0, 1000.0, 700.0],
+            [0.0, 0.0, MAX_COORD + 1.0, 700.0],
         ] {
             assert_eq!(opening_geometry(Some(bad), monitor), (None, egui::vec2(1360.0, 900.0)), "corrupt {bad:?}: the default");
         }
