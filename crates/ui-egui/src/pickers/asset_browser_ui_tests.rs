@@ -615,6 +615,102 @@ fn actual_card_selection_and_double_activation_emit_only_the_enabled_generic_eve
 }
 
 #[test]
+fn actual_root_card_selection_keeps_its_source_group_identity() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_root_item_between_groups("A", "a1"));
+    let card = h.get_by_label("A card 1").rect().center();
+    h.event(Event::PointerMoved(card));
+    h.event(Event::PointerButton { pos: card, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: card, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+
+    assert!(matches!(h.state().1.as_slice(), [BrowserAction::SelectItem { group, group_path, key }] if group == "A" && group_path.is_empty() && key == "a1"));
+}
+
+#[test]
+fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
+    for (source_label, target_label, after) in [("B card 1", "A card 1", false), ("A card 1", "B card 1", true)] {
+        let mut initial = PresetUi::default();
+        initial.set_hierarchy_order(
+            PANEL,
+            "",
+            vec![
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+                HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+                HierarchyOrderEntry::Group("B".into()),
+            ],
+        );
+        let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), initial);
+        let source = h.get_by_label(source_label).rect().center();
+        let target_rect = h.get_by_label(target_label).rect();
+        let target = if after { pos2(target_rect.right() - 2.0, target_rect.center().y) } else { pos2(target_rect.left() + 2.0, target_rect.center().y) };
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(
+            h.state().0.hierarchy_order[PANEL][""],
+            [
+                HierarchyOrderEntry::Group("A".into()),
+                HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+                HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+                HierarchyOrderEntry::Group("B".into()),
+                HierarchyOrderEntry::Group("C".into()),
+            ],
+            "source={source_label}, target={target_label}, after={after}"
+        );
+    }
+}
+
+#[test]
+fn active_root_card_drop_between_cards_paints_a_vertical_insertion_marker() {
+    let mut initial = PresetUi::default();
+    initial.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::Group("A".into()),
+            HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+            HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+            HierarchyOrderEntry::Group("B".into()),
+        ],
+    );
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), initial);
+    let source = h.get_by_label("B card 1").rect().center();
+    let target_card = h.get_by_label("A card 1").rect();
+    let target = pos2(target_card.left() + 0.5, target_card.center().y);
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+
+    let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
+    let image = h.render().expect("render root card insertion preview");
+    let ppp = h.ctx.pixels_per_point();
+    let x = (target_card.left() * ppp).round() as i32;
+    let y = (target_card.center().y * ppp).round() as i32;
+    let has_accent = (x - 2..=x + 2).any(|px| {
+        (y - 2..=y + 2).any(|py| {
+            px >= 0 && py >= 0 && (px as u32) < image.width() && (py as u32) < image.height()
+                && image.get_pixel(px as u32, py as u32).0[..3] == accent[..3]
+        })
+    });
+
+    assert!(has_accent, "the insertion marker between root cards should be vertical at the target card's leading edge");
+    let horizontal_marker_pixels = (x + 3..((target_card.right() * ppp).round() as i32 - 3)).filter(|px| {
+        (y - 1..=y + 1).any(|py| {
+            *px >= 0 && py >= 0 && (*px as u32) < image.width() && (py as u32) < image.height()
+                && image.get_pixel(*px as u32, py as u32).0[..3] == accent[..3]
+        })
+    }).count();
+    assert_eq!(horizontal_marker_pixels, 0, "an interior card insertion must not paint a horizontal marker across the card");
+}
+
+#[test]
 fn actual_card_drag_commits_before_and_after_positions_for_multiple_source_target_pairs() {
     for (source_key, source_label, target_key, target_label, after, expected_index) in [
         ("a1", "A card 1", "a2", "A card 2", false, 0),

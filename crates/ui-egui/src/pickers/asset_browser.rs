@@ -2315,6 +2315,40 @@ mod filter_tests {
     }
 
     #[test]
+    fn root_card_runs_split_at_groups_and_retain_each_source_group() {
+        let groups = vec![
+            group("First", vec![item("first-a", "First A", &[]), item("first-b", "First B", &[])]),
+            group("Middle", vec![item("middle", "Middle", &[])]),
+            group("Last", vec![item("last", "Last", &[])]),
+        ];
+        let orders = std::collections::BTreeMap::from([(
+            "".into(),
+            vec![
+                HierarchyOrderEntry::Group("First".into()),
+                HierarchyOrderEntry::RootItem { group: "First".into(), key: "first-a".into() },
+                HierarchyOrderEntry::Group("Middle".into()),
+                HierarchyOrderEntry::RootItem { group: "Last".into(), key: "last".into() },
+                HierarchyOrderEntry::Group("Last".into()),
+                HierarchyOrderEntry::RootItem { group: "First".into(), key: "first-b".into() },
+            ],
+        )]);
+
+        let segments = group_render_segments(&groups, &[(0, 0), (1, 0), (2, 0)], &Default::default(), &orders);
+
+        assert_eq!(
+            segment_summary(&segments, &groups),
+            [
+                ("First".into(), true, vec![]),
+                ("First".into(), false, vec!["first-a".into()]),
+                ("Middle".into(), true, vec!["middle".into()]),
+                ("Last".into(), false, vec!["last".into()]),
+                ("Last".into(), true, vec![]),
+                ("First".into(), false, vec!["first-b".into()]),
+            ]
+        );
+    }
+
+    #[test]
     fn best_drop_target_is_the_last_eligible_candidate() {
         let candidates = [false, true, false, true, false];
 

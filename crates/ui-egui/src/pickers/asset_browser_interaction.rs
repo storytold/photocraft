@@ -230,7 +230,7 @@ pub(crate) fn root_append_hit(rect: Rect, indicator_rect: Rect, order: usize) ->
         region: PointerRegion::ContainerEnd,
         hit_rect: rect,
         indicator_rect,
-        depth: 0,
+        depth: usize::MAX,
         order,
     }
 }
@@ -297,7 +297,7 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
+    use super::{card_drop_hit, card_drop_hits, card_trailing_marker_rect, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit, root_prepend_hit};
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
     use egui::{Pos2, Rect};
@@ -538,6 +538,33 @@ mod insertion_marker_tests {
         let root = root_append_hit(rect, rect, 5);
         assert_eq!(root.region, PointerRegion::ContainerEnd);
         assert_eq!(root.container, Some(ContainerId::Root));
+    }
+
+    #[test]
+    fn root_prepend_boundary_wins_the_overlap_with_the_first_node() {
+        use crate::pickers::picker_browser_dragging::arbitrate_hit_index;
+
+        let first = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 50.0));
+        let pointer = Pos2::new(80.0, 20.0);
+        let node_edge = card_drop_hit(first, pointer, false, NodeId::from("first"), 0, 0);
+        let root_edge = root_prepend_hit(first, first, NodeId::from("first"), 1);
+
+        assert_eq!(root_edge.target, Some(NodeId::from("first")));
+        assert_eq!(root_edge.region, PointerRegion::LeadingEdge);
+        assert_eq!(root_edge.depth, usize::MAX);
+        assert_eq!(arbitrate_hit_index(pointer, &[node_edge, root_edge]), Some(1));
+    }
+
+    #[test]
+    fn card_drop_midpoint_is_the_leading_half_in_both_layouts() {
+        let card = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(110.0, 60.0));
+        let grid_midpoint = Pos2::new(card.center().x, card.center().y);
+        let list_midpoint = Pos2::new(card.center().x, card.center().y);
+
+        assert_eq!(card_drop_hit(card, grid_midpoint, true, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
+        assert_eq!(card_drop_hit(card, list_midpoint, false, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
+        assert_eq!(card_drop_hit(card, Pos2::new(card.center().x + 0.01, card.center().y), true, NodeId::from("card"), 0, 0).region, PointerRegion::TrailingEdge);
+        assert_eq!(card_drop_hit(card, Pos2::new(card.center().x, card.center().y + 0.01), false, NodeId::from("card"), 0, 0).region, PointerRegion::TrailingEdge);
     }
 }
 

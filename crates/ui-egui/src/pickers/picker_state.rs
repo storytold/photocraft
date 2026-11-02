@@ -1199,4 +1199,161 @@ mod tests {
             [HierarchyOrderEntry::RootItem { group: "A".into(), key: "same".into() }, HierarchyOrderEntry::RootItem { group: "B".into(), key: "same".into() },]
         );
     }
+
+    #[test]
+    fn moving_a_root_card_reorders_the_mixed_root_sequence_without_losing_groups() {
+        let mut state = PresetUi::default();
+        let first = HierarchyOrderEntry::RootItem { group: "A".into(), key: "first".into() };
+        let second = HierarchyOrderEntry::RootItem { group: "B".into(), key: "second".into() };
+        let entries = vec![HierarchyOrderEntry::Group("Before".into()), first.clone(), HierarchyOrderEntry::Group("After".into()), second.clone()];
+
+        state.move_hierarchy_entry("panel", "", entries.clone(), second.clone(), Some(&first));
+        assert_eq!(state.hierarchy_order["panel"][""], [
+            HierarchyOrderEntry::Group("Before".into()), second.clone(), first.clone(), HierarchyOrderEntry::Group("After".into()),
+        ]);
+
+        let current = state.hierarchy_order["panel"][""].clone();
+        state.move_hierarchy_entry("panel", "", current, first.clone(), None);
+        assert_eq!(state.hierarchy_order["panel"][""], [
+            HierarchyOrderEntry::Group("Before".into()), second, HierarchyOrderEntry::Group("After".into()), first,
+        ]);
+    }
+
+    #[test]
+    fn root_cards_cannot_be_inserted_into_a_nested_group_sequence() {
+        let mut state = PresetUi::default();
+        let root = HierarchyOrderEntry::RootItem { group: "Owner".into(), key: "card".into() };
+        state.set_hierarchy_order("panel", "", vec![root.clone(), HierarchyOrderEntry::Group("Folder".into())]);
+
+        state.move_hierarchy_entry("panel", "Folder", vec![HierarchyOrderEntry::Item("nested".into())], root.clone(), None);
+        state.set_hierarchy_order("panel", "Folder", vec![root.clone(), HierarchyOrderEntry::Item("nested".into())]);
+
+        assert_eq!(state.hierarchy_order["panel"][""], [root.clone(), HierarchyOrderEntry::Group("Folder".into())]);
+        assert_eq!(state.hierarchy_order["panel"]["Folder"], [HierarchyOrderEntry::Item("nested".into())]);
+    }
+
+    #[test]
+    fn root_card_selection_is_qualified_by_owner_even_when_keys_match() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("panel", "First", &[], "shared");
+
+        assert!(state.is_selected_item("panel", "First", &[], "shared"));
+        assert!(!state.is_selected_item("panel", "Second", &[], "shared"));
+        state.set_selected_item("panel", "Second", &[], "shared");
+        assert!(!state.is_selected_item("panel", "First", &[], "shared"));
+        assert!(state.is_selected_item("panel", "Second", &[], "shared"));
+    }
+
+    #[test]
+    fn deleting_a_root_card_removes_only_the_matching_owner_and_key() {
+        let mut state = PresetUi::default();
+        state.set_hierarchy_order("panel", "", vec![
+            HierarchyOrderEntry::RootItem { group: "First".into(), key: "shared".into() },
+            HierarchyOrderEntry::RootItem { group: "Second".into(), key: "shared".into() },
+        ]);
+
+        state.delete_hierarchy_item_in_group("panel", "First", "shared");
+
+        assert_eq!(state.hierarchy_order["panel"][""], [HierarchyOrderEntry::RootItem { group: "Second".into(), key: "shared".into() }]);
+    }
+
+    #[test]
+    fn root_card_identity_and_mixed_order_survive_the_preferences_round_trip() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.presets_ui.set_hierarchy_order("gradients", "", vec![
+            HierarchyOrderEntry::Group("First group".into()),
+            HierarchyOrderEntry::RootItem { group: "Root owner".into(), key: "same:key".into() },
+            HierarchyOrderEntry::RootItem { group: "Other owner".into(), key: "same:key".into() },
+            HierarchyOrderEntry::Group("Second group".into()),
+        ]);
+
+        super::persist(&mut app, &egui::Context::default());
+        let saved = app.session.prefs_to_json();
+        let mut restarted = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        restarted.session.load_prefs_json(&saved).unwrap();
+        super::restore(&mut restarted);
+
+        assert_eq!(restarted.ui.presets_ui.hierarchy_order["gradients"][""], app.ui.presets_ui.hierarchy_order["gradients"][""]);
+    }
+
+    #[test]
+    fn persist_does_not_save_picker_state_until_the_pointer_is_released() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.ui.presets_ui.set_hierarchy_order("panel", "", vec![HierarchyOrderEntry::Group("A".into())]);
+
+        let mut output = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::Pos2::new(10.0, 10.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        }, |_| {});
+        output.textures_delta.clear();
+        super::persist(&mut app, &ctx);
+        assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_none(), "an in-progress drag must not persist an intermediate hierarchy");
+
+        let mut output = ctx.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::Pos2::new(10.0, 10.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        }, |_| {});
+        output.textures_delta.clear();
+        super::persist(&mut app, &ctx);
+        assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_some(), "the completed hierarchy is persisted after release");
+    }
+
+    #[test]
+    fn legacy_brush_view_migrates_without_overwriting_saved_hierarchy_or_valid_defaults() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert(
+                "pickerBrowserUi".into(),
+                serde_json::json!({
+                    "hierarchyOrder": {"gradients": {"": [{"type": "group", "key": "Existing group"}]}}
+                }),
+            );
+            prefs.brush_picker = serde_json::json!({
+                "showName": false,
+                "showStroke": "not a boolean",
+                "showTip": false,
+                "scale": "not a number"
+            });
+        });
+
+        super::restore(&mut app);
+
+        assert_eq!(
+            app.ui.presets_ui.hierarchy_order["gradients"][""],
+            [HierarchyOrderEntry::Group("Existing group".into())],
+            "restoring the legacy brush view must retain the common picker's saved hierarchy"
+        );
+        assert!(!app.ui.presets_ui.brush_picker.show_name);
+        assert!(app.ui.presets_ui.brush_picker.show_stroke, "a mistyped field retains its default");
+        assert!(!app.ui.presets_ui.brush_picker.show_tip);
+        assert_eq!(app.ui.presets_ui.brush_picker.scale, 1.0, "a mistyped scale retains its default");
+        assert!(app.session.prefs().brush_picker.is_null(), "the legacy preference is consumed after migration");
+    }
+
+    #[test]
+    fn legacy_brush_view_restores_one_visible_part_and_clamps_its_scale() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.prefs.edit(|prefs| {
+            prefs.brush_picker = serde_json::json!({"showName": false, "showStroke": false, "showTip": false, "scale": -4.0});
+        });
+
+        super::restore(&mut app);
+
+        assert!(!app.ui.presets_ui.brush_picker.show_name);
+        assert!(!app.ui.presets_ui.brush_picker.show_stroke);
+        assert!(app.ui.presets_ui.brush_picker.show_tip, "the card must retain at least one visible part");
+        assert_eq!(app.ui.presets_ui.brush_picker.scale, 0.15);
+        assert!(app.session.prefs().brush_picker.is_null());
+    }
 }

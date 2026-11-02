@@ -512,6 +512,21 @@ mod tests {
     }
 
     #[test]
+    fn root_item_wire_tokens_round_trip_unicode_group_and_item_keys() {
+        let mut layout = PickerBrowserData::default();
+        layout.hierarchy_order.insert("panel".into(), [(String::new(), vec![
+            Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() },
+        ])].into());
+
+        let written = serde_json::to_value(&layout).unwrap();
+        let restored: PickerBrowserData = serde_json::from_value(written).unwrap();
+
+        assert_eq!(restored.hierarchy_order["panel"][""], [
+            Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() },
+        ]);
+    }
+
+    #[test]
     fn token_looking_nested_item_keys_remain_literal() {
         let token = "__picker-root-item:v1:8:Original9:root-card";
         let layout: PickerBrowserData = serde_json::from_value(serde_json::json!({"hierarchyOrder": {"panel": {
