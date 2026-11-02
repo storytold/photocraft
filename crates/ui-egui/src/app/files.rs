@@ -1,6 +1,6 @@
 use super::{
-    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, jobs_ui,
-    jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
+    DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, camera_raw_ui, dds_options_ui, file_open, flat_file_keeps_extras,
+    jobs_ui, jpeg_options_ui, json, notices, open_prompt, plain_raster, preset_files_ui, saved_revision_after_write, targa_options_ui, tiff_options_ui,
 };
 
 impl PhotocraftApp {
@@ -220,10 +220,12 @@ impl PhotocraftApp {
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
+        let keeps_extras = st.path.as_deref().is_some_and(|p| flat_file_keeps_extras(&st.doc, p));
         let writable = ext.is_some_and(|e| {
-            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
+            matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb")
+                || (matches!(e.as_str(), "tif" | "tiff") && keeps_extras)
                 || (e == "ora" && holds_ora)
-                || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+                || (flat && keeps_extras && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
@@ -247,6 +249,10 @@ impl PhotocraftApp {
                     && let Some(r) = crate::disk_change_prompt::intercept(app, doc, &path, true, choices)
                 {
                     return r;
+                }
+                if crate::flat_copy_ui::wants_prompt(app, &path) {
+                    crate::flat_copy_ui::park(app, path.clone(), choices)?;
+                    return Ok(serde_json::json!({"path": path, "warnings": []}));
                 }
                 let from = app.session.journal.len();
                 let r = app.save_to(path.clone(), choices)?;
@@ -443,6 +449,7 @@ impl PhotocraftApp {
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
                     && plain_raster(&st.doc).is_some()
+                    && flat_file_keeps_extras(&st.doc, p)
                     && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
             };
             let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
@@ -503,9 +510,25 @@ impl PhotocraftApp {
         // so the editable document isn't marked saved after losing them (#3806).
         let st = self.session.active().ok_or("no document")?;
         let tiff = |p: &str| matches!(photocraft_engine::file_cmds::extension(p).as_deref(), Some("tif" | "tiff"));
-        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || tiff(path);
+        // Nor is a document with more than a flat file keeps marked saved after losing it.
+        let extras = flat_file_keeps_extras(&st.doc, path);
+        let holds = photocraft_engine::file_cmds::holds_at(&st.doc, path) || (tiff(path) && extras);
         let lives_layered = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::saves_in_place(p) || tiff(p));
-        Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered)))
+        Ok(tiff_layers == Some(false) || (!holds && (plain_raster(&st.doc).is_none() || lives_layered || !extras)))
+    }
+
+    /// Whether saving the active document to `path` leaves content behind: a copy, not because it
+    /// lives in a layered file but because the file can't hold what it has.
+    pub(crate) fn save_loses_content(&self, path: &str) -> bool {
+        let Some(st) = self.session.active() else { return false };
+        self.saves_copy(path, None).unwrap_or(false) && (plain_raster(&st.doc).is_none() || !flat_file_keeps_extras(&st.doc, path))
+    }
+
+    /// Whether the close prompt should say the document's content is in no file: its last save was
+    /// such a copy, and it has no file of its own that holds it.
+    pub(crate) fn only_saved_flat(&self, doc: DocId) -> bool {
+        let own = self.session.documents().iter().find(|st| st.doc.id == doc).and_then(|st| st.path.as_deref());
+        self.flat_copy_docs.contains(&doc) && !own.is_some_and(photocraft_engine::file_cmds::saves_in_place)
     }
 
     /// Writes the active document to a known path. `tiff_layers` is the TIFF Options answer:
@@ -514,8 +537,21 @@ impl PhotocraftApp {
     /// Options.
     fn write_save(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
         let copy = self.saves_copy(&path, tiff_layers)?;
+        // The exporter reports flattened layers, but not these. Up front, as a background save ends
+        // later.
+        let doc = self.session.active().map(|st| &*st.doc);
+        if copy && !self.flat_copy_confirmed && doc.is_some_and(|doc| !flat_file_keeps_extras(doc, &path)) {
+            let line =
+                tl!("This file type can't hold the document's alpha channels, saved paths or layer comps. The document stays open, with its changes unsaved.");
+            notices::post(self, tl!("Saving a copy"), vec![line.to_string()], false, None);
+        }
+        let flat = self.active_doc_id().ok().filter(|_| self.save_loses_content(&path));
         let settings = choices.apply(ExportSettings { tiff_layers: tiff_layers.unwrap_or(ExportSettings::default().tiff_layers), ..self.save_settings() });
-        match self.write_document(path.clone(), &settings, copy)? {
+        let written = self.write_document(path.clone(), &settings, copy)?;
+        if let Some(doc) = flat {
+            self.flat_copy_docs.insert(doc);
+        }
+        match written {
             Some((path, warnings)) => Ok(serde_json::json!({"path": path, "warnings": warnings})),
             None => Ok(serde_json::json!({"path": path, "warnings": [], "pending": true, "job": self.jobs.last_started.map(|j| j.0)})),
         }
@@ -599,6 +635,9 @@ impl PhotocraftApp {
     }
 
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
+        if !copy {
+            self.flat_copy_docs.remove(&doc);
+        }
         // Automation: only a layered save becomes the document's file; a flat one is a
         // copy, as in the headless server (#2579).
         let (hooks, arm) = match kind {
@@ -668,7 +707,7 @@ impl PhotocraftApp {
 
     /// TIFF, Targa, DDS or JPEG Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
+        self.tiff_options.is_some() || self.flat_copy.is_some() || self.targa_options.is_some() || self.dds_options.is_some() || self.jpeg_options.is_some()
     }
 
     /// Writes a save that waited on a format prompt (Targa, DDS, JPEG or TIFF Options) once answered:
