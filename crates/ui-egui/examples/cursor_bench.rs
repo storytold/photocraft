@@ -131,7 +131,8 @@ fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, 
         events: vec![egui::Event::PointerMoved(at)],
         ..Default::default()
     };
-    let output = ctx.run(input, |ctx| {
+    let output = ctx.run_ui(input, |ui| {
+        let ctx = ui.ctx();
         ctx.set_cursor_image(None);
         let start = Instant::now();
         if painted {

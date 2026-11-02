@@ -619,7 +619,7 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
 
 #[test]
 fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
-    for scale in [1.0, 1.25, 1.5, 2.0] {
+    for scale in [1.0f32, 1.25, 1.5, 2.0] {
         for variant in super::PenVariant::all() {
             let image = super::pen::rasterize(variant, scale).expect("pen variant rasterizes");
             let [w, h] = image.size;
@@ -724,7 +724,7 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
 
 #[test]
 fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
-    for scale in [1.0, 1.25, 1.5, 2.0] {
+    for scale in [1.0f32, 1.25, 1.5, 2.0] {
         let offset_px = 1.0 * scale;
         let pad = (offset_px + 2.0).ceil() as usize;
         let icon_px = (22.0 * scale).round() as usize;
