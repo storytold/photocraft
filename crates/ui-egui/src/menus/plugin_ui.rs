@@ -70,16 +70,25 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     Some(Ok(json!({"dialog": d})))
 }
 
+/// Plug-ins are listed process-wide, and tests run side by side: tests that install one take this
+/// to write, and tests that compare menus built at two moments take it to read.
+#[cfg(test)]
+pub(crate) static REGISTRY_TESTS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::PoisonError;
 
     #[test]
     fn installed_plugins_appear_under_filter_plugins_and_run() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
-        app.run("plugin.install", json!({"path": path})).unwrap();
+        {
+            let _installing = REGISTRY_TESTS.write().unwrap_or_else(PoisonError::into_inner);
+            app.run("plugin.install", json!({"path": path})).unwrap();
+        }
         let items = crate::menus::menu_items(&app);
         let pi: Vec<&MenuItem> = items.iter().filter(|i| i.path == ["Filter", "Plug-ins"]).collect();
         let me = pi.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("plug-in listed");
@@ -106,7 +115,10 @@ mod tests {
         let _lang = crate::i18n::language_scope(ja);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
-        app.run("plugin.install", json!({"path": path})).unwrap();
+        {
+            let _installing = REGISTRY_TESTS.write().unwrap_or_else(PoisonError::into_inner);
+            app.run("plugin.install", json!({"path": path})).unwrap();
+        }
         let items = crate::menus::menu_items(&app);
         let me = items.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("plug-in listed");
         assert_eq!(me.path, ["Filter", "Plug-ins"], "plug-in row sits where the menu renderer looks for it");
