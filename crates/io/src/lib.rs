@@ -794,8 +794,8 @@ mod tests {
     use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
 
-    /// A damaged lookup that only the timeline's base holds is reported, one in both trees once,
-    /// and two layers with the same name and damage each.
+    /// A damaged lookup that only the timeline's base or a baked step holds is reported, one in
+    /// both trees once, and two layers with the same name and damage each.
     #[test]
     fn open_warnings_cover_the_design_timeline_trees() {
         use photocraft_doc::adjust::Adjustment;
@@ -816,9 +816,20 @@ mod tests {
         base.layers = vec![lookup("both"), lookup("old"), lookup("old")];
         let mut doc = base.clone();
         doc.layers.truncate(1);
-        doc.design_timeline = Some(std::sync::Arc::new(DesignTimeline::new(std::sync::Arc::new(base))));
+        let mut tl = DesignTimeline::new(std::sync::Arc::new(base));
+        let mut step: photocraft_doc::design::DesignStep = serde_json::from_value(serde_json::json!({
+            "step": 2, "command": "edit.paste", "params": {}, "label": "Paste",
+            "active": null, "selected": [], "created": [], "changed": []
+        }))
+        .unwrap();
+        let baked = lookup("baked");
+        step.created = vec![baked.id];
+        step.baked = Some(std::sync::Arc::new(photocraft_doc::design::Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None }));
+        tl.steps.push(step);
+        doc.design_timeline = Some(std::sync::Arc::new(tl));
         let w = super::open_warnings(&doc);
-        assert_eq!(w.len(), 3, "\"both\" once, each \"old\" layer on its own: {w:?}");
+        assert_eq!(w.len(), 4, "\"both\" once, each \"old\" layer on its own, the baked one: {w:?}");
+        assert!(w.iter().any(|w| w.contains("\"baked\"")), "{w:?}");
         assert_eq!(w.iter().filter(|w| w.contains("\"old\"")).count(), 2, "{w:?}");
     }
 
