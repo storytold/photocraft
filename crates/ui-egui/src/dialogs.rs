@@ -1028,6 +1028,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
     }
 }
 
+/// Confirm an open dialog (`id`) and execute its associated command or action.
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;

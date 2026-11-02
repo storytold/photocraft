@@ -903,10 +903,12 @@ mod dialog {
         }
     }
 
+    /// Widths of the entries currently recorded in `recent_documents`, newest first.
     fn recent_widths(h: &Harness<'static, PhotocraftApp>) -> Vec<u32> {
         h.state().session.presets.recent_documents.iter().map(|r| r.width).collect()
     }
 
+    /// Creating a document at the unmodified Clipboard size skips Recent, while resizing it via UI or `ui.dialog.set` records it.
     #[test]
     fn a_document_at_the_clipboard_size_is_not_added_to_recent() {
         let mut h = harness();
@@ -926,5 +928,17 @@ mod dialog {
         type_into(&mut h, 0, "640");
         enter(&mut h);
         assert_eq!(recent_widths(&h), [640]);
+
+        // Resizing through `ui.dialog.set` also clears `__preset` and records the customized size.
+        let id = h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+        h.run_steps(3);
+        let mut f = fields(&h);
+        super::super::set_clipboard(&mut f, 590, 894);
+        set_fields(&mut h, f);
+        let (req, _) = crate::control::ControlRequest::new("ui.dialog.set", serde_json::json!({"dialog": id, "field": "width", "value": 720}));
+        let ctx = h.ctx.clone();
+        assert!(matches!(crate::control::handle(h.state_mut(), &ctx, &req), crate::control::Outcome::Done(ref v) if v["ok"] == true));
+        enter(&mut h);
+        assert_eq!(recent_widths(&h), [720, 640]);
     }
 }

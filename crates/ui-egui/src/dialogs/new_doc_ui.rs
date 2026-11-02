@@ -122,9 +122,11 @@ pub fn set_clipboard(f: &mut Map<String, Value>, w: u32, h: u32) {
 /// Whether creating a document from these fields adds it to Recent. A document made at the
 /// Clipboard preset's size is not recorded: the Clipboard card already offers that size while the
 /// image is on the clipboard, and afterwards the size only clutters Recent as a "Custom" card.
-/// Editing the size clears `__preset`, so a resized clipboard document is still recorded.
+/// Editing the size clears `__preset` (or changes `width`/`height`), so a resized clipboard
+/// document is still recorded.
 pub fn records_recent(f: &Map<String, Value>) -> bool {
-    get_s(f, "__preset", "") != CLIPBOARD
+    !(get_s(f, "__preset", "") == CLIPBOARD
+        && clipboard_preset(f).is_some_and(|(_, w, h, _)| (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0)) == (w as f32, h as f32)))
 }
 
 /// The clipboard image's size, when the dialog offers the Clipboard preset.

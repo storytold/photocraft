@@ -1016,6 +1016,8 @@ fn discard_dialog_confirm(app: &mut PhotocraftApp, ctx: &egui::Context, choice: 
     wrap(crate::discard_ui::answer_control(app, ctx, choice))
 }
 
+/// Set a field on an open dialog (`ui.dialog.set`); changing New Document's `width` or `height`
+/// clears the active preset selection like typing into the size fields does.
 fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
     let (Some(id), Some(field)) = (u64_param(p, "dialog"), str_param(p, "field")) else { return err("need `dialog` and `field`") };
     let value = p.get("value").cloned().unwrap_or(Value::Null);
@@ -1026,6 +1028,10 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A marker picks the handler OK runs: a dialog keeps the ones it was opened with.
         Some(d) if !d.fields.contains_key(field) && crate::dialogs::is_route_marker(field) => err(format!("`{field}` is set only by the dialog it belongs to")),
         Some(d) => {
+            if matches!(d.kind, crate::state::DialogKind::NewDocument) && matches!(field, "width" | "height") && d.fields.get(field) != Some(&value) {
+                d.fields.remove("__preset");
+                d.fields.remove("__savedPreset");
+            }
             d.fields.insert(field.to_string(), value);
             ok(Value::Null)
         }
