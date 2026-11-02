@@ -243,7 +243,7 @@ mod tests {
             sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
         ) -> Result<(), RenderError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            photocraft_compose::render_bands(doc, rect, band_rows, |buf| sink(RenderBand { rect: buf.rect, pixels: buf.px })).map_err(RenderError::sink)
+            photocraft_io::CpuRenderer.render_bands(doc, rect, band_rows, sink)
         }
     }
 
@@ -260,9 +260,10 @@ mod tests {
         std::fs::write(&bad_file, b"not a valid png or document file").unwrap();
 
         let good_file = tmp.join("02_good.pcraft");
-        let good_doc = Document::with_background("test", Size::new(32, 32), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-        let previews = photocraft_automation::files::previews(&good_doc);
-        photocraft_format::save_path(&good_doc, &good_file, &previews).unwrap();
+        let mut good_doc = Document::with_background("test", Size::new(32, 32), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let extra_layer = good_doc.layers[0].clone();
+        good_doc.layers.push(extra_layer);
+        photocraft_automation::files::save(&good_doc, &good_file, None, &Default::default(), None).unwrap();
 
         let target_dir = tmp.join("out");
         std::fs::create_dir_all(&target_dir).unwrap();

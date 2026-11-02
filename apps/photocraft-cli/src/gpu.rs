@@ -52,42 +52,42 @@ impl GpuPolicy {
 
     /// Apply policy to a headless automation session.
     pub(crate) fn apply_to_headless(&self, h: &mut Headless) {
-        #[cfg(feature = "gpu")]
+        #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
         if self.enabled {
             h.enable_gpu();
         }
-        #[cfg(not(feature = "gpu"))]
+        #[cfg(any(not(feature = "gpu"), target_arch = "wasm32"))]
         if self.enabled {
             h.set_renderer(Some(Box::new(DisabledGpuRenderer::new())));
         }
     }
 
     /// Create an optional boxed renderer under this policy.
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
     pub(crate) fn create_renderer(&self) -> Option<Box<dyn BandRenderer>> {
         if self.enabled { Some(Box::new(photocraft_automation::gpu::GpuRenderer::lazy())) } else { None }
     }
 
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), target_arch = "wasm32"))]
     pub(crate) fn create_renderer(&self) -> Option<Box<dyn BandRenderer>> {
         if self.enabled { Some(Box::new(DisabledGpuRenderer::new())) } else { None }
     }
 }
 
 /// Renderer stub emitted when GPU is requested in builds compiled without `--features gpu`.
-#[cfg(not(feature = "gpu"))]
+#[cfg(any(not(feature = "gpu"), target_arch = "wasm32"))]
 struct DisabledGpuRenderer {
     emitted: bool,
 }
 
-#[cfg(not(feature = "gpu"))]
+#[cfg(any(not(feature = "gpu"), target_arch = "wasm32"))]
 impl DisabledGpuRenderer {
     fn new() -> Self {
         Self { emitted: false }
     }
 }
 
-#[cfg(not(feature = "gpu"))]
+#[cfg(any(not(feature = "gpu"), target_arch = "wasm32"))]
 impl BandRenderer for DisabledGpuRenderer {
     fn render_bands(
         &mut self,
