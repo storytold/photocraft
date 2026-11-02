@@ -293,7 +293,8 @@ fn the_curvature_pen_carries_on_the_selected_subpath_of_two_that_end_together() 
 /// one, bent into the new segment, stays in line with it: the knot stays smooth.
 #[test]
 fn a_smooth_endpoint_carried_on_stays_smooth() {
-    use photocraft_doc::vector::{Knot, Point, Subpath};
+    use photocraft_doc::vector::{Knot, Subpath};
+    use photocraft_geom::Point;
     let mut app = app(Tool::CurvaturePen);
     let end = Knot::smooth(Point::new(80.0, 80.0), Point::new(60.0, 60.0), Point::new(100.0, 100.0));
     set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![Knot::corner(20.0, 20.0), end], op: Default::default() }]);
