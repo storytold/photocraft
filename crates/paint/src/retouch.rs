@@ -163,12 +163,23 @@ pub fn stroke_coverage_within(stroke: &Stroke, max_pixels: u64) -> Option<(Rect,
     Some(r.dense_coverage())
 }
 
-/// Pixels the stroke's own points span, as a lower bound on the extent its dabs will cover.
+/// A lower bound on the pixels [`stroke_coverage_within`] will cover: the box the stroke's input
+/// points span, grown by half the tip, so a single-point stroke still counts the dab it draws.
 ///
-/// A dab is centred on the path through the points, and scattering and a dual brush only move
-/// dabs further out, so the rendered extent contains this box whenever anything is drawn at all.
-/// An empty stroke spans nothing. Saturating throughout: the points are input-derived and may be
-/// far apart, and this must answer rather than overflow.
+/// Grown on @FredApps's #8707 review: without the tip the box is a bound only for a zero-size
+/// tip, so the gate refused less than it safely could.
+///
+/// **What "lower bound" is worth here**, since the comment this replaces claimed more than the
+/// code does. It said scattering "only moves dabs further out", and that is not so. A dab is
+/// displaced by `rand_signed * jitter * radius` (`dynamics.rs`), radially when `both_axes` is set
+/// and otherwise perpendicular to the direction of travel, and the sign is random either way. On
+/// an axis-aligned stroke perpendicular scatter only widens the box, but on a diagonal one it has
+/// a component along each axis, so the outermost dab can be pulled inward and the rendered extent
+/// can come in under this box by up to `jitter` radii.
+///
+/// That costs nothing for the job this does: it gates strokes spanning hundreds of thousands of
+/// pixels, where a few radii cannot close the gap, and the exact extent is measured from the tiles
+/// straight afterwards. It is not a bound to build anything exact on.
 fn points_extent(stroke: &Stroke) -> u64 {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in &stroke.points {
@@ -181,6 +192,11 @@ fn points_extent(stroke: &Stroke) -> u64 {
     if x1 < x0 || y1 < y0 {
         return 0;
     }
+    // The tip reaches half its width past the outermost point on each side (@FredApps, #8707
+    // review): without this the box is only a bound for a zero-size tip, and the gate refuses
+    // less than it safely could.
+    let grow = f64::from(stroke.brush.size.max(0.0)) / 2.0;
+    let (x0, y0, x1, y1) = (x0 - grow, y0 - grow, x1 + grow, y1 + grow);
     // `as` on an out-of-range or non-finite f64 saturates, which is the answer wanted here.
     let side = |lo: f64, hi: f64| (hi - lo).max(0.0).ceil().min(u64::MAX as f64) as u64;
     side(x0, x1).saturating_mul(side(y0, y1))
@@ -679,20 +695,32 @@ mod extent_tests {
         }
     }
 
+    /// Default `BrushSettings::size` is 20 px, so the box grows by 10 on every side: 20 wider and
+    /// 20 taller than the points alone. The expectations below are written as the points' span
+    /// plus that, rather than as bare numbers, so the reason for each is visible.
     #[test]
     fn the_points_span_is_measured_without_overflowing() {
+        let grown = |w: u64, h: u64| (w + 20) * (h + 20);
         assert_eq!(points_extent(&stroke(&[])), 0, "nothing spans nothing");
-        assert_eq!(points_extent(&stroke(&[(5.0, 5.0)])), 0, "one point has no area");
-        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.0, 4.0)])), 40);
-        assert_eq!(points_extent(&stroke(&[(10.0, 4.0), (0.0, 0.0)])), 40, "order does not matter");
+        // A single point does draw a dab, so it is no longer treated as spanning nothing: that was
+        // the gap @FredApps spotted in the #8707 review.
+        assert_eq!(points_extent(&stroke(&[(5.0, 5.0)])), grown(0, 0), "one point spans its own tip");
+        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.0, 4.0)])), grown(10, 4));
+        assert_eq!(points_extent(&stroke(&[(10.0, 4.0), (0.0, 0.0)])), grown(10, 4), "order does not matter");
         // A fractional span is rounded up, so the bound never reads smaller than the pixels.
-        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.5, 4.5)])), 55);
+        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.5, 4.5)])), grown(11, 5));
         // Input-derived and hostile: the far corners of the accepted range, and non-finite
         // values, answer instead of overflowing or panicking.
-        assert_eq!(points_extent(&stroke(&[(-1e6, -1e6), (1e6, 1e6)])), 4_000_000_000_000);
+        assert_eq!(points_extent(&stroke(&[(-1e6, -1e6), (1e6, 1e6)])), grown(2_000_000, 2_000_000));
         assert_eq!(points_extent(&stroke(&[(f64::MIN, f64::MIN), (f64::MAX, f64::MAX)])), u64::MAX);
-        assert_eq!(points_extent(&stroke(&[(f64::NAN, 0.0), (f64::INFINITY, 1.0), (0.0, 0.0), (3.0, 2.0)])), 6);
+        assert_eq!(points_extent(&stroke(&[(f64::NAN, 0.0), (f64::INFINITY, 1.0), (0.0, 0.0), (3.0, 2.0)])), grown(3, 2));
         assert_eq!(points_extent(&stroke(&[(f64::NAN, f64::NAN)])), 0, "no finite point is no span");
+        // A nonsense size cannot shrink the box or panic.
+        let mut odd = stroke(&[(0.0, 0.0), (10.0, 4.0)]);
+        odd.brush.size = -50.0;
+        assert_eq!(points_extent(&odd), 40, "a negative size grows by nothing");
+        odd.brush.size = f32::NAN;
+        assert_eq!(points_extent(&odd), 40, "nor does a non-finite one");
     }
 
     /// #4961 follow-up: a stroke whose points already span more than the budget is refused
