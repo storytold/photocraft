@@ -634,3 +634,35 @@ fn uncached_pattern_fills_keep_the_full_resolution_composite() {
     doc.layers.push(cached);
     assert!(proxy_matches(&doc));
 }
+
+/// Solo spot channel view is grayscale and updates with edits on an RGB or CMYK document with
+/// no layer mask.
+#[test]
+fn solo_spot_is_grayscale_and_edits_without_layer_mask() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        let mode_str = if mode == ColorMode::Rgb { "rgb" } else { "cmyk" };
+        app.run("file.new", json!({"width": 8, "height": 4, "mode": mode_str})).unwrap();
+        // Plain document has a background layer and no layer mask.
+        assert!(app.session.active().unwrap().doc.layers.iter().all(|l| l.mask.is_none()));
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        let spot = app.run("channel.newSpot", json!({"color": "#ff0000", "solidity": 0})).unwrap()["channel"].as_u64().unwrap();
+        app.sync_views();
+        // Target the spot channel alone (Channels panel row click).
+        app.run("channel.target", json!({"channel": spot})).unwrap();
+        let st = app.session.active().unwrap();
+        assert_eq!(st.channel_view.visible_colors(color_count(&st.doc)), 0);
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer)
+            .expect("solo spot channel must render without a layer mask");
+        // Selected half (x 0..4) has ink (1.0 -> white in grayscale tone), unselected half is black (0.0).
+        assert_eq!(px[0], Color32::WHITE, "{mode:?}: inked half is white tone");
+        assert_eq!(px[7], Color32::BLACK, "{mode:?}: uninked half is black tone");
+
+        // Editing the targeted spot channel updates the solo preview.
+        app.run("select.rect", json!({"x": 4, "y": 0, "width": 4, "height": 4})).unwrap();
+        app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        let st = app.session.active().unwrap();
+        let px2 = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).expect("edited spot channel must render");
+        assert_eq!(px2[7], Color32::WHITE, "{mode:?}: newly filled area is now white");
+    }
+}

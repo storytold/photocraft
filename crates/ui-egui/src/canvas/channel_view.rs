@@ -257,14 +257,6 @@ fn render_with_source(
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let n = (w * h) as usize;
     let mut overlays: Vec<usize> = (0..doc.channels.len()).filter(|i| v.alpha_shown(*i)).collect();
-    // Visible spot channels of an RGB or CMYK document print over the picture as inks, in panel
-    // order, before the alpha channel and Quick Mask tints.
-    let spot_ids: Vec<usize> = overlays.iter().copied().filter(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i)).collect();
-    overlays.retain(|i| !spot_ids.contains(i));
-    // The ink colours are converted once per render, and only when there are inks to print.
-    let space = (!spot_ids.is_empty()).then(|| photocraft_compose::multichannel::InkSpace::of(doc));
-    let spots: Vec<(photocraft_compose::multichannel::Ink, Vec<f32>)> =
-        space.iter().flat_map(|space| spot_ids.iter().filter_map(|&i| doc.channels.get(i)).map(|ch| (space.ink(ch), sample(&ch.surface, r, factor)))).collect();
     let gray = |s: &Surface| sample(s, r, factor).into_iter().map(|g| [g, g, g, 1.0]).collect();
     // The sampled composite over white: the cached one when it matches, else rendered here (and
     // handed back to the cache).
@@ -280,7 +272,7 @@ fn render_with_source(
         Some(px)
     };
     // Premultiplied RGBA accumulator. With no colour channel left, the channel being edited
-    // (alpha, Quick Mask, or layer mask) is the picture — grayscale, not a rubylith over nothing.
+    // (alpha, spot, Quick Mask, or layer mask) is the picture — grayscale, not a rubylith over nothing.
     let mut solo_quick = false;
     let mut solo_mask = false;
     let mut out: Vec<[f32; 4]> = if vis == 0 {
@@ -328,6 +320,17 @@ fn render_with_source(
     } else {
         vec![[0.0; 4]; n]
     };
+    // Visible spot channels of an RGB or CMYK document print over the picture as inks, in panel
+    // order, before the alpha channel and Quick Mask tints.
+    let spots: Vec<(photocraft_compose::multichannel::Ink, Vec<f32>)> = if vis > 0 {
+        let spot_ids: Vec<usize> = overlays.iter().copied().filter(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i)).collect();
+        overlays.retain(|i| !spot_ids.contains(i));
+        // The ink colours are converted once per render, and only when there are inks to print.
+        let space = (!spot_ids.is_empty()).then(|| photocraft_compose::multichannel::InkSpace::of(doc));
+        space.iter().flat_map(|space| spot_ids.iter().filter_map(|&i| doc.channels.get(i)).map(|ch| (space.ink(ch), sample(&ch.surface, r, factor)))).collect()
+    } else {
+        Vec::new()
+    };
     if vis == colors && !spots.is_empty() {
         // Spot inks print over the composite (#10249) where they have ink: those pixels become
         // the opaque printed picture, the rest stay transparent so the normal canvas (display
@@ -348,7 +351,7 @@ fn render_with_source(
                 }
             }
         }
-    } else {
+    } else if vis > 0 {
         for (ink, vals) in &spots {
             ink.apply(&mut out, vals.iter().copied());
         }
