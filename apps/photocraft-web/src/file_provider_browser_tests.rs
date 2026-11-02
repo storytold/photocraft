@@ -5,13 +5,14 @@ use photocraft_ui_egui::{
     PhotocraftApp, Services,
     file_providers::{self, Host},
 };
-use wasm_bindgen::{JsCast, JsValue, prelude::wasm_bindgen};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
 wasm_bindgen_test_configure!(run_in_browser);
 
 const API: &str = "photocraftFileProviders";
+const EVENT: &str = "photocraft-file-provider";
 const LIMIT: u32 = 80 * 1024 * 1024;
 
 // This helper is test-only: the product has no handwritten script or postMessage listener.
@@ -76,6 +77,37 @@ impl Drop for InstalledApi {
             // Remove only the object installed by this fixture; never another caller's API.
             let _ = Reflect::delete_property(self.window.unchecked_ref::<Object>(), &API.into());
         }
+    }
+}
+
+struct PublishedEvents {
+    window: web_sys::Window,
+    callback: Closure<dyn FnMut(web_sys::Event)>,
+    events: Array,
+}
+
+impl PublishedEvents {
+    fn listen(window: &web_sys::Window) -> Result<Self, JsValue> {
+        let events = Array::new();
+        let recorded = events.clone();
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            recorded.push(event.as_ref());
+        });
+        window.add_event_listener_with_callback(EVENT, callback.as_ref().unchecked_ref())?;
+        Ok(Self { window: window.clone(), callback, events })
+    }
+
+    fn detail(&self, index: u32) -> Result<JsValue, JsValue> {
+        let event = self.events.get(index).dyn_into::<web_sys::CustomEvent>()?;
+        assert_eq!(event.type_(), EVENT);
+        Ok(event.detail())
+    }
+}
+
+impl Drop for PublishedEvents {
+    fn drop(&mut self) {
+        // Unregister this fixture's callback even when a later browser operation returns Err.
+        let _ = self.window.remove_event_listener_with_callback(EVENT, self.callback.as_ref().unchecked_ref());
     }
 }
 
@@ -240,25 +272,29 @@ pub async fn page_local_provider_boundary_checks_default_off_inputs_limits_and_o
         assert_eq!(bytes, &[1, 2, 3][..]);
         Ok((document.clone(), Vec::new()))
     }));
+    let published = PublishedEvents::listen(&window)?;
     let accepted = call(&api, "requestOpen", &["file-one".into()])?;
     let accepted_id = accepted.as_string().ok_or_else(|| JsValue::from_str("open request ID must be a string"))?;
-    let events = host.take_events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].metadata["type"], "openRequest");
-    assert_eq!(events[0].metadata["requestId"], accepted_id);
+    crate::file_providers::publish(&host);
+    assert_eq!(published.events.length(), 1);
+    let requested = published.detail(0)?;
+    assert_eq!(Reflect::get(&requested, &"type".into())?.as_string().as_deref(), Some("openRequest"));
+    assert_eq!(Reflect::get(&requested, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
     call(&api, "openResource", &[accepted, "loaded.png".into(), Uint8Array::from(&[1u8, 2, 3][..]).into()])?;
     assert!(host.busy());
-    assert!(host.take_events().is_empty(), "accepted bytes wait for application-thread admission");
+    crate::file_providers::publish(&host);
+    assert_eq!(published.events.length(), 1, "accepted bytes wait for application-thread admission");
     assert!(host.cancel_open(accepted_id.clone(), String::new()).is_err(), "the exported callback consumed its live request");
     file_providers::tick(&mut app, &egui::Context::default());
-    let events = host.take_events();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].metadata["type"], "opened");
-    assert_eq!(events[0].metadata["requestId"], accepted_id);
-    assert_eq!(events[0].metadata["resourceId"], "file-one");
-    assert_eq!(events[0].metadata["filename"], "loaded.png");
+    crate::file_providers::publish(&host);
+    assert_eq!(published.events.length(), 2, "admission publishes exactly one additional event");
+    let opened = published.detail(1)?;
+    assert_eq!(Reflect::get(&opened, &"type".into())?.as_string().as_deref(), Some("opened"));
+    assert_eq!(Reflect::get(&opened, &"requestId".into())?.as_string().as_deref(), Some(accepted_id.as_str()));
+    assert_eq!(Reflect::get(&opened, &"resourceId".into())?.as_string().as_deref(), Some("file-one"));
+    assert_eq!(Reflect::get(&opened, &"filename".into())?.as_string().as_deref(), Some("loaded.png"));
     let active = app.session.active().ok_or_else(|| JsValue::from_str("admitted provider document missing"))?;
-    assert_eq!(events[0].metadata["documentId"], active.doc.id.0.to_string());
+    assert_eq!(Reflect::get(&opened, &"documentId".into())?.as_string(), Some(active.doc.id.0.to_string()));
     assert!(host.bound(active.doc.id));
     assert_eq!(app.session.documents().len(), 2);
     assert!(!host.busy());
