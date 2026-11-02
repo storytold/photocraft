@@ -1,4 +1,4 @@
-use super::open::import_at_raw_ppi;
+use super::open::import_opened;
 use super::paths::{extension, file_name, join, list_images, read_file, stem};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, save_doc};
@@ -176,14 +176,15 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+/// Run each input and its action steps in an isolated session inheriting the caller’s preferences.
+/// Save successful outputs and collect errors without changing the caller’s documents.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
-    // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
-    let raw_ppi = s.prefs().raw_defaults.resolution;
+    // Imports use the caller's preferences, including Raw Defaults and the PSD pixel allowance.
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
@@ -192,7 +193,8 @@ fn process_outputs<'a>(
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+            scratch.edit_prefs(|prefs| *prefs = s.prefs().clone());
+            let doc = import_opened(s, &file_name(path), &bytes)?;
             scratch.add_document(doc, Some(path.to_string()));
             if !f(&mut scratch, &out)? {
                 let d = scratch.active().ok_or(EngineError::NoDocument)?;
@@ -244,6 +246,7 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Validate a batch action, carry playback limits across inputs, and save each result to its destination.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps =

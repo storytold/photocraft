@@ -67,7 +67,7 @@ pub mod pixels;
 mod psd_budget;
 mod psd_export;
 mod psd_import;
-pub use psd_budget::DEFAULT_PSD_IMPORT_PIXEL_BYTES;
+pub use psd_budget::{DEFAULT_PSD_IMPORT_PIXEL_BYTES, PsdImportBatchBudget, default_psd_import_pixel_bytes};
 pub mod psd_thumbnail;
 pub mod raw;
 pub mod slices_map;
@@ -349,17 +349,26 @@ pub struct ImportOptions {
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace. May lower the
-    /// default cap; does not cover metadata or smart-filter caches.
+    /// native default or raise it; wasm is capped at 1 GiB. Linux also checks current process/cgroup
+    /// headroom for both defaults and overrides. Does not cover metadata or smart-filter caches.
     pub psd_max_pixel_bytes: u64,
 }
 
 impl Default for ImportOptions {
+    /// Use normal SVG/raw settings and the platform’s automatic PSD/PSB pixel allowance.
     fn default() -> Self {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
-            psd_max_pixel_bytes: DEFAULT_PSD_IMPORT_PIXEL_BYTES,
+            psd_max_pixel_bytes: default_psd_import_pixel_bytes(),
         }
+    }
+}
+
+impl ImportOptions {
+    /// The configured allowance as this target can honour it.
+    pub fn effective_psd_max_pixel_bytes(&self) -> u64 {
+        psd_budget::effective_limit(self.psd_max_pixel_bytes, cfg!(target_arch = "wasm32"))
     }
 }
 
@@ -469,12 +478,12 @@ pub fn import_file_for_open_with(
         let bytes = photocraft_format::read_file(path).map_err(read_failed)?;
         return import_for_open_with(name, &bytes, opts, ctl);
     }
-    import_source_with_limit(name, photocraft_psd::Source::new(source), ctl, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    import_source_with_limit(name, photocraft_psd::Source::new(source), ctl, opts.effective_psd_max_pixel_bytes())
 }
 
 /// [`import_file_for_open_with`] for a PSD/PSB in any [`photocraft_psd::ReadAt`] source.
 pub fn import_source_for_open_with(name: &str, source: photocraft_psd::Source, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
-    import_source_with_limit(name, source, ctl, DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+    import_source_with_limit(name, source, ctl, default_psd_import_pixel_bytes())
 }
 
 fn import_source_with_limit(
@@ -508,7 +517,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
+        return import_psd(name, ctl, damaged, opts.effective_psd_max_pixel_bytes(), |want, recover| {
             PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
         });
     }
@@ -543,11 +552,11 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
+        return import_psd(name, ctl, damaged, opts.effective_psd_max_pixel_bytes(), |want, recover| {
             PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
         });
     }
-    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    flat::import_flat_with_limit(name, bytes, opts.effective_psd_max_pixel_bytes())
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

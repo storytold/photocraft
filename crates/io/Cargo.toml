@@ -46,6 +46,8 @@ imagesize = "0.13"
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# Query RAM only; no process, disk or network enumeration, and no wasm dependency.
+sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }

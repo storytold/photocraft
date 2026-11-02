@@ -782,3 +782,22 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
         assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
     }
 }
+
+#[test]
+/// Background byte and file opens enforce the same session PSD allowance.
+fn psd_import_budget_is_used_by_background_byte_and_file_opens() {
+    let src = session(256, 256);
+    let bytes = photocraft_io::export(&src.active().unwrap().doc, "psd", &Default::default()).unwrap().bytes;
+    let path = std::env::temp_dir().join(format!("photocraft-10745-jobs-{}.psd", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":1})).unwrap();
+    for source in [OpenSource::Bytes(Arc::new(bytes)), OpenSource::Path(path.to_string_lossy().into_owned())] {
+        let id = job(s.start_open("layers.psd", source).unwrap());
+        let outcome = wait_event(&mut s, id).outcome;
+        let JobOutcome::Failed(error) = outcome else { panic!("{outcome:?}") };
+        assert!(error.to_string().contains("pixel memory"), "{error}");
+        assert!(s.documents().is_empty());
+    }
+    std::fs::remove_file(path).unwrap();
+}

@@ -529,3 +529,24 @@ fn scripts_nested_deeper_than_the_limit_fail() {
     assert!(r.to_string().contains("nested more than"), "{r}");
     assert_eq!(s.actions.script_depth, 0, "the depth is released");
 }
+
+#[test]
+/// Contact Sheet must reject PSD sources that exceed the session allowance.
+fn psd_import_budget_is_used_by_contact_sheet_sources() {
+    let dir = tmp("psd-import-budget");
+    let path = format!("{dir}/source.psd");
+    let mut source = Session::new();
+    source.execute("file.new", json!({"width":256,"height":256,"background":"white"})).unwrap();
+    crate::file_cmds::save_doc(&source.active().unwrap().doc, &path, None).unwrap();
+    let params = json!({"input":[path],"units":"pixels","width":128,"height":128,"columns":1,"rows":1,"caption":false});
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":1})).unwrap();
+    let rejected = s.execute("file.automate.contactSheetII", params.clone()).unwrap();
+    assert_eq!(rejected["images"], 0);
+    assert!(rejected["errors"].to_string().contains("pixel memory"), "{rejected}");
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":4096})).unwrap();
+    let accepted = s.execute("file.automate.contactSheetII", params).unwrap();
+    assert_eq!(accepted["images"], 1);
+    assert_eq!(accepted["errors"], json!([]));
+    std::fs::remove_dir_all(dir).unwrap();
+}

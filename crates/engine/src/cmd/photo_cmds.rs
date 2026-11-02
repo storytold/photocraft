@@ -21,7 +21,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, flattened, import, list_images, read_file};
+use crate::file_cmds::{file_name, flattened, import_with_options, list_images, read_file};
 use crate::{EngineError, Result, Session};
 
 /// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
@@ -64,6 +64,8 @@ pub(crate) struct Source {
 /// Loaded sources, the common pixel format and the first source's ICC profile.
 type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 
+/// Preflight the combined PSD source allowance before importing files, then flatten them
+/// to a common pixel format alongside any requested open documents.
 fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     let mut docs: Vec<(String, Document)> = Vec::new();
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
@@ -76,9 +78,15 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
         Some(Value::String(dir)) => list_images(dir)?,
         _ => Vec::new(),
     };
+    let opts = crate::jobs::import_options(s.prefs());
+    let mut budget = photocraft_io::PsdImportBatchBudget::default();
+    // Read one source at a time, and reject the combined PSD estimate before decoding any.
+    for path in &paths {
+        budget.include(&read_file(path)?, &opts).map_err(|error| EngineError::Other(error.to_string()))?;
+    }
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import(&file_name(path), &bytes)?));
+        docs.push((file_name(path), import_with_options(&file_name(path), &bytes, &opts)?));
     }
     if docs.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));

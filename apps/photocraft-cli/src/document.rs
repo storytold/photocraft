@@ -26,13 +26,16 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// Open with the CLI import allowance, preserve raw defaults, and export to the requested format.
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
-    let mut o = files::open(input)?;
+    let mut session = photocraft_engine::Session::new();
+    a.import.apply(&mut session);
+    let mut o = files::open_with_options(input, &photocraft_engine::jobs::import_options(session.prefs()))?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
-    photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
+    photocraft_engine::file_cmds::raw_defaults(&session, &o.warnings, &mut o.document);
     warn_all(err, &o.warnings);
     warn_all(err, &missing_font_warnings(&o.document));
     let ws = files::save(&o.document, output, a.export.format.as_deref(), &opts, None)?;
@@ -40,9 +43,11 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
+/// Inspect a document after opening it under the CLI import allowance.
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
+    a.import.apply(&mut h.session);
     let opened = h.open(file)?;
     let mut doc = h.inspect(None)?;
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
@@ -72,9 +77,11 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
     Ok(cmds)
 }
 
+/// Open or create a document, run commands, and export using the configured import allowance.
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
+    a.import.apply(&mut h.session);
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
     let mut reported_fonts = std::collections::HashSet::<String>::new();
@@ -227,5 +234,74 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod psd_import_budget_tests {
+    use crate::test_support::invoke;
+
+    #[test]
+    /// Cover import-flag help, numeric bounds and the headless-only MCP restriction.
+    fn psd_import_flag_validates_values_and_is_listed_on_import_commands() {
+        for subcommand in ["convert", "info", "run", "batch", "droplet", "serve", "mcp"] {
+            let result = invoke(&[subcommand, "--help"]);
+            assert_eq!(result.code, 0);
+            assert!(result.stdout.contains("--psd-import-memory-mb"), "{subcommand}: {}", result.stdout);
+        }
+        for value in ["-1", "1048577", "1.5", "huge"] {
+            let result = invoke(&["info", "a.psd", "--psd-import-memory-mb", value]);
+            assert_eq!(result.code, 2, "{}", result.stderr);
+            assert!(result.stderr.contains("--psd-import-memory-mb"));
+        }
+        let result = invoke(&["mcp", "--bridge", "7878", "--psd-import-memory-mb", "8192"]);
+        assert_eq!(result.code, 2);
+        assert!(result.stderr.contains("headless MCP mode"));
+    }
+
+    #[test]
+    /// Refuse an over-budget PSD across CLI import routes before writing an output.
+    fn cli_info_run_convert_and_batch_honour_the_limit_before_opening() {
+        let folder = std::env::temp_dir().join(format!("photocraft-10745-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let native = folder.join("native.pcraft").to_string_lossy().into_owned();
+        let psd = folder.join("source.psd").to_string_lossy().into_owned();
+        let png = folder.join("result.png").to_string_lossy().into_owned();
+        let result = invoke(&["run", "--new", r#"{"width":256,"height":256,"background":"white"}"#, "--out", &native]);
+        assert_eq!(result.code, 0, "{}", result.stderr);
+        assert_eq!(invoke(&["convert", &native, &psd]).code, 0);
+        for args in [
+            vec!["info", &psd, "--psd-import-memory-mb", "1"],
+            vec!["run", &psd, "--out", &png, "--psd-import-memory-mb", "1"],
+            vec!["convert", &psd, &png, "--psd-import-memory-mb", "1"],
+        ] {
+            let result = invoke(&args);
+            assert_eq!(result.code, 1, "{}", result.stderr);
+            assert!(result.stderr.contains("pixel memory"), "{}", result.stderr);
+            assert!(!std::path::Path::new(&png).exists());
+        }
+        for mb in ["0", "4096"] {
+            let result = invoke(&["info", &psd, "--psd-import-memory-mb", mb]);
+            assert_eq!(result.code, 0, "{}", result.stderr);
+        }
+        let actions = folder.join("actions.json");
+        std::fs::write(&actions, r#"["select.deselect"]"#).unwrap();
+        let out = folder.join("output");
+        let result = invoke(&[
+            "batch",
+            "--actions",
+            &actions.to_string_lossy(),
+            "--in",
+            &folder.to_string_lossy(),
+            "--out",
+            &out.to_string_lossy(),
+            "--format",
+            "png",
+            "--psd-import-memory-mb",
+            "1",
+        ]);
+        assert_eq!(result.code, 1, "{}", result.stderr);
+        assert!(result.stderr.contains("pixel memory"), "{}", result.stderr);
+        std::fs::remove_dir_all(folder).unwrap();
     }
 }

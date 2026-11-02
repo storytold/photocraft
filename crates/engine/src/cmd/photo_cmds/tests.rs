@@ -350,3 +350,45 @@ fn crop_and_straighten_makes_documents() {
     let (c, e) = (l.rgba(d.size.width as i32 / 2, 6)[0], l.rgba(d.size.width as i32 / 2, d.size.height as i32 - 6)[0]);
     assert!((c - e).abs() < 0.05);
 }
+
+#[test]
+/// Photography sources respect the per-session PSD allowance.
+fn psd_import_budget_is_used_by_photography_source_loading() {
+    let dir = std::env::temp_dir().join(format!("photocraft-10745-photo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("source.psd");
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":256,"height":256,"background":"white"})).unwrap();
+    crate::file_cmds::save_doc(&s.active().unwrap().doc, &path.to_string_lossy(), None).unwrap();
+    let params = json!({"paths":[path.to_string_lossy()]});
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":1})).unwrap();
+    let error = match load_sources(&s, &params, "test") {
+        Ok(_) => panic!("photography sources must honour the configured allowance"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("pixel memory"), "{error}");
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":4096})).unwrap();
+    assert_eq!(load_sources(&s, &params, "test").unwrap().0.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+/// Reject a combined PSD source set even when each source fits on its own.
+fn photography_sources_cannot_each_spend_the_psd_allowance() {
+    let dir = std::env::temp_dir().join(format!("photocraft-10778-photo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":256,"height":256,"background":"white"})).unwrap();
+    let path = dir.join("source.psd");
+    crate::file_cmds::save_doc(&s.active().unwrap().doc, &path.to_string_lossy(), None).unwrap();
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":4})).unwrap();
+    let one = json!({"paths":[path.to_string_lossy()]});
+    assert_eq!(load_sources(&s, &one, "test").unwrap().0.len(), 1);
+    let two = json!({"paths":[path.to_string_lossy(),path.to_string_lossy()]});
+    let error = load_sources(&s, &two, "test").err().expect("combined estimate exceeds 4 MiB");
+    assert!(error.to_string().contains("pixel memory"), "{error}");
+    assert_eq!(s.documents().len(), 1, "rejection leaves the session untouched");
+    s.execute("prefs.set", json!({"path":"performance.psdImportMemoryMb","value":16})).unwrap();
+    assert_eq!(load_sources(&s, &two, "test").unwrap().0.len(), 2);
+    std::fs::remove_dir_all(dir).unwrap();
+}

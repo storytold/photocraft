@@ -4,27 +4,31 @@ use super::{
     resize_surface, str_param, translate_surface,
 };
 
+/// Import an auxiliary document with default settings, refusing thumbnail-only previews.
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
-    import_result(name, bytes).map(|r| r.document)
+    import_with_options(name, bytes, &Default::default())
 }
 
-/// [`import`] for a file that becomes a document of its own (Revert, Load Files into Stack;
-/// Batch's scratch sessions use [`import_at_raw_ppi`]): a developed raw gets Preferences › Raw
+/// Auxiliary import with the caller's settings, preserving the ordinary preview refusal.
+pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Document> {
+    import_result(name, bytes, opts).map(|r| r.document)
+}
+
+/// [`import`] with the session's import settings (Revert, Load Files into Stack, Batch):
+/// a developed raw gets Preferences › Raw
 /// Defaults › Resolution, as it does through File › Open.
 pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_at_raw_ppi(s.prefs().raw_defaults.resolution, name, bytes)
-}
-
-pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
-    let r = import_result(name, bytes)?;
+    let opts = crate::jobs::import_options(s.prefs());
+    let r = import_result(name, bytes, &opts)?;
     let mut doc = r.document;
-    raw_resolution(raw_ppi, &r.warnings, &mut doc);
+    raw_resolution(s.prefs().raw_defaults.resolution, &r.warnings, &mut doc);
     Ok(doc)
 }
 
-fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
+/// Apply the import allowance and refuse previews that auxiliary workflows cannot identify to users.
+fn import_result(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
     crate::allocation::checkpoint("importing document")?;
-    let r = photocraft_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+    let r = photocraft_io::import_with_options(name, bytes, opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -108,13 +112,15 @@ fn raw_resolution(ppi: f64, warnings: &[String], doc: &mut Document) {
     }
 }
 
+/// Open bytes with an optional format override while retaining session import limits and raw defaults.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let r = photocraft_io::import(&decode_name, bytes).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
+    let opts = crate::jobs::import_options(s.prefs());
+    let r = photocraft_io::import_with_options(&decode_name, bytes, &opts).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
     raw_defaults(s, &r.warnings, &mut doc);
@@ -212,6 +218,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "smartObject": smart}))
 }
 
+/// Read and place a source through session import settings, retaining a path for linked objects.
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let cmd = if linked { "file.placeLinked" } else { "file.placeEmbedded" };
     let path = str_param(p, "path", cmd)?.to_string();

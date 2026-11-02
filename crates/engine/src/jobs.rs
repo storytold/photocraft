@@ -514,7 +514,11 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
-        ..Default::default()
+        psd_max_pixel_bytes: if prefs.performance.psd_import_memory_mb == 0 {
+            photocraft_io::default_psd_import_pixel_bytes()
+        } else {
+            u64::from(prefs.performance.psd_import_memory_mb) << 20
+        },
     }
 }
 

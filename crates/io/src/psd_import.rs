@@ -1222,6 +1222,8 @@ pub(crate) fn psd_to_document_decoded_integrity(
     psd_to_document_global(file, ctl, decoded, global, false).map(|(doc, warnings, damaged, _)| (doc, warnings, damaged))
 }
 
+/// Map a parsed PSD to a document, refusing failed preflights before allocating pixel surfaces.
+/// Legacy callers receive a minimal document and warning; preflighted imports reuse their earlier check.
 fn psd_to_document_global(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,
@@ -1232,7 +1234,7 @@ fn psd_to_document_global(
     // Legacy conversion APIs return warnings rather than Result. Reject before metadata or
     // pixels are decoded, and retain the fatal error for the ordinary import path. An import
     // that checked the file against its own limit first (`preflighted`) does not estimate twice.
-    if !preflighted && let Err(error) = crate::psd_budget::check(file, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES) {
+    if !preflighted && let Err(error) = crate::psd_budget::check(file, crate::default_psd_import_pixel_bytes()) {
         let message = error.to_string();
         let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
         return Some((doc, vec![message], true, Some(error)));

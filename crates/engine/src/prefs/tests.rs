@@ -1065,3 +1065,25 @@ fn the_web_build_caps_memory_usage() {
         assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
     }
 }
+
+#[test]
+/// The import preference survives persistence, validates bounds and reaches import options.
+fn psd_import_memory_preference_is_validated_persisted_and_used() {
+    let mut s = Session::new();
+    let path = "performance.psdImportMemoryMb";
+    assert_eq!(crate::jobs::import_options(s.prefs()).psd_max_pixel_bytes, photocraft_io::default_psd_import_pixel_bytes());
+    for mb in [1u32, 4096, 65536, 0] {
+        s.execute("prefs.set", json!({"path": path, "value": mb})).unwrap();
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restored.prefs().performance.psd_import_memory_mb, mb);
+        let bytes = if mb == 0 { photocraft_io::default_psd_import_pixel_bytes() } else { u64::from(mb) << 20 };
+        assert_eq!(crate::jobs::import_options(restored.prefs()).psd_max_pixel_bytes, bytes);
+    }
+    for value in [json!(-1), json!(1_048_577), json!(1.5), json!("4096"), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": path, "value": value})).is_err());
+    }
+    s.execute("prefs.set", json!({"path": path, "value": 4096})).unwrap();
+    s.execute("prefs.reset", json!({"path": path})).unwrap();
+    assert_eq!(s.prefs().performance.psd_import_memory_mb, 0);
+}

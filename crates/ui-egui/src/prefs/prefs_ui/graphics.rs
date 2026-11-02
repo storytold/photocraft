@@ -129,6 +129,27 @@ pub(super) fn memory_usage_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) 
     ui.add_space(8.0);
 }
 
+/// Import preflight is separate from History's budget, since it includes decode workspace.
+pub(super) fn psd_import_memory_row(ui: &mut egui::Ui, obj: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.group(|ui| {
+        ui.label(RichText::new(tl!("PSD/PSB Import Memory")).strong());
+        let mut mb = obj.get("psdImportMemoryMb").and_then(Value::as_u64).unwrap_or(0);
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Pixel memory limit (MiB)"));
+            if ui.add(egui::DragValue::new(&mut mb).range(0..=1_048_576).suffix(" MiB")).labelled_by(label.id).changed() {
+                obj.insert("psdImportMemoryMb".into(), json!(mb));
+            }
+        });
+        ui.label(RichText::new(tl!("0 = Automatic: half of installed RAM, at least 2 GiB. The browser limit is 1 GiB.")).color(t.text_dim));
+        ui.label(
+            RichText::new(tl!("Includes layers, masks and decode workspace. Applies to subsequent imports; memory is not reserved in advance."))
+                .color(t.text_dim),
+        );
+    });
+    ui.add_space(8.0);
+}
+
 /// Settings read only when the app starts, which say "Applies at next launch." under their row.
 pub(super) fn read_at_launch(path: &str) -> bool {
     match path {

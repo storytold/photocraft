@@ -16,7 +16,7 @@ const BAND_BYTES: usize = 32 << 20;
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_flat_with_limit(name, bytes, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+    import_flat_with_limit(name, bytes, crate::default_psd_import_pixel_bytes())
 }
 
 /// [`import_flat`] with the caller's PSD pixel allowance, which a layered TIFF is held to.
@@ -235,7 +235,7 @@ pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
 /// a second full-size copy (#8169), when the machine has the memory for it (see
 /// [`crate::memory`]).
 pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result<ImportResult, IoError> {
-    import_tiff_page_with_limit(name, bytes, page, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+    import_tiff_page_with_limit(name, bytes, page, crate::default_psd_import_pixel_bytes())
 }
 
 fn import_tiff_page_with_limit(name: &str, bytes: &[u8], page: Option<usize>, pixel_limit: u64) -> Result<ImportResult, IoError> {

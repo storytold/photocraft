@@ -39,6 +39,23 @@ pub(crate) enum Command {
     Serve(ServeArgs),
 }
 
+/// Import controls shared by file commands and headless servers.
+#[derive(Args)]
+pub(crate) struct ImportArgs {
+    /// PSD/PSB pixel memory allowance in MiB, including decode workspace (0 = automatic)
+    #[arg(long, value_name = "MiB", value_parser = clap::value_parser!(u32).range(0..=1_048_576), allow_negative_numbers = true)]
+    pub(crate) psd_import_memory_mb: Option<u32>,
+}
+
+impl ImportArgs {
+    /// Apply the validated CLI import allowance before any file or action is opened.
+    pub(crate) fn apply(&self, session: &mut photocraft_engine::Session) {
+        if let Some(mb) = self.psd_import_memory_mb {
+            session.edit_prefs(|p| p.performance.psd_import_memory_mb = mb);
+        }
+    }
+}
+
 // How an image is written: shared by `convert`, `run` and `batch`.
 #[derive(Args)]
 pub(crate) struct ExportArgs {
@@ -82,6 +99,8 @@ pub(crate) struct ExportArgs {
 /// --in-place allows it.
 #[derive(Args)]
 pub(crate) struct ConvertArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The file to read
     #[arg(value_name = "IN")]
     pub(crate) input: PathBuf,
@@ -98,6 +117,8 @@ pub(crate) struct ConvertArgs {
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     pub(crate) file: PathBuf,
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
@@ -113,6 +134,8 @@ pub(crate) struct InfoArgs {
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
 #[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
 pub(crate) struct RunArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The document to open
     pub(crate) file: Option<PathBuf>,
     /// Start from a new document with these JSON parameters instead of opening a file
@@ -153,6 +176,8 @@ pub(crate) enum Step {
 /// loaded, so its steps can play other actions of the set.
 #[derive(Args)]
 pub(crate) struct BatchArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The action list: actions.json, a droplet, or a Photoshop Actions file (.atn)
     #[arg(long, value_name = "FILE")]
     pub(crate) actions: PathBuf,
@@ -176,6 +201,8 @@ pub(crate) struct BatchArgs {
 /// Run a droplet (File › Automate › Create Droplet) on images and folders
 #[derive(Args)]
 pub(crate) struct DropletArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The droplet to run
     #[arg(value_name = "FILE.pcdroplet")]
     pub(crate) file: String,
@@ -205,6 +232,8 @@ pub(crate) struct CommandsArgs {
 /// app; root flags are refused. The token flags require --bridge (or PHOTOCRAFT_CONTROL_PORT).
 #[derive(Args)]
 pub(crate) struct McpArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// Bridge to the PhotoCraft app listening here instead of a headless engine; a bare port means
     /// 127.0.0.1:<PORT>
     #[arg(long, value_name = "127.0.0.1:PORT", env = "PHOTOCRAFT_CONTROL_PORT", value_parser = bridge)]
@@ -227,6 +256,8 @@ pub(crate) struct McpArgs {
 /// --port (or PHOTOCRAFT_CONTROL_PORT); stdio needs no control token.
 #[derive(Args)]
 pub(crate) struct ServeArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// Listen on 127.0.0.1:<PORT> instead of stdio
     #[arg(long, value_name = "PORT", env = "PHOTOCRAFT_CONTROL_PORT", value_parser = control_port)]
     pub(crate) port: Option<u16>,
@@ -269,6 +300,8 @@ enum ServerOptionError {
     /// authority the bridge can't give (#8035).
     #[error("configure automation roots on the desktop app; --automation-read-root and --automation-write-root require headless MCP mode")]
     BridgeRoots,
+    #[error("--psd-import-memory-mb requires headless MCP mode; configure performance.psdImportMemoryMb on the desktop app")]
+    BridgeImport,
     /// A token flag without the bridge or port that reads it would be ignored (#8035).
     #[error("{flag} requires {transport}")]
     NeedsTransport { flag: &'static str, transport: &'static str },
@@ -278,7 +311,7 @@ impl ServerOptionError {
     fn into_clap(self, cmd: &mut clap::Command) -> clap::Error {
         let kind = match self {
             Self::BridgeVar(_) => ErrorKind::ValueValidation,
-            Self::BridgeRoots => ErrorKind::ArgumentConflict,
+            Self::BridgeRoots | Self::BridgeImport => ErrorKind::ArgumentConflict,
             Self::NeedsTransport { .. } => ErrorKind::MissingRequiredArgument,
         };
         cmd.error(kind, self)
@@ -397,6 +430,9 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                 }
                 if a.bridge.is_some() && (a.automation.automation_read_root.is_some() || a.automation.automation_write_root.is_some()) {
                     return Err(ServerOptionError::BridgeRoots.into_clap(sub));
+                }
+                if a.bridge.is_some() && a.import.psd_import_memory_mb.is_some() {
+                    return Err(ServerOptionError::BridgeImport.into_clap(sub));
                 }
                 check_server(sub, m, a.bridge.is_some(), "--bridge")?;
             }

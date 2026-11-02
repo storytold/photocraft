@@ -118,6 +118,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
+        "performance.psdImportMemoryMb" => (0.0, 1_048_576.0),
         "performance.gpuMemoryMb" => (0.0, 1_048_576.0),
         "performance.historyStates" => (1.0, 1000.0),
         "performance.cacheLevels" => (1.0, 8.0),

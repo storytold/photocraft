@@ -2044,3 +2044,21 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+#[test]
+/// Render and edit the PSD import control so a missing write-back fails the test.
+fn psd_import_memory_preference_is_visible_and_keeps_its_value() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let values = json!({"psdImportMemoryMb":8192}).as_object().unwrap().clone();
+    assert!(!field_visible("performance", &values, "psdImportMemoryMb", ""));
+    let mut h = Harness::builder()
+        .with_size(vec2(800.0, 350.0))
+        .build_ui_state(|ui, values| section_fields(ui, "performance", values, &[], crate::i18n::Lang::EN, None, "PSD/PSB"), values);
+    h.run_steps(2);
+    h.get_by_label("PSD/PSB Import Memory");
+    h.get_by_label("Pixel memory limit (MiB)");
+    assert_eq!(h.state()["psdImportMemoryMb"], 8192);
+    h.get_by_role(egui::accesskit::Role::SpinButton).set_value_accesskit(4096.0);
+    h.run_steps(2);
+    assert_eq!(h.state()["psdImportMemoryMb"], 4096);
+}

@@ -1,6 +1,6 @@
 use super::appearance::{AppearanceRows, appearance_rows, system_theme};
 use super::dialogs::{mismatch_body, presets_body, presets_io_body, settings_height};
-use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, read_at_launch, rendering_mode_row};
+use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, psd_import_memory_row, read_at_launch, rendering_mode_row};
 use super::shortcuts::shortcuts_body;
 use super::{Color32, Map, PhotocraftApp, RichText, SECTIONS, Sense, Tokens, Value, json, prefs, vec2};
 
@@ -29,6 +29,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 /// split camelCase into words (`convertToSrgb` → "Convert to srgb").
 pub(super) fn humanize(key: &str) -> String {
     match key {
+        "psdImportMemoryMb" => return "PSD/PSB Import Memory (MiB, 0 = Automatic)".into(),
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
@@ -363,7 +364,7 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
     let drawn_elsewhere = (section == "interface" && matches!(k, "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes"))
         // View › Rulers (⌘R) sets it, as in Photoshop.
         || path == "unitsAndRulers.showRulers"
-        || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))
+        || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb" | "psdImportMemoryMb"))
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
         || (section == "export" && !export_field_visible(obj, k))
@@ -397,6 +398,9 @@ pub(super) fn section_fields(
     }
     if section == "performance" && (query.is_empty() || preference_matches(section, "memoryUsageMb", &query)) {
         memory_usage_row(ui, obj);
+    }
+    if section == "performance" && (query.is_empty() || preference_matches(section, "psdImportMemoryMb", &query)) {
+        psd_import_memory_row(ui, obj);
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));

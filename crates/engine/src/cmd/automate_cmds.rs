@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, import, join, list_images, read_file, stem, write_file};
+use crate::file_cmds::{file_name, import_with_options, join, list_images, read_file, stem, write_file};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -471,7 +471,9 @@ fn units_px(v: f64, unit: &str, res: f64) -> f64 {
     }
 }
 
+/// Lay out source files on contact-sheet pages using session import settings for every source.
 fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
+    let import_opts = crate::jobs::import_options(s.prefs());
     let cmd = "file.automate.contactSheetII";
     let files: Vec<String> = match p.get("input").or_else(|| p.get("files")) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
@@ -523,7 +525,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             let y0 = vs + f64::from(r) * (cell_h + vs);
             let thumb = (|| -> Result<photocraft_doc::Surface> {
                 let bytes = read_file(path)?;
-                let src = import(&file_name(path), &bytes)?;
+                let src = import_with_options(&file_name(path), &bytes, &import_opts)?;
                 let mut t = Session::new();
                 t.add_document(src, None);
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
