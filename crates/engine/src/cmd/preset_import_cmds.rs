@@ -497,14 +497,14 @@ mod tests {
     }
 
     /// #10433 review: a selected import becomes the current preset, so an unnamed Update Brush
-    /// targets it, including after a re-import replaced the group the old current preset was in.
+    /// targets it, including after a `replace` re-import dropped the group the old current preset was in.
     #[test]
     fn a_selected_import_is_the_current_preset() {
         let mut s = Session::new();
         let data = photocraft_paint::tile::b64_encode(&abr_v2());
         s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true})).unwrap();
         assert_eq!(s.tools.current_preset.as_deref(), Some("Hard Round 2"));
-        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true})).unwrap();
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true, "replace": true})).unwrap();
         assert_eq!(s.tools.current_preset.as_deref(), Some("Hard Round 2"), "the replacement, not None");
         s.execute("brush.presets.update", json!({})).unwrap();
     }
