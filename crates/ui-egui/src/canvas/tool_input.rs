@@ -227,8 +227,11 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
-            // (not when the selected pixels move: those are the active layer's).
-            if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.command {
+            // (not when the selected pixels move: those are the active layer's). The Move tool
+            // that ⌘ summons over another tool takes Auto-Select as it is set, as in Photoshop:
+            // that ⌘ doesn't turn it round too (#9619).
+            let flip = mods.command && app.ui.tool == Tool::Move;
+            if !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != flip {
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
