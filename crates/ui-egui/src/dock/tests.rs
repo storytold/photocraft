@@ -1093,3 +1093,27 @@ fn restore_notice_is_visible_with_hidden_status_bar_and_fullscreen_chrome() {
         }
     }
 }
+
+#[test]
+fn window_menu_reveals_hides_and_expands_replace_fallback_but_noop_show_keeps_it() {
+    let ctx = egui::Context::default();
+    for (id, group) in [("window.panel.history", Group::History), ("window.panel.gradients", Group::Color)] {
+        let (mut app, _, _) = app_with_layers();
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        let saved = retained_fallback(&mut app);
+        assert!(app.ui.status.contains("editing panels or resetting"));
+        assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("editing panels or resetting"))));
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert_eq!(snapshot(&app)["docking"], saved["docking"], "no-op {id}");
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":false})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "hide {id}");
+        retained_fallback(&mut app);
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "show {id}");
+        app.ui.dock.set_collapsed(group, true);
+        retained_fallback(&mut app);
+        crate::menus::invoke(&mut app, &ctx, id, json!({"show":true})).unwrap();
+        assert!(app.ui.docking_kept.is_none(), "expand {id}");
+        assert!(!app.ui.dock.is_collapsed(group));
+    }
+}
