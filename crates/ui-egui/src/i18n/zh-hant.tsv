@@ -3234,3 +3234,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} 個失敗
 @plural	{n} waiting|{n} waiting	{n} 個等待中
 @plural	{n} generating|{n} generating	{n} 個正在產生
+	Check the service's own terms for what each request costs.	每次請求的費用請查看該服務的條款。
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	此變體已略過色彩比對：選取範圍周圍的影像傳回時差異過大，無法安全比對。
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	此變體已略過色彩比對：選取範圍外的影像太少，無法測量。
+	Each request is billed by the service.	每次請求都由該服務計費。
+	Each request uses your subscription allowance.	每次請求都會使用你的訂閱額度。
+	Generate {n}	產生 {n} 個
+	Save Fill Diagnostics…	儲存填色診斷…
+	Saved Generative Fill diagnostics to {folder}	生成式填色診斷已儲存到 {folder}
+	Select a generative layer first.	請先選取一個生成式圖層。
+	The connection is set up as free of charge.	此連線設定為免費。
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	服務為 {sent} 的區域傳回了 {returned} 的影像；縮放後與選取範圍周圍的影像吻合。
+	The service returned a {returned} picture for a {sent} area; its centre was used.	服務為 {sent} 的區域傳回了 {returned} 的影像；已使用其中央部分。
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	將此次填色傳送和收到的內容（影像、遮色片、提示詞和摘要）寫入你選擇的資料夾。除非你要求，否則不會儲存任何內容。
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	已為 {n} 個變體略過色彩比對。
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	在這台電腦上用 {connection} 產生 {n} 個變體。
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	產生 {n} 個變體：向 {connection} 傳送 {n} 個個別請求。

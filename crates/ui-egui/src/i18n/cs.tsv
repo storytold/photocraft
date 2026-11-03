@@ -4337,3 +4337,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} selhala|{n} selhaly|{n} selhalo
 @plural	{n} waiting|{n} waiting	{n} čeká|{n} čekají|{n} čeká
 @plural	{n} generating|{n} generating	{n} se generuje|{n} se generují|{n} se generuje
+	Check the service's own terms for what each request costs.	Kolik stojí každý požadavek, uvádějí podmínky služby.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Sladění barev bylo u této varianty přeskočeno: obraz kolem výběru se vrátil příliš odlišný, aby šel bezpečně sladit.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Sladění barev bylo u této varianty přeskočeno: mimo výběr je příliš málo obrazu na měření.
+	Each request is billed by the service.	Každý požadavek služba účtuje.
+	Each request uses your subscription allowance.	Každý požadavek čerpá limit vašeho předplatného.
+	Generate {n}	Generovat {n}
+	Save Fill Diagnostics…	Uložit diagnostiku výplně…
+	Saved Generative Fill diagnostics to {folder}	Diagnostika generativní výplně uložena do {folder}
+	Select a generative layer first.	Nejprve vyberte generativní vrstvu.
+	The connection is set up as free of charge.	Připojení je nastaveno jako bezplatné.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Služba vrátila obrázek {returned} pro oblast {sent}; po změně měřítka odpovídal obrazu kolem výběru.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Služba vrátila obrázek {returned} pro oblast {sent}; byl použit jeho střed.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Zapíše, co tato výplň odeslala a dostala zpět (obrázky, masku, prompt a souhrn), do složky, kterou zvolíte. Nic se neuloží, pokud o to nepožádáte.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Sladění barev bylo přeskočeno u {n} varianty.|Sladění barev bylo přeskočeno u {n} variant.|Sladění barev bylo přeskočeno u {n} variant.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Vytvoří {n} variantu na tomto počítači pomocí {connection}.|Vytvoří {n} varianty na tomto počítači pomocí {connection}.|Vytvoří {n} variant na tomto počítači pomocí {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Vytvoří {n} variantu: {n} požadavek na {connection}.|Vytvoří {n} varianty: {n} samostatné požadavky na {connection}.|Vytvoří {n} variant: {n} samostatných požadavků na {connection}.

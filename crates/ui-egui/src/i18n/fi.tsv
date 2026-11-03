@@ -4845,3 +4845,19 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 @plural	{n} failed|{n} failed	{n} epäonnistui|{n} epäonnistui
 @plural	{n} waiting|{n} waiting	{n} odottaa|{n} odottaa
 @plural	{n} generating|{n} generating	{n} luodaan|{n} luodaan
+	Check the service's own terms for what each request costs.	Katso palvelun omista ehdoista, mitä kukin pyyntö maksaa.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Värien sovitus ohitettiin tälle muunnelmalle: kuva valinnan ympärillä palasi liian erilaisena sovitettavaksi turvallisesti.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Värien sovitus ohitettiin tälle muunnelmalle: valinnan ulkopuolella on liian vähän kuvaa mittaamiseen.
+	Each request is billed by the service.	Palvelu laskuttaa jokaisesta pyynnöstä.
+	Each request uses your subscription allowance.	Jokainen pyyntö kuluttaa tilauksesi kiintiötä.
+	Generate {n}	Luo {n}
+	Save Fill Diagnostics…	Tallenna täytön diagnostiikka…
+	Saved Generative Fill diagnostics to {folder}	Generatiivisen täytön diagnostiikka tallennettu kansioon {folder}
+	Select a generative layer first.	Valitse ensin generatiivinen taso.
+	The connection is set up as free of charge.	Yhteys on määritetty maksuttomaksi.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Palvelu palautti {returned}-kuvan {sent}-alueelle; skaalattuna se sopi valinnan ympäröivään kuvaan.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Palvelu palautti {returned}-kuvan {sent}-alueelle; sen keskiosaa käytettiin.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Kirjoittaa valitsemaasi kansioon, mitä tämä täyttö lähetti ja sai takaisin (kuvat, maskin, kehotteen ja yhteenvedon). Mitään ei tallenneta, ellet pyydä.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Värien sovitus ohitettiin {n} muunnelmalle.|Värien sovitus ohitettiin {n} muunnelmalle.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Tekee {n} muunnelman tällä tietokoneella, palvelulla {connection}.|Tekee {n} muunnelmaa tällä tietokoneella, palvelulla {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Tekee {n} muunnelman: {n} pyyntö palveluun {connection}.|Tekee {n} muunnelmaa: {n} erillistä pyyntöä palveluun {connection}.

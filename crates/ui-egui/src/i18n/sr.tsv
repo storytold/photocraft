@@ -4670,3 +4670,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} neuspešna|{n} neuspešne|{n} neuspešnih
 @plural	{n} waiting|{n} waiting	{n} čeka|{n} čekaju|{n} čeka
 @plural	{n} generating|{n} generating	{n} se generiše|{n} se generišu|{n} se generiše
+	Check the service's own terms for what each request costs.	Koliko košta svaki zahtev, piše u uslovima usluge.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Usklađivanje boja je preskočeno za ovu varijaciju: slika oko izbora vratila se previše drugačija da bi se bezbedno uskladila.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Usklađivanje boja je preskočeno za ovu varijaciju: van izbora je premalo slike za merenje.
+	Each request is billed by the service.	Usluga naplaćuje svaki zahtev.
+	Each request uses your subscription allowance.	Svaki zahtev troši kvotu vaše pretplate.
+	Generate {n}	Generiši {n}
+	Save Fill Diagnostics…	Sačuvaj dijagnostiku popune…
+	Saved Generative Fill diagnostics to {folder}	Dijagnostika generativne popune sačuvana u {folder}
+	Select a generative layer first.	Prvo izaberite generativni sloj.
+	The connection is set up as free of charge.	Veza je podešena kao besplatna.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Usluga je vratila sliku {returned} za oblast {sent}; nakon skaliranja poklopila se sa slikom oko izbora.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Usluga je vratila sliku {returned} za oblast {sent}; upotrebljena je njena sredina.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Upisuje u fasciklu koju izaberete ono što je ova popuna poslala i dobila nazad (slike, masku, upit i rezime). Ništa se ne čuva dok to ne zatražite.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Usklađivanje boja je preskočeno za {n} varijaciju.|Usklađivanje boja je preskočeno za {n} varijacije.|Usklađivanje boja je preskočeno za {n} varijacija.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Pravi {n} varijaciju na ovom računaru, pomoću {connection}.|Pravi {n} varijacije na ovom računaru, pomoću {connection}.|Pravi {n} varijacija na ovom računaru, pomoću {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Pravi {n} varijaciju: {n} zahtev za {connection}.|Pravi {n} varijacije: {n} zasebna zahteva za {connection}.|Pravi {n} varijacija: {n} zasebnih zahteva za {connection}.

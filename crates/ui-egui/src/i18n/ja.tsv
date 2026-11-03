@@ -4270,3 +4270,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} 件失敗
 @plural	{n} waiting|{n} waiting	{n} 件待機中
 @plural	{n} generating|{n} generating	{n} 件生成中
+	Check the service's own terms for what each request costs.	各リクエストの料金はサービスの規約をご確認ください。
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	このバリエーションではカラーマッチングをスキップしました：選択範囲の周囲の画像が大きく変わって返されたため、安全に合わせられません。
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	このバリエーションではカラーマッチングをスキップしました：選択範囲外の画像が少なすぎて測定できません。
+	Each request is billed by the service.	リクエストごとにサービスから課金されます。
+	Each request uses your subscription allowance.	リクエストごとにサブスクリプションの利用枠を使います。
+	Generate {n}	{n} 件生成
+	Save Fill Diagnostics…	塗りつぶしの診断を保存…
+	Saved Generative Fill diagnostics to {folder}	生成塗りつぶしの診断を {folder} に保存しました
+	Select a generative layer first.	先に生成レイヤーを選択してください。
+	The connection is set up as free of charge.	この接続は無料として設定されています。
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	サービスは {sent} の領域に対して {returned} の画像を返しました。拡大縮小すると選択範囲の周囲の画像と一致しました。
+	The service returned a {returned} picture for a {sent} area; its centre was used.	サービスは {sent} の領域に対して {returned} の画像を返しました。中央部分を使用しました。
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	この塗りつぶしが送信・受信したもの（画像、マスク、プロンプト、概要）を選んだフォルダーに書き出します。指示しない限り何も保存されません。
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	{n} 件のバリエーションでカラーマッチングをスキップしました。
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	このコンピューター上で {connection} を使って {n} 件のバリエーションを作成します。
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	{n} 件のバリエーションを作成します：{connection} への {n} 件の個別リクエスト。

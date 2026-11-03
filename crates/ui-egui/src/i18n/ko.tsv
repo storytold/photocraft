@@ -3813,3 +3813,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n}개 실패
 @plural	{n} waiting|{n} waiting	{n}개 대기 중
 @plural	{n} generating|{n} generating	{n}개 생성 중
+	Check the service's own terms for what each request costs.	요청당 비용은 서비스 약관을 확인하세요.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	이 변형에서는 색상 맞춤을 건너뛰었습니다: 선택 영역 주변 이미지가 너무 다르게 돌아와 안전하게 맞출 수 없습니다.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	이 변형에서는 색상 맞춤을 건너뛰었습니다: 선택 영역 밖의 이미지가 너무 적어 측정할 수 없습니다.
+	Each request is billed by the service.	요청마다 서비스에서 요금이 청구됩니다.
+	Each request uses your subscription allowance.	요청마다 구독 사용 한도를 사용합니다.
+	Generate {n}	{n}개 생성
+	Save Fill Diagnostics…	채우기 진단 저장…
+	Saved Generative Fill diagnostics to {folder}	생성형 채우기 진단을 {folder}에 저장했습니다
+	Select a generative layer first.	먼저 생성형 레이어를 선택하세요.
+	The connection is set up as free of charge.	이 연결은 무료로 설정되어 있습니다.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	서비스가 {sent} 영역에 {returned} 이미지를 반환했습니다. 크기를 조정하자 선택 영역 주변 이미지와 맞았습니다.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	서비스가 {sent} 영역에 {returned} 이미지를 반환했습니다. 가운데 부분을 사용했습니다.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	이 채우기가 보내고 받은 것(이미지, 마스크, 프롬프트, 요약)을 선택한 폴더에 씁니다. 요청하지 않으면 아무것도 저장되지 않습니다.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	{n}개 변형에서 색상 맞춤을 건너뛰었습니다.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	이 컴퓨터에서 {connection}(으)로 변형 {n}개를 만듭니다.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	변형 {n}개를 만듭니다: {connection}에 별도 요청 {n}개.

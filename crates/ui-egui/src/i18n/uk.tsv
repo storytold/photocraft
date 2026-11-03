@@ -4304,3 +4304,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} з помилкою|{n} з помилкою|{n} з помилкою
 @plural	{n} waiting|{n} waiting	{n} у черзі|{n} у черзі|{n} у черзі
 @plural	{n} generating|{n} generating	{n} створюється|{n} створюються|{n} створюються
+	Check the service's own terms for what each request costs.	Скільки коштує кожен запит, зазначено в умовах сервісу.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Підбір кольору для цього варіанта пропущено: зображення навколо виділення повернулося надто зміненим, щоб надійно його підігнати.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Підбір кольору для цього варіанта пропущено: поза виділенням замало зображення для вимірювання.
+	Each request is billed by the service.	Кожен запит оплачується в сервісі.
+	Each request uses your subscription allowance.	Кожен запит витрачає ліміт вашої підписки.
+	Generate {n}	Створити {n}
+	Save Fill Diagnostics…	Зберегти діагностику заливки…
+	Saved Generative Fill diagnostics to {folder}	Діагностику генеративної заливки збережено в {folder}
+	Select a generative layer first.	Спершу виберіть генеративний шар.
+	The connection is set up as free of charge.	Підключення налаштовано як безкоштовне.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Сервіс повернув зображення {returned} для області {sent}; після масштабування воно збіглося із зображенням навколо виділення.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Сервіс повернув зображення {returned} для області {sent}; використано його середину.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Записує у вибрану теку те, що ця заливка надіслала й отримала (зображення, маску, запит і зведення). Нічого не зберігається, доки ви не попросите.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Підбір кольору пропущено для {n} варіанта.|Підбір кольору пропущено для {n} варіантів.|Підбір кольору пропущено для {n} варіантів.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Створює {n} варіант на цьому комп'ютері за допомогою {connection}.|Створює {n} варіанти на цьому комп'ютері за допомогою {connection}.|Створює {n} варіантів на цьому комп'ютері за допомогою {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Створює {n} варіант: {n} запит до {connection}.|Створює {n} варіанти: {n} окремі запити до {connection}.|Створює {n} варіантів: {n} окремих запитів до {connection}.

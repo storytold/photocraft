@@ -4325,3 +4325,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} başarısız
 @plural	{n} waiting|{n} waiting	{n} bekliyor
 @plural	{n} generating|{n} generating	{n} oluşturuluyor
+	Check the service's own terms for what each request costs.	Her isteğin maliyeti için hizmetin kendi koşullarına bakın.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Bu varyasyon için renk eşleştirme atlandı: seçimin çevresindeki resim güvenle eşleştirilemeyecek kadar farklı döndü.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Bu varyasyon için renk eşleştirme atlandı: seçimin dışında ölçmeye yetecek kadar resim yok.
+	Each request is billed by the service.	Her istek hizmet tarafından ücretlendirilir.
+	Each request uses your subscription allowance.	Her istek aboneliğinizin kotasından düşer.
+	Generate {n}	{n} oluştur
+	Save Fill Diagnostics…	Dolgu tanılamasını kaydet…
+	Saved Generative Fill diagnostics to {folder}	Üretken Dolgu tanılaması {folder} konumuna kaydedildi
+	Select a generative layer first.	Önce üretken bir katman seçin.
+	The connection is set up as free of charge.	Bağlantı ücretsiz olarak ayarlanmış.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Hizmet {sent} alan için {returned} resim döndürdü; ölçeklenince seçimin çevresindeki resimle örtüştü.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Hizmet {sent} alan için {returned} resim döndürdü; ortası kullanıldı.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Bu dolgunun gönderdiklerini ve geri aldıklarını (resimler, maske, istem ve bir özet) seçtiğiniz klasöre yazar. Siz istemedikçe hiçbir şey kaydedilmez.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	{n} varyasyon için renk eşleştirme atlandı.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Bu bilgisayarda {connection} ile {n} varyasyon oluşturur.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	{n} varyasyon oluşturur: {connection} hizmetine {n} ayrı istek.

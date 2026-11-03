@@ -3278,3 +3278,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} 个失败
 @plural	{n} waiting|{n} waiting	{n} 个等待中
 @plural	{n} generating|{n} generating	{n} 个正在生成
+	Check the service's own terms for what each request costs.	每次请求的费用请查看该服务的条款。
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	此变体已跳过颜色匹配：选区周围的图像返回时差异过大，无法安全匹配。
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	此变体已跳过颜色匹配：选区外的图像太少，无法测量。
+	Each request is billed by the service.	每次请求都由该服务计费。
+	Each request uses your subscription allowance.	每次请求都会使用你的订阅额度。
+	Generate {n}	生成 {n} 个
+	Save Fill Diagnostics…	保存填充诊断…
+	Saved Generative Fill diagnostics to {folder}	生成式填充诊断已保存到 {folder}
+	Select a generative layer first.	请先选择一个生成式图层。
+	The connection is set up as free of charge.	此连接设置为免费。
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	服务为 {sent} 的区域返回了 {returned} 的图像；缩放后与选区周围的图像吻合。
+	The service returned a {returned} picture for a {sent} area; its centre was used.	服务为 {sent} 的区域返回了 {returned} 的图像；已使用其中心部分。
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	将此次填充发送和收到的内容（图像、蒙版、提示词和摘要）写入你选择的文件夹。除非你要求，否则不会保存任何内容。
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	已为 {n} 个变体跳过颜色匹配。
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	在这台电脑上用 {connection} 生成 {n} 个变体。
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	生成 {n} 个变体：向 {connection} 发送 {n} 个单独请求。

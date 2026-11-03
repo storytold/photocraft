@@ -4842,3 +4842,19 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 @plural	{n} failed|{n} failed	{n} misslyckades|{n} misslyckades
 @plural	{n} waiting|{n} waiting	{n} väntar|{n} väntar
 @plural	{n} generating|{n} generating	{n} genereras|{n} genereras
+	Check the service's own terms for what each request costs.	Se tjänstens egna villkor för vad varje begäran kostar.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Färganpassningen hoppades över för den här variationen: bilden runt markeringen kom tillbaka för olik för att anpassas säkert.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Färganpassningen hoppades över för den här variationen: för lite av bilden ligger utanför markeringen för att mäta.
+	Each request is billed by the service.	Varje begäran debiteras av tjänsten.
+	Each request uses your subscription allowance.	Varje begäran använder ditt abonnemangs kvot.
+	Generate {n}	Generera {n}
+	Save Fill Diagnostics…	Spara fyllningsdiagnostik…
+	Saved Generative Fill diagnostics to {folder}	Diagnostik för generativ fyllning sparad i {folder}
+	Select a generative layer first.	Välj ett generativt lager först.
+	The connection is set up as free of charge.	Anslutningen är inställd som kostnadsfri.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Tjänsten returnerade en bild på {returned} för ett område på {sent}; skalad stämde den med bilden runt markeringen.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Tjänsten returnerade en bild på {returned} för ett område på {sent}; dess mitt användes.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Skriver det den här fyllningen skickade och fick tillbaka (bilderna, masken, prompten och en sammanfattning) till en mapp du väljer. Inget sparas om du inte ber om det.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Färganpassningen hoppades över för {n} variation.|Färganpassningen hoppades över för {n} variationer.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Gör {n} variation på den här datorn, med {connection}.|Gör {n} variationer på den här datorn, med {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Gör {n} variation: {n} begäran till {connection}.|Gör {n} variationer: {n} separata begäranden till {connection}.

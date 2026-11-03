@@ -671,3 +671,19 @@ cameraRaw	Yellow	पीला
 @plural	{n} failed|{n} failed	{n} विफल|{n} विफल
 @plural	{n} waiting|{n} waiting	{n} प्रतीक्षा में|{n} प्रतीक्षा में
 @plural	{n} generating|{n} generating	{n} बन रहा है|{n} बन रहे हैं
+	Check the service's own terms for what each request costs.	हर अनुरोध की लागत के लिए सेवा की अपनी शर्तें देखें।
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	इस विविधता के लिए रंग मिलान छोड़ दिया गया: चयन के आसपास की तस्वीर इतनी बदली हुई लौटी कि उसे सुरक्षित रूप से मिलाया नहीं जा सकता।
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	इस विविधता के लिए रंग मिलान छोड़ दिया गया: मापने के लिए चयन के बाहर तस्वीर बहुत कम है।
+	Each request is billed by the service.	हर अनुरोध का शुल्क सेवा लेती है।
+	Each request uses your subscription allowance.	हर अनुरोध आपकी सदस्यता की सीमा से घटता है।
+	Generate {n}	{n} बनाएँ
+	Save Fill Diagnostics…	फ़िल डायग्नोस्टिक्स सहेजें…
+	Saved Generative Fill diagnostics to {folder}	जनरेटिव फ़िल डायग्नोस्टिक्स {folder} में सहेजे गए
+	Select a generative layer first.	पहले एक जनरेटिव लेयर चुनें।
+	The connection is set up as free of charge.	यह कनेक्शन निःशुल्क के रूप में सेट है।
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	सेवा ने {sent} क्षेत्र के लिए {returned} तस्वीर लौटाई; स्केल करने पर वह चयन के आसपास की तस्वीर से मेल खाई।
+	The service returned a {returned} picture for a {sent} area; its centre was used.	सेवा ने {sent} क्षेत्र के लिए {returned} तस्वीर लौटाई; उसका बीच का हिस्सा इस्तेमाल किया गया।
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	यह फ़िल जो भेजा और वापस पाया (तस्वीरें, मास्क, प्रॉम्प्ट और एक सारांश), उसे आपके चुने फ़ोल्डर में लिखता है। आपके कहे बिना कुछ नहीं सहेजा जाता।
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	{n} विविधता के लिए रंग मिलान छोड़ दिया गया।|{n} विविधताओं के लिए रंग मिलान छोड़ दिया गया।
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	इस कंप्यूटर पर {connection} से {n} विविधता बनाता है।|इस कंप्यूटर पर {connection} से {n} विविधताएँ बनाता है।
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	{n} विविधता बनाता है: {connection} को {n} अनुरोध।|{n} विविधताएँ बनाता है: {connection} को {n} अलग अनुरोध।

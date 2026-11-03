@@ -4788,3 +4788,19 @@ shape	Appearance	Оформление
 @plural	{n} failed|{n} failed	{n} с ошибкой|{n} с ошибкой|{n} с ошибкой
 @plural	{n} waiting|{n} waiting	{n} в очереди|{n} в очереди|{n} в очереди
 @plural	{n} generating|{n} generating	{n} создаётся|{n} создаются|{n} создаются
+	Check the service's own terms for what each request costs.	Сколько стоит каждый запрос, указано в условиях сервиса.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Подбор цвета для этого варианта пропущен: изображение вокруг выделения вернулось слишком изменённым, чтобы надёжно подогнать его.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Подбор цвета для этого варианта пропущен: вне выделения слишком мало изображения для измерения.
+	Each request is billed by the service.	Каждый запрос оплачивается в сервисе.
+	Each request uses your subscription allowance.	Каждый запрос расходует лимит вашей подписки.
+	Generate {n}	Создать {n}
+	Save Fill Diagnostics…	Сохранить диагностику заливки…
+	Saved Generative Fill diagnostics to {folder}	Диагностика генеративной заливки сохранена в {folder}
+	Select a generative layer first.	Сначала выберите генеративный слой.
+	The connection is set up as free of charge.	Подключение настроено как бесплатное.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Сервис вернул изображение {returned} для области {sent}; после масштабирования оно совпало с изображением вокруг выделения.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Сервис вернул изображение {returned} для области {sent}; использована его середина.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Записывает в выбранную папку то, что эта заливка отправила и получила (изображения, маску, запрос и сводку). Ничего не сохраняется, пока вы не попросите.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Подбор цвета пропущен для {n} варианта.|Подбор цвета пропущен для {n} вариантов.|Подбор цвета пропущен для {n} вариантов.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Создаёт {n} вариант на этом компьютере с помощью {connection}.|Создаёт {n} варианта на этом компьютере с помощью {connection}.|Создаёт {n} вариантов на этом компьютере с помощью {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Создаёт {n} вариант: {n} запрос к {connection}.|Создаёт {n} варианта: {n} отдельных запроса к {connection}.|Создаёт {n} вариантов: {n} отдельных запросов к {connection}.

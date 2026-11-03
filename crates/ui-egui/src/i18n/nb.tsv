@@ -4844,3 +4844,19 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 @plural	{n} failed|{n} failed	{n} mislyktes|{n} mislyktes
 @plural	{n} waiting|{n} waiting	{n} venter|{n} venter
 @plural	{n} generating|{n} generating	{n} genereres|{n} genereres
+	Check the service's own terms for what each request costs.	Se tjenestens egne vilkår for hva hver forespørsel koster.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Fargetilpasning ble hoppet over for denne variasjonen: bildet rundt markeringen kom for annerledes tilbake til å tilpasses trygt.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Fargetilpasning ble hoppet over for denne variasjonen: for lite av bildet ligger utenfor markeringen til å måle.
+	Each request is billed by the service.	Hver forespørsel faktureres av tjenesten.
+	Each request uses your subscription allowance.	Hver forespørsel bruker av abonnementets kvote.
+	Generate {n}	Generer {n}
+	Save Fill Diagnostics…	Lagre fyllingsdiagnose…
+	Saved Generative Fill diagnostics to {folder}	Diagnose for generativ fylling lagret i {folder}
+	Select a generative layer first.	Velg et generativt lag først.
+	The connection is set up as free of charge.	Tilkoblingen er satt opp som gratis.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Tjenesten returnerte et bilde på {returned} for et område på {sent}; skalert passet det med bildet rundt markeringen.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Tjenesten returnerte et bilde på {returned} for et område på {sent}; midten av det ble brukt.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Skriver det denne fyllingen sendte og fikk tilbake (bildene, masken, ledeteksten og et sammendrag) til en mappe du velger. Ingenting lagres med mindre du ber om det.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Fargetilpasning ble hoppet over for {n} variasjon.|Fargetilpasning ble hoppet over for {n} variasjoner.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Lager {n} variasjon på denne datamaskinen med {connection}.|Lager {n} variasjoner på denne datamaskinen med {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Lager {n} variasjon: {n} forespørsel til {connection}.|Lager {n} variasjoner: {n} separate forespørsler til {connection}.

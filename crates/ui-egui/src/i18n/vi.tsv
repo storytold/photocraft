@@ -4100,3 +4100,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} thất bại
 @plural	{n} waiting|{n} waiting	{n} đang chờ
 @plural	{n} generating|{n} generating	{n} đang tạo
+	Check the service's own terms for what each request costs.	Xem điều khoản của dịch vụ để biết mỗi yêu cầu tốn bao nhiêu.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Đã bỏ qua khớp màu cho biến thể này: ảnh quanh vùng chọn trả về quá khác để khớp an toàn.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Đã bỏ qua khớp màu cho biến thể này: phần ảnh nằm ngoài vùng chọn quá ít để đo.
+	Each request is billed by the service.	Mỗi yêu cầu được dịch vụ tính phí.
+	Each request uses your subscription allowance.	Mỗi yêu cầu dùng hạn mức gói đăng ký của bạn.
+	Generate {n}	Tạo {n}
+	Save Fill Diagnostics…	Lưu chẩn đoán tô…
+	Saved Generative Fill diagnostics to {folder}	Đã lưu chẩn đoán tô tạo sinh vào {folder}
+	Select a generative layer first.	Hãy chọn một lớp tạo sinh trước.
+	The connection is set up as free of charge.	Kết nối được thiết lập là miễn phí.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Dịch vụ trả về ảnh {returned} cho vùng {sent}; sau khi co giãn, ảnh khớp với phần ảnh quanh vùng chọn.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Dịch vụ trả về ảnh {returned} cho vùng {sent}; phần giữa của ảnh đã được dùng.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Ghi những gì lần tô này đã gửi và nhận lại (các ảnh, mặt nạ, lời nhắc và bản tóm tắt) vào thư mục bạn chọn. Không có gì được lưu nếu bạn không yêu cầu.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Đã bỏ qua khớp màu cho {n} biến thể.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Tạo {n} biến thể trên máy tính này, với {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Tạo {n} biến thể: {n} yêu cầu riêng tới {connection}.

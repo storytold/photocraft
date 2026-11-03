@@ -4212,3 +4212,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} nieudane|{n} nieudane|{n} nieudanych
 @plural	{n} waiting|{n} waiting	{n} oczekuje|{n} oczekują|{n} oczekuje
 @plural	{n} generating|{n} generating	{n} w toku|{n} w toku|{n} w toku
+	Check the service's own terms for what each request costs.	Koszt każdego żądania podają warunki usługi.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Dopasowanie kolorów pominięto dla tego wariantu: obraz wokół zaznaczenia wrócił zbyt zmieniony, by bezpiecznie go dopasować.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Dopasowanie kolorów pominięto dla tego wariantu: poza zaznaczeniem jest za mało obrazu do pomiaru.
+	Each request is billed by the service.	Każde żądanie jest rozliczane przez usługę.
+	Each request uses your subscription allowance.	Każde żądanie zużywa limit Twojej subskrypcji.
+	Generate {n}	Generuj {n}
+	Save Fill Diagnostics…	Zapisz diagnostykę wypełnienia…
+	Saved Generative Fill diagnostics to {folder}	Diagnostykę wypełnienia generatywnego zapisano w {folder}
+	Select a generative layer first.	Najpierw zaznacz warstwę generatywną.
+	The connection is set up as free of charge.	Połączenie jest skonfigurowane jako bezpłatne.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Usługa zwróciła obraz {returned} dla obszaru {sent}; po przeskalowaniu pasował do obrazu wokół zaznaczenia.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Usługa zwróciła obraz {returned} dla obszaru {sent}; użyto jego środka.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Zapisuje to, co to wypełnienie wysłało i otrzymało (obrazy, maskę, prompt i podsumowanie), w wybranym folderze. Nic nie jest zapisywane, jeśli o to nie poprosisz.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Dopasowanie kolorów pominięto dla {n} wariantu.|Dopasowanie kolorów pominięto dla {n} wariantów.|Dopasowanie kolorów pominięto dla {n} wariantów.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Tworzy {n} wariant na tym komputerze, przez {connection}.|Tworzy {n} warianty na tym komputerze, przez {connection}.|Tworzy {n} wariantów na tym komputerze, przez {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Tworzy {n} wariant: {n} żądanie do {connection}.|Tworzy {n} warianty: {n} osobne żądania do {connection}.|Tworzy {n} wariantów: {n} osobnych żądań do {connection}.

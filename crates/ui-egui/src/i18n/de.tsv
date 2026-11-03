@@ -3624,3 +3624,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} fehlgeschlagen|{n} fehlgeschlagen
 @plural	{n} waiting|{n} waiting	{n} wartet|{n} warten
 @plural	{n} generating|{n} generating	{n} wird generiert|{n} werden generiert
+	Check the service's own terms for what each request costs.	Was jede Anfrage kostet, steht in den Bedingungen des Dienstes.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Der Farbabgleich wurde für diese Variante übersprungen: Das Bild um die Auswahl kam zu verändert zurück, um es sicher abzugleichen.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Der Farbabgleich wurde für diese Variante übersprungen: Zu wenig vom Bild liegt außerhalb der Auswahl, um zu messen.
+	Each request is billed by the service.	Jede Anfrage wird vom Dienst berechnet.
+	Each request uses your subscription allowance.	Jede Anfrage zählt zum Kontingent Ihres Abonnements.
+	Generate {n}	{n} generieren
+	Save Fill Diagnostics…	Füll-Diagnose speichern…
+	Saved Generative Fill diagnostics to {folder}	Diagnose des generativen Füllens gespeichert unter {folder}
+	Select a generative layer first.	Wählen Sie zuerst eine generative Ebene aus.
+	The connection is set up as free of charge.	Die Verbindung ist als kostenlos eingerichtet.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Der Dienst lieferte ein Bild mit {returned} für einen Bereich mit {sent}; skaliert passte es zum Bild um die Auswahl.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Der Dienst lieferte ein Bild mit {returned} für einen Bereich mit {sent}; seine Mitte wurde verwendet.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Schreibt, was diese Füllung gesendet und zurückbekommen hat (die Bilder, die Maske, den Prompt und eine Zusammenfassung), in einen Ordner Ihrer Wahl. Gespeichert wird nur, wenn Sie es verlangen.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Der Farbabgleich wurde für {n} Variante übersprungen.|Der Farbabgleich wurde für {n} Varianten übersprungen.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Erstellt {n} Variante auf diesem Computer, mit {connection}.|Erstellt {n} Varianten auf diesem Computer, mit {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Erstellt {n} Variante: {n} Anfrage an {connection}.|Erstellt {n} Varianten: {n} einzelne Anfragen an {connection}.

@@ -4291,3 +4291,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} απέτυχε|{n} απέτυχαν
 @plural	{n} waiting|{n} waiting	{n} σε αναμονή|{n} σε αναμονή
 @plural	{n} generating|{n} generating	{n} δημιουργείται|{n} δημιουργούνται
+	Check the service's own terms for what each request costs.	Δείτε τους όρους της υπηρεσίας για το κόστος κάθε αιτήματος.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Η αντιστοίχιση χρωμάτων παραλείφθηκε για αυτή την παραλλαγή: η εικόνα γύρω από την επιλογή επέστρεψε πολύ διαφορετική για ασφαλή αντιστοίχιση.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Η αντιστοίχιση χρωμάτων παραλείφθηκε για αυτή την παραλλαγή: πολύ λίγο από την εικόνα βρίσκεται έξω από την επιλογή για μέτρηση.
+	Each request is billed by the service.	Κάθε αίτημα χρεώνεται από την υπηρεσία.
+	Each request uses your subscription allowance.	Κάθε αίτημα χρησιμοποιεί το όριο της συνδρομής σας.
+	Generate {n}	Δημιουργία {n}
+	Save Fill Diagnostics…	Αποθήκευση διαγνωστικών γεμίσματος…
+	Saved Generative Fill diagnostics to {folder}	Τα διαγνωστικά του παραγωγικού γεμίσματος αποθηκεύτηκαν στο {folder}
+	Select a generative layer first.	Επιλέξτε πρώτα ένα παραγωγικό επίπεδο.
+	The connection is set up as free of charge.	Η σύνδεση έχει ρυθμιστεί ως δωρεάν.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Η υπηρεσία επέστρεψε εικόνα {returned} για περιοχή {sent}· σε κλίμακα ταίριαξε με την εικόνα γύρω από την επιλογή.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Η υπηρεσία επέστρεψε εικόνα {returned} για περιοχή {sent}· χρησιμοποιήθηκε το κέντρο της.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Γράφει ό,τι έστειλε και έλαβε αυτό το γέμισμα (τις εικόνες, τη μάσκα, την εντολή και μια σύνοψη) σε φάκελο της επιλογής σας. Τίποτα δεν αποθηκεύεται αν δεν το ζητήσετε.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Η αντιστοίχιση χρωμάτων παραλείφθηκε για {n} παραλλαγή.|Η αντιστοίχιση χρωμάτων παραλείφθηκε για {n} παραλλαγές.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Δημιουργεί {n} παραλλαγή σε αυτόν τον υπολογιστή, με {connection}.|Δημιουργεί {n} παραλλαγές σε αυτόν τον υπολογιστή, με {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Δημιουργεί {n} παραλλαγή: {n} αίτημα προς {connection}.|Δημιουργεί {n} παραλλαγές: {n} ξεχωριστά αιτήματα προς {connection}.

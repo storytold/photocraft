@@ -3616,3 +3616,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} gagal
 @plural	{n} waiting|{n} waiting	{n} menunggu
 @plural	{n} generating|{n} generating	{n} sedang dibuat
+	Check the service's own terms for what each request costs.	Lihat ketentuan layanan untuk biaya setiap permintaan.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Pencocokan warna dilewati untuk variasi ini: gambar di sekitar seleksi kembali terlalu berbeda untuk dicocokkan dengan aman.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Pencocokan warna dilewati untuk variasi ini: terlalu sedikit gambar di luar seleksi untuk diukur.
+	Each request is billed by the service.	Setiap permintaan ditagih oleh layanan.
+	Each request uses your subscription allowance.	Setiap permintaan memakai kuota langganan Anda.
+	Generate {n}	Generate {n}
+	Save Fill Diagnostics…	Simpan diagnostik isian…
+	Saved Generative Fill diagnostics to {folder}	Diagnostik isian generatif disimpan di {folder}
+	Select a generative layer first.	Pilih layer generatif terlebih dahulu.
+	The connection is set up as free of charge.	Koneksi ini diatur sebagai gratis.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Layanan mengembalikan gambar {returned} untuk area {sent}; setelah diskalakan, gambar itu cocok dengan gambar di sekitar seleksi.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Layanan mengembalikan gambar {returned} untuk area {sent}; bagian tengahnya yang dipakai.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Menulis apa yang dikirim dan diterima isian ini (gambar, mask, prompt, dan ringkasan) ke folder pilihan Anda. Tidak ada yang disimpan kecuali Anda memintanya.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Pencocokan warna dilewati untuk {n} variasi.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Membuat {n} variasi di komputer ini, dengan {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Membuat {n} variasi: {n} permintaan terpisah ke {connection}.

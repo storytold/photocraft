@@ -4627,3 +4627,19 @@ shape	Appearance	Apparence
 @plural	{n} failed|{n} failed	{n} en échec|{n} en échec
 @plural	{n} waiting|{n} waiting	{n} en attente|{n} en attente
 @plural	{n} generating|{n} generating	{n} en cours|{n} en cours
+	Check the service's own terms for what each request costs.	Consultez les conditions du service pour le coût de chaque requête.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Correspondance des couleurs ignorée pour cette variante : l'image autour de la sélection est revenue trop différente pour l'ajuster sans risque.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Correspondance des couleurs ignorée pour cette variante : trop peu de l'image se trouve hors de la sélection pour mesurer.
+	Each request is billed by the service.	Chaque requête est facturée par le service.
+	Each request uses your subscription allowance.	Chaque requête utilise le quota de votre abonnement.
+	Generate {n}	Générer {n}
+	Save Fill Diagnostics…	Enregistrer le diagnostic du remplissage…
+	Saved Generative Fill diagnostics to {folder}	Diagnostic du remplissage génératif enregistré dans {folder}
+	Select a generative layer first.	Sélectionnez d'abord un calque génératif.
+	The connection is set up as free of charge.	La connexion est configurée comme gratuite.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Le service a renvoyé une image de {returned} pour une zone de {sent} ; une fois mise à l'échelle, elle s'alignait sur l'image autour de la sélection.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Le service a renvoyé une image de {returned} pour une zone de {sent} ; son centre a été utilisé.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Écrit ce que ce remplissage a envoyé et reçu (les images, le masque, le prompt et un résumé) dans le dossier de votre choix. Rien n'est enregistré sans votre demande.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Correspondance des couleurs ignorée pour {n} variante.|Correspondance des couleurs ignorée pour {n} variantes.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Crée {n} variante sur cet ordinateur, avec {connection}.|Crée {n} variantes sur cet ordinateur, avec {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Crée {n} variante : {n} requête à {connection}.|Crée {n} variantes : {n} requêtes distinctes à {connection}.

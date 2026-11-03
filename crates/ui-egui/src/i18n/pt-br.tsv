@@ -4518,3 +4518,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} com falha|{n} com falha
 @plural	{n} waiting|{n} waiting	{n} aguardando|{n} aguardando
 @plural	{n} generating|{n} generating	{n} em andamento|{n} em andamento
+	Check the service's own terms for what each request costs.	Consulte os termos do serviço para saber quanto custa cada solicitação.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	O ajuste de cor foi ignorado nesta variação: a imagem ao redor da seleção voltou diferente demais para ajustá-la com segurança.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	O ajuste de cor foi ignorado nesta variação: há muito pouca imagem fora da seleção para medir.
+	Each request is billed by the service.	Cada solicitação é cobrada pelo serviço.
+	Each request uses your subscription allowance.	Cada solicitação usa a franquia da sua assinatura.
+	Generate {n}	Gerar {n}
+	Save Fill Diagnostics…	Salvar diagnóstico do preenchimento…
+	Saved Generative Fill diagnostics to {folder}	Diagnóstico do preenchimento generativo salvo em {folder}
+	Select a generative layer first.	Selecione primeiro uma camada generativa.
+	The connection is set up as free of charge.	A conexão está configurada como gratuita.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	O serviço devolveu uma imagem de {returned} para uma área de {sent}; redimensionada, ela coincidiu com a imagem ao redor da seleção.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	O serviço devolveu uma imagem de {returned} para uma área de {sent}; o centro dela foi usado.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Grava o que este preenchimento enviou e recebeu (as imagens, a máscara, o prompt e um resumo) na pasta que você escolher. Nada é salvo sem que você peça.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	O ajuste de cor foi ignorado em {n} variação.|O ajuste de cor foi ignorado em {n} variações.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Cria {n} variação neste computador, com {connection}.|Cria {n} variações neste computador, com {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Cria {n} variação: {n} solicitação a {connection}.|Cria {n} variações: {n} solicitações separadas a {connection}.

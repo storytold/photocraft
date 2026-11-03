@@ -4511,3 +4511,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} sikertelen
 @plural	{n} waiting|{n} waiting	{n} várakozik
 @plural	{n} generating|{n} generating	{n} készül
+	Check the service's own terms for what each request costs.	Hogy mennyibe kerül egy kérés, azt a szolgáltatás feltételei mondják meg.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	A színillesztés kimaradt ennél a változatnál: a kijelölés körüli kép túl eltérően jött vissza a biztonságos illesztéshez.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	A színillesztés kimaradt ennél a változatnál: túl kevés kép esik a kijelölésen kívülre a méréshez.
+	Each request is billed by the service.	Minden kérést a szolgáltatás számláz.
+	Each request uses your subscription allowance.	Minden kérés az előfizetése keretéből fogy.
+	Generate {n}	{n} létrehozása
+	Save Fill Diagnostics…	Kitöltési diagnosztika mentése…
+	Saved Generative Fill diagnostics to {folder}	A generatív kitöltés diagnosztikája mentve ide: {folder}
+	Select a generative layer first.	Először jelöljön ki egy generatív réteget.
+	The connection is set up as free of charge.	A kapcsolat ingyenesként van beállítva.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	A szolgáltatás {returned} méretű képet adott vissza egy {sent} méretű területre; átméretezve illeszkedett a kijelölés körüli képhez.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	A szolgáltatás {returned} méretű képet adott vissza egy {sent} méretű területre; a közepét használtuk.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Egy választott mappába írja, amit ez a kitöltés elküldött és visszakapott (a képeket, a maszkot, a promptot és egy összegzést). Semmi sem mentődik, amíg nem kéri.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	A színillesztés {n} változatnál kimaradt.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	{n} változatot készít ezen a számítógépen, ezzel: {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	{n} változatot készít: {n} külön kérés ide: {connection}.

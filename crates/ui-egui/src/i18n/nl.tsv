@@ -4348,3 +4348,19 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	{n} failed|{n} failed	{n} mislukt|{n} mislukt
 @plural	{n} waiting|{n} waiting	{n} wachtend|{n} wachtend
 @plural	{n} generating|{n} generating	{n} bezig|{n} bezig
+	Check the service's own terms for what each request costs.	Bekijk de voorwaarden van de dienst voor wat elk verzoek kost.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Kleurafstemming is overgeslagen voor deze variatie: het beeld rond de selectie kwam te anders terug om veilig af te stemmen.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Kleurafstemming is overgeslagen voor deze variatie: te weinig van het beeld ligt buiten de selectie om te meten.
+	Each request is billed by the service.	Elk verzoek wordt door de dienst in rekening gebracht.
+	Each request uses your subscription allowance.	Elk verzoek gaat van de tegoed van je abonnement af.
+	Generate {n}	{n} genereren
+	Save Fill Diagnostics…	Vuldiagnose opslaan…
+	Saved Generative Fill diagnostics to {folder}	Diagnose van generatief vullen opgeslagen in {folder}
+	Select a generative layer first.	Selecteer eerst een generatieve laag.
+	The connection is set up as free of charge.	De verbinding is ingesteld als gratis.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	De dienst gaf een afbeelding van {returned} terug voor een gebied van {sent}; geschaald sloot die aan op het beeld rond de selectie.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	De dienst gaf een afbeelding van {returned} terug voor een gebied van {sent}; het midden ervan is gebruikt.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Schrijft wat deze vulling verstuurde en terugkreeg (de afbeeldingen, het masker, de prompt en een samenvatting) naar een map die je kiest. Er wordt niets opgeslagen tenzij je erom vraagt.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Kleurafstemming is overgeslagen voor {n} variatie.|Kleurafstemming is overgeslagen voor {n} variaties.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Maakt {n} variatie op deze computer, met {connection}.|Maakt {n} variaties op deze computer, met {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Maakt {n} variatie: {n} verzoek aan {connection}.|Maakt {n} variaties: {n} afzonderlijke verzoeken aan {connection}.

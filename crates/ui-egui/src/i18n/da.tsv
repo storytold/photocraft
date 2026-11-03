@@ -4844,3 +4844,19 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 @plural	{n} failed|{n} failed	{n} mislykkedes|{n} mislykkedes
 @plural	{n} waiting|{n} waiting	{n} venter|{n} venter
 @plural	{n} generating|{n} generating	{n} genereres|{n} genereres
+	Check the service's own terms for what each request costs.	Se tjenestens egne vilkår for, hvad hver forespørgsel koster.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Farvetilpasning blev sprunget over for denne variation: billedet omkring markeringen kom for forskelligt tilbage til at tilpasse sikkert.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Farvetilpasning blev sprunget over for denne variation: for lidt af billedet ligger uden for markeringen til at måle.
+	Each request is billed by the service.	Hver forespørgsel faktureres af tjenesten.
+	Each request uses your subscription allowance.	Hver forespørgsel bruger af dit abonnements kvote.
+	Generate {n}	Generér {n}
+	Save Fill Diagnostics…	Gem udfyldningsdiagnose…
+	Saved Generative Fill diagnostics to {folder}	Diagnose for generativ udfyldning gemt i {folder}
+	Select a generative layer first.	Vælg først et generativt lag.
+	The connection is set up as free of charge.	Forbindelsen er sat op som gratis.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Tjenesten returnerede et billede på {returned} til et område på {sent}; skaleret passede det med billedet omkring markeringen.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Tjenesten returnerede et billede på {returned} til et område på {sent}; midten af det blev brugt.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Skriver, hvad denne udfyldning sendte og fik tilbage (billederne, masken, prompten og et resumé), til en mappe, du vælger. Intet gemmes, medmindre du beder om det.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Farvetilpasning blev sprunget over for {n} variation.|Farvetilpasning blev sprunget over for {n} variationer.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Laver {n} variation på denne computer med {connection}.|Laver {n} variationer på denne computer med {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Laver {n} variation: {n} forespørgsel til {connection}.|Laver {n} variationer: {n} separate forespørgsler til {connection}.
