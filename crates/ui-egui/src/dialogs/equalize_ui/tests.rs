@@ -85,6 +85,18 @@ fn ok_refuses_while_another_document_is_active() {
     assert!(gray(&app, 1, 1) < 0.05, "OK runs once its document is active again");
 }
 
+/// OK on a dialog whose selection was cleared while it was open equalizes nothing and leaves the
+/// dialog open, so the choice is never applied to the whole layer.
+#[test]
+fn ok_refuses_after_the_selection_is_cleared() {
+    let (mut app, ctx) = setup(true);
+    let d = menu(&mut app, &ctx, COMMAND, json!({})).unwrap()["dialog"].as_u64().unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, d).is_err());
+    assert!(app.ui.dialogs.iter().any(|x| x.id == d), "the dialog stays open");
+    assert!((gray(&app, 1, 1) - 0.4).abs() < 0.01 && (gray(&app, 30, 20) - 0.5).abs() < 0.01, "the layer is unchanged");
+}
+
 #[test]
 fn cancel_leaves_the_layer_unchanged() {
     let (mut app, ctx) = setup(true);

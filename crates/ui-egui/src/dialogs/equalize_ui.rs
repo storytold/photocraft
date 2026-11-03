@@ -35,12 +35,15 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
-/// OK runs only while the document the dialog was opened for is active; otherwise the dialog
-/// stays open.
+/// OK runs only while the document the dialog was opened for is active and still has a selection;
+/// otherwise the dialog stays open.
 pub fn validate(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     if f.get("__document") != Some(&json!(st.doc.id)) {
         return Err("the Equalize dialog belongs to another document".into());
+    }
+    if st.doc.selection.is_none() {
+        return Err("the selection was cleared while the Equalize dialog was open".into());
     }
     Ok(())
 }
