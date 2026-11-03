@@ -325,16 +325,20 @@ struct Origin {
 /// stays on its board, joins one from outside any board, leaves for the top level, or has its
 /// position locked stays where it is. The lock is read on both sides: a lock the layer had from a
 /// group or board it left no longer shows on it once it has left (#10489 review).
-fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Vec<(LayerId, i32, i32)> {
-    ids.iter()
-        .zip(from)
-        .filter_map(|(&id, src)| {
-            let (board, dst) = (src.board.as_ref()?, board_rect_of(doc, id)?);
-            let (dx, dy) = (dst.x0.checked_sub(board.x0)?, dst.y0.checked_sub(board.y0)?);
-            let locks = doc.effective_locks(id);
-            ((dx != 0 || dy != 0) && !src.pinned && !(locks.position || locks.all)).then_some((id, dx, dy))
-        })
-        .collect()
+fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Result<Vec<(LayerId, i32, i32)>> {
+    let mut shifts = Vec::new();
+    for (&id, src) in ids.iter().zip(from) {
+        let (Some(board), Some(dst)) = (src.board.as_ref(), board_rect_of(doc, id)) else { continue };
+        let locks = doc.effective_locks(id);
+        if src.pinned || locks.position || locks.all || (board.x0, board.y0) == (dst.x0, dst.y0) {
+            continue;
+        }
+        let (Some(dx), Some(dy)) = (dst.x0.checked_sub(board.x0), dst.y0.checked_sub(board.y0)) else {
+            return Err(bad("layer.moveTo", "these artboards are too far apart to preserve the layer's position"));
+        };
+        shifts.push((id, dx, dy));
+    }
+    Ok(shifts)
 }
 
 /// The document-only part of `move_to`, shared with [`preview_move`] so the Layers panel's hover
@@ -382,7 +386,7 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
     // The layers now sit in their new parents; carry each across to its new board. Copies keep the
     // order of `moved_ids`, so `from` lines up with either list.
     let landed: &[LayerId] = if copy { &copies } else { moved_ids };
-    let shifts = board_offsets(doc, landed, &from);
+    let shifts = board_offsets(doc, landed, &from)?;
     if !shifts.is_empty() {
         let snapshot = doc.clone();
         move_layers(doc, &snapshot, &shifts)?;
