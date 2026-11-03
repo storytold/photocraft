@@ -26,14 +26,14 @@ fn reduced_gpu_preview_reports_native_reach_before_any_commit_and_recovers() {
         let ctx = egui::Context::default();
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         let layer = a.session.active().unwrap().active_layer;
-        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true));
+        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true).unwrap());
         a.ui.transform.as_mut().unwrap().quad = a.ui.transform.as_ref().unwrap().quad.map(|[x, y]| [x + 16.0, y]);
         let good = a.ui.transform.as_ref().unwrap().quad;
         assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().factor > 1);
         let gpu = crate::channel_transform_gpu::test_wait(&rs, || texture(&mut a, &ctx, index, None)).unwrap();
         assert!(a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().gpu.is_some());
         let old = a.transform_preview.as_ref().unwrap().channel.as_ref().unwrap().shown.clone();
-        let mut expected = Preview::new(&before, layer, a.session.tools.background, true);
+        let mut expected = Preview::new(&before, layer, a.session.tools.background, true).unwrap();
         expected.update(a.ui.transform.as_ref().unwrap()).unwrap();
         let offset = f64::from(photocraft_algo::transform::WARP_REACH) + 64.0;
         a.ui.transform.as_mut().unwrap().quad = good.map(|[x, y]| [x + offset, y]);
@@ -88,7 +88,7 @@ fn reduced_mask_saved_channel_and_quick_mask_refuse_native_reach() {
         crate::transform_tool::begin(&mut a, &ctx).unwrap();
         let before = a.session.active().unwrap().doc.clone();
         let layer = a.session.active().unwrap().active_layer;
-        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true));
+        a.transform_preview.as_mut().unwrap().channel = Some(Preview::new(&before, layer, a.session.tools.background, true).unwrap());
         let mut t = a.ui.transform.as_ref().unwrap().clone();
         assert_eq!(t.target, Some(target));
         let preview = a.transform_preview.as_mut().unwrap().channel.as_mut().unwrap();

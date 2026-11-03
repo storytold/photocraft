@@ -121,7 +121,7 @@ fn differently_sparse_colour_sets_use_scalar_outlines_or_the_cpu_oracle() {
     );
     t.warp = Some(Warp::custom(BezierMesh::identity(t.rect, 1, 1).map_points(|p| [p[0] + 2.0, p[1]]), t.rect));
     assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_some(), "a full-frame Warp has common coverage");
-    let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
+    let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
     cpu.update(&t).unwrap();
     let expected = cpu.image(&view, crate::channel_view::Look::default(), None);
     let actual = fast.readback();

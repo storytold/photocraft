@@ -123,6 +123,13 @@ fn source(doc: &Document, layer: Option<LayerId>) -> Option<(&Layer, bool)> {
 
 impl Preview {
     pub(crate) fn new(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4]) -> Option<Self> {
+        let generation = photocraft_raster::spill::read_error_generation();
+        let captured = Self::capture(gpu, doc, layer, fill);
+        photocraft_engine::channel_transform::check_capture(doc, generation).ok()?;
+        captured
+    }
+
+    fn capture(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4]) -> Option<Self> {
         let (l, beneath) = source(doc, layer)?;
         let surf = l.surface()?;
         if !doc.bounds().contains_rect(&surf.content_bounds()) {
@@ -294,7 +301,10 @@ impl Preview {
     }
 
     pub(crate) fn new_move(gpu: &crate::gpu_canvas::GpuCanvas, doc: &Document, layer: Option<LayerId>, fill: [f32; 4], factor: u32) -> Option<Self> {
-        if factor > 1 { Self::capture_native_move(gpu, doc, layer, fill, factor) } else { Self::new(gpu, doc, layer, fill) }
+        let generation = photocraft_raster::spill::read_error_generation();
+        let captured = if factor > 1 { Self::capture_native_move(gpu, doc, layer, fill, factor) } else { Self::new(gpu, doc, layer, fill) };
+        photocraft_engine::channel_transform::check_capture(doc, generation).ok()?;
+        captured
     }
 
     pub(crate) fn texture(&mut self, t: &TransformSession, view: &ChannelView, in_color: bool, encode: bool, factor: u32) -> Option<egui::TextureId> {

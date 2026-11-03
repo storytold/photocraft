@@ -30,6 +30,7 @@ pub(crate) struct Preview {
     /// GPU-only frames don't resample `shown`. Replay this geometry once if native
     /// preflight later refuses a drag, so CPU fallback retains the last visible placement.
     gpu_geometry: Option<TransformSession>,
+    retry_after: f64,
 }
 
 struct CpuTexture {
@@ -39,11 +40,13 @@ struct CpuTexture {
 
 impl Preview {
     /// Capture an immutable source at a scale suitable for interactive CPU resampling.
-    pub(crate) fn new(doc: &Document, layer: Option<LayerId>, background: [f32; 4], reduced: bool) -> Self {
+    pub(crate) fn new(doc: &Document, layer: Option<LayerId>, background: [f32; 4], reduced: bool) -> Result<Self, String> {
+        let generation = photocraft_raster::spill::read_error_generation();
         // Effects and vector masks need document-space geometry, so retain full resolution there.
         let factor = if photocraft_compose::proxy::proxy_faithful(doc) { crate::proxy::preview_factor(doc, reduced) } else { 1 };
         let base = Arc::new(crate::proxy::proxy_document(doc, factor));
-        Self {
+        photocraft_engine::channel_transform::check_capture(doc, generation).map_err(|e| e.to_string())?;
+        Ok(Self {
             native: Arc::new(doc.clone()),
             affine_bounds: None,
             checked: None,
@@ -59,7 +62,8 @@ impl Preview {
             gpu: None,
             gpu_attempted: false,
             gpu_geometry: None,
-        }
+            retry_after: 0.0,
+        })
     }
 
     pub(crate) fn guard(&self, target: Value) -> photocraft_engine::channel_transform::Guard {
@@ -81,6 +85,17 @@ impl Preview {
     }
 
     fn check_native(&mut self, t: &TransformSession) -> Result<(), String> {
+        for doc in [&self.native, &self.base, &self.shown] {
+            if let Err(error) = doc.scratch_health() {
+                let now = crate::gpu_canvas::now_ms();
+                if now < self.retry_after {
+                    return Err(error);
+                }
+                self.retry_after = now + 250.0;
+                photocraft_engine::channel_transform::retry_capture(doc).map_err(|e| e.to_string())?;
+            }
+        }
+        self.retry_after = 0.0;
         let budget = photocraft_engine::transform_cmds::budget();
         if let Some((old, limit, result)) = &self.checked
             && old == t
@@ -89,11 +104,13 @@ impl Preview {
             return result.clone();
         }
         let params = json!({"target":t.target});
+        let generation = photocraft_raster::spill::read_error_generation();
         let result = if let Some(warp) = &t.warp {
             photocraft_engine::warp_cmds::check_channel_warp_geometry(&self.native, self.layer, &params, t.rect, warp)
         } else {
             self.check_affine(t, &params)
         };
+        let result = photocraft_engine::channel_transform::check_capture(&self.native, generation).and(result);
         let stable = matches!(&result, Ok(_) | Err(photocraft_engine::EngineError::BadParams { .. }));
         let result = result.map_err(|e| e.to_string());
         if stable {
@@ -244,8 +261,11 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         && photocraft_engine::channel_transform::is_color(&json!({"target":t.target}))
     {
         if !preview.gpu_attempted {
+            let generation = photocraft_raster::spill::read_error_generation();
             preview.gpu = crate::channel_transform_gpu::Preview::new(gpu, &preview.base, preview.layer, preview.background);
-            preview.gpu_attempted = preview.gpu.is_some() || !crate::channel_transform_gpu::validation_pending(gpu);
+            preview.gpu_attempted = preview.gpu.is_some()
+                || (!crate::channel_transform_gpu::validation_pending(gpu)
+                    && photocraft_engine::channel_transform::check_capture(&preview.base, generation).is_ok());
         }
         if let Some(tex) = preview.gpu.as_mut().and_then(|g| g.texture(t, &view, in_color, display.as_ref().is_some_and(|d| d.encode_srgb), preview.factor)) {
             // Ordinary GPU dragging avoids CPU resampling. After a refusal, the geometry
@@ -278,17 +298,22 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
     }
     let key = (view.clone(), look, display_key);
     if preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
+        let generation = photocraft_raster::spill::read_error_generation();
         let image = limit_image(preview.image(&view, look, display.as_deref()), ctx.input(|i| i.max_texture_side));
+        let view = photocraft_engine::channel_transform::check_capture(&preview.shown, generation).is_ok().then_some(key);
         match preview.textures.get_mut(&output) {
             Some(entry) => {
                 entry.texture.set(image, TextureOptions::LINEAR);
-                entry.view = Some(key);
+                entry.view = view;
             }
             None => {
                 let texture = ctx.load_texture(format!("channel-transform-{}-{:?}", t.session, output), image, TextureOptions::LINEAR);
-                preview.textures.insert(output, CpuTexture { view: Some(key), texture });
+                preview.textures.insert(output, CpuTexture { view, texture });
             }
         }
+    }
+    if preview.retry_after > 0.0 || [&preview.native, &preview.base, &preview.shown].iter().any(|doc| doc.scratch_health().is_err()) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
     preview.textures.get(&output).map(|entry| entry.texture.id())
 }
@@ -350,7 +375,7 @@ mod tests {
                             "stretch stays on the cached GPU path"
                         );
                         let actual = fast.readback();
-                        let mut oracle = Preview::new(doc, st.active_layer, [1.0; 4], false);
+                        let mut oracle = Preview::new(doc, st.active_layer, [1.0; 4], false).unwrap();
                         oracle.update(&t).unwrap();
                         let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
                         let max = actual
@@ -473,7 +498,7 @@ mod tests {
                             }
                             texture.unwrap();
                             let actual = fast.readback();
-                            let mut oracle = Preview::new(doc, st.active_layer, fill, false);
+                            let mut oracle = Preview::new(doc, st.active_layer, fill, false).unwrap();
                             oracle.factor = factor;
                             oracle.update(&t).unwrap();
                             let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
@@ -544,7 +569,7 @@ mod tests {
                             t.warp = Some(Warp::custom(mesh, t.rect));
                             t.interpolation = interpolation.into();
                             let texture = crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &st.channel_view, false, false, factor));
-                            let mut oracle = Preview::new(doc, st.active_layer, fill, false);
+                            let mut oracle = Preview::new(doc, st.active_layer, fill, false).unwrap();
                             oracle.factor = factor;
                             oracle.update(&t).unwrap();
                             let expected = oracle.image(&st.channel_view, crate::channel_view::Look::default(), None);
@@ -665,7 +690,7 @@ mod tests {
                             }
                             _ => {}
                         }
-                        let mut oracle = Preview::new(&doc, layer, fill, false);
+                        let mut oracle = Preview::new(&doc, layer, fill, false).unwrap();
                         if geometry == 8 {
                             // The scalar engine rejects unbounded perspective geometry; neither
                             // preview path may turn it into a wrapped or mirrored sample.
@@ -993,7 +1018,7 @@ mod tests {
                 } else {
                     t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
                 }
-                let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
+                let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
                 cpu.update(&t).unwrap();
                 for eyes in [vec![1], vec![0, 1]] {
                     let mut view = st.channel_view.clone();
@@ -1057,7 +1082,7 @@ mod tests {
             });
             let mut fast = crate::channel_transform_gpu::test_wait(&rs, || crate::channel_transform_gpu::Preview::new(&gpu, &doc, layer, [1.0; 4])).unwrap();
             assert!(crate::channel_transform_gpu::test_wait(&rs, || fast.texture(&t, &view, false, false, 1)).is_none(), "faint_selection={faint_selection}");
-            let mut cpu = Preview::new(&doc, layer, [1.0; 4], false);
+            let mut cpu = Preview::new(&doc, layer, [1.0; 4], false).unwrap();
             assert!(cpu.update(&t).unwrap_err().contains("horizon"));
         }
     }
@@ -1102,7 +1127,7 @@ mod tests {
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
         let st = a.session.active().unwrap();
-        let mut preview = Preview::new(&st.doc, st.active_layer, [1.0; 4], false);
+        let mut preview = Preview::new(&st.doc, st.active_layer, [1.0; 4], false).unwrap();
         let mut t = a.ui.transform.clone().unwrap();
         let valid = t.clone();
         let [x0, y0, x1, y1] = t.rect;
@@ -1340,7 +1365,7 @@ mod tests {
                 mask.fill_rect(Rect::new(480, 480, 720, 720), &[0.5]);
                 doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("Quick Mask", mask));
                 let original = doc.quick_mask.clone();
-                let preview = Preview::new(&doc, None, [1.0; 4], reduced);
+                let preview = Preview::new(&doc, None, [1.0; 4], reduced).unwrap();
                 assert_eq!(preview.factor, factor);
                 assert_eq!(preview.base.size, Size::new(size.width / factor, size.height / factor));
                 let mask = &preview.base.quick_mask.as_ref().unwrap().surface;
@@ -1676,7 +1701,7 @@ mod tests {
                         let mut expected = doc.clone();
                         photocraft_engine::channel_cmds::move_color_channels(&mut expected, id, colors, dx, dy, background).unwrap();
                         let reduced = crate::proxy::proxy_document(&expected, k);
-                        let oracle = Preview::new(&reduced, Some(id), background, false);
+                        let oracle = Preview::new(&reduced, Some(id), background, false).unwrap();
                         let mut t = initial.clone();
                         t.target = Some(target.clone());
                         t.quad = t.quad.map(|[x, y]| [x + f64::from(dx), y + f64::from(dy)]);
@@ -1873,3 +1898,7 @@ mod set_tests;
 
 #[cfg(test)]
 mod limits_tests;
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod scratch_tests;

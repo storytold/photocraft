@@ -22,6 +22,13 @@ pub struct AffinePreviewBounds {
 
 impl AffinePreviewBounds {
     pub fn new(doc: Arc<Document>, layer: Option<LayerId>, params: &Value, background: [f32; 4]) -> Result<Self> {
+        let generation = photocraft_raster::spill::read_error_generation();
+        let captured = Self::capture(doc.clone(), layer, params, background);
+        super::check_capture(&doc, generation)?;
+        captured
+    }
+
+    fn capture(doc: Arc<Document>, layer: Option<LayerId>, params: &Value, background: [f32; 4]) -> Result<Self> {
         let colors = crate::color_channels::explicit(params, crate::channel_cmds::color_count(&doc))?;
         let (source, format, original) = if let Some(colors) = colors {
             source_budget(&doc, layer, colors)?;
@@ -42,6 +49,7 @@ impl AffinePreviewBounds {
     }
 
     pub fn check(&mut self, h: &Homography) -> Result<()> {
+        super::retry_capture(&self.doc)?;
         if let Some(selection) = &self.doc.selection {
             crate::transform_cmds::check_channel_geometry(self.source, selection.format(), h, None).map_err(|e| bad(e.to_string()))?;
         }
@@ -56,6 +64,7 @@ impl AffinePreviewBounds {
             let space = photocraft_compose::cmyk_space(&self.doc);
             let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&surface.format(), self.background));
             let mut bounds = Vec::new();
+            let generation = photocraft_raster::spill::read_error_generation();
             if let Some(colors) = self.colors {
                 for k in colors.indices() {
                     let fill = native.get(k).copied().ok_or_else(|| bad("missing background component"))?;
@@ -63,6 +72,7 @@ impl AffinePreviewBounds {
                     bounds.push(component_bounds(surface, self.source, k, default.default_bytes())?);
                 }
             }
+            super::check_capture(&self.doc, generation)?;
             self.exact = Some(bounds);
         }
         for &source in self.exact.as_deref().ok_or_else(|| bad("missing native preview bounds"))? {
@@ -83,12 +93,13 @@ fn component_bounds(surface: &Surface, area: Rect, k: usize, default: &[u8]) -> 
         if bounds.contains_rect(&rect) {
             continue;
         }
-        let Some(data) = surface.tile(tile).map(|t| t.bytes()) else {
+        let Some(tile_data) = surface.tile(tile) else {
             if base != default {
                 bounds = bounds.union(&rect);
             }
             continue;
         };
+        let data = tile_data.try_bytes().map_err(crate::EngineError::Other)?;
         let origin = tile.rect();
         for y in rect.y0..rect.y1 {
             let mut x = rect.x0;

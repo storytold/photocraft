@@ -531,3 +531,17 @@ pre-merge build, rather than later upstream scratch-storage changes.
 [summary](benchmarks/channel-review-20261103/move-summary.json),
 [environment and source/binary provenance](benchmarks/channel-review-20261103/environment.json),
 and [24 MP affine/Warp frames](benchmarks/channel-review-20261103/transform-samples.json).
+
+
+### Scratch-storage integration (main `655295b2a`)
+
+Channel captures and bounds use main's scratch generation and document-health checks.
+Unreadable placeholders cannot become a reduced proxy, GPU source, exact component
+bounds, CPU texture memo or Move damage frame. Capture errors remain retryable. An active
+transform retries at most eight failed tiles per batch, with a 250 ms repaint/backoff gate,
+including tiles owned by its native source, reduced proxy and last shown document. Repairing
+the backing file can recover the open transform without changing its geometry or target.
+The regression restores the file without manually reloading tiles and exercises all native
+sample depths, an interior scalar proxy tile, off-canvas RGB samples and subsequent Move
+damage rectangles. The test runs in an isolated process because scratch configuration is
+process-wide.

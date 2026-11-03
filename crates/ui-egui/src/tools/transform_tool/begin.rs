@@ -464,6 +464,7 @@ fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, b: photocraft_geom::
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.clone();
     let active = st.active_layer;
+    let generation = photocraft_raster::spill::read_error_generation();
     let b = photocraft_engine::channel_transform::source_bounds(&doc, active, &json!({"target":target}))
         .map_err(|e| e.to_string())?
         .ok_or("no isolated transform target")?;
@@ -471,7 +472,8 @@ fn begin_lone(app: &mut PhotocraftApp, ctx: &egui::Context, b: photocraft_geom::
         return Err("Could not transform: nothing is selected".into());
     }
     let layer = active.map_or(0, |l| l.0);
-    let channel = crate::channel_transform_preview::Preview::new(&doc, active, app.session.tools.background, crate::proxy::reduced_previews(app));
+    let channel = crate::channel_transform_preview::Preview::new(&doc, active, app.session.tools.background, crate::proxy::reduced_previews(app))?;
+    photocraft_engine::channel_transform::check_capture(&doc, generation).map_err(|e| e.to_string())?;
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
     // Scalar previews are composited as a document; the raw moving-quad texture is unused.

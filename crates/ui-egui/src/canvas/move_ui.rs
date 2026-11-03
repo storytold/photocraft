@@ -249,6 +249,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
         return None;
     }
     let (doc, view) = (st.doc.clone(), st.channel_view.clone());
+    photocraft_engine::channel_transform::retry_capture(&doc).ok()?;
     let background = app.session.tools.background;
     let factor = if photocraft_compose::proxy::proxy_faithful(&doc) { crate::proxy::preview_factor(&doc, crate::proxy::reduced_previews(app)) } else { 1 };
     let (display, _) = crate::canvas::canvas_display(app, &doc, output);
@@ -270,15 +271,20 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             && p.factor == factor
     });
     if !fresh {
+        let generation = photocraft_raster::spill::read_error_generation();
         let native_bounds = photocraft_compose::bounds::content_bounds(doc.layer(layer)?.surface()?);
         // The shader uploads the document only. An off-canvas source can move pixels in from
         // beyond that upload, so retain the CPU oracle for it.
-        let (bounds, preview) = if native_bounds.is_empty() || !doc.bounds().contains_rect(&native_bounds) {
+        let (bounds, mut preview) = if native_bounds.is_empty() || !doc.bounds().contains_rect(&native_bounds) {
             (Rect::EMPTY, None)
         } else {
             let preview = crate::channel_transform_gpu::Preview::new_move(gpu, &doc, Some(layer), background, factor);
             (native_bounds, preview)
         };
+        let source_ok = photocraft_engine::channel_transform::check_capture(&doc, generation).is_ok();
+        if !source_ok {
+            preview = None;
+        }
         app.move_gpu_preview = Some(MoveGpuPreview {
             doc: doc.id,
             snapshot: Arc::downgrade(&doc),
@@ -287,7 +293,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
             background,
             factor,
             bounds,
-            pending: preview.is_none() && crate::channel_transform_gpu::validation_pending(gpu),
+            pending: preview.is_none() && (crate::channel_transform_gpu::validation_pending(gpu) || !source_ok),
             gpu: preview,
             shown: false,
         });
@@ -398,8 +404,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     // A native colour target (#6068): the drag moves those components of the active layer, as
     // `layer.translate` will on release, and the layer itself stays.
     let channel = st.active_layer.zip(color_target(app));
+    if channel.is_some() {
+        photocraft_engine::channel_transform::retry_capture(&doc).ok()?;
+    }
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
+        let generation = photocraft_raster::spill::read_error_generation();
         let ids = match channel {
             Some((id, _)) => vec![id],
             None => photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers()),
@@ -414,6 +424,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let moving = if channel.is_some() { Vec::new() } else { with_descendants(&doc, &ids) };
         let too_big = exceeds(&doc, &ids, LIVE_LIMIT, mask_target);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
+        photocraft_engine::channel_transform::check_capture(&doc, generation).ok()?;
         app.move_preview = Some(MovePreview {
             doc: doc_id,
             revision,
@@ -437,6 +448,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         return None;
     }
     if p.shown.is_none() || p.offsets.last() != Some(&offset) || (channel.is_some() && p.background != background) {
+        let generation = photocraft_raster::spill::read_error_generation();
         let t0 = crate::gpu_canvas::now_ms();
         let moved = match channel {
             Some((id, colors)) => {
@@ -449,6 +461,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
+                if photocraft_engine::channel_transform::check_capture(&doc, generation).is_err() || d.scratch_health().is_err() {
+                    p.shown = None;
+                    return None;
+                }
                 p.shown = Some(Arc::new(d));
                 p.offsets.push(offset);
                 p.background = background;

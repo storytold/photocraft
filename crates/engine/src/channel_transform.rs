@@ -20,6 +20,36 @@ pub struct Guard {
 pub const LOCKED: &str = "Commit or cancel the channel transform before changing its target or document pixels";
 pub const HIDDEN: &str = "Show each selected channel using its eye before starting a transform";
 
+/// Never admit derived pixels or bounds built across a failed or recovered scratch read.
+/// Previously captured immutable pixels remain valid; unreadable placeholders do not.
+pub fn check_capture(doc: &Document, generation: u64) -> Result<()> {
+    photocraft_raster::spill::check_since(generation).map_err(EngineError::Other)?;
+    doc.scratch_health().map_err(EngineError::Other)
+}
+
+/// Retry a bounded batch of failed native tiles. A reduced preview otherwise only reads
+/// its healthy proxy and could never discover that the backing storage has recovered.
+pub fn retry_capture(doc: &Document) -> Result<()> {
+    if doc.scratch_health().is_ok() {
+        return Ok(());
+    }
+    let generation = photocraft_raster::spill::read_error_generation();
+    let mut remaining = 8;
+    doc.for_each_surface(|surface| {
+        for (_, tile) in surface.tiles() {
+            if remaining == 0 {
+                break;
+            }
+            if tile.scratch_health().is_err() {
+                remaining -= 1;
+                // Health/generation below report failed reads and recovery transitions.
+                drop(tile.try_bytes());
+            }
+        }
+    });
+    check_capture(doc, generation)
+}
+
 /// The captured target stays locked until its background commit has ended too.
 pub fn locked(s: &Session) -> bool {
     s.active().is_some_and(|st| st.channel_transform.is_some()) || s.channel_transform_running()
@@ -301,6 +331,14 @@ fn plane_with_interrupt(
 
 /// Resolve and validate an interactive scalar frame without allocating its full-resolution source.
 pub fn source_bounds(doc: &Document, layer: Option<LayerId>, p: &Value) -> Result<Option<Rect>> {
+    retry_capture(doc)?;
+    let generation = photocraft_raster::spill::read_error_generation();
+    let result = source_bounds_inner(doc, layer, p);
+    check_capture(doc, generation)?;
+    result
+}
+
+fn source_bounds_inner(doc: &Document, layer: Option<LayerId>, p: &Value) -> Result<Option<Rect>> {
     check_locks(doc, layer, p)?;
     if let Some(selection) = &doc.selection {
         validate_area(selection.content_bounds())?;

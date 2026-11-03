@@ -322,6 +322,21 @@ pub fn move_color_channels(
     dy: i32,
     background: [f32; 4],
 ) -> Result<()> {
+    let generation = photocraft_raster::spill::read_error_generation();
+    crate::channel_transform::retry_capture(doc)?;
+    let result = move_color_channels_inner(doc, id, colors, dx, dy, background);
+    crate::channel_transform::check_capture(doc, generation)?;
+    result
+}
+
+fn move_color_channels_inner(
+    doc: &mut Document,
+    id: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+) -> Result<()> {
     if (dx != 0 || dy != 0) && colors.len() > 1 && doc.selection.is_some() {
         return crate::channel_transform::move_selected_colors(doc, id, colors, dx, dy, background);
     }
@@ -366,7 +381,7 @@ pub fn move_color_channels(
         } else {
             None
         };
-        let data = surf.try_tile_mut(tile)?.bytes_mut();
+        let mut data = surf.try_tile_mut(tile)?.bytes_mut();
         let tile_width = photocraft_geom::TILE_SIZE as usize;
         let width = cleared.width() as usize;
         for y in cleared.y0..cleared.y1 {
