@@ -556,6 +556,10 @@ fn is_empty_layer(l: &Layer) -> bool {
     }
 }
 
+/// Layer › Ungroup Layers: replace the selected group with its children in place, the topmost
+/// child becoming active. Ungrouping an empty group next to other layers simply removes it;
+/// when it is the only root layer the edit is refused, as `layer.delete` refuses to drop the
+/// last layer (#11118).
 fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit("Ungroup Layers", |doc, active| {
