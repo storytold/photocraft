@@ -171,10 +171,10 @@ fn start(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         params["prompt"] = json!("Remove the selected object and reconstruct the surrounding background naturally.");
     }
     let mut request = Request::parse(&params)?;
-    let harmonize = params.get("harmonize").map_or(Ok(true), |v| v.as_bool().ok_or_else(|| bad("harmonize must be boolean")))?;
+    let harmonize = params.get("harmonize").map_or(Ok(kind != BACKGROUND), |v| v.as_bool().ok_or_else(|| bad("harmonize must be boolean")))?;
     if request.dry_run {
         return Ok(
-            json!({"dryRun":true,"operation":kind,"region":[edit.region.x0,edit.region.y0,edit.region.width(),edit.region.height()],"requires":"masked_edit_revision 1"}),
+            json!({"dryRun":true,"operation":kind,"region":[edit.region.x0,edit.region.y0,edit.region.width(),edit.region.height()],"harmonize":harmonize,"requires":"masked_edit_revision 1"}),
         );
     }
     let snapshot = st.doc.clone();
@@ -241,7 +241,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
     [(FILL,"Fill Selection…",selected as fn(&Session)->std::result::Result<(),String>,fill as fn(&mut Session,&Value)->Result<Value>),
      (REMOVE,"Remove Object…",selected,remove), (EXPAND,"Expand Canvas…",expandable,expand), (BACKGROUND,"Replace Background…",selected,background)]
     .into_iter().map(|(id,label,enabled,run)|CommandSpec {id,label,menu:&["Image"],shortcut:None,
-        params:r#"{"prompt":text (optional for Remove Object),"model":id?,"negative":text?,"seed":i64=-1,"steps":1..50?,"cfg":1..20?,"strength":0.05..1?,"harmonize":bool=true,"document":id?,"left":0..512,"right":0..512,"top":0..512,"bottom":0..512 (Expand Canvas only),"dryRun":bool=false (validate without inference)} → {layer,seed,model,region}. Source-aware masked editing, new root layer, one undo. Fill/Remove require selection; bounded context never shrinks the selection. Expand supports raster layers/groups without effects; source pixels remain beneath a zero-weight protection mask. Requires Enki masked_edit_revision 1."#,
+        params:r#"{"prompt":text (optional for Remove Object),"model":id?,"negative":text?,"seed":i64=-1,"steps":1..50?,"cfg":1..20?,"strength":0.05..1?,"harmonize":bool (defaults to false for Replace Background, true otherwise),"document":id?,"left":0..512,"right":0..512,"top":0..512,"bottom":0..512 (Expand Canvas only),"dryRun":bool=false (validate without inference)} → {layer,seed,model,region}. Source-aware masked editing, new root layer, one undo. Fill/Remove require selection; bounded context never shrinks the selection. Expand supports raster layers/groups without effects; source pixels remain beneath a zero-weight protection mask. Requires Enki masked_edit_revision 1."#,
         enabled,run,journal:true}).collect()
 }
 fn fill(s: &mut Session, p: &Value) -> Result<Value> {

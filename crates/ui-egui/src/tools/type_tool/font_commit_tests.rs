@@ -112,6 +112,9 @@ fn choose(h: &mut Harness<'_, Probe>, font: &str, accept: &str) {
         "arrow-enter" => {
             h.key_press(Key::ArrowDown);
             h.run();
+            // The exact family is first, even when an installed variant also matches.
+            h.key_press(Key::ArrowUp);
+            h.run();
             h.key_press(Key::Enter);
         }
         "click" => h.get_by_label(font).click(),

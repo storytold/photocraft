@@ -111,7 +111,8 @@ pub fn body(_app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Va
             }
             ui.label(tl!("Expanded dimensions must be multiples of 8 and no larger than 1024 pixels per side."));
         }
-        let mut harmonize = fields.get("harmonize").and_then(Value::as_bool).unwrap_or(true);
+        let replacing_background = fields.get("__command").and_then(Value::as_str) == Some("image.replaceBackground");
+        let mut harmonize = fields.get("harmonize").and_then(Value::as_bool).unwrap_or(!replacing_background);
         if widgets::checkbox(ui, &mut harmonize, tl!("Match generated edge colors")).changed() {
             fields.insert("harmonize".into(), json!(harmonize));
         }
@@ -119,7 +120,7 @@ pub fn body(_app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Va
         if widgets::slider_row(ui, tl!("Edit strength:"), &mut strength, 0.05..=1.0, "", None).changed() {
             fields.insert("strength".into(), json!(strength));
         }
-        if fields.get("__command").and_then(Value::as_str) == Some("image.replaceBackground") {
+        if replacing_background {
             ui.label(tl!("The selection marks the subject to keep. Its background will be replaced using the original scene as context."));
         }
         ui.label(tl!("Uses original image context and an edit mask. Protected pixels remain unchanged. Requires an updated Enki runtime."));

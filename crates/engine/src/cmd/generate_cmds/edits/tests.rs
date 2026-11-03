@@ -208,6 +208,8 @@ fn background_replacement_protects_subject_and_keeps_its_soft_weights() {
         Ok(())
     })
     .unwrap();
+    let plan = s.execute(BACKGROUND, json!({"prompt":"new sky","dryRun":true})).unwrap();
+    assert_eq!(plan["harmonize"], false);
     let before = s.active().unwrap().doc.clone();
     let edit = background_edit(&s).unwrap();
     assert_eq!(edit.mask.sample_channel(20, 20, 0), 0.0);

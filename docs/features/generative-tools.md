@@ -2,10 +2,11 @@
 
 Implementation status, 2026-11-02. This is a draft port onto upstream 0.19.0.
 
-The branch also contains generated-edge harmonization (`harmonize: true`, default), learned
+The branch also contains generated-edge harmonization (enabled by default for fill, removal, and expansion), learned
 subject masks (`select.subjectEnki`), a masked cutout duplicate (`layer.removeBackgroundEnki`),
 and source-aware background replacement (`image.replaceBackground`). Background replacement
-protects the subject selection and edits its complement. Subject-mask inference requires the
+protects the subject selection and edits its complement. Edge matching defaults off for
+background replacement because the protected pixels are the subject itself. Subject-mask inference requires the
 separately configured Enki U2Net worker/model; edge refinement reuses the image-guided engine,
 not a learned alpha-matting model. These latest additions still require complete acceptance;
 earlier live evidence below belongs to the previous checkout, not this 0.19.0 port.
