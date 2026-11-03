@@ -422,6 +422,20 @@ mod tests {
     }
 
     #[test]
+    fn wait_slices_observes_cancel_while_pending() {
+        let flag = AtomicBool::new(false);
+        let cancelled = || flag.load(Ordering::SeqCst);
+        let mut polls = 0;
+        let outcome = wait_slices(Duration::from_secs(1), &cancelled, |_| {
+            polls += 1;
+            flag.store(true, Ordering::SeqCst);
+            SlicePoll::Pending
+        });
+        assert_eq!(outcome, WaitOutcome::Cancelled);
+        assert_eq!(polls, 1, "cancellation set during a pending poll must end the wait");
+    }
+
+    #[test]
     fn fault_text() {
         assert_eq!(Fault::Lost(String::new()).to_string(), "GPU device lost");
         assert_eq!(Fault::Error("x".into()).to_string(), "GPU error: x");

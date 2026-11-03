@@ -154,6 +154,7 @@ fn single_layer_and_cmyk_exports_report_that_the_renderer_was_not_used() {
 
 struct FailOnceDiagnosingRenderer {
     failed: bool,
+    calls: usize,
     diagnostics: Vec<String>,
 }
 
@@ -166,6 +167,7 @@ impl BandRenderer for FailOnceDiagnosingRenderer {
         ctl: &Interrupt<'_>,
         sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
     ) -> Result<(), RenderError> {
+        self.calls += 1;
         if !self.failed {
             self.failed = true;
             self.push_diagnostic("GPU readback error: forced device loss".into());
@@ -188,7 +190,7 @@ impl BandRenderer for FailOnceDiagnosingRenderer {
 fn fallback_diagnostics_stay_with_the_failed_export() {
     let doc = synthetic_doc();
     let opts = ExportOptions::default();
-    let mut renderer = FailOnceDiagnosingRenderer { failed: false, diagnostics: Vec::new() };
+    let mut renderer = FailOnceDiagnosingRenderer { failed: false, calls: 0, diagnostics: Vec::new() };
     let first = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("first export retries on CPU");
     assert!(first.warnings.iter().any(|w| w.contains("falling back to CPU")), "the failed export reports its fallback: {:?}", first.warnings);
     assert!(
@@ -197,7 +199,9 @@ fn fallback_diagnostics_stay_with_the_failed_export() {
         first.warnings
     );
 
+    let calls_before_second = renderer.calls;
     let second = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("second export uses the GPU path");
+    assert!(renderer.calls > calls_before_second, "the second export must call the renderer: {}", renderer.calls);
     assert!(!second.warnings.iter().any(|w| w.contains("falling back to CPU")), "a fallback warning must not carry into a later export: {:?}", second.warnings);
     assert!(
         !second.warnings.iter().any(|w| w.contains("GPU readback error")),
@@ -206,16 +210,66 @@ fn fallback_diagnostics_stay_with_the_failed_export() {
     );
 }
 
+/// Composes bands through the reference compositor but never polls `ctl` itself, so a band only
+/// reaches the export sink when the export checks cancellation. Counts the bands it forwarded.
+#[derive(Default)]
+struct UnpollingRenderer {
+    bands: usize,
+}
+
+impl BandRenderer for UnpollingRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        _ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        let rows = if band_rows > 0 { band_rows } else { 32 };
+        photocraft_compose::render_bands(doc, rect, rows, |buf| {
+            sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })?;
+            self.bands += 1;
+            Ok(())
+        })
+        .map_err(RenderError::sink)
+    }
+}
+
 #[test]
-fn failed_cpu_retry_leaves_queued_diagnostics_on_the_renderer() {
+fn cancellation_stops_the_cpu_band_sink() {
+    let opts = ExportOptions::default();
+
+    // RGB bands: cancellation is checked per band, so the second band is never assembled.
+    let checks = AtomicUsize::new(0);
+    let cancel = || checks.fetch_add(1, Ordering::SeqCst) + 1 >= 2;
+    let mut renderer = UnpollingRenderer::default();
+    let res = export_flat_with_renderer(&synthetic_doc(), Format::Tiff, &opts, &Interrupt::cancel_only(&cancel), Some(&mut renderer));
+    assert!(matches!(res, Err(IoError::Cancelled)), "a cancelled RGB export must stop between bands: {res:?}");
+    assert_eq!(renderer.bands, 1, "the band after a cancellation request must not be assembled");
+
+    // CMYK inks mix in bands through the same sink: none is assembled once cancelled.
+    let mut cmyk = Document::with_background("cmyk", Size::new(32, 32), ColorMode::Cmyk, SampleType::U8, Color::WHITE);
+    let mut s = Surface::new(cmyk.pixel_format());
+    s.fill_rect(Rect::new(4, 4, 28, 28), &[0.1, 0.2, 0.3, 0.4, 0.5]);
+    cmyk.layers.push(Layer::new("ink", LayerContent::Raster(s)));
+    let mut renderer = UnpollingRenderer::default();
+    let res = export_flat_with_renderer(&cmyk, Format::Tiff, &opts, &Interrupt::cancel_only(&|| true), Some(&mut renderer));
+    assert!(matches!(res, Err(IoError::Cancelled)), "a cancelled CMYK export must stop before its first band: {res:?}");
+    assert_eq!(renderer.bands, 0, "no CMYK band may be assembled when the export is already cancelled");
+}
+
+#[test]
+fn cancelled_export_leaves_queued_diagnostics_on_the_renderer() {
     let doc = synthetic_doc();
     let opts = ExportOptions::default();
-    let mut renderer = FailOnceDiagnosingRenderer { failed: false, diagnostics: Vec::new() };
+    let mut renderer = FailOnceDiagnosingRenderer { failed: false, calls: 0, diagnostics: Vec::new() };
     let cancelled = Interrupt::cancel_only(&|| true);
     let res = export_flat_with_renderer(&doc, Format::Png, &opts, &cancelled, Some(&mut renderer));
-    assert!(matches!(res, Err(IoError::Cancelled)), "the CPU retry must observe cancellation: {res:?}");
+    assert!(matches!(res, Err(IoError::Cancelled)), "cancellation must be observed before the CPU retry: {res:?}");
+    assert_eq!(renderer.calls, 1, "the cancelled export must not retry through the renderer: {}", renderer.calls);
     let diagnostics = renderer.drain_diagnostics();
-    assert!(diagnostics.iter().any(|d| d.contains("GPU readback error")), "diagnostics must stay queued when the retry also fails: {diagnostics:?}");
+    assert!(diagnostics.iter().any(|d| d.contains("GPU readback error")), "diagnostics must stay queued when the export is cancelled: {diagnostics:?}");
 }
 
 #[test]

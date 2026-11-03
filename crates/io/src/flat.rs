@@ -937,6 +937,9 @@ impl<'a> FlatSource<'a> {
         let colors = self.layout(false).channels();
         // Bands of quantised samples with alpha; the alpha is dropped here when not wanted.
         let mut emit = |rows: u32, parts: Vec<Vec<u8>>, translucent: bool| -> Result<(), IoError> {
+            // The CPU retry after a retryable GPU error composes through this sink with no
+            // renderer to poll `ctl` for it: check once per band, as `CpuRenderer` does.
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut data = Vec::with_capacity(parts.iter().map(Vec::len).sum());
             for part in parts {
                 data.extend_from_slice(&part);
@@ -1148,6 +1151,8 @@ pub fn export_flat_with_renderer(
                 // queued diagnostics into its retry result too: leaving either on the renderer
                 // would leak them into a later successful GPU export. If the retry fails, `?`
                 // returns early and they stay with the renderer for the caller.
+                // A cancelled export stops before compositing the document again.
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 let mut cpu_result = export_flat_with_renderer(doc, format, opts, ctl, None)?;
                 cpu_result.warnings.extend(r.drain_diagnostics());
                 cpu_result.warnings.push(fallback_warning);
@@ -1293,6 +1298,8 @@ pub fn export_png_streamed_with_renderer(
                 // queued diagnostics into its retry result too: leaving either on the renderer
                 // would leak them into a later successful GPU export. If the retry fails, `?`
                 // returns early and they stay with the renderer for the caller.
+                // A cancelled export stops before streaming the PNG again.
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 let mut cpu_result = export_png_streamed_with_renderer(doc, opts, ctl, rows, None)?;
                 cpu_result.warnings.extend(r.drain_diagnostics());
                 cpu_result.warnings.push(fallback_warning);
