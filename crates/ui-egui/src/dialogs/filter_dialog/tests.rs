@@ -121,6 +121,8 @@ fn same_target_ignores_parameters_but_nothing_else() {
         break_it(&mut other);
         assert!(!other.same_target(&base), "{other:?} must not pass as {base:?}");
         assert!(!base.same_target(&other));
+        // The canvas's display gate forgives the factor alone (#10474), nothing else.
+        assert_eq!(other.same_target_at_any_scale(&base), other.k != base.k, "{other:?}");
     }
 }
 

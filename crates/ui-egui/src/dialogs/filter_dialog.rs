@@ -1351,13 +1351,20 @@ impl FilterPreviewKey {
     /// parameters moved on. A reopened dialog has a new id, a different command or a different
     /// document, and a committed document a new revision, so neither survives this test.
     pub fn same_target(&self, other: &Self) -> bool {
+        self.k == other.k && self.same_target_at_any_scale(other)
+    }
+
+    /// [`Self::same_target`] at any proxy factor: whether the canvas may keep showing this frame,
+    /// drawn at its own `k`, while the factor moves under a drag. A parameter can set the factor
+    /// (Minimum and Maximum's radius, Mosaic's cell size, #10474), and the frame for the old one is
+    /// still the closest thing to the result until the new one lands.
+    pub fn same_target_at_any_scale(&self, other: &Self) -> bool {
         self.doc == other.doc
             && self.revision == other.revision
             && self.dialog == other.dialog
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
-            && self.k == other.k
     }
 }
 
