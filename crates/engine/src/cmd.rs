@@ -618,13 +618,14 @@ fn build() -> Vec<CommandSpec> {
             "Layer Properties",
             [],
             None,
-            r##"{"layer":id?,"layers":[id,…]? (the same change to each, one step: the Layers panel's controls with several layers selected),"name":str? (one layer only),"visible":bool?,"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
+            r##"{"layer":id?,"layers":[id,…]? (the same change to each, one step: the Layers panel's controls with several layers selected; with neither, the selection),"name":str? (one layer only),"visible":bool?,"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
             has_layer,
             |s, p| {
                 // Several layers at once (the Layers panel with several selected, as in Photoshop),
-                // else the given or active one.
+                // else the given one, else the selection. A rename only ever means one layer.
                 let ids: Vec<LayerId> = match p.get("layers") {
-                    None | Some(Value::Null) => vec![layer_param(s, p)?],
+                    None | Some(Value::Null) if p.get("name").is_some() => vec![layer_param(s, p)?],
+                    None | Some(Value::Null) => crate::layer_multi_cmds::targets(s, p)?,
                     Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => {
                         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
                         let mut ids = Vec::with_capacity(a.len());

@@ -156,6 +156,10 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
             return recorded_transform(s, p, pre_selected);
         }
     }
+    // A visibility gesture names its layer for replay instead (`actions_cmds::recorded_params`).
+    if id == "layer.setProps" && p.get("visible").is_none() && p.get("layers").is_some_and(Value::is_array) {
+        return recorded_set_props(s, p, pre_selected);
+    }
     let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId) else { return p };
     let is_sole_selected = match pre_selected {
         Some(sel) => sel == [layer_id],
@@ -205,6 +209,24 @@ fn recorded_transform(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]
     moved.dedup();
     targets.sort_unstable();
     if moved == targets
+        && let Some(fields) = p.as_object_mut()
+    {
+        fields.remove("layers");
+    }
+    p
+}
+
+/// `layer.setProps` on the layers that were selected plays on the selection at replay, not on
+/// this document's ids. Any other list stays as recorded.
+fn recorded_set_props(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    let Some(st) = s.active() else { return p };
+    let Some(listed) = p.get("layers").and_then(Value::as_array) else { return p };
+    let Some(mut listed) = listed.iter().map(|v| v.as_u64().map(LayerId)).collect::<Option<Vec<_>>>() else { return p };
+    let mut selected = pre_selected.map_or_else(|| st.selected_layers(), <[LayerId]>::to_vec);
+    listed.sort_unstable();
+    listed.dedup();
+    selected.sort_unstable();
+    if listed == selected
         && let Some(fields) = p.as_object_mut()
     {
         fields.remove("layers");
