@@ -255,7 +255,9 @@ fn a_cancelled_job_ends_cancelled() {
 #[test]
 fn a_whole_fill_lands_as_one_undo_step_inside_the_mask_after_consent() {
     let scene = Scene::new(true, true);
-    let ai = Arc::new(scene.ai(Some(Answer::Picture(png(16, 16, [255, 0, 0])))));
+    // The area sent is the whole 3:2 canvas, so the picture comes back 3:2 (one of another shape
+    // that doesn't line up with the picture around the selection would be refused).
+    let ai = Arc::new(scene.ai(Some(Answer::Picture(png(24, 16, [255, 0, 0])))));
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 120, "height": 80, "background": "#ffffff"})).unwrap();
     s.execute("select.rect", json!({"x": 40, "y": 20, "width": 30, "height": 30})).unwrap();
