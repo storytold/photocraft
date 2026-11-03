@@ -308,8 +308,11 @@ impl<'a> Layer<'a> {
             // The decoded channel and the 8-bit mask built from it are live together: refuse
             // before decoding either (a 1-bit channel expands eightfold).
             let n = w.checked_mul(h).ok_or(PsdError::LimitExceeded("mask size overflow"))?;
-            let per_pixel = usize::from(self.header.depth.div_ceil(8)) + 1;
-            if n.checked_mul(per_pixel).is_none_or(|len| len as u64 > crate::compression::MAX_DECODED_BYTES) {
+            // The packed source (rows of `depth` bits, so a 1-bit channel is an eighth of a byte a
+            // pixel) and the 8-bit output are live together.
+            let source = (w * usize::from(self.header.depth)).div_ceil(8).checked_mul(h);
+            let total = source.and_then(|s| s.checked_add(n));
+            if total.is_none_or(|len| len as u64 > crate::compression::MAX_DECODED_BYTES) {
                 return Err(PsdError::LimitExceeded("mask output exceeds MAX_DECODED_BYTES"));
             }
             let data = plane_to_u8(&self.channel_bytes(id)?, self.header.depth, w, h)?;
