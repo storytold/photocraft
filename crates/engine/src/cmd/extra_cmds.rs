@@ -566,6 +566,12 @@ fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let children = group.children.clone();
         let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(id))?;
+        // Ungrouping the only root layer when it is an empty group would leave the document
+        // with no layers at all; `layer.delete` refuses to drop the last layer, so refuse here
+        // too instead (#11118).
+        if parent.is_empty() && children.is_empty() && doc.layers.len() == 1 {
+            return Err(EngineError::Other("a document must keep at least one layer".into()));
+        }
         let sib = if parent.is_empty() { &mut doc.layers } else { doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(id))? };
         sib.remove(idx);
         let top = children.last().map(|l| l.id);
