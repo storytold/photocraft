@@ -517,7 +517,8 @@ fn smart_filter_params_merge_or_replace() {
     s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [50, 30, 20, 0]})).unwrap();
     s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}})).unwrap();
     assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "merged: the gray row stays");
-    assert!(max_diff(&flatten(&s), &original) > 0.05, "and still mixes the red channel");
+    let merged = flatten(&s);
+    assert!(max_diff(&merged, &original) > 0.05, "and still mixes the red channel");
     let steps = s.active().unwrap().history.past_len();
     s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"monochrome": false}, "replace": true})).unwrap();
     assert_eq!(smart_filters_of(&s)[0].params, json!({"monochrome": false}));
@@ -525,6 +526,7 @@ fn smart_filter_params_merge_or_replace() {
     assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
     s.undo();
     assert!(smart_filters_of(&s)[0].params.get("gray").is_some(), "undo brings the old params back");
+    assert!(max_diff(&flatten(&s), &merged) < 1e-6, "and renders the old result");
 }
 
 /// `replace` takes the filter's complete settings: they must be an object, and must read as this

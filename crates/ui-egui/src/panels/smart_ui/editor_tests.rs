@@ -194,7 +194,7 @@ fn filter_editor_starts_missing_parameters_from_defaults_not_remembered_values()
 #[test]
 fn an_adjustment_smart_filter_reopens_with_the_settings_it_renders() {
     let (mut app, layer) = app(8, "rgb");
-    let flat = |app: &PhotocraftApp| photocraft_compose::flatten(&app.session.active().unwrap().doc).px;
+    let flat = |app: &PhotocraftApp| photocraft_compose::flatten(&app.session.active().unwrap().doc).px.clone();
     app.run("image.adjustments.channelMixer", json!({"monochrome": true})).unwrap();
     let index = smart(&app, layer).smart_filters.len() - 1;
     let (before, steps) = (flat(&app), app.session.active().unwrap().history.past_len());
