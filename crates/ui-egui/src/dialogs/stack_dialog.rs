@@ -6,6 +6,7 @@
 //! Vignette Removal, Geometric Distortion Correction and Content Aware Fill Transparent Areas
 //! below, and Use can also be Open Files (every open document, saved or not). OK runs the
 //! corresponding engine command with the list or the folder.
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{RichText, vec2};
@@ -132,7 +133,24 @@ struct FolderScan {
     folder: String,
     generation: u64,
     started: Option<f64>,
-    pending: Option<Arc<Mutex<Option<FolderListing>>>>,
+    pending: Option<Pending>,
+}
+
+/// Most folder listings running at once, over all dialogs. A listing stalled on a dead share
+/// can't be cancelled, so without a cap each folder chosen after it would add a thread.
+const MAX_LISTINGS: usize = 4;
+static LISTINGS_RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+/// A result slot a worker fills in.
+type Pending = Arc<Mutex<Option<FolderListing>>>;
+
+/// How starting a background listing went.
+enum Started {
+    Running(Pending),
+    /// `MAX_LISTINGS` are running: try again shortly.
+    Busy,
+    /// No worker thread (the web, or the system refused one): list inline.
+    NoThread,
 }
 
 fn scan_key(id: u64) -> egui::Id {
@@ -153,17 +171,25 @@ fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background:
     let generation = f.get("__listGen").and_then(Value::as_u64).unwrap_or(0);
     let mut scan = ctx.data(|m| m.get_temp::<FolderScan>(key)).unwrap_or_default();
     if scan.folder != dir || scan.generation != generation {
-        // Another folder, or Browse… again: drop the old listing, running or not.
+        // Another folder, Browse… again, or back to Use: Folder: drop the old listing, running or
+        // not, and what it found (OK must wait for the new one).
+        f.remove("__listed");
         scan = FolderScan { folder: dir.clone(), generation, ..FolderScan::default() };
     } else if let Some(done) = scan.pending.as_ref().and_then(|p| p.lock().unwrap_or_else(PoisonError::into_inner).take()) {
         store(f, &dir, done);
         scan.pending = None;
     }
+    let mut busy = false;
     if !dir.is_empty() && scan.pending.is_none() && scan.started.is_none_or(|at| (now - at).abs() >= RELIST_SECS) {
         scan.started = Some(now);
-        match background.then(|| start(ctx, &dir, list)).flatten() {
-            Some(pending) => scan.pending = Some(pending),
-            None => {
+        match if background { start(ctx, &dir, list) } else { Started::NoThread } {
+            Started::Running(pending) => scan.pending = Some(pending),
+            Started::Busy => {
+                scan.started = None;
+                busy = true;
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            Started::NoThread => {
                 let took = web_time::Instant::now();
                 store(f, &dir, list(&dir));
                 // From when it finished, so a listing slower than RELIST_SECS isn't repeated on
@@ -172,7 +198,7 @@ fn folder_images(ui: &egui::Ui, f: &mut Map<String, Value>, id: u64, background:
             }
         }
     }
-    if scan.pending.is_some() {
+    if scan.pending.is_some() || busy {
         f.insert("__listing".into(), json!(true));
     } else {
         f.remove("__listing");
@@ -187,26 +213,44 @@ fn drop_folder_scan(ctx: &egui::Context, id: u64) {
     ctx.data_mut(|m| m.remove::<FolderScan>(scan_key(id)));
 }
 
-/// Starts listing `dir` on a worker thread, or `None` where there are none (the web) or one can't
-/// be started.
+/// One of the `LISTINGS_RUNNING`, given back when dropped (the worker ends, or never started).
+struct RunningListing;
+
+impl Drop for RunningListing {
+    fn drop(&mut self) {
+        LISTINGS_RUNNING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Starts listing `dir` on a worker thread, unless `MAX_LISTINGS` are running.
 #[cfg(not(target_arch = "wasm32"))]
-fn start(ctx: &egui::Context, dir: &str, list: Lister) -> Option<Arc<Mutex<Option<FolderListing>>>> {
-    let result = Arc::new(Mutex::new(None));
+fn start(ctx: &egui::Context, dir: &str, list: Lister) -> Started {
+    let mut n = LISTINGS_RUNNING.load(Ordering::SeqCst);
+    loop {
+        if n >= MAX_LISTINGS {
+            return Started::Busy;
+        }
+        match LISTINGS_RUNNING.compare_exchange(n, n + 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(now) => n = now,
+        }
+    }
+    let running = RunningListing;
+    let result: Pending = Arc::new(Mutex::new(None));
     let (slot, ctx, dir) = (Arc::clone(&result), ctx.clone(), dir.to_string());
-    std::thread::Builder::new()
-        .name("photocraft-folder-listing".into())
-        .spawn(move || {
-            let r = std::panic::catch_unwind(|| list(&dir)).unwrap_or_else(|_| Err(format!("{dir}: listing the folder failed")));
-            *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
-            ctx.request_repaint();
-        })
-        .ok()?;
-    Some(result)
+    let spawned = std::thread::Builder::new().name("photocraft-folder-listing".into()).spawn(move || {
+        let _running = running;
+        let r = std::panic::catch_unwind(|| list(&dir)).unwrap_or_else(|_| Err(format!("{dir}: listing the folder failed")));
+        *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+        ctx.request_repaint();
+    });
+    // A thread that didn't start dropped its `RunningListing` with the closure.
+    if spawned.is_ok() { Started::Running(result) } else { Started::NoThread }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn start(_: &egui::Context, _: &str, _: Lister) -> Option<Arc<Mutex<Option<FolderListing>>>> {
-    None
+fn start(_: &egui::Context, _: &str, _: Lister) -> Started {
+    Started::NoThread
 }
 
 /// Keeps the listing of `dir` in the fields.

@@ -437,21 +437,33 @@ fn photomerge_does_not_fill_without_blend() {
     assert_eq!((&p["blend"], &p["contentAwareFill"]), (&json!(false), &json!(false)), "{p}");
 }
 
-/// Alt+Cancel → Reset puts Layout and the options back to their defaults and keeps the files.
+/// Alt+Cancel → Reset puts Layout and the options back to their defaults in the open dialog,
+/// keeps the files and the dialog.
 #[test]
 fn photomerge_alt_reset_restores_the_options() {
     let (mut h, _) = harness(vec![]);
     let id = open_photomerge(h.state_mut());
-    let mut f = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
-    let fresh = f.clone();
-    f.insert("files".into(), json!(["a.png", "b.png"]));
-    f.insert("layout".into(), json!("cylindrical"));
+    let fresh = dialog(&h).unwrap().1;
+    let d = h.state_mut().ui.dialog_mut(id).unwrap();
+    d.fields.insert("files".into(), json!(["a.png", "b.png"]));
+    d.fields.insert("layout".into(), json!("cylindrical"));
     for (key, _, on) in PHOTOMERGE_OPTIONS {
-        f.insert(key.into(), json!(!on));
+        d.fields.insert(key.into(), json!(!on));
     }
-    assert!(crate::dialog_alt_reset::supported(&f));
-    let ctx = h.ctx.clone();
-    crate::dialog_alt_reset::apply(h.state_mut(), &ctx, &mut f);
+    h.run_steps(2);
+    assert!(h.query_by_label("Reset").is_none());
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.run_steps(2);
+    assert!(h.query_by_label("Cancel").is_none(), "Alt turns Cancel into Reset");
+    let at = h.get_by_label("Reset").rect().center();
+    for e in [true, false].map(|pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::ALT })
+    {
+        h.event(e);
+        h.run_steps(1);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
+    let (_, f) = dialog(&h).expect("Reset keeps the dialog open");
     for key in ["layout", "blend", "vignetteRemoval", "geometricCorrection", "contentAwareFill"] {
         assert_eq!(f[key], fresh[key], "{key}");
     }
@@ -480,18 +492,22 @@ fn gated_listing(dir: &str) -> Result<Vec<String>, String> {
     Ok(vec![format!("{dir}/a.png"), format!("{dir}/b.png")])
 }
 
-/// One frame at `time` showing `folder_images` for dialog 1 in the background.
-fn listing_frame(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+/// One frame at `time` showing `folder_images` for dialog `id` in the background.
+fn listing_frame_of(ctx: &egui::Context, id: u64, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
     let mut shown = Vec::new();
-    let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| shown = folder_images(ui, f, 1, true, gated_listing));
+    let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| shown = folder_images(ui, f, id, true, gated_listing));
     out.textures_delta.clear();
     shown
 }
 
-/// Frames at `time` until the background listing is back (at most 5 s).
-fn until_listed(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+fn listing_frame(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+    listing_frame_of(ctx, 1, f, time)
+}
+
+/// Frames at `time` until dialog `id`'s background listing is back (at most 5 s).
+fn until_listed_of(ctx: &egui::Context, id: u64, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
     for _ in 0..250 {
-        let shown = listing_frame(ctx, f, time);
+        let shown = listing_frame_of(ctx, id, f, time);
         if !f.contains_key("__listing") {
             return shown;
         }
@@ -500,9 +516,15 @@ fn until_listed(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> V
     panic!("the listing never came back");
 }
 
+fn until_listed(ctx: &egui::Context, f: &mut Map<String, Value>, time: f64) -> Vec<String> {
+    until_listed_of(ctx, 1, f, time)
+}
+
 /// In the app a folder is listed on a worker: a listing that hangs doesn't hold up frames, nor
-/// the folder Browse… picks next; the folder is listed again RELIST_SECS after a listing
-/// started, never two at once, and the last listing stays shown meanwhile.
+/// the folder Browse… picks next; back in Use: Folder, OK waits for a new listing; at most
+/// MAX_LISTINGS run at once; the folder is listed again RELIST_SECS after a listing started,
+/// never two at once, and the last listing stays shown meanwhile. (One test: the hung listings
+/// and the running count are shared.)
 #[test]
 fn a_slow_folder_is_listed_off_the_ui_thread() {
     use std::sync::atomic::Ordering::SeqCst;
@@ -514,22 +536,57 @@ fn a_slow_folder_is_listed_off_the_ui_thread() {
     assert!(f.contains_key("__listing") && !f.contains_key("__listed"), "{f:?}");
     assert!(!can_confirm_folder(&f), "OK waits for the listing");
     listing_frame(&ctx, &mut f, 2.0);
-    assert_eq!(LISTINGS.load(SeqCst), 1, "not listed again while a listing runs");
+    assert_eq!(LISTINGS_RUNNING.load(SeqCst), 1, "not listed again while a listing runs");
 
     // Browse… another folder: listed at once, not after the hung one.
     f.insert("folder".into(), json!("/share"));
     f.insert("__listGen".into(), json!(1));
     assert_eq!(until_listed(&ctx, &mut f, 2.1), ["/share/a.png", "/share/b.png"]);
     assert!(can_confirm_folder(&f));
+
+    // Use: Files, then Folder again: the earlier listing doesn't enable OK before the new one.
+    drop_folder_scan(&ctx, 1);
+    listing_frame(&ctx, &mut f, 2.2);
+    assert!(!can_confirm_folder(&f), "{f:?}");
+    until_listed(&ctx, &mut f, 2.2);
+    assert!(can_confirm_folder(&f));
+
+    // The hung listing and more on other dialogs fill MAX_LISTINGS; then another waits. (The
+    // listing just back may still be ending its thread.)
+    for _ in 0..250 {
+        if LISTINGS_RUNNING.load(SeqCst) == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(LISTINGS_RUNNING.load(SeqCst), 1, "the hung listing");
+    let mut others: Vec<Map<String, Value>> = (0..MAX_LISTINGS).map(|_| Map::from_iter([("folder".to_string(), json!("/hung"))])).collect();
+    for (i, g) in others.iter_mut().enumerate() {
+        listing_frame_of(&ctx, 10 + i as u64, g, 2.3);
+    }
+    assert_eq!(LISTINGS_RUNNING.load(SeqCst), MAX_LISTINGS);
+    let waiting_id = 10 + MAX_LISTINGS as u64 - 1;
+    let waiting = others.last_mut().unwrap();
+    listing_frame_of(&ctx, waiting_id, waiting, 2.4);
+    assert!(waiting.contains_key("__listing") && !waiting.contains_key("__listed"), "{waiting:?}");
+    assert_eq!(LISTINGS_RUNNING.load(SeqCst), MAX_LISTINGS, "no thread while MAX_LISTINGS run");
     HUNG_RELEASED.store(true, SeqCst);
+    assert_eq!(until_listed_of(&ctx, waiting_id, waiting, 2.5), ["/hung/a.png", "/hung/b.png"], "listed once a listing ended");
+    for _ in 0..250 {
+        if LISTINGS_RUNNING.load(SeqCst) == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(LISTINGS_RUNNING.load(SeqCst), 0, "every listing gave its place back");
     let listings = LISTINGS.load(SeqCst);
 
-    // RELIST_SECS after that listing started (2.1 s): listed again, the last listing shown
+    // RELIST_SECS after that listing started (2.2 s): listed again, the last listing shown
     // meanwhile; not before.
-    listing_frame(&ctx, &mut f, 3.0);
+    listing_frame(&ctx, &mut f, 3.1);
     assert_eq!(LISTINGS.load(SeqCst), listings);
-    assert_eq!(listing_frame(&ctx, &mut f, 3.2), ["/share/a.png", "/share/b.png"], "kept while listing again");
-    until_listed(&ctx, &mut f, 3.3);
+    assert_eq!(listing_frame(&ctx, &mut f, 3.3), ["/share/a.png", "/share/b.png"], "kept while listing again");
+    until_listed(&ctx, &mut f, 3.4);
     assert_eq!(LISTINGS.load(SeqCst), listings + 1);
 }
 
