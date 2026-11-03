@@ -374,8 +374,9 @@ const ENHANCE_CUT_REQUEST: &str = "Which edges of this picture cut off its main 
 
 /// The system turn of [`EnhanceKind::Scene`]: the Outpaint LoRA was trained with a Qwen3-VL-8B
 /// description of the whole picture after its instruction (AusBoss's model card, read
-/// 2026-11-03), so the caption names the subject as well as the setting.
-const ENHANCE_SCENE_SYSTEM: &str = "You see a picture. Describe all of it in one or two plain sentences, as a caption: the main subject (who or what, pose, clothing, how much of them the frame shows) and the setting, background, lighting and style. Reply with the description only.";
+/// 2026-11-03), so the caption names the subject as well as the setting; never who a person
+/// is (it named Cody's sitter, which goes into the prompt and the layer's info).
+const ENHANCE_SCENE_SYSTEM: &str = "You see a picture. Describe all of it in one or two plain sentences, as a caption: the main subject (who or what, pose, clothing, how much of them the frame shows) and the setting, background, lighting and style. Never name or identify a person, even a famous one: describe people only by how they look. Reply with the description only.";
 
 /// The user turn of [`EnhanceKind::Scene`].
 const ENHANCE_SCENE_REQUEST: &str = "Describe this picture.";
