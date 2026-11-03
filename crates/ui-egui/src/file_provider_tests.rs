@@ -10,6 +10,10 @@ use crate::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services, menus}
 
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+#[path = "../../io/tests/support/recovery_psd.rs"]
+mod recovery_psd;
+
 fn app(connected: bool) -> (PhotocraftApp, Host, Written) {
     let provider = Host::default();
     provider.set_session("test-provider-instance-0001".into()).unwrap();
@@ -541,6 +545,50 @@ fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
     assert!(!provider.saving(), "a cancelled read does not become a save operation");
     provider.publish_events_with(|_, _| Ok::<_, ()>(()), |_| {});
     assert!(!provider.busy());
+}
+
+/// A memory refusal cannot both finish the provider request and schedule an unowned local open.
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+#[test]
+fn provider_memory_approval_refusal_cannot_launch_an_unowned_open_job() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, written) = app(true);
+    app.services.import = Some(Box::new(|name, bytes, opts| {
+        photocraft_io::import_with_options(name, bytes, opts).map(|result| (result.document, result.warnings)).map_err(|error| error.to_string())
+    }));
+    let original = app.session.active().unwrap().doc.clone();
+    let background_jobs = app.background_jobs;
+    let bytes = recovery_psd::make_psd(false);
+    let gb = 1_u64 << 30;
+    let memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(5 * gb), swap_free: None, commit_headroom: None };
+    photocraft_io::psd_budget::with_test_estimate_charge(3 * gb, || {
+        photocraft_io::memory::with_mock_memory(memory, || {
+            let options = photocraft_engine::jobs::import_options(app.session.prefs());
+            assert!(matches!(photocraft_io::import_for_open("memory.psd", &bytes, &options), Err(photocraft_io::IoError::PsdApprovalRequired { .. })));
+            provider.set_resources(
+                provider.snapshot()["connectionId"].as_str().unwrap(),
+                vec![file_providers::Resource { id: "memory".into(), name: "memory.psd".into(), updated_at: String::new() }],
+            ).unwrap();
+            let request = provider.request_open("memory").unwrap();
+            provider.take_events();
+            provider.open(request.clone(), "memory.psd".into(), bytes).unwrap();
+            file_providers::tick(&mut app, &ctx);
+            assert!(app.jobs.opens.is_empty(), "a failed provider request must not leave a local open job");
+            assert!(app.session.jobs().iter().next().is_none());
+            assert!(app.held_memory_prompts.is_empty() && app.held_opens.is_empty() && app.prompt_order.is_empty());
+            assert_eq!(app.session.documents().len(), 1);
+            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+            assert_eq!(app.background_jobs, background_jobs);
+            let events = provider.take_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].metadata["type"], "openFailed");
+            assert_eq!(events[0].metadata["requestId"], request);
+            assert_eq!(events[0].metadata["resourceId"], "memory");
+            assert!(!provider.busy());
+            assert!(written.borrow().is_empty());
+            assert!(provider.request_open("memory").is_ok(), "the correlated failure permits a fresh retry");
+        });
+    });
 }
 
 #[test]

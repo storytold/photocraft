@@ -477,6 +477,11 @@ impl Host {
         Ok(())
     }
 
+    /// An active provider decode must finish or fail before its request leaves the inline path.
+    pub(crate) fn inline_open_requested(&self) -> bool {
+        self.state().opening.is_some()
+    }
+
     pub(crate) fn opening_document(&self, doc: DocId) {
         let mut s = self.state();
         if let Some(resource) = s.opening.take() {
