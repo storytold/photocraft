@@ -303,7 +303,7 @@ pub fn start_save(
     }
     let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
     let copy_like = copy || (automation && !photocraft_engine::file_cmds::holds_at(&st.doc, &path));
-    let invalidate_savepoint = copy_like && app.copy_overwrites_savepoint(&snapshot, &path, &settings);
+    let invalidate_savepoint = copy_like && PhotocraftApp::copy_needs_savepoint_check(&snapshot, &path, &settings);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();

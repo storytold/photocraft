@@ -1191,3 +1191,26 @@ fn background_copy_overwrite_rechecks_file_identity_after_atomic_replacement() {
     assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
     assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
 }
+
+#[test]
+fn background_copy_overwrite_recreating_a_deleted_backing_file_through_an_alias_is_unsaved() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let alias = dir.path().join("nested").join("..").join("own.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    let mut h = app_harness();
+    h.state_mut().session.active_mut().unwrap().saved_to(own.clone());
+    std::fs::remove_file(&own).unwrap();
+    h.state_mut().services.save_file = Some(Arc::new(|doc, path, settings, ctl| {
+        ctl.check()?;
+        let result = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+        photocraft_format::atomic_write(std::path::Path::new(path), &result.bytes).map_err(|e| e.to_string())?;
+        Ok(result.warnings)
+    }));
+    let settings = crate::ExportSettings { tiff_layers: false, ..Default::default() };
+    assert_eq!(h.state_mut().write_document(alias, &settings, true), Ok(None));
+    step_until(&mut h, |app| !app.saving());
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
+}

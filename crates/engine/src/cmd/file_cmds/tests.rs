@@ -2443,3 +2443,15 @@ fn copy_overwrite_of_a_hard_link_leaves_the_original_savepoint_clean() {
     assert_eq!(std::fs::read(&own).unwrap(), b"saved original");
     assert_ne!(std::fs::read(&alias).unwrap(), b"saved original");
 }
+
+#[test]
+fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    let mut s = session(4, 4, 8);
+    assert!(!photocraft_io::tiff_layers::would_write_layers(&s.active().unwrap().doc));
+    s.active_mut().unwrap().saved_to(own.clone());
+    s.execute("file.saveACopy", json!({"path": own, "overwrite": true, "tiffLayers": true})).unwrap();
+    assert!(s.active().unwrap().is_dirty());
+    assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
+}

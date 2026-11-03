@@ -157,6 +157,7 @@ fn copy_overwrite_uses_actual_tiff_layer_support() {
     for mode in ["rgb", "gray", "cmyk", "lab"] {
         for command in ["file.saveACopy", "file.saveAs"] {
             let mut app = app_at("own.tif");
+            app.run("file.close", json!({})).unwrap();
             app.run("file.new", json!({"width": 4, "height": 4, "mode": mode})).unwrap();
             app.run("layer.new.layer", json!({})).unwrap();
             app.session.active_mut().unwrap().saved_to("own.tif".into());
@@ -247,6 +248,7 @@ fn copy_overwrite_refreshes_only_its_own_successful_write_stamp() {
 #[test]
 fn copy_overwrite_from_the_tiff_prompt_uses_actual_layer_support() {
     let mut app = app_at("own.tif");
+    app.run("file.close", json!({})).unwrap();
     app.run("file.new", json!({"width": 4, "height": 4, "mode": "lab"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.session.active_mut().unwrap().saved_to("own.tif".into());
@@ -254,4 +256,36 @@ fn copy_overwrite_from_the_tiff_prompt_uses_actual_layer_support() {
     assert!(!app.tiff_options.as_ref().unwrap().discard_layers);
     crate::tiff_options_ui::confirm(&mut app, &egui::Context::default());
     assert!(app.has_unsaved_work(), "the encoder falls back to flat TIFF despite the Layers answer");
+}
+
+#[test]
+fn copy_overwrite_recreating_a_deleted_backing_file_through_an_alias_is_unsaved() {
+    let dir = tempfile::tempdir().unwrap();
+    let own = dir.path().join("own.tif").to_string_lossy().into_owned();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let alias = dir.path().join("nested").join("..").join("own.tif").to_string_lossy().into_owned();
+    std::fs::write(&own, b"saved original").unwrap();
+    let mut app = app_at(&own);
+    std::fs::remove_file(&own).unwrap();
+    app.services.write = Some(Box::new(|path, bytes| photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| e.to_string())));
+    app.replay_save("file.saveACopy", &json!({"path": alias, "tiffLayers": false})).unwrap();
+    assert!(app.session.active().unwrap().is_dirty(), "the recreated backing file no longer holds the editable layers");
+    assert!(photocraft_codecs::tiff_photoshop_tags(&std::fs::read(&own).unwrap()).1.is_none());
+}
+
+#[test]
+fn copy_overwrite_of_a_flat_background_tiff_remains_conservatively_unsaved() {
+    for copy in [false, true] {
+        let mut app = app_at("own.tif");
+        app.run("file.close", json!({})).unwrap();
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.session.active_mut().unwrap().saved_to("own.tif".into());
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let written = bytes.clone();
+        app.services.write = Some(Box::new(move |_, data| { *written.borrow_mut() = data.to_vec(); Ok(()) }));
+        let command = if copy { "file.saveACopy" } else { "file.saveAs" };
+        app.replay_save(command, &json!({"path": "own.tif", "tiffLayers": true})).unwrap();
+        assert!(photocraft_codecs::tiff_photoshop_tags(&bytes.borrow()).1.is_none());
+        assert_eq!(app.session.active().unwrap().is_dirty(), copy, "ordinary saves retain their existing classification");
+    }
 }

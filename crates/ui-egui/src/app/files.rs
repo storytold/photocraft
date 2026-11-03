@@ -463,7 +463,7 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
-        let invalidate = copy && self.copy_overwrites_savepoint(&st.doc, &path, settings);
+        let invalidate = copy && Self::copy_needs_savepoint_check(&st.doc, &path, settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
@@ -478,11 +478,11 @@ impl PhotocraftApp {
 
     /// A layered copy keeps the editable document; flat copies can change pixels, alpha or
     /// layers. Recheck file identity after writing before invalidating its saved state.
-    pub(crate) fn copy_overwrites_savepoint(&self, doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
-        let Some(st) = self.session.documents().iter().find(|st| st.doc.id == doc.id) else { return false };
+    pub(crate) fn copy_needs_savepoint_check(doc: &photocraft_doc::Document, path: &str, settings: &ExportSettings) -> bool {
         let layered = photocraft_engine::file_cmds::holds_at(doc, path)
-            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::supports_layers(doc));
-        st.path.as_deref().is_some_and(|own| photocraft_engine::file_cmds::same_file(own, path)) && !layered
+            || (tiff_options_ui::is_tiff_path(path) && settings.tiff_layers && photocraft_io::tiff_layers::supports_layers(doc)
+                && photocraft_io::tiff_layers::would_write_layers(doc));
+        !layered
     }
 
     /// A successful incomplete write may have replaced this document's file. Atomic replacement
@@ -712,7 +712,7 @@ impl PhotocraftApp {
         }
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
-        let invalidate = !photocraft_engine::file_cmds::holds_at(&state.doc, &target) && self.copy_overwrites_savepoint(&state.doc, &target, &settings);
+        let invalidate = !photocraft_engine::file_cmds::holds_at(&state.doc, &target) && Self::copy_needs_savepoint_check(&state.doc, &target, &settings);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
