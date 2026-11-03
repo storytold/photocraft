@@ -118,7 +118,7 @@ pub fn clamp_view_with_aspect(view: &mut View, size: egui::Vec2, ppp: f32, aspec
             if view.center[0].is_finite() { view.center[0] } else { w as f32 / 2.0 },
             if view.center[1].is_finite() { view.center[1] } else { h as f32 / 2.0 },
         ];
-        let xf = crate::canvas::ViewXform { rect: egui::Rect::from_min_size(Pos2::ZERO, size), zoom, center, flip: false, rotation: view.rotation, aspect };
+        let xf = crate::canvas::ViewXform { rect: Rect::from_min_size(Pos2::ZERO, size), zoom, center, flip: false, rotation: view.rotation, aspect };
         let image = xf.image_bounds(view.doc_size);
         if !image.is_finite() {
             return false;
@@ -337,6 +337,19 @@ mod tests {
         assert!(clamp_view(&mut v, vec2(500.0, 400.0), 1.0));
         assert_eq!(v.center, [250.0, 200.0]);
         assert!(!clamp_view(&mut v, vec2(500.0, 400.0), 1.0), "stable: no repaint loop");
+    }
+
+    #[test]
+    fn overscroll_off_centres_a_fitting_rotated_image() {
+        // 600 px at 45 degrees is about 849 points across, so it fits a 900-point view both ways.
+        // Started off centre, the clamp centres its screen-space bounds in the view (#10488).
+        let mut v = View { zoom: 1.0, center: [100.0, 450.0], doc_size: [600, 600], rotation: 45.0, ..Default::default() };
+        let size = vec2(900.0, 900.0);
+        assert!(clamp_view_with_aspect(&mut v, size, 1.0, 1.0));
+        let xf = crate::canvas::ViewXform { rect: Rect::from_min_size(Pos2::ZERO, size), zoom: 1.0, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 };
+        let c = xf.image_bounds(v.doc_size).center();
+        assert!((c - xf.rect.center()).length() < 1e-2, "centred: {c:?}");
+        assert!(!clamp_view_with_aspect(&mut v, size, 1.0, 1.0), "stable: no repaint loop");
     }
 
     #[test]
