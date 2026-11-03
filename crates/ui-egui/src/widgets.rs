@@ -69,6 +69,20 @@ pub use units::{
     value_field_units,
 };
 
+/// Room between a dialog's edge and its contents. egui's modal frame uses the menu margin (6
+/// points), which left titles and buttons crowding the edge.
+pub const DIALOG_MARGIN: egui::Margin = egui::Margin::symmetric(20, 16);
+
+/// The frame of every dialog: the popup frame's fill, stroke, corners and shadow, with dialog room.
+pub fn dialog_frame(style: &egui::Style) -> egui::Frame {
+    egui::Frame::popup(style).inner_margin(DIALOG_MARGIN)
+}
+
+/// A modal in a [`dialog_frame`].
+pub fn modal(ctx: &egui::Context, id: egui::Id) -> egui::Modal {
+    egui::Modal::new(id).frame(dialog_frame(&ctx.global_style()))
+}
+
 #[cfg(test)]
 mod tests;
 

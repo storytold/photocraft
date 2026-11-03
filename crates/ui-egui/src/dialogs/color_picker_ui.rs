@@ -627,6 +627,15 @@ fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> bool {
     resp.clicked()
 }
 
+/// A grid cell at least as wide as egui's default column.
+fn column_cell<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.set_min_width(ui.spacing().interact_size.x);
+        add(ui)
+    })
+    .inner
+}
+
 /// Component radios and numeric fields: HSB, RGB, Lab, CMYK and hex.
 fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Components) {
     let t = Tokens::get(ui.ctx());
@@ -712,13 +721,15 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
             });
         });
-        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
+        // No minimum column width: the default (24 points) gave the last column, a bare "%", room
+        // past the content width that widened the window. The radio and label columns keep it.
+        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).min_col_width(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
             for (i, (v, range)) in [(lab[0], 0.0..=100.0), (lab[1], -128.0..=127.0), (lab[2], -128.0..=127.0)].into_iter().enumerate() {
                 let (key, label) = LAB_MODES[i];
-                if radio(ui, mode == key, label) {
+                if column_cell(ui, |ui| radio(ui, mode == key, label)) {
                     new_mode = Some(key);
                 }
-                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
+                column_cell(ui, |ui| ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim)));
                 let mut x = v.round();
                 if widgets::value_field(ui, &mut x, range, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut l = lab;
@@ -731,8 +742,8 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
             ui.allocate_exact_size(vec2(0.0, 3.0), Sense::hover());
             ui.end_row();
             for (i, label) in ["C:", "M:", "Y:", "K:"].into_iter().enumerate() {
-                ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim));
+                column_cell(ui, |ui| ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover()));
+                column_cell(ui, |ui| ui.label(egui::RichText::new(tl!(&label)).color(t.text_dim)));
                 let mut x = (cmyk[i] * 100.0).round();
                 if widgets::value_field(ui, &mut x, 0.0..=100.0, "", VALUE_W).accessible_name(tl!(&label)).changed() {
                     let mut k = cmyk;

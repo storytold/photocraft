@@ -547,7 +547,8 @@ fn fit_image_is_as_narrow_as_its_content() {
     let d = crate::menus::invoke(h.state_mut(), &ctx, "file.automate.fitImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
     h.run_steps(4);
     let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", d)))).expect("the Fit Image window");
-    assert!(window.width() < 300.0, "Fit Image is {} points wide", window.width());
+    let content = window.width() - crate::widgets::DIALOG_MARGIN.sum().x;
+    assert!(content < 288.0, "Fit Image's content is {content} points wide");
     for label in ["Fit Image", "Width", "Height", "OK", "Cancel"] {
         // A caption and the field it names share the label; either sits inside the window.
         let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));
