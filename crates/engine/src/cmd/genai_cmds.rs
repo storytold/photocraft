@@ -846,8 +846,9 @@ fn more_enabled(s: &Session) -> std::result::Result<(), String> {
 fn more(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |msg: String| EngineError::BadParams { cmd: MORE.into(), msg };
     let count = variations_param(p, "count", MORE)?;
-    more_enabled(s).map_err(bad)?;
+    // The layer asked for (`layer`), else the active one: not only the active one.
     let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first".into()))?;
+    ai_ready(s).map_err(bad)?;
     let source = s.genai_state.sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();

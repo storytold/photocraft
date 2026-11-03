@@ -176,3 +176,19 @@ fn only_the_last_fills_keep_their_capture() {
     assert!(!s.generative_has_diagnostics(groups[0]), "the oldest was let go");
     assert!(groups[1..].iter().all(|g| s.generative_has_diagnostics(*g)));
 }
+
+#[test]
+fn generate_more_takes_the_layer_asked_for_whatever_is_active() {
+    let (mut s, f, r) = filled(Some(1));
+    let id = r["layer"].as_u64().unwrap();
+    // An ordinary layer is active; the generative layer is named.
+    let background = doc(&s).layers[0].id;
+    s.execute("layer.select", json!({"layer": background.0})).unwrap();
+    assert_eq!(s.generative_layer(), None);
+    let more = s.execute(MORE, json!({"layer": id, "count": 1})).unwrap();
+    assert_eq!(more["layer"], id);
+    assert_eq!(group(&s, id).children().unwrap().len(), 2);
+    assert_eq!(f.sent.lock().unwrap().len(), 2);
+    // Without `layer`, the active one decides, and it isn't one.
+    assert!(s.execute(MORE, json!({"count": 1})).is_err());
+}

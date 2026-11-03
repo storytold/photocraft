@@ -15,8 +15,12 @@ const ON: f32 = 0.02;
 const SOLID: f32 = 0.5;
 /// Most grid cells the areas are looked for on.
 const MAX_CELLS: u64 = 1 << 20;
-/// Most areas told apart; a selection with more is one area.
+/// Most areas told apart; a selection with more is one area. Only solid areas count: the wisps
+/// dropped from it don't.
 pub const MAX_AREAS: usize = 64;
+/// Most parts labelled before the wisps are dropped, so a selection of countless specks stays
+/// cheap to look at (it is one area then).
+const MAX_PARTS: usize = 4096;
 
 /// A selection split into its areas.
 pub(crate) struct Areas {
@@ -70,7 +74,7 @@ impl Areas {
             if labels[start] != 0 || peak[start] < ON {
                 continue;
             }
-            if rects.len() >= MAX_AREAS {
+            if rects.len() >= MAX_PARTS {
                 // Too many to tell apart: the selection is one area.
                 return Areas { bounds, step, gw, labels: vec![1; gw * gh], rects: vec![bounds] };
             }
@@ -114,6 +118,10 @@ impl Areas {
                     *slot = kept.len() as u32;
                 }
             }
+        }
+        // Too many solid areas to tell apart: the selection is one area.
+        if kept.len() > MAX_AREAS {
+            return Areas { bounds, step, gw, labels: vec![1; gw * gh], rects: vec![bounds] };
         }
         for l in &mut labels {
             *l = renumber.get(*l as usize).copied().unwrap_or(0);
@@ -191,6 +199,27 @@ mod tests {
         let a = Areas::find(&s, Rect::new(0, 0, 100, 100));
         assert_eq!(a.len(), 1);
         assert_eq!(Areas::find(&mask(), Rect::new(0, 0, 10, 10)).len(), 0);
+    }
+
+    #[test]
+    fn only_solid_areas_count_toward_the_limit() {
+        // Two objects and a hundred faint specks: still two areas, not one.
+        let mut s = mask();
+        rect(&mut s, Rect::new(10, 10, 30, 30), 1.0);
+        rect(&mut s, Rect::new(300, 10, 330, 30), 1.0);
+        for i in 0..100 {
+            let (x, y) = (10 + (i % 20) * 15, 100 + (i / 20) * 15);
+            rect(&mut s, Rect::new(x, y, x + 2, y + 2), 0.1);
+        }
+        let a = Areas::find(&s, Rect::new(0, 0, 400, 200));
+        assert_eq!(a.rects(), &[Rect::new(10, 10, 30, 30), Rect::new(300, 10, 330, 30)]);
+        // More solid areas than MAX_AREAS: one.
+        let mut s = mask();
+        for i in 0..=MAX_AREAS as i32 {
+            let (x, y) = ((i % 20) * 10, (i / 20) * 10);
+            rect(&mut s, Rect::new(x, y, x + 4, y + 4), 1.0);
+        }
+        assert_eq!(Areas::find(&s, Rect::new(0, 0, 200, 200)).len(), 1);
     }
 
     #[test]
