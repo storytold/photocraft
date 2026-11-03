@@ -669,6 +669,16 @@ const NATIVE21_FILL: &str = "qwen-2.1/fill";
 /// the bicycle and the pine cleanly in 1.1–3.2 s warm, the 2.1 fill in 10.6–13.3 s.
 pub const NATIVE_FILL_ORDER: &[&str] = &["krea2-turbo/fill", NATIVE21_FILL];
 
+/// What `auto` tries for a fill on the native worker, given its prompt and whether the prompt
+/// writer runs. AnyPaint wants the whole finished picture described: given a short typed prompt
+/// as it stands ("a blue vespa scooter", Enhance off) it cleared the area in 4 of 4 runs and
+/// never drew the scooter, where the 2.1 fill drew it 4 of 4 at the same speed (2.07 s against
+/// 1.99 s warm) and AnyPaint with Enhance on 4 of 4 (pre-release benchmark, 2026-11-03). So a
+/// typed prompt taken verbatim goes to the 2.1 fill; Enhance on, or nothing typed, keeps AnyPaint.
+pub(crate) fn native_fill_order(prompt: &str, enhance: bool) -> &'static [&'static str] {
+    if enhance || prompt.trim().is_empty() { NATIVE_FILL_ORDER } else { &[NATIVE21_FILL] }
+}
+
 /// The crop a removal on Qwen-Image-2.1 goes out at when `maxPixels` is left at the default:
 /// 0.75 MP, the size the 2.1 removal runs were measured at (1 MP is 2511's).
 const NATIVE21_REMOVAL_PIXELS: u64 = 786_432;
@@ -1782,7 +1792,7 @@ fn plan_fill(s: &Session, p: &Value) -> Result<FillPlan> {
         as_edit = opt_bool(FILL, p, "fillAsEdit", false)?;
         base = if as_edit { native21_auto(s, EDIT, false).unwrap_or(t).to_string() } else { t.to_string() };
         // A prompted fill still picks inside the job: Krea 2 AnyPaint when the worker serves it
-        // ([`NATIVE_FILL_ORDER`]), else this 2.1 fill.
+        // and the prompt is rewritten or blank ([`native_fill_order`]), else this 2.1 fill.
         auto = !as_edit;
     }
     // A fill from references on the native worker: the 2.1 edit template, which takes nine
@@ -3588,7 +3598,7 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
         command: if as_edit { EDIT } else { FILL },
         template_id: template.meta.id.clone(),
         auto,
-        auto_order: if template.meta.id == NATIVE21_FILL { NATIVE_FILL_ORDER } else { auto_order(FILL, quality(s)) },
+        auto_order: if template.meta.id == NATIVE21_FILL { native_fill_order(&prompt, enhance) } else { auto_order(FILL, quality(s)) },
         prompt,
         negative,
         seed,
