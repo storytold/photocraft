@@ -349,3 +349,22 @@ fn gemini_is_offered_for_generative_fill() {
     assert!(fill.cloud.iter().any(|c| c.preset == "gemini"));
     assert!(fill.cloud.iter().any(|c| c.preset == "bfl"));
 }
+
+#[test]
+fn an_old_status_is_read_again_on_a_worker_not_on_the_caller() {
+    let scene = Scene::new(true, true);
+    let ai = scene.ai(Some(Answer::Picture(png(4, 4, [255, 0, 0]))));
+    assert!(ai.status().is_ready());
+    // The key goes, in another app, say. Within the cache's life the old answer stands.
+    scene.keys.delete(&SecretRef::new("fake-key").unwrap()).unwrap();
+    assert!(ai.status().is_ready());
+    // Past it, the old answer is still given at once while a worker reads the new one.
+    std::thread::sleep(super::STATUS_TTL * 2);
+    assert!(ai.status().is_ready(), "not read on the caller's thread");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while ai.status().is_ready() {
+        assert!(std::time::Instant::now() < deadline, "the worker never read it again");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(matches!(ai.status(), AiStatus::Unavailable { .. }));
+}

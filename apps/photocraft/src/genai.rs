@@ -9,6 +9,7 @@
 //! the person's choice. Nothing is sent until a fill starts, and nothing leaves the computer
 //! without the person's agreement (PhotoCraft's own prompt, recorded in its consent file).
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -29,10 +30,14 @@ use photocraft_engine::genai::{
 const APP: &str = "photocraft";
 /// The catalogue's tool PhotoCraft's Generative Fill is.
 const TOOL: &str = "generative-fill";
-/// How long a status answer is reused. The menus and the options bar ask every frame they are
-/// drawn; this keeps that from reading the shared settings (and the keychain) dozens of times a
-/// second, while a change made in another Craft app shows within a second.
+/// How long a status answer is used before it is read again. The menus and the options bar ask
+/// every frame they are drawn; this keeps that from reading the shared settings (and the
+/// keychain) dozens of times a second, while a change made in another Craft app shows within a
+/// second or so. An answer past it is still given while a worker reads the new one.
+#[cfg(not(test))]
 const STATUS_TTL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const STATUS_TTL: Duration = Duration::from_millis(50);
 
 /// The app's generative AI: the shared layer if it can be reached, else one that says why not.
 pub fn shared() -> SharedAi {
@@ -50,7 +55,51 @@ pub struct CraftAi {
     manager: ConnectionManager,
     role: Role,
     consent: Option<ConsentFile>,
-    status: Mutex<Option<(Instant, AiStatus)>>,
+    status: Arc<StatusCache>,
+}
+
+/// The tool's status as last read, shared with the worker that reads it again. Reading it
+/// reaches the OS keychain, which can block while an unlock prompt is open, so once there is an
+/// answer it is never read again on the interface thread.
+#[derive(Default)]
+struct StatusCache {
+    value: Mutex<Option<(Instant, AiStatus)>>,
+    /// A worker is reading it.
+    refreshing: AtomicBool,
+    /// Bumped when the answer is forgotten, so a read that started before doesn't bring it back.
+    generation: AtomicU64,
+}
+
+impl StatusCache {
+    fn get(&self) -> Option<(Instant, AiStatus)> {
+        self.value.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Keep `s`, read when the cache was at `generation`, unless it was forgotten since.
+    fn put(&self, generation: u64, s: AiStatus) {
+        let mut v = self.value.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.generation.load(Ordering::SeqCst) == generation {
+            *v = Some((Instant::now(), s));
+        }
+    }
+}
+
+/// Whether the tool can run, read from the shared layer (the settings and the keychain).
+fn read_status(client: &AiClient, role: &Role) -> AiStatus {
+    match client.status(role) {
+        RoleStatus::Ready(r) => AiStatus::Ready {
+            model: r.model_label,
+            connection: r.connection_label,
+            local: r.locality == Locality::Local,
+            billing: match r.billing {
+                Billing::Free => AiBilling::Free,
+                Billing::Metered => AiBilling::Metered,
+                Billing::SubscriptionAllowance => AiBilling::Subscription,
+                Billing::Unknown => AiBilling::Unknown,
+            },
+        },
+        RoleStatus::Unavailable { reason } => AiStatus::Unavailable { reason },
+    }
 }
 
 /// The `generative-fill` tool, from the shared catalogue.
@@ -75,7 +124,10 @@ impl CraftAi {
         let secrets: Arc<dyn SecretStore> = Arc::new(LayeredStore::new(vec![Box::new(EnvStore::new()), Box::new(KeychainStore::new())]));
         let manager = ConnectionManager::new(shared.clone(), Arc::clone(&secrets));
         let consent = client.consent_file();
-        Ok(CraftAi { client: Arc::new(client), shared, secrets, manager, role: fill_role()?, consent, status: Mutex::new(None) })
+        let ai = CraftAi { client: Arc::new(client), shared, secrets, manager, role: fill_role()?, consent, status: Arc::default() };
+        // Read it off the interface thread before the first menu asks.
+        ai.refresh_in_background();
+        Ok(ai)
     }
 
     /// Built from parts (tests: a temporary store, an in-memory key store, scripted adapters).
@@ -93,11 +145,32 @@ impl CraftAi {
         let manager = ConnectionManager::new(shared.clone(), Arc::clone(&secrets)).with_probe_factory(probe);
         #[allow(clippy::expect_used)]
         let role = fill_role().expect("the catalogue has generative-fill");
-        CraftAi { client: Arc::new(client), shared, secrets, manager, role, consent: Some(consent), status: Mutex::new(None) }
+        CraftAi { client: Arc::new(client), shared, secrets, manager, role, consent: Some(consent), status: Arc::default() }
     }
 
+    /// Forget the status after a change made here (a connection, a choice): the next ask reads it.
     fn forget_status(&self) {
-        *self.status.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        let mut v = self.status.value.lock().unwrap_or_else(PoisonError::into_inner);
+        self.status.generation.fetch_add(1, Ordering::SeqCst);
+        *v = None;
+    }
+
+    /// Read the status again on a worker, unless one is already reading it.
+    fn refresh_in_background(&self) {
+        if self.status.refreshing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (client, role, cache) = (Arc::clone(&self.client), self.role.clone(), Arc::clone(&self.status));
+        let generation = cache.generation.load(Ordering::SeqCst);
+        let worker = Arc::clone(&cache);
+        let spawned = std::thread::Builder::new().name("photocraft-ai-status".into()).spawn(move || {
+            worker.put(generation, read_status(&client, &role));
+            worker.refreshing.store(false, Ordering::SeqCst);
+        });
+        // No thread: the answer on hand stays until the next try.
+        if spawned.is_err() {
+            cache.refreshing.store(false, Ordering::SeqCst);
+        }
     }
 
     /// The launcher's side, for choosing the tool's model for the whole suite.
@@ -139,29 +212,23 @@ fn core_term(t: ConsentTerm) -> craft_ai_core::ConsentTerm {
 }
 
 impl GenerativeAi for CraftAi {
+    /// The last answer, read again on a worker once it is older than [`STATUS_TTL`]. Only with
+    /// no answer yet (before the first read finished, or right after a change made here) is it
+    /// read on the caller's thread.
     fn status(&self) -> AiStatus {
-        let mut cached = self.status.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((at, s)) = cached.as_ref()
-            && at.elapsed() < STATUS_TTL
-        {
-            return s.clone();
+        match self.status.get() {
+            Some((at, s)) if at.elapsed() < STATUS_TTL => s,
+            Some((_, s)) => {
+                self.refresh_in_background();
+                s
+            }
+            None => {
+                let generation = self.status.generation.load(Ordering::SeqCst);
+                let s = read_status(&self.client, &self.role);
+                self.status.put(generation, s.clone());
+                s
+            }
         }
-        let s = match self.client.status(&self.role) {
-            RoleStatus::Ready(r) => AiStatus::Ready {
-                model: r.model_label,
-                connection: r.connection_label,
-                local: r.locality == Locality::Local,
-                billing: match r.billing {
-                    Billing::Free => AiBilling::Free,
-                    Billing::Metered => AiBilling::Metered,
-                    Billing::SubscriptionAllowance => AiBilling::Subscription,
-                    Billing::Unknown => AiBilling::Unknown,
-                },
-            },
-            RoleStatus::Unavailable { reason } => AiStatus::Unavailable { reason },
-        };
-        *cached = Some((Instant::now(), s.clone()));
-        s
     }
 
     fn plan(&self, request: FillRequest) -> Result<Arc<dyn FillPlan>, AiFailure> {
