@@ -79,14 +79,14 @@ impl RefineParams {
         } else {
             0
         };
-        edge + (3.0 * self.smooth_sigma()).ceil() as i32 + (3.0 * self.feather_sigma()).ceil() as i32 + 2
+        edge.saturating_add((3.0 * self.smooth_sigma()).ceil() as i32).saturating_add((3.0 * self.feather_sigma()).ceil() as i32).saturating_add(2)
     }
     /// How far the refined mask can extend beyond the original.
     pub fn spread(&self) -> i32 {
         (if self.uses_image() { self.radius.ceil() as i32 } else { 0 })
-            + (3.0 * self.smooth_sigma()).ceil() as i32
-            + (3.0 * self.feather_sigma()).ceil() as i32
-            + 1
+            .saturating_add((3.0 * self.smooth_sigma()).ceil() as i32)
+            .saturating_add((3.0 * self.feather_sigma()).ceil() as i32)
+            .saturating_add(1)
     }
 }
 
