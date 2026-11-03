@@ -161,7 +161,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 
     if cmd == "generate.expand" && has("left") {
-        section(ui, &t, tl!("Canvas"), expand_note(f));
+        section(ui, &t, tl!("Canvas"), None);
         expand_sides(ui, &t, f);
         ui.add_space(SECTION_GAP);
     }
@@ -189,7 +189,9 @@ fn prompt_box(ui: &mut egui::Ui, t: &Tokens, f: &mut Map<String, Value>, cmd: &s
     let mut v = f.get("prompt").and_then(Value::as_str).unwrap_or_default().to_string();
     let id = egui::Id::unique(("generative-dialog-prompt", cmd));
     let focused = ui.ctx().memory(|m| m.has_focus(id));
-    let rows = v.lines().count().clamp(3, 8);
+    // Expand's prompt is optional and usually empty: a shorter box keeps the dialog on screen.
+    let least = if cmd == "generate.expand" { 2 } else { 3 };
+    let rows = v.lines().count().clamp(least, 8);
     egui::Frame::new()
         .fill(t.field)
         .stroke(Stroke::new(1.0, if focused { t.accent } else { t.field_border }))
@@ -227,76 +229,150 @@ fn prompt_box(ui: &mut egui::Ui, t: &Tokens, f: &mut Map<String, Value>, cmd: &s
     }
 }
 
-/// The new canvas size beside the Canvas title.
-fn expand_note(f: &Map<String, Value>) -> Option<(String, egui::Color32)> {
-    let (w, h) = doc_size(f)?;
-    let [l, tp, r, b] = added(f);
-    Some((format!("{w} × {h} → {} × {} px", w + l + r, h + tp + b), egui::Color32::TRANSPARENT))
+/// The one-click amounts: a share of the picture on every side, the aspect ratios the picture
+/// can grow into, and Clear.
+fn expand_presets(dw: u32, dh: u32) -> Vec<(String, &'static str, [u32; 4])> {
+    let mut out = Vec::new();
+    for pct in [10u32, 25, 50] {
+        let (x, y) = (dw * pct / 100, dh * pct / 100);
+        out.push((format!("+{pct}%"), tl!("Add this share of the picture on every side"), [x, y, x, y]));
+    }
+    // An aspect ratio wider or taller than the picture: grow the short way, evenly.
+    for (name, num, den, tip) in
+        [("1:1", 1, 1, tl!("Make it square")), ("4:3", 4, 3, tl!("Grow to 4:3")), ("16:9", 16, 9, tl!("Grow to 16:9")), ("9:16", 9, 16, tl!("Grow to 9:16"))]
+    {
+        let want_w = dh * num / den;
+        let want_h = dw * den / num;
+        let sides = if want_w > dw {
+            let add = want_w - dw;
+            [add / 2, 0, add - add / 2, 0]
+        } else if want_h > dh {
+            let add = want_h - dh;
+            [0, add / 2, 0, add - add / 2]
+        } else {
+            continue;
+        };
+        if sides.iter().all(|v| *v <= 4096) && sides != [0; 4] {
+            out.push((name.to_string(), tip, sides));
+        }
+    }
+    out
 }
 
-/// Expand's sides around a to-scale diagram of the result (the picture inside the grown
-/// canvas), with one-click amounts for every side.
+/// Expand's sides: a to-scale diagram of the grown canvas (the picture inside, each added band
+/// labelled with its pixels) beside the four fields, one-click amounts above, the new size below.
 fn expand_sides(ui: &mut egui::Ui, t: &Tokens, f: &mut Map<String, Value>) {
     let mut e = added(f);
     let (dw, dh) = doc_size(f).unwrap_or((1024, 1024));
-    // Quick amounts: a share of the picture on every side, or the sides cleared.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new(tl!("Add")).small().color(t.text_dim));
-        for (pct, name) in [(10u32, "10%"), (25, "25%"), (50, "50%")] {
-            let target = [dw * pct / 100, dh * pct / 100, dw * pct / 100, dh * pct / 100];
-            let on = e == target;
-            if chip(ui, t, name, on).on_hover_text(tl!("Add this share of the picture on every side")).clicked() {
-                e = target;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for (name, tip, sides) in expand_presets(dw, dh) {
+            if chip(ui, t, &name, e == sides).on_hover_text(tip).clicked() {
+                e = sides;
             }
         }
-        let wide = (dh * 16 / 9).saturating_sub(dw) / 2;
-        if wide > 0 && chip(ui, t, "16:9", e == [wide, 0, wide, 0]).on_hover_text(tl!("Widen to 16:9")).clicked() {
-            e = [wide, 0, wide, 0];
-        }
-        let square = dw.max(dh);
-        let sq = [(square - dw) / 2, (square - dh) / 2, (square - dw) - (square - dw) / 2, (square - dh) - (square - dh) / 2];
-        if sq != [0; 4] && chip(ui, t, "1:1", e == sq).on_hover_text(tl!("Make it square")).clicked() {
-            e = sq;
-        }
-        if e != [0; 4] && chip(ui, t, tl!("Clear"), false).clicked() {
+        if e != [0; 4] && chip(ui, t, tl!("Clear"), false).on_hover_text(tl!("Add nothing")).clicked() {
             e = [0; 4];
         }
     });
-    let field = |ui: &mut egui::Ui, v: &mut u32, name: &str| {
-        let mut x = *v as f32;
-        let r = crate::widgets::value_field_named(ui, name, &mut x, 0.0..=4096.0, "px", 72.0).on_hover_text(name);
-        crate::widgets::field_tab::register(ui.ctx(), r.id);
-        *v = x.round().clamp(0.0, 4096.0) as u32;
-    };
-    egui::Frame::new().fill(t.field.gamma_multiply(0.5)).corner_radius(t.radius_sm).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.vertical_centered(|ui| field(ui, &mut e[1], tl!("Top")));
-        ui.horizontal(|ui| {
-            let gap = ui.spacing().item_spacing.x;
-            let box_w = (ui.available_width() - 2.0 * (72.0 + gap)).max(60.0);
-            field(ui, &mut e[0], tl!("Left"));
-            let (r, _) = ui.allocate_exact_size(vec2(box_w, 72.0), Sense::hover());
-            let (nw, nh) = ((dw + e[0] + e[2]) as f32, (dh + e[1] + e[3]) as f32);
-            let s = ((r.width() - 8.0) / nw).min((r.height() - 8.0) / nh).max(0.0);
-            let outer = Rect::from_center_size(r.center(), vec2(nw * s, nh * s));
-            let inner = Rect::from_min_size(outer.min + vec2(e[0] as f32 * s, e[1] as f32 * s), vec2(dw as f32 * s, dh as f32 * s));
-            let p = ui.painter();
-            if e != [0; 4] {
-                p.rect_filled(outer, 2.0, t.accent.gamma_multiply(0.18));
-                p.rect_stroke(outer, 2.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+    ui.add_space(2.0);
+    egui::Frame::new()
+        .fill(t.field.gamma_multiply(0.5))
+        .stroke(Stroke::new(1.0, t.separator))
+        .corner_radius(t.radius_sm)
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let fields_w = 150.0;
+                let side = (ui.available_width() - fields_w - 12.0).clamp(120.0, 200.0);
+                let (r, _) = ui.allocate_exact_size(vec2(side, 124.0), Sense::hover());
+                diagram(ui, t, r, (dw, dh), e);
+                ui.vertical(|ui| {
+                    ui.add_space(2.0);
+                    egui::Grid::new("generative-expand-sides").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+                        for (i, name) in [(1usize, tl!("Top")), (3, tl!("Bottom")), (0, tl!("Left")), (2, tl!("Right"))] {
+                            ui.label(RichText::new(name).color(t.text_dim));
+                            let mut x = e[i] as f32;
+                            let r = crate::widgets::value_field_named(ui, name, &mut x, 0.0..=4096.0, "px", 88.0);
+                            crate::widgets::field_tab::register(ui.ctx(), r.id);
+                            e[i] = x.round().clamp(0.0, 4096.0) as u32;
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+            if doc_size(f).is_some() {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tl!("Canvas")).small().color(t.text_faint));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let [l, tp, r, b] = e;
+                        let text = format!("{dw} × {dh} px  →  {} × {} px", dw + l + r, dh + tp + b);
+                        ui.label(RichText::new(text).small().color(if e == [0; 4] { t.text_faint } else { t.text_dim }));
+                    });
+                });
             }
-            p.rect_filled(inner, 1.0, t.text_faint);
-            p.text(inner.center(), egui::Align2::CENTER_CENTER, tl!("picture"), egui::FontId::proportional(10.0), t.card);
-            field(ui, &mut e[2], tl!("Right"));
         });
-        ui.vertical_centered(|ui| field(ui, &mut e[3], tl!("Bottom")));
-    });
     if e == [0; 4] && int(f, "width") == 0 && int(f, "height") == 0 {
-        ui.label(RichText::new(tl!("Set how much to add on at least one side.")).small().color(t.warning));
+        ui.label(RichText::new(tl!("Pick an amount or type how many pixels to add on a side.")).small().color(t.text_faint));
     }
     for (k, v) in ["left", "top", "right", "bottom"].into_iter().zip(e) {
         f.insert(k.into(), json!(v));
+    }
+}
+
+/// The grown canvas to scale in `r`: the added bands tinted with their pixels written in them,
+/// the picture in the middle (never smaller than a mark you can see), the new edge dashed.
+fn diagram(ui: &egui::Ui, t: &Tokens, r: Rect, (dw, dh): (u32, u32), e: [u32; 4]) {
+    let p = ui.painter();
+    let (nw, nh) = ((dw + e[0] + e[2]) as f32, (dh + e[1] + e[3]) as f32);
+    let s = ((r.width() - 4.0) / nw).min((r.height() - 4.0) / nh).max(0.0);
+    let outer = Rect::from_center_size(r.center(), vec2(nw * s, nh * s));
+    // The picture's place by its share of the new canvas, at least 18 points so it stays visible.
+    let pw = (dw as f32 * s).max(18.0).min(outer.width());
+    let ph = (dh as f32 * s).max(18.0).min(outer.height());
+    let fx = if e[0] + e[2] == 0 { 0.5 } else { e[0] as f32 / (e[0] + e[2]) as f32 };
+    let fy = if e[1] + e[3] == 0 { 0.5 } else { e[1] as f32 / (e[1] + e[3]) as f32 };
+    let inner = Rect::from_min_size(outer.min + vec2((outer.width() - pw) * fx, (outer.height() - ph) * fy), vec2(pw, ph));
+    if e != [0; 4] {
+        p.rect_filled(outer, 3.0, t.accent.gamma_multiply(0.16));
+        dashed(p, outer, Stroke::new(1.0, t.accent));
+    }
+    p.rect_filled(inner, 2.0, t.text_faint.gamma_multiply(0.9));
+    p.rect_stroke(inner, 2.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
+    if inner.width() >= 22.0 && inner.height() >= 22.0 {
+        crate::icons::paint(ui, Rect::from_center_size(inner.center(), vec2(16.0, 16.0)), "image", 16.0, t.card);
+    }
+    // Each band's pixels, where it is wide enough to hold them.
+    let font = egui::FontId::proportional(10.0);
+    let bands = [
+        (e[0], Rect::from_min_max(outer.min, egui::pos2(inner.left(), outer.bottom())), true),
+        (e[1], Rect::from_min_max(outer.min, egui::pos2(outer.right(), inner.top())), false),
+        (e[2], Rect::from_min_max(egui::pos2(inner.right(), outer.top()), outer.max), true),
+        (e[3], Rect::from_min_max(egui::pos2(outer.left(), inner.bottom()), outer.max), false),
+    ];
+    for (v, band, vertical) in bands {
+        if v == 0 {
+            continue;
+        }
+        let text = format!("+{v}");
+        let g = p.layout_no_wrap(text, font.clone(), t.accent);
+        let room = if vertical { band.width() } else { band.height() };
+        let need = if vertical { g.size().x + 4.0 } else { g.size().y + 2.0 };
+        if room >= need {
+            let c = if vertical { egui::pos2(band.center().x, inner.center().y) } else { egui::pos2(inner.center().x, band.center().y) };
+            p.galley(c - g.size() / 2.0, g, t.accent);
+        }
+    }
+}
+
+/// A dashed rectangle outline.
+fn dashed(p: &egui::Painter, r: Rect, stroke: Stroke) {
+    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+    for w in corners.windows(2) {
+        p.extend(egui::Shape::dashed_line(&[w[0], w[1]], stroke, 4.0, 3.0));
     }
 }
 
