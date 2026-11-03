@@ -24,7 +24,8 @@ impl PhotocraftApp {
     /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
     /// is `Some`) and are suppressed only on frames where the splash screen is actually visible.
     pub fn splash_shortcuts_blocked(&self, now: f64) -> bool {
-        self.synthetic.is_empty()
+        self.ui.notices.is_empty()
+            && self.synthetic.is_empty()
             && self.synthetic_batch.is_none()
             && self.splash.as_ref().is_some_and(|s| s.should_render(now))
     }
@@ -99,6 +100,8 @@ impl PhotocraftApp {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
+            // Treat the splash as visible only if it was initially visible and notices remain empty.
+            let splash_visible = splash_visible && self.ui.notices.is_empty();
             if !splash_visible && type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);

@@ -1113,6 +1113,17 @@ fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_whe
         !h.state().splash_shortcuts_blocked(rendered_now),
         "shortcuts must be unblocked once splash is dismissed"
     );
+
+    // 5. Notices posted (e.g. during jobs_ui::tick) unblock shortcuts since splash will be dismissed
+    let mut splash_active = crate::splash::SplashState::new();
+    splash_active.start_time = now;
+    h.state_mut().splash = Some(splash_active);
+    crate::notices::post(h.state_mut(), String::from("Notice"), vec!["Warning".into()], true, None);
+    assert!(!h.state().ui.notices.is_empty());
+    assert!(
+        !h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must not be blocked when notices are present"
+    );
 }
 
 fn identity_app() -> PhotocraftApp {
