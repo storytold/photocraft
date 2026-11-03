@@ -1,5 +1,5 @@
-use super::decode::{Layout, Patched, Src, is_eof};
-use super::*;
+use super::decode::{Layout, Patched, Prepared, Src, is_eof};
+use super::{CodecError, Decoder, SampleType, err, f16, map_err};
 
 /// The a* and b* samples (1 and 2 of every pixel) of a Lab image between the file's encoding and
 /// PhotoCraft's (8 bits: `a + 128`; 16 bits: `(a + 128) · 257`). In the file, CIELab holds them
@@ -96,6 +96,23 @@ pub(super) fn zeroed(len: usize) -> Result<Vec<u8>, CodecError> {
     Ok(v)
 }
 
+/// `v` refilled with `len` zero bytes, reusing its allocation when it is large enough.
+pub(super) fn refill_zeroed(mut v: Vec<u8>, len: usize) -> Result<Vec<u8>, CodecError> {
+    if v.capacity() < len {
+        drop(v);
+        return zeroed(len);
+    }
+    v.clear();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        v.par_extend(rayon::iter::repeat_n(0u8, len));
+    }
+    #[cfg(target_arch = "wasm32")]
+    v.resize(len, 0);
+    Ok(v)
+}
+
 /// Chunks decoded and chunks whose data ended early.
 #[derive(Default, Clone, Copy)]
 pub(super) struct Tally {
@@ -138,40 +155,40 @@ pub(super) fn budget_workers(held: u64, per_worker: u64, max_alloc: u64, threads
 /// Bands each parallel task decodes, one after the other: one band per task when every thread
 /// may hold a worker, else the bands split into `workers` runs so that no more than `workers`
 /// decoders and scratch buffers are ever alive at once.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn bands_per_task(bands: usize, workers: usize, threads: usize) -> usize {
     if workers >= threads { 1 } else { bands.div_ceil(workers.max(1)).max(1) }
 }
 
-/// Decodes every band into `data`, in parallel on native targets (one decoder and scratch
-/// buffer per worker, at most `workers` of them at once). `extra` receives samples that are not
-/// part of the colour image, one band of rows at a time, when it is non-empty.
+/// Decodes the bands from `first` on into `data` (`band_bytes` each), in parallel on native
+/// targets (one decoder and scratch buffer per worker, at most `workers` of them at once).
+/// `extra` receives samples that are not part of the colour image, `extra_band` bytes per band,
+/// when it is non-empty.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
-pub(super) fn decode_bands<'a, O>(
-    lay: &Layout,
+pub(super) fn decode_bands(
+    p: &Prepared,
+    b: &[u8],
     data: &mut [u8],
     band_bytes: usize,
+    first: usize,
     extra: &mut [u8],
     extra_band: usize,
     workers: usize,
-    _first: &mut Decoder<Patched<'a>>,
-    open: &O,
-) -> Result<Tally, CodecError>
-where
-    O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
-{
+) -> Result<Tally, CodecError> {
     use rayon::prelude::*;
     let band_bytes = band_bytes.max(1);
     let per_task = bands_per_task(data.len().div_ceil(band_bytes), workers, worker_threads());
     let task_bytes = band_bytes.saturating_mul(per_task);
-    let init = || open().map(|d| (d, Vec::new())).map_err(|e| e.to_string());
+    let init = || p.open(b).map(|d| (d, Vec::new())).map_err(|e| e.to_string());
+    let task_first = |t: usize| first.saturating_add(t.saturating_mul(per_task));
     if extra.is_empty() {
         return data
             .par_chunks_mut(task_bytes)
             .enumerate()
             .map_init(init, |worker, (t, task)| {
                 let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
-                decode_task(lay, dec, scratch, t.saturating_mul(per_task), task, band_bytes, None, extra_band)
+                decode_task(&p.lay, dec, scratch, task_first(t), task, band_bytes, None, extra_band)
             })
             .try_reduce(Tally::default, |a, b| Ok(a + b));
     }
@@ -180,30 +197,28 @@ where
         .enumerate()
         .map_init(init, |worker, (t, (task, extra_task))| {
             let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
-            decode_task(lay, dec, scratch, t.saturating_mul(per_task), task, band_bytes, Some(extra_task), extra_band)
+            decode_task(&p.lay, dec, scratch, task_first(t), task, band_bytes, Some(extra_task), extra_band)
         })
         .try_reduce(Tally::default, |a, b| Ok(a + b))
 }
 
-/// Decodes every band into `data`, one after the other.
+/// Decodes the bands from `first` on into `data` (`band_bytes` each), one after the other.
 #[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
-pub(super) fn decode_bands<'a, O>(
-    lay: &Layout,
+pub(super) fn decode_bands(
+    p: &Prepared,
+    b: &[u8],
     data: &mut [u8],
     band_bytes: usize,
+    first: usize,
     extra: &mut [u8],
     extra_band: usize,
     _workers: usize,
-    first: &mut Decoder<Patched<'a>>,
-    _open: &O,
-) -> Result<Tally, CodecError>
-where
-    O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
-{
+) -> Result<Tally, CodecError> {
+    let mut dec = p.open(b)?;
     let mut scratch = Vec::new();
     let extra = if extra.is_empty() { None } else { Some(extra) };
-    decode_task(lay, first, &mut scratch, 0, data, band_bytes.max(1), extra, extra_band)
+    decode_task(&p.lay, &mut dec, &mut scratch, first, data, band_bytes.max(1), extra, extra_band)
 }
 
 /// Decodes the consecutive bands in `task` (the first is band `b0`), one after the other.
@@ -258,7 +273,11 @@ fn decode_band(
             if lay.direct() && pref.len == band.len() && stride == out_row {
                 match dec.read_chunk_bytes(chunk, band) {
                     Ok(()) => tally.decoded += 1,
-                    Err(e) if is_eof(&e) => tally.missing += 1,
+                    // Rows read before the end would survive: a missing strip is zeros.
+                    Err(e) if is_eof(&e) => {
+                        band.fill(0);
+                        tally.missing += 1;
+                    }
                     Err(e) => return Err(map_err(e)),
                 }
                 continue;
@@ -267,6 +286,9 @@ fn decode_band(
                 return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", pref.len)));
             }
             if scratch.len() < pref.len {
+                scratch
+                    .try_reserve_exact(pref.len - scratch.len())
+                    .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", pref.len)))?;
                 scratch.resize(pref.len, 0);
             }
             let buf = scratch.get_mut(..pref.len).ok_or_else(|| err("scratch buffer"))?;
@@ -344,6 +366,9 @@ fn read_planar_extras(
                 return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", pref.len)));
             }
             if scratch.len() < pref.len {
+                scratch
+                    .try_reserve_exact(pref.len - scratch.len())
+                    .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", pref.len)))?;
                 scratch.resize(pref.len, 0);
             }
             let buf = scratch.get_mut(..pref.len).ok_or_else(|| err("scratch buffer"))?;
@@ -539,6 +564,7 @@ fn finish_band(lay: &Layout, band: &mut [u8]) {
 mod scratch_budget {
     use super::{CodecError, bands_per_task, budget_workers};
 
+    /// Only as many band workers run as fit beside the image, and none fitting is a limit error.
     #[test]
     fn workers_are_capped_by_the_room_beside_the_image() {
         // NV-9: four threads, a 128 MiB strip scratch each, 8 MiB of image, 160 MiB of budget:
@@ -554,6 +580,7 @@ mod scratch_budget {
         assert_eq!(budget_workers(0, 1, u64::MAX, 0).unwrap(), 1);
     }
 
+    /// Fewer workers than threads split the bands into at most that many consecutive runs.
     #[test]
     fn a_short_budget_groups_bands_into_as_many_tasks_as_workers() {
         assert_eq!(bands_per_task(16, 4, 4), 1);

@@ -1,5 +1,8 @@
 use super::hue_saturation::spectrum_bar;
-use super::*;
+use super::{
+    Color32, Edit, EditorCx, GradientPreset, Group, PhotocraftApp, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, Value, adjust_params, color_button,
+    color32, flag, json, label, pos2, rgb_of, round, vec2, widgets,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Gradient Map
@@ -158,7 +161,7 @@ pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
         label(ui, tl!("Preset:"));
         let mut picked = None;
         let (press, close) = crate::press_menu::PressCombo::before(ui, cx.mem.with("gm-preset"));
-        let combo = egui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
+        let combo = craft_ui::ComboBox::from_id_salt(cx.mem.with("gm-preset"))
             .selected_text(tl!("Custom"))
             .width(ui.available_width().min(190.0))
             .height(420.0)
@@ -210,7 +213,7 @@ pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
     if let Some(s) = stops.get_mut(selected) {
         ui.horizontal(|ui| {
             label(ui, tl!("Color:"));
-            let r = color_button(ui, &mut s.1);
+            let r = color_button(ui, &mut s.1, tl!("Stop Color"));
             changed |= r.changed;
             e.add(r);
             ui.add_enabled_ui(can_remove, |ui| {

@@ -667,10 +667,12 @@ fn wide_gray(w: u32, h: u32, rows: u32) -> Vec<u8> {
     build(true, false, &[strips(w, h, 64, 1, 1, rows, &px)], &[0]).bytes
 }
 
+/// Decode options whose only change from the defaults is `max_alloc`.
 fn with_max_alloc(max_alloc: u64) -> DecodeOptions {
     DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() }
 }
 
+/// A strip's scratch buffer is charged against `max_alloc` next to the output it decodes into.
 #[test]
 fn strip_scratch_counts_against_max_alloc() {
     // 64×64: an 8 KiB 16-bit output, but its one strip is 32 KiB of 64-bit samples, decoded
@@ -683,6 +685,7 @@ fn strip_scratch_counts_against_max_alloc() {
     assert_eq!(img.to_u16_samples().unwrap()[64 * 63], 63);
 }
 
+/// Room for one worker's scratch decodes every strip with that one worker, each in its place.
 #[test]
 fn a_tight_budget_decodes_its_strips_one_after_another() {
     // 64×512 in eight 32 KiB strips: a 64 KiB output with room for only one strip's scratch
@@ -696,4 +699,21 @@ fn a_tight_budget_decodes_its_strips_one_after_another() {
     }
     // Unlimited, the same file decodes the same in parallel.
     assert_eq!(decode(&file).unwrap().to_u16_samples().unwrap(), v);
+}
+
+/// The `tiff` crate decodes each row of a floating-point-predicted tile into a buffer of the
+/// declared tile width. A 64x64 page declaring TileWidth 0xFFFFFFFF asked for about 103 GB
+/// there, unbudgeted (an allocation failure aborts); it is now refused with a limit error.
+#[test]
+fn a_float_predictor_row_of_a_hostile_tile_width_is_refused() {
+    let (w, h) = (64u32, 64u32);
+    let tile = vec![0u8; (w * h * 3 * 8) as usize];
+    let d = Dir { entries: base(w, h, 64, 3, 2), chunks: vec![tile], tiled: true }
+        .tag(322, LONG, &[0xFFFF_FFFF])
+        .tag(323, LONG, &[u64::from(h)])
+        .tag(317, SHORT, &[3])
+        .tag(339, SHORT, &[3]);
+    let file = build(true, false, &[d], &[0]).bytes;
+    let r = decode_with(&file, &with_max_alloc(1 << 30));
+    assert!(matches!(r, Err(CodecError::LimitExceeded(_))), "{:?}", r.map(|i| i.data().len()));
 }
