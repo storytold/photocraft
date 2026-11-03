@@ -954,6 +954,10 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         app.ui.status = tl!("Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…").to_string();
         app.ui.status_error = false;
     }
+    if result.is_ok() && cmd == "path.stroke" {
+        // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
+        crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
+    }
     if result.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
     }
