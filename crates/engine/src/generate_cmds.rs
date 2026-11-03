@@ -349,6 +349,9 @@ pub(crate) enum EnhanceKind {
     Backdrop,
     /// A picture: which of its edges cut its main subject off (Generative Expand with no prompt).
     CutEdges,
+    /// A picture: a caption of all of it, subject and setting (Generative Expand through the
+    /// Outpaint LoRA with no prompt: its `Scene:` line).
+    Scene,
 }
 
 /// The system turn of [`EnhanceKind::Subject`]: a short noun phrase the matte can follow.
@@ -368,6 +371,14 @@ const ENHANCE_CUT_SYSTEM: &str = "You see a picture. Say which of its edges cut 
 
 /// The user turn of [`EnhanceKind::CutEdges`].
 const ENHANCE_CUT_REQUEST: &str = "Which edges of this picture cut off its main subject?";
+
+/// The system turn of [`EnhanceKind::Scene`]: the Outpaint LoRA was trained with a Qwen3-VL-8B
+/// description of the whole picture after its instruction (AusBoss's model card, read
+/// 2026-11-03), so the caption names the subject as well as the setting.
+const ENHANCE_SCENE_SYSTEM: &str = "You see a picture. Describe all of it in one or two plain sentences, as a caption: the main subject (who or what, pose, clothing, how much of them the frame shows) and the setting, background, lighting and style. Reply with the description only.";
+
+/// The user turn of [`EnhanceKind::Scene`].
+const ENHANCE_SCENE_REQUEST: &str = "Describe this picture.";
 
 /// The user turn of [`EnhanceKind::Backdrop`].
 const ENHANCE_BACKDROP_REQUEST: &str = "Describe the background of this picture.";
@@ -458,6 +469,7 @@ pub(crate) fn enhance_prompt(
         EnhanceKind::Subject => ENHANCE_SUBJECT_SYSTEM.to_string(),
         EnhanceKind::Backdrop => ENHANCE_BACKDROP_SYSTEM.to_string(),
         EnhanceKind::CutEdges => ENHANCE_CUT_SYSTEM.to_string(),
+        EnhanceKind::Scene => ENHANCE_SCENE_SYSTEM.to_string(),
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
@@ -2506,6 +2518,9 @@ type Filled = (Made, u32, u32, (u32, u32), String);
 /// instead of meeting it at a hard line (the classic outpainting seam).
 struct Outpaint {
     picture: Rect,
+    /// The Outpaint LoRA's canvas: the new area flat grey (#808080, as it was trained) and the
+    /// whole canvas the edit's reference, so no reference crop goes along.
+    lora: bool,
 }
 
 /// Regenerate the pixels `coverage` marks (one value per pixel of `rect`) through the backend
@@ -2570,7 +2585,7 @@ fn request_params(tuning: &Tuning, outpaint: Option<&Outpaint>, rect: Rect, (w, 
     if let Some(d) = tuning.denoise {
         params.insert("denoise".to_string(), json!(d));
     }
-    if let Some(o) = outpaint {
+    if let Some(o) = outpaint.filter(|o| !o.lora) {
         let (sx, sy) = (f64::from(rw) / f64::from(w.max(1)), f64::from(rh) / f64::from(h.max(1)));
         let p = o.picture;
         let x0 = (f64::from(p.x0 - rect.x0) * sx).floor().clamp(0.0, f64::from(rw.saturating_sub(16)));
@@ -2707,7 +2722,8 @@ fn source_picture(doc: &Document, ctx: &JobCtx, rect: Rect, outpaint: Option<&Ou
     let mut image = Rgba8::new(composite.width, composite.height, composite.pixels).map_err(gen_err)?;
     if let Some(o) = outpaint {
         let p = o.picture;
-        prefill_outside(&mut image, Rect::new(p.x0 - rect.x0, p.y0 - rect.y0, p.x1 - rect.x0, p.y1 - rect.y0));
+        let inner = Rect::new(p.x0 - rect.x0, p.y0 - rect.y0, p.x1 - rect.x0, p.y1 - rect.y0);
+        if o.lora { grey_outside(&mut image, inner) } else { prefill_outside(&mut image, inner) }
     }
     Ok(image)
 }
@@ -2803,7 +2819,8 @@ fn fill_region(
     // template, whose "fill" is an edit with the mask in view) hands it back a few pixels off:
     // the result is realigned to the picture outside the mask (`generate_realign`).
     let qwen21 = template::find(&template_id).is_ok_and(|t| t.meta.family == "qwen-image-2.1");
-    let realign = outpaint.is_none() && (command == EDIT || qwen21);
+    // The Outpaint LoRA's edit redraws the whole canvas too.
+    let realign = (outpaint.is_none() && (command == EDIT || qwen21)) || outpaint.as_ref().is_some_and(|o| o.lora);
     // The smoothed hole helps 2511 (it copies what its reference shows, so a smooth
     // continuation gives it nothing to keep); Qwen-Image-2.1 hands the smoothing back as the
     // blur it is, and removes from the real picture as well as 2511 does from the smoothed one
@@ -3458,6 +3475,17 @@ pub(crate) fn side_by_side(left: &Rgba8, right: &Rgba8) -> Result<Rgba8> {
 /// in-context expand template, whose reference is the picture placed inside the canvas, never
 /// sees this area either; a mid-grey prefill tried with the whole canvas as the reference came
 /// back as black canvas, 2026-10-20.)
+/// Everything of `img` outside `inner` flat [`PREFILL`] grey (the Outpaint LoRA's canvas).
+fn grey_outside(img: &mut Rgba8, inner: Rect) {
+    let w = img.width as i32;
+    for (i, px) in img.data.chunks_exact_mut(4).enumerate() {
+        let (x, y) = (i as i32 % w, i as i32 / w);
+        if !(x >= inner.x0 && x < inner.x1 && y >= inner.y0 && y < inner.y1) {
+            px.copy_from_slice(&PREFILL);
+        }
+    }
+}
+
 fn prefill_outside(img: &mut Rgba8, inner: Rect) {
     let (w, h) = (img.width as i32, img.height as i32);
     let inner = inner.intersect(&Rect::new(0, 0, w, h));
@@ -3577,9 +3605,67 @@ fn expand_backdrop_prompt(backdrop: &str, pads: &Pads) -> String {
 }
 const MAX_EXPAND_SIDE: u32 = 16_384;
 
-/// An expand's plan: the fill plan, the pads, the grown canvas size, whether the prompt was
-/// blank (the picture is described first) and the request margin.
-type ExpandPlan = (FillPlan, Pads, (u32, u32), bool, f64);
+/// An expand's plan.
+struct ExpandPlan {
+    fill: FillPlan,
+    pads: Pads,
+    /// The grown canvas.
+    canvas: (u32, u32),
+    /// The prompt was blank: the picture is described first.
+    describe: bool,
+    /// How much of the picture the request takes in (see [`expand_rect`]).
+    margin: f64,
+    /// Through the Outpaint LoRA ([`outpaint_lora`]): the prompt as typed (its `Scene:`
+    /// line), empty when blank.
+    outpaint: Option<String>,
+}
+
+/// AusBoss's Outpaint LoRA for Qwen-Image-2.1 (https://huggingface.co/ausboss/Qwen-Image-2.1-
+/// Outpaint-LoRA, Qwen Research License like the model; read 2026-11-03): trained to replace
+/// flat #808080 grey around a picture with the scene's continuation, the padded canvas the edit's
+/// reference at its own size, denoise 1, 25 steps at CFG 1. v2 for everyday extensions at
+/// 1 to 2 MP (people and outfits), v1 for large ones from a small picture at about 1 MP.
+pub(crate) const OUTPAINT_LORA: &str = "qwen-image-2.1-outpaint-v2.safetensors";
+pub(crate) const OUTPAINT_LORA_WIDE: &str = "qwen-image-2.1-outpaint.safetensors";
+/// The picture's share of the grown canvas below which the v1 file goes first.
+const OUTPAINT_WIDE_SHARE: f64 = 0.3;
+const OUTPAINT_PIXELS: u64 = 1_572_864;
+const OUTPAINT_WIDE_PIXELS: u64 = 1_048_576;
+/// The LoRA's trigger, its instruction, verbatim from the model card; a `Scene:` caption of
+/// the whole picture follows it, as in 75 % of its training pairs.
+pub(crate) const OUTPAINT_INSTRUCTION: &str =
+    "Outpaint the image: replace the solid gray areas with a seamless continuation of the scene, keeping the existing picture unchanged.";
+
+/// The Outpaint LoRA file an `auto` expand of an `old` picture to `canvas` takes, and the
+/// request size it goes out at: when research-only models are allowed, the native engine runs
+/// Qwen-Image-2.1's edit and the Models folder's `loras/` has the file. A backdrop-only
+/// prompt on 2511 could not continue a person cut off at the picture's edge, and a prompt
+/// that named her painted a second copy of her (Cody's portrait, 2026-11-03); the LoRA was
+/// trained on exactly this.
+fn outpaint_lora(s: &Session, (ow, oh): (u32, u32), (nw, nh): (u32, u32)) -> Option<(&'static str, u64)> {
+    if !(s.prefs().integrations.allow_research_models && loras::runs_native(s, "qwen-2.1/edit")) {
+        return None;
+    }
+    let root = s.prefs().integrations.models_root();
+    if root.is_empty() {
+        return None;
+    }
+    let share = (f64::from(ow) * f64::from(oh)) / (f64::from(nw) * f64::from(nh)).max(1.0);
+    pick_outpaint_lora(|f| std::path::Path::new(&root).join("loras").join(f).is_file(), share)
+}
+
+/// Of the Outpaint LoRA files `has` finds, the one for a picture that is `share` of its grown
+/// canvas (v1 first below [`OUTPAINT_WIDE_SHARE`], else v2), with its request size.
+fn pick_outpaint_lora(has: impl Fn(&str) -> bool, share: f64) -> Option<(&'static str, u64)> {
+    let order = if share < OUTPAINT_WIDE_SHARE { [OUTPAINT_LORA_WIDE, OUTPAINT_LORA] } else { [OUTPAINT_LORA, OUTPAINT_LORA_WIDE] };
+    order.into_iter().find(|f| has(f)).map(|f| (f, if f == OUTPAINT_LORA_WIDE { OUTPAINT_WIDE_PIXELS } else { OUTPAINT_PIXELS }))
+}
+
+/// The Outpaint LoRA's prompt: its instruction, then the scene.
+fn outpaint_prompt(scene: &str) -> String {
+    let scene = scene.trim();
+    if scene.is_empty() { OUTPAINT_INSTRUCTION.to_string() } else { format!("{OUTPAINT_INSTRUCTION} Scene: {scene}") }
+}
 
 fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -3657,8 +3743,14 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
         requested = t.to_string();
         auto = false;
     }
-    let Common { template, prompt, negative, seed, steps, guidance, models, name } =
-        plan_common(s, EXPAND, &q, if auto { DEFAULT_EXPAND_TEMPLATE } else { &requested }, Task::Expand, &default_model)?;
+    let lora = if auto { outpaint_lora(s, (ow, oh), (nw, nh)) } else { None };
+    let Common { template, prompt, negative, seed, steps, guidance, models, name } = match lora {
+        Some(_) => plan_common(s, EXPAND, &q, "qwen-2.1/edit", Task::Edit, &default_model)?,
+        None => plan_common(s, EXPAND, &q, if auto { DEFAULT_EXPAND_TEMPLATE } else { &requested }, Task::Expand, &default_model)?,
+    };
+    if lora.is_some() {
+        auto = false;
+    }
     let variations = match opt_num(EXPAND, p, "variations", 1.0, f64::from(MAX_VARIATIONS))? {
         None => 1,
         Some(x) if x.fract() == 0.0 => x as u32,
@@ -3666,7 +3758,12 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
     };
     // How much of the picture goes along: the template's say (an in-context model wants all of
     // it, see `Meta::expand_margin`), else a quarter of the longer side.
-    let margin = opt_num(EXPAND, p, "margin", 0.0, 1.0)?.unwrap_or_else(|| template.meta.expand_margin.map_or(0.25, |m| f64::from(m.clamp(0.0, 1.0))));
+    // The Outpaint LoRA sees the whole canvas.
+    let margin = if lora.is_some() {
+        1.0
+    } else {
+        opt_num(EXPAND, p, "margin", 0.0, 1.0)?.unwrap_or_else(|| template.meta.expand_margin.map_or(0.25, |m| f64::from(m.clamp(0.0, 1.0))))
+    };
     let edge = parse_edge(EXPAND, p)?;
     let rect = expand_rect((ow, oh), &pads, margin);
     let pixels = u64::from(rect.width()) * u64::from(rect.height());
@@ -3678,10 +3775,15 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
         )));
     }
     let name = name.unwrap_or_else(|| "Generative Expand".to_string());
+    let tuning = match lora {
+        Some((file, max_pixels)) => Tuning { loras: vec![(file.to_string(), 1.0)], max_pixels, ..Tuning::default() },
+        None => Tuning::default(),
+    };
+    let outpaint = lora.map(|_| if blank { String::new() } else { p.get("prompt").and_then(Value::as_str).unwrap_or_default().trim().to_string() });
     // An expand keeps its wording: its prompt continues the scene, the rewriter's rules
     // (name the subject, say what stays) are about a picture's content.
-    Ok((
-        FillPlan {
+    Ok(ExpandPlan {
+        fill: FillPlan {
             template,
             prompt,
             negative,
@@ -3698,13 +3800,14 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
             refs: Default::default(),
             grow: 0,
             erase: false,
-            tuning: Tuning::default(),
+            tuning,
         },
         pads,
-        (nw, nh),
-        blank,
+        canvas: (nw, nh),
+        describe: blank,
         margin,
-    ))
+        outpaint,
+    })
 }
 
 /// An expand's request on its grown canvas: the bounding box of the added canvas (an L or a
@@ -3818,7 +3921,8 @@ fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// `generate.expand`: grow the canvas and have the model paint the new area, as one undo step.
 fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
-    let (plan, pads, (nw, nh), describe, margin) = plan_expand(s, p)?;
+    let ExpandPlan { fill: plan, pads, canvas: (nw, nh), describe, margin, outpaint } = plan_expand(s, p)?;
+    let lora = outpaint.is_some();
     let backend = backend(s)?;
     let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect: _, variations, auto, edge, enhance, refs, grow, erase, tuning } =
         plan;
@@ -3864,7 +3968,24 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
             // asked for that alone (else it paints the subject again into the new area). Where
             // the picture cuts its subject off, those sides go first, asked to continue it.
             let mut stages: Vec<(Pads, String)> = vec![(pads, prompt.clone())];
-            if describe {
+            if let Some(typed) = &outpaint {
+                // Through the Outpaint LoRA: one run over every side, the scene (subject and
+                // setting) described when no prompt was given.
+                let scene = if typed.is_empty() {
+                    let seen = photocraft_compose::render(doc, doc.bounds()).to_rgba8();
+                    let seen = Rgba8::new(seen.width, seen.height, seen.pixels).map_err(gen_err)?;
+                    let (rw, rh) = matte_request_size(seen.width, seen.height);
+                    let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
+                    ctx.progress(0.0, "Describing the picture");
+                    enhance_prompt(thinker.as_ref(), EnhanceKind::Scene, ENHANCE_SCENE_REQUEST, Some(&seen), None, seed, &JobProgress::span(ctx, 0.0, 0.03))
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                } else {
+                    typed.clone()
+                };
+                stages = vec![(pads, outpaint_prompt(&scene))];
+            } else if describe {
                 let seen = photocraft_compose::render(doc, doc.bounds()).to_rgba8();
                 let seen = Rgba8::new(seen.width, seen.height, seen.pixels).map_err(gen_err)?;
                 let (rw, rh) = matte_request_size(seen.width, seen.height);
@@ -3933,7 +4054,7 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
                     job(stage_prompt, if final_stage { variations } else { 1 }),
                     rect,
                     coverage,
-                    Some(Outpaint { picture: old.intersect(&rect) }),
+                    Some(Outpaint { picture: old.intersect(&rect), lora }),
                 )?;
                 if final_stage {
                     last = Some(filled);

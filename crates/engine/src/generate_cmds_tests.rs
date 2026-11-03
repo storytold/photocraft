@@ -989,6 +989,27 @@ fn an_expand_without_a_prompt_asks_for_the_background_alone() {
 }
 
 #[test]
+fn the_outpaint_lora_is_picked_by_how_much_canvas_is_added_and_prompted_with_its_trigger() {
+    let both = |_: &str| true;
+    // Cody's portrait, 452×678 grown by 500 on every side: 13 % of the canvas, the v1 file.
+    assert_eq!(pick_outpaint_lora(both, 0.13), Some((OUTPAINT_LORA_WIDE, OUTPAINT_WIDE_PIXELS)));
+    assert_eq!(pick_outpaint_lora(both, 0.6), Some((OUTPAINT_LORA, OUTPAINT_PIXELS)));
+    // Whichever file is there.
+    assert_eq!(pick_outpaint_lora(|f| f == OUTPAINT_LORA, 0.13), Some((OUTPAINT_LORA, OUTPAINT_PIXELS)));
+    assert_eq!(pick_outpaint_lora(|_| false, 0.5), None);
+    assert_eq!(
+        outpaint_prompt(" a woman in a white ruffled top before a brown studio backdrop "),
+        format!("{OUTPAINT_INSTRUCTION} Scene: a woman in a white ruffled top before a brown studio backdrop")
+    );
+    assert_eq!(outpaint_prompt(""), OUTPAINT_INSTRUCTION);
+    // The canvas the LoRA sees: the picture as it is, flat #808080 around it.
+    let mut img = Rgba8::new(4, 3, vec![10; 48]).unwrap();
+    grey_outside(&mut img, Rect::new(1, 1, 3, 2));
+    let px = |x: usize, y: usize| img.data[(y * 4 + x) * 4];
+    assert_eq!((px(0, 0), px(1, 1), px(2, 1), px(3, 1), px(1, 2)), (128, 10, 10, 128, 128));
+}
+
+#[test]
 fn expand_stages_continue_the_subject_first_and_the_far_side_last() {
     assert_eq!(cut_sides("cut off at: bottom, Left."), Pads { left: 1, top: 0, right: 0, bottom: 1 });
     assert_eq!(cut_sides("not cut off at all"), Pads::default());
