@@ -14,6 +14,19 @@ pub enum ToolEvent {
     Up { x: f64, y: f64 },
 }
 
+/// A Shift-click's press was snapped to the aliased tip's grid. Moving or releasing inside
+/// that same cell is still the click, not a new constrained segment (#10836). Keep real drag
+/// samples at their subpixel positions so the line walker can sample the freehand path.
+fn aliased_shift_click_point(app: &PhotocraftApp, d: &Drag, p: [f64; 2]) -> Option<[f64; 2]> {
+    if d.aliased_click {
+        let (x, y) = snap_aliased_tip(app, d.tool, p[0], p[1]);
+        if d.points.last().is_some_and(|last| last[0] == x && last[1] == y) {
+            return Some([x, y]);
+        }
+    }
+    None
+}
+
 /// The body of a `Move` for every tool: tracked position, ⇧ constraint, the moving layer, and so
 /// on. It does not feed the live stroke, so the canvas can push a whole frame's recovered samples
 /// and update the live stroke once (see `canvas_view`).
@@ -30,11 +43,15 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     } else if tool == Tool::CurvaturePen {
         crate::vector_ui::curvature_move(app, x, y);
     }
+    let aliased_click = app.drag.as_ref().and_then(|d| aliased_shift_click_point(app, d, [x, y]));
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
         d.track(mods);
         d.shift_to([x, y]);
     } else if let Some(d) = &mut app.drag {
+        // Once a click becomes a drag, never suppress later freehand samples in this gesture.
+        d.aliased_click &= aliased_click.is_some();
+        let [x, y] = aliased_click.unwrap_or([x, y]);
         d.track(mods);
         // ⇧: straight 0/45/90° strokes, 45° gradient angles (stroke_constraint.rs).
         let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
@@ -508,6 +525,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
+            drag.aliased_click = from.is_some() && (tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool));
             drag.capture_vector_owners(app);
             app.drag = Some(drag);
             app.trail = None;
@@ -565,6 +583,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             if d.reposition {
                 d.shift_to([x, y]);
             }
+            let [x, y] = aliased_shift_click_point(app, &d, [x, y]).unwrap_or([x, y]);
             let last = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
             let [x, y] = crate::stroke_constraint::constrain(d.tool, &mut d.constrain, d.start, last, [x, y], mods.shift, zoom);
             let [x, y] = crate::move_mods::selection_drag_to(&mut d, [x, y], mods.shift && app.active_tool() != Tool::Move);

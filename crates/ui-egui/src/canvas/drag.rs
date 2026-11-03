@@ -16,6 +16,8 @@ pub struct Drag {
     pub clear: bool,
     /// ⇧ constraint of a painting stroke (stroke_constraint.rs).
     pub constrain: Option<crate::stroke_constraint::Axis>,
+    /// A connected aliased ⇧-click, until the pointer leaves the clicked grid cell.
+    pub(super) aliased_click: bool,
     /// Modifiers held now (updated on every pointer event of the gesture).
     pub live: egui::Modifiers,
     /// Which of the modifiers held at the press have been released since.
@@ -46,6 +48,7 @@ impl Drag {
             erase,
             clear: false,
             constrain: None,
+            aliased_click: false,
             live: modifiers,
             released: egui::Modifiers::NONE,
             reposition: false,
