@@ -43,9 +43,13 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Resu
         }
         size = Some([width, height]);
     }
+    let changed = app.ui.toolbar_floating != position || app.ui.panel_presentation.tools_size != size;
     app.ui.toolbar_floating = position;
     app.ui.panel_presentation.tools_size = size;
     app.ui.panels.toolbar = true;
+    if changed {
+        crate::dock::discard_retained_layout(app);
+    }
     Ok(json!({"toolbarFloating":position,"toolbarSize":size}))
 }
 pub(crate) fn header_drag(app: &PhotocraftApp, ui: &egui::Ui, response: &egui::Response) {
@@ -217,6 +221,33 @@ mod tests {
         for id in ["window.tools.float", "window.tools.dock"] {
             assert!(command(&mut app, id, &json!({})).is_err());
             assert_eq!(crate::dock::snapshot(&app), before);
+        }
+    }
+    #[test]
+    fn tools_layout_changes_replace_retained_fallback_but_noops_and_invalid_requests_keep_it() {
+        for operation in ["float", "dock", "resize"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            let pose = json!({"x":120,"y":150,"width":74,"height":320});
+            if operation != "float" {
+                command(&mut app, "window.tools.float", &pose).unwrap();
+            }
+            let mut saved = crate::dock::snapshot(&app);
+            saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+            crate::dock::apply(&mut app, &saved);
+            assert!(app.ui.docking_kept.is_some());
+            let before = crate::dock::snapshot(&app);
+            command(&mut app, if operation == "float" { "window.tools.dock" } else { "window.tools.float" }, &pose).unwrap();
+            assert_eq!(crate::dock::snapshot(&app), before, "no-op {operation}");
+            assert!(command(&mut app, "window.tools.float", &json!({"width":0})).is_err());
+            assert_eq!(crate::dock::snapshot(&app), before, "invalid {operation}");
+            let params = if operation == "resize" { json!({"x":120,"y":150,"width":84,"height":420}) } else { pose };
+            command(&mut app, if operation == "dock" { "window.tools.dock" } else { "window.tools.float" }, &params).unwrap();
+            assert!(app.ui.docking_kept.is_none(), "{operation}");
+            assert!(crate::panel_docking::load(&crate::dock::snapshot(&app)).is_some(), "{operation}");
+            assert_eq!(app.ui.toolbar_floating.is_none(), operation == "dock");
+            if operation == "resize" {
+                assert_eq!(app.ui.panel_presentation.tools_size, Some([84.0, 420.0]));
+            }
         }
     }
 }
