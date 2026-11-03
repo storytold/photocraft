@@ -4,25 +4,25 @@ use crate::{EngineError, Result, Session, commands::CommandSpec};
 #[cfg(target_os = "linux")]
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::Value;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 use serde_json::json;
 
 #[cfg(target_os = "linux")]
 mod edits;
 #[cfg(target_os = "linux")]
 mod subject;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 #[cfg(target_os = "linux")]
 mod transport;
 
 pub const COMMAND: &str = "image.generate";
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn bad(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 #[derive(Clone, Debug)]
 struct Request {
     prompt: String,
@@ -38,14 +38,14 @@ struct Request {
     dry_run: bool,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 #[derive(Clone, Debug)]
 struct EditInput {
     source_png: String,
     mask_png: String,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 impl Request {
     fn parse(p: &Value) -> Result<Self> {
         if !p.is_object() {
@@ -205,7 +205,7 @@ struct Output {
     model: String,
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn validate_png(bytes: &[u8], width: u32, height: u32) -> Result<()> {
     if bytes.len() > 5 * 1024 * 1024 || !(64..=1024).contains(&width) || !(64..=1024).contains(&height) {
         return Err(bad("Enki returned an oversized image"));

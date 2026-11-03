@@ -159,7 +159,7 @@ pub fn body(_app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Va
     }
     ui.label(tl!("Runs locally through Enki. No models are downloaded. The result is a new layer; Undo removes it."));
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     #[test]

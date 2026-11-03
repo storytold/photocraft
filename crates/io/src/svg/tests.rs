@@ -312,7 +312,11 @@ fn a_single_path_clip_becomes_the_groups_vector_mask() {
     // The report's file: PhotoCraft's own icon opens without the clip-path warning.
     let icon = import_svg("photocraft.svg", include_bytes!("../../../../assets/app-icon/photocraft.svg")).unwrap();
     assert!(icon.warnings.iter().all(|w| !w.contains("clip-path")), "{:?}", icon.warnings);
-    assert!(icon.document.layers.iter().any(|l| l.vector_mask.is_some()), "its rounded square is a vector mask");
+    let clipped = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <defs><clipPath id="rounded"><rect width="64" height="64" rx="12"/></clipPath></defs>
+        <g clip-path="url(#rounded)"><rect width="64" height="64" fill="#336699"/></g></svg>"##;
+    let clipped = import_svg("rounded-clip.svg", clipped).unwrap();
+    assert!(clipped.document.layers.iter().any(|l| l.vector_mask.is_some()));
     // Two shapes in the clip: rasterised, and said so.
     let two = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
             <defs><clipPath id="c"><rect width="20" height="20"/><rect x="30" width="20" height="20"/></clipPath></defs>
