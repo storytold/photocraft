@@ -163,6 +163,9 @@ impl PhotocraftApp {
     /// (a flat file): confirming the document's own file is recorded as a `file.save` step,
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
     pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
@@ -223,6 +226,9 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         // An RGB Targa asks for its bits per pixel, a DDS texture for its compression, and a JPEG
         // for its quality and format, unless the caller chose them; the save continues from the
         // prompt (still a copy when it would be one without the prompt), which records the step
@@ -349,14 +355,20 @@ impl PhotocraftApp {
     /// What a save writes by default under the preferences: File Handling › Image Previews
     /// decides whether a PSD/PSB gets its thumbnail, and Maximize PSD and PSB File Compatibility
     /// whether it gets its real merged image. Ask When Saving has no dialog here yet, so it saves
-    /// both, as Photoshop's checkboxes start on. A JPEG or WebP is written the way the active
+    /// both, as Photoshop's checkboxes start on. Save Full-Size Composite in .pcraft Files decides
+    /// whether a `.pcraft` save also writes `composite/full.png`. A JPEG or WebP is written the way the active
     /// document's file was (its JPEG quality, a WebP lossy at its quality or lossless), as
     /// Photoshop's Save and Save As options start there.
     pub(crate) fn save_settings(&self) -> ExportSettings {
         let file_handling = &self.session.prefs().file_handling;
         let previews = file_handling.image_previews != photocraft_engine::prefs::Ask::Never;
         let maximize = file_handling.maximize_psd_compatibility != photocraft_engine::prefs::Ask::Never;
-        let mut settings = ExportSettings { image_previews: previews, psd_maximize_compatibility: maximize, ..ExportSettings::default() };
+        let mut settings = ExportSettings {
+            image_previews: previews,
+            psd_maximize_compatibility: maximize,
+            pcraft_full_composite: file_handling.pcraft_full_composite,
+            ..ExportSettings::default()
+        };
         if let Some(st) = self.session.active() {
             let e = &st.doc.file_encoding;
             settings.jpeg_quality = e.jpeg_quality.map(|q| q.clamp(1, 100));

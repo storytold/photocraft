@@ -92,6 +92,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("WebP", &["webp"]),
     ("TIFF", &["tif", "tiff"]),
     ("Targa", &["tga"]),
@@ -496,6 +497,11 @@ fn guarded_clipboard_get(mut read: impl FnMut() -> Result<Option<(u32, u32, Vec<
     Box::new(move || crate::crash_guard::guard("Paste", &mut read))
 }
 
+/// SVG reads use the same recovery boundary as raster clipboard reads.
+fn guarded_clipboard_svg(mut read: impl FnMut() -> Result<Option<Vec<u8>>, String> + 'static) -> photocraft_ui_egui::ClipboardGetSvgFn {
+    Box::new(move || crate::crash_guard::guard("Paste", &mut read))
+}
+
 fn guarded_clipboard_set(mut write: impl FnMut(u32, u32, &[u8]) -> Result<(), String> + 'static) -> photocraft_ui_egui::ClipboardSetFn {
     Box::new(move |w: u32, h: u32, px: &[u8]| crate::crash_guard::guard("Copy", || write(w, h, px)))
 }
@@ -615,6 +621,18 @@ fn clipboard_text(read: Result<String, arboard::Error>) -> Result<Option<String>
     }
 }
 
+/// Keep SVG source for Paste As without accepting an unbounded clipboard string as a new copy.
+fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String> {
+    let Some(text) = text else { return Ok(None) };
+    if !photocraft_io::svg::is_svg(text.as_bytes()) {
+        return Ok(None);
+    }
+    if text.len() > 16 << 20 {
+        return Err("SVG clipboard data exceeds the 16 MiB limit".into());
+    }
+    Ok(Some(text.into_bytes()))
+}
+
 /// The shell command that starts this install under XWayland, where winit delivers file drops
 /// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
@@ -710,6 +728,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())
             })
         }),
+        open_external_svg: Some(Box::new(crate::external_svg::open)),
         clipboard_get_image: Some({
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();
@@ -744,6 +763,17 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                     },
                     |cb| clipboard_text(cb.get_text()),
                 )
+            })
+        }),
+        clipboard_get_svg: Some({
+            let clip = clip.clone();
+            guarded_clipboard_svg(move || {
+                let mut slot = clip.try_borrow_mut().map_err(|_| "clipboard is busy".to_string())?;
+                let cb = match slot.as_mut() {
+                    Some(c) => c,
+                    None => slot.insert(arboard::Clipboard::new().map_err(|e| e.to_string())?),
+                };
+                svg_clipboard_source(clipboard_text(cb.get_text())?)
             })
         }),
         clipboard_unreadable: Some(Box::new(move || clip_unreadable.get())),
