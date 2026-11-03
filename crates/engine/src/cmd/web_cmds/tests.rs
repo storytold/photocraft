@@ -1324,7 +1324,7 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
 fn platform_writer_resizes_under_the_sessions_source_policy() {
     fn deny_png_paths(_: &str, p: &Value) -> Result<()> {
         match p.get("path").and_then(Value::as_str) {
-            Some(path) if path.ends_with(".png") => Err(other(format!("source path refused: {path}"))),
+            Some(path) if path.ends_with("art.png") => Err(other(format!("source path refused: {path}"))),
             _ => Ok(()),
         }
     }
@@ -1342,14 +1342,12 @@ fn platform_writer_resizes_under_the_sessions_source_policy() {
     s.authorize = Some(deny_png_paths);
     let params = json!({"format": "png24", "path": "small.png", "width": 32});
     let mut output = Vec::new();
-    if save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+    save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
         output.extend_from_slice(bytes);
         Ok(())
     })
-    .is_ok()
-    {
-        let img = photocraft_codecs::decode(&output).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
-        let i = (12 * 32 + 16) * 4;
-        assert_ne!(&img.data()[i..i + 3], &[0, 0, 255], "the refused file must not be re-read into the export");
-    }
+    .unwrap();
+    let img = photocraft_codecs::decode(&output).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
+    let i = (12 * 32 + 16) * 4;
+    assert_ne!(&img.data()[i..i + 3], &[0, 0, 255], "the refused file must not be re-read into the export");
 }
