@@ -698,11 +698,11 @@ mod tests {
 
     #[test]
     fn images_past_the_pixel_budget_are_left_out() {
-        // Two 64×64 RGBA images cost 16 KiB each when resampled; a 16 KiB budget admits one and
+        // Two 64×64 RGBA images each keep a whole 256×256 tile (256 KiB); a one-tile budget admits one and
         // the second is dropped with a warning instead of being staged anyway.
         let d = affinity_document(vec![(64, 64, Pixels::Rgba8(vec![0; 64 * 64 * 4])), (64, 64, Pixels::Rgba8(vec![0; 64 * 64 * 4]))]);
         let mut b = Builder::new("budget", &d).unwrap();
-        b.pixel_budget = 64 * 64 * 4;
+        b.pixel_budget = 256 * 256 * 4; // one whole tile per image
         b.document(&d).unwrap();
         assert_eq!(b.doc.layers.len(), 1, "the image past the budget must not import");
         assert!(b.warnings.iter().any(|w| w.contains("pixel memory")), "{:?}", b.warnings);
@@ -723,7 +723,7 @@ mod tests {
         assert!(b.warnings.iter().any(|w| w.contains("pixel memory")), "{:?}", b.warnings);
         // The same image imports when the budget covers the decode and the resample.
         let mut ok = Builder::new("room", &d).unwrap();
-        ok.pixel_budget = 8 * 8 * 4 * 2;
+        ok.pixel_budget = 8 * 8 * 4 + 256 * 256 * 4;
         ok.document(&d).unwrap();
         assert_eq!(ok.doc.layers.len(), 1, "within the budget the image imports as a smart object");
     }
