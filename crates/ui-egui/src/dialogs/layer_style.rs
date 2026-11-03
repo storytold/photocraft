@@ -543,6 +543,16 @@ pub fn drags_gradient(f: &Map<String, Value>) -> bool {
     entry(f, selected).and_then(|e| e.get("kind")).and_then(Value::as_str) == Some("gradientOverlay")
 }
 
+/// The width and height of the layer the dialog `f` is open on, what a Gradient Overlay's offset
+/// is a fraction of (`photocraft_compose::layer_bounds`, what the renderer paints against): `None`
+/// once that layer is gone, when a drag on the image has nothing to move and the Hand tool pans.
+pub fn gradient_layer_bounds(session: &photocraft_engine::Session, f: &Map<String, Value>) -> Option<[f64; 2]> {
+    let id = f.get("layer").and_then(Value::as_u64)?;
+    let st = session.active()?;
+    let b = photocraft_compose::layer_bounds(st.doc.layer(photocraft_doc::LayerId(id))?, st.doc.bounds());
+    Some([f64::from(b.width()), f64::from(b.height())])
+}
+
 /// A drag on the image with a Gradient Overlay page selected: `start` is true on the press (it
 /// records the gradient's offset then), `total` the pointer's movement since in document pixels
 /// and `bounds` the layer's width and height. The gradient's centre moves with the pointer, kept
@@ -551,12 +561,13 @@ pub fn drag_gradient(f: &mut Map<String, Value>, start: bool, total: [f64; 2], b
     const KEY: &str = "__gradientDrag";
     let Some(id) = f.get("selected").and_then(Value::as_str).map(str::to_string).filter(|_| drags_gradient(f)) else { return };
     let Some(e) = entry(f, &id) else { return };
-    // The offset the gradient shows: `offset` as stored when it is a pair of finite numbers (the
-    // only form the engine applies), else the effect's own (its `fx` snapshot), else the centre
+    // The offset the gradient shows: `offset` as stored when its first two elements are finite
+    // numbers (the only form the engine applies, and all it reads of a longer array), else the
+    // effect's own (its `fx` snapshot), else the centre
     // (None: never set); within ±4 of the layer's size, as the renderer keeps it, so the drag
     // starts from where the gradient is seen.
     let pair = |v: Option<&Value>| {
-        let a = v?.as_array().filter(|a| a.len() == 2)?;
+        let a = v?.as_array()?;
         let (x, y) = (a.first()?.as_f64()?, a.get(1)?.as_f64()?);
         (x.is_finite() && y.is_finite()).then(|| [x.clamp(-4.0, 4.0), y.clamp(-4.0, 4.0)])
     };

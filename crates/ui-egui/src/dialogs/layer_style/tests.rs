@@ -46,6 +46,7 @@ fn a_drag_starts_from_the_offset_the_gradient_shows() {
             {"id": "fx1", "kind": "gradientOverlay", "on": true, "params": {"offset": [5.0, 0.0]}},
             {"id": "fx2", "kind": "gradientOverlay", "on": true, "params": {"offset": [0.5, null]}},
             {"id": "fx3", "kind": "gradientOverlay", "on": true, "params": {"offset": [0.5, null]}, "fx": {"GradientOverlay": {"gradient": {"offset": [0.2, 0.3]}}}},
+            {"id": "fx4", "kind": "gradientOverlay", "on": true, "params": {"offset": [0.1, 0.2, 9]}},
         ]),
     );
     let offset = |f: &Map<String, Value>, id: &str| entry(f, id).unwrap()["params"].get("offset").cloned();
@@ -65,6 +66,27 @@ fn a_drag_starts_from_the_offset_the_gradient_shows() {
     drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
     drag_gradient(&mut f, false, [50.0, 0.0], [200.0, 100.0]);
     assert_eq!(offset(&f, "fx3"), Some(json!([0.45, 0.3])));
+    // Three elements: the first two count, as the engine reads them.
+    f.insert("selected".into(), json!("fx4"));
+    drag_gradient(&mut f, true, [0.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx4"), Some(json!([0.1, 0.2, 9])), "a plain press leaves it");
+    drag_gradient(&mut f, false, [50.0, 0.0], [200.0, 100.0]);
+    assert_eq!(offset(&f, "fx4"), Some(json!([0.35, 0.2])));
+}
+
+/// Review: with the dialog's layer gone, a drag on the image has nothing to move, so the Hand
+/// tool pans as usual: `gradient_layer_bounds` finds the dialog's layer, or nothing.
+#[test]
+fn the_gradient_drag_needs_its_layer() {
+    let s = session();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let mut f = Map::new();
+    f.insert("layer".into(), json!(id.0));
+    assert!(gradient_layer_bounds(&s, &f).is_some_and(|[w, h]| w > 0.0 && h > 0.0), "the dialog's layer");
+    f.insert("layer".into(), json!(id.0 + 1000));
+    assert_eq!(gradient_layer_bounds(&s, &f), None, "a layer that is gone");
+    f.remove("layer");
+    assert_eq!(gradient_layer_bounds(&s, &f), None, "a dialog without a layer");
 }
 
 /// #10763: with a Gradient Overlay page selected, a drag on the image moves the gradient: its
