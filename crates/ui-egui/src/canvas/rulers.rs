@@ -221,7 +221,9 @@ pub fn guide_cursor(xf: &ViewXform, vertical: bool) -> egui::CursorIcon {
 /// Layout's preview and a guide being dragged either way.
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document, shown: bool) {
     let clip = painter.clip_rect();
-    let drag = app.guide_drag;
+    // A guide being dragged or selected is the active document's, not this tile's.
+    let active = app.session.active().is_some_and(|st| st.doc.id == doc.id);
+    let drag = app.guide_drag.filter(|_| active);
     let g = &app.session.prefs().guides_grid_and_slices;
     let preview = crate::guide_layout_ui::preview(app, doc);
     let guides = preview.as_ref().map(|(guides, _)| guides).unwrap_or(&doc.guides);
@@ -234,7 +236,7 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     // A guide given a colour in New Guide keeps it; the rest use the preference colour (or, while
     // New Guide Layout previews, the colour it will set). The selected guide is Photoshop's blue.
     let own = |vertical: bool, p: f64| {
-        if crate::guide_select::is_selected(app, vertical, p) {
+        if active && crate::guide_select::is_selected(app, vertical, p) {
             return crate::guide_select::SELECTED_COLOR;
         }
         guides.color(vertical, p).map_or(guide, |[r, g, b]| Color32::from_rgb(r, g, b))

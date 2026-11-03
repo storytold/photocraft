@@ -1284,6 +1284,17 @@ struct CanvasOverlayInput<'a> {
     zoom_out: &'a dyn Fn(bool) -> bool,
 }
 
+/// Grid and guides are each document window's own: a tile or an extra window shows its own.
+fn paint_grid_and_guides(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, doc: &Document, idx: usize) {
+    let toggles = app.window_toggles_in(ctx.viewport_id(), idx);
+    if toggles.grid && toggles.extras {
+        crate::rulers::draw_grid(app, painter, xf, doc);
+    }
+    if (toggles.extras && app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
+        crate::rulers::draw_guides(app, painter, xf, doc, toggles.guides);
+    }
+}
+
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
     let painter = input.painter;
@@ -1299,14 +1310,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::transform_tool::draw_content(app, painter, xf);
     // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
     crate::distort_ui::draw_content(app, painter, xf);
-    // Grid and guides are each document window's own: a tile or an extra window shows its own.
-    let toggles = app.window_toggles_in(ctx.viewport_id(), idx);
-    if toggles.grid && toggles.extras {
-        crate::rulers::draw_grid(app, painter, xf, doc);
-    }
-    if (toggles.extras && app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
-        crate::rulers::draw_guides(app, painter, xf, doc, toggles.guides);
-    }
+    paint_grid_and_guides(app, ctx, painter, xf, doc, idx);
     // The selection's ants go over the grid and guides, as in Photoshop (#10671).
     painter.extend(ants);
     // The pending crop frame shows on its own document only, not on the other tiles (#1918).
@@ -1887,7 +1891,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         ctx.request_repaint();
     }
     let xf = ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, ..target_xf }.pixel_aligned_for(app, ppp);
-    let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
+    let pixel_grid = app.window_toggles_in(ui.ctx().viewport_id(), idx).extras && app.ui.view.show.pixel_grid;
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     let stroke_dismissal = primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response);
     let painter = ui.painter_at(rect);
@@ -2094,6 +2098,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         };
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
+        paint_grid_and_guides(app, &ctx, &painter, &xf, &doc, idx);
         painter.extend(ants);
     }
     let tail = CanvasTailInput {
@@ -2908,8 +2913,14 @@ fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rec
     };
     let velocity = vec2(speed(pointer.x, rect.left(), rect.right()), speed(pointer.y, rect.top(), rect.bottom()));
     let velocity = velocity * (600.0 / velocity.length().max(600.0));
-    let xf =
-        ViewXform { rect, zoom, center: view.center, flip: app.ui.view.flip_horizontal, rotation: view.rotation, aspect: app.display_aspect_of(Some(idx)) };
+    let xf = ViewXform {
+        rect,
+        zoom,
+        center: view.center,
+        flip: app.window_toggles_in(ctx.viewport_id(), idx).flip_horizontal,
+        rotation: view.rotation,
+        aspect: app.display_aspect_of(Some(idx)),
+    };
     let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
     view.center[0] += delta.x;
     view.center[1] += delta.y;

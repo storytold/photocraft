@@ -79,6 +79,65 @@ fn pixel_aspect_ratio_is_each_documents_own() {
     assert_eq!(checked(&empty, "view.pixelAspectRatio.square"), Some(false));
 }
 
+/// An arranged document that isn't the active one draws its own grid and guides, from its
+/// window's settings, whatever the active document's are.
+#[test]
+fn an_arranged_tile_draws_its_own_grid_and_guides() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with(2);
+    app.ui.view.arrange = "tileAllVertically".into();
+    let active = app.session.active_index().unwrap();
+    let other = 1 - active;
+    app.session.set_active(other);
+    app.sync_views();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 20})).unwrap();
+    app.session.set_active(active);
+    app.sync_views();
+    let mut own = app.window_toggles();
+    own.grid = false;
+    own.guides = false;
+    own.extras = true;
+    app.ui.views[other].toggles = Some(own);
+    app.ui.extras.grid = false;
+    app.ui.extras.guides = false;
+    app.ui.view.extras = false;
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let rect = h.state().last_canvas_rect;
+    let cells = crate::canvas::arranged_cells(h.state(), rect).unwrap();
+    let cell = |d: usize| cells.iter().find(|(i, _)| *i == d).unwrap().1;
+    let lines = |h: &Harness<'_, PhotocraftApp>, r: egui::Rect| {
+        h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::LineSegment { points, .. } if r.contains(points[0].lerp(points[1], 0.5)))).count()
+    };
+    let plain = (lines(&h, cell(other)), lines(&h, cell(active)));
+    // The other document's grid on: only its tile gains lines.
+    own.grid = true;
+    h.state_mut().ui.views[other].toggles = Some(own);
+    h.run_steps(3);
+    let gridded = (lines(&h, cell(other)), lines(&h, cell(active)));
+    assert!(gridded.0 > plain.0, "its grid: {plain:?} to {gridded:?}");
+    assert_eq!(gridded.1, plain.1, "the active document's grid stays off");
+    // Its Extras off hide the grid again, though the active document's are what is live.
+    own.extras = false;
+    h.state_mut().ui.views[other].toggles = Some(own);
+    h.run_steps(3);
+    assert_eq!(lines(&h, cell(other)), plain.0);
+    // Its guides: a guide in the other document shows when its window's Guides are on.
+    own = crate::state::WindowToggles { extras: true, grid: false, guides: true, ..own };
+    h.state_mut().ui.views[other].toggles = Some(own);
+    h.run_steps(3);
+    assert!(lines(&h, cell(other)) > plain.0, "its guide shows in its tile");
+}
+
 /// Flip Horizontal, Extras, Rulers and Show › Grid / Guides belong to each document window, as in
 /// Photoshop: switching documents brings back each one's own, an arranged document is drawn with
 /// its own flip, and a new document starts from the settings in use.
