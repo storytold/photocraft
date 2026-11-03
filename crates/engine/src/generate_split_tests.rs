@@ -157,5 +157,10 @@ fn split_fails_with_nothing_changed_when_every_fill_paints_the_subject_back() {
     let d = s.active().unwrap();
     assert_eq!((d.doc.layers.len(), d.history.past_len()), (before, steps), "nothing changed");
     let fills = fake.state().runs.iter().filter(|r| r.request["task"] != "segment" && r.request["task"] != "matte").count();
-    assert!(fills >= 3, "three fills tried: {fills}");
+    assert!(fills >= 4, "four fills tried: {fills}");
+    // After the removal, the backdrop fill: the hole's box flattened, the subject never named.
+    let st = fake.state();
+    let backdrop: Vec<_> = st.runs.iter().filter(|r| r.request["prompt"].as_str().is_some_and(|p| p.contains("with nobody there"))).collect();
+    assert_eq!(backdrop.len(), 3, "three backdrop fills after the removal");
+    assert!(backdrop.iter().all(|r| !r.request["prompt"].as_str().unwrap_or("").contains("person")), "the subject is not named");
 }

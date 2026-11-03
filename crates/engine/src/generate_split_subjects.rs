@@ -17,8 +17,9 @@ use crate::EngineError;
 
 use super::{
     Common, DEFAULT_MATTE_TEMPLATE, GenerativeInfo, Gray8, JobCtx, JobProgress, Layer, MATTE_DEFAULT_PROMPT, MAX_GROW, REMOVE_BG, REMOVE_MIN_REQUEST, Request,
-    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, gen_err, json, matte_request_size, name_selected,
-    plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
+    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, background_job, box_blur, dilate, embed_coverage, fill_rect, fill_region, gen_err, json,
+    matte_request_size, name_selected, plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info,
+    write_rgba8,
 };
 
 /// The most subjects one split gives their own layer (the largest kept).
@@ -80,6 +81,8 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
     let asked = prompt.clone();
     let job =
         removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
+    // The background fill tried when the removal paints a large subject back.
+    let backdrop = background_job(s, "Split into Layers", seed, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() }).ok();
     let base = name.unwrap_or_else(|| "Split Layer".to_string());
     // The matte request (Remove Background's model), planned now; used when the server has it.
     let matte = plan_common(
@@ -176,23 +179,63 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             // changed rather than hand back a repainted person.
             let mut ms = 0u64;
             let mut fill = None;
+            // The box the background fill repaints (the hole's bounds widened by the removal's
+            // grow) and how its result is laid over the picture: only over the subjects, widened
+            // and feathered, so the background outside them keeps the picture's own pixels.
+            let grow = job.grow.min(MAX_GROW) as i32;
+            let (wu, hu) = (w as usize, h as usize);
+            let boxed = hole_rect.inflate(grow).intersect(&area);
+            let box_hole: Vec<f32> = (0..wu * hu)
+                .map(|k| {
+                    let (x, y) = (area.x0 + (k % wu) as i32, area.y0 + (k / wu) as i32);
+                    if x >= boxed.x0 && x < boxed.x1 && y >= boxed.y0 && y < boxed.y1 { 1.0 } else { 0.0 }
+                })
+                .collect();
+            let feather = (grow as usize / 2).max(1);
+            let over = dilate(&hole, wu, hu, grow.max(1) as usize);
+            let over = box_blur(&box_blur(&over, wu, hu, feather, true), wu, hu, feather, false);
             for attempt in 0..FILL_TRIES {
                 ctx.progress(0.35 + 0.5 * attempt as f32 / FILL_TRIES as f32, "Filling the background");
-                let mut try_job = job.clone();
-                try_job.seed = job.seed.wrapping_add(u64::from(attempt) * 1000);
-                let (made, ..) = fill_region(doc, active, ctx, try_job, rect, embed_coverage(area, &hole, rect), None)?;
+                // The removal first (quick, and clean on most pictures); after it paints a
+                // subject back, the backdrop fill of a grey box.
+                let try_box = attempt > 0 && backdrop.is_some();
+                let mut try_job = if try_box { backdrop.clone().unwrap_or_else(|| job.clone()) } else { job.clone() };
+                try_job.seed = try_job.seed.wrapping_add(u64::from(attempt) * 1000);
+                let coverage = embed_coverage(area, if try_box { &box_hole } else { &hole }, rect);
+                let (made, ..) = fill_region(doc, active, ctx, try_job, rect, coverage, None)?;
                 ctx.check()?;
                 ms += made.iter().map(|m| m.3).sum::<u64>();
                 // The background whole: the picture with the fill over the hole, one layer.
-                let background = photocraft_compose::render(doc, area).to_rgba8().pixels;
+                let filled = photocraft_compose::render(doc, area).to_rgba8().pixels;
                 let fill_seed = made.first().map_or(0, |m| m.1);
-                ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
-                let left = subject_left_in(&finder.only(check_prompt(&found_by)), doc, *active, &hole, ctx)?;
                 for (id, ..) in &made {
                     doc.remove(*id);
                 }
                 *active = below;
-                if !left {
+                let background: Vec<u8> = if try_box {
+                    picture
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(filled.as_chunks::<4>().0)
+                        .zip(&over)
+                        .flat_map(|((p, f), a)| {
+                            let a = a.clamp(0.0, 1.0);
+                            std::array::from_fn::<u8, 4, _>(|c| (f32::from(p[c]) * (1.0 - a) + f32::from(f[c]) * a).round() as u8)
+                        })
+                        .collect()
+                } else {
+                    filled
+                };
+                ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
+                // Checked as it will be kept: on a layer of its own over the picture.
+                let mut probe = Layer::raster("Split check".to_string(), doc.pixel_format());
+                write_rgba8(&mut probe, &Rgba8::new(w, h, background.clone()).map_err(gen_err)?, area)?;
+                let probe = doc.insert_above(below, probe);
+                let left = subject_left_in(&finder.only(check_prompt(&found_by)), doc, Some(probe), &hole, ctx);
+                doc.remove(probe);
+                *active = below;
+                if !left? {
                     fill = Some((background, fill_seed));
                     break;
                 }
@@ -265,8 +308,11 @@ fn check_prompt(found_by: &str) -> &str {
 /// The detector's and the removal's word for a person.
 const PERSON: &str = "person";
 
+/// The share of the frame over which a detection counts as the whole frame (ignored).
+const WHOLE_FRAME: f32 = 0.9;
+
 /// Fills tried before Split gives up on a background with the subject painted back.
-const FILL_TRIES: u32 = 3;
+const FILL_TRIES: u32 = 4;
 
 /// Of a detection on the filled background, the share inside the hole at which it counts as
 /// the subject painted back (a person beside the hole overlaps it little).
@@ -297,6 +343,11 @@ fn subject_left_in(
         Err(e) => return Err(e),
     };
     Ok(found.iter().any(|(cov, _, _)| {
+        // A detection over nearly the whole frame is the detector's quirk, not a subject (it
+        // flagged one clean backdrop fill whole, 2026-11-03).
+        if cov.iter().filter(|c| **c >= 0.5).count() as f32 > WHOLE_FRAME * cov.len() as f32 {
+            return false;
+        }
         let (mut on, mut inside) = (0usize, 0usize);
         for (c, h) in cov.iter().zip(hole) {
             if *c >= 0.5 {

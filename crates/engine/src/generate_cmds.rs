@@ -1497,6 +1497,53 @@ fn removal_job(
     })
 }
 
+/// What Split's background fill asks for once the removal has painted a large subject back:
+/// the backdrop alone, the subject never named (a model told to remove "the person" from a
+/// 12-megapixel portrait kept them in place on every route, measured in the app 2026-11-03).
+pub(crate) const BACKGROUND_PROMPT: &str = "the empty background continued seamlessly: the same wall, floor and light as around it, with nobody there";
+
+/// Split's background fill for a large subject: a plain fill of [`BACKGROUND_PROMPT`] with the
+/// hole flattened to grey in what the model sees (`erase`), on Qwen-Image-2.1's fill when it is
+/// served, else the fill order. Seeing the subject, every fill route handed it back; seeing a
+/// grey box, the 2.1 fill continued the curtain behind the owner's portrait (measured in the
+/// app 2026-11-03).
+fn background_job(s: &Session, label: &str, seed: Option<u64>, tuning: Tuning) -> Result<FillJob> {
+    let default_model = s.prefs().integrations.default_edit_model.clone();
+    let (base, auto) = match native21_auto(s, FILL, false) {
+        Some(t) => (t.to_string(), false),
+        None => (DEFAULT_FILL_TEMPLATE.to_string(), true),
+    };
+    let Common { template, prompt, negative, seed, steps, guidance, models, .. } =
+        plan_common(s, FILL, &json!({"prompt": BACKGROUND_PROMPT, "seed": seed}), &base, Task::Fill, &default_model)?;
+    let backend = backend(s)?;
+    Ok(FillJob {
+        thinker: Arc::clone(&backend),
+        backend,
+        command: FILL,
+        template_id: template.meta.id.clone(),
+        auto,
+        auto_order: auto_order(FILL, quality(s)),
+        prompt,
+        negative,
+        seed,
+        steps,
+        guidance,
+        name: label.to_string(),
+        models,
+        variations: 1,
+        edge: Edge::Soft,
+        enhance: false,
+        refs: Default::default(),
+        grow: 0,
+        erase: true,
+        rewritten: None,
+        removal: false,
+        prefill: false,
+        tuning,
+        object: None,
+    })
+}
+
 /// Remove what `coverage` marks (one value per pixel of `bounds`) with the fill model, as
 /// Generative Fill does with [`REMOVE_PROMPT`]: the hole widened by `grow` (or, when `grow`
 /// is 0, by [`remove_grow`]), its pixels kept in the request (or flattened to grey when
