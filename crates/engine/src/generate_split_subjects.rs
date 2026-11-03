@@ -213,15 +213,24 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
                 }
                 *active = below;
                 let background: Vec<u8> = if try_box {
+                    // The fill's tone matched to the picture where both show the backdrop (in the
+                    // box, outside the subjects): a fill a few levels darker left the person's
+                    // outline as a shadow on the curtain (measured in the app 2026-11-03).
+                    let tone = ToneGrid::new(&picture, &filled, |k| box_hole[k] >= 0.5 && over[k] < 0.02, wu, hu);
                     picture
                         .as_chunks::<4>()
                         .0
                         .iter()
                         .zip(filled.as_chunks::<4>().0)
                         .zip(&over)
-                        .flat_map(|((p, f), a)| {
+                        .enumerate()
+                        .flat_map(|(k, ((p, f), a))| {
                             let a = a.clamp(0.0, 1.0);
-                            std::array::from_fn::<u8, 4, _>(|c| (f32::from(p[c]) * (1.0 - a) + f32::from(f[c]) * a).round() as u8)
+                            let t = if a > 0.0 { tone.at(k % wu, k / wu) } else { [0.0; 3] };
+                            std::array::from_fn::<u8, 4, _>(|c| {
+                                let f = if c < 3 { (f32::from(f[c]) + t[c]).clamp(0.0, 255.0) } else { f32::from(f[c]) };
+                                (f32::from(p[c]) * (1.0 - a) + f * a).round() as u8
+                            })
                         })
                         .collect()
                 } else {
@@ -308,11 +317,96 @@ fn check_prompt(found_by: &str) -> &str {
 /// The detector's and the removal's word for a person.
 const PERSON: &str = "person";
 
+/// Cells of [`ToneGrid`], in pixels.
+const TONE_CELL: usize = 64;
+
+/// A smooth per-channel correction (picture minus fill) measured where `known` says both show
+/// the same backdrop, averaged over cells and carried across the rest (the subjects) as a
+/// membrane: the fill's tone matched to its surroundings with no step at their edge.
+struct ToneGrid {
+    gw: usize,
+    gh: usize,
+    v: Vec<[f32; 3]>,
+}
+
+impl ToneGrid {
+    fn new(picture: &[u8], filled: &[u8], known: impl Fn(usize) -> bool, w: usize, h: usize) -> Self {
+        let (gw, gh) = (w.div_ceil(TONE_CELL).max(1), h.div_ceil(TONE_CELL).max(1));
+        let mut sum = vec![[0.0f64; 3]; gw * gh];
+        let mut count = vec![0u32; gw * gh];
+        for k in 0..w * h {
+            if !known(k) {
+                continue;
+            }
+            let g = (k / w / TONE_CELL) * gw + (k % w) / TONE_CELL;
+            for c in 0..3 {
+                sum[g][c] += f64::from(picture[k * 4 + c]) - f64::from(filled[k * 4 + c]);
+            }
+            count[g] += 1;
+        }
+        let fixed: Vec<bool> = count.iter().map(|n| *n >= 16).collect();
+        let (mut all, mut n) = ([0.0f64; 3], 0u64);
+        for (s, c) in sum.iter().zip(&count) {
+            for i in 0..3 {
+                all[i] += s[i];
+            }
+            n += u64::from(*c);
+        }
+        let mean: [f32; 3] = std::array::from_fn(|i| if n > 0 { (all[i] / n as f64) as f32 } else { 0.0 });
+        let mut v: Vec<[f32; 3]> =
+            (0..gw * gh).map(|g| if fixed[g] { std::array::from_fn(|i| (sum[g][i] / f64::from(count[g])) as f32) } else { mean }).collect();
+        // The cells with no backdrop take their neighbours' average until it settles.
+        for _ in 0..(gw + gh) * 40 {
+            let prev = v.clone();
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let g = gy * gw + gx;
+                    if fixed[g] {
+                        continue;
+                    }
+                    let mut acc = [0.0f32; 3];
+                    let mut m = 0.0f32;
+                    for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                        let (x, y) = (gx as i32 + dx, gy as i32 + dy);
+                        if x < 0 || y < 0 || x >= gw as i32 || y >= gh as i32 {
+                            continue;
+                        }
+                        let q = prev[y as usize * gw + x as usize];
+                        for i in 0..3 {
+                            acc[i] += q[i];
+                        }
+                        m += 1.0;
+                    }
+                    if m > 0.0 {
+                        v[g] = std::array::from_fn(|i| acc[i] / m);
+                    }
+                }
+            }
+        }
+        ToneGrid { gw, gh, v }
+    }
+
+    /// The correction at pixel (`x`, `y`), bilinear between cell centres.
+    fn at(&self, x: usize, y: usize) -> [f32; 3] {
+        let fx = ((x as f32 + 0.5) / TONE_CELL as f32 - 0.5).clamp(0.0, (self.gw - 1) as f32);
+        let fy = ((y as f32 + 0.5) / TONE_CELL as f32 - 0.5).clamp(0.0, (self.gh - 1) as f32);
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.gw - 1), (y0 + 1).min(self.gh - 1));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let g = |x: usize, y: usize| self.v[y * self.gw + x];
+        std::array::from_fn(|i| {
+            let top = g(x0, y0)[i] * (1.0 - tx) + g(x1, y0)[i] * tx;
+            let bottom = g(x0, y1)[i] * (1.0 - tx) + g(x1, y1)[i] * tx;
+            top * (1.0 - ty) + bottom * ty
+        })
+    }
+}
+
 /// The share of the frame over which a detection counts as the whole frame (ignored).
 const WHOLE_FRAME: f32 = 0.9;
 
 /// Fills tried before Split gives up on a background with the subject painted back.
-const FILL_TRIES: u32 = 4;
+const FILL_TRIES: u32 = 5;
 
 /// Of a detection on the filled background, the share inside the hole at which it counts as
 /// the subject painted back (a person beside the hole overlaps it little).
@@ -496,5 +590,25 @@ mod check_tests {
         assert_eq!(check_prompt("object"), "person");
         assert_eq!(check_prompt("person"), "person");
         assert_eq!(check_prompt("the lighthouse"), "the lighthouse");
+    }
+}
+
+#[cfg(test)]
+mod tone_tests {
+    use super::ToneGrid;
+
+    #[test]
+    fn the_tone_grid_carries_the_ring_offset_across_the_hole() {
+        // A 256x256 picture of 100 and a fill of 90: the backdrop is known outside the middle
+        // square only; the correction is +10 everywhere, the middle included.
+        let (w, h) = (256usize, 256usize);
+        let picture = vec![100u8; w * h * 4];
+        let filled = vec![90u8; w * h * 4];
+        let inside = |k: usize| (64..192).contains(&(k % w)) && (64..192).contains(&(k / w));
+        let tone = ToneGrid::new(&picture, &filled, |k| !inside(k), w, h);
+        for (x, y) in [(0, 0), (128, 128), (100, 200), (255, 255)] {
+            let t = tone.at(x, y);
+            assert!(t.iter().all(|v| (v - 10.0).abs() < 0.5), "{x},{y}: {t:?}");
+        }
     }
 }
