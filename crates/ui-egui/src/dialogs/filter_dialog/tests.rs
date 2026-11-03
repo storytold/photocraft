@@ -23,6 +23,18 @@ fn a_unit_after_a_range_bound_does_not_reset_the_range_to_its_fallback() {
 }
 
 #[test]
+fn lens_flare_dialog_centre_is_a_slider_from_0_to_1_defaulting_to_the_middle() {
+    // `"centerX":number=0.5` read as an integer field defaulting to 0: the menu's Lens Flare
+    // landed in the top-left corner and an imported 0.4 centre rounded to 0.
+    let spec = photocraft_engine::commands::find("filter.render.lensFlare").expect("filter.render.lensFlare is registered");
+    let params = parse_spec(spec.params);
+    for key in ["centerX", "centerY"] {
+        let kind = params.iter().find(|p| p.key == key).map(|p| p.kind.clone());
+        assert_eq!(kind, Some(Kind::Range { min: 0.0, max: 1.0, default: 0.5 }), "{key}");
+    }
+}
+
+#[test]
 fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
     // #6323: a press condition installed in the system can be the CMYK working space, as in
     // Photoshop's Color Settings; each working-space menu lists only profiles of its space.
@@ -121,6 +133,8 @@ fn same_target_ignores_parameters_but_nothing_else() {
         break_it(&mut other);
         assert!(!other.same_target(&base), "{other:?} must not pass as {base:?}");
         assert!(!base.same_target(&other));
+        // The canvas's display gate forgives the factor alone (#10474), nothing else.
+        assert_eq!(other.same_target_at_any_scale(&base), other.k != base.k, "{other:?}");
     }
 }
 
@@ -533,6 +547,45 @@ fn every_filter_command_spec_parses() {
     assert!(!has_dialog("filter.stylize.findEdges"));
 }
 
+/// #9423: Select and Mask starts from its defaults each time, as in Photoshop, unless Remember
+/// Settings was on when it was last OKed; turning it off forgets the settings again.
+#[test]
+fn select_and_mask_remembers_settings_only_when_asked() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let cmd = crate::select_mask_view::COMMAND;
+    let fields = |app: &PhotocraftApp, id: u64| app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    let opened = |app: &mut PhotocraftApp| {
+        let id = open(app, cmd).unwrap();
+        let f = fields(app, id);
+        app.ui.dialogs.retain(|d| d.id != id);
+        f
+    };
+    let first = opened(&mut app);
+    assert_eq!(first["smooth"], json!(0.0));
+    assert_eq!(first.get(crate::select_mask_view::REMEMBER), None, "off by default");
+    // OK with Smooth 10 and Remember Settings off: the next one starts from the defaults.
+    let mut f = first.clone();
+    f.insert("smooth".into(), json!(10.0));
+    f.insert(crate::select_mask_view::REMEMBER.into(), json!(false));
+    remember(&mut app, cmd, &f);
+    let next = opened(&mut app);
+    assert_eq!(next["smooth"], json!(0.0), "not remembered");
+    assert_eq!(next[crate::select_mask_view::REMEMBER], json!(false));
+    // With Remember Settings on, the next one starts from them.
+    f.insert(crate::select_mask_view::REMEMBER.into(), json!(true));
+    remember(&mut app, cmd, &f);
+    let next = opened(&mut app);
+    assert_eq!(next["smooth"], json!(10.0), "remembered");
+    assert_eq!(next[crate::select_mask_view::REMEMBER], json!(true));
+    // Turning it off again forgets them.
+    let mut off = next.clone();
+    off.insert(crate::select_mask_view::REMEMBER.into(), json!(false));
+    remember(&mut app, cmd, &off);
+    assert_eq!(opened(&mut app)["smooth"], json!(0.0));
+}
+
 /// Select and Mask's Output To lists all six output targets.
 #[test]
 fn select_and_mask_output_lists_all_six_targets() {
@@ -589,7 +642,7 @@ fn smart_displace_preview_uses_the_map_document() {
             applied.add_document((**d).clone(), None);
         }
         applied.execute(SMART_FILTER_SET_PARAMS, p.clone()).unwrap();
-        let want = photocraft_compose::render(&applied.active().unwrap().doc, doc.bounds()).px;
+        let want = photocraft_compose::render(&applied.active().unwrap().doc, doc.bounds()).into_px();
         let preview = preview_document_for_target(
             &doc,
             layer,
@@ -915,6 +968,13 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
         ("filter.noise.dustAndScratches", json!({"radius": 4.0, "threshold": 0.0})),
         ("filter.noise.reduceNoise", json!({})),
         ("filter.other.custom", json!({"kernel": edge})),
+        // #10474: Minimum and Maximum work on whole-pixel radii (`round()` / `floor()`), so at
+        // k = 4 a typed 1.5 px radius previewed as 0.375 px = 0 px: the proxy showed the untouched
+        // document while OK writes a real 1.5 / 1 px effect. A radius under 2 px previews at k = 1.
+        ("filter.other.minimum", json!({"radius": 1.5, "preserve": "squareness"})),
+        ("filter.other.minimum", json!({"radius": 1.5, "preserve": "roundness"})),
+        ("filter.other.maximum", json!({"radius": 1.5, "preserve": "squareness"})),
+        ("filter.other.maximum", json!({"radius": 1.5, "preserve": "roundness"})),
         ("filter.video.deInterlace", json!({})),
         ("filter.stylize.traceContour", json!({})),
         ("filter.stylize.wind", json!({"method": "blast"})),
@@ -987,6 +1047,32 @@ fn proxy_previews_scale_only_lengths() {
     assert_eq!(preview_factor("filter.pixelate.mosaic", &json!({"cellSize": "x"}), 4), 4);
     let (k, diff) = error("filter.pixelate.mosaic", json!({"cellSize": 10.0}));
     assert!(k == 2 && diff < 0.01, "Mosaic: {diff}");
+    // Roundness at a fractional radius: at 6.5 px, k = 3 reaches floor(2.17) = 2 proxy px along an
+    // axis (6 px), where k = 4 reached floor(1.63) = 1 (4 px), so the chosen factor previews closer
+    // to what OK applies than k = 4 did (#10474).
+    for cmd in ["filter.other.minimum", "filter.other.maximum"] {
+        let p = json!({"radius": 6.5, "preserve": "roundness"});
+        let (k, diff) = error(cmd, p.clone());
+        let applied = preview_document(&doc, Some(bg), cmd, &p, 1).unwrap();
+        let at_four = preview_document(&doc, Some(bg), cmd, &p, 4).unwrap();
+        let four = mean_abs(&every_kth(&applied, 4), &every_kth(&at_four, 1));
+        assert!(k == 3 && diff < four, "{cmd}: k = {k} differs by {diff}, k = 4 by {four}");
+    }
+    // Minimum and Maximum keep at least one proxy pixel of radius (#10474), and a large radius
+    // keeps a proxy instead of a full-size preview that costs minutes at radius 500. Both keep
+    // their whole-pixel radius within 1 px of OK's. Squareness rounds: 6 px is 2 proxy px at k = 3
+    // (6 px), not at k = 4 (8 px); 50 px is 17 at k = 3 (51 px), not 13 at k = 4 (52 px). Roundness's
+    // disc reaches floor(r) along an axis: 6 px is 2 at k = 3 (6 px), not 1 at k = 4 (4 px); 50 px
+    // is 25 at k = 2, not 12 at k = 4 or 16 at k = 3 (48 px).
+    let factors = |cmd: &str, preserve: &str| {
+        [0.2, 1.5, 2.5, 3.9, 6.0, 50.0, 500.0, 9999.0].map(|radius| preview_factor(cmd, &json!({"radius": radius, "preserve": preserve}), 4))
+    };
+    for cmd in ["filter.other.minimum", "filter.other.maximum"] {
+        assert_eq!(factors(cmd, "squareness"), [1, 1, 2, 3, 3, 3, 4, 4], "{cmd} squareness");
+        assert_eq!(factors(cmd, "roundness"), [1, 1, 2, 3, 3, 2, 4, 4], "{cmd} roundness");
+        assert_eq!(preview_factor(cmd, &json!({"radius": 6.0}), 4), 3, "{cmd}: Squareness is the default");
+        assert_eq!(preview_factor(cmd, &json!({"radius": "x"}), 4), 4, "{cmd}: a junk radius keeps the proxy");
+    }
     // Tree's and Picture Frame's sizes are relative, not pixels (and not shown as "px").
     assert!(!is_pixel_param_of("filter.render.tree", "size") && !is_pixel_param_of("filter.render.pictureFrame", "size"));
     assert!(is_pixel_param_of("filter.stylize.extrude", "size"));
@@ -1366,6 +1452,30 @@ fn assign_profile_offers_only_profiles_of_the_documents_colour_mode() {
     assert!(rgb.iter().any(|o| o == "srgb") && !rgb.iter().any(|o| o == "coated-cmyk"), "an RGB document gets RGB profiles");
     let (cmyk, _) = assign_profile_offers(Some("image.mode.cmyk"));
     assert!(cmyk.iter().any(|o| o == "coated-cmyk") && !cmyk.iter().any(|o| o == "srgb"), "a CMYK document gets CMYK profiles");
+}
+
+/// #9087: Artboard from Layers opens at the selected layers' size and the next Artboard N, as
+/// in the reference application, never at a size remembered from other layers.
+#[test]
+fn artboard_from_layers_opens_at_the_selected_layers_size() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 100, "height": 80})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 10, "y": 5, "width": 20, "height": 30})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.session.prefs.edit(|prefs| {
+        prefs.dialogs.insert("layer.new.artboardFromLayers".into(), json!({"width": 1080, "height": 1350}));
+    });
+    let id = open(&mut app, "layer.new.artboardFromLayers").unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!((&fields["width"], &fields["height"]), (&json!(20), &json!(30)), "not the remembered 1080 x 1350");
+    assert_eq!(fields["name"], json!("Artboard 1"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    let boards = doc.artboards();
+    assert_eq!(boards.len(), 1);
+    assert_eq!((boards[0].1, boards[0].2.rect), ("Artboard 1", photocraft_geom::Rect::new(10, 5, 30, 35)));
 }
 
 /// #4951: a profile remembered from a document of another colour mode isn't preselected.

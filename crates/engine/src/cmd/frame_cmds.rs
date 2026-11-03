@@ -54,11 +54,8 @@ fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         Err(e) => {
             // The group couldn't be framed: take the grouping back, leaving nothing to redo and
             // no grouping step to record.
-            s.undo();
+            s.rollback();
             s.journal.truncate(journal);
-            if let Some(st) = s.active_mut() {
-                st.history.clear_redo();
-            }
             Err(e)
         }
     }
@@ -127,10 +124,7 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Some("ellipse")) => true,
         Some(_) => return Err(bad("`shape` must be \"rectangle\" or \"ellipse\"".into())),
     };
-    let content = match p.get("layer") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(LayerId(v.as_u64().ok_or_else(|| bad(format!("`layer` = {v} is not a layer id")))?)),
-    };
+    let content = crate::commands::explicit_layer(s, p)?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let gid = s.edit("New Frame", |doc, active| {
         let mask =
@@ -149,9 +143,15 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
                 crate::layer_multi_cmds::check_group_depth(doc, "New Frame")?;
                 gid
             }
-            None => doc.insert_above(*active, Layer::group(name, vec![])),
+            None => crate::layer_place::insert_new(doc, *active, Layer::group(name, vec![]), crate::layer_place::Place::AutoEditable),
         };
-        doc.layer_mut(gid).ok_or(EngineError::NoLayer(gid))?.mask = Some(mask);
+        let frame = doc.layer_mut(gid).ok_or(EngineError::NoLayer(gid))?;
+        frame.mask = Some(mask);
+        // A frame is one row, as in Photoshop: closed, so the next new layer goes above it rather
+        // than into it.
+        if let LayerContent::Group(g) = &mut frame.content {
+            g.expanded = false;
+        }
         *active = Some(gid);
         Ok(gid)
     })?;
