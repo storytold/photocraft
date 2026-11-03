@@ -348,6 +348,17 @@ fn dds_params_are_none_until_one_is_given() {
     assert_eq!(dds_param(&json!({"ddsCompression": "bc2"}), "file.saveAs").unwrap(), Some(DdsOptions { compression: DdsCompression::Bc2, mipmaps: false }));
 }
 
+/// The layer export's `format` is an extension, never a path: separators and `..` are refused.
+#[test]
+fn layer_export_format_cannot_carry_path_components() {
+    let dir = tmp("fmt-path");
+    let mut s = session(8, 8, 8);
+    for bad in ["png/../../x", "..\\x", "a/b", ""] {
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+    }
+}
+
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
 #[test]
 fn bad_targa_bits_are_refused_before_writing() {

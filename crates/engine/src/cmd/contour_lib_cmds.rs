@@ -47,7 +47,9 @@ fn named(c: Contour, name: &str) -> Contour {
 /// `base`, or `base 2`, `base 3`… so a name is neither a standard contour's nor a user contour's
 /// (a name alone selects a standard contour, so a user contour may not shadow one).
 fn unique(lib: &[Contour], base: &str) -> String {
-    let taken = |n: &str| builtin_contour(n).is_some() || lib.iter().any(|c| name_of(c) == n);
+    // One pass over the library, not one per suffix tried.
+    let used: std::collections::HashSet<&str> = lib.iter().map(name_of).collect();
+    let taken = |n: &str| builtin_contour(n).is_some() || used.contains(n);
     if !taken(base) {
         return base.to_string();
     }
