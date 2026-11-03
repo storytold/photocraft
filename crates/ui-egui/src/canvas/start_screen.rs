@@ -174,7 +174,7 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
         // input is judged as that command, as the menu does: a client confined to its automation
         // roots can't plant a recent file outside them and click it open.
         let gate = match app.services.automation_command.as_ref() {
-            Some(authorize) if app.automation_input => authorize(&format!("file.openRecent.{i}"), &json!({})),
+            Some(authorize) if app.automation_input => authorize(&format!("file.openRecent.{i}"), &serde_json::json!({})),
             _ => Ok(()),
         };
         if let Err(e) = gate.and_then(|()| app.open_path(&path)) {
