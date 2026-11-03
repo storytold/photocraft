@@ -287,7 +287,11 @@ fn bounded_text(input: &[u8], compressed: bool, latin1: bool, limit: usize) -> R
             let start_in = decoder.total_in();
             let start_out = decoder.total_out();
             let Some(tail) = usize::try_from(start_in).ok().and_then(|at| input.get(at..)) else { return Ok((None, output.len())) };
-            let Ok(status) = decoder.decompress(tail, &mut scratch, flate2::FlushDecompress::None) else { return Ok((None, output.len())) };
+            let Ok(status) = decoder.decompress(tail, &mut scratch, flate2::FlushDecompress::None) else {
+                // The backend may write a batch before it reports corruption: charge it too.
+                let written = usize::try_from(decoder.total_out().saturating_sub(start_out)).unwrap_or(usize::MAX);
+                return Ok((None, output.len().saturating_add(written)));
+            };
             let Some(batch) = usize::try_from(decoder.total_out() - start_out).ok().and_then(|len| scratch.get(..len)) else { return Ok((None, output.len())) };
             append(&mut output, batch)?;
             if status == flate2::Status::StreamEnd {
