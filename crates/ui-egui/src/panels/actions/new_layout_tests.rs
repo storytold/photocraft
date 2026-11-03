@@ -218,6 +218,70 @@ fn runtime_shutdown_releases_an_owned_yield_without_saving_the_draft() {
 }
 
 #[test]
+fn modern_spelling_pause_survives_a_later_tick_then_done_or_cancel_finishes_its_owner() {
+    for done in [true, false] {
+        let mut app = app();
+        app.run("type.create", json!({"x": 2, "y": 4, "text": "Teh cat", "size": 12})).unwrap();
+        let id = draft(&mut app, &[("edit.checkSpelling", json!({"allLayers": false})), ("layer.new.layer", json!({"name": "After spelling"}))]);
+        app.run("actions.editor.step", json!({"draft": id, "op": "dialog", "step": 0, "enabled": true})).unwrap();
+        app.run("actions.editor.record", json!({"draft": id})).unwrap();
+        let original = actions_cmds::editor::inspect(&app.session, id).unwrap()["action"].clone();
+        let take = app.session.actions.take;
+        let ctx = egui::Context::default();
+        start_preview(&mut app, id, 0).unwrap();
+        tick_with_quantum(&mut app, &ctx, 1);
+        let token = app.ui.type_panels.spell.as_ref().unwrap().resume.unwrap();
+        assert!(app.ui.dialogs.is_empty(), "Spelling retains its own non-modal panel");
+        assert!(app.paused_playbacks.paused[&token].incremental);
+        assert!(app.session.actions.held_playback.is_some());
+        tick_with_quantum(&mut app, &ctx, 1);
+        assert_eq!(app.ui.type_panels.spell.as_ref().unwrap().resume, Some(token), "a later tick must not orphan Spelling");
+        assert!(app.paused_playbacks.paused.contains_key(&token));
+        if done {
+            crate::type_panels_ui::close_spelling(&mut app);
+            assert!(app.actions_runtime.task.is_some());
+            tick_with_quantum(&mut app, &ctx, 1);
+        } else {
+            cancel(&mut app);
+            assert!(app.ui.type_panels.spell.is_none());
+        }
+        assert_eq!(app.session.active().unwrap().doc.walk().iter().any(|(_, _, layer)| layer.name == "After spelling"), done);
+        assert!(app.session.actions.recording_active());
+        assert_eq!(app.session.actions.take, take);
+        assert!(app.session.actions.held_playback.is_none());
+        assert!(app.paused_playbacks.paused.is_empty());
+        assert_eq!(actions_cmds::editor::inspect(&app.session, id).unwrap()["action"], original, "preview never publishes or records itself");
+        assert!(app.session.actions.list.is_empty());
+        // Cancelling an already completed playback must not close a subsequently opened manual panel.
+        crate::type_panels_ui::open_spelling(&mut app, true).unwrap();
+        assert!(app.ui.type_panels.spell.as_ref().unwrap().resume.is_none());
+        cancel(&mut app);
+        assert!(app.ui.type_panels.spell.is_some());
+    }
+}
+
+#[test]
+fn draft_spelling_records_the_completed_choice_once_on_done() {
+    let mut app = app();
+    app.run("type.create", json!({"x": 2, "y": 4, "text": "Teh cat", "size": 12})).unwrap();
+    let id = draft(&mut app, &[]);
+    app.run("actions.editor.record", json!({"draft": id})).unwrap();
+    crate::type_panels_ui::open_spelling(&mut app, false).unwrap();
+    assert!(
+        actions_cmds::editor::inspect(&app.session, id).unwrap()["action"]["steps"].as_array().unwrap().is_empty(),
+        "opening/listing is not the recorded choice"
+    );
+    crate::type_panels_ui::close_spelling(&mut app);
+    app.run("actions.editor.stop", json!({"draft": id})).unwrap();
+    let value = actions_cmds::editor::inspect(&app.session, id).unwrap();
+    assert_eq!(value["action"]["steps"], json!([["edit.checkSpelling", {"allLayers": false}]]));
+    assert_eq!(value["action"]["dialogs"], json!([0]));
+    crate::type_panels_ui::close_spelling(&mut app);
+    assert_eq!(actions_cmds::editor::inspect(&app.session, id).unwrap(), value, "Done is one-use");
+    assert!(app.session.actions.list.is_empty());
+}
+
+#[test]
 fn search_is_case_insensitive_and_new_group_keeps_classic_set_defaults() {
     let mut app = app();
     app.session.actions.list = vec![Action::new("Warm contrast", Vec::new()), Action::new("Cool shadows", Vec::new())];

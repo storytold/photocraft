@@ -36,7 +36,9 @@ mod files;
 pub(crate) mod sidecar;
 pub use sidecar::ActionMetadata;
 
+mod steps_artboard;
 mod steps_channels;
+mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_gallery;

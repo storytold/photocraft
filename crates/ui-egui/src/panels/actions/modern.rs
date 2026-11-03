@@ -608,7 +608,14 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         .paused_playbacks
         .paused
         .iter()
-        .filter_map(|(token, paused)| (paused.incremental && app.ui.dialogs.iter().all(|dialog| dialog.id != paused.dialog)).then_some(*token))
+        .filter_map(|(token, paused)| {
+            let open = if paused.doc.is_some() {
+                app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(*token))
+            } else {
+                app.ui.dialogs.iter().any(|dialog| dialog.id == paused.dialog)
+            };
+            (paused.incremental && !open).then_some(*token)
+        })
         .collect();
     for token in orphaned {
         abandoned(app, &serde_json::Map::from_iter([(RESUME.into(), json!(token))]));
@@ -643,8 +650,8 @@ fn tick_with_quantum(app: &mut PhotocraftApp, ctx: &egui::Context, quantum: usiz
         if let Some(failed) = value.get("failed") {
             return Err(failed.get("error").and_then(Value::as_str).unwrap_or("Action playback failed").to_string());
         }
-        if let Some(dialog) = value.get("paused").and_then(|paused| paused.get("dialog")).and_then(Value::as_u64) {
-            let token = app.ui.dialog_mut(dialog).and_then(|dialog| dialog.fields.get(RESUME)).and_then(Value::as_u64);
+        if let Some(dialog) = value.get("paused").and_then(waiting_dialog) {
+            let token = paused_token(app, dialog);
             let entry = token.and_then(|token| app.paused_playbacks.paused.get_mut(&token)).ok_or("The action step dialog lost its continuation")?;
             entry.parents.extend(std::mem::take(&mut task.parents));
             entry.used = task.used;
@@ -719,7 +726,14 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     let tokens: Vec<_> = app.paused_playbacks.paused.iter().filter_map(|(token, paused)| paused.incremental.then_some(*token)).collect();
     for token in tokens {
         if let Some(paused) = app.paused_playbacks.paused.remove(&token) {
-            app.ui.close_dialog(paused.dialog);
+            if paused.doc.is_some() {
+                // Only this continuation owns the Spelling panel; a manual/unrelated one stays.
+                if app.ui.type_panels.spell.as_ref().is_some_and(|dialog| dialog.resume == Some(token)) {
+                    app.ui.type_panels.spell = None;
+                }
+            } else {
+                app.ui.close_dialog(paused.dialog);
+            }
             if let Some(owner) = paused.record {
                 owner.finish(&mut app.session);
             }
