@@ -905,7 +905,11 @@ pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image, keep_transpar
     // Resource 1022 counts every sample past the colour channels, the transparency included.
     let first = color_channels.saturating_add(usize::from(img.layout().has_alpha()));
     let quick_id = if quick_last { u16::try_from(first.saturating_add(picked.len()).saturating_sub(1)).ok() } else { None };
-    match channel_resources(img.meta.photoshop_resources.as_deref(), &names, &picked, quick_id) {
+    // Save Transparency on: the transparency is the first extra sample, and Photoshop pairs the
+    // channel resources with every sample past the colour channels, so they list it first
+    // ("Transparency"), as the layered path and the PSD writer do.
+    let transparency = img.layout().has_alpha();
+    match channel_resources(img.meta.photoshop_resources.as_deref(), &names, &picked, quick_id, transparency) {
         Ok(bytes) => img.meta.photoshop_resources = Some(bytes),
         Err(e) => warnings.push(format!("spot channel options were not written to the TIFF: {e}")),
     }
@@ -914,7 +918,13 @@ pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image, keep_transpar
 }
 
 /// Existing Photoshop resources with the channel-name, display-info and quick-mask blocks replaced.
-fn channel_resources(existing: Option<&[u8]>, names: &[&str], channels: &[&AlphaChannel], quick_id: Option<u16>) -> Result<Vec<u8>, IoError> {
+fn channel_resources(
+    existing: Option<&[u8]>,
+    names: &[&str],
+    channels: &[&AlphaChannel],
+    quick_id: Option<u16>,
+    transparency: bool,
+) -> Result<Vec<u8>, IoError> {
     let mut resources = match existing.filter(|b| !b.is_empty()) {
         Some(b) => resources_from_bytes(b)?.0,
         None => Vec::new(),
@@ -922,10 +932,11 @@ fn channel_resources(existing: Option<&[u8]>, names: &[&str], channels: &[&Alpha
     resources.retain(|r| {
         !matches!(r.id, 1006 | 1045 | crate::channel_map::DISPLAY_INFO | crate::channel_map::QUICK_MASK_INFO | crate::channel_map::ALPHA_IDENTIFIERS)
     });
-    resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(names)));
-    resources.push(ImageResource::new(1045, crate::psd_export::unicode_names_resource(names)));
-    resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(channels, false)));
-    resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(false, names.len())));
+    let listed: Vec<&str> = transparency.then_some("Transparency").into_iter().chain(names.iter().copied()).collect();
+    resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(&listed)));
+    resources.push(ImageResource::new(1045, crate::psd_export::unicode_names_resource(&listed)));
+    resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(channels, transparency)));
+    resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(transparency, names.len())));
     if let Some(id) = quick_id {
         let mut data = id.to_be_bytes().to_vec();
         data.push(0);

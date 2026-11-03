@@ -37,6 +37,21 @@ fn extra_samples_tag(bytes: &[u8]) -> Vec<u16> {
     dec.get_tag_u16_vec(tiff::tags::Tag::ExtraSamples).unwrap_or_default()
 }
 
+/// A TIFF's channel resources: the names in 1006, and the byte lengths of DisplayInfo (1077)
+/// and the alpha identifiers (1053).
+fn channel_resources(bytes: &[u8]) -> (Vec<String>, usize, usize) {
+    let tag = photocraft_codecs::tiff_photoshop_tags(bytes).0.expect("resources");
+    let (resources, _) = photocraft_psd::tiff::resources_from_bytes(tag).expect("parse resources");
+    let data = |id: u16| resources.iter().find(|r| r.id == id).map(|r| r.data.clone()).unwrap_or_default();
+    let pascal = data(1006);
+    let (mut at, mut names) = (0usize, Vec::new());
+    while let Some(&len) = pascal.get(at) {
+        names.push(String::from_utf8_lossy(&pascal[at + 1..at + 1 + usize::from(len)]).into_owned());
+        at += 1 + usize::from(len);
+    }
+    (names, data(1077).len(), data(1053).len())
+}
+
 /// The first sample of pixel (0, 0) and its alpha, on the 0–1 scale.
 fn corner(img: &photocraft_codecs::Image) -> (f32, Option<f32>) {
     let f = img.convert(img.layout(), photocraft_codecs::SampleType::F32);
@@ -99,6 +114,12 @@ fn on_keeps_transparency_ahead_of_spot_channels() {
             assert_eq!(back.channels[0].surface.pixel(3, 0)[0], 0.0, "{case}: bare");
             assert_eq!(layer_alpha(&back, 0, 0), 0.0, "{case}");
             assert_eq!(layer_alpha(&back, 1, 1), 1.0, "{case}");
+            // Photoshop pairs the channel resources with every sample past the colour channels,
+            // so both paths list the transparency first: a name, a DisplayInfo record and an id.
+            let (names, display, ids) = channel_resources(&r.bytes);
+            assert_eq!(names, ["Transparency", "White"], "{case}");
+            assert_eq!(display, 4 + 2 * 13, "{case}: DisplayInfo records");
+            assert_eq!(ids, 2 * 4, "{case}: identifiers");
             if layers {
                 // As Photoshop writes it: a positive layer count and `MTrn` first.
                 let (isd, _) = ImageSourceData::from_bytes(photocraft_codecs::tiff_photoshop_tags(&r.bytes).1.unwrap()).unwrap();
@@ -190,6 +211,19 @@ fn pyramid_levels_follow_the_full_image_and_open_the_same_document() {
         let info = photocraft_codecs::tiff_info(&with.bytes).unwrap();
         let kinds: Vec<_> = info.pages.iter().map(|p| (p.kind, p.width)).collect();
         assert_eq!(kinds, [(photocraft_codecs::TiffPageKind::Page, 100), (photocraft_codecs::TiffPageKind::ReducedResolution, 50)], "layers {layers}");
+        // The level holds the image at half size: level (15, 10) covers full-size (30..32, 20..22),
+        // inside the orange fill; (40, 40) is outside it, composited over white (the alpha
+        // channel keeps the transparency out of the file).
+        let level = photocraft_codecs::decode_tiff_page(&with.bytes, 1, &photocraft_codecs::DecodeOptions::default()).unwrap();
+        assert_eq!(level.dimensions(), (50, 50), "layers {layers}");
+        let level = level.convert(level.layout(), photocraft_codecs::SampleType::F32);
+        let px = level.to_f32_samples().unwrap();
+        for ((x, y), want) in [((15, 10), [1.0f32, 0.5, 0.0]), ((40, 40), [1.0, 1.0, 1.0])] {
+            let i = (y * 50 + x) * level.layout().channels();
+            for (c, want) in want.iter().enumerate() {
+                assert!((px[i + c] - want).abs() < 0.01, "layers {layers} ({x}, {y}) channel {c}: {}", px[i + c]);
+            }
+        }
         let a = import("t.tif", &with.bytes).unwrap();
         let b = import("t.tif", &without.bytes).unwrap();
         assert!(!a.warnings.iter().any(|w| w.contains("page")), "layers {layers}: {:?}", a.warnings);

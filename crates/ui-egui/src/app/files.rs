@@ -308,7 +308,12 @@ impl PhotocraftApp {
             && last.0 == "file.saveAs"
             && last.1.get("path").and_then(Value::as_str) == Some(path)
             && let Some(step) = last.1.as_object()
-            && step.keys().all(|k| matches!(k.as_str(), "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat"))
+            && step.keys().all(|k| {
+                matches!(
+                    k.as_str(),
+                    "path" | "tgaBits" | "ddsCompression" | "ddsMipmaps" | "quality" | "jpegFormat" | "tiffCompression" | "tiffTransparency" | "tiffPyramid"
+                )
+            })
         {
             let mut step = step.clone();
             step.remove("path");

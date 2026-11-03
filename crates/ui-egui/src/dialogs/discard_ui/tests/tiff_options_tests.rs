@@ -208,6 +208,27 @@ fn recorded_plain_save_of_a_tiff_writes_the_file_it_is_played_on() {
     assert_eq!(writes.borrow().as_slice(), &[("other.tif".to_string(), asked("lzw", None, false, true))]);
 }
 
+/// A scripted plain Save that passes the TIFF answers skips the prompt and is recorded the same
+/// way: `file.save` with the answers and no path, so playback writes the file it is played on.
+#[test]
+fn recorded_scripted_plain_save_of_a_tiff_has_no_path() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let (mut h, writes) = tiff_app("white", "own.tif");
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "own.tif", "tiffCompression": "none"})).unwrap();
+    h.state_mut().run("actions.record", json!({})).unwrap();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.save", json!({"tiffCompression": "lzw", "tiffPyramid": true})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().tiff_options.is_none(), "the script answered");
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[0].steps, [("file.save".into(), json!({"tiffCompression": "lzw", "tiffPyramid": true}))]);
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveAs", json!({"path": "other.tif", "tiffCompression": "none"})).unwrap();
+    writes.borrow_mut().clear();
+    let played = h.state_mut().run("actions.play", json!({"action": 0})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(writes.borrow().as_slice(), &[("other.tif".to_string(), asked("lzw", None, true, true))]);
+}
+
 /// OK writes the waiting document with its own save settings, even after another tab became
 /// active: its path is what linked smart objects resolve against.
 #[test]
