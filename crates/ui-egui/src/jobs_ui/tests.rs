@@ -1059,6 +1059,62 @@ fn splash_dismisses_on_synthetic_batch_or_pending_captures() {
     assert!(h.state().splash.is_none(), "splash must dismiss when capture is pending");
 }
 
+/// Verifies that shortcuts remain available during splash appearance delay and are suppressed when splash renders.
+#[test]
+fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_when_rendered() {
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+
+    // No splash: shortcuts not blocked
+    assert!(!h.state().splash_shortcuts_blocked(now));
+
+    // 1. Splash is started but within appearance delay (< SPLASH_APPEAR_DELAY).
+    // time_until_appearance is Some, should_render is false.
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    assert!(splash.time_until_appearance(now).is_some());
+    assert!(!splash.should_render(now));
+    h.state_mut().splash = Some(splash);
+
+    // Shortcuts remain unblocked during appearance delay
+    assert!(
+        !h.state().splash_shortcuts_blocked(now),
+        "shortcuts must remain available during appearance delay when splash is not visible"
+    );
+
+    // 2. Splash past appearance delay: actually rendering on screen.
+    // should_render is true, time_until_appearance is None.
+    let rendered_now = now + crate::splash::SPLASH_APPEAR_DELAY + 0.1;
+    let mut splash_rendered = crate::splash::SplashState::new();
+    splash_rendered.start_time = now;
+    assert!(splash_rendered.time_until_appearance(rendered_now).is_none());
+    assert!(splash_rendered.should_render(rendered_now));
+    h.state_mut().splash = Some(splash_rendered);
+
+    // Shortcuts are suppressed while splash renders
+    assert!(
+        h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must be suppressed on frames where splash is rendered"
+    );
+
+    // 3. Synthetic batches bypass splash suppression for automated testing
+    h.state_mut().synthetic_batch = Some(Vec::new());
+    assert!(
+        !h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must not be blocked when synthetic batch is active"
+    );
+    h.state_mut().synthetic_batch = None;
+
+    // 4. Once splash is dismissed, shortcuts are unblocked immediately
+    if let Some(s) = h.state_mut().splash.as_mut() {
+        s.dismiss();
+    }
+    assert!(
+        !h.state().splash_shortcuts_blocked(rendered_now),
+        "shortcuts must be unblocked once splash is dismissed"
+    );
+}
+
 fn identity_app() -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();

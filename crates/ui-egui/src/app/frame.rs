@@ -18,6 +18,16 @@ impl PhotocraftApp {
         }
         self.last_frame_start_ms = gpu_canvas::now_ms();
     }
+
+    /// Returns whether application shortcuts are suppressed by an actively rendered splash screen.
+    ///
+    /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
+    /// is `Some`) and are suppressed only on frames where the splash screen is actually visible.
+    pub fn splash_shortcuts_blocked(&self, now: f64) -> bool {
+        self.synthetic.is_empty()
+            && self.synthetic_batch.is_none()
+            && self.splash.as_ref().is_some_and(|s| s.should_render(now))
+    }
 }
 
 impl PhotocraftApp {
@@ -83,13 +93,13 @@ impl PhotocraftApp {
         // A colour swatch's Color Picker OK hands its colour back to the swatch widget.
         crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
-        // shortcuts see Esc).
-        let splash_active = self.synthetic.is_empty() && self.synthetic_batch.is_none() && self.splash.as_ref().is_some_and(|s| s.is_active(now));
+        // shortcuts see Esc). Shortcuts are suppressed only while the splash is actually rendered.
+        let splash_visible = self.splash_shortcuts_blocked(now);
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
-            if !splash_active && type_tool::in_ui_pass(ctx) {
+            if !splash_visible && type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);
                 } else {
