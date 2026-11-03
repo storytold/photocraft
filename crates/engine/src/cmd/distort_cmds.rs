@@ -87,6 +87,9 @@ pub fn puppet_params(cmd: &str, p: &Value) -> Result<PuppetWarp> {
 }
 
 /// Perspective Warp params (planes, after the optional straighten).
+/// Most planes one Perspective Warp takes (Photoshop's canvas fits a few dozen).
+pub const MAX_PLANES: usize = 64;
+
 pub fn perspective_params(cmd: &str, p: &Value) -> Result<Vec<Plane>> {
     let mut planes: Vec<Plane> = match p.get("planes") {
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("bad `planes` (each {{\"src\":[4×[x,y]],\"dst\":[4×[x,y]]}}): {e}")))?,
@@ -94,6 +97,11 @@ pub fn perspective_params(cmd: &str, p: &Value) -> Result<Vec<Plane>> {
     };
     if planes.is_empty() {
         return Err(bad(cmd, "`planes` is empty"));
+    }
+    // Before the map is built: corner grouping and shared-edge discovery compare every plane
+    // with every other, so a long list stalls the command thread before any pixel work.
+    if planes.len() > MAX_PLANES {
+        return Err(bad(cmd, format!("too many planes (max {MAX_PLANES})")));
     }
     if planes.iter().any(|q| q.src.iter().chain(&q.dst).flatten().any(|v| !v.is_finite())) {
         return Err(bad(cmd, "plane corners must be finite"));

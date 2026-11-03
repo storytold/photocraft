@@ -34,31 +34,37 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
     }
     let background_id = src.background().map(|l| l.id);
     let mut layers = std::mem::take(&mut src.layers);
+    let mut embedded = std::collections::HashMap::new();
     for l in &mut layers {
         if Some(l.id) == background_id {
             l.name = "Layer 0".into();
             l.locks = Default::default();
         }
-        embed_nested(&src.metadata, l);
+        embed_nested(&src.metadata, l, &mut embedded);
     }
     Ok(layers)
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
 /// behind: embed those sources so the nested smart objects keep rendering in the document.
-fn embed_nested(meta: &Metadata, l: &mut Layer) {
+/// `embedded` holds each file found so far by uuid: layers naming the same file share one copy
+/// of its bytes rather than each retaining their own.
+fn embed_nested(meta: &Metadata, l: &mut Layer, embedded: &mut std::collections::HashMap<String, Option<(String, Arc<Vec<u8>>)>>) {
     let found = match &l.content {
-        LayerContent::Smart(SmartObject { source: SmartSource::Linked { path }, .. }) => photocraft_io::linked::find_linked_file(meta, path),
+        LayerContent::Smart(SmartObject { source: SmartSource::Linked { path }, .. }) => embedded
+            .entry(path.clone())
+            .or_insert_with(|| photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))))
+            .clone(),
         _ => None,
     };
-    if let Some(f) = found {
+    if let Some((file_name, bytes)) = found {
         if let LayerContent::Smart(sm) = &mut l.content {
-            sm.source = SmartSource::Embedded { file_name: f.file_name, bytes: Arc::new(f.bytes) };
+            sm.source = SmartSource::Embedded { file_name, bytes };
         }
         detach_psd(l);
     }
     for c in l.children_mut().into_iter().flatten() {
-        embed_nested(meta, c);
+        embed_nested(meta, c, embedded);
     }
 }
 

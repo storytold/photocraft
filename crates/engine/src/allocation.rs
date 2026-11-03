@@ -18,6 +18,11 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Ve
 /// Reserve a vector for a known number of operation results.
 pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
     let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| error(purpose, "requested size overflowed"))?;
+    // Staging covers a surface's content bounds, which two distant tiles can make enormous:
+    // hold it to Memory Usage, as a transform's result is, rather than trying the allocator.
+    if bytes as u64 > crate::transform_cmds::budget() {
+        return Err(error(purpose, &format!("{bytes} bytes exceed the memory budget")));
+    }
     #[cfg(test)]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));

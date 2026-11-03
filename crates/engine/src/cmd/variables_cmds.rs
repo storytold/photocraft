@@ -203,7 +203,8 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
     let file = crate::doc_path::resolve(path).map_err(|why| crate::doc_path::refusal("the image", path, why))?;
     let bytes = std::fs::read(&file).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let src = crate::file_cmds::import(path, &bytes)?;
-    let img = crate::file_cmds::flattened(&src, fmt);
+    // A sparse bundle declares its canvas: refuse one too large to render before flattening.
+    let img = crate::file_cmds::flattened_checked(&src, fmt, "image.variables.applyDataSet")?;
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
     let (tw, th) = (target.width() as f64, target.height() as f64);
     let (sx, sy) = match method {

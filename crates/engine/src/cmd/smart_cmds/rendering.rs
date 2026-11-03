@@ -23,14 +23,13 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
         all => all,
     };
     let bounds = doc.bounds();
-    // An SVG opens with one layer per shape, and every visible one gets its own float frame:
-    // they may take 1 GiB together, the SVG import's own budget, before any is rendered.
-    if photocraft_io::svg::is_svg(bytes) {
-        let visible = u64::try_from(layers.iter().filter(|l| l.visible).count()).unwrap_or(u64::MAX);
-        let frame_bytes = doc.size.area().saturating_mul(16);
-        if visible.saturating_mul(frame_bytes) > 1 << 30 {
-            return Err(EngineError::Other("the SVG has too many shapes for Stack Mode at this size".into()));
-        }
+    // Every visible layer gets its own full-canvas float frame, held together until they are
+    // combined: a compact file of fill layers over a large canvas may declare far more than
+    // the memory budget before any is rendered.
+    let visible = u64::try_from(layers.iter().filter(|l| l.visible).count()).unwrap_or(u64::MAX);
+    let frame_bytes = doc.size.area().saturating_mul(16);
+    if visible.saturating_mul(frame_bytes) > crate::transform_cmds::budget().min(1 << 30) {
+        return Err(EngineError::Other("the smart object's contents have too many layers for Stack Mode at this size".into()));
     }
     let frames: Vec<Vec<[f32; 4]>> = layers
         .iter()
@@ -67,18 +66,21 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
 // ---------- rendering ----------
 
 /// Mix a filter's result with its input, without stacking the same pixel coverage twice.
-pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32) -> Surface {
+pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32) -> Result<Surface> {
     if opacity <= 0.0 {
-        return base.clone();
+        return Ok(base.clone());
     }
     let fmt = base.format();
     let area = base.content_bounds().union(&top.content_bounds());
     let mut out = base.clone();
     if area.is_empty() {
-        return out;
+        return Ok(out);
     }
     let n = fmt.channels();
-    let (b, t) = (base.read_region(area), top.read_region(area));
+    // The union of two sparse surfaces: a filter that moved its result far from the input spans
+    // the empty space between them, so the staging is held to the memory budget.
+    let b = crate::allocation::read_region(base, area, "blending a smart filter")?;
+    let t = crate::allocation::read_region(top, area, "blending a smart filter")?;
     // Alpha-preserving filters edit the same coverage. A non-Normal filter that
     // changes coverage (e.g. blur) must also retain input-only pixels and admit
     // filtered-only pixels, as Photoshop's Smart Filter blend oracles require.
@@ -115,7 +117,7 @@ pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opa
     }
     out.write_region(area, &o);
     out.prune();
-    out
+    Ok(out)
 }
 
 /// Runs the smart filter stack on the placed (unfiltered) content. A filter the session's
@@ -161,7 +163,7 @@ fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect
         Some(out) => out,
         None => cur.clone(),
     };
-    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { Ok(blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0))) }
+    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0)) }
 }
 
 /// The source placed in document pixels, before any smart filter.

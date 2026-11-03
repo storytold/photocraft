@@ -21,7 +21,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, flattened, import, list_images, read_file};
+use crate::file_cmds::{file_name, flattened, flattened_checked, import, list_images, read_file};
 use crate::{EngineError, Result, Session};
 
 /// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
@@ -94,9 +94,11 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
         .into_iter()
         .map(|(name, d)| {
             let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-            Source { name, surf: flattened(&d, fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info }
+            // A sparse bundle declares its canvas: refuse one too large to render before flattening.
+            let surf = flattened_checked(&d, fmt, cmd)?;
+            Ok(Source { name, surf, w: d.size.width as usize, h: d.size.height as usize, exif: info })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok((out, fmt, icc))
 }
 
