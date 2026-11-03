@@ -23,6 +23,7 @@ mod copy_shape_placement;
 mod corpus_atn;
 mod crop_content_aware;
 mod crop_delete_off_background;
+mod live_gradient_frame_damage;
 mod current_affinity_artboards;
 mod duplicate_layer_comps;
 mod duplicate_slices;
