@@ -649,6 +649,10 @@ fn the_time_estimate_is_one_formula_everywhere() {
     // An image template counts the size asked for.
     assert!((estimate_seconds("krea2-turbo/image", 1000, 1000, 1, 0).unwrap() - 7.0).abs() < 0.01);
     assert!(estimate_seconds("nope/x", 1, 1, 1, 0).is_none());
+    // The native Qwen-Image-2.1 edit (Edit's `auto`): three variations of a 1024² photo took
+    // 17.7 s in the app on the 5090 (2026-11-03); the ComfyUI-era numbers said about 2 min.
+    let edit = estimate_seconds("qwen-2.1/edit", 1024, 1024, 3, 0).unwrap();
+    assert!((12.0..30.0).contains(&edit), "{edit}");
     // generate.models reports it per template for an area and count.
     let mut s = Session::new();
     let v = s.execute("generate.models", json!({"probe": false, "width": 1000, "height": 1000, "count": 1})).unwrap();

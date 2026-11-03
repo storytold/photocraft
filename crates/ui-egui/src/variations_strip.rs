@@ -177,8 +177,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                // The Area hands its content last frame's size as the room to fill, and a scroll
+                // area never grows past the room it is given: a strip that first showed one tile
+                // stayed one tile tall (a scroll bar under it) when a run of three came next.
+                // Give the scroll area the whole canvas edge to shrink from instead.
+                let (max_w, max_h) = ((canvas.width() - 2.0 * margin - 30.0).max(TILE), (canvas.height() - 2.0 * margin - 30.0).max(TILE));
                 if vertical {
-                    egui::ScrollArea::vertical().max_height((canvas.height() - 2.0 * margin - 30.0).max(TILE)).show(ui, |ui| {
+                    ui.set_max_height(max_h);
+                } else {
+                    ui.set_max_width(max_w);
+                }
+                if vertical {
+                    egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
                         ui.set_width(TILE);
                         for (n, b) in list.iter().enumerate() {
                             if n > 0 {
@@ -188,7 +198,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         }
                     });
                 } else {
-                    egui::ScrollArea::horizontal().max_width((canvas.width() - 2.0 * margin - 30.0).max(TILE)).show(ui, |ui| {
+                    egui::ScrollArea::horizontal().max_width(max_w).show(ui, |ui| {
                         ui.horizontal(|ui| {
                             for (n, b) in list.iter().enumerate() {
                                 if n > 0 {

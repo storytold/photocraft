@@ -136,6 +136,45 @@ fn a_running_job_shows_placeholders_then_its_tiles_and_a_failed_one_offers_retry
     assert_eq!(bundles(h.state()).len(), 1, "dismissed");
 }
 
+/// The strip's outer rect as egui laid it out last frame.
+fn strip_rect(h: &Harness<'_, PhotocraftApp>) -> egui::Rect {
+    h.ctx.memory(|m| m.area_rect(egui::Id::unique("variations-strip"))).expect("the strip is on screen")
+}
+
+#[test]
+fn a_run_of_three_after_a_run_of_one_shows_all_three_tiles() {
+    // The README capture (2026-11-03): one variation first, then an Edit with three. The strip
+    // kept the one-tile height of its first frame and only the first tile of the three showed.
+    for side in ["right", "bottom"] {
+        let fake = FakeNative::start().unwrap();
+        let mut a = app(&fake.url);
+        a.session.edit_prefs(|p| p.integrations.variations_strip = side.into());
+        a.run("generate.fill", json!({"prompt": "a kite"})).unwrap();
+        let mut h = harness(a);
+        let one = strip_rect(&h);
+        h.state_mut().run("generate.fill", json!({"prompt": "a red kite", "variations": 3})).unwrap();
+        h.run_steps(4);
+        let strip = strip_rect(&h);
+        let v = inspect(h.state(), &h.ctx);
+        let tiles = v["runs"][0]["tiles"].as_array().unwrap().clone();
+        assert_eq!(tiles.len(), 3, "{v}");
+        if side == "right" {
+            assert!(strip.height() > one.height() + 2.0 * TILE, "{side}: the strip grew: {one:?} -> {strip:?}");
+        } else {
+            assert!(strip.width() > one.width() + 2.0 * TILE, "{side}: the strip grew: {one:?} -> {strip:?}");
+        }
+        // Every tile of both runs is inside the strip, none behind a scroll bar.
+        let all: Vec<Value> = v["runs"].as_array().unwrap().iter().flat_map(|r| r["tiles"].as_array().unwrap().clone()).collect();
+        assert_eq!(all.len(), 4);
+        for t in &all {
+            let r = &t["rect"];
+            let (x, y, w, hh) = (r[0].as_f64().unwrap() as f32, r[1].as_f64().unwrap() as f32, r[2].as_f64().unwrap() as f32, r[3].as_f64().unwrap() as f32);
+            assert!(strip.contains_rect(egui::Rect::from_min_size(egui::pos2(x, y), vec2(w, hh))), "{side}: tile {r} outside {strip:?}");
+        }
+        assert!(h.query_by_label("Variation 3 of 3").is_some());
+    }
+}
+
 #[test]
 fn the_preference_moves_the_strip_to_the_bottom_or_hides_it() {
     let fake = FakeNative::start().unwrap();

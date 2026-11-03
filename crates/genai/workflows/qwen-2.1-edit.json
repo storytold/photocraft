@@ -39,9 +39,9 @@
       "max": 9
     },
     "estimatedSeconds": {
-      "base": 8,
-      "perMegapixel": 22,
-      "perReference": 6
+      "base": 1.5,
+      "perMegapixel": 4.5,
+      "perReference": 2
     },
     "pages": [
       "edit"
