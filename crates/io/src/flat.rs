@@ -787,6 +787,7 @@ impl RowConverter {
 /// the image by its pixel size rather than by the bytes that could not be reserved.
 fn alloc_error(e: AllocationError, w: u32, h: u32) -> IoError {
     match e {
+        AllocationError::ScratchRead(e) => IoError::Unsupported(format!("could not read scratch pixels: {e}")),
         AllocationError::LengthMismatch { .. } => IoError::Unsupported("the decoded image does not match its size".into()),
         AllocationError::SizeOverflow => IoError::Unsupported(format!("the {w}×{h} image is too large to open")),
         AllocationError::NotEnoughMemory { .. } => IoError::Unsupported(format!("not enough memory to open the {w}×{h} image")),
