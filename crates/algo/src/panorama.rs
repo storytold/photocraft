@@ -897,6 +897,14 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_level_count_is_clamped() {
+        let (w, h) = (4, 4);
+        let img = RoiImage { x0: 0, y0: 0, w, h, ch: 1, px: vec![0.5; w * h], alpha: vec![1.0; w * h] };
+        let (out, _) = multiband(w, h, &[img], &[vec![1.0; w * h]], usize::MAX);
+        assert_eq!(out.len(), w * h);
+    }
+
+    #[test]
     fn seams_avoid_disagreement_and_multiband_is_seamless() {
         // Two images over a 120×40 strip, overlapping in 40..80; the second has a bright
         // "moving object" at x 50..58 that the first doesn't.

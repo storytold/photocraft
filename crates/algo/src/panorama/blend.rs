@@ -509,7 +509,8 @@ pub fn multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], le
 /// image). Each pixel still adds the bands in image order, so the result doesn't depend on it.
 pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize, budget: usize) -> (Vec<f32>, Vec<f32>) {
     let ch = imgs.first().map_or(1, |i| i.ch);
-    let levels = levels.max(1);
+    // Levels past 1x1 add nothing; 16 (real use is at most 7) keeps `align` and `margin` below in range.
+    let levels = levels.clamp(1, 16);
     let align = 1i32 << (levels - 1);
     // Level sizes of the panorama.
     let mut sizes = vec![(w, h)];
