@@ -184,7 +184,8 @@ pub struct ToolOptions {
     #[serde(default = "yes")]
     pub perspective_crop_grid: bool,
     /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
-    /// (Photoshop's defaults: Rule of Thirds, Auto Show Overlay). See `crop_overlay`.
+    /// (the reference application's defaults: Rule of Thirds, Always Show Overlay, #10894). See
+    /// `crop_overlay`.
     #[serde(default)]
     pub crop_overlay: crate::crop_overlay::CropOverlay,
     #[serde(default)]

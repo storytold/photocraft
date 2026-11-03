@@ -81,8 +81,10 @@ impl CropOverlay {
 #[serde(rename_all = "camelCase")]
 pub enum OverlayShow {
     /// Only while the crop box is being dragged (drawn, moved, resized or turned).
-    #[default]
     Auto,
+    /// The whole time a crop is pending, as the reference application starts out (its Reset Tool
+    /// brings back Always Show Overlay, #10894).
+    #[default]
     Always,
     Never,
 }
@@ -438,7 +440,7 @@ mod tests {
     #[test]
     fn cycling_overlays_and_orientations() {
         let mut o = ToolOptions::default();
-        assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::Thirds, OverlayShow::Auto, 0));
+        assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::Thirds, OverlayShow::Always, 0));
         let mut seen = vec![o.crop_overlay];
         for _ in 0..6 {
             cycle(&mut o);
@@ -539,6 +541,8 @@ mod tests {
     #[test]
     fn the_overlay_shows_by_mode_and_gesture() {
         let mut app = crop_app();
+        // Auto is no longer the default (#10894): set it for the Auto half of this test.
+        app.ui.tool_options.crop_overlay_show = OverlayShow::Auto;
         assert!(current_guides(&app, 300.0, 200.0).is_empty(), "Auto: no guides without a drag");
         app.crop.drag = Some(crate::crop_ui::CropDrag::Move { start: [0.0, 0.0], rect: [0.0, 0.0, 10.0, 10.0] });
         assert_eq!(current_guides(&app, 300.0, 200.0).len(), 4, "Auto: the thirds while dragging");
@@ -555,7 +559,7 @@ mod tests {
     #[test]
     fn old_state_files_get_photoshops_defaults() {
         let o: ToolOptions = serde_json::from_str(r#"{"crop_ratio": "1:1"}"#).unwrap();
-        assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::Thirds, OverlayShow::Auto, 0));
+        assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::Thirds, OverlayShow::Always, 0));
         let o: ToolOptions = serde_json::from_str(r#"{"crop_overlay": "goldenSpiral", "crop_overlay_show": "always", "crop_overlay_orientation": 3}"#).unwrap();
         assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::GoldenSpiral, OverlayShow::Always, 3));
     }
