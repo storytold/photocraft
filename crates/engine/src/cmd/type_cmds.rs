@@ -933,7 +933,8 @@ pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
         return false;
     }
     let Some(st) = s.active() else { return false };
-    let Some(layer) = params.get("layer").and_then(Value::as_u64) else { return false };
+    // An edit that names no layer edits the active one, and coalesces the same.
+    let Some(layer) = params.get("layer").and_then(Value::as_u64).or(st.active_layer.map(|l| l.0)) else { return false };
     if st.active_layer != Some(LayerId(layer)) {
         return false;
     }
@@ -947,16 +948,19 @@ pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
     }) else {
         return false;
     };
-    // The step before made this very layer: the type tool makes a layer, then types in it.
-    let made_here = s.actions.typing_layer == Some((st.doc.id.0, layer));
+    // The step before made, or typed in, this very layer of this document: the type tool makes a
+    // layer, then types in it. Typing in another document is a step of its own.
+    let here = Some((st.doc.id.0, layer));
+    let same_target = s.actions.typing_layer == here;
     let last = s.journal.len().checked_sub(1).filter(|&i| i >= from);
     match last.and_then(|i| s.journal.get_mut(i)) {
-        Some((last_id, p)) if last_id == "type.create" && made_here => p["text"] = json!(text),
-        Some((last_id, p)) if last_id == "type.edit" && p.get("coalesce") == Some(&key) && p.get("layer").is_none() => {
+        Some((last_id, p)) if last_id == "type.create" && same_target => p["text"] = json!(text),
+        Some((last_id, p)) if last_id == "type.edit" && same_target && p.get("coalesce") == Some(&key) && p.get("layer").is_none() => {
             *p = json!({"text": text, "coalesce": key});
         }
         _ => s.journal.push((id.to_string(), json!({"text": text, "coalesce": key}))),
     }
+    s.actions.typing_layer = here;
     true
 }
 

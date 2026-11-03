@@ -465,6 +465,8 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     }
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(crate::actions::selected_action(&app).map(|a| a.steps.len()), Some(1), "one step for the typing");
+    // CodeRabbit on #10730: and that step makes the layer with the text typed.
+    assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
     let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
     fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
@@ -508,6 +510,10 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
     assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
     let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
     assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
+    // CodeRabbit on #10730: each with its reason after the path.
+    for (line, name) in notice.lines.iter().zip(["a.png", "b.png"]) {
+        assert!(line.strip_prefix(&path(name)).is_some_and(|why| !why.trim().is_empty()), "{line}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

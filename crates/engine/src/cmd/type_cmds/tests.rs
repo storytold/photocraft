@@ -895,3 +895,36 @@ fn typing_in_styled_text_keeps_a_step_per_edit() {
     assert_eq!(steps.len(), 2, "{steps:?}");
     assert!(steps.iter().all(|(id, p)| id == "type.edit" && p.get("replace").is_some()), "{steps:?}");
 }
+
+/// CodeRabbit on #10730: one typing session's key going on in another document (a tab switched
+/// mid-session, no step) is a step of its own there, not folded into the first document's.
+#[test]
+fn a_typing_session_going_on_in_another_document_is_a_step_of_its_own() {
+    let mut s = session();
+    let first = s.execute("type.create", json!({"x": 10, "y": 40, "text": "One", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let second = s.execute("type.create", json!({"x": 10, "y": 40, "text": "Two", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name": "Both"})).unwrap();
+    type_in(&mut s, second, 3, "!", "same");
+    assert!(s.set_active(0));
+    type_in(&mut s, first, 3, "?", "same");
+    s.execute("actions.stop", json!({})).unwrap();
+    let texts: Vec<_> = s.actions.list[0].steps.iter().map(|(_, p)| p["text"].as_str().map(str::to_string)).collect();
+    assert_eq!(texts, [Some("Two!".to_string()), Some("One?".to_string())], "one step per document");
+}
+
+/// CodeRabbit on #10730: an edit that names no layer edits the active one, and coalesces like one
+/// that names it.
+#[test]
+fn typing_edits_that_name_no_layer_coalesce_too() {
+    let mut s = session();
+    s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi", "size": 24})).unwrap();
+    s.execute("actions.record", json!({"name": "Plain"})).unwrap();
+    for (i, c) in "!!".chars().enumerate() {
+        s.execute("type.edit", json!({"replace": {"start": 2 + i, "end": 2 + i, "text": c.to_string()}, "coalesce": "s6"})).unwrap();
+    }
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].1["text"], "Hi!!");
+}
