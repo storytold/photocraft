@@ -457,3 +457,38 @@ fn allocation_errors_name_the_image_not_the_reservation() {
     let overflow = alloc_error(AllocationError::SizeOverflow, 70000, 70000).to_string();
     assert!(overflow.contains("70000×70000 image is too large"), "{overflow}");
 }
+
+/// The stream asks the machine before it allocates the first tile: an image that can't fit is
+/// refused, with an error naming its pixel size, and the stream never starts.
+#[test]
+fn a_streamed_png_the_machine_can_not_hold_is_refused_before_any_tile() {
+    let bytes = Png::new(400, 300, 6, 8).bytes();
+    match import_png_streamed_with("t", &bytes, &Interrupt::NONE, 0, || Some(0)) {
+        Err(e) => assert!(e.to_string().contains("not enough memory to open this 400 × 300 px image"), "{e}"),
+        Ok(_) => panic!("opened with no free memory"),
+    }
+    // Unknown free memory is no refusal: the image opens as before.
+    assert!(import_png_streamed_with("t", &bytes, &Interrupt::NONE, 0, || None).unwrap().is_some());
+    // A cancelled stream is cancelled, not refused for the memory it would have needed.
+    let yes = || true;
+    match import_png_streamed_with("t", &bytes, &Interrupt::cancel_only(&yes), 0, || Some(0)) {
+        Err(IoError::Cancelled) => {}
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+}
+
+/// The base (whole-image) PNG path checks the layer's tiles against free memory before they are
+/// allocated, as the streamed path does, for images big enough for the tiles to matter; unknown
+/// free memory is no refusal, and an image below the streaming size opens as it did.
+#[test]
+fn the_whole_image_path_refuses_tiles_the_machine_can_not_hold() {
+    let img = codecs::decode(&Png::new(400, 300, 2, 8).bytes()).unwrap();
+    // Small tiles are not worth a check: with nothing reported free this still opens.
+    assert!(image_to_document_with_memory("t", &img, &Interrupt::NONE, Some(0)).is_ok());
+    match check_layer_fits(4000, 3000, ChannelLayout::Rgba, CSample::U8, Some(0)) {
+        Err(e) => assert!(e.to_string().contains("not enough memory to open this 4000 × 3000 px image"), "{e}"),
+        Ok(()) => panic!("opened with no free memory"),
+    }
+    assert!(check_layer_fits(4000, 3000, ChannelLayout::Rgba, CSample::U8, None).is_ok());
+    assert!(check_layer_fits(4000, 3000, ChannelLayout::Rgba, CSample::U8, Some(1 << 40)).is_ok());
+}

@@ -52,7 +52,11 @@ fn import_flat_impl_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt, stream
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
-        return import_tiff_page_with_limit(name, bytes, None, pixel_limit);
+        // The banded decode takes no interrupt, so a cancel is honoured once it is over, as on
+        // the whole-image path below. A decode error is reported as itself, not as the cancel.
+        let r = import_tiff_page_with_limit(name, bytes, None, pixel_limit)?;
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        return Ok(r);
     }
     // A PNG whose rows come in final order is decoded straight into the tiles.
     let streamed = match stream_min {
@@ -325,8 +329,7 @@ fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: imp
         // The layer's tiles, plus a group as decoded, turned upright, converted and read into a
         // worker's scratch buffer. Linux overcommits, so the tiles below are allocated even when
         // they can't be backed, and writing them would have the process killed: refuse first.
-        let tiles = |n: u32| u64::from(n).div_ceil(TILE_SIZE as u64).saturating_mul(TILE_SIZE as u64);
-        let layer = tiles(w).saturating_mul(tiles(h)).saturating_mul(bpp);
+        let layer = tile_bytes(w, h, bpp);
         let group = bands.group_bytes()? as u64;
         let group_px = group / (layout.channels() as u64 * sample.bytes() as u64).max(1);
         let needed = layer.saturating_add(group.saturating_mul(3)).saturating_add(group_px.saturating_mul(bpp));
@@ -365,6 +368,29 @@ fn tiff_to_document(name: &str, mut bands: codecs::TiffBands<'_>, available: imp
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
     Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+}
+
+/// The bytes of a layer's tiles holding a `w` × `h` image of `bpp` bytes a pixel: tiles are whole
+/// [`TILE_SIZE`] squares, so a small image still rounds up to one.
+fn tile_bytes(w: u32, h: u32, bpp: u64) -> u64 {
+    let tiles = |n: u32| u64::from(n).div_ceil(TILE_SIZE as u64).saturating_mul(TILE_SIZE as u64);
+    tiles(w).saturating_mul(tiles(h)).saturating_mul(bpp)
+}
+
+/// Refuses the layer's tiles of a `w` × `h` image decoded whole when the machine can't hold them
+/// beside the decoded pixels, which are still live: Linux overcommits, so the tiles would be
+/// allocated and writing them would have the process killed. The whole-image counterpart of
+/// [`tiff_to_document`]'s check, which the base PNG path (a small, interlaced, animated or turned
+/// image, see [`import_png_streamed`]) also comes through. Below [`STREAM_MIN_BYTES`] of tiles the
+/// image is one the whole-image path is for because it is small, and the check's reserve, not the
+/// tiles, would decide: those keep opening as they did (as [`needs_memory_check`] does for TIFF).
+fn check_layer_fits(w: u32, h: u32, target_layout: ChannelLayout, csample: CSample, available: Option<u64>) -> Result<(), IoError> {
+    let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
+    let needed = tile_bytes(w, h, bpp);
+    if needed < STREAM_MIN_BYTES {
+        return Ok(());
+    }
+    crate::memory::check_fits(w, h, needed, available)
 }
 
 /// Whether a `w` × `h` flat TIFF is checked against free memory before it opens: only the sizes
@@ -421,8 +447,14 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
 }
 
 /// [`image_to_document`], checking `ctl` before and after the tiles are built (progress 0.95
-/// once they are).
+/// once they are), and refusing tiles the machine can't hold beside the decoded image.
 fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<ImportResult, IoError> {
+    image_to_document_with_memory(name, img, ctl, crate::memory::available())
+}
+
+/// [`image_to_document_with`], with the memory the machine can still use given (see
+/// [`crate::memory::available`]): `None` when it isn't known.
+fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, available: Option<u64>) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
     let (mode, target_layout, depth, csample) = flat_target(img.layout(), img.sample_type());
@@ -431,6 +463,8 @@ fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<Im
     }
     let (w, h) = img.dimensions();
     ctl.check().map_err(|_| IoError::Cancelled)?;
+    // The decoded pixels are already here: check the tiles built beside them before they exist.
+    check_layer_fits(w, h, target_layout, csample, available)?;
     let s = image_surface(img, target_layout, csample)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
@@ -508,8 +542,21 @@ fn flat_document(
 /// decoded image never exists next to them. `None` when it can't be or isn't worth it (under
 /// `min_bytes` decoded): an interlaced or animated file, or one whose `eXIf` (which may follow the image data) calls for turning the pixels
 /// upright; the caller then decodes the whole image as for any other format. Errors, limits and
-/// metadata are the whole-image decoder's.
+/// metadata are the whole-image decoder's. The tiles and one group of rows are checked against
+/// free memory before the first tile exists (see [`crate::memory`]).
 fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
+    import_png_streamed_with(name, bytes, ctl, min_bytes, crate::memory::available())
+}
+
+/// [`import_png_streamed`], with the memory the machine can still use given (see
+/// [`crate::memory::available`]): `None` when it isn't known.
+fn import_png_streamed_with(
+    name: &str,
+    bytes: &[u8],
+    ctl: &Interrupt,
+    min_bytes: u64,
+    available: impl FnOnce() -> Option<u64>,
+) -> Result<Option<ImportResult>, IoError> {
     struct Stream {
         surface: Surface,
         header: codecs::PngHeader,
@@ -518,6 +565,7 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64
     // Rows are worked off 0.02..0.55 so a fallback to the whole-image path, which reports 0.6
     // after its decode, never takes progress backwards.
     let state = std::cell::RefCell::new(None::<Stream>);
+    let mut available = Some(available);
     let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
     let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
         // Decoded size, from the header; a size that overflows is certainly large enough.
@@ -527,13 +575,22 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64
         if bytes.is_some_and(|b| b < min_bytes) {
             return Ok(false);
         }
+        // A cancelled import is reported as such, not as the memory it would have needed.
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
+        // The layer's tiles, plus one group of rows as decoded and as converted into them.
+        // Linux overcommits, so the tiles would be allocated even when they can't be backed, and
+        // writing them would have the process killed: refuse first, as `tiff_to_document` does.
+        let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
+        let src_px = (header.layout.channels() * header.sample.bytes()) as u64;
+        let group = u64::from(header.width).saturating_mul(u64::from(header.height.min(TILE_SIZE as u32)));
+        let needed = tile_bytes(header.width, header.height, bpp).saturating_add(group.saturating_mul(src_px)).saturating_add(group.saturating_mul(bpp));
+        crate::memory::check_fits(header.width, header.height, needed, available.take().and_then(|f| f()))?;
         *state.try_borrow_mut().map_err(|_| busy())? = Some(Stream {
             surface: Surface::new(surface_format(target_layout, csample)),
             header: *header,
             convert: RowConverter::new((header.layout, header.sample), (target_layout, csample)),
         });
-        ctl.check().map_err(|_| IoError::Cancelled)?;
         ctl.progress(0.02);
         Ok(true)
     };
@@ -2138,6 +2195,15 @@ mod fused_tile_tests {
         let after_decode = || calls.fetch_add(1, Ordering::Relaxed) >= 1;
         let r = import_flat_with("t", &bytes, &Interrupt::cancel_only(&after_decode));
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        // The TIFF branch decodes without an interrupt, so a cancel is honoured after the
+        // decode too, never reported as a success.
+        let tiff = codecs::encode(&img, Format::Tiff, &codecs::EncodeOptions::default()).unwrap();
+        let r = import_flat_with("t", &tiff, &Interrupt::cancel_only(&yes));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        // A decode error is still the error, not the cancel that follows it.
+        let broken = tiff.get(..8).unwrap_or_default();
+        let r = import_flat_with("t", broken, &Interrupt::cancel_only(&yes));
+        assert!(matches!(&r, Err(e) if !matches!(e, IoError::Cancelled)), "{:?}", r.map(|_| ()));
     }
 
     #[test]
