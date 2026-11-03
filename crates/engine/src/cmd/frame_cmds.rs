@@ -133,8 +133,10 @@ fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let gid = s.edit("New Frame", |doc, active| {
-        let mask =
-            crate::commands::mask_at_depth(if ellipse { ellipse_mask(rect, doc.bounds()) } else { clip_mask(rect.intersect(&doc.bounds()), doc.depth)? }, doc.depth)?;
+        let mask = crate::commands::mask_at_depth(
+            if ellipse { ellipse_mask(rect, doc.bounds()) } else { clip_mask(rect.intersect(&doc.bounds()), doc.depth)? },
+            doc.depth,
+        )?;
         let name = name.unwrap_or_else(|| doc.next_layer_name("Frame"));
         let gid = match content {
             Some(id) => {
