@@ -490,6 +490,8 @@ impl Default for HistoryLog {
 pub struct FileHandling {
     pub image_previews: Ask,
     pub lowercase_extension: bool,
+    /// The format Save As suggests when the document has no file of its own to keep.
+    pub default_save_format: SaveFormat,
     /// File › Save a Copy suggests the document's own name rather than "<name> copy" (#8080).
     pub do_not_append_copy: bool,
     /// Saves run in the background while you keep working (on), or in the foreground under a
@@ -508,8 +510,6 @@ pub struct FileHandling {
     pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
-    /// The format Save As suggests when the document has no file of its own to keep.
-    pub default_save_format: SaveFormat,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
     pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
@@ -533,6 +533,7 @@ impl Default for FileHandling {
         Self {
             image_previews: Ask::Always,
             lowercase_extension: true,
+            default_save_format: SaveFormat::Psd,
             do_not_append_copy: false,
             save_in_background: true,
             autosave: true,
@@ -542,7 +543,6 @@ impl Default for FileHandling {
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
-            default_save_format: SaveFormat::Psd,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),
