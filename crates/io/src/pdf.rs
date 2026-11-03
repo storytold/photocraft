@@ -189,6 +189,78 @@ fn print_pdf_with_vectors(page: &PrintPage, vectors: &str, selection_font: &sele
     out
 }
 
+/// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
+/// indices of the layers they replace, and the selection font covering exactly their text.
+/// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
+fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::SelectionFont) {
+    enum Candidate<'a> {
+        Ops(String),
+        Text(text::PreparedText<'a>),
+    }
+    let mut candidates = Vec::new();
+    if doc.icc_profile.is_none() {
+        let mut repertoire = std::collections::BTreeSet::new();
+        for (index, layer) in doc.layers.iter().enumerate().rev() {
+            if !layer.visible {
+                continue;
+            }
+            if layer.blend != photocraft_color::BlendMode::Normal
+                || layer.opacity != 1.0
+                || layer.fill_opacity != 1.0
+                || layer.clipped
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || (layer.effects.enabled && !layer.effects.items.is_empty())
+                || layer.excluded_channels != 0
+                || layer.blend_if != Default::default()
+                || layer.advanced != Default::default()
+                || layer.video.is_some()
+            {
+                break;
+            }
+            let candidate = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_path(shape, doc.mode) {
+                    Some(ops) => Candidate::Ops(ops),
+                    None => break,
+                },
+                photocraft_doc::LayerContent::Text(text_layer) => {
+                    let Some(prepared) = text::prepare(text_layer, doc.mode, doc.resolution_dpi) else { break };
+                    for ch in text_layer.text.chars() {
+                        repertoire.insert(ch);
+                        if repertoire.len() > 255 {
+                            break;
+                        }
+                    }
+                    if repertoire.len() > 255 {
+                        break;
+                    }
+                    Candidate::Text(prepared)
+                }
+                _ => break,
+            };
+            candidates.push((index, candidate));
+        }
+    }
+    let selection_font = selection::SelectionFont::new(candidates.iter().filter_map(|(_, candidate)| match candidate {
+        Candidate::Text(prepared) => Some(prepared.text()),
+        Candidate::Ops(_) => None,
+    }));
+    let mut layers = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates {
+        let ops = match candidate {
+            Candidate::Ops(ops) => ops,
+            Candidate::Text(prepared) => match text::ops(&prepared, doc.mode, &selection_font) {
+                Some(ops) => ops,
+                // `prepare` already accepted this layer; keep the whole page raster rather than
+                // emitting some vectors while hiding only part of their sources.
+                None => return (Vec::new(), selection::SelectionFont::default()),
+            },
+        };
+        layers.push((index, ops));
+    }
+    (layers, selection_font)
+}
+
 /// File › Save As / Save a Copy › PDF (#3401): the flattened document, at its print size
 /// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
 /// warning says so — and the embedded profile travels with the image.
@@ -209,39 +281,11 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
     // compositing. Stop at the first unsupported visible layer, since it may depend on the
     // backdrop (adjustments, blend modes, masks, effects, or clipping).
-    let selection_font = selection::SelectionFont::new(doc.layers.iter().filter_map(|layer| match &layer.content {
-        photocraft_doc::LayerContent::Text(text) => Some(text.text.as_str()),
-        _ => None,
-    }));
+    let (vector_layers, selection_font) = collect_vectors(doc);
     let mut backdrop = doc.clone();
-    let mut vector_ops = Vec::new();
-    if doc.icc_profile.is_none() {
-        for layer in backdrop.layers.iter_mut().rev() {
-            if !layer.visible {
-                continue;
-            }
-            if layer.blend != photocraft_color::BlendMode::Normal
-                || layer.opacity != 1.0
-                || layer.fill_opacity != 1.0
-                || layer.clipped
-                || layer.mask.is_some()
-                || layer.vector_mask.is_some()
-                || (layer.effects.enabled && !layer.effects.items.is_empty())
-                || layer.excluded_channels != 0
-                || layer.blend_if != Default::default()
-                || layer.advanced != Default::default()
-                || layer.video.is_some()
-            {
-                break;
-            }
-            let ops = match &layer.content {
-                photocraft_doc::LayerContent::Shape(shape) => shapes::shape_path(shape, doc.mode),
-                photocraft_doc::LayerContent::Text(text_layer) => text::text_ops_with_font(text_layer, doc.mode, doc.resolution_dpi, &selection_font),
-                _ => break,
-            };
-            let Some(ops) = ops else { break };
+    for (index, _) in &vector_layers {
+        if let Some(layer) = backdrop.layers.get_mut(*index) {
             layer.visible = false;
-            vector_ops.push(ops);
         }
     }
     let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
@@ -267,7 +311,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     }
     let scale = 72.0 / dpi;
     let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
-    for ops in vector_ops.iter().rev() {
+    for (_, ops) in vector_layers.iter().rev() {
         vectors.push_str(ops);
     }
     vectors.push_str("Q\n");

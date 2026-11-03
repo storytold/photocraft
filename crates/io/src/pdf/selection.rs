@@ -9,8 +9,20 @@ pub(super) struct SelectionFont {
 }
 
 impl SelectionFont {
+    /// Collect distinct characters until the one-byte code space is exceeded. Stopping there,
+    /// rather than after a fixed number of characters scanned, keeps a long run of repeated
+    /// text from hiding later distinct characters.
     pub(super) fn new<'a>(texts: impl Iterator<Item = &'a str>) -> Self {
-        Self { chars: texts.flat_map(str::chars).take(65536).collect() }
+        let mut chars = BTreeSet::new();
+        'texts: for text in texts {
+            for ch in text.chars() {
+                chars.insert(ch);
+                if chars.len() > 255 {
+                    break 'texts;
+                }
+            }
+        }
+        Self { chars }
     }
 
     pub(super) fn encode(&self, text: &str) -> Option<String> {
@@ -58,5 +70,31 @@ impl SelectionFont {
         );
         let stream = |data: &str| format!("<< /Length {} >>\nstream\n{data}endstream", data.len()).into_bytes();
         vec![font.into_bytes(), stream("1000 0 0 -250 1000 1000 d1\n"), stream(&cmap)]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distinct_characters_after_a_long_repeated_run_still_encode() {
+        let mut text = "a".repeat(70_000);
+        text.push('Ω');
+        let font = SelectionFont::new(std::iter::once(text.as_str()));
+        assert!(font.encode("aΩ").is_some(), "the distinct tail character must survive the repetition");
+    }
+
+    #[test]
+    fn the_one_byte_code_space_fits_exactly_255_distinct_characters() {
+        let fits: String = (0x100u32..0x1FF).filter_map(char::from_u32).collect();
+        assert_eq!(fits.chars().count(), 255);
+        let font = SelectionFont::new(std::iter::once(fits.as_str()));
+        assert!(font.encode(&fits).is_some(), "255 distinct characters fit one-byte codes");
+
+        let too_many: String = (0x100u32..0x200).filter_map(char::from_u32).collect();
+        assert_eq!(too_many.chars().count(), 256);
+        let font = SelectionFont::new(std::iter::once(too_many.as_str()));
+        assert!(font.encode("Ā").is_none(), "256 distinct characters exceed the code space");
     }
 }

@@ -123,6 +123,10 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
         transform: photocraft_geom::Affine::translate(1.0, 1.5),
         ..Default::default()
     };
+    let layout = photocraft_text::TextEngine::new().layout(&text, 72.0);
+    let cluster = layout.clusters.iter().filter(|cluster| !cluster.range.is_empty()).min_by_key(|cluster| cluster.range.start).expect("a shaped cluster");
+    let baseline = layout.lines.get(cluster.line).expect("a line").baseline;
+    let origin = text.transform.apply(photocraft_geom::Point::new(f64::from(cluster.x), f64::from(baseline)));
     d.layers.push(Layer::new("Text", LayerContent::Text(text)));
     let out = export(&d).unwrap();
     check_structure(&out.bytes);
@@ -134,6 +138,8 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
     assert!(content.contains("3 Tr"));
     assert!(content.contains("/FSelect"));
     assert!(has(&out.bytes, "/ToUnicode"));
+    let tm = format!("{} {} Tm", origin.x, origin.y);
+    assert!(content.lines().any(|line| line.ends_with(tm.as_str())), "the translated text starts at {tm}:\n{content}");
     let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
     assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Vector PDF");
     assert!(content.contains("ET"));
@@ -157,8 +163,9 @@ fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
     check_structure(&out.bytes);
     let content = stream_after(&out.bytes, "/Contents 4 0 R");
     let content = String::from_utf8(content).unwrap();
-    assert!(content.contains("1 0 0 rg\n"));
-    assert!(content.contains("0 1 0 rg\n"));
+    let red = content.find("1 0 0 rg\n").expect("the shape fill");
+    let green = content.find("0 1 0 rg\n").expect("the text fill");
+    assert!(red < green, "the lower red shape is painted before the upper green text");
     assert!(content.contains("/Span << /ActualText <FEFF0048> >> BDC"));
     assert!(content.contains("> Tj"));
     assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
@@ -267,4 +274,53 @@ fn text_with_compositing_or_a_profile_stays_in_the_raster_backdrop() {
             assert!(has(&pdf, "[/ICCBased 7 0 R]"));
         }
     }
+}
+
+/// 300 distinct characters: more than the selection font's 255 one-byte codes.
+fn many_distinct_chars() -> String {
+    let text: String = (0x100u32..0x22C).filter_map(char::from_u32).collect();
+    assert_eq!(text.chars().count(), 300);
+    text
+}
+
+#[test]
+fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
+    use photocraft_doc::TextLayer;
+    let many = many_distinct_chars();
+    for case in 0..2 {
+        let mut d = doc(ColorMode::Rgb);
+        // Hidden in the first case; in the second a raster layer with reduced opacity sits above
+        // it, so scanning stops before the oversized repertoire.
+        let mut lower = Layer::new("Lower text", LayerContent::Text(TextLayer { text: many.clone(), size_pt: 12.0, ..Default::default() }));
+        lower.visible = case == 1;
+        d.layers.push(lower);
+        if case == 1 {
+            let fmt = d.pixel_format();
+            let mut blocker = Layer::new("Blocker", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[0.0, 0.0, 0.0, 0.5])));
+            blocker.opacity = 0.5;
+            d.layers.push(blocker);
+        }
+        d.layers.push(Layer::new(
+            "Top text",
+            LayerContent::Text(TextLayer { text: "Hi".into(), size_pt: 12.0, color: photocraft_color::Color::rgb(0.0, 1.0, 0.0), ..Default::default() }),
+        ));
+        let pdf = export(&d).unwrap().bytes;
+        let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+        assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "case {case}: only the top text is selectable");
+        let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+        assert!(content.contains("/ActualText <FEFF0048"), "case {case}: the top text must stay vector:\n{content}");
+        assert!(content.contains("/FSelect"), "case {case}");
+    }
+}
+
+#[test]
+fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
+    use photocraft_doc::TextLayer;
+    let mut d = doc(ColorMode::Rgb);
+    d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "A\nB".into(), size_pt: 12.0, ..Default::default() })));
+    let pdf = export(&d).unwrap().bytes;
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "A\nB", "the paragraph break survives selection");
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    assert!(content.contains("/ActualText <FEFF0041000A"), "the first span carries the break:\n{content}");
 }

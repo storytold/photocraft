@@ -58,7 +58,18 @@ fn straight_horizontal(layer: &TextLayer, dpi: f32) -> bool {
 /// Coordinates are in document pixels with y increasing down; the caller applies the CTM.
 #[cfg(test)]
 fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<String> {
-    text_ops_with_font(layer, mode, dpi, &super::selection::SelectionFont::new(std::iter::once(layer.text.as_str())))
+    let prepared = prepare(layer, mode, dpi)?;
+    let font = super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+    ops(&prepared, mode, &font)
+}
+
+fn channels(mode: ColorMode) -> Option<usize> {
+    match mode {
+        ColorMode::Rgb => Some(3),
+        ColorMode::Grayscale => Some(1),
+        ColorMode::Cmyk => Some(4),
+        _ => None,
+    }
 }
 
 fn outlines_permitted(bytes: &[u8], index: u32) -> bool {
@@ -68,24 +79,76 @@ fn outlines_permitted(bytes: &[u8], index: u32) -> bool {
         && face.is_subsetting_allowed()
 }
 
-pub(super) fn text_ops_with_font(layer: &TextLayer, mode: ColorMode, dpi: f32, selection_font: &super::selection::SelectionFont) -> Option<String> {
-    selection_font.encode(&layer.text)?;
-    if !straight_horizontal(layer, dpi) {
+/// A laid-out text layer that is directly representable, except for the selection font: its
+/// codes depend on every candidate layer's characters, so the caller builds it afterwards.
+pub(super) struct PreparedText<'a> {
+    layer: &'a TextLayer,
+    layout: photocraft_text::TextLayout,
+}
+
+impl PreparedText<'_> {
+    pub(super) fn text(&self) -> &str {
+        self.layer.text.as_str()
+    }
+}
+
+/// Lay `layer` out and check it can be emitted as outlines plus selection text. The selection
+/// font is deliberately not consulted, so a hidden or already-blocked layer cannot make a
+/// supported top layer ineligible.
+pub(super) fn prepare<'a>(layer: &'a TextLayer, mode: ColorMode, dpi: f32) -> Option<PreparedText<'a>> {
+    if !straight_horizontal(layer, dpi) || channels(mode).is_none() {
         return None;
     }
-    let channels = match mode {
-        ColorMode::Rgb => 3,
-        ColorMode::Grayscale => 1,
-        ColorMode::Cmyk => 4,
-        _ => return None,
-    };
     if layer.text.is_empty() {
-        return Some(String::new());
+        return Some(PreparedText { layer, layout: photocraft_text::TextLayout::default() });
     }
-
     let mut engine = photocraft_text::TextEngine::new();
     let layout = engine.layout(layer, dpi);
-    layout_ops(layer, mode, channels, &layout, selection_font)
+    layout_checks(layer, mode, &layout).then_some(PreparedText { layer, layout })
+}
+
+/// Everything that can refuse a laid-out layer independently of the selection font. The text
+/// matrix products are checked here so a layer whose transform overflows is refused during
+/// candidate selection, not halfway through emission.
+fn layout_checks(layer: &TextLayer, mode: ColorMode, layout: &photocraft_text::TextLayout) -> bool {
+    let Some(channels) = channels(mode) else { return false };
+    if synthetic_bold(layout) || layout.faces.iter().any(|face| !outlines_permitted(face.font.data.as_ref(), face.font.index)) {
+        return false;
+    }
+    for style in &layout.styles {
+        let color = style.color.in_mode(mode);
+        if !color.alpha.is_finite() || color.alpha != 1.0 || color.c[..channels].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+            return false;
+        }
+    }
+    let [a, b, c, d, _, _] = layer.transform.m;
+    for cluster in &layout.clusters {
+        let Some(text) = layer.text.get(cluster.range.clone()) else { return false };
+        if text.is_empty() {
+            continue;
+        }
+        let Some(line) = layout.lines.get(cluster.line) else { return false };
+        let height = (line.ascent + line.descent).max(1.0);
+        let width = cluster.advance.abs() / text.chars().count().max(1) as f32;
+        if !height.is_finite() || !width.is_finite() {
+            return false;
+        }
+        let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(cluster.x), f64::from(line.baseline)));
+        if !origin.x.is_finite() || !origin.y.is_finite() {
+            return false;
+        }
+        for coefficient in [a * f64::from(width), b * f64::from(width), -c * f64::from(height), -d * f64::from(height)] {
+            if !coefficient.is_finite() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub(super) fn ops(prepared: &PreparedText<'_>, mode: ColorMode, selection_font: &super::selection::SelectionFont) -> Option<String> {
+    let channels = channels(mode)?;
+    layout_ops(prepared.layer, mode, channels, &prepared.layout, selection_font)
 }
 
 fn layout_ops(
@@ -95,15 +158,8 @@ fn layout_ops(
     layout: &photocraft_text::TextLayout,
     selection_font: &super::selection::SelectionFont,
 ) -> Option<String> {
-    if synthetic_bold(layout) || layout.faces.iter().any(|face| !outlines_permitted(face.font.data.as_ref(), face.font.index)) {
+    if !layout_checks(layer, mode, layout) {
         return None;
-    }
-
-    for style in &layout.styles {
-        let color = style.color.in_mode(mode);
-        if !color.alpha.is_finite() || color.alpha != 1.0 || color.c[..channels].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
-            return None;
-        }
     }
 
     let outlines = photocraft_text::render::glyph_outlines(layout, &layer.transform, None);
@@ -192,15 +248,37 @@ fn layout_ops(
         writeln!(out, "f").ok()?;
     }
 
+    selection_ops(&mut out, layer, layout, selection_font)?;
+    Some(out)
+}
+
+/// Emit the invisible selection text for each shaped cluster. A span reaches the next shaped
+/// cluster, so paragraph breaks and other whitespace omitted by shaping survive
+/// in the selection; the first span also takes leading characters. Without this a multi-line
+/// layer extracts as one run of text.
+fn selection_ops(out: &mut String, layer: &TextLayer, layout: &photocraft_text::TextLayout, selection_font: &super::selection::SelectionFont) -> Option<()> {
     let [a, b, c, d, _, _] = layer.transform.m;
     let mut current_line = None;
     let mut clusters: Vec<_> = layout.clusters.iter().collect();
     clusters.sort_by_key(|cluster| cluster.range.start);
-    for cluster in clusters {
+    let mut first = true;
+    for (i, cluster) in clusters.iter().enumerate() {
         let text = layer.text.get(cluster.range.clone())?;
         if text.is_empty() {
             continue;
         }
+        let span_start = if first { 0 } else { cluster.range.start };
+        first = false;
+        let next_start = clusters.iter().skip(i + 1).find(|next| !next.range.is_empty()).map_or(layer.text.len(), |next| next.range.start);
+        let span_end = next_start.max(cluster.range.end).min(layer.text.len());
+        // Only layout whitespace may extend a cluster. Truncated box text must stay raster,
+        // rather than exposing unpainted source text in the selection plane.
+        if !layer.text.get(span_start..cluster.range.start)?.chars().all(char::is_whitespace)
+            || !layer.text.get(cluster.range.end..span_end)?.chars().all(char::is_whitespace)
+        {
+            return None;
+        }
+        let span = layer.text.get(span_start..span_end)?;
         let line = layout.lines.get(cluster.line)?;
         if current_line != Some(cluster.line) {
             if current_line.is_some() {
@@ -219,18 +297,21 @@ fn layout_ops(
         if !origin.x.is_finite() || !origin.y.is_finite() {
             return None;
         }
-        let hex = actual_text_hex(text);
-        let encoded = selection_font.encode(text)?;
+        let [ta, tb, tc, td] = [a * f64::from(width), b * f64::from(width), -c * f64::from(height), -d * f64::from(height)];
+        if !ta.is_finite() || !tb.is_finite() || !tc.is_finite() || !td.is_finite() {
+            return None;
+        }
+        let hex = actual_text_hex(span);
+        let encoded = selection_font.encode(span)?;
         writeln!(out, "/Span << /ActualText <{hex}> >> BDC").ok()?;
-        writeln!(out, "{} {} {} {} {} {} Tm", a * f64::from(width), b * f64::from(width), -c * f64::from(height), -d * f64::from(height), origin.x, origin.y)
-            .ok()?;
+        writeln!(out, "{ta} {tb} {tc} {td} {} {} Tm", origin.x, origin.y).ok()?;
         writeln!(out, "<{encoded}> Tj\nEMC").ok()?;
     }
 
     if current_line.is_some() {
         writeln!(out, "ET").ok()?;
     }
-    Some(out)
+    Some(())
 }
 
 #[cfg(test)]
@@ -333,5 +414,29 @@ mod tests {
         };
         let ops = text_ops(&layer, ColorMode::Rgb, 72.0).unwrap();
         assert!(ops.contains("h\nf\n"));
+    }
+
+    #[test]
+    fn overflowing_text_matrix_products_are_refused() {
+        // Whitespace shapes no outlines, so the text matrix is the only place the transform
+        // reaches the output. Zero the positions: the products overflow, while the cluster
+        // origin they are added to stays finite.
+        let layer =
+            TextLayer { text: " ".into(), size_pt: 100.0, transform: photocraft_geom::Affine { m: [1e308, 1e308, 0.0, 0.0, 0.0, 0.0] }, ..Default::default() };
+        let mut layout = photocraft_text::TextEngine::new().layout(&layer, 72.0);
+        for cluster in &mut layout.clusters {
+            cluster.x = 0.0;
+            cluster.advance = cluster.advance.abs().max(2.0);
+        }
+        for line in &mut layout.lines {
+            line.baseline = 0.0;
+        }
+        let cluster = layout.clusters.first().expect("a whitespace cluster");
+        let line = layout.lines.get(cluster.line).expect("a line");
+        let origin = layer.transform.apply(photocraft_geom::Point::new(f64::from(cluster.x), f64::from(line.baseline)));
+        assert!(origin.x.is_finite() && origin.y.is_finite(), "the fixture's origin stays finite");
+        let font = super::super::selection::SelectionFont::new(std::iter::once(layer.text.as_str()));
+        assert!(layout_ops(&layer, ColorMode::Rgb, 3, &layout, &font).is_none(), "overflowing Tm coefficients must not be emitted");
+        assert!(text_ops(&layer, ColorMode::Rgb, 72.0).is_none());
     }
 }
