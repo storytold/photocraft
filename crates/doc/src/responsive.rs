@@ -237,9 +237,9 @@ impl ResponsiveLayout {
         for variant in &self.variants {
             if !variant_ids.insert(variant.artboard) {
                 return Err("duplicate responsive variant artboard");
-                if variant.name.len() > 256 {
-                    return Err("responsive variant name exceeds 256 bytes");
-                }
+            }
+            if variant.name.len() > 256 {
+                return Err("responsive variant name exceeds 256 bytes");
             }
             let mut master_layers = HashSet::with_capacity(variant.layers.len());
             let mut variant_layers = HashSet::with_capacity(variant.layers.len());
