@@ -15,7 +15,10 @@
 
 #[path = "cursor_bench/args.rs"]
 mod args;
+#[path = "cursor_bench/stats.rs"]
+mod stats;
 use args::checked_sample_count;
+use stats::percentile;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -89,15 +92,6 @@ struct PerfReport {
     visual_comparisons: Vec<CursorVisualComparison>,
     #[serde(skip_serializing_if = "Option::is_none")]
     contact_sheet_png_base64: Option<String>,
-}
-
-/// Read one nearest-rank percentile from sorted timing samples.
-fn percentile(sorted: &[f64], pct: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let idx = ((sorted.len() as f64 - 1.0) * pct).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
 }
 
 /// Map each benchmark variant to the tool used by the production dispatcher.

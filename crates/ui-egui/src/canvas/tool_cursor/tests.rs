@@ -620,7 +620,10 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
 /// Check glyph bounds, contrast and the fixed Convert Point apex across display scales.
 #[test]
 fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
+    let anchor = convert_point_anchor_centre();
     assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), vec2(12.0, 7.0), "match the painted Convert Point apex");
+    assert_eq!(anchor, vec2(12.0, 7.0), "convert-point.svg anchor square centre");
+    assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), anchor, "the Convert Point hotspot is the SVG anchor square centre");
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
         for variant in super::PenVariant::all() {
             let image = super::pen::rasterize(variant, scale).expect("pen variant rasterizes");
@@ -639,10 +642,11 @@ fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_s
             assert!(has_white, "{variant:?} at {scale} has solid white foreground");
             assert!(has_dark_outline, "{variant:?} at {scale} has dark outline");
 
-            // Verify hotspot matches expected formula: pad + (hot_box / 24.0) * 22.0 * scale
+            // Verify hotspot matches expected formula: pad + (hot_box / 24.0) * 22.0 * scale,
+            // with Convert Point anchored to its SVG square rather than a literal.
             let offset_px = scale;
             let pad = (offset_px + 2.0).ceil();
-            let hot_box = variant.hotspot_in_box();
+            let hot_box = expected_hot_box(variant, anchor);
             let ideal_hx = pad + (hot_box.x / 24.0) * 22.0 * scale;
             let ideal_hy = pad + (hot_box.y / 24.0) * 22.0 * scale;
             let expected_hx = ideal_hx.round() as u16;
@@ -671,6 +675,35 @@ fn pen_variants_have_distinct_hotspots_and_geometry() {
     assert_ne!(standard.rgba, add.rgba, "Add Anchor keeps its plus badge");
     assert_ne!(standard.rgba, delete.rgba, "Delete Anchor keeps its minus badge");
     assert_ne!(add.rgba, delete.rgba, "the two anchor badges differ");
+
+    // Pin the tool-to-variant and variant-to-icon mappings so a swapped badge cannot pass.
+    assert_eq!(super::PenVariant::from_tool(Tool::AddAnchorPoint), Some(super::PenVariant::AddAnchor));
+    assert_eq!(super::PenVariant::from_tool(Tool::DeleteAnchorPoint), Some(super::PenVariant::DeleteAnchor));
+    assert_eq!(super::PenVariant::AddAnchor.icon_name(), "pen-add-anchor", "Add Anchor uses the plus badge");
+    assert_eq!(super::PenVariant::DeleteAnchor.icon_name(), "pen-delete-anchor", "Delete Anchor uses the minus badge");
+}
+
+/// The Convert Point glyph's anchor-square centre, read from the SVG's `<rect>` so a moved square
+/// fails the hotspot tests instead of passing against a stale literal.
+fn convert_point_anchor_centre() -> Vec2 {
+    const SVG: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icons/convert-point.svg"));
+    let rect = SVG
+        .split_once("<rect")
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .map(|(attrs, _)| attrs)
+        .expect("convert-point.svg contains one <rect> anchor square");
+    let attr = |name: &str| -> f32 {
+        rect.split_whitespace()
+            .find_map(|a| a.strip_prefix(name)?.strip_prefix("=\"")?.strip_suffix('"')?.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("convert-point.svg <rect> is missing numeric {name}"))
+    };
+    vec2(attr("x") + attr("width") / 2.0, attr("y") + attr("height") / 2.0)
+}
+
+/// The point each glyph's hotspot is built from: the SVG anchor-square centre for Convert Point,
+/// the icon's own point for every other variant.
+fn expected_hot_box(variant: super::PenVariant, anchor: Vec2) -> Vec2 {
+    if variant == super::PenVariant::ConvertPoint { anchor } else { variant.hotspot_in_box() }
 }
 
 /// Reject invalid or unbounded rasterization scales without allocating a cursor.
@@ -736,6 +769,7 @@ fn pen_cursor_lifecycle_and_fallback_marks_visible_cursor() {
 /// Guard padding, integer hotspot rounding and unclipped cursor ink.
 #[test]
 fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
+    let anchor = convert_point_anchor_centre();
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
         let offset_px = scale;
         let pad = (offset_px + 2.0).ceil() as usize;
@@ -752,7 +786,7 @@ fn pen_bitmaps_geometric_bounds_and_hotspot_quantization_limits() {
             assert_eq!(usize::from(h), expected_side, "{variant:?} height at {scale}");
 
             // 2. Hotspot quantization: OS cursor requires integer hotspot coordinates.
-            let hot_box = variant.hotspot_in_box();
+            let hot_box = expected_hot_box(variant, anchor);
             let ideal_hx = pad as f32 + (hot_box.x / 24.0) * 22.0 * scale;
             let ideal_hy = pad as f32 + (hot_box.y / 24.0) * 22.0 * scale;
 
@@ -826,7 +860,7 @@ fn synthetic_straight_rgba_compositing_math_proves_equivalence() {
 /// including translucent pixels where a premultiplied/straight mixup is visible.
 #[test]
 fn partial_alpha_pen_rgb_recovers_source_glyph_coverage() {
-    let mut checked = 0;
+    let mut partial_alpha = Vec::new();
     for scale in [1.0f32, 1.25, 1.5, 2.0] {
         let pad = (scale + 2.0).ceil() as usize;
         let side = (22.0 * scale).round() as u32;
@@ -834,6 +868,7 @@ fn partial_alpha_pen_rgb_recovers_source_glyph_coverage() {
             let source = crate::icons::rasterize_svg(variant.icon_name(), side, side).unwrap();
             let image = super::pen::rasterize(variant, scale).unwrap();
             let width = usize::from(image.size[0]);
+            let mut checked = 0;
             for (i, pixel) in source.pixels.iter().enumerate() {
                 let out_i = ((i / source.size[0] + pad) * width + i % source.size[0] + pad) * 4;
                 let out = &image.rgba[out_i..out_i + 4];
@@ -849,13 +884,38 @@ fn partial_alpha_pen_rgb_recovers_source_glyph_coverage() {
                 }
                 checked += 1;
             }
+            println!("partial-alpha samples for {variant:?} at {scale}x: {checked}");
+            partial_alpha.push((variant, scale, checked));
         }
     }
-    assert!(checked > 0, "exercise actual translucent foreground edges");
+    // Some glyph/scale pairs composite every edge opaquely; report the per-pair counts so a
+    // minimum can be pinned once CI has shown which pairs always keep translucent edges.
+    assert!(partial_alpha.iter().any(|&(_, _, count)| count > 0), "exercise actual translucent foreground edges: {partial_alpha:?}");
 }
 
 // Exercise the benchmark's actual allocation-admission helper in normal library CI;
 // example test binaries are not part of the workspace nextest gate.
 mod benchmark_args {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cursor_bench/args.rs"));
+}
+
+// Likewise the percentile helper: nearest rank must include the largest sample, so a single slow
+// run cannot hide under the cost gate. Example test binaries are not in the workspace nextest gate.
+mod benchmark_stats {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/cursor_bench/stats.rs"));
+
+    #[test]
+    fn nearest_rank_percentiles_include_the_maximum_for_small_samples() {
+        let samples: Vec<f64> = (1..=12).map(f64::from).collect();
+        assert_eq!(percentile(&samples, 0.95), 12.0, "ceil(0.95 * 12) = 12, the largest sample");
+        assert_eq!(percentile(&samples, 0.99), 12.0);
+        assert_eq!(percentile(&samples, 0.5), 6.0, "lower median of an even count");
+        assert_eq!(percentile(&samples, 0.1), 2.0, "ceil(0.1 * 12) = 2");
+        assert_eq!(percentile(&samples, 0.0), 1.0, "the lowest sample");
+        assert_eq!(percentile(&samples, 1.0), 12.0, "the highest sample");
+        assert_eq!(percentile(&samples, f64::INFINITY), 12.0, "an infinite percentage stays bounded");
+        assert_eq!(percentile(&samples, f64::NAN), 1.0, "a NaN percentage stays bounded");
+        assert_eq!(percentile(&[], 0.95), 0.0, "no samples");
+        assert_eq!(percentile(&[4.5], 0.95), 4.5, "one sample");
+    }
 }
