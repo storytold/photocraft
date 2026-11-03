@@ -283,14 +283,14 @@ fn rdf_end_tag(x: &str) -> Option<(usize, usize)> {
             i = x[i + 9..].find("]]>").map_or(b.len(), |e| i + 12 + e);
             continue;
         }
-        if b[i..].starts_with(b"xmlns") {
-            if let Some((name, next)) = parse_rdf_xmlns(x, i) {
-                if let Some(n) = name.filter(|n| !names.contains(n)) {
-                    names.push(n);
-                }
-                i = next;
-                continue;
+        if b[i..].starts_with(b"xmlns")
+            && let Some((name, next)) = parse_rdf_xmlns(x, i)
+        {
+            if let Some(n) = name.filter(|n| !names.contains(n)) {
+                names.push(n);
             }
+            i = next;
+            continue;
         }
         if b[i..].starts_with(b"</") {
             for name in &names {
@@ -380,12 +380,10 @@ fn rdf_bound_above(x: &str, at: usize) -> bool {
             let after = i + "<rdf:RDF".len();
             // The element name ends at whitespace, `/` or `>`; `<rdf:RDFjunk` is a different name.
             let name_ends = matches!(b.get(after), Some(c) if *c == b' ' || *c == b'\t' || *c == b'\r' || *c == b'\n' || *c == b'/' || *c == b'>');
-            if name_ends {
-                if let Some(end) = x[after..at].find('>') {
-                    let tag = &x[after..after + end];
-                    if tag.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || tag.contains(&format!("xmlns:rdf='{RDF_NS}'")) {
-                        return true;
-                    }
+            if name_ends && let Some(end) = x[after..at].find('>') {
+                let tag = &x[after..after + end];
+                if tag.contains(&format!("xmlns:rdf=\"{RDF_NS}\"")) || tag.contains(&format!("xmlns:rdf='{RDF_NS}'")) {
+                    return true;
                 }
             }
             i = after;
