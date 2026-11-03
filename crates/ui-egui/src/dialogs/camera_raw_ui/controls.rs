@@ -195,7 +195,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let Some(d) = app.camera_raw.as_ref() else { return };
+    let shown_id = egui::Id::new("camera-raw-window-frames");
+    let Some(d) = app.camera_raw.as_ref() else {
+        ctx.data_mut(|m| m.remove::<u8>(shown_id));
+        return;
+    };
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
@@ -214,7 +218,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // the main window, as Photoshop opens it.
     let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
     let size = window_size(monitor);
-    let mut builder = crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size([900.0, 600.0]);
+    let mut builder = crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size([900.0, 600.0]).with_visible(false);
     if let Some(outer) = outer {
         builder = builder.with_position(outer.center() - size / 2.0);
     }
@@ -224,6 +228,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             close = true;
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
+        // The window opens hidden and shows once its second frame is painted, so it doesn't flash
+        // black, then grey, then white while the OS window and the first frame come up.
+        let frames = ui.ctx().data_mut(|m| *m.get_temp_mut_or_default::<u8>(shown_id));
+        if frames < 2 {
+            ui.ctx().data_mut(|m| m.insert_temp(shown_id, frames + 1));
+            if frames == 1 {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+            ui.ctx().request_repaint();
+        }
     });
     if close && app.camera_raw.is_some() {
         cancel(app);
