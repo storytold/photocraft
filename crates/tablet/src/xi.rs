@@ -115,11 +115,11 @@ impl Device {
     }
 }
 
-/// A device name for the bounded, single-line XInput inventory diagnostic.
+/// Escape a device name before capping the single-line XInput inventory diagnostic.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn diagnostic_name(name: &str) -> String {
     const MAX_NAME_CHARS: usize = 128;
-    let mut chars = name.chars();
+    let mut chars = name.chars().flat_map(char::escape_debug);
     let mut name: String = chars.by_ref().take(MAX_NAME_CHARS).collect();
     if chars.next().is_some() {
         let _ = name.pop();
