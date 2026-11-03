@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod halo_extreme_params;
 mod liquify_freeze_formats;
 mod liquify_source_footprint;
 mod retouch_blur_exact;

@@ -578,9 +578,9 @@ impl FilterParams {
             | FilterParams::DustAndScratches { radius, .. }
             | FilterParams::Minimum { radius, .. }
             | FilterParams::Maximum { radius, .. } => Halo::Radius((radius.max(0.0).ceil() as i32).saturating_add(1)),
-            FilterParams::MotionBlur { distance, .. } => Halo::Radius((distance.abs() / 2.0).ceil() as i32 + 2),
+            FilterParams::MotionBlur { distance, .. } => Halo::Radius(((distance.abs() / 2.0).ceil() as i32).saturating_add(2)),
             FilterParams::Mosaic { cell_size } => Halo::Radius((cell_size.max(1.0).ceil() as i32).saturating_add(1)),
-            FilterParams::Emboss { height, .. } => Halo::Radius(height.abs().ceil() as i32 + 2),
+            FilterParams::Emboss { height, .. } => Halo::Radius((height.abs().ceil() as i32).saturating_add(2)),
             FilterParams::FindEdges => Halo::Radius(1),
             FilterParams::AddNoise { .. } | FilterParams::Solarize | FilterParams::Invert | FilterParams::Desaturate => Halo::Radius(0),
             FilterParams::RadialBlur { .. }
