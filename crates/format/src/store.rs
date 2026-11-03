@@ -143,21 +143,30 @@ fn hash_bytes(b: &[u8]) -> Hash {
     blake3::hash(b).to_hex().to_string()
 }
 
+#[cfg(test)]
+/// Encode an untagged preview for comparison with native bundle members.
 fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
     png_tagged(img, None)
 }
 
-/// [`png`] with `icc` embedded.
+/// Encode preview pixels with an optional ICC profile.
 fn png_tagged(img: &Rgba8Image, icc: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut pixels = Vec::new();
     pixels.try_reserve_exact(img.pixels.len()).map_err(|_| FormatError::LimitExceeded("not enough memory for PNG pixels".into()))?;
     pixels.extend_from_slice(&img.pixels);
-    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, pixels)
-        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?
-        .with_icc(icc.map(<[u8]>::to_vec));
+    let mut image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, pixels)
+        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?;
+    if let Some(icc) = icc {
+        let mut owned = Vec::new();
+        owned.try_reserve_exact(icc.len()).map_err(|_| FormatError::LimitExceeded("not enough memory for PNG profile".into()))?;
+        owned.extend_from_slice(icc);
+        image.icc = Some(owned);
+    }
     photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
 }
 
+/// Encode supplied preview pixels with their explicit reduced or full ICC profile.
+/// Reduced encoding errors abort the save; a full-size encoding error omits that optional PNG.
 fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
     let (full, (composite, thumbnail)) = beside(
         opts.full_composite.is_some() && (opts.thumbnail.is_some() || opts.composite.is_some()),
@@ -165,8 +174,8 @@ fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
         || {
             beside(
                 opts.thumbnail.is_some() && opts.composite.is_some(),
-                || opts.composite.as_ref().map(png).transpose(),
-                || opts.thumbnail.as_ref().map(png).transpose(),
+                || opts.composite.as_ref().map(|img| png_tagged(img, opts.preview_icc.as_deref().map(Vec::as_slice))).transpose(),
+                || opts.thumbnail.as_ref().map(|img| png_tagged(img, opts.preview_icc.as_deref().map(Vec::as_slice))).transpose(),
             )
         },
     );
@@ -1510,6 +1519,47 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
     assert!(!dir.join(FULL_COMPOSITE).exists());
     assert!(dir.join(COMPOSITE).exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+/// ZIP and directory rewrites preserve samples and keep reduced and full tags independent.
+fn reduced_preview_profiles_are_explicit_and_independent_of_the_full_profile() {
+    use std::sync::Arc;
+
+    let doc = Document::new("profiles", photocraft_geom::Size::new(2, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let image = Rgba8Image { width: 2, height: 1, pixels: vec![64, 128, 191, 91, 220, 10, 90, 0] };
+    let preview_icc = Arc::new((0..600).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+    let full_icc = vec![17; 400];
+    let dir = std::env::temp_dir().join(format!("pcraft-preview-profiles-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut writer = PcraftWriter::new();
+    for tagged in [true, false] {
+        for full_tagged in [true, false] {
+            let opts = SaveOptions {
+                thumbnail: Some(image.clone()),
+                composite: Some(image.clone()),
+                preview_icc: tagged.then(|| preview_icc.clone()),
+                full_composite: Some(image.clone()),
+                full_composite_icc: full_tagged.then(|| full_icc.clone()),
+            };
+            let (bytes, _) = writer.save_zip(&doc, &opts).unwrap();
+            let zip = ZipReader::new(&bytes).unwrap();
+            writer.save_dir(&doc, &dir, &opts).unwrap();
+            for (name, icc) in [
+                (THUMB, opts.preview_icc.as_deref().map(Vec::as_slice)),
+                (COMPOSITE, opts.preview_icc.as_deref().map(Vec::as_slice)),
+                (FULL_COMPOSITE, opts.full_composite_icc.as_deref()),
+            ] {
+                let png = zip.read_by_name(name, usize::MAX).unwrap();
+                assert_eq!(std::fs::read(dir.join(name)).unwrap(), png);
+                let decoded = photocraft_codecs::decode(&png).unwrap();
+                assert_eq!(decoded.icc.as_deref(), icc, "{name}, reduced={tagged}, full={full_tagged}");
+                assert_eq!(decoded.to_rgba8(), image.pixels);
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[cfg(test)]

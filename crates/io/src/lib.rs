@@ -960,6 +960,8 @@ const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
 
+/// Prepare the requested output; the caller checks scratch health before and after these stages.
+/// Native previews retain compositor RGB samples and embed the profile describing those samples.
 fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
     let ext = extension(name_or_ext);
     if ext == "pdn" {
@@ -997,7 +999,8 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
             ctl.progress(PCRAFT_FULL_COMPOSITE_DONE);
         }
         let full_composite_icc = full_composite.as_ref().map(|_| pcraft_full_composite_icc(doc.as_ref()));
-        let previews = photocraft_format::SaveOptions { thumbnail, composite, full_composite, full_composite_icc };
+        let preview_icc = Some(std::sync::Arc::new(pcraft_full_composite_icc(doc.as_ref())));
+        let previews = photocraft_format::SaveOptions { thumbnail, composite, preview_icc, full_composite, full_composite_icc };
         let bytes = match &opts.pcraft_cache {
             Some(cache) => cache.encode(doc.as_ref(), &previews)?,
             None => photocraft_format::save_to_bytes(doc.as_ref(), &previews)?,
@@ -1051,7 +1054,8 @@ pub fn pcraft_full_composite(doc: &Document) -> Option<photocraft_raster::Rgba8I
     pcraft_full_composite_with(doc, &photocraft_raster::Interrupt::NONE).ok().flatten()
 }
 
-/// The ICC profile of [`pcraft_full_composite`]'s pixels: an RGB document's own profile as stored,
+/// The ICC profile of the compositor's RGB pixels, including [`pcraft_full_composite`] and
+/// native reduced previews: an RGB document's own profile as stored,
 /// a gray document's gray profile as RGB, and sRGB for CMYK, Lab and documents without a usable
 /// profile ([`psd_thumbnail::composite_profile`]).
 pub fn pcraft_full_composite_icc(doc: &Document) -> Vec<u8> {
