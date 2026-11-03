@@ -39,6 +39,9 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, _params: &Value) -> Option<Result
     None
 }
 
+/// The frame delays the Timeline offers, in milliseconds: Photoshop's choices from 0.1 to 10 s.
+const DELAY_CHOICES_MS: [u32; 7] = [100, 200, 500, 1000, 2000, 5000, 10_000];
+
 /// Render the Timeline panel.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.ui.timeline.open {
@@ -109,6 +112,24 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                     ui.separator();
                     ui.label(RichText::new(format!("{:.2}s", tl.time())).color(t.text_dim).monospace());
+                    // How long this frame shows, as under each frame in Photoshop's frame strip:
+                    // pick a time for this frame, or for every frame.
+                    let shown = format!("{:.2}s", tl.frame_ms(tl.current) as f32 / 1000.0);
+                    ui.menu_button(RichText::new(shown).color(t.text).monospace(), |ui| {
+                        let choices = |ui: &mut egui::Ui, all: bool, act: &mut Option<(&str, Value)>| {
+                            for ms in DELAY_CHOICES_MS {
+                                if ui.button(format!("{:.1}s", ms as f32 / 1000.0)).clicked() {
+                                    *act = Some(("timeline.setFrameDelay", json!({ "ms": ms, "all": all })));
+                                    ui.close();
+                                }
+                            }
+                        };
+                        choices(ui, false, &mut act);
+                        ui.separator();
+                        ui.menu_button(tl!("All Frames"), |ui| choices(ui, true, &mut act));
+                    })
+                    .response
+                    .on_hover_text(tl!("Frame Delay"));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::icons::button(ui, "trash", 20.0, false, tl!("Delete Timeline")).clicked() {
                             stop_play = true;
@@ -144,17 +165,21 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some((cmd, p)) = act {
         let _ = app.run(cmd, p);
     }
-    // Playback: auto-advance the playhead at the frame rate (loops).
+    // Playback: auto-advance the playhead, each frame shown for its own delay (loops).
     if app.ui.timeline.playing {
         if let Some(t) = app.session.active().and_then(|d| d.doc.timeline.clone()) {
             let now = ctx.input(|i| i.time);
-            let period = 1.0 / f64::from(t.fps.max(1.0));
-            if now - app.ui.timeline.last_time >= period {
+            let period = f64::from(t.frame_ms(t.current)) / 1000.0;
+            let waited = now - app.ui.timeline.last_time;
+            if waited >= period {
                 app.ui.timeline.last_time = now;
                 let next = (t.current + 1) % t.duration.max(1);
                 let _ = app.run("timeline.setFrame", json!({ "frame": next as u64 }));
+                ctx.request_repaint();
+            } else {
+                // Wake when the frame is due rather than every frame: a frame can show for seconds.
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64((period - waited).max(0.0)));
             }
-            ctx.request_repaint();
         } else {
             app.ui.timeline.playing = false;
         }
