@@ -96,6 +96,12 @@ const BAND_BYTES: usize = 32 << 20;
 fn band_rows(top: i32, h: usize, row_bytes: usize) -> Vec<(usize, usize)> {
     let tile = TILE_SIZE as usize;
     let rows = (BAND_BYTES / row_bytes.max(1)).max(tile) / tile * tile;
+    row_bands(top, h, rows)
+}
+
+// `rows` is a positive multiple of TILE_SIZE. Mask decoding uses one tile row at a
+// time so a narrow but tall mask never needs a whole-plane conversion buffer.
+fn row_bands(top: i32, h: usize, rows: usize) -> Vec<(usize, usize)> {
     // The first band ends at the first tile boundary at least `rows` rows in.
     let into_tile = usize::try_from(top.rem_euclid(TILE_SIZE)).unwrap_or(0);
     let mut out = Vec::new();
@@ -252,21 +258,6 @@ impl Ctx<'_> {
         Placement { id, transform, perspective, warp }
     }
 
-    /// Decodes a PSD layer channel, marking the document damaged if its data is unreadable.
-    fn channel_plane(&mut self, rec: &LayerRecord, id: i16, name: &str) -> Option<Vec<u8>> {
-        rec.channel(id)?;
-        if self.fatal_error.is_some() {
-            return None;
-        }
-        match rec.decode_channel(id, self.file.header.depth, self.file.header.version) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                self.channel_failed(name, id, &e);
-                None
-            }
-        }
-    }
-
     /// Builds a raster surface from the layer channels, leaving the surface empty if
     /// any present channel fails to decode rather than inventing replacement pixels.
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
@@ -337,6 +328,12 @@ impl Ctx<'_> {
                 self.allocation_failed(format!("layer \"{name}\": {error}"));
                 return Surface::new(self.fmt);
             }
+            // The interleaved band goes back to the scratch pool for the next band (and the next
+            // import): it is a fresh page-faulted mmap otherwise. The decoded planes don't: the
+            // decoder allocates its own, so pooled ones would only sit there.
+            drop(refs);
+            photocraft_raster::scratch::give(bytes);
+            drop(planes);
         }
         surf.prune();
         // A white background, a solid fill's cache: one tile per value, shared across layers.
@@ -357,23 +354,42 @@ impl Ctx<'_> {
         };
         let mut surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
         if !rect.is_empty()
+            && self.fatal_error.is_none()
             && let Ok((w, h)) = rect.size()
-            && let Some(plane) = self.channel_plane(rec, id, name)
         {
-            let s = self.mask_fmt.sample;
-            let bytes = match try_interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]) {
-                Ok(bytes) => bytes,
+            let decoder = rec.channel(id)?.row_decoder(w, h, self.file.header.depth, self.file.header.version);
+            match decoder {
                 Err(error) => {
-                    self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
-                    return None;
+                    self.channel_failed(name, id, &error);
                 }
-            };
-            if let Err(error) = surface.try_write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes) {
-                self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
-                return None;
+                Ok(decoder) => {
+                    for (b0, b1) in row_bands(rect.top, h, TILE_SIZE as usize) {
+                        let mut bytes = match decoder.rows(b0, b1) {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                self.channel_failed(name, id, &error);
+                                // Discard bands already written: damaged mask data must not
+                                // leave a plausible but incomplete mask on the layer.
+                                surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
+                                break;
+                            }
+                        };
+                        // A mask is one channel: convert its big-endian samples in place.
+                        // Preserve float bits, including NaN payloads, without a float round trip.
+                        #[cfg(target_endian = "little")]
+                        for sample in bytes.chunks_exact_mut(self.mask_fmt.sample.bytes()) {
+                            sample.reverse();
+                        }
+                        let band = Rect::new(rect.left, rect.top + b0 as i32, rect.right, rect.top + b1 as i32);
+                        if let Err(error) = surface.try_write_interleaved(band, &bytes) {
+                            self.allocation_failed(format!("layer \"{name}\" mask: {error}"));
+                            return None;
+                        }
+                    }
+                    surface.prune();
+                    surface.share_uniform_tiles(&mut self.uniform);
+                }
             }
-            surface.prune();
-            surface.share_uniform_tiles(&mut self.uniform);
         }
         let params = m.parameters;
         Some(LayerMask {
@@ -1106,7 +1122,16 @@ pub(crate) fn can_recover_layers(file: &PsdFile) -> bool {
     import_format(file).1 && !file.layers().is_empty()
 }
 
-fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Document, layered: bool, multichannel: bool, warnings: &mut Vec<String>) -> bool {
+/// Reads the document-level metadata; the second value is the allocation failure that stopped a
+/// pattern from being read, which fails the open.
+fn read_initial_metadata(
+    file: &PsdFile,
+    global: &[PsdGlobalBlock],
+    doc: &mut Document,
+    layered: bool,
+    multichannel: bool,
+    warnings: &mut Vec<String>,
+) -> (bool, Option<String>) {
     let header = &file.header;
     for resource in &file.resources {
         match resource.id {
@@ -1164,7 +1189,11 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
             block.key_str()
         ));
     }
-    doc.patterns = crate::pattern_map::from_global_blocks(doc);
+    let mut alloc_error = None;
+    match crate::pattern_map::try_from_global_blocks(doc) {
+        Ok(patterns) => doc.patterns = patterns,
+        Err(error) => alloc_error = Some(format!("patterns: {error}")),
+    }
     warnings.extend(crate::pattern_map::unpaintable_warnings(&doc.patterns));
     doc.notes = crate::annotations_map::notes_from_blocks(doc);
     if crate::annotations_map::anno_unreadable(doc) {
@@ -1174,7 +1203,7 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
         doc.measurement.scale = scale;
     }
     let _ = layered;
-    damaged
+    (damaged, alloc_error)
 }
 
 /// [`psd_to_document_with`] with the merged image already decoded (by
@@ -1199,6 +1228,30 @@ pub(crate) fn psd_to_document_decoded_integrity(
     psd_to_document_global(file, ctl, decoded, global, false).map(|(doc, warnings, damaged, _)| (doc, warnings, damaged))
 }
 
+/// Admission for a legacy conversion.
+///
+/// A nested conversion spends the enclosing attempt's remaining allowance and never resets it.
+/// A standalone conversion refuses an ineligible file before waiting for the decode gate and
+/// rechecks the fresh measurement once admitted, so a refused file never waits behind an active
+/// decode and a memory drop during the wait is seen before any pixel is decoded.
+fn legacy_admission(est: &crate::psd_budget::PsdMemoryEstimate, ctl: &photocraft_raster::Interrupt) -> Result<crate::psd_gate::AdmissionGuard, crate::IoError> {
+    if crate::psd_gate::is_holding_admission() {
+        // Cancellation is checked before the charge and admission is reentrant here, so a
+        // cancelled or refused nested conversion never spends its parent's allowance.
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+        let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+        crate::psd_gate::consume_attempt_allowance(est.total_bytes)?;
+        return Ok(guard);
+    }
+    let snapshot = || crate::memory::MemorySnapshot::current();
+    // Legacy standalone is unconfirmed: it cannot silently auto allow an estimate above S.
+    crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
+    let guard = crate::psd_gate::acquire_decode_admission(ctl)?;
+    let outcome = crate::memory::evaluate_psd_admission(est.total_bytes, est.tile_bytes, 0, false, None, snapshot())?;
+    crate::psd_gate::set_active_attempt_budget(outcome.authorized_total.saturating_sub(est.total_bytes));
+    Ok(guard)
+}
+
 fn psd_to_document_global(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,
@@ -1209,11 +1262,26 @@ fn psd_to_document_global(
     // Legacy conversion APIs return warnings rather than Result. Reject before metadata or
     // pixels are decoded, and retain the fatal error for the ordinary import path. An import
     // that checked the file against its own limit first (`preflighted`) does not estimate twice.
-    if !preflighted && let Err(error) = crate::psd_budget::check(file, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES) {
-        let message = error.to_string();
-        let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-        return Some((doc, vec![message], true, Some(error)));
-    }
+    let _guard = if !preflighted || !crate::psd_gate::is_holding_admission() {
+        let est = match crate::psd_budget::estimate(file) {
+            Ok(e) => e,
+            Err(error) => {
+                let message = error.to_string();
+                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                return Some((doc, vec![message], true, Some(error)));
+            }
+        };
+        match legacy_admission(&est, ctl) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                let message = error.to_string();
+                let doc = Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                return Some((doc, vec![message], true, Some(error)));
+            }
+        }
+    } else {
+        None
+    };
     let (mode, layered, multichannel, depth) = import_format(file);
     let h = &file.header;
     let mut warnings = Vec::new();
@@ -1221,7 +1289,7 @@ fn psd_to_document_global(
         warnings.push(format!("unknown color mode {}; importing as RGB", h.color_mode.as_u16()));
     }
     let mut doc = Document::new("Untitled", Size::new(h.width, h.height), mode, depth);
-    let damaged = read_initial_metadata(file, &global, &mut doc, layered, multichannel, &mut warnings);
+    let (damaged, pattern_error) = read_initial_metadata(file, &global, &mut doc, layered, multichannel, &mut warnings);
 
     let fmt = doc.pixel_format();
     let cc = fmt.mode.color_channels();
@@ -1249,6 +1317,9 @@ fn psd_to_document_global(
         uniform: Default::default(),
         total: file.layers().len(),
     };
+    if let Some(error) = pattern_error {
+        cx.allocation_failed(error);
+    }
     for (_, key, data) in cx.global.clone().iter().filter(|(_, key, _)| matches!(key, b"FEid" | b"FXid")) {
         // Smart-filter caches can be large: a cancelled open stops between blocks.
         if ctl.cancelled() {
@@ -1338,7 +1409,9 @@ fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mu
 fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Vec<u8>>>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if let Some(Ok(all)) = merged {
         let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();
-        crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings);
+        if let Err(error) = crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings) {
+            cx.fatal_error.get_or_insert(error);
+        }
     }
     if !file.layers().is_empty() {
         cx.warn(format!("Multichannel documents have no layers: {} layer records were not imported", file.layers().len()));
@@ -1380,6 +1453,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     if let Err(error) = surface.try_write_interleaved(canvas, &bytes) {
         return cx.allocation_failed(format!("merged image: {error}"));
     }
+    photocraft_raster::scratch::give(bytes);
     if alpha_idx.is_some() {
         let white = photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 1.0, 1.0]);
         let mut vals = Vec::new();
@@ -1519,6 +1593,7 @@ fn import_extra_channels(import: DecodedImport<'_>, doc: &mut Document, cx: &mut
         if let Err(error) = s.try_write_interleaved(canvas, &raw) {
             return cx.allocation_failed(format!("extra channel {idx}: {error}"));
         }
+        photocraft_raster::scratch::give(raw);
         s.prune();
         let name = names.get(k).cloned().unwrap_or_else(|| format!("Alpha {}", k + 1));
         doc.channels.push(AlphaChannel::new(name, s));
