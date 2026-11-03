@@ -1143,6 +1143,7 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
 #[test]
 fn a_symlinked_preset_entry_is_refused_not_written_through() {
     let dir = TempDir::new("symlink");
+    std::fs::create_dir_all(&dir.0).unwrap();
     let outside = dir.0.join("outside.txt");
     std::fs::write(&outside, b"victim").unwrap();
     std::os::unix::fs::symlink(&outside, dir.0.join("planted.json")).unwrap();
