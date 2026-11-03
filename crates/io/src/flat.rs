@@ -6,7 +6,7 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
@@ -522,7 +522,7 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
 
 /// [`document_to_image`] with an optional custom [`BandRenderer`].
 pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
-    document_to_image_for_with_renderer(doc, warnings, true, false, renderer)
+    document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, renderer)
 }
 
 fn document_to_image_for_with_renderer(
@@ -530,6 +530,7 @@ fn document_to_image_for_with_renderer(
     warnings: &mut Vec<String>,
     cmyk_target: bool,
     lab_target: bool,
+    ctl: &Interrupt<'_>,
     renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<Image, IoError> {
     let src = FlatSource::new(doc, warnings, cmyk_target, lab_target)?;
@@ -540,7 +541,7 @@ fn document_to_image_for_with_renderer(
     let bytes = src.sample.bytes();
     let mut data = try_buffer((w as usize) * (h as usize), src.layout(alpha).channels() * bytes)?;
     let mut opaque = true;
-    src.bands(alpha, renderer, |_, band, translucent| {
+    src.bands(alpha, ctl, renderer, |_, band, translucent| {
         opaque &= !translucent;
         data.extend_from_slice(&band);
         Ok(())
@@ -559,7 +560,7 @@ fn document_to_preview_with_renderer(doc: &Document, warnings: &mut Vec<String>,
     let (w, h) = (doc.size.width, doc.size.height);
     let pixels = (w as usize).checked_mul(h as usize).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
     let mut data = try_buffer(pixels, ChannelLayout::Rgba.channels())?;
-    src.bands(true, renderer, |_, band, _| {
+    src.bands(true, &Interrupt::NONE, renderer, |_, band, _| {
         data.extend_from_slice(&band);
         Ok(())
     })?;
@@ -584,7 +585,8 @@ pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dy
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                r.push_diagnostic(fallback_warning.clone());
+                // Keep the fallback reason in this export's warnings only. Queuing it on the
+                // renderer would leak it into the next successful GPU export's diagnostics.
                 let mut cpu_result = export_preview_png_with_renderer(doc, None)?;
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
@@ -710,7 +712,8 @@ impl<'a> FlatSource<'a> {
     fn bands(
         &self,
         alpha: bool,
-        renderer: Option<&mut dyn BandRenderer>,
+        ctl: &Interrupt<'_>,
+        mut renderer: Option<&mut dyn BandRenderer>,
         mut sink: impl FnMut(u32, Vec<u8>, bool) -> Result<(), IoError>,
     ) -> Result<(), IoError> {
         let doc = self.doc;
@@ -719,6 +722,11 @@ impl<'a> FlatSource<'a> {
         if let Some(s) = self.native {
             // Native path: keep model and depth. The surface's encoded samples are the codec's raw
             // native-endian samples, copied a band of rows at a time (alpha dropped when opaque).
+            if let Some(r) = renderer.as_mut() {
+                r.push_diagnostic(
+                    "GPU rendering unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU".into(),
+                );
+            }
             let ch = fmt.channels();
             let bps = fmt.sample.bytes();
             let keep = (ch - 1) * bps;
@@ -757,6 +765,9 @@ impl<'a> FlatSource<'a> {
             sink(rows, data, translucent)
         };
         if self.inks {
+            if let Some(r) = renderer.as_mut() {
+                r.push_diagnostic("GPU rendering unsupported: CMYK ink mixing uses the CPU compositor; falling back to CPU".into());
+            }
             // Mixed on ink values, rendered and quantised in bands.
             let rendered = photocraft_compose::cmyk::render_cmyk_bands(doc, doc.bounds(), self.rows, |band| -> Result<(), IoError> {
                 let translucent = band.px.iter().any(|p| p[4] < 1.0 || p[4].is_nan());
@@ -819,7 +830,7 @@ impl<'a> FlatSource<'a> {
         };
 
         if let Some(r) = renderer {
-            r.render_bands(doc, doc.bounds(), self.rows, &mut |band| render_one_band(band.rect, band.pixels))?;
+            r.render_bands(doc, doc.bounds(), self.rows, ctl, &mut |band| render_one_band(band.rect, band.pixels))?;
         } else {
             photocraft_compose::render_bands(doc, doc.bounds(), self.rows, |band| render_one_band(band.rect, band.into_px()))?;
         }
@@ -928,7 +939,7 @@ pub fn export_flat_with_renderer(
         let mut warnings = Vec::new();
         let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
         let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, Some(r)) {
+        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, Some(r)) {
             Ok(mut img) => {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 ctl.progress(composite_share(format));
@@ -951,7 +962,8 @@ pub fn export_flat_with_renderer(
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                r.push_diagnostic(fallback_warning.clone());
+                // Keep the fallback reason in this export's warnings only. Queuing it on the
+                // renderer would leak it into the next successful GPU export's diagnostics.
                 let mut cpu_result = export_flat_with_renderer(doc, format, opts, ctl, None)?;
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
@@ -963,7 +975,7 @@ pub fn export_flat_with_renderer(
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, None)?;
+    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, None)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(composite_share(format));
     strip_xmp(&mut img.meta, opts);
@@ -1092,7 +1104,8 @@ pub fn export_png_streamed_with_renderer(
             Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                r.push_diagnostic(fallback_warning.clone());
+                // Keep the fallback reason in this export's warnings only. Queuing it on the
+                // renderer would leak it into the next successful GPU export's diagnostics.
                 let mut cpu_result = export_png_streamed_with_renderer(doc, opts, ctl, rows, None)?;
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
@@ -1180,7 +1193,7 @@ fn stream_png_with_renderer(
     let mut bytes = Vec::new();
     let mut png = codecs::PngRows::new(&mut bytes, &first, h, &encode)?;
     let (mut done, mut translucent) = (0u64, false);
-    let streamed = src.bands(alpha, renderer, |rows, data, see_through| {
+    let streamed = src.bands(alpha, ctl, renderer, |rows, data, see_through| {
         if see_through && !alpha {
             translucent = true;
             return Err(IoError::Cancelled);

@@ -443,13 +443,38 @@ impl Headless {
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
         self.sync_jobs();
-        if wait {
-            return Ok(self.session.execute(id, params)?);
+        // Commands such as `file.close`, `file.closeAll` and `file.closeOthers` remove
+        // documents directly through the session, so release their GPU caches here too.
+        let before = self.document_ids();
+        let result = if wait {
+            self.session.execute(id, params).map_err(AutomationError::from)
+        } else {
+            self.session
+                .start(id, params)
+                .map(|started| match started {
+                    photocraft_engine::jobs::Started::Done(v) => v,
+                    photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
+                })
+                .map_err(AutomationError::from)
+        };
+        self.forget_removed_documents(&before);
+        result
+    }
+
+    fn document_ids(&self) -> Vec<photocraft_doc::DocId> {
+        self.session.documents().iter().map(|st| st.doc.id).collect()
+    }
+
+    /// Release the writer and GPU caches of every document a command removed.
+    fn forget_removed_documents(&mut self, before: &[photocraft_doc::DocId]) {
+        let after: std::collections::HashSet<_> = self.document_ids().into_iter().collect();
+        let removed: Vec<_> = before.iter().copied().filter(|id| !after.contains(id)).collect();
+        for id in removed {
+            self.writers.remove(&id.0);
+            if let Some(r) = self.renderer.as_mut() {
+                r.forget_document(id);
+            }
         }
-        Ok(match self.session.start(id, params)? {
-            photocraft_engine::jobs::Started::Done(v) => v,
-            photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
-        })
     }
 }
 

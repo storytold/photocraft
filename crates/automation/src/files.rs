@@ -117,9 +117,21 @@ pub fn save_with_renderer(
         }
         return Ok(warnings);
     }
-    let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
-    // Crash-safe: a failed write never destroys the previous file.
-    photocraft_format::atomic_write(path, &r.bytes).map_err(|e| AutomationError::Io(e.to_string()))?;
+    let Some(renderer) = renderer else {
+        let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, None)?;
+        // Crash-safe: a failed write never destroys the previous file.
+        photocraft_format::atomic_write(path, &r.bytes).map_err(|e| AutomationError::Io(e.to_string()))?;
+        return Ok(r.warnings);
+    };
+    let r = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, Some(&mut *renderer))?;
+    if let Err(e) = photocraft_format::atomic_write(path, &r.bytes) {
+        // Encoding drained the renderer's diagnostics into `r.warnings`; put them back so the
+        // caller can still report the adapter or fallback reason alongside the write error.
+        for warning in &r.warnings {
+            renderer.push_diagnostic(warning.clone());
+        }
+        return Err(AutomationError::Io(e.to_string()));
+    }
     Ok(r.warnings)
 }
 

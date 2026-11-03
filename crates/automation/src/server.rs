@@ -1,6 +1,7 @@
 //! The MCP server (rmcp). Tool names use `snake_case` with underscores (dots
 //! are not valid in every client's tool-name grammar).
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -841,7 +842,8 @@ impl PhotocraftMcp {
             .headless_op(move |h| {
                 let res = h.render_png(p.index, max);
                 for d in h.drain_diagnostics() {
-                    eprintln!("warning: {d}");
+                    // Ignore a failed stderr write: the completed render must still be returned.
+                    let _ = writeln!(std::io::stderr(), "warning: {d}");
                 }
                 res
             })
@@ -1139,7 +1141,8 @@ impl PhotocraftMcp {
                 let path = p.path.map(PathBuf::from);
                 let res = h.save(p.index, path.as_deref(), p.format.as_deref(), &opts);
                 for d in h.drain_diagnostics() {
-                    eprintln!("warning: {d}");
+                    // Ignore a failed stderr write: the completed save must still be returned.
+                    let _ = writeln!(std::io::stderr(), "warning: {d}");
                 }
                 res
             })

@@ -2,14 +2,16 @@
 
 use photocraft_doc::{DocId, Document};
 use photocraft_geom::Rect;
+use photocraft_raster::Interrupt;
 
 use crate::IoError;
 
 /// A horizontal band of rendered straight-alpha RGBA float samples (`[R, G, B, A]`).
 ///
 /// Semantics:
-/// - Color space: working color space of the document composite (sRGB for RGB documents,
-///   sRGB working composite for Lab and Grayscale, or profile-converted composite for CMYK).
+/// - Color space: the document's embedded colour profile for RGB documents (sRGB when the
+///   document is untagged), sRGB working composite for Lab and Grayscale, or profile-converted
+///   composite for CMYK.
 /// - Alpha representation: straight (unpremultiplied) alpha in `pixels[..][3]`, where `1.0` is
 ///   fully opaque and `0.0` is fully transparent. Color channels `pixels[..][0..3]` carry
 ///   unpremultiplied sample values.
@@ -74,8 +76,16 @@ impl RenderError {
 /// A provider of rendered composite bands for flat export.
 pub trait BandRenderer: Send {
     /// Renders `doc` over `rect` in horizontal bands, passing each band to `sink`.
-    /// `band_rows`: preferred rows per band (0 to let provider choose).
-    fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError>;
+    /// `band_rows`: preferred rows per band (0 to let provider choose). `ctl` reports
+    /// cancellation; a renderer that waits for the device polls it between bounded waits.
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError>;
 
     /// Drain renderer diagnostic messages (e.g. backend/adapter status once, fallback reasons).
     fn drain_diagnostics(&mut self) -> Vec<String> {
@@ -95,7 +105,15 @@ pub trait BandRenderer: Send {
 pub struct CpuRenderer;
 
 impl BandRenderer for CpuRenderer {
-    fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        ctl.check().map_err(|_| RenderError::Cancelled)?;
         photocraft_compose::render_bands(doc, rect, band_rows, |buf| sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })).map_err(RenderError::sink)
     }
 }

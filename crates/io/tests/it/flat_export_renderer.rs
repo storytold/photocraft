@@ -7,8 +7,8 @@ use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size};
 use photocraft_io::{
-    BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError, export_flat, export_flat_with_renderer, export_png_streamed_with_renderer,
-    export_preview_png_with_renderer,
+    BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
+    export_png_streamed_with_renderer, export_preview_png_with_renderer,
 };
 use photocraft_raster::{Interrupt, Surface};
 
@@ -21,6 +21,33 @@ fn synthetic_doc() -> Document {
     top.blend = BlendMode::Multiply;
     doc.layers.push(top);
     doc
+}
+
+#[derive(Default)]
+struct RecordingRenderer {
+    diagnostics: Vec<String>,
+}
+
+impl BandRenderer for RecordingRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        let mut cpu = CpuRenderer;
+        cpu.render_bands(doc, rect, band_rows, ctl, sink)
+    }
+
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    fn push_diagnostic(&mut self, diagnostic: String) {
+        self.diagnostics.push(diagnostic);
+    }
 }
 
 struct FailingRenderer {
@@ -36,7 +63,14 @@ impl FailingRenderer {
 }
 
 impl BandRenderer for FailingRenderer {
-    fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        _ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
         let rows = if band_rows > 0 { band_rows } else { 32 };
         photocraft_compose::render_bands(doc, rect, rows, |buf| {
             let count = self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -68,6 +102,7 @@ impl BandRenderer for GeometryViolatingRenderer {
         _doc: &Document,
         rect: Rect,
         _band_rows: i32,
+        _ctl: &Interrupt<'_>,
         sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
     ) -> Result<(), RenderError> {
         let (w, h) = (rect.width(), rect.height());
@@ -86,6 +121,82 @@ impl BandRenderer for GeometryViolatingRenderer {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[test]
+fn single_layer_and_cmyk_exports_report_that_the_renderer_was_not_used() {
+    // A single plain layer takes the native copy path, never calling a renderer.
+    let mut single = Document::with_background("single", Size::new(24, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    single.layers[0].name = "Background".into();
+    let mut renderer = RecordingRenderer::default();
+    let mut warnings = Vec::new();
+    document_to_image_with_renderer(&single, &mut warnings, Some(&mut renderer)).expect("single-layer export");
+    let diagnostics = renderer.drain_diagnostics();
+    assert!(
+        diagnostics.iter().any(|d| d.contains("single-layer") && d.contains("CPU")),
+        "a requested renderer that is bypassed must report why: {diagnostics:?}"
+    );
+
+    // A CMYK composite mixed on ink values likewise returns before the renderer branch.
+    let mut cmyk = Document::with_background("cmyk", Size::new(32, 32), ColorMode::Cmyk, SampleType::U8, Color::WHITE);
+    let mut s = Surface::new(cmyk.pixel_format());
+    s.fill_rect(Rect::new(4, 4, 28, 28), &[0.1, 0.2, 0.3, 0.4, 0.5]);
+    cmyk.layers.push(Layer::new("ink", LayerContent::Raster(s)));
+    let mut renderer = RecordingRenderer::default();
+    let res = export_flat_with_renderer(&cmyk, Format::Tiff, &ExportOptions::default(), &Interrupt::NONE, Some(&mut renderer)).expect("CMYK TIFF export");
+    assert!(
+        res.warnings.iter().any(|w| w.contains("CMYK ink mixing") && w.contains("CPU")),
+        "CMYK ink mixing must report its CPU fallback: {:?}",
+        res.warnings
+    );
+}
+
+#[test]
+fn fallback_warning_does_not_leak_into_the_next_export() {
+    struct FailOnceRenderer {
+        failed: bool,
+    }
+    impl BandRenderer for FailOnceRenderer {
+        fn render_bands(
+            &mut self,
+            doc: &Document,
+            rect: Rect,
+            band_rows: i32,
+            ctl: &Interrupt<'_>,
+            sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+        ) -> Result<(), RenderError> {
+            if !self.failed {
+                self.failed = true;
+                return Err(RenderError::Device("forced device loss".into()));
+            }
+            let mut cpu = CpuRenderer;
+            cpu.render_bands(doc, rect, band_rows, ctl, sink)
+        }
+    }
+
+    let doc = synthetic_doc();
+    let opts = ExportOptions::default();
+    let mut renderer = FailOnceRenderer { failed: false };
+    let first = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("first export retries on CPU");
+    assert!(first.warnings.iter().any(|w| w.contains("falling back to CPU")), "the failed export reports its fallback: {:?}", first.warnings);
+
+    let second = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("second export uses the GPU path");
+    assert!(
+        !second.warnings.iter().any(|w| w.contains("falling back to CPU")),
+        "a fallback warning from an earlier export must not carry into a later successful one: {:?}",
+        second.warnings
+    );
+}
+
+#[test]
+fn ora_and_pdf_exports_report_cpu_use_when_a_renderer_is_set() {
+    let doc = synthetic_doc();
+    let opts = ExportOptions::default();
+    for (name, marker) in [("out.ora", "OpenRaster export uses CPU compositor"), ("out.pdf", "PDF export uses CPU compositor")] {
+        let mut renderer = RecordingRenderer::default();
+        let res = photocraft_io::export_with_renderer(&doc, name, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("CPU-only format export");
+        assert!(res.warnings.iter().any(|w| w.contains(marker)), "{name} must report CPU use: {:?}", res.warnings);
     }
 }
 
@@ -115,6 +226,18 @@ fn renderer_preview_is_8bit_rgba_while_saved_export_keeps_depth() {
     assert_eq!((img.width(), img.height()), (64, 48));
     assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba, "a preview is always RGBA");
     assert_eq!(img.sample_type(), photocraft_codecs::SampleType::U8, "a preview is always 8-bit");
+
+    let pixel = |x: u32, y: u32| {
+        let at = ((y * img.width() + x) * 4) as usize;
+        &img.data()[at..at + 4]
+    };
+    // Inside the 50 % blue layer: half the layer colour over white.
+    let inside = pixel(32, 24);
+    for (got, want) in inside.iter().zip([153u8, 179, 230, 255]) {
+        assert!(got.abs_diff(want) <= 2, "preview compositing is wrong inside the layer: {inside:?}");
+    }
+    // Outside the layer: the white background.
+    assert_eq!(pixel(2, 2), [255, 255, 255, 255], "preview must keep the document background");
 
     // A saved export keeps the document's native depth: the preview conversion is preview-only.
     let opts = ExportOptions::default();
@@ -177,6 +300,7 @@ fn encoder_and_sink_failures_are_not_retried_on_cpu() {
             _doc: &Document,
             _rect: Rect,
             _band_rows: i32,
+            _ctl: &Interrupt<'_>,
             _sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
         ) -> Result<(), RenderError> {
             Err(RenderError::sink(IoError::Unsupported("test sink failure".into())))
