@@ -177,3 +177,154 @@ fn a_read_failing_while_layers_decode_fails_the_open() {
         }
     }
 }
+// A held public mutex proves a dependency, not system-font initialization latency.
+#[derive(Clone, Copy)]
+enum NativeTextFixture {
+    FlatRaster,
+    GroupedRaster,
+    GroupedCachedType,
+}
+
+fn native_text_fixture(dir: &TempDir, kind: NativeTextFixture) -> std::path::PathBuf {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{
+        Document, Layer, LayerContent, TextLayer,
+        text::{CharStyle, TextRun},
+    };
+    use photocraft_geom::{Affine, Rect, Size};
+
+    let mut doc = Document::new("native text dependency", Size::new(96, 40), ColorMode::Rgb, SampleType::U8);
+    let leaf = match kind {
+        NativeTextFixture::GroupedCachedType => {
+            let mut text = TextLayer {
+                text: "Font control".into(),
+                runs: vec![TextRun {
+                    len: 12,
+                    style: CharStyle { font_family: "Inter".into(), postscript_name: Some("Inter-Regular".into()), size_pt: 12.0, ..Default::default() },
+                }],
+                transform: Affine { m: [1.0, 0.0, 0.0, 1.0, 4.0, 20.0] },
+                ..Default::default()
+            };
+            text.sync_summary();
+            // Prepare the cached appearance unlocked, before the observed import.
+            photocraft_text::TextEngine::new().render_layer(&mut text, doc.resolution_dpi, doc.pixel_format());
+            assert!(!text.cache.as_ref().unwrap().content_bounds().is_empty());
+            Layer::new("type", LayerContent::Text(text))
+        }
+        _ => {
+            let mut leaf = Layer::raster("raster", PixelFormat::RGBA8);
+            leaf.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 3, 2), &[0.25, 0.5, 0.75, 1.0]);
+            leaf
+        }
+    };
+    doc.layers.push(match kind {
+        NativeTextFixture::FlatRaster => leaf,
+        _ => Layer::group("outer", vec![Layer::group("inner", vec![leaf])]),
+    });
+    let bytes = photocraft_io::export(&doc, "native.psd", &Default::default()).unwrap().bytes;
+    assert!(bytes.starts_with(b"8BPS"));
+    dir.write("native.psd", &bytes)
+}
+
+fn check_native_text_fixture(doc: &photocraft_doc::Document, kind: NativeTextFixture) {
+    use photocraft_doc::LayerContent;
+    assert_eq!((doc.size.width, doc.size.height), (96, 40));
+    let layers = doc.walk();
+    let types: Vec<_> = layers
+        .iter()
+        .filter_map(|(_, depth, layer)| match &layer.content {
+            LayerContent::Text(t) => Some((*depth, t)),
+            _ => None,
+        })
+        .collect();
+    match kind {
+        NativeTextFixture::GroupedCachedType => {
+            assert_eq!(types.len(), 1);
+            let (depth, t) = types[0];
+            assert!(depth >= 2, "editable type is genuinely nested");
+            assert_eq!(t.text, "Font control");
+            assert_eq!(t.font_family, "Inter");
+            assert_eq!(t.char_runs()[0].style.font_family, "Inter");
+            assert_eq!(t.char_runs()[0].style.postscript_name.as_deref(), Some("Inter-Regular"));
+            assert!(!t.cache.as_ref().expect("cached type keeps its appearance").content_bounds().is_empty());
+        }
+        _ => {
+            assert!(types.is_empty(), "no editable type at any depth");
+            let (depth, pixels) = layers
+                .iter()
+                .find_map(|(_, depth, layer)| match &layer.content {
+                    LayerContent::Raster(s) if layer.name == "raster" => Some((*depth, s)),
+                    _ => None,
+                })
+                .expect("ordinary raster layer survives import");
+            assert_eq!(pixels.pixel(0, 0), vec![64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0]);
+            if matches!(kind, NativeTextFixture::GroupedRaster) {
+                assert!(depth >= 2, "raster is genuinely nested");
+            } else {
+                assert_eq!(depth, 0);
+            }
+        }
+    }
+}
+
+fn native_text_dependency_case(tag: &str, kind: NativeTextFixture) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let dir = TempDir::new(tag);
+    let path = native_text_fixture(&dir, kind);
+    // Normal unlocked import establishes the same file's successful model and appearance.
+    let expected = photocraft_io::import_file_for_open_with("native.psd", &path, &Default::default(), &Interrupt::NONE).unwrap();
+    check_native_text_fixture(&expected.0.document, kind);
+    let held = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = started_tx.send(());
+        let imported = photocraft_io::import_file_for_open_with("native.psd", &path, &Default::default(), &Interrupt::NONE);
+        let _ = done_tx.send(());
+        imported
+    });
+    let started = started_rx.recv_timeout(Duration::from_secs(10));
+    let observed = started.as_ref().ok().map(|_| done_rx.recv_timeout(Duration::from_secs(10)));
+    // Always release before joining/asserting, including the expected baseline timeout.
+    // The external exact-test process bound also covers a worker that fails to drain.
+    drop(held);
+    let actual = worker.join().expect("import worker panicked").expect("ordinary file import failed");
+    assert!(started.is_ok(), "worker never acknowledged the public import call");
+    check_native_text_fixture(&actual.0.document, kind);
+    assert_eq!(actual.1, expected.1);
+    assert_eq!(actual.0.warnings, expected.0.warnings);
+    assert_eq!(without_ids(&actual.0.document), without_ids(&expected.0.document));
+    // Compare actual raster/cache samples as well as the editable model/debug representation.
+    let a = actual.0.document.walk();
+    let b = expected.0.document.walk();
+    for ((_, _, l), (_, _, expected)) in a.iter().zip(&b) {
+        if let (Some(pixels), Some(want)) = (l.surface(), expected.surface()) {
+            let rect = want.content_bounds();
+            assert_eq!(pixels.content_bounds(), rect);
+            assert_eq!(pixels.read_region(rect), want.read_region(rect));
+        }
+    }
+    match kind {
+        NativeTextFixture::GroupedCachedType => assert!(
+            matches!(observed, Some(Err(mpsc::RecvTimeoutError::Timeout))),
+            "real type retains text preparation; timeout is not a font-speed measurement"
+        ),
+        _ => assert!(matches!(observed, Some(Ok(()))), "no-type native PSD waited for the held text engine"),
+    }
+}
+
+#[test]
+fn native_psd_text_dependency_flat_raster_returns_with_engine_held() {
+    native_text_dependency_case("font-wait-flat", NativeTextFixture::FlatRaster);
+}
+
+#[test]
+fn native_psd_text_dependency_grouped_raster_returns_with_engine_held() {
+    native_text_dependency_case("font-wait-grouped", NativeTextFixture::GroupedRaster);
+}
+
+#[test]
+fn native_psd_text_dependency_grouped_type_retains_preparation() {
+    native_text_dependency_case("font-wait-type", NativeTextFixture::GroupedCachedType);
+}
