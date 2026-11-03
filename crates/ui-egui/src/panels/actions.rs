@@ -270,6 +270,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             let token = app.paused_playbacks.pause(action.name.clone(), i + 1, app.session.authorize);
             if let Some(entry) = app.paused_playbacks.paused.get_mut(&token) {
                 entry.doc = app.session.active().map(|d| d.doc.id);
+                entry.snapshot = Some(action.clone());
             }
             if let Some(d) = app.ui.type_panels.spell.as_mut() {
                 d.resume = Some(token);
@@ -832,6 +833,9 @@ pub(crate) struct PausedPlayback {
     /// The document a pause at Check Spelling was playing on. That dialog doesn't block the
     /// document tabs, so Done ([`resume_spelling`]) continues only on this document.
     doc: Option<photocraft_doc::DocId>,
+    /// The action as it was when a pause at Check Spelling began. That dialog leaves the Actions
+    /// panel editable, so Done continues only while the action of that name still equals it.
+    snapshot: Option<Action>,
 }
 
 /// The paused playbacks, by the token their dialog carries. The dialog's fields hold only the
@@ -845,7 +849,7 @@ pub(crate) struct PausedPlaybacks {
 impl PausedPlaybacks {
     fn pause(&mut self, action: String, from: usize, gate: Option<Gate>) -> u64 {
         self.last = self.last.wrapping_add(1);
-        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new(), ran: 0, doc: None });
+        self.paused.insert(self.last, PausedPlayback { action, from, gate, record: None, then: Vec::new(), ran: 0, doc: None, snapshot: None });
         self.last
     }
 
@@ -855,18 +859,19 @@ impl PausedPlaybacks {
 }
 
 /// Check Spelling's Done for the action paused at its step: the action continues when the document
-/// it was playing on is still the active one, and otherwise ends there with the reason in the
-/// status bar. Returns `Ok` when nothing failed.
+/// it was playing on is still the active one and the action is unchanged, and otherwise ends there
+/// with the reason in the status bar. Returns `Ok` when nothing failed.
 pub(crate) fn resume_spelling(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
     let fields = serde_json::Map::from_iter([(RESUME.to_string(), json!(token))]);
-    let Some((from, doc)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc)) else {
+    let Some((from, doc, snapshot)) = app.paused_playbacks.paused.get(&token).map(|p| (p.from, p.doc, p.snapshot.clone())) else {
         return resume(app, &fields);
     };
-    if doc.is_none() || doc == app.session.active().map(|d| d.doc.id) {
+    let edited = snapshot.as_ref().is_some_and(|s| app.session.actions.list.iter().find(|a| a.name == s.name) != Some(s));
+    if !edited && (doc.is_none() || doc == app.session.active().map(|d| d.doc.id)) {
         return resume(app, &fields);
     }
     abandoned(app, &fields);
-    let error = "the active document changed while Check Spelling was open";
+    let error = if edited { "the paused action changed while Check Spelling was open" } else { "the active document changed while Check Spelling was open" };
     report_play(app, &json!({"failed": {"step": from.saturating_sub(1), "id": "edit.checkSpelling", "error": error}}));
     Err(error.into())
 }

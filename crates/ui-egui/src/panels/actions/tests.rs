@@ -1673,6 +1673,29 @@ fn check_spelling_done_on_another_document_ends_the_waiting_action() {
     assert!(app.ui.status.contains("document"), "{}", app.ui.status);
 }
 
+/// Check Spelling leaves the Actions panel editable: Done after the waiting action was deleted and
+/// recorded again under the same name ends it there instead of playing the new action's steps.
+#[test]
+fn check_spelling_done_after_the_waiting_action_changed_ends_it() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 300, "height": 100})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Teh cat"})).unwrap();
+    let mut a = Action::new("Spell", vec![("edit.checkSpelling".into(), json!({"allLayers": false})), ("layer.new.layer".into(), json!({"name": "after"}))]);
+    a.dialogs.insert(0);
+    app.session.actions.list.push(a);
+    let v = play(&mut app, &json!({"action": "Spell"})).unwrap();
+    assert_eq!(v["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{v}");
+    app.session.actions.list.clear();
+    let replacement = Action::new("Spell", vec![("layer.new.layer".into(), json!({"name": "first"})), ("layer.new.layer".into(), json!({"name": "replaced"}))]);
+    app.session.actions.list.push(replacement);
+    crate::type_panels_ui::close_spelling(&mut app);
+    let names = layer_names(&app);
+    assert!(!names.contains(&"after".to_string()) && !names.contains(&"replaced".to_string()), "{names:?}");
+    assert!(app.paused_playbacks.paused.is_empty());
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
 fn deny_spelling(id: &str, p: &Value) -> photocraft_engine::Result<()> {
     if id == "edit.checkSpelling" && p.get("action").is_none() { Err(photocraft_engine::EngineError::Other("spelling denied".into())) } else { Ok(()) }
 }
