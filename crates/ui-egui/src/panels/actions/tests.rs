@@ -1071,6 +1071,7 @@ fn a_paused_playback_keeps_its_automation_gate_when_the_dialog_is_confirmed() {
 /// when the user presses the key: its file step is refused, not run with the user's access.
 #[test]
 fn a_users_key_plays_an_action_automation_wrote_under_its_gate() {
+    /// The automation policy this test stands in for: every `file.` command is refused.
     fn deny_file(id: &str, _: &Value) -> photocraft_engine::Result<()> {
         if id.starts_with("file.") { Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
     }

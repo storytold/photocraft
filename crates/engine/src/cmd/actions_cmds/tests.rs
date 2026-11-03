@@ -710,6 +710,7 @@ fn play_refuses_recursion() {
 
 #[test]
 fn play_checks_each_step_with_the_authorize_hook() {
+    /// The automation policy these tests stand in for: every `file.` command is refused.
     fn deny_file(id: &str, _: &Value) -> Result<()> {
         if id.starts_with("file.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
     }
@@ -734,6 +735,7 @@ fn play_checks_each_step_with_the_authorize_hook() {
 /// with the user's access. The user's own actions, and sets the user loads, run as before.
 #[test]
 fn actions_automation_wrote_keep_its_gate_when_the_user_plays_them() {
+    /// The automation policy these tests stand in for: every `file.` command is refused.
     fn deny_file(id: &str, _: &Value) -> Result<()> {
         if id.starts_with("file.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
     }

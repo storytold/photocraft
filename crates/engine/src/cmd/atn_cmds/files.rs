@@ -1,6 +1,8 @@
 use super::convert::{UniqueNames, export, import};
 use super::*;
 
+/// `actions.load`: add the actions of an `.atn` file (`path` or `data`) to the list. A set an
+/// automation client loads is marked as automation's, so it keeps the gate when the user plays it.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
     if s.actions.recording.is_some() || s.actions.playing > 0 {

@@ -115,6 +115,8 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
     played
 }
 
+/// Play an action's steps in the shell (dialogs, shell saves and views), under whatever gate
+/// [`play_owned`] installed; pauses at a step whose dialog is toggled on.
 fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>) -> Result<Value, String> {
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
         Ok(plan) => plan,
