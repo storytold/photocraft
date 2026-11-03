@@ -517,11 +517,18 @@ fn start(s: &mut Session, id: u64) -> Result<Value> {
             }
             Ok(v)
         }
-        // Inline it landed (and was forgotten) or failed; one waiting for consent stays, so the
-        // caller can agree to it. A job that couldn't start is forgotten.
+        // Inline it landed (and was forgotten), failed or waits for consent. A failed one stays
+        // for Retry, Discard and Save Fill Diagnostics as in the background, and one waiting for
+        // consent so the caller can agree to it. A job that couldn't start (or was cancelled)
+        // set no error and is forgotten.
         None => {
-            let waits = s.genai_state.fills.iter().any(|f| f.id == id && f.status.consent.load(Ordering::Relaxed));
-            if !waits {
+            let (waits, kept) = s
+                .genai_state
+                .fills
+                .iter()
+                .find(|f| f.id == id)
+                .map_or((false, false), |f| (f.status.consent.load(Ordering::Relaxed), f.status.error().is_some()));
+            if !kept {
                 s.genai_state.fills.retain(|f| f.id != id);
             }
             match r {

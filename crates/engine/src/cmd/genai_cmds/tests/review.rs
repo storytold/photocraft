@@ -218,3 +218,19 @@ fn what_a_generative_layer_was_made_from_is_let_go_once_nothing_can_bring_it_bac
     assert_eq!(s.generative_prompt(layer(&second)), None);
     assert!(s.generative_variation_note(variation(&second)).is_none());
 }
+
+#[test]
+fn an_inline_fill_that_failed_stays_for_retry_discard_and_its_diagnostics() {
+    let mut s = banded();
+    install(&mut s, Fake { size: Some((1536, 1024)), ..fake([0, 0, 255]) });
+    assert!(s.execute(FILL, json!({"prompt": "x", "variations": 1})).is_err());
+    let fills = s.generative_fills();
+    assert_eq!(fills.len(), 1, "kept as in the background");
+    assert_eq!((fills[0].state, fills[0].diagnostics), ("failed", true));
+    let dir = tempfile::tempdir().unwrap();
+    s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "fill": fills[0].id})).unwrap();
+    // Retry, now answered with the area's shape, lands it.
+    install(&mut s, fake([0, 0, 255]));
+    s.execute(RETRY, json!({"fill": fills[0].id})).unwrap();
+    assert!(s.generative_fills().is_empty());
+}
