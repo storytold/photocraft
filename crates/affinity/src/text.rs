@@ -19,8 +19,19 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
     let mut align = None;
     let mut total = 0usize;
     let mut placeholders = false;
-    for block in s.objs(story, b"Blok") {
+    // Shared structures are traversed once per occurrence: charge the raw slots (nulls and empty
+    // blocks included) before collecting them, against a document-wide budget.
+    if !r.charge_text(s.array_len(story, b"Blok").unwrap_or(0)) {
+        r.warn("text beyond the document text budget (left out)");
+        return None;
+    }
+    'blocks: for block in s.objs(story, b"Blok") {
         let glyphs = s.obj(block, b"Glyp")?;
+        let runs_n = s.obj(block, b"GAtt").and_then(|g| s.array_len(g, b"Runs")).unwrap_or(0);
+        if !r.charge_text(1 + runs_n + s.array_len(glyphs, b"Mixd").unwrap_or(0)) {
+            r.warn("text beyond the document text budget (truncated)");
+            break;
+        }
         let chars = block_chars(s, glyphs, total, &mut placeholders);
         total = total.checked_add(chars.len())?;
         if total > MAX_CHARS {
@@ -37,6 +48,10 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
             start = end;
             let Some(attrs) = s.obj(run, b"Item") else { continue };
             if !text.is_empty() {
+                if !r.charge_text(text.len()) {
+                    r.warn("text beyond the document text budget (truncated)");
+                    break 'blocks;
+                }
                 runs.push(run_attrs(r, attrs, text, world));
             }
         }

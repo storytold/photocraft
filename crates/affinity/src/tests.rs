@@ -497,6 +497,26 @@ mod shapes {
     }
 
     #[test]
+    fn a_shared_story_placed_many_times_is_charged_against_the_text_budget() {
+        // One ~1 MiB story referenced 100 times would retain ~100 MiB of text without a budget.
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("a".repeat((1 << 20) - 1)))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(1 << 20)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let group = F::Def(101, vec![tag(b"Grup")], vec![(tag(b"Chld"), F::Shared((0..100).map(|_| F::Ref(100)).collect()))]);
+        let d = read(vec![text, group], 101);
+        assert!(d.warnings.iter().any(|w| w.contains("document text budget")), "{:?}", d.warnings);
+    }
+
+    #[test]
     fn pie_angles_with_huge_finite_values_do_not_loop_or_emit_nonfinite_points() {
         let document = read(vec![shape(100, b"ShPi", vec![(tag(b"AngS"), F::F64(1.0e308)), (tag(b"AngE"), F::F64(-1.0e308))])], 100);
         for subpath in &path(&document).subpaths {
