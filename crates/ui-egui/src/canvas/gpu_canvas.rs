@@ -45,11 +45,13 @@ mod setup;
 mod shaders;
 mod texels;
 
+use budget::apply_budget;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes, memory_budget,
-    physical_memory, video_memory, vram_share,
+    DEFER_PX, DocGpuBytes, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, SHARED_EDIT_BUDGET, SHARED_EDIT_CELLS,
+    SHARED_STAGING_LIMIT, canvas_budget, canvas_texture_bytes, compositor_budget, memory_budget, physical_memory, shared_memory_budget, shares_system_memory,
+    video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
@@ -215,13 +217,15 @@ impl GpuCanvas {
         let info = rs.adapter.get_info();
         res.separate_mip_targets = separate_mip_targets(info.backend, info.vendor, std::env::var("PHOTOCRAFT_SEPARATE_MIPS").ok().as_deref());
         let vram = video_memory(&info);
+        let shared = shares_system_memory(&info, vram);
+        res.shared_memory = shared;
         res.canvas_budget.store(canvas_budget(physical_memory(), vram), Ordering::Relaxed);
         let budget = res.canvas_budget.clone();
         rs.renderer.write().callback_resources.insert(res);
         log::info!(
             "gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}, video memory {}",
             rs.target_format,
-            vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
+            if shared { "shared with the system".to_owned() } else { vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20)) }
         );
         Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
     }
@@ -297,6 +301,59 @@ impl GpuCanvas {
         self.vram
     }
 
+    /// Whether the adapter's memory is the system's (see [`shares_system_memory`]).
+    pub fn shares_system_memory(&self) -> bool {
+        let r = self.rs.renderer.read();
+        r.callback_resources.get::<Resources>().is_some_and(|res| res.shared_memory)
+    }
+
+    /// Treat the adapter as sharing system memory or not, whatever [`shares_system_memory`]
+    /// detected: tests and benchmarks exercise both kinds of adapter on one machine.
+    pub fn set_shares_system_memory(&self, shared: bool) {
+        let mut r = self.rs.renderer.write();
+        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+            res.shared_memory = shared;
+        }
+    }
+
+    /// GPU bytes of `doc`'s display texture set (every tile and mip level, in the format it
+    /// would get), whether or not it exists yet.
+    pub fn display_bytes(&self, doc: &photocraft_doc::Document) -> u64 {
+        let size = [doc.size.width, doc.size.height];
+        canvas_texture_bytes(size, self.tile, texel_bytes(self.format_for(doc.depth, size)))
+    }
+
+    /// Bytes of the layer pages a full refresh of `doc` needs resident on this device
+    /// ([`photocraft_gpu::layer_working_set`]), priced without the compositor, which the first
+    /// refresh creates.
+    pub fn layer_working_set(&self, doc: &photocraft_doc::Document) -> u64 {
+        photocraft_gpu::layer_working_set(doc, doc.bounds(), self.page_side())
+    }
+
+    /// At most the bytes of layer pages one page cell of `doc` needs on this device
+    /// ([`photocraft_gpu::cell_working_set`]).
+    pub fn cell_working_set(&self, doc: &photocraft_doc::Document) -> u64 {
+        photocraft_gpu::cell_working_set(doc, self.page_side())
+    }
+
+    /// The side of the compositor's layer pages on this device.
+    fn page_side(&self) -> u32 {
+        photocraft_gpu::page_side(self.rs.device.limits().max_texture_dimension_2d)
+    }
+
+    /// The compositor budget the app gives `doc`: [`memory_budget`] of Memory Usage
+    /// (`allowance`), the document's pixels and History (`pixels`) and GPU Memory (`fixed`, 0 =
+    /// Automatic), and where the adapter shares system memory and GPU Memory is Automatic,
+    /// [`shared_memory_budget`] of that (#9007). The app and the benchmarks size it here, so they
+    /// count memory the same way.
+    pub fn budget_for(&self, doc: &photocraft_doc::Document, allowance: u64, pixels: u64, fixed: u64) -> u64 {
+        compositor_budget(self.shares_system_memory(), allowance, pixels, physical_memory(), self.vram, fixed, || DocGpuBytes {
+            display: self.display_bytes(doc),
+            layers: self.layer_working_set(doc),
+            cell: self.cell_working_set(doc),
+        })
+    }
+
     /// The canvas texture format for a document of `depth` and `size`: `Rgba16Float` for 16/32-bit
     /// documents when the adapter supports it and the document fits [`F16_BUDGET_PX`], else
     /// `Rgba8Unorm`.
@@ -341,6 +398,17 @@ impl GpuCanvas {
         }
     }
 
+    /// Whether the budget given to [`GpuCanvas::set_memory_budget`] is GPU Memory set by hand
+    /// (Preferences › Performance) rather than Automatic. Set by hand, it keeps today's behaviour
+    /// where the GPU shares system memory too: uploads stage in the usual batches, and a lowered
+    /// budget frees pages only when a render needs the room (see [`apply_budget`]).
+    pub fn set_gpu_memory_by_hand(&self, by_hand: bool) {
+        let mut r = self.rs.renderer.write();
+        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+            res.gpu_memory_by_hand = by_hand;
+        }
+    }
+
     /// The compositor's memory budget (`None` until [`GpuCanvas::set_memory_budget`]).
     pub fn memory_budget(&self) -> Option<u64> {
         let r = self.rs.renderer.read();
@@ -361,8 +429,7 @@ impl GpuCanvas {
     /// The bytes `doc`'s display textures would take and [`canvas_budget`] (`None` without a GPU
     /// canvas): the numbers of a [`CpuReason::CanvasTooLarge`].
     pub fn canvas_fit(&self, doc: &photocraft_doc::Document) -> Option<(u64, u64)> {
-        let size = [doc.size.width, doc.size.height];
-        let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(self.format_for(doc.depth, size)));
+        let bytes = self.display_bytes(doc);
         let r = self.rs.renderer.read();
         r.callback_resources.get::<Resources>().map(|res| (bytes, res.canvas_budget.load(Ordering::Relaxed)))
     }
@@ -447,9 +514,10 @@ impl GpuCanvas {
         let mut r = self.rs.renderer.write();
         let res = r.callback_resources.get_mut::<Resources>()?;
         let budget = res.compositor_budget;
+        let shared = res.shared_memory && !res.gpu_memory_by_hand;
         let comp = res.compositor.as_mut()?;
         if let Some(b) = budget {
-            comp.set_memory_budget(b);
+            apply_budget(comp, b, shared);
         }
         let needed = comp.working_set(doc, doc.bounds());
         let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, true) };
@@ -614,7 +682,7 @@ impl GpuCanvas {
         // Measured, not waited for: the timestamps come back a frame or two later.
         comp.measure_gpu_time(device, queue);
         if let Some(b) = res.compositor_budget {
-            comp.set_memory_budget(b);
+            apply_budget(&mut comp, b, res.shared_memory && !res.gpu_memory_by_hand);
         }
         if let Some(b) = res.compositor_cache_budget {
             comp.set_composite_cache_budget(b);

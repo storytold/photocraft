@@ -397,3 +397,83 @@ fn shaders_validate() {
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 }
+
+/// #9007: wgpu reports a Metal device with `hasUnifiedMemory` (Apple silicon) as integrated,
+/// as it does Intel and AMD integrated graphics; with no memory of its own reported, what it
+/// allocates is system memory.
+#[test]
+fn integrated_gpus_share_system_memory() {
+    let info = |t| wgpu::AdapterInfo::new(t, wgpu::Backend::Metal);
+    assert!(shares_system_memory(&info(wgpu::DeviceType::IntegratedGpu), None));
+    // A card's own memory, known (or simulated with PHOTOCRAFT_VRAM_MB), is not the system's.
+    assert!(!shares_system_memory(&info(wgpu::DeviceType::IntegratedGpu), Some(8 << 30)));
+    for t in [wgpu::DeviceType::DiscreteGpu, wgpu::DeviceType::VirtualGpu, wgpu::DeviceType::Cpu, wgpu::DeviceType::Other] {
+        assert!(!shares_system_memory(&info(t), None), "{t:?}");
+    }
+    if std::env::var_os("PHOTOCRAFT_VRAM_MB").is_none() {
+        let mut gi = GpuInfo::default();
+        gi.set_adapter(&wgpu::AdapterInfo { name: "Apple M2 Max".into(), ..info(wgpu::DeviceType::IntegratedGpu) });
+        assert!(gi.shared_memory && gi.video_memory_mb.is_none());
+        gi.set_adapter(&info(wgpu::DeviceType::Cpu));
+        assert!(!gi.shared_memory);
+    }
+}
+
+/// #9007's numbers: a 9190 × 11811 PSD (1.3 GB of layer pages, 0.58 GB of display textures)
+/// on a 16 GB machine would keep a second copy of its layers resident; a sixth of RAM is the
+/// line, so a small document, or the same one on a machine four times the size, keeps its
+/// pages. Beyond it the budget holds four page cells' pages, so edits in the view stay on the
+/// GPU, and never less than the edit floor or more than the Automatic budget.
+#[test]
+fn shared_memory_budget_keeps_layers_resident_only_for_small_documents() {
+    const G: u64 = 1 << 30;
+    const M: u64 = 1 << 20;
+    let ram = Some(16 * G);
+    let budget = memory_budget(8 * G, 1300 * M, ram, None, 0);
+    assert_eq!(budget, 4 * G);
+    let gpu = |display, layers, cell| DocGpuBytes { display, layers, cell };
+    // Ten 16 MB pages a cell: four cells' worth, with the caches' quarter on top.
+    let psd = gpu(580 * M, 1300 * M, 160 * M);
+    let four_cells = photocraft_gpu::budget_for_pages(640 * M);
+    assert!((640 * M..=860 * M).contains(&four_cells), "{four_cells}");
+    assert_eq!(shared_memory_budget(budget, 1300 * M, psd, ram), four_cells);
+    assert_eq!(shared_memory_budget(budget, 1300 * M, psd, Some(64 * G)), budget);
+    assert_eq!(shared_memory_budget(budget, 600 * M, gpu(100 * M, 600 * M, 60 * M), ram), budget);
+    // A document of few layers gets the floor; one of many cells' worth never more than
+    // the Automatic budget.
+    assert_eq!(shared_memory_budget(budget, 1300 * M, gpu(580 * M, 1300 * M, 16 * M), ram), SHARED_EDIT_BUDGET);
+    assert_eq!(shared_memory_budget(budget, 3 * G, gpu(0, 3 * G, 2 * G), ram), budget);
+    // At a sixth exactly the copy stays; a byte more and it doesn't.
+    let sixth = 16 * G / 6;
+    assert_eq!(shared_memory_budget(budget, sixth - 2, gpu(1, 1, 0), ram), budget);
+    assert_eq!(shared_memory_budget(budget, sixth - 1, gpu(1, 1, 0), ram), SHARED_EDIT_BUDGET);
+    // Never raises a smaller budget; 16 GB assumed when RAM is unknown; sums saturate.
+    assert_eq!(shared_memory_budget(128 * M, 3 * G, gpu(0, 3 * G, 0), ram), 128 * M);
+    assert_eq!(shared_memory_budget(budget, 2 * G, gpu(0, 2 * G, 0), None), SHARED_EDIT_BUDGET);
+    assert_eq!(shared_memory_budget(budget, u64::MAX, gpu(u64::MAX, u64::MAX, u64::MAX), ram), budget);
+}
+
+/// Both kinds of adapter through the app's budget (the detection mocked by `shared`): a card
+/// with its own memory keeps today's budget and never prices the document's GPU bytes; shared
+/// memory caps a large document only, and GPU Memory set by hand wins on both.
+#[test]
+fn compositor_budget_caps_a_large_document_only_where_the_gpu_shares_memory() {
+    const G: u64 = 1 << 30;
+    let ram = Some(16 * G);
+    let priced = std::cell::Cell::new(0);
+    let large = || {
+        priced.set(priced.get() + 1);
+        DocGpuBytes { display: G / 4, layers: 3 * G, cell: 0 }
+    };
+    for vram in [Some(8 * G), None] {
+        assert_eq!(compositor_budget(false, 8 * G, 3 * G, ram, vram, 0, large), memory_budget(8 * G, 3 * G, ram, vram, 0));
+    }
+    assert_eq!(priced.get(), 0, "nothing is priced off shared memory");
+    assert_eq!(compositor_budget(true, 8 * G, 3 * G, ram, None, 0, large), SHARED_EDIT_BUDGET);
+    assert_eq!(priced.get(), 1);
+    let small = || DocGpuBytes { display: G / 8, layers: G / 4, cell: G / 16 };
+    assert_eq!(compositor_budget(true, 8 * G, G / 4, ram, None, 0, small), memory_budget(8 * G, G / 4, ram, None, 0));
+    assert_eq!(compositor_budget(true, 8 * G, 3 * G, ram, None, 6 * G, large), 6 * G);
+    assert_eq!(compositor_budget(false, 8 * G, 3 * G, ram, None, 6 * G, large), 6 * G);
+    assert_eq!(priced.get(), 1, "a set GPU Memory prices nothing");
+}

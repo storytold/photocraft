@@ -105,6 +105,9 @@ pub struct Compositor {
     stamp: u64,
     /// Bytes staged by uploads since the last submit.
     staged: u64,
+    /// Upload bytes one batch may stage before it is submitted, below [`FLUSH_BYTES`] and an
+    /// eighth of the budget ([`Compositor::set_staging_limit`]); `None`: no further limit.
+    staging_limit: Option<u64>,
     /// Copies and render passes recorded since the last submit.
     recorded: u32,
     /// Why a layer page texture couldn't be created this refresh (it then ends on the CPU).
@@ -152,8 +155,8 @@ use convert::{CONVERT_BATCH, colour_managed, convert_tile, convert_tiles, rgb_gr
 pub use convert::{f16_to_f32, f32_to_f16};
 pub use kit::SHADER;
 use kit::{Kit, tex_entry};
-pub use paging::OVER_BUDGET;
 use paging::first_error;
+pub use paging::{OVER_BUDGET, budget_for_pages, cell_working_set, layer_working_set, page_side};
 #[cfg(test)]
 use paging::{lru_victims, uniform_buffer_len};
 #[cfg(not(target_arch = "wasm32"))]

@@ -28,6 +28,10 @@ pub(super) struct Resources {
     pub(super) compositor_failed: Option<photocraft_gpu::Unsupported>,
     /// The device's health: the paint callback issues no GPU work once it's lost.
     pub(super) health: photocraft_gpu::DeviceHealth,
+    /// The adapter shares system memory ([`super::shares_system_memory`]): see [`super::budget::apply_budget`].
+    pub(super) shared_memory: bool,
+    /// The budget is GPU Memory set by hand ([`super::GpuCanvas::set_gpu_memory_by_hand`]).
+    pub(super) gpu_memory_by_hand: bool,
     /// GPU memory the compositor may hold (`None`: its default), and the document area the
     /// view shows; applied before every composite.
     pub(super) compositor_budget: Option<u64>,
@@ -361,6 +365,8 @@ impl Resources {
             compositor: None,
             compositor_failed: None,
             health: photocraft_gpu::DeviceHealth::new(),
+            shared_memory: false,
+            gpu_memory_by_hand: false,
             compositor_budget: None,
             layer_fit: None,
             compositor_cache_budget: None,

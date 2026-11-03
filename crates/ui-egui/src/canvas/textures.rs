@@ -609,8 +609,9 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
 
 /// Point the wgpu compositor at what the view shows, and size its memory budget from GPU Memory,
 /// or Memory Usage, the document's pixels and History (charged where the GPU shares the system's
-/// memory), physical memory and the GPU's own: on full refreshes (pixels counted once per
-/// structural change, not per brush dab) and whenever either preference changes.
+/// memory, which also keeps a large document's layer pages from being a second copy there,
+/// #9007), physical memory and the GPU's own (`GpuCanvas::budget_for`): on full refreshes (pixels
+/// counted once per structural change, not per brush dab) and whenever either preference changes.
 fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: usize, partial: bool, visible: DRect) {
     gpu.set_focus(Some(visible));
     let allowance = budget_allowance(app);
@@ -620,7 +621,8 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     }
     let Some(st) = app.session.documents().get(idx) else { return };
     let pixels = st.memory_bytes() as u64;
-    let budget = crate::gpu_canvas::memory_budget(allowance.0, pixels, crate::gpu_canvas::physical_memory(), gpu.video_memory(), allowance.1);
+    let budget = gpu.budget_for(&st.doc, allowance.0, pixels, allowance.1);
+    gpu.set_gpu_memory_by_hand(allowance.1 > 0);
     gpu.set_memory_budget(budget);
     app.perf.gpu_budget_mb = budget >> 20;
     app.perf.gpu_budget_allowance = allowance;

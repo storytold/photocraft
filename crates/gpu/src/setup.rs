@@ -1,11 +1,10 @@
-use super::batch::tile_grid;
-use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAP16, MAP32, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
-use super::kit::{Kit, SHADER, tex_entry, uniform_entry};
-use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
-use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{
-    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
+use super::consts::{
+    ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FLUSH_BYTES, FX_BUDGET, MAP16, MAP32, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET,
 };
+use super::kit::{Kit, SHADER, tex_entry, uniform_entry};
+use super::paging::{field_reaches, first_error, layer_working_set, lru_victims, page_side};
+use super::textures::{FxEntry, FxKey, ResKey, Resident, Tex};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 impl Compositor {
     /// Create a compositor with the default accumulation format ([`ACC_FORMAT`]).
@@ -156,6 +155,7 @@ impl Compositor {
             frame: 0,
             stamp: 0,
             staged: 0,
+            staging_limit: None,
             recorded: 0,
             layer_alloc: None,
             admit_freed: 0,
@@ -178,12 +178,8 @@ impl Compositor {
     /// least one tile). Tests use a small limit to exercise documents larger than it on any
     /// adapter. Drops every cached texture.
     pub fn set_texture_limit(&mut self, max: u32) {
-        let tile = TILE_SIZE as u32;
-        self.max_dim = max.min(self.device_max).max(tile);
-        let mut page = tile;
-        while page * 2 <= self.max_dim.min(PAGE) {
-            page *= 2;
-        }
+        self.max_dim = max.min(self.device_max).max(TILE_SIZE as u32);
+        let page = page_side(self.max_dim);
         self.page = page;
         self.chunk = CHUNK.min(page);
         self.prefix.set_step(self.chunk);
@@ -261,6 +257,54 @@ impl Compositor {
         self.resident_budget.saturating_add(self.fx_budget).saturating_add(self.prefix.budget())
     }
 
+    /// Drop what the budgets no longer cover, least recently used first: resident layer pages
+    /// beyond the resident budget and effect maps beyond theirs (lower-stack chunks already
+    /// follow [`Self::set_memory_budget`]). A render evicts the same way as it admits pages, but
+    /// a full refresh that a lowered budget sends to the CPU compositor never renders, so the
+    /// pages of an earlier document or a larger budget would stay resident until the next edit.
+    /// Returns how many textures were dropped and their bytes.
+    pub fn trim(&mut self) -> (usize, u64) {
+        let pages: Vec<(u64, ResKey, u64)> = self.residents.iter().map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
+        let (mut n, mut freed) = (0usize, 0u64);
+        for k in lru_victims(pages, self.resident_bytes(), 0, self.resident_budget) {
+            if let Some(r) = self.residents.remove(&k) {
+                n += 1;
+                freed = freed.saturating_add(r.bytes());
+            }
+        }
+        let fx_budget = usize::try_from(self.fx_budget).unwrap_or(usize::MAX);
+        let mut total = self.fx_cache_bytes();
+        if total > fx_budget {
+            let mut lru: Vec<((u64, u64), FxKey)> = self.fx.iter().map(|(k, e)| ((e.last_used, e.stamp), *k)).collect();
+            lru.sort_unstable_by_key(|c| c.0);
+            for (_, k) in lru {
+                if total <= fx_budget {
+                    break;
+                }
+                if let Some(e) = self.fx.remove(&k) {
+                    total = total.saturating_sub(e.bytes());
+                    n += 1;
+                    freed = freed.saturating_add(e.bytes() as u64);
+                }
+            }
+        }
+        (n, freed)
+    }
+
+    /// Cap the upload bytes a refresh stages before it submits the batch recorded so far
+    /// (`None`: only [`FLUSH_BYTES`] and an eighth of the memory budget cap it). Two batches can
+    /// be in flight, and where the GPU shares system memory their staging buffers are system
+    /// memory on top of the document and its pages (#9007).
+    pub fn set_staging_limit(&mut self, bytes: Option<u64>) {
+        self.staging_limit = bytes;
+    }
+
+    /// Upload bytes a refresh stages before submitting: at most [`FLUSH_BYTES`], an eighth of the
+    /// memory budget and the staging limit, and at least 16 MiB.
+    pub(crate) fn flush_bytes(&self) -> u64 {
+        FLUSH_BYTES.min(self.memory_budget() / 8).min(self.staging_limit.unwrap_or(u64::MAX)).max(16 << 20)
+    }
+
     /// Bytes held by reusable lower-stack chunks, within the overall cache allowance.
     pub fn composite_cache_bytes(&self) -> u64 {
         self.prefix.bytes()
@@ -277,24 +321,7 @@ impl Compositor {
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
     /// surface's tiles within the region's page cells, in their texture format).
     pub fn working_set(&self, doc: &Document, region: Rect) -> u64 {
-        let Ok(plan) = plan(doc) else { return 0 };
-        let grid = tile_grid(doc.bounds());
-        let cells = grid_rects(region.intersect(&doc.bounds()), self.page)
-            .into_iter()
-            .map(|r| cell_rect((r.x0.div_euclid(self.page as i32), r.y0.div_euclid(self.page as i32)), self.page))
-            .fold(Rect::EMPTY, |a, c| if a.is_empty() { c } else { a.union(&c) });
-        let mut seen = std::collections::HashSet::new();
-        let mut total = 0u64;
-        for p in &plan.passes {
-            let sources = [p.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), p.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
-            for (layer, role, s) in sources.into_iter().flatten() {
-                if seen.insert((layer, role)) {
-                    let a = s.tile_bounds().intersect(&grid).intersect(&cells);
-                    total += a.width() as u64 * a.height() as u64 * TexKind::for_surface(role, s.format()).bytes_per_pixel() as u64;
-                }
-            }
-        }
-        total
+        layer_working_set(doc, region, self.page)
     }
 
     /// The GPU memory resident layer pages may hold (bytes; see [`Compositor::set_memory_budget`]).

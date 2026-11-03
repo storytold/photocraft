@@ -1,6 +1,75 @@
-use super::consts::STRIDE;
-use super::textures::Cell;
-use super::{DeviceHealth, FieldKind, HashMap, Rect, Unsupported, fx};
+use super::batch::tile_grid;
+use super::consts::{FX_BUDGET, PAGE, STRIDE};
+use super::textures::{Cell, TexKind};
+use super::{DeviceHealth, Document, FieldKind, HashMap, Rect, Role, TILE_SIZE, Unsupported, fx, plan};
+
+/// The side of the square pages a compositor stores layer surfaces in on a device whose largest
+/// texture side is `max_dim`: the largest power-of-two multiple of the tile size within it and
+/// [`PAGE`] ([`Compositor::page_size`](super::Compositor::page_size)).
+pub fn page_side(max_dim: u32) -> u32 {
+    let tile = TILE_SIZE as u32;
+    let limit = max_dim.max(tile).min(PAGE.max(tile));
+    let mut page = tile;
+    while page.saturating_mul(2) <= limit {
+        page *= 2;
+    }
+    page
+}
+
+/// Each distinct layer and mask surface `doc`'s plan samples: its tiles within the canvas tile
+/// grid, and the bytes per pixel of its page texture.
+fn plan_surfaces(doc: &Document) -> Vec<(Rect, u64)> {
+    let Ok(plan) = plan(doc) else { return Vec::new() };
+    let grid = tile_grid(doc.bounds());
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for pass in &plan.passes {
+        let sources = [pass.tex.as_ref().map(|t| (t.layer, t.role, t.surface.get())), pass.mask.as_ref().map(|m| (m.layer, Role::Mask, m.surface.get()))];
+        for (layer, role, s) in sources.into_iter().flatten() {
+            if seen.insert((layer, role)) {
+                out.push((s.tile_bounds().intersect(&grid), TexKind::for_surface(role, s.format()).bytes_per_pixel() as u64));
+            }
+        }
+    }
+    out
+}
+
+/// Bytes of the layer pages a render of `region` of `doc` needs resident with pages of side
+/// `page` (each layer and mask surface's tiles within the region's page cells, in their texture
+/// format): [`Compositor::working_set`](super::Compositor::working_set), priced before any
+/// compositor exists, so a memory budget can be sized for a document's first refresh.
+pub fn layer_working_set(doc: &Document, region: Rect, page: u32) -> u64 {
+    let page = page.max(1);
+    let p = i32::try_from(page).unwrap_or(i32::MAX);
+    let cells = grid_rects(region.intersect(&doc.bounds()), page)
+        .into_iter()
+        .map(|r| cell_rect((r.x0.div_euclid(p), r.y0.div_euclid(p)), page))
+        .fold(Rect::EMPTY, |a, c| if a.is_empty() { c } else { a.union(&c) });
+    plan_surfaces(doc).into_iter().fold(0u64, |total, (area, bpp)| {
+        let a = area.intersect(&cells);
+        total.saturating_add((a.width() as u64).saturating_mul(a.height() as u64).saturating_mul(bpp))
+    })
+}
+
+/// At most the bytes of layer pages one page cell of `doc` needs resident with pages of side
+/// `page`: each layer and mask surface's tiles, up to a whole page each. A refresh draws cell by
+/// cell, keeping the cell it draws resident, so a budget of a few cells keeps edits in the view
+/// uploading only the tiles they change, even where the whole document's pages don't fit.
+pub fn cell_working_set(doc: &Document, page: u32) -> u64 {
+    let page_px = u64::from(page.max(1)).saturating_mul(u64::from(page.max(1)));
+    plan_surfaces(doc).into_iter().fold(0u64, |total, (area, bpp)| {
+        let px = (area.width() as u64).saturating_mul(area.height() as u64).min(page_px);
+        total.saturating_add(px.saturating_mul(bpp))
+    })
+}
+
+/// A memory budget ([`Compositor::set_memory_budget`](super::Compositor::set_memory_budget))
+/// whose layer-page share holds `pages` bytes, with no more on top than the caches take: a
+/// quarter of the budget, at most [`FX_BUDGET`].
+pub fn budget_for_pages(pages: u64) -> u64 {
+    let quarter = pages.div_ceil(3);
+    pages.saturating_add(quarter.min(FX_BUDGET as u64))
+}
 
 /// Document pixels of page cell `c`.
 pub(crate) fn cell_rect(c: Cell, page: u32) -> Rect {

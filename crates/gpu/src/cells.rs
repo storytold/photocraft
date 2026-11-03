@@ -21,6 +21,7 @@ impl Compositor {
         fr: &FrameRes,
         first_pass: usize,
         stats: &mut Stats,
+        batch: &mut Option<&mut Option<wgpu::SubmissionIndex>>,
     ) -> Bound {
         let cr = cell_rect(cell, self.page);
         let mut views: Vec<(Option<ResidentRef>, Option<ResidentRef>)> = Vec::with_capacity(plan.passes.len());
@@ -49,6 +50,18 @@ impl Compositor {
                     (keys.len() - 1, r)
                 });
             views.push((tex, mask));
+            // Every page a cell draws from is uploaded before it draws, so a staging limit holds
+            // here too: one cell of a many-layer document stages every layer's page (#9007).
+            if self.staging_limit.is_some()
+                && self.staged >= self.flush_bytes()
+                && self.fault().is_none()
+                && let Some(last) = batch.as_deref_mut()
+            {
+                submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), last);
+                self.staged = 0;
+                self.recorded = 0;
+                stats.flushes += 1;
+            }
             maps.push(p.map.and_then(|m| {
                 let f = plan.fx.get(m.fx)?;
                 let key = (f.layer.id, paged.get(m.fx).copied().unwrap_or(false).then_some(cell));
@@ -91,7 +104,7 @@ impl Compositor {
         let first_pass = checkpoint
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
             .unwrap_or(0);
-        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
+        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats, batch);
         // A page couldn't be created: draw nothing with the pages missing (the caller ends the refresh).
         if self.layer_alloc.is_some() {
             return;

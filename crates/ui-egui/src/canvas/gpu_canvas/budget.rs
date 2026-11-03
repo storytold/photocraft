@@ -35,6 +35,94 @@ pub fn vram_share(vram: u64) -> u64 {
     vram / 8 * 3
 }
 
+/// Whether `adapter`'s memory is the system's: an integrated GPU whose own memory nobody reported
+/// (`vram`, from [`video_memory`]). wgpu reports a Metal device with `hasUnifiedMemory` (Apple
+/// silicon, and Intel graphics in older Macs) as integrated, as it does Intel and AMD integrated
+/// graphics elsewhere. Everything the GPU allocates there, layer pages and upload staging
+/// included, is system memory on top of the document's own pixels (#9007). `PHOTOCRAFT_VRAM_MB`
+/// simulates a card, so it turns this off too.
+pub fn shares_system_memory(adapter: &wgpu::AdapterInfo, vram: Option<u64>) -> bool {
+    adapter.device_type == wgpu::DeviceType::IntegratedGpu && vram.is_none()
+}
+
+/// The least compositor budget for a large document where the GPU shares system memory
+/// ([`shared_memory_budget`]).
+pub const SHARED_EDIT_BUDGET: u64 = 256 << 20;
+
+/// Page cells whose layer pages the edit budget of a large document holds where the GPU shares
+/// system memory ([`shared_memory_budget`]): a refresh keeps only the cell it draws resident, so
+/// with less, a dab across a cell border or corner uploads every layer's pages of the cells it
+/// touches on every frame.
+pub const SHARED_EDIT_CELLS: u64 = 4;
+
+/// Upload bytes the compositor stages per batch where the GPU shares system memory: two batches
+/// can be in flight, and their staging buffers are system memory too (#9007).
+pub const SHARED_STAGING_LIMIT: u64 = 64 << 20;
+
+/// What a document needs on the GPU (bytes), for [`shared_memory_budget`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DocGpuBytes {
+    /// Its display texture set ([`GpuCanvas::display_bytes`](super::GpuCanvas::display_bytes)).
+    pub display: u64,
+    /// Its layer pages, all of them ([`GpuCanvas::layer_working_set`](super::GpuCanvas::layer_working_set)).
+    pub layers: u64,
+    /// At most the layer pages of one page cell ([`GpuCanvas::cell_working_set`](super::GpuCanvas::cell_working_set)).
+    pub cell: u64,
+}
+
+/// The Automatic compositor budget where the GPU shares system memory (#9007). There, resident
+/// layer pages are a second copy of the layers in the same memory the document already holds,
+/// so `budget` ([`memory_budget`]) stands only while the document's pixels and History
+/// (`pixels`), its display textures and its layer pages (`gpu`) together fit a sixth of physical
+/// memory (`ram`; 16 GB assumed when unknown): then the copy is affordable and whole-document
+/// edits draw on the GPU. Beyond that the budget holds the pages of [`SHARED_EDIT_CELLS`] page
+/// cells (at least [`SHARED_EDIT_BUDGET`]): edits in the view stay on the GPU, and refreshes of
+/// the whole document go to the background CPU compositor ([`OVER_BUDGET`]), which reads the
+/// document's own pixels instead of a copy. Never more than `budget`.
+pub fn shared_memory_budget(budget: u64, pixels: u64, gpu: DocGpuBytes, ram: Option<u64>) -> u64 {
+    let ram = ram.unwrap_or(16 << 30);
+    if pixels.saturating_add(gpu.display).saturating_add(gpu.layers) <= ram / 6 {
+        return budget;
+    }
+    let edit = photocraft_gpu::budget_for_pages(gpu.cell.saturating_mul(SHARED_EDIT_CELLS)).max(SHARED_EDIT_BUDGET);
+    budget.min(edit)
+}
+
+/// [`GpuCanvas::budget_for`](super::GpuCanvas::budget_for) on an adapter that does or doesn't share system memory (`shared`):
+/// [`memory_budget`], and where `shared` and GPU Memory is Automatic (`fixed` 0),
+/// [`shared_memory_budget`] of it, with `gpu_bytes` pricing the document on the GPU (only then).
+pub fn compositor_budget(
+    shared: bool,
+    allowance: u64,
+    pixels: u64,
+    ram: Option<u64>,
+    vram: Option<u64>,
+    fixed: u64,
+    gpu_bytes: impl FnOnce() -> DocGpuBytes,
+) -> u64 {
+    let budget = memory_budget(allowance, pixels, ram, vram, fixed);
+    if fixed > 0 || !shared {
+        return budget;
+    }
+    shared_memory_budget(budget, pixels, gpu_bytes(), ram)
+}
+
+/// Give `comp` the memory budget `bytes`. Where the GPU shares system memory and GPU Memory is
+/// Automatic (`shared`) its uploads also stage in batches of at most [`SHARED_STAGING_LIMIT`], and
+/// a lowered budget frees at once the pages and effect maps it no longer covers: the refresh it
+/// lowers may go to the CPU compositor, which renders nothing on the GPU that would evict them
+/// (switching from a small document to a large one). A graphics card's own memory, and GPU Memory
+/// set by hand, keep today's behaviour: the usual batches, and pages kept until a render needs the
+/// room. The staging limit is set either way, so it never outlives the reason for it.
+pub(super) fn apply_budget(comp: &mut photocraft_gpu::Compositor, bytes: u64, shared: bool) {
+    let before = comp.memory_budget();
+    comp.set_memory_budget(bytes);
+    comp.set_staging_limit(shared.then_some(SHARED_STAGING_LIMIT));
+    if shared && bytes < before {
+        comp.trim();
+    }
+}
+
 /// Why a document whose display textures don't fit [`canvas_budget`] is drawn on the CPU canvas.
 pub const OVER_CANVAS_BUDGET: &str = "the canvas exceeds the GPU texture budget; drawing it on the CPU canvas";
 

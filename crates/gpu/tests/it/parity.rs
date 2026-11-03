@@ -3189,6 +3189,118 @@ fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     assert_eq!(comp.resident_budget(), need, "the next memory budget lends again");
 }
 
+/// #9007: a full refresh a lowered budget sends to the CPU compositor renders nothing on the GPU,
+/// so nothing would evict what the budget no longer covers (switching from a small document to a
+/// large one where the GPU shares system memory). `trim` frees it at once, least recently used
+/// first, and the next render brings back what it needs.
+#[test]
+fn trim_enforces_a_lowered_budget_without_a_render() {
+    let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(g) = gpu() else { return };
+    let d = big_doc();
+    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    comp.set_texture_limit(PAGED_LIMIT);
+    comp.set_memory_budget(1 << 30);
+    render_to_vec(&mut comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    let (pages, maps) = (comp.resident_bytes(), comp.fx_cache_bytes() as u64);
+    assert!(pages > 0 && maps > 0, "{pages} {maps}");
+    assert_eq!(comp.trim(), (0, 0), "nothing is over a roomy budget");
+    // A lower budget alone drops nothing; trimming does, down to it.
+    comp.set_memory_budget(pages / 2);
+    assert_eq!(comp.resident_bytes(), pages);
+    let (n, freed) = comp.trim();
+    assert!(n > 0, "{n}");
+    assert!(comp.resident_bytes() <= comp.resident_budget(), "{} over {}", comp.resident_bytes(), comp.resident_budget());
+    let held = comp.resident_bytes() + comp.fx_cache_bytes() as u64 + comp.composite_cache_bytes();
+    assert!(held <= comp.memory_budget(), "{held} over {}", comp.memory_budget());
+    assert_eq!(freed, pages + maps - comp.resident_bytes() - comp.fx_cache_bytes() as u64);
+    assert_eq!(comp.trim(), (0, 0), "a second trim has nothing left to do");
+    let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(s.tiles_uploaded > 0, "{s:?}");
+    let worst = worst_diff(&photocraft_compose::flatten(&d).px, &out);
+    assert!(worst.0 <= TOL, "after a trim: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+    // A zero budget leaves nothing.
+    comp.set_memory_budget(0);
+    comp.trim();
+    assert_eq!((comp.resident_bytes(), comp.fx_cache_bytes(), comp.composite_cache_bytes()), (0, 0, 0));
+}
+
+/// #9007: a budget holding the pages of four page cells keeps an edit across a cell corner
+/// uploading only the tiles it changes, though the whole document needs nine cells' worth; with
+/// one cell's worth, each such edit uploads every layer's pages of the cells it touches again.
+/// `cell_working_set` prices a cell and `budget_for_pages` the budget whose page share holds it.
+#[test]
+fn a_budget_of_four_cells_keeps_edits_across_cell_corners_resident() {
+    let Some(g) = gpu() else { return };
+    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    comp.set_texture_limit(PAGED_LIMIT);
+    let page = comp.page_size();
+    let (side, p) = (page * 3, page as i32);
+    let mut d = base_doc(side, side);
+    for k in 0..3 {
+        d.layers.push(noise_layer(&format!("layer {k}"), PixelFormat::RGBA8, Rect::from_xywh(0, 0, side, side), 70 + k, 0.4));
+    }
+    let cell = photocraft_gpu::cell_working_set(&d, page);
+    assert_eq!(cell, 4 * u64::from(page).pow(2) * 4, "four RGBA8 layers, a page each");
+    assert_eq!(comp.working_set(&d, d.bounds()), 9 * cell);
+    assert_eq!(photocraft_gpu::layer_working_set(&d, d.bounds(), page), 9 * cell);
+    let corner = Rect::new(p - 20, p - 20, p + 20, p + 20);
+    for (cells, reuploads) in [(1, true), (4, false)] {
+        comp.set_memory_budget(photocraft_gpu::budget_for_pages(cells * cell));
+        comp.set_composite_cache_budget(0);
+        assert!(comp.resident_budget() >= cells * cell);
+        photocraft_gpu::render_to_vec(&mut comp, &g.device, &g.queue, &d, corner).unwrap();
+        // A dab of one tile at the corner, then the same refresh.
+        d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(p - 6, p - 6, p - 2, p - 2), &[0.9, 0.1, 0.2, 1.0]);
+        let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, corner).unwrap();
+        if reuploads {
+            assert!(s.tiles_uploaded >= 12, "{cells} cell(s): the other cells' pages come back {s:?}");
+        } else {
+            assert_eq!(s.tiles_uploaded, 1, "{cells} cells: only the changed tile {s:?}");
+        }
+        let worst = worst_diff(&photocraft_compose::render(&d, corner).px, &out);
+        assert!(worst.0 <= TOL, "{cells} cell(s): max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+    }
+    assert_eq!(photocraft_gpu::budget_for_pages(0), 0);
+    assert_eq!(photocraft_gpu::budget_for_pages(u64::MAX), u64::MAX);
+    for pages in [1u64, 3, 1 << 20, 6 << 30, 64 << 30] {
+        let budget = photocraft_gpu::budget_for_pages(pages);
+        comp.set_memory_budget(budget);
+        assert!(comp.resident_budget() >= pages, "{pages}: {}", comp.resident_budget());
+        assert!(budget <= pages + pages.div_ceil(3), "{pages}: {budget}");
+    }
+}
+
+/// #9007: where the GPU shares system memory, staging buffers are system memory too, and two
+/// batches can be in flight. A staging limit submits the uploads in small batches, inside one page
+/// cell as well (one cell of a many-layer document stages every layer's page), with the same
+/// uploads and the same result.
+#[test]
+fn layers_stream_through_a_small_budget_with_small_upload_batches() {
+    let Some(g) = gpu() else { return };
+    // Six 1600 × 1600 layers in one page cell: 77 MB of RGBA8 pages.
+    let (w, h) = (1600, 1600);
+    let mut d = base_doc(w, h);
+    for k in 0..5 {
+        d.layers.push(noise_layer(&format!("layer {k}"), PixelFormat::RGBA8, Rect::from_xywh(0, 0, w, h), 90 + k, 0.3));
+    }
+    let cpu = photocraft_compose::flatten(&d);
+    let mut runs = Vec::new();
+    for (limit, budget) in [(None, 1 << 30), (Some(16 << 20), 1 << 30), (Some(16 << 20), 32 << 20)] {
+        let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+        comp.set_memory_budget(budget);
+        comp.set_staging_limit(limit);
+        let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        let worst = worst_diff(&cpu.px, &out);
+        assert!(worst.0 <= TOL, "{limit:?}, {budget}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+        assert_eq!(s.cells, 1, "{s:?}");
+        runs.push((s.flushes, s.bytes_uploaded));
+    }
+    assert_eq!(runs[0].0, 0, "one cell under the default batch size: no intermediate submit {runs:?}");
+    assert!(runs[1].0 >= 2 && runs[2].0 >= 2, "{runs:?}");
+    assert!(runs.iter().all(|r| r.1 == runs[0].1), "the same uploads {runs:?}");
+}
+
 // A pass-through group holding an adjustment renders isolated when layers clip to it, on the GPU
 // as on the CPU (psd-tools passthrough_clipping_mask_adjustment).
 #[test]

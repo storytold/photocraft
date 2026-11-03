@@ -1,4 +1,4 @@
-use super::budget::video_memory;
+use super::budget::{shares_system_memory, video_memory};
 use super::setup::Refresh;
 use super::texels::LayerFit;
 use super::wgpu;
@@ -89,6 +89,9 @@ pub struct GpuInfo {
     /// The adapter's own memory in MB ([`video_memory`]): discrete GPUs where the platform
     /// reports it. It caps the GPU memory budgets.
     pub video_memory_mb: Option<u64>,
+    /// The adapter shares system memory ([`shares_system_memory`]): an integrated GPU, Apple
+    /// silicon among them. Large documents then redraw whole on the CPU by design (#9007).
+    pub shared_memory: bool,
     /// `performance.gpuBackend` at launch.
     pub preference: String,
     /// Every graphics adapter the window could have used, by name (Preferences › Performance ›
@@ -133,7 +136,9 @@ impl GpuInfo {
         }
         .to_string();
         self.driver = [info.driver.as_str(), info.driver_info.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ");
-        self.video_memory_mb = video_memory(info).map(|b| b >> 20);
+        let vram = video_memory(info);
+        self.video_memory_mb = vram.map(|b| b >> 20);
+        self.shared_memory = shares_system_memory(info, vram);
     }
 
     /// Human-readable lines for Help › System Info.
