@@ -350,7 +350,7 @@ mod tests {
                 vec![0.0f32, -1.0, -(w as f32), w as f32 - 1.0, w as f32, 16_777_215.0, 16_777_216.0, -16_777_216.0, 3.0e9, -3.0e9, f32::NAN, f32::INFINITY];
             coords.extend((-300..300).map(|i| i as f32 * 1.0));
             for &x0 in &coords {
-                for &y0 in coords.iter().step_by(7) {
+                for &y0 in coords.iter().filter(|y| !y.is_finite() || y.abs() > 20.0 || **y % 7.0 == 0.0) {
                     for (tx, ty) in [(0.0, 0.0), (0.25, 0.75), (0.999, 0.5)] {
                         let (new, old) = (p.sample_bilinear_wrap(x0, y0, tx, ty), old_bilinear(&p, x0, y0, tx, ty));
                         assert_eq!(new.to_bits(), old.to_bits(), "{w}x{h} at ({x0}, {y0})");
