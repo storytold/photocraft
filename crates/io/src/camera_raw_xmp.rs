@@ -286,7 +286,8 @@ pub fn is_photocraft_xmp(bytes: &[u8]) -> bool {
         return false;
     }
     let Ok(text) = std::str::from_utf8(bytes) else { return false };
-    let Ok(doc) = roxmltree::Document::parse(text.trim_start_matches('\u{feff}')) else { return false };
+    // The shared parser refuses nesting that would overflow the stack; such a file is not ours.
+    let Ok(doc) = crate::xml::parse(text.trim_start_matches('\u{feff}'), Default::default()) else { return false };
     doc.descendants()
         .find(|n| n.is_element() && n.tag_name().namespace() == Some(META_NS) && n.tag_name().name() == "xmpmeta")
         .and_then(|n| n.attribute((META_NS, "xmptk")))

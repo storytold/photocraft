@@ -382,6 +382,11 @@ fn rle_decode(input: &[u8], bpp: usize, pixels: usize) -> Result<Vec<u8>> {
             if plane.len() + run > pixels {
                 return Err(invalid("an RLE run crosses the end of its tile"));
             }
+            // A long run of length 0 consumes input without producing output: a tile of them
+            // (reachable from many tile pointers) is work the pixel budget never charges.
+            if run == 0 {
+                return Err(invalid("an RLE run has no length"));
+            }
             if verbatim {
                 let data = input.get(pos..pos + run).ok_or_else(|| invalid("an RLE tile is cut short"))?;
                 pos += run;
@@ -500,6 +505,8 @@ impl<'a> Image<'a> {
         let mut c = self.c.at(ptr);
         let (_w, _h) = (c.u32()?, c.u32()?);
         let name = c.string()?;
+        // As for layers: repeated channel pointers must not retain unbounded copies of one name.
+        self.meta_budget = self.meta_budget.checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?;
         let props = props(&mut c)?;
         let hptr = c.ptr()?;
         let saved = (self.base_type, self.precision);

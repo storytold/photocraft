@@ -140,25 +140,28 @@ fn parse_entries(data: &[u8]) -> Option<Vec<Entry>> {
         }
         let end = start.checked_add(len)?;
         let raw = data.get(start..end)?;
-        let kind = r.take(4)?;
+        // Read the entry from its own span: a text length past the declared end would otherwise
+        // decode the entries after it (again) into this one's text.
+        r.p = end;
+        let mut e = Reader { d: raw, p: 4 };
+        let kind = e.take(4)?;
         if kind != b"txtA" {
             out.push(Entry::Raw(raw.to_vec()));
-            r.p = end;
             continue;
         }
-        let open = r.u8()? != 0;
-        let (_flags, _opt) = (r.u8()?, r.u16()?);
-        let icon = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
-        let popup = [r.i32()?, r.i32()?, r.i32()?, r.i32()?];
-        let space = r.u16()?;
-        let c = [r.u16()?, r.u16()?, r.u16()?, r.u16()?];
-        let author = r.pascal()?;
-        let _name = r.pascal()?;
-        let modified = r.pascal()?;
-        let _data_len = r.u32()?;
-        let _key = r.take(4)?;
-        let n = r.u32()? as usize;
-        let text = decode_text(r.take(n)?);
+        let open = e.u8()? != 0;
+        let (_flags, _opt) = (e.u8()?, e.u16()?);
+        let icon = [e.i32()?, e.i32()?, e.i32()?, e.i32()?];
+        let popup = [e.i32()?, e.i32()?, e.i32()?, e.i32()?];
+        let space = e.u16()?;
+        let c = [e.u16()?, e.u16()?, e.u16()?, e.u16()?];
+        let author = e.pascal()?;
+        let _name = e.pascal()?;
+        let modified = e.pascal()?;
+        let _data_len = e.u32()?;
+        let _key = e.take(4)?;
+        let n = e.u32()? as usize;
+        let text = decode_text(e.take(n)?);
         out.push(Entry::Text(Note {
             author,
             color: color_from(space, c),
@@ -168,7 +171,6 @@ fn parse_entries(data: &[u8]) -> Option<Vec<Entry>> {
             open,
             modified,
         }));
-        r.p = end;
     }
     Some(out)
 }
@@ -441,6 +443,26 @@ mod tests {
         }
         let hostile = [0, 2, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, b's', b'n', b'd', b'A'];
         assert!(parse_anno(&hostile).is_none());
+    }
+
+    #[test]
+    fn a_text_length_past_the_entry_end_is_unreadable() {
+        // One txtA entry whose declared length ends before its text: the text would be read
+        // from the bytes after it (another entry's), as many times as there are such entries.
+        let mut entry = b"txtA".to_vec();
+        entry.extend_from_slice(&[1, 0x1C, 0, 1]);
+        entry.extend_from_slice(&[0; 32]); // icon + popup
+        entry.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); // space + colour
+        entry.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // author, name, modified (empty, padded)
+        entry.extend_from_slice(&[0, 0, 0, 0]);
+        entry.extend_from_slice(b"txtC");
+        entry.extend_from_slice(&64u32.to_be_bytes()); // 64 bytes of text, none in the entry
+        let len = (entry.len() + 4) as u32;
+        let mut b = vec![0, 2, 0, 1, 0, 0, 0, 1];
+        b.extend_from_slice(&len.to_be_bytes());
+        b.extend_from_slice(&entry);
+        b.extend_from_slice(&[b'A'; 64]);
+        assert!(parse_entries(&b).is_none());
     }
 
     #[test]

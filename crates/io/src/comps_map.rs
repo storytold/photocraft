@@ -230,6 +230,9 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
         // came before (#8093). Only comps that capture visibility take that inherited value; the
         // Last Document State entry (comp 0) and the others keep what the entry says.
         let mut inherited = true;
+        // Rejected offsets are counted and reported once per layer: a warning per setting, each
+        // carrying the layer's name, grew with name length × settings.
+        let mut out_of_range = 0usize;
         for s in settings {
             let resolved = s.visible.unwrap_or(inherited);
             if s.comps.iter().any(|id| *id != 0) {
@@ -239,10 +242,7 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 (Some(h), Some(o)) => {
                     let p = offset_position(h, o);
                     if p.is_none() {
-                        warnings.push(format!(
-                            "layer \"{}\": layer comp position offset ({}, {}) is out of range; that position was not imported",
-                            l.name, o.0, o.1
-                        ));
+                        out_of_range += 1;
                     }
                     p
                 }
@@ -257,6 +257,10 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 }
                 c.states.push(CompLayerState { layer: l.id, visible, position, appearance: None });
             }
+        }
+        if out_of_range > 0 {
+            let name: String = l.name.chars().take(64).collect();
+            warnings.push(format!("layer \"{name}\": {out_of_range} layer comp position offset(s) are out of range; those positions were not imported"));
         }
     }
     let last = (!last.states.is_empty()).then_some(last);
