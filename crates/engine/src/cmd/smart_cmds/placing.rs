@@ -1,7 +1,7 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
-use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
+use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes, source_without_stored_commands};
 use super::{
-    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
+    Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
     SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
 use photocraft_algo::transform::Interp;
@@ -259,7 +259,12 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.
-    cache_put(cache_key(&bytes, fmt), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
+    cache_put(
+        cache_key(&bytes, fmt),
+        SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
+        source_without_stored_commands(&sub, &JobCtx::new())?.then(crate::jobs::render_proof::Proof::default),
+        false,
+    );
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
     Ok(Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::translate(b.x0 as f64, b.y0 as f64), Some(cache)))))
