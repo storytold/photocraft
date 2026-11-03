@@ -24,6 +24,7 @@ pub mod curve;
 pub mod dynamics;
 pub mod mixer;
 pub mod outline;
+mod pattern_cache;
 pub mod presets;
 pub mod procedural;
 pub mod render;
