@@ -86,12 +86,33 @@ if [[ -n "${PHOTOCRAFT_WEB_FONTS_DIR:-}" ]]; then
   mkdir -p "$WORK/$NAME/fonts"
   cp "$FONTS_MANIFEST" "$WORK/$NAME/fonts/manifest.txt"
   # Field 3 is the font file, field 6 (if any) its licence file; both relative to the folder.
+  FONTS_ROOT="$(cd "$PHOTOCRAFT_WEB_FONTS_DIR" && pwd -P)"
   awk -F' [|] ' '!/^[[:space:]]*(#|$)/ { print $3; if ($6 != "") print $6 }' "$FONTS_MANIFEST" | sort -u | while IFS= read -r f; do
+    # Only under fonts/ (README.md › Fonts), so a manifest can't replace the app's own files.
     case "$f" in
-      "" | /* | *..* | *\\* | *://*) echo "error: $FONTS_MANIFEST: '$f' is not a relative path inside the folder" >&2; exit 1 ;;
+      fonts/*) ;;
+      *) echo "error: $FONTS_MANIFEST: '$f' is not a path under fonts/" >&2; exit 1 ;;
     esac
+    case "$f" in
+      */../* | */.. | *\\* | *://* | fonts/manifest.txt) echo "error: $FONTS_MANIFEST: '$f' is not a font or licence file inside the folder" >&2; exit 1 ;;
+    esac
+    src="$PHOTOCRAFT_WEB_FONTS_DIR/$f"
+    # A link could read any file the build can into the published site: refuse it, and anything
+    # that still resolves outside the folder through a linked directory.
+    if [[ -L "$src" || ! -f "$src" ]]; then
+      echo "error: $FONTS_MANIFEST: '$f' is not a regular file" >&2
+      exit 1
+    fi
+    case "$(cd "$(dirname "$src")" && pwd -P)/" in
+      "$FONTS_ROOT"/*) ;;
+      *) echo "error: $FONTS_MANIFEST: '$f' resolves outside $PHOTOCRAFT_WEB_FONTS_DIR" >&2; exit 1 ;;
+    esac
+    if [[ -e "$WORK/$NAME/$f" ]]; then
+      echo "error: $FONTS_MANIFEST: '$f' would replace a file already in the site" >&2
+      exit 1
+    fi
     mkdir -p "$WORK/$NAME/$(dirname "$f")"
-    cp "$PHOTOCRAFT_WEB_FONTS_DIR/$f" "$WORK/$NAME/$f"
+    cp "$src" "$WORK/$NAME/$f"
   done
   echo "served fonts: $(grep -cvE '^[[:space:]]*(#|$)' "$FONTS_MANIFEST") manifest lines from $PHOTOCRAFT_WEB_FONTS_DIR"
 fi
