@@ -195,7 +195,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let shown_id = egui::Id::new("camera-raw-window-frames");
+    let shown_id = egui::Id::unique("camera-raw-window-frames");
     let Some(d) = app.camera_raw.as_ref() else {
         ctx.data_mut(|m| m.remove::<u8>(shown_id));
         return;
