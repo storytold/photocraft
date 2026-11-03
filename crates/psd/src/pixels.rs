@@ -47,8 +47,16 @@ pub fn unpack_bits(bytes: &[u8], width: usize, height: usize) -> Result<Vec<u8>>
 
 /// Shared 1-bit expansion; `map` turns each bit (0 or 1) into the output byte.
 fn unpack_bits_with(bytes: &[u8], width: usize, height: usize, map: impl Fn(u8) -> u8) -> Result<Vec<u8>> {
-    let len = width.checked_mul(height).ok_or(PsdError::LimitExceeded("plane size overflow"))?;
+    // The output is one byte per declared pixel, eight times the packed input: bound it like
+    // every other decoded plane, and never size it past what the input actually holds.
+    let len = width
+        .checked_mul(height)
+        .filter(|&len| len as u64 <= crate::compression::MAX_DECODED_BYTES)
+        .ok_or(PsdError::LimitExceeded("expanded bitmap plane exceeds MAX_DECODED_BYTES"))?;
     let rb = width.div_ceil(8);
+    if rb.checked_mul(height).is_none_or(|packed| bytes.len() < packed) {
+        return Err(PsdError::invalid("bitmap plane is shorter than its rectangle"));
+    }
     let mut out = try_buffer(len)?;
     for y in 0..height {
         for x in 0..width {
@@ -253,13 +261,20 @@ impl<'a> Layer<'a> {
         if n.checked_mul(cc + 2 + 4).is_none_or(|len| len as u64 > crate::compression::MAX_DECODED_BYTES) {
             return Err(PsdError::LimitExceeded("RGBA output exceeds MAX_DECODED_BYTES"));
         }
+        // A record with a rectangle but no pixel channel would have every plane synthesized from
+        // the rectangle alone: nothing in the file backs that allocation.
+        if (0..cc as i16).chain([CHANNEL_TRANSPARENCY]).all(|id| self.record.channel(id).is_none()) {
+            return Err(PsdError::invalid("layer has no colour or transparency channel"));
+        }
         let mut color = Vec::with_capacity(cc);
         for id in 0..cc as i16 {
             let plane = if self.record.channel(id).is_some() {
                 let bytes = self.channel_bytes(id)?;
                 if depth == 8 { bytes } else { plane_to_u8(&bytes, depth, w, h)? }
             } else {
-                vec![if mode == ColorMode::Cmyk { 255 } else { 0 }; n]
+                let mut plane = try_buffer(n)?;
+                plane.resize(n, if mode == ColorMode::Cmyk { 255 } else { 0 });
+                plane
             };
             if plane.len() != n {
                 return Err(PsdError::invalid("channel size mismatch"));
@@ -290,6 +305,13 @@ impl<'a> Layer<'a> {
         Some((|| {
             let rect: Rect = self.record.channel_rect(id);
             let (w, h) = rect.size()?;
+            // The decoded channel and the 8-bit mask built from it are live together: refuse
+            // before decoding either (a 1-bit channel expands eightfold).
+            let n = w.checked_mul(h).ok_or(PsdError::LimitExceeded("mask size overflow"))?;
+            let per_pixel = usize::from(self.header.depth.div_ceil(8)) + 1;
+            if n.checked_mul(per_pixel).is_none_or(|len| len as u64 > crate::compression::MAX_DECODED_BYTES) {
+                return Err(PsdError::LimitExceeded("mask output exceeds MAX_DECODED_BYTES"));
+            }
             let data = plane_to_u8(&self.channel_bytes(id)?, self.header.depth, w, h)?;
             let default_value = match (self.record.layer_mask(), id) {
                 (Some(m), CHANNEL_REAL_USER_MASK) => m.real.map_or(m.default_color, |r| r.background),
@@ -372,6 +394,17 @@ impl PsdFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bitmap_expansion_is_bounded_by_its_input_and_the_decode_cap() {
+        // One packed byte cannot stand for a whole plane: the geometry alone sized the output.
+        assert!(matches!(unpack_bits(&[0xff], 16, 1), Err(PsdError::Invalid(_))));
+        assert!(matches!(plane_to_u8(&[0xff], 1, 8, 2), Err(PsdError::Invalid(_))));
+        // A plane past the decode cap is refused before any allocation (`1 << 40` pixels).
+        assert!(matches!(unpack_bits(&[0; 16], 1 << 20, 1 << 20), Err(PsdError::LimitExceeded(_))));
+        // Exactly enough input still unpacks.
+        assert_eq!(unpack_bits(&[0b1010_0000, 0b0000_0001], 3, 2).unwrap(), [1, 0, 1, 0, 0, 0]);
+    }
 
     #[test]
     fn float_composite_removes_white_matte_without_changing_native_data() {
