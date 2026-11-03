@@ -76,6 +76,9 @@ fn scale_rect(r: Rect, sx: f64, sy: f64) -> Rect {
     )
 }
 
+/// Most slices one HTML export lays out (a table of at most about 4M cells).
+const MAX_HTML_SLICES: usize = 1024;
+
 /// The HTML table for `cells` (rect, td body) over a `w`×`h` image: one column per distinct x
 /// edge, one row per y edge, colspan/rowspan per slice, and a spacer row fixing column widths.
 fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spacer: Option<&str>) -> String {
@@ -228,6 +231,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
+    // The HTML table is a grid of every distinct slice edge across and down: its cells grow
+    // with the square of the slice count, so a document of many tiny slices is refused here.
+    if html && chosen.len() > MAX_HTML_SLICES {
+        return Err(bad(cmd, format!("{} slices are more than an HTML table of {MAX_HTML_SLICES} can lay out", chosen.len())));
+    }
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
