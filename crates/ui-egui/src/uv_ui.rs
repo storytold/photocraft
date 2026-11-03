@@ -1175,7 +1175,7 @@ fn flush_mask_settings(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 /// Selecting a map also chooses its editable 2D document and native paint channel.
 pub(crate) fn select_view_channel(app: &mut PhotocraftApp, channel: Channel) {
-    if channel != Channel::Material && finish_paint(app).is_err() {
+    if channel != app.ui.uv_workbench.channel && finish_paint(app).is_err() {
         return;
     }
     app.ui.uv_workbench.channel = channel;
@@ -4251,6 +4251,23 @@ mod tests {
         crate::uv_workspace::restore_preferences(&mut app, Some(&legacy));
         assert_eq!(app.ui.uv_workbench.channel_2d, Channel::Normal);
     }
+
+    #[test]
+    fn view_channel_stays_unchanged_when_queued_paint_cannot_finish() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let mut app = fixture_app();
+        app.ui.uv_workbench.channel = Channel::Material;
+        app.ui.uv_workbench.channel_2d = Channel::Color;
+        let active_doc = app.session.active().unwrap().doc.id;
+        app.uv_cache.paint_for_test(crate::uv_paint::queued_input_for_test());
+
+        select_view_channel(&mut app, Channel::Normal);
+
+        assert_eq!(app.ui.uv_workbench.channel, Channel::Material, "failed finish does not partially change the 3D display");
+        assert_eq!(app.ui.uv_workbench.channel_2d, Channel::Color, "failed finish leaves the 2D document channel alone");
+        assert_eq!(app.session.active().unwrap().doc.id, active_doc, "failed finish does not change the engine's paint target");
+    }
+
     #[test]
     fn uv_mask_view_replaces_live_map_and_restores_material_without_touching_texture() {
         let _gpu = photocraft_testkit::gpu_lock();

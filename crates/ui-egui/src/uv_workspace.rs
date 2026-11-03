@@ -361,25 +361,22 @@ fn bar(app: &mut PhotocraftApp, ui: &mut Ui) {
                 uv_ui::select_2d_channel(app, channel);
             }
             let previous = app.ui.uv_workbench.channel;
-            let s = &mut app.ui.uv_workbench;
-            if s.channel != Channel::Material && !available.contains(&s.channel) {
-                s.channel = Channel::Material;
-            }
+            let selected_channel = if previous != Channel::Material && !available.contains(&previous) { Channel::Material } else { previous };
+            let mut selected_channel = selected_channel;
             let response = craft_ui::ComboBox::from_id_salt("uv-display-channel")
                 .width(170.0)
-                .selected_text(s.channel.label())
+                .selected_text(selected_channel.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut s.channel, Channel::Material, tl!("Material"));
+                    ui.selectable_value(&mut selected_channel, Channel::Material, tl!("Material"));
                     for kind in available.iter().copied() {
-                        ui.selectable_value(&mut s.channel, kind, kind.label());
+                        ui.selectable_value(&mut selected_channel, kind, kind.label());
                     }
                 })
                 .response;
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Display channel")));
             response.on_hover_text(tl!("Material shows the shaded material. Map channels show unlit texture colors."));
-            let channel = app.ui.uv_workbench.channel;
-            if channel != previous {
-                uv_ui::select_view_channel(app, channel);
+            if selected_channel != previous {
+                uv_ui::select_view_channel(app, selected_channel);
             }
             if app.ui.uv_workbench.split_view || !app.ui.uv_workbench.view_3d || app.ui.uv_workbench.floating_2d {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

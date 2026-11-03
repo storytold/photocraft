@@ -669,9 +669,15 @@ fn compose_levels_prefix(
     if !has_uv_binding {
         return photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region);
     }
-    let (_, ids) = crate::uv_mask::shell_ids_for_document(app, ctx, document, [size.width, size.height])?;
+    let needs_shell_ids =
+        stack.layers.iter().take(end_layer).any(|layer| layer.visible && layer.opacity > 0.0 && matches!(&layer.kind, EffectKind::Blur { .. }));
+    let Some((_, ids)) = crate::uv_mask::shell_ids_for_document(app, ctx, document, [size.width, size.height]) else {
+        return (!needs_shell_ids).then(|| photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region)).flatten();
+    };
     let canvas = photocraft_geom::Rect::new(0, 0, size.width as i32, size.height as i32);
-    let shell_ids = photocraft_compose::mask_paint::ShellIdMap::new(canvas, &ids)?;
+    let Some(shell_ids) = photocraft_compose::mask_paint::ShellIdMap::new(canvas, &ids) else {
+        return (!needs_shell_ids).then(|| photocraft_compose::mask_paint::compose_prefix(stack, end_layer, region)).flatten();
+    };
     photocraft_compose::mask_paint::compose_prefix_with_shell_ids(stack, end_layer, region, shell_ids)
 }
 
@@ -1269,6 +1275,38 @@ mod tests {
         let picked = &app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[1].kind;
         let input_black = if let EffectKind::Levels { input_black, .. } = picked { *input_black } else { f32::NAN };
         assert_eq!(input_black, expected_unbound, "an unbound mask picker keeps ordinary composition");
+    }
+
+    #[test]
+    fn levels_uses_ordinary_prefix_if_uv_shell_map_is_unavailable_without_visible_blur() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, ctx, doc_id, _layer_id, _material, stack, _ids, _source, target) = levels_shell_fixture();
+        let size = photocraft_doc::Size { width: 32, height: 32 };
+        app.session.uv.topology = None;
+        let region = photocraft_geom::Rect::new(target[0], target[1], target[0] + 1, target[1] + 1);
+
+        assert_eq!(compose_levels_prefix(&app, &ctx, doc_id, size, &stack, 1, region), None, "visible Blur still requires shell IDs");
+
+        let mut hidden_blur = stack.clone();
+        hidden_blur.layers[0].visible = false;
+        let expected_without_visible_blur = photocraft_compose::mask_paint::compose_prefix(&hidden_blur, 1, region);
+        assert_eq!(
+            compose_levels_prefix(&app, &ctx, doc_id, size, &hidden_blur, 1, region),
+            expected_without_visible_blur,
+            "without an active Blur prefix, unavailable shell ownership falls back to ordinary composition"
+        );
+        let mut transparent_blur = stack.clone();
+        transparent_blur.layers[0].opacity = 0.0;
+        let expected_without_active_blur = photocraft_compose::mask_paint::compose_prefix(&transparent_blur, 1, region);
+        assert_eq!(
+            compose_levels_prefix(&app, &ctx, doc_id, size, &transparent_blur, 1, region),
+            expected_without_active_blur,
+            "zero-opacity Blur does not require shell ownership"
+        );
+        assert!(
+            compose_levels_prefix(&app, &ctx, doc_id, size, &stack, 0, region).is_some(),
+            "a Levels effect with no preceding Blur does not need the shell map"
+        );
     }
 
     #[test]

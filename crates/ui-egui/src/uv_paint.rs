@@ -166,6 +166,17 @@ fn defer_pointer_event(state: &mut State, event: PointerEvent) {
     state.deferred_pointer_events.push_back(event);
 }
 
+fn keep_blocked_wrap_release(held: bool, release_pending: bool, events: &mut VecDeque<PointerEvent>) {
+    if !held || release_pending {
+        events.clear();
+    } else {
+        let release = events.drain(..).find(|event| matches!(event, PointerEvent::Up { .. } | PointerEvent::Gone));
+        if let Some(release) = release {
+            events.push_back(release);
+        }
+    }
+}
+
 fn defer_new_gesture_behind_path(state: &mut State, event: PointerEvent) -> bool {
     if state.path_pending.is_empty() {
         return false;
@@ -248,6 +259,22 @@ fn flush_wrap_samples_at(app: &mut PhotocraftApp, state: &mut State, now_ms: f64
     true
 }
 
+fn cancel_blocked_wrap(app: &mut PhotocraftApp, state: &mut State) -> bool {
+    if state.wrapped
+        && let Err(error) = app.run("paint.uvWrap", json!({"end":true}))
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+        return false;
+    }
+    let line_anchor = state.line_anchor.clone();
+    *state = State { line_anchor, ..Default::default() };
+    app.uv_paint_key = None;
+    app.ui.status = tl!("Queued UV Wrap input was discarded; already applied samples remain as an undoable stroke.").into();
+    app.ui.status_error = false;
+    true
+}
+
 fn flush_wrap_group(app: &mut PhotocraftApp, state: &mut State, options: &serde_json::Value, deferred: bool) -> bool {
     let mut sent = 0;
     let pending_len = if deferred { state.wrap_deferred.front().map_or(0, |batch| batch.stamps.len()) } else { state.wrap_pending.len() };
@@ -266,7 +293,10 @@ fn flush_wrap_group(app: &mut PhotocraftApp, state: &mut State, options: &serde_
         };
         object.insert("stamps".into(), serde_json::Value::Array(stamps));
         match app.run("paint.uvWrap", params) {
-            Ok(_) => sent += count,
+            Ok(_) => {
+                sent += count;
+                state.wrapped = true;
+            }
             Err(error) => {
                 if deferred {
                     if let Some(batch) = state.wrap_deferred.front_mut() {
@@ -957,7 +987,7 @@ fn finish_after_pending_path(app: &mut PhotocraftApp, ctx: &egui::Context, state
             return;
         }
         let deferred_pointer_events = std::mem::take(&mut state.deferred_pointer_events);
-        finish(app, state);
+        let _ = finish_inner(app, state, false, true);
         state.deferred_pointer_events = deferred_pointer_events;
         app.tool_override = previous_override;
         if !state.deferred_pointer_events.is_empty() {
@@ -990,6 +1020,11 @@ fn defer_wrap_path(wrap: bool, action: Action, tool: Tool) -> bool {
 #[cfg(test)]
 pub(crate) fn pending_path_len(state: &State) -> usize {
     state.path_pending.len()
+}
+
+#[cfg(test)]
+pub(crate) fn queued_input_for_test() -> State {
+    State { path_pending: VecDeque::from([PathPoint::from(egui::pos2(4.0, 8.0))]), path_release_pending: true, ..Default::default() }
 }
 
 fn surface_tool(tool: Tool) -> bool {
@@ -1096,6 +1131,14 @@ pub(crate) fn input(
     let now_ms = ui.input(|input| input.time) * 1000.0;
     let frame_time_base = state.path_pending.back().or(state.path_last.as_ref()).map_or(now_ms, |point| point.time_ms).min(now_ms);
     let mut incoming_pointer_events = collect_pointer_events(app, ui, response, &events, tool, now_ms, frame_time_base);
+    if state.wrap_blocked {
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            let _ = cancel_blocked_wrap(app, state);
+            return;
+        }
+        keep_blocked_wrap_release(state.held, state.path_release_pending, &mut incoming_pointer_events);
+        keep_blocked_wrap_release(state.held, state.path_release_pending, &mut state.deferred_pointer_events);
+    }
     if state.native_gpu_release_waiting {
         if canvas::complete_native_mask_gpu_release(app) {
             state.native_gpu_release_waiting = false;
@@ -1169,6 +1212,17 @@ pub(crate) fn input(
     app.defer_live_stroke = true;
     let mut defer_remaining_pointer_events = false;
     while let Some(event) = pointer_events.pop_front() {
+        if state.wrap_blocked {
+            match event {
+                PointerEvent::Up { .. } | PointerEvent::Gone if state.held && !state.path_release_pending => {
+                    mask_stroke_finished |= native_mask_brush;
+                    state.held = false;
+                    state.path_release_pending = true;
+                }
+                _ => {}
+            }
+            continue;
+        }
         if defer_remaining_pointer_events {
             defer_pointer_event(state, event);
             continue;
@@ -1293,6 +1347,7 @@ pub(crate) fn input(
         if bounded_mask_path
             || state.surface_line_active
             || defer_symmetry_path(native_surface_3d, state.suppress_document_symmetry, state.tool.unwrap_or(tool))
+            || defer_wrap_path(view.wrap, state.action, state.tool.unwrap_or(tool))
         {
             state.path_release_pending = true;
         } else {
@@ -1658,6 +1713,55 @@ mod tests {
         assert_eq!((point.pen.unwrap().pressure, point.time_ms, *modifiers), (0.75, 3.0, Modifiers { shift: true, ..Modifiers::NONE }));
         let PointerEvent::Up { point, .. } = events.next().unwrap() else { panic!("release follows all moves") };
         assert_eq!((point.pen.unwrap().pressure, point.time_ms), (0.2, 4.0));
+    }
+
+    #[test]
+    fn blocked_wrap_input_keeps_only_one_active_release_event() {
+        let point = PathPoint { screen: egui::pos2(20.0, 20.0), pen: None, time_ms: 1.0 };
+        let mut events = VecDeque::from([
+            PointerEvent::Down { point, modifiers: Modifiers::NONE, tool: Tool::Brush, symmetry_enabled: false },
+            PointerEvent::Move { point, modifiers: Modifiers::NONE },
+            PointerEvent::Up { point, modifiers: Modifiers::NONE },
+            PointerEvent::Gone,
+        ]);
+        keep_blocked_wrap_release(true, false, &mut events);
+        assert_eq!(events.len(), 1, "blocked Wrap input retains at most one release event");
+        assert!(matches!(events.front(), Some(PointerEvent::Up { .. })));
+        keep_blocked_wrap_release(false, true, &mut events);
+        assert!(events.is_empty(), "an already released gesture queues no terminal events");
+    }
+
+    #[test]
+    fn escape_discards_unsent_wrap_tail_but_keeps_applied_samples_undoable() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut app, _scene, geometry) = setup(Tool::Brush);
+        let material = app.session.uv.material;
+        let (triangle_index, triangle) = geometry.triangles.iter().enumerate().find(|(_, triangle)| triangle.material == material).unwrap();
+        let position: [f64; 3] = std::array::from_fn(|axis| {
+            let prepared_center = triangle.positions.iter().map(|point| f64::from(point[axis])).sum::<f64>() / 3.0;
+            geometry.center[axis] + prepared_center * geometry.diameter
+        });
+        let before = app.session.active().unwrap().doc.clone();
+        app.run("paint.uvWrap", json!({"triangle":triangle_index,"position":position,"pressure":1.0,"coalesce":"blocked-wrap-cancel","target":"pixels"}))
+            .unwrap();
+        let applied = app.session.active().unwrap().doc.clone();
+        assert_ne!(applied.layers[0].surface(), before.layers[0].surface(), "the fixture applies the prefix before cancellation");
+
+        let mut state = State {
+            wrapped: true,
+            held: true,
+            wrap_blocked: true,
+            wrap_pending: vec![json!({"triangle":triangle_index,"position":position,"pressure":1.0})],
+            path_pending: VecDeque::from([PathPoint::from(egui::pos2(12.0, 14.0))]),
+            deferred_pointer_events: VecDeque::from([PointerEvent::Move { point: PathPoint::from(egui::pos2(15.0, 17.0)), modifiers: Modifiers::NONE }]),
+            ..Default::default()
+        };
+        assert!(cancel_blocked_wrap(&mut app, &mut state));
+        assert!(!state.wrap_blocked && !state.held);
+        assert!(state.wrap_pending.is_empty() && state.path_pending.is_empty() && state.deferred_pointer_events.is_empty());
+        assert_eq!(app.session.active().unwrap().doc.layers[0].surface(), applied.layers[0].surface());
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers[0].surface(), before.layers[0].surface());
     }
 
     #[test]
