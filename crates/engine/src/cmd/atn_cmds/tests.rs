@@ -335,6 +335,21 @@ fn load_renames_play_targets_longer_than_the_name_limit() {
     assert_eq!(caller.steps[0].1["action"], renamed.as_str());
 }
 
+/// The `set` override is copied into every loaded action, so it is held to the same limit as a
+/// set name read from the file.
+#[test]
+fn load_clips_an_overlong_set_override() {
+    let mut s = Session::new();
+    let actions: Vec<Action> = (0..3).map(|i| Action::new(format!("A{i}"), vec![])).collect();
+    let refs: Vec<&Action> = actions.iter().collect();
+    let (bytes, _) = export("File", &refs, &[], false).unwrap();
+    let long = "s".repeat(super::convert::MAX_NAME_CHARS * 4);
+    s.execute("actions.load", json!({"data": b64(&bytes), "set": long})).unwrap();
+    let clipped = "s".repeat(super::convert::MAX_NAME_CHARS);
+    assert_eq!(s.actions.list.len(), 3);
+    assert!(s.actions.list.iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
+}
+
 #[test]
 fn load_many_duplicate_names_get_sequential_suffixes() {
     // Several actions share one base name. Deduplication must stay O(n) overall and produce

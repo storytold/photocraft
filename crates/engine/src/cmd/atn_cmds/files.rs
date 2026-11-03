@@ -1,4 +1,4 @@
-use super::convert::{UniqueNames, export, import_with_encoding};
+use super::convert::{UniqueNames, clip_name, export, import_with_encoding};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
@@ -17,7 +17,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
-            imp.set = n.trim().to_string();
+            // Held to the importer's name limit: the set name is copied into every action.
+            imp.set = clip_name(n.trim());
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }

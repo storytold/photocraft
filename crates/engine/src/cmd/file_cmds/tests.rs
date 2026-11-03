@@ -2011,3 +2011,26 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
         assert_eq!(sanitize(name), name);
     }
 }
+
+/// A droplet whose steps run the same droplet stops at the nesting limit with an error for the
+/// input, rather than opening documents until the stack or memory runs out.
+#[test]
+fn a_droplet_that_runs_itself_stops_at_the_nesting_limit() {
+    let dir = tmp("droplet-recursion");
+    let input = png(&dir, "a.png", 4, 4, "#ff0000");
+    let droplet = join(&dir, "self.pcdroplet");
+    let out = join(&dir, "out");
+    let step = json!(["file.automate.runDroplet", {"droplet": droplet, "input": [input], "output": out}]);
+    std::fs::write(&droplet, json!({"photocraftDroplet": 1, "name": "self", "action": {"steps": [step]}, "options": {"format": "png"}}).to_string()).unwrap();
+    let mut s = Session::new();
+    // Each level runs the next in a scratch session; the innermost is refused, so this returns.
+    s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [input], "output": out})).unwrap();
+    assert_eq!(s.actions.batch_depth, 0);
+    // At the limit, the droplet is refused before its file is read (this one doesn't exist).
+    s.actions.batch_depth = crate::actions_cmds::MAX_BATCH_DEPTH;
+    let missing = join(&dir, "missing.pcdroplet");
+    let e = s.execute("file.automate.runDroplet", json!({"droplet": missing, "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
+    let e = s.execute("file.automate.batch", json!({"steps": [], "input": [input], "output": out})).unwrap_err();
+    assert!(e.to_string().contains("nested more than"), "{e}");
+}

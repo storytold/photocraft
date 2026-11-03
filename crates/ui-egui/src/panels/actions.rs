@@ -187,7 +187,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             return Err(e.to_string());
         }
     };
-    let recording = match actions_cmds::begin_playback(&mut app.session, &action) {
+    let recording = match actions_cmds::begin_playback(&mut app.session, &action, from) {
         Ok(r) => r,
         Err(e) => {
             restore_recording(app, suspended.as_ref());

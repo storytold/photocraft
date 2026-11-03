@@ -244,8 +244,21 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Refuses a batch or droplet nested past [`MAX_BATCH_DEPTH`](crate::actions_cmds::MAX_BATCH_DEPTH),
+/// before it reads or decodes anything: each level keeps its parent's scratch document open.
+pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
+    if s.actions.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
+        return Err(EngineError::BadParams {
+            cmd: cmd.into(),
+            msg: format!("batches and droplets are nested more than {} deep", crate::actions_cmds::MAX_BATCH_DEPTH),
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
+    check_batch_depth(s, cmd)?;
     let mut steps =
         parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
     // Each result goes to the destination folder, which overrides the action's recorded Save /
@@ -275,8 +288,11 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // decoded and saved even with no steps) to the playback tree it is in and
     // hands the count on, so a batch of batches can't multiply past the limit. A top-level batch
     // is not limited by it.
+    // A batch nested in another batch (a droplet a droplet runs) is charged the same way, so the
+    // levels share one budget.
+    let nested = s.actions.playing > 0 || s.actions.batch_depth > 0;
     let mut playback_steps = 0;
-    if s.actions.playing > 0 {
+    if nested {
         playback_steps = s.actions.playback_steps.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
             return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the playback step limit of the action that runs it".into() });
@@ -288,6 +304,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         playing: s.actions.playing,
         playback_stack: s.actions.playback_stack.clone(),
         playback_steps,
+        batch_depth: s.actions.batch_depth.saturating_add(1),
         ..Default::default()
     };
     let names = batch_naming::plan(&inputs, &output, &format, p)?;
@@ -342,7 +359,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         Some(names) => process_outputs(s, inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run),
         None => process_tree(s, &inputs, &output, &format, save, "", &run),
     };
-    if s.actions.playing > 0 {
+    if nested {
         s.actions.playback_steps = carried.get();
     }
     Ok(r)
