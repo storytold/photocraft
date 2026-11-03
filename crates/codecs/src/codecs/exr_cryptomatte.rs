@@ -124,25 +124,33 @@ fn parse_manifest(json: &str) -> Vec<(f32, String)> {
     out
 }
 
-/// The stream channel names of a layer (`crypto_asset00`, `crypto_asset01`, …, exactly as
-/// the file spells them), matched leniently: the channel prefix and the `name` attribute
-/// differ in case or `_`/`-` between renderers (`CryptoAsset` vs `crypto_asset`).
-fn layer_streams(header: &exr::meta::header::Header, name: &str) -> Vec<String> {
-    let normalize = |s: &str| s.to_ascii_lowercase().replace(['_', '-'], "");
-    let want = normalize(name);
-    let mut found: Vec<(u32, String)> = header
-        .channels
-        .list
-        .iter()
-        .filter_map(|c| {
-            let s = split_stream(&c.name.to_string())?;
-            (!s.coverage).then_some((s.index, s.stream))
+/// How a layer name compares with a stream's channel prefix: the channel prefix and the `name`
+/// attribute differ in case or `_`/`-` between renderers (`CryptoAsset` vs `crypto_asset`).
+fn normalize_layer(s: &str) -> String {
+    s.to_ascii_lowercase().replace(['_', '-'], "")
+}
+
+/// The stream channel names of every layer of a header (`crypto_asset00`, `crypto_asset01`, …,
+/// exactly as the file spells them), keyed by [`normalize_layer`] of their prefix. Built in one
+/// pass over the channels, so looking up each `cryptomatte/<key>/name` costs no channel scan.
+fn layer_streams(header: &exr::meta::header::Header) -> std::collections::HashMap<String, Vec<String>> {
+    let mut found: std::collections::HashMap<String, Vec<(u32, String)>> = std::collections::HashMap::new();
+    for c in &header.channels.list {
+        let Some(s) = split_stream(&c.name.to_string()) else { continue };
+        if s.coverage {
+            continue;
+        }
+        let layer = normalize_layer(s.stream.trim_end_matches(|c: char| c.is_ascii_digit()));
+        found.entry(layer).or_default().push((s.index, s.stream));
+    }
+    found
+        .into_iter()
+        .map(|(layer, mut streams)| {
+            streams.sort();
+            streams.dedup();
+            (layer, streams.into_iter().map(|(_, stream)| stream).collect())
         })
-        .filter(|(_, stream)| normalize(stream.trim_end_matches(|c: char| c.is_ascii_digit())) == want)
-        .collect();
-    found.sort();
-    found.dedup();
-    found.into_iter().map(|(_, stream)| stream).collect()
+        .collect()
 }
 
 /// Lists every Cryptomatte layer of the file from the headers alone: what a Cryptomatte
@@ -157,13 +165,15 @@ pub(crate) fn layers(bytes: &[u8], limits: &Limits) -> Result<Vec<CryptomatteLay
         let size = header.layer_size;
         let (w, h) = (u32::try_from(size.0).unwrap_or(u32::MAX), u32::try_from(size.1).unwrap_or(u32::MAX));
         limits.check_bytes(w, h, 8)?;
-        // Cache stream lists by resolved layer name: layer_streams() rescans every channel,
-        // and distinct file-controlled keys can all name the same layer, which would turn
-        // channel discovery into O(keys * channels) work and allocate a fresh list each time.
-        let mut streams_for: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        // Every channel's stream, indexed once by layer. Each layer's list is moved into the
+        // first key that names it: file-controlled keys can all name the same layer (in any
+        // case or `_`/`-` spelling), and copying its list for each of them would make the
+        // result grow with keys * channels. A second key naming a listed layer is skipped;
+        // `decode` resolves a name to its first layer anyway.
+        let mut streams_for = layer_streams(header);
         for key in cryptomatte_keys(&header.own_attributes.other) {
             let Some(name) = attribute(&header.own_attributes.other, &key, "name") else { continue };
-            let channels = streams_for.entry(name.clone()).or_insert_with(|| layer_streams(header, name.as_str())).clone();
+            let Some(channels) = streams_for.remove(&normalize_layer(&name)) else { continue };
             if channels.is_empty() {
                 continue;
             }
@@ -240,9 +250,12 @@ pub(crate) fn decode(bytes: &[u8], layer_name: &str, limits: &Limits) -> Result<
     // Two (ID, coverage) ranks per set: rank `slot * 2 + stream.rank`.
     let mut ids: Vec<Vec<f32>> = vec![Vec::new(); ranks];
     let mut coverages: Vec<Vec<f32>> = vec![Vec::new(); ranks];
+    // Stream name -> its slot, built once: a linear search per decoded channel is quadratic in
+    // the file's stream count.
+    let slots: std::collections::HashMap<&str, usize> = layer.channels.iter().enumerate().rev().map(|(i, s)| (s.as_str(), i)).collect();
     for c in &ex_layer.channel_data.list {
         let Some(stream) = split_stream(&c.name.to_string()) else { continue };
-        let Some(slot) = layer.channels.iter().position(|s| *s == stream.stream) else { continue };
+        let Some(&slot) = slots.get(stream.stream.as_str()) else { continue };
         let values: Vec<f32> = c.sample_data.values_as_f32().collect();
         if values.len() != npx {
             return Err(CodecError::malformed(F, "a Cryptomatte channel is smaller than its layer"));
