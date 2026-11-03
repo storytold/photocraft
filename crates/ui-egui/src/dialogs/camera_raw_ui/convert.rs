@@ -48,6 +48,36 @@ pub(super) fn apply_raw_conversions(app: &mut PhotocraftApp, index: usize, d: &p
     Ok(())
 }
 
+/// `area` of `surf` averaged over `k`×`k` blocks, row-major (`ceil(w/k)` × `ceil(h/k)`). A block
+/// past the last row repeats that row, as a clamped edge; each source row is still read once,
+/// weighted by the block rows it stands for (a one-row domain read the same row `k` times, which
+/// is quadratic in its width).
+fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+    let mut proxy = vec![[0.0f32; 4]; pw * ph];
+    let mut row = vec![[0.0f32; 4]; w];
+    for py in 0..ph {
+        let mut acc = vec![[0.0f32; 5]; pw];
+        for sy in py * k..((py + 1) * k).min(h) {
+            let weight = if sy == h - 1 { ((py + 1) * k - sy) as f32 } else { 1.0 };
+            let y = area.y0 + sy as i32;
+            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
+            for (x, q) in row.iter().enumerate() {
+                let a = &mut acc[x / k];
+                for c in 0..4 {
+                    a[c] += q[c] * weight;
+                }
+                a[4] += weight;
+            }
+        }
+        for (x, a) in acc.iter().enumerate() {
+            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
+        }
+    }
+    proxy
+}
+
 pub(super) fn open_pixels(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -78,26 +108,7 @@ pub(super) fn open_pixels(
     }
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    let mut row = vec![[0.0f32; 4]; w];
-    for py in 0..ph {
-        // Box-average k×k blocks.
-        let mut acc = vec![[0.0f32; 5]; pw];
-        for dy in 0..k {
-            let y = area.y0 + (py * k + dy).min(h - 1) as i32;
-            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-            for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
-                for c in 0..4 {
-                    a[c] += q[c];
-                }
-                a[4] += 1.0;
-            }
-        }
-        for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
-        }
-    }
+    let proxy = box_average(&surf, area, k);
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
@@ -189,4 +200,51 @@ pub(super) fn open_pixels(
     d.render(ctx);
     app.camera_raw = Some(d);
     Ok(())
+}
+
+#[cfg(test)]
+mod box_average_tests {
+    use super::{Rect, box_average};
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+
+    /// The clamped reference: every block row read, past the last row the last row again.
+    fn reference(surf: &Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+        let mut out = Vec::new();
+        let mut row = vec![[0.0f32; 4]; w];
+        for py in 0..ph {
+            let mut acc = vec![[0.0f32; 5]; pw];
+            for dy in 0..k {
+                let y = area.y0 + (py * k + dy).min(h - 1) as i32;
+                surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
+                for (x, q) in row.iter().enumerate() {
+                    for c in 0..4 {
+                        acc[x / k][c] += q[c];
+                    }
+                    acc[x / k][4] += 1.0;
+                }
+            }
+            out.extend(acc.iter().map(|a| [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]]));
+        }
+        out
+    }
+
+    #[test]
+    fn blocks_past_the_last_row_match_the_clamped_average() {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        for x in 0..37 {
+            for y in 0..5 {
+                surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[x as f32 / 37.0, y as f32 / 5.0, 0.5, 1.0]);
+            }
+        }
+        for (area, k) in [(Rect::new(0, 0, 37, 5), 2), (Rect::new(0, 0, 37, 5), 4), (Rect::new(0, 2, 37, 3), 16), (Rect::new(3, 0, 37, 5), 7)] {
+            let (got, want) = (box_average(&surf, area, k), reference(&surf, area, k));
+            assert_eq!(got.len(), want.len());
+            for (g, w) in got.iter().zip(&want) {
+                assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{area:?} k={k}: {g:?} vs {w:?}");
+            }
+        }
+    }
 }
