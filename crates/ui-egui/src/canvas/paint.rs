@@ -552,7 +552,12 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             }
             trail.draw(painter, doc_rect, xf.flip, col);
         }
-        t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live),
+        t if crate::vector_ui::is_shape_tool(t) => {
+            crate::vector_ui::draw_shape_preview(app, painter, xf, t, d.start, last, d.live);
+            if let Some(bounds) = crate::vector_ui::shape_bounds(&app.ui.tool_options, t, d.start, last, d.live) {
+                draw_marquee_readout(app, painter.ctx(), xf.to_screen(last[0] as f32, last[1] as f32), size_readout(app, bounds));
+            }
+        }
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
             // Mapped corner by corner like the other marquees, so a rotated view shows the line
             // where the release commits it (#2512).
