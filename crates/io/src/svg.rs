@@ -1512,7 +1512,13 @@ impl Conv {
         // resvg's own buffers for this element (nested layers, filters, clips, pattern tiles) come on
         // top of the layers already kept.
         if let Err(refusal) = limits::check(std::slice::from_ref(node), ts, w, h, self.retained_pixel_bytes) {
-            let why = if refusal.complex { "is too complex to check" } else { "needs too much memory to rasterise" };
+            let why = if refusal.complex {
+                "is too complex to check"
+            } else if refusal.memory {
+                "needs too much memory to rasterise"
+            } else {
+                "exceeds a rasterising limit"
+            };
             self.note("raster-scratch", format!("SVG: an element was dropped because it {why}: {}", refusal.message));
             return None;
         }

@@ -1017,7 +1017,7 @@ fn long_clip_and_mask_chains_are_refused() {
         let next = if i + 1 < n { format!(" clip-path=\"url(#c{})\"", i + 1) } else { String::new() };
         clips.push_str(&format!("<clipPath id=\"c{i}\"{next}><rect width=\"2000\" height=\"2000\"/></clipPath>"));
         let next = if i + 1 < n { format!(" mask=\"url(#m{})\"", i + 1) } else { String::new() };
-        masks.push_str(&format!("<mask id=\"m{i}\"{next}><rect width=\"2000\" height=\"2000\" fill=\"#fff\"/></mask>"));
+        masks.push_str(&format!("<mask id=\"m{i}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"40\" height=\"40\"{next}><rect width=\"2000\" height=\"2000\" fill=\"#fff\"/></mask>"));
     }
     for (defs, attr) in [(clips, "clip-path=\"url(#c0)\""), (masks, "mask=\"url(#m0)\"")] {
         let svg = format!(
@@ -1028,6 +1028,34 @@ fn long_clip_and_mask_chains_are_refused() {
     // A short chain is fine.
     let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"200\"><defs><clipPath id=\"a\" clip-path=\"url(#b)\"><rect width=\"100\" height=\"100\"/></clipPath><clipPath id=\"b\"><rect width=\"80\" height=\"80\"/></clipPath></defs><rect width=\"200\" height=\"200\" clip-path=\"url(#a)\"/></svg>";
     assert!(rasterize(svg.as_bytes(), 1.0).is_ok());
+}
+
+/// A mask chain that ends in a chain the walk already measured is still one long chain: the cached
+/// length must be checked against the cap too, not only the links walked on the way in.
+#[test]
+fn a_mask_chain_that_joins_a_cached_chain_is_still_capped() {
+    let mut defs = String::new();
+    // `t0..t14` is 15 links long, under the cap of 16.
+    for i in 0..15 {
+        let next = if i + 1 < 15 { format!(" mask=\"url(#t{})\"", i + 1) } else { String::new() };
+        defs.push_str(&format!("<mask id=\"t{i}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"40\" height=\"40\"{next}><rect width=\"20\" height=\"20\" fill=\"#fff\"/></mask>"));
+    }
+    // `m0..m9` is 10 links that end in `t0`: 25 links in all.
+    for i in 0..10 {
+        let next = if i + 1 < 10 { format!(" mask=\"url(#m{})\"", i + 1) } else { " mask=\"url(#t0)\"".to_string() };
+        defs.push_str(&format!("<mask id=\"m{i}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"40\" height=\"40\"{next}><rect width=\"20\" height=\"20\" fill=\"#fff\"/></mask>"));
+    }
+    let uses = |first: &str, second: &str| {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"40\"><defs>{defs}</defs><rect width=\"20\" height=\"20\" mask=\"url(#{first})\"/><rect x=\"20\" width=\"20\" height=\"20\" mask=\"url(#{second})\"/></svg>"
+        )
+    };
+    // The short chain alone is fine, and so is the cached chain used twice.
+    assert!(rasterize(uses("t0", "t0").as_bytes(), 1.0).is_ok());
+    // The long chain, measured after the cached one, is refused.
+    too_big(&uses("t0", "m0"));
+    // And refused on its own too.
+    too_big(&uses("m0", "m0"));
 }
 
 /// The estimate itself has a depth limit, so a deep drawing cannot overflow its own walk.

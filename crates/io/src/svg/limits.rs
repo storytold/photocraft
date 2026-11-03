@@ -54,6 +54,8 @@ const MAX_NODES: usize = 2_000_000;
 pub(super) struct Refusal {
     /// Too many elements to check, rather than too much memory.
     pub(super) complex: bool,
+    /// Over the memory budget, as opposed to a nesting, chain or element-count cap.
+    pub(super) memory: bool,
     pub(super) message: String,
 }
 
@@ -63,11 +65,11 @@ fn mib(bytes: f64) -> String {
 
 fn memory(what: &str, bytes: f64) -> Refusal {
     let limit = MAX_PEAK_PIXEL_BYTES >> 20;
-    Refusal { complex: false, message: format!("{what} needs {}, over the {limit} MiB limit", mib(bytes)) }
+    Refusal { complex: false, memory: true, message: format!("{what} needs {}, over the {limit} MiB limit", mib(bytes)) }
 }
 
 fn limit(what: &str, value: usize) -> Refusal {
-    Refusal { complex: false, message: format!("{what} (limit {value})") }
+    Refusal { complex: false, memory: false, message: format!("{what} (limit {value})") }
 }
 
 /// A pixel count that is never NaN: unknown sizes count as unbounded.
@@ -171,7 +173,7 @@ impl Walk {
     fn node(&mut self, node: &usvg::Node, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
         self.visited += 1;
         if self.visited > MAX_NODES {
-            return Err(Refusal { complex: true, message: format!("the drawing has more than {MAX_NODES} elements to check") });
+            return Err(Refusal { complex: true, memory: false, message: format!("the drawing has more than {MAX_NODES} elements to check") });
         }
         match node {
             usvg::Node::Group(g) if !g.should_isolate() => self.plain(g, ts, cx),
@@ -338,6 +340,10 @@ impl Walk {
             return Err(limit("masks are chained too deeply", MAX_LINKS));
         }
         let n = 1 + mask.mask().map_or(Ok(0), |m| self.mask_links(m, depth + 1))?;
+        // A cached tail can make the chain longer than `depth` shows; the cap is on the whole chain.
+        if n > MAX_LINKS {
+            return Err(limit("masks are chained too deeply", MAX_LINKS));
+        }
         self.masks.insert(key, n);
         Ok(n)
     }
