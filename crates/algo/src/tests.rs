@@ -272,7 +272,7 @@ fn monochrome_noise_matches_original_rgb8_bytes() {
         let monochrome = apply(&source, &FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: true, seed: 1 }, area, area, None);
         assert_eq!(rgb_bytes(&monochrome).as_slice(), expected.as_slice(), "{distribution:?}");
         let colored = apply(&source, &FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: false, seed: 1 }, area, area, None);
-        assert!(rgb_bytes(&colored).chunks_exact(3).any(|pixel| pixel[0] != pixel[1] || pixel[1] != pixel[2]), "{distribution:?}");
+        assert!(rgb_bytes(&colored).as_chunks::<3>().0.iter().any(|pixel| pixel[0] != pixel[1] || pixel[1] != pixel[2]), "{distribution:?}");
     }
 }
 
