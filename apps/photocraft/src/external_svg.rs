@@ -1388,7 +1388,10 @@ mod native {
             assert!(owned.read(&stamp).is_err());
             assert!(owned.overwrite(b"<svg/>").is_err());
             std::fs::remove_file(&owned.file).unwrap();
-            rustix::fs::mkfifoat(rustix::fs::CWD, &owned.file, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).unwrap();
+            // The POSIX `mkfifo` utility, as `crates/plugins/tests/abi.rs` does: rustix has no
+            // `mkfifoat` for Apple targets, so calling it kept this test from compiling on macOS.
+            let status = std::process::Command::new("mkfifo").arg(&owned.file).status().unwrap();
+            assert!(status.success(), "mkfifo failed with {status}");
             assert!(owned.stamp().is_err());
             let began = Instant::now();
             assert!(owned.read(&stamp).is_err());
