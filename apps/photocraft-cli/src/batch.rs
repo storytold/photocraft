@@ -1,3 +1,5 @@
+use std::collections::{HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -19,12 +21,21 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
+/// Select recognized readable image names, admitting only supported XCF compound transports rather than arbitrary
+/// archives.
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz" | "xcfbz2" | "xcfxz")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
-    p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
+    // A transport suffix alone does not identify an image: only the supported XCF compound
+    // names are candidates. The importer still validates the actual container and XCF bytes.
+    p.is_file()
+        && (p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
+            || p.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy().to_ascii_lowercase();
+                [".xcf.gz", ".xcf.bz2", ".xcf.xz"].iter().any(|suffix| name.ends_with(suffix))
+            }))
 }
 
 /// Drops the Save and view steps the desktop records from `action` (Batch saves each result
@@ -47,6 +58,75 @@ fn strip_shell_steps(action: &mut Action) {
     (action.steps, action.disabled, action.dialogs) = (steps, disabled, dialogs);
 }
 
+/// Strip the complete import-only XCF transport suffix while preserving the source spelling.
+fn xcf_stem(input: &Path) -> Option<String> {
+    let name = input.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    [".xcf.gz", ".xcf.bz2", ".xcf.xz", ".xcf", ".xcfgz", ".xcfbz2", ".xcfxz"].into_iter().find_map(|suffix| {
+        if !lower.ends_with(suffix) {
+            return None;
+        }
+        name.len().checked_sub(suffix.len()).and_then(|end| name.get(..end)).map(str::to_owned)
+    })
+}
+
+/// Plan the writable output name without opening or modifying any document.
+fn batch_target(input: &Path, out_dir: &Path, format: Option<&str>) -> (PathBuf, String) {
+    let xcf_stem = xcf_stem(input);
+    // XCF is import-only. Default to editable native data and remove the whole transport
+    // suffix without changing the case or Unicode spelling of the document's name.
+    let ext = format
+        .map(str::to_owned)
+        .or_else(|| xcf_stem.as_ref().map(|_| photocraft_format::EXTENSION.to_owned()))
+        .unwrap_or_else(|| photocraft_engine::file_cmds::batch_same_format(&input.to_string_lossy()));
+    let stem = xcf_stem.or_else(|| input.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_default();
+    (out_dir.join(format!("{stem}.{ext}")), ext)
+}
+
+/// Index identities without retaining one open operating-system handle per selected file.
+/// Hash matches are only candidates: equality is always confirmed before refusing a write.
+fn file_key(handle: &same_file::Handle) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    handle.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Validate the entire output plan before any save, preserving other selected inputs and
+/// allowing the current input only with explicit in-place consent. Comparisons happen now;
+/// this does not make later writes atomic against an external process swapping filesystem links.
+fn preflight_outputs(inputs: &[PathBuf], outputs: &[(PathBuf, String)], in_place: bool) -> Result {
+    let mut sources: HashMap<u64, Vec<(usize, &Path)>> = HashMap::new();
+    for (index, input) in inputs.iter().enumerate() {
+        let handle = same_file::Handle::from_path(input).map_err(|source| CliError::InspectBatchFile { path: input.clone(), source })?;
+        sources.entry(file_key(&handle)).or_default().push((index, input));
+    }
+    for (index, (output, _)) in outputs.iter().enumerate() {
+        let handle = match same_file::Handle::from_path(output) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(CliError::InspectBatchFile { path: output.clone(), source }),
+        };
+        if let Some(candidates) = sources.get(&file_key(&handle)) {
+            for &(other_index, input) in candidates {
+                if other_index == index && in_place {
+                    continue;
+                }
+                let other = same_file::Handle::from_path(input).map_err(|source| CliError::InspectBatchFile { path: input.to_path_buf(), source })?;
+                if handle == other {
+                    return Err(if other_index == index {
+                        CliError::OutIsInput(output.clone())
+                    } else {
+                        CliError::OutIsSelectedInput { output: output.clone(), input: input.to_path_buf() }
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run actions in scratch sessions with safe separate destinations, reporting per-file failures without saving a failed
+/// nested action result.
 pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (in_dir, out_dir) = (a.in_dir.as_path(), a.out.as_path());
     let (actions, mut set, warnings) = load_actions_file(&a.actions, a.action.as_deref())?;
@@ -81,8 +161,21 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     let (mut ok, mut failed) = (0, 0);
     // `--format .jpg` names outputs `<stem>.jpg`, as `--format jpg` does (#490).
     let format = a.export.format.as_deref().map(|f| f.strip_prefix('.').unwrap_or(f));
+    // Naming tokens see XCF's native destination stem/extension, not a final compression
+    // suffix. Opening and identity preflight always use the untouched real input paths.
+    let naming_inputs: Vec<_> = inputs
+        .iter()
+        .map(|input| {
+            let path = Path::new(&input.path);
+            let path = match xcf_stem(path) {
+                Some(stem) => path.with_file_name(format!("{stem}.{}", photocraft_format::EXTENSION)).to_string_lossy().into_owned(),
+                None => input.path.clone(),
+            };
+            photocraft_engine::file_cmds::BatchInput { path, rel_dir: input.rel_dir.clone() }
+        })
+        .collect();
     let named = photocraft_engine::file_cmds::plan_batch_names(
-        &inputs,
+        &naming_inputs,
         &out_dir.to_string_lossy(),
         format.unwrap_or("same"),
         &json!({"naming": a.naming.as_deref().unwrap_or(""), "startingSerial": a.start_serial.unwrap_or(1)}),
@@ -90,16 +183,12 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     .map_err(|error| CliError::Naming(error.to_string()))?;
     let targets: Vec<PathBuf> = match named {
         Some(paths) => paths.into_iter().map(PathBuf::from).collect(),
-        None => inputs
-            .iter()
-            .map(|input| {
-                let path = Path::new(&input.path);
-                let ext = format.map_or_else(|| photocraft_engine::file_cmds::batch_same_format(&input.path), str::to_owned);
-                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                out_dir.join(format!("{stem}.{ext}"))
-            })
-            .collect(),
+        None => inputs.iter().map(|input| batch_target(Path::new(&input.path), out_dir, format).0).collect(),
     };
+    let outputs: Vec<_> =
+        inputs.iter().zip(&targets).map(|(input, target)| (target.clone(), batch_target(Path::new(&input.path), out_dir, format).1)).collect();
+    let source_paths: Vec<_> = inputs.iter().map(|input| PathBuf::from(&input.path)).collect();
+    preflight_outputs(&source_paths, &outputs, a.in_place)?;
     let plan: Vec<_> = inputs.iter().zip(&targets).map(|(input, target)| (input.path.clone(), target.to_string_lossy().into_owned())).collect();
     photocraft_engine::file_cmds::validate_flat_outputs(&plan).map_err(|error| CliError::Naming(error.to_string()))?;
     if let Some(log) = &a.error_log {
@@ -112,12 +201,11 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     let mut failures = Vec::new();
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
     let mut renderer = policy.create_renderer();
-    for (input, target) in inputs.iter().zip(targets) {
+    for (input, (target, ext)) in inputs.iter().zip(&outputs) {
         let input = Path::new(&input.path);
         // The selected format encodes the bytes, whatever extension `--naming` gives the file.
-        // Without --format, a file PhotoCraft only opens (.kra, raw, …) is saved as PSD, the
-        // same format `--naming`'s {ext} plans.
-        let ext = format.map_or_else(|| photocraft_engine::file_cmds::batch_same_format(&input.to_string_lossy()), str::to_owned);
+        // Without --format, XCF is saved natively and other import-only formats as PSD,
+        // matching the format `--naming`'s {ext} plans.
         let mut h = Headless::trusted_local();
         h.set_renderer(renderer.take());
         let r = (|| -> Result<Vec<String>> {
@@ -127,7 +215,12 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
             h.session.actions.list = set.clone();
-            h.open_with_approval(input, a.approve_high_memory)?;
+            let import_opts = photocraft_io::ImportOptions {
+                psd_high_memory_approved: a.approve_high_memory,
+                historical_xcf_sample_order: a.import.historical_xcf_sample_order,
+                ..Default::default()
+            };
+            h.open_with_options(input, &import_opts)?;
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)
                     || photocraft_engine::actions_cmds::shell_save_command(id)
@@ -141,7 +234,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
                     return Err(CliError::NestedFailure { id: id.clone(), message });
                 }
             }
-            let r = h.save(None, Some(&target), Some(&ext), &opts)?;
+            let r = h.save(None, Some(target), Some(ext), &opts)?;
             Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
         })();
         let diags = h.drain_diagnostics();

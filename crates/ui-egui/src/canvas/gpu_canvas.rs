@@ -905,6 +905,7 @@ impl GpuCanvas {
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
                 out.gpu = stats.gpu_time;
+                out.gpu_stats = Some(stats);
                 return out;
             }
             Err(e) => {

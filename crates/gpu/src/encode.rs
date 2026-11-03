@@ -1,4 +1,4 @@
-use super::batch::{batch_runs, run_starts, submit_batch, tile_grid};
+use super::batch::{batch_layout, capture_starts, run_starts, submit_batch, tile_grid};
 use super::consts::{FLUSH_BYTES, FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
 use super::convert::lut_texture;
 use super::kit::FrameRes;
@@ -165,11 +165,13 @@ impl Compositor {
         // Runs of plain layers drawn as one pass each (`fs_layerbatch`). The grouping is the same
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
-        let runs = batch_runs(&plan);
+        let (runs, complete) = batch_layout(&plan);
         let checkpoint = if flush {
             let starts = run_starts(&runs);
+            let captures = capture_starts(&runs, &complete);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
-            self.prefix.prepare(doc, &resumable)
+            let capturable: Vec<_> = resumable.iter().filter(|c| captures.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
+            self.prefix.prepare(doc, &resumable, &capturable)
         } else {
             None
         };

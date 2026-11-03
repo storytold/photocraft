@@ -10,15 +10,15 @@ use egui_kittest::{
 };
 use photocraft_engine::Session;
 
+/// Create the native offscreen shell with real in-memory imports and the requested foreground/background opening
+/// path.
 fn harness(background: bool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::new(
             Session::new(),
             Services {
-                import: Some(Box::new(|name, bytes, opts| {
-                    photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-                })),
+                import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
                 ..Default::default()
             },
         )

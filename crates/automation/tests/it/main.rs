@@ -18,3 +18,4 @@ mod raw_defaults;
 mod read_roots;
 mod renderer_save;
 mod smart_filter_authorization;
+mod xcf_native_workflows;

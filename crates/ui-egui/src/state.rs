@@ -597,6 +597,8 @@ pub struct UiState {
     /// Non-modal release-check window; readable and controllable through `ui.inspect`/`ui.set`.
     #[serde(default)]
     pub updates_open: bool,
+    #[serde(default)]
+    pub import_report: crate::import_report::State,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -616,7 +618,8 @@ pub struct UiState {
 }
 
 impl Default for UiState {
-    /// Creates the default UI state with default tools and empty drag state.
+    /// Initialize shell view/tool state with empty transient queues and native defaults for panels, dialogs and
+    /// previews.
     fn default() -> Self {
         Self {
             tool: Tool::Move,
@@ -726,6 +729,7 @@ impl Default for UiState {
             status_error: false,
             notices: Vec::new(),
             updates_open: false,
+            import_report: Default::default(),
             gpu_fallback_notice: None,
             kys_offer: None,
             slow_refresh_noticed: Vec::new(),

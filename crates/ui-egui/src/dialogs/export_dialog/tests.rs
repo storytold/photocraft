@@ -1063,3 +1063,172 @@ fn applying_a_preset_restores_its_size_mode() {
     assert_eq!(f.get("height"), Some(&json!(50.0)));
     assert_eq!(f.get("sizing"), Some(&json!("scale")));
 }
+
+/// Source protection follows the originating tab through deferred whole-image, layer,
+/// and batch exports, and recognizes hard-link aliases before encoding or writing.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_as_preserves_protected_sources_and_aliases_across_tabs() {
+    use crate::file_dialog::FileDialogAnswer;
+    use std::{cell::Cell, rc::Rc};
+
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.png");
+    let alias = directory.path().join("alias.png");
+    std::fs::write(&source, b"original import source").unwrap();
+    std::fs::hard_link(&source, &alias).unwrap();
+    let mut destinations = vec![source.clone(), alias.clone()];
+    let symlink = directory.path().join("symlink.png");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&source, &symlink).unwrap();
+        destinations.push(symlink);
+    }
+    #[cfg(windows)]
+    match std::os::windows::fs::symlink_file(&source, &symlink) {
+        Ok(()) => destinations.push(symlink),
+        Err(error) if error.raw_os_error() == Some(1314) => eprintln!("SKIP symlink case: Windows symlink privilege unavailable"),
+        Err(error) => panic!("cannot create symlink fixture: {error}"),
+    }
+    for mode in ["replay", "document", "layer", "layers", "quickLayers"] {
+        for (destination, close_source) in destinations.iter().flat_map(|path| [false, true].map(|close| (path, close))) {
+            if mode == "replay" && close_source {
+                continue;
+            }
+            let calls = Rc::new(Cell::new(0));
+            let encoded = calls.clone();
+            let written = calls.clone();
+            let mut app = PhotocraftApp::new(
+                photocraft_engine::Session::new(),
+                crate::Services {
+                    export: Some(Box::new(move |_, _, _| {
+                        encoded.set(encoded.get() + 1);
+                        Ok((vec![1], vec![]))
+                    })),
+                    write: Some(Box::new(move |_, _| {
+                        written.set(written.get() + 1);
+                        Ok(())
+                    })),
+                    file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo(destination.to_string_lossy().into_owned()))]).0),
+                    ..Default::default()
+                },
+            );
+            app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
+                ids.push(app.session.active().unwrap().active_layer.unwrap());
+            }
+            let state = app.session.active_mut().unwrap();
+            state.source_read_only = true;
+            state.protected_import_source = Some(source.to_string_lossy().into_owned());
+            state.saved_revision = state.revision;
+            let doc = state.doc.clone();
+            let protected_source = state.protected_import_source.clone();
+            let mut fields = Map::from_iter([("format".into(), json!("png")), ("scale".into(), json!(100))]);
+            match mode {
+                "replay" => {
+                    assert!(replay(&mut app, &json!({"format":"png", "path": destination})).unwrap_err().contains("import-only source"));
+                }
+                "quickLayers" => {
+                    app.session.active_mut().unwrap().selected_layers = ids.clone();
+                    quick_export_selected_layers_png(&mut app).unwrap();
+                }
+                _ => {
+                    if mode == "layer" {
+                        fields.insert("__layer".into(), json!(ids[0].0));
+                    }
+                    if mode == "layers" {
+                        fields.insert("__layers".into(), json!(ids.iter().map(|id| id.0).collect::<Vec<_>>()));
+                    }
+                    confirm(&mut app, &fields).unwrap();
+                }
+            }
+            if mode != "replay" {
+                app.run("file.new", json!({"width": 1, "height": 1})).unwrap();
+                let other_id = app.session.active().unwrap().doc.id;
+                if close_source {
+                    app.run("file.close", json!({"document":0})).unwrap();
+                }
+                app.poll_file_dialog(&egui::Context::default(), None);
+                assert!(app.ui.status_error && app.ui.status.contains("import-only source"), "{mode}: {}", app.ui.status);
+                assert_eq!(app.session.active().unwrap().doc.id, other_id);
+            }
+            assert_eq!(calls.get(), 0, "{mode}: blocked before encoder/writer");
+            assert_eq!(std::fs::read(&source).unwrap(), b"original import source");
+            // The captured export remains usable after switching or closing its tab.
+            let profile = effective_source_profile(&app, &doc);
+            write_export(&mut app, protected_source.as_deref(), &doc, &fields, directory.path().join("copy.png").to_str().unwrap(), &profile).unwrap();
+            assert_eq!(calls.get(), 2);
+        }
+    }
+}
+
+/// A pending export owns its document and may finish even after the last tab closes.
+#[test]
+fn captured_exports_finish_after_the_last_source_tab_closes() {
+    use crate::file_dialog::FileDialogAnswer;
+    use std::{cell::Cell, rc::Rc};
+
+    for mode in ["document", "layer", "layers", "quickLayers"] {
+        for protected in [false, true] {
+            let calls = Rc::new(Cell::new(0));
+            let encoded = calls.clone();
+            let written = calls.clone();
+            let mut app = PhotocraftApp::new(
+                photocraft_engine::Session::new(),
+                crate::Services {
+                    export: Some(Box::new(move |doc, _, _| {
+                        assert_eq!((doc.size.width, doc.size.height), (2, 2));
+                        assert!(!doc.layers.is_empty());
+                        encoded.set(encoded.get() + 1);
+                        Ok((vec![1], vec![]))
+                    })),
+                    write: Some(Box::new(move |_, bytes| {
+                        assert_eq!(bytes, &[1]);
+                        written.set(written.get() + 1);
+                        Ok(())
+                    })),
+                    file_dialog: Some(crate::file_dialog::fake(vec![Some(FileDialogAnswer::SaveTo("copy.png".into()))]).0),
+                    ..Default::default()
+                },
+            );
+            app.run("file.new", json!({"width":2,"height":2})).unwrap();
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("edit.fill", json!({"color":"#ff0000"})).unwrap();
+                ids.push(app.session.active().unwrap().active_layer.unwrap());
+            }
+            let state = app.session.active_mut().unwrap();
+            state.saved_revision = state.revision;
+            if protected {
+                state.source_read_only = true;
+                state.protected_import_source = Some("source.xcf".into());
+            }
+            let mut fields = Map::from_iter([("format".into(), json!("png")), ("scale".into(), json!(100))]);
+            match mode {
+                "quickLayers" => {
+                    state.selected_layers = ids.clone();
+                    quick_export_selected_layers_png(&mut app).unwrap();
+                }
+                _ => {
+                    if mode == "layer" {
+                        fields.insert("__layer".into(), json!(ids[0].0));
+                    }
+                    if mode == "layers" {
+                        fields.insert("__layers".into(), json!(ids.iter().map(|id| id.0).collect::<Vec<_>>()));
+                    }
+                    confirm(&mut app, &fields).unwrap();
+                }
+            }
+            app.run("file.close", json!({"document":0})).unwrap();
+            assert!(app.session.active().is_none());
+            app.poll_file_dialog(&egui::Context::default(), None);
+            assert!(!app.ui.status_error, "{mode}, protected={protected}: {}", app.ui.status);
+            assert_eq!(calls.get(), if mode == "layers" || mode == "quickLayers" { 4 } else { 2 }, "{mode}");
+            assert!(app.session.active().is_none(), "export must not reopen or focus a tab");
+        }
+    }
+}
