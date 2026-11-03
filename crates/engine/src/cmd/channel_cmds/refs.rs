@@ -88,10 +88,15 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
     let r = doc.bounds();
     let fmt = doc.pixel_format();
     let n = fmt.channels();
+    // The source is read as dense samples over the whole canvas, whatever tiles it stores, then
+    // returned as `n` native f32 samples per pixel. Refuse a canvas past the working budget
+    // before reading (an empty canvas can be 300000 px a side).
+    let out = (n as u64).saturating_mul(4);
     match layer {
         Some(id) => {
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let s = l.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", l.name)))?;
+            crate::allocation::check_dense(r, (s.channels() as u64).saturating_mul(4).saturating_add(out), "reading this channel source")?;
             if s.format() == fmt {
                 return Ok((s.read_region(r), n));
             }
@@ -100,6 +105,8 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
             Ok((raw.chunks_exact(sf.channels()).flat_map(|p| from_rgba(&fmt, to_rgba(&sf, p))).collect(), n))
         }
         None => {
+            // The composite is straight RGBA f32.
+            crate::allocation::check_dense(r, 16u64.saturating_add(out), "reading this channel source")?;
             let buf = photocraft_compose::render(doc, r);
             Ok((buf.px.iter().flat_map(|p| from_rgba(&fmt, *p)).collect(), n))
         }

@@ -124,6 +124,11 @@ fn to_multichannel(s: &mut Session, _p: &Value) -> Result<Value> {
         return Err(EngineError::NoDocument);
     };
     let names = s.edit("Multichannel", |doc, active| {
+        // Every ink is built as dense planes over the whole canvas (the flattened image, its
+        // colour planes, the inverted densities and each clamped channel), however few tiles
+        // the document stores: refuse a canvas past the working budget before allocating.
+        let cc = doc.pixel_format().mode.color_channels() as u64;
+        crate::allocation::check_dense(doc.bounds(), cc.saturating_mul(12).saturating_add(16), "converting to Multichannel")?;
         let inks = inks_of(doc);
         let mut channels: Vec<AlphaChannel> = inks
             .iter()
@@ -189,6 +194,10 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
     let how = s.edit("Mode Change", |doc, active| {
         let (inks, others): (Vec<AlphaChannel>, Vec<AlphaChannel>) = std::mem::take(&mut doc.channels).into_iter().partition(|c| c.spot.is_some());
         let canvas = doc.bounds();
+        // The interleaved output, the rendered look (straight RGBA f32) and one ink plane at a
+        // time, all over the canvas: refuse a canvas past the working budget before allocating.
+        let out_cc = mode.color_channels() as u64;
+        crate::allocation::check_dense(canvas, out_cc.saturating_add(1).saturating_mul(4).saturating_add(20), "converting from Multichannel")?;
         let n = canvas.width() as usize * canvas.height() as usize;
         let reinterpret = matches!((mode, inks.len()), (ColorMode::Rgb | ColorMode::Lab, 3) | (ColorMode::Cmyk, 4) | (ColorMode::Grayscale, 1));
         // The printed look, rendered before the inks leave the document.

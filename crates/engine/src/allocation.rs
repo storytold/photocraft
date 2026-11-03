@@ -49,6 +49,29 @@ pub(crate) fn read_region(surface: &photocraft_raster::Surface, area: photocraft
     Ok(out)
 }
 
+/// Most bytes of dense working buffers one command may hold while it expands sparse content (or
+/// the canvas) into flat arrays: the allowance Image Size resamples within. A document stores
+/// only the tiles it holds, so two distant tiles, or a huge empty canvas, make a small file whose
+/// content bounds would need far more than any machine has.
+pub(crate) const MAX_DENSE_BYTES: u64 = crate::image_cmds::MAX_RESAMPLE_BYTES;
+
+/// Refuses, before anything is allocated, an operation that would hold `bytes_per_px` bytes of
+/// dense buffers for every pixel of `area` at once.
+pub(crate) fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str) -> Result<()> {
+    let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
+    let bytes = px.saturating_mul(bytes_per_px);
+    if bytes <= MAX_DENSE_BYTES {
+        return Ok(());
+    }
+    Err(EngineError::Other(format!(
+        "{purpose} would need {} MB of working memory for a {} x {} px area (limit {} MB); the document was not changed",
+        bytes >> 20,
+        area.width(),
+        area.height(),
+        MAX_DENSE_BYTES >> 20
+    )))
+}
+
 pub(crate) fn error(purpose: &str, detail: &str) -> EngineError {
     EngineError::Other(format!("not enough memory for {purpose} ({detail}); the document was not changed"))
 }
@@ -89,6 +112,17 @@ fn failpoint_hits() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_area_past_the_budget_is_refused() {
+        use photocraft_geom::Rect;
+        assert!(check_dense(Rect::from_xywh(0, 0, 4096, 4096), 16, "test").is_ok());
+        // Two tiles a million pixels apart: content bounds of a trillion pixels.
+        let far = Rect::new(0, 0, 1 << 20, 1 << 20);
+        assert!(check_dense(far, 16, "test").is_err_and(|e| e.to_string().contains("working memory")));
+        // Overflowing sizes saturate instead of wrapping into a small number.
+        assert!(check_dense(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), u64::MAX, "test").is_err());
+    }
 
     #[test]
     fn allocation_failure_is_reported_without_panicking() {

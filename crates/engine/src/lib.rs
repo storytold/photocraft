@@ -303,4 +303,7 @@ mod tests;
 #[cfg(test)]
 mod fx_mode_tests;
 
+#[cfg(test)]
+mod dense_budget_tests;
+
 pub mod command_hints;
