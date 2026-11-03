@@ -471,6 +471,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
 /// Handles one finished job: optional completion beep, waiting control replies, and the
 /// command-specific open, save, transform and recovery paths.
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
+    let label = if e.command == "edit.ai.codex" { crate::i18n::t(&e.label).to_owned() } else { e.label.clone() };
     // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like
     // Photoshop's cue. Cancelling is the user's own action and stays silent.
     if matches!(e.outcome, JobOutcome::Done(_))
@@ -551,7 +552,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         }
         JobOutcome::Done(_) => {
             app.sync_views();
-            app.ui.status = e.label;
+            app.ui.status = label;
             app.ui.status_error = false;
         }
         JobOutcome::Failed(err) => {
@@ -559,10 +560,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
                 app.jobs.close_after_saves = false;
             }
             app.sync_views();
-            notices::error(app, format!("{}: {err}", e.label));
+            notices::error(app, format!("{label}: {err}"));
         }
         JobOutcome::Cancelled => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &label)]);
             app.ui.status_error = false;
         }
     }

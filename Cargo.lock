@@ -5198,6 +5198,7 @@ dependencies = [
  "photocraft-compose",
  "photocraft-doc",
  "photocraft-format",
+ "photocraft-gen",
  "photocraft-geom",
  "photocraft-io",
  "photocraft-ipp",
@@ -5244,6 +5245,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "winsafe",
+]
+
+[[package]]
+name = "photocraft-gen"
+version = "0.20.1"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -13,6 +13,8 @@
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--codex-account-fixture connected|signedOut|unsupported|failed|cancelled` supplies a visual-only
+//! account state without authentication I/O (cannot be combined with `--background-jobs`).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -25,9 +27,28 @@
 //! `--hover-at X,Y` leaves the pointer there without a click, for what a tool shows under it (the
 //! brush outline, the Clone Source overlay).
 
+use photocraft_engine::cmd::ai_account_cmds::State;
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::Value;
+
+/// Reject invalid fixture options before opening documents or executing scripts with side effects.
+fn account_fixture(args: &[String]) -> Result<Option<State>, &'static str> {
+    if !args.iter().any(|a| a == "--codex-account-fixture") {
+        return Ok(None);
+    }
+    if args.iter().any(|a| a == "--background-jobs") {
+        return Err("--codex-account-fixture cannot be combined with --background-jobs");
+    }
+    match arg(args, "--codex-account-fixture").as_deref() {
+        Some("connected") => Ok(Some(State::Connected)),
+        Some("signedOut") => Ok(Some(State::SignedOut)),
+        Some("unsupported") => Ok(Some(State::Unsupported)),
+        Some("failed") => Ok(Some(State::Failed)),
+        Some("cancelled") => Ok(Some(State::Cancelled)),
+        _ => Err("unsupported account fixture"),
+    }
+}
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -35,6 +56,13 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let fixture = match account_fixture(&args) {
+        Ok(state) => state,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
     let out = arg(&args, "--out").unwrap_or_else(|| "snapshot.png".into());
     let (w, h) = arg(&args, "--size")
         .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
@@ -159,6 +187,17 @@ fn main() {
         if timing {
             eprintln!("{:>8.1} ms  {label}", t0.elapsed().as_secs_f64() * 1000.0);
         }
+    }
+    if let Some(state) = fixture {
+        use photocraft_engine::cmd::ai_account_cmds::Snapshot;
+        let status = Snapshot {
+            plan: (state == State::Connected).then(|| "plus".into()),
+            message: (state == State::Failed).then(|| "Synthetic connection error".into()),
+            state,
+        };
+        harness.state_mut().session.ai_account.snapshot = status.clone();
+        harness.state_mut().ui.ai_account.status = status;
+        harness.run_steps(4);
     }
     for (flag, button) in [("--click-at", egui::PointerButton::Primary), ("--right-click-at", egui::PointerButton::Secondary)] {
         let Some((x, y)) = arg(&args, flag).and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) else {
