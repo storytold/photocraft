@@ -348,3 +348,62 @@ fn freeform_refuses_a_locked_shape_before_starting_a_stroke() {
         assert!(app.drag.is_some(), "{lock}: unlocked stroke can start");
     }
 }
+
+/// #10934: the options bar's Make Shape (Path mode) turns the Work Path into a shape layer filled
+/// with the foreground colour, as one History step; the Work Path is the shape's path afterwards.
+/// A path still being drawn is finished first. With no path the button is disabled.
+#[test]
+fn make_shape_turns_the_work_path_into_a_shape_layer() {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
+            }
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+    assert!(h.get_by_label("Make Shape").accesskit_node().is_disabled(), "no path yet");
+    square(h.state_mut(), 20.0, 20.0, 100.0);
+    let drawn = work(h.state());
+    let (count, steps) = (layers(h.state()), h.state().session.active().unwrap().history.past_len());
+    h.run_steps(2);
+    h.get_by_label("Make Shape").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(layers(app), count + 1);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one History step");
+    let (id, path) = shape_path(app);
+    assert_eq!(path, drawn);
+    let st = app.session.active().unwrap();
+    assert!(st.doc.work_path.is_none());
+    let LayerContent::Shape(sh) = &st.doc.layer(id).unwrap().content else { panic!("not a shape layer") };
+    let fg = app.session.tools.foreground;
+    assert_eq!(sh.fill, Some(photocraft_doc::Fill::Solid(photocraft_color::Color::rgba(fg[0], fg[1], fg[2], fg[3]))));
+    // An open path still being drawn is finished into the Work Path, then made a shape.
+    for (x, y) in [(10.0, 150.0), (60.0, 150.0), (60.0, 190.0)] {
+        pen_down(h.state_mut(), x, y, false);
+        pen_up(h.state_mut());
+    }
+    h.run_steps(2);
+    h.get_by_label("Make Shape").click();
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.ui.pen.is_none());
+    assert_eq!(layers(app), count + 2);
+    assert_eq!(shape_path(app).1.subpaths[0].knots.len(), 3);
+}
+
+/// Make Shape on a saved path selected in the Paths panel keeps that path.
+#[test]
+fn make_shape_keeps_a_saved_path() {
+    let mut app = app();
+    square(&mut app, 20.0, 20.0, 50.0);
+    app.run("path.rename", json!({"name": "work", "to": "Box"})).unwrap();
+    app.ui.selected_path = Some("Box".into());
+    super::make_shape(&mut app).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.paths.first().map(|p| p.name.as_str()), Some("Box"));
+    assert_eq!(shape_path(&app).1, st.doc.paths[0].path);
+}

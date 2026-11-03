@@ -73,6 +73,25 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
     Ok(r)
 }
 
+/// The Pen options bar's Make Shape (Path mode, #10934): a new shape layer from the path being
+/// drawn (committed first) or the active path, with the shape tools' fill and stroke. The Work Path
+/// becomes the shape's path, so it is no longer selected in the Paths panel.
+pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
+    // A path being drawn into a targeted vector mask is that layer's path afterwards.
+    let pending_layer = pending && super::targeted_vector_mask(app).is_some();
+    if pending && !pen_commit(app, false) {
+        return Err(app.ui.status.clone());
+    }
+    let name = if pending_layer { Some("layer".to_string()) } else { active_path_name(app) }
+        .ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
+    let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
+    if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
+        app.ui.selected_path = None;
+    }
+    Ok(r)
+}
+
 /// After the Pen or Path Selection tool made a selection from the path `name` (⌘↩, the canvas
 /// menu's Make Selection…), Photoshop deselects it in the Paths panel and stops drawing it; the
 /// path itself stays (#6079). The Work Path is hidden too when a saved path was loaded, so no
