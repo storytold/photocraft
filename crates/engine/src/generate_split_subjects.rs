@@ -17,8 +17,9 @@ use crate::EngineError;
 
 use super::{
     Common, DEFAULT_MATTE_TEMPLATE, GenerativeInfo, Gray8, JobCtx, JobProgress, Layer, MATTE_DEFAULT_PROMPT, MAX_GROW, REMOVE_BG, REMOVE_MIN_REQUEST, Request,
-    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, gen_err, json, matte_request_size, name_selected,
-    plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info, write_rgba8,
+    Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, background_job, box_blur, dilate, embed_coverage, fill_rect, fill_region, gen_err, json,
+    matte_request_size, name_selected, plan_common, removal_job, removal_prompt, remove_grow, resize_gray8, resize_rgba8, resolve_auto, set_generative_info,
+    write_rgba8,
 };
 
 /// The most subjects one split gives their own layer (the largest kept).
@@ -80,6 +81,8 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
     let asked = prompt.clone();
     let job =
         removal_job(s, "Split into Layers", 0, false, false, 2, seed, true, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() })?;
+    // The background fill tried when the removal paints a large subject back.
+    let backdrop = background_job(s, "Split into Layers", seed, Tuning { fast_draft: s.prefs().integrations.fast_draft, ..Tuning::default() }).ok();
     let base = name.unwrap_or_else(|| "Split Layer".to_string());
     // The matte request (Remove Background's model), planned now; used when the server has it.
     let matte = plan_common(
@@ -176,23 +179,72 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             // changed rather than hand back a repainted person.
             let mut ms = 0u64;
             let mut fill = None;
+            // The box the background fill repaints (the hole's bounds widened by the removal's
+            // grow) and how its result is laid over the picture: only over the subjects, widened
+            // and feathered, so the background outside them keeps the picture's own pixels.
+            let grow = job.grow.min(MAX_GROW) as i32;
+            let (wu, hu) = (w as usize, h as usize);
+            let boxed = hole_rect.inflate(grow).intersect(&area);
+            let box_hole: Vec<f32> = (0..wu * hu)
+                .map(|k| {
+                    let (x, y) = (area.x0 + (k % wu) as i32, area.y0 + (k / wu) as i32);
+                    if x >= boxed.x0 && x < boxed.x1 && y >= boxed.y0 && y < boxed.y1 { 1.0 } else { 0.0 }
+                })
+                .collect();
+            let feather = (grow as usize / 2).max(1);
+            let over = dilate(&hole, wu, hu, grow.max(1) as usize);
+            let over = box_blur(&box_blur(&over, wu, hu, feather, true), wu, hu, feather, false);
             for attempt in 0..FILL_TRIES {
                 ctx.progress(0.35 + 0.5 * attempt as f32 / FILL_TRIES as f32, "Filling the background");
-                let mut try_job = job.clone();
-                try_job.seed = job.seed.wrapping_add(u64::from(attempt) * 1000);
-                let (made, ..) = fill_region(doc, active, ctx, try_job, rect, embed_coverage(area, &hole, rect), None)?;
+                // The removal first (quick, and clean on most pictures); after it paints a
+                // subject back, the backdrop fill of a grey box.
+                let try_box = attempt > 0 && backdrop.is_some();
+                let mut try_job = if try_box { backdrop.clone().unwrap_or_else(|| job.clone()) } else { job.clone() };
+                try_job.seed = try_job.seed.wrapping_add(u64::from(attempt) * 1000);
+                let coverage = embed_coverage(area, if try_box { &box_hole } else { &hole }, rect);
+                let (made, ..) = fill_region(doc, active, ctx, try_job, rect, coverage, None)?;
                 ctx.check()?;
                 ms += made.iter().map(|m| m.3).sum::<u64>();
                 // The background whole: the picture with the fill over the hole, one layer.
-                let background = photocraft_compose::render(doc, area).to_rgba8().pixels;
+                let filled = photocraft_compose::render(doc, area).to_rgba8().pixels;
                 let fill_seed = made.first().map_or(0, |m| m.1);
-                ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
-                let left = subject_left_in(&finder.only(check_prompt(&found_by)), doc, *active, &hole, ctx)?;
                 for (id, ..) in &made {
                     doc.remove(*id);
                 }
                 *active = below;
-                if !left {
+                let background: Vec<u8> = if try_box {
+                    // The fill's tone matched to the picture where both show the backdrop (in the
+                    // box, outside the subjects): a fill a few levels darker left the person's
+                    // outline as a shadow on the curtain (measured in the app 2026-11-03).
+                    let tone = ToneGrid::new(&picture, &filled, |k| box_hole[k] >= 0.5 && over[k] < 0.02, wu, hu);
+                    picture
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(filled.as_chunks::<4>().0)
+                        .zip(&over)
+                        .enumerate()
+                        .flat_map(|(k, ((p, f), a))| {
+                            let a = a.clamp(0.0, 1.0);
+                            let t = if a > 0.0 { tone.at(k % wu, k / wu) } else { [0.0; 3] };
+                            std::array::from_fn::<u8, 4, _>(|c| {
+                                let f = if c < 3 { (f32::from(f[c]) + t[c]).clamp(0.0, 255.0) } else { f32::from(f[c]) };
+                                (f32::from(p[c]) * (1.0 - a) + f * a).round() as u8
+                            })
+                        })
+                        .collect()
+                } else {
+                    filled
+                };
+                ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
+                // Checked as it will be kept: on a layer of its own over the picture.
+                let mut probe = Layer::raster("Split check".to_string(), doc.pixel_format());
+                write_rgba8(&mut probe, &Rgba8::new(w, h, background.clone()).map_err(gen_err)?, area)?;
+                let probe = doc.insert_above(below, probe);
+                let left = subject_left_in(&finder.only(check_prompt(&found_by)), doc, Some(probe), &hole, ctx);
+                doc.remove(probe);
+                *active = below;
+                if !left? {
                     fill = Some((background, fill_seed));
                     break;
                 }
@@ -265,8 +317,96 @@ fn check_prompt(found_by: &str) -> &str {
 /// The detector's and the removal's word for a person.
 const PERSON: &str = "person";
 
+/// Cells of [`ToneGrid`], in pixels.
+const TONE_CELL: usize = 64;
+
+/// A smooth per-channel correction (picture minus fill) measured where `known` says both show
+/// the same backdrop, averaged over cells and carried across the rest (the subjects) as a
+/// membrane: the fill's tone matched to its surroundings with no step at their edge.
+struct ToneGrid {
+    gw: usize,
+    gh: usize,
+    v: Vec<[f32; 3]>,
+}
+
+impl ToneGrid {
+    fn new(picture: &[u8], filled: &[u8], known: impl Fn(usize) -> bool, w: usize, h: usize) -> Self {
+        let (gw, gh) = (w.div_ceil(TONE_CELL).max(1), h.div_ceil(TONE_CELL).max(1));
+        let mut sum = vec![[0.0f64; 3]; gw * gh];
+        let mut count = vec![0u32; gw * gh];
+        for k in 0..w * h {
+            if !known(k) {
+                continue;
+            }
+            let g = (k / w / TONE_CELL) * gw + (k % w) / TONE_CELL;
+            for c in 0..3 {
+                sum[g][c] += f64::from(picture[k * 4 + c]) - f64::from(filled[k * 4 + c]);
+            }
+            count[g] += 1;
+        }
+        let fixed: Vec<bool> = count.iter().map(|n| *n >= 16).collect();
+        let (mut all, mut n) = ([0.0f64; 3], 0u64);
+        for (s, c) in sum.iter().zip(&count) {
+            for i in 0..3 {
+                all[i] += s[i];
+            }
+            n += u64::from(*c);
+        }
+        let mean: [f32; 3] = std::array::from_fn(|i| if n > 0 { (all[i] / n as f64) as f32 } else { 0.0 });
+        let mut v: Vec<[f32; 3]> =
+            (0..gw * gh).map(|g| if fixed[g] { std::array::from_fn(|i| (sum[g][i] / f64::from(count[g])) as f32) } else { mean }).collect();
+        // The cells with no backdrop take their neighbours' average until it settles.
+        for _ in 0..(gw + gh) * 40 {
+            let prev = v.clone();
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let g = gy * gw + gx;
+                    if fixed[g] {
+                        continue;
+                    }
+                    let mut acc = [0.0f32; 3];
+                    let mut m = 0.0f32;
+                    for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                        let (x, y) = (gx as i32 + dx, gy as i32 + dy);
+                        if x < 0 || y < 0 || x >= gw as i32 || y >= gh as i32 {
+                            continue;
+                        }
+                        let q = prev[y as usize * gw + x as usize];
+                        for i in 0..3 {
+                            acc[i] += q[i];
+                        }
+                        m += 1.0;
+                    }
+                    if m > 0.0 {
+                        v[g] = std::array::from_fn(|i| acc[i] / m);
+                    }
+                }
+            }
+        }
+        ToneGrid { gw, gh, v }
+    }
+
+    /// The correction at pixel (`x`, `y`), bilinear between cell centres.
+    fn at(&self, x: usize, y: usize) -> [f32; 3] {
+        let fx = ((x as f32 + 0.5) / TONE_CELL as f32 - 0.5).clamp(0.0, (self.gw - 1) as f32);
+        let fy = ((y as f32 + 0.5) / TONE_CELL as f32 - 0.5).clamp(0.0, (self.gh - 1) as f32);
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.gw - 1), (y0 + 1).min(self.gh - 1));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let g = |x: usize, y: usize| self.v[y * self.gw + x];
+        std::array::from_fn(|i| {
+            let top = g(x0, y0)[i] * (1.0 - tx) + g(x1, y0)[i] * tx;
+            let bottom = g(x0, y1)[i] * (1.0 - tx) + g(x1, y1)[i] * tx;
+            top * (1.0 - ty) + bottom * ty
+        })
+    }
+}
+
+/// The share of the frame over which a detection counts as the whole frame (ignored).
+const WHOLE_FRAME: f32 = 0.9;
+
 /// Fills tried before Split gives up on a background with the subject painted back.
-const FILL_TRIES: u32 = 3;
+const FILL_TRIES: u32 = 5;
 
 /// Of a detection on the filled background, the share inside the hole at which it counts as
 /// the subject painted back (a person beside the hole overlaps it little).
@@ -297,6 +437,11 @@ fn subject_left_in(
         Err(e) => return Err(e),
     };
     Ok(found.iter().any(|(cov, _, _)| {
+        // A detection over nearly the whole frame is the detector's quirk, not a subject (it
+        // flagged one clean backdrop fill whole, 2026-11-03).
+        if cov.iter().filter(|c| **c >= 0.5).count() as f32 > WHOLE_FRAME * cov.len() as f32 {
+            return false;
+        }
         let (mut on, mut inside) = (0usize, 0usize);
         for (c, h) in cov.iter().zip(hole) {
             if *c >= 0.5 {
@@ -445,5 +590,25 @@ mod check_tests {
         assert_eq!(check_prompt("object"), "person");
         assert_eq!(check_prompt("person"), "person");
         assert_eq!(check_prompt("the lighthouse"), "the lighthouse");
+    }
+}
+
+#[cfg(test)]
+mod tone_tests {
+    use super::ToneGrid;
+
+    #[test]
+    fn the_tone_grid_carries_the_ring_offset_across_the_hole() {
+        // A 256x256 picture of 100 and a fill of 90: the backdrop is known outside the middle
+        // square only; the correction is +10 everywhere, the middle included.
+        let (w, h) = (256usize, 256usize);
+        let picture = vec![100u8; w * h * 4];
+        let filled = vec![90u8; w * h * 4];
+        let inside = |k: usize| (64..192).contains(&(k % w)) && (64..192).contains(&(k / w));
+        let tone = ToneGrid::new(&picture, &filled, |k| !inside(k), w, h);
+        for (x, y) in [(0, 0), (128, 128), (100, 200), (255, 255)] {
+            let t = tone.at(x, y);
+            assert!(t.iter().all(|v| (v - 10.0).abs() < 0.5), "{x},{y}: {t:?}");
+        }
     }
 }
