@@ -20,6 +20,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File"], "---", None, "---"),
     (&["File", "Export"], "Quick Export as PNG", None, "file.export.quickExportAsPng"),
     (&["File", "Export"], "Export As…", Some("Cmd+Alt+Shift+W"), "file.export.exportAs"),
+    (&["File", "Export"], "Export Sprite Sheet…", None, "file.export.spriteSheet"),
     (&["File", "Export"], "Export Preferences…", None, "file.export.exportPreferences"),
     (&["File", "Export"], "---", None, "---"),
     (&["File", "Export"], "Save for Web (Legacy)…", Some("Cmd+Alt+Shift+S"), "file.export.saveForWebLegacy"),
