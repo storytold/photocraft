@@ -25,8 +25,7 @@ projects use MIT OR Apache-2.0.
 
 The [interaction-check](https://github.com/PerchAnton/interaction-check) runner is development-only;
 Python is not a PhotoCraft runtime dependency. To run the scenarios locally, use the
-revision below. Automated execution is proposed in
-[craft-common-actions #84](https://github.com/storytold/craft-common-actions/pull/84).
+revision below. Automated execution needs a separate shared workflow and maintainer review.
 The adapter belongs to PhotoCraft and calls the shipped dialog handlers, control field setter,
 egui canvas/dialog frames, engine commands and history. Expectations are never passed to the
 adapter. These are semantic integration checks, not a substitute for screenshot or pointer tests.
