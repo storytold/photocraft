@@ -2809,6 +2809,25 @@ fn font_metadata_large_nameless_lists_rebuild_after_edit() {
     }
 }
 
+#[test]
+fn font_metadata_reordered_duplicates_keep_distinct_dictionary_records() {
+    use crate::engine_data::Value as E;
+    let record = |name: &str, marker| E::Dict(vec![("Name".into(), E::String(name.into())), ("PrivateFontFlag".into(), E::Int(marker))]);
+    let mut layer = point("Original", 24.0);
+    let mut template = crate::psd::build_engine_data(&layer, None, 72.0);
+    let resource = vec![record("A", 1), record("A", 2), record("B", 3)];
+    let document = vec![record("B", 30), record("A", 10), record("A", 20)];
+    template.get_mut("ResourceDict").unwrap().set("FontSet", E::Array(resource.clone()));
+    template.get_mut("DocumentResources").unwrap().set("FontSet", E::Array(document.clone()));
+    layer.text = "Edited".into();
+    let rebuilt = crate::psd::build_engine_data(&layer, Some(template), 72.0);
+    assert_eq!(&rebuilt.path(&["ResourceDict", "FontSet"]).unwrap().as_array().unwrap()[..3], resource.as_slice());
+    let fonts = rebuilt.path(&["DocumentResources", "FontSet"]).unwrap().as_array().unwrap();
+    assert_eq!(&fonts[..3], &[document[1].clone(), document[2].clone(), document[0].clone()], "reordered duplicates must keep distinct metadata");
+    let repeated = crate::psd::font_set(&["A", "A", "A", "A"].map(str::to_string), Some(&E::Array(resource.clone())));
+    assert_eq!(repeated, E::Array(vec![resource[0].clone(), resource[1].clone(), resource[0].clone(), resource[0].clone()]));
+}
+
 /// Same-runner release probe: compare the original and repaired source, not a wall-clock CI limit.
 #[test]
 #[ignore = "release performance measurement for large imported FontSets"]
@@ -2872,6 +2891,39 @@ fn a_word_wider_than_the_paragraph_box_breaks_at_the_box_edge() {
     let l = e.layout(&spaced, 72.0);
     assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
     assert_eq!(l.lines[1].range.start, 3, "{:?}", l.lines);
+}
+
+/// [`TextLayout::overflows`] reads dropped lines off the layout: text that fits covers its end
+/// through trailing empty paragraphs; a taller text's lines stop short of the text's end; an
+/// empty uncovered tail of pure trailing breaks that fit is not an overflow.
+#[test]
+fn overflows_says_whether_a_box_holds_its_text() {
+    let mut e = TextEngine::new();
+    let tall_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 900.0 };
+    // Everything fits, trailing breaks included: the trailing empty paragraphs cover the
+    // text's end.
+    for text in ["a", "a\n", "a\n\n", "", "Lorem ipsum dolor sit amet"] {
+        let l = e.layout(&TextLayer { shape: tall_box.clone(), ..point(text, 24.0) }, 72.0);
+        assert!(!l.overflows(text), "{text:?}: {} lines", l.lines.len());
+    }
+    // The box holds one line of 24 pt type — additional lines are dropped, and the last line
+    // stops short of the text.
+    let short_box = TextShape::Box { x: 0.0, y: 0.0, width: 220.0, height: 34.0 };
+    let text = "ab\ncd\nef";
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point(text, 24.0) }, 72.0);
+    assert!(l.overflows(text), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A trailing break whose empty paragraph doesn't fit is an overflow as well.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("ab\n\n", 24.0) }, 72.0);
+    assert!(l.overflows("ab\n\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // A box holding one full line plus exactly one more empty paragraph is not.
+    let exact = point("ab\n", 24.0);
+    let l = e.layout(&TextLayer { shape: tall_box.clone(), ..exact }, 72.0);
+    assert!(!l.overflows("ab\n"), "{:?}", l.lines.last().map(|ln| ln.range.clone()));
+    // Empty text never overflows: even a box too short for its paragraph (no lines laid out)
+    // has nothing to lose, so no overflow mark.
+    let l = e.layout(&TextLayer { shape: short_box.clone(), ..point("", 24.0) }, 72.0);
+    assert!(!l.overflows(""), "{} lines", l.lines.len());
+    let _ = &mut e;
 }
 
 /// Closed polygon in text space.

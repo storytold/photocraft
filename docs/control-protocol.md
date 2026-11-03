@@ -206,6 +206,18 @@ their usual file access. Source replacement, relinking and export commands remai
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
 editing session; non-type layers return an error without changing the tool or document.
 
+### Selected colour channel sets
+
+`channel.target {"colors":[0,2]}` selects native colour components. Shift-click is
+`channel.target {"channel":{"color":1},"extend":true}`: toggle that component,
+starting from all colour components when the composite is selected. Masks and saved
+channels cannot join a colour set. All components selected becomes the composite.
+Channel inspection adds `selectedColors`; the legacy primary `target` remains.
+Applicable drawing, adjustment, clipboard and filter commands follow the selected
+set, or accept `"target":{"colors":[0,2]}` explicitly. Invalid or empty sets fail
+without a document edit. Move/transform on partial sets and Camera Raw on a partial
+set return an unsupported error. See [selected colour editing](multi-channel-editing.md).
+
 ### Command list replies
 
 `engine.commands` (control channel and `serve`), the engine command `command.list` and the MCP
@@ -296,6 +308,15 @@ are never written. The Actions list is `actions.json` in that same folder and su
 Headless CLI/MCP sessions and the web build keep brush presets and the action list for the session
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
+
+`brush.presets.importAbr` and `gradient.presets.importGrd` never overwrite a group by default: a
+file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
+result's `group` names the one it landed in. Pass `"replace": true` to delete that group's own
+presets first (built-in brushes are kept); the preset libraries are outside document history, so
+this can't be undone (#10640). In the app, opening such a file (`app.open`, File › Open,
+drag-and-drop, Import Brushes…) shows a prompt instead: `ui.dialog.confirm` imports as a new
+group, `ui.dialog.set {"choice":"replace"}` then `ui.dialog.confirm` replaces, and
+`ui.dialog.cancel` imports nothing.
 
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
 web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or
@@ -422,13 +443,13 @@ stdio, and a value that is not a port is a usage error naming the variable. Impl
 | `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement (`enabled`, `disabledReason`, `needsDocument`); `result` is a bare array of command objects ([Command list replies](#command-list-replies)) |
 | `session.list` | open documents and the active index |
-| `doc.open` / `doc.new` | `{path}` / `file.new` params |
-| `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
+| `doc.open` / `doc.new` | `{path, approveHighMemory? (false)}` / `file.new` params (`approveHighMemory` is the same one-shot PSD/PSB consent as the `file.openAs` command; see [development.md](development.md) for the structured refusal fields) |
+| `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), approveHighMemory? (false), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path. `approveHighMemory` is refused unless it is a boolean |
 | `doc.replaceSmartObject` | `{path, layer? (id or name; default the active layer), index?}` → the command's `{layer, instances}`: replaces a Smart Object's contents (one history step, transform and filters kept). `path` resolves beneath the read root, so this is the capability-scoped `layer.smartObjects.replaceContents`, which itself still refuses an ambient path (#8061) |
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, skipped}` (plus `count` for workspace exports): one file per exported top-level layer, named like `file.export.layersToFiles` names them. `count` is present only for workspace exports and counts written files only. `skipped` is always an array (empty when nothing is omitted), in top-to-bottom order, of `{layer, name, reason}`: the session layer id, original unsanitized name, and `"hidden by visibleOnly"` or `"adjustment layer has no pixels of its own"`. Visibility takes precedence for hidden adjustments; `visibleOnly:false` exports hidden non-adjustment layers. Groups export merged; their children are not separate exports or skips. Existing filenames/numbering are unchanged. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file. Encode/write failures are errors, not skips |
 | `doc.exportDataSets` | `{dir, format? (png), dataSets? (all), naming? ("{name}\|{index}\|{document}"), index?}` → `{files, count}`: the capability-scoped `file.export.dataSetsAsFiles`. The batch is planned first and colliding names are refused before any file is written, as in the command |
 | `doc.importDataSets` | `{path, delimiter? (,), index?}` → `{imported}`: the capability-scoped `file.import.variableDataSets`; the CSV is read beneath the read root |
-| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?, tgaBits?, ddsCompression?, ddsMipmaps?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF; `tgaBits` 24 or 32 sets a TGA's bits per pixel, and `ddsCompression`/`ddsMipmaps` a DDS texture's compression and mip chain, as `app.save` does). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
+| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?, tgaBits?, ddsCompression?, ddsMipmaps?, pcraftFullComposite?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF; `tgaBits` 24 or 32 sets a TGA's bits per pixel, and `ddsCompression`/`ddsMipmaps` a DDS texture's compression and mip chain, as `app.save` does; `pcraftFullComposite: true` also writes the flattened document at its canvas size into a `.pcraft` file as `composite/full.png`; the save may leave it out in the cases listed in [the format guide](../book/src/formats/pcraft.md), and the manifest's `full_composite` member names it when written). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
