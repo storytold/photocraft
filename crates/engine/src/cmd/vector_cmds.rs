@@ -71,7 +71,7 @@ mod vector_mask;
 
 pub(crate) use params::{layer_id, nums, op_from, pt};
 pub use params::{parse_path, parse_stroke, path_json};
-pub use paths::STROKE_PATH_TOOLS;
+pub use paths::{STROKE_PATH_TOOLS, TYPE_PATH};
 use paths::{
     clipping_path_clear, clipping_path_set, path_delete, path_fill, path_rename, path_set, path_stroke, path_to_selection, path_to_selection_with_mode,
     path_transform, paths_list, resolve_path, select_to_work_path,
@@ -142,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Path Info",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str|"work"|"layer"="work"} → {name,path}"##,
+            params: r##"{"name":str|"work"|"layer"|"typePath"="work"} → {name,path}"##,
             enabled: has_doc,
             run: |s, p| {
                 let name = p.get("name").and_then(Value::as_str);
@@ -204,7 +204,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Make Selection from Path",
             menu: &[],
             shortcut: Some("Cmd+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            params: r##"{"name":str|"work"|"layer"|"typePath"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             enabled: has_doc,
             run: path_to_selection,
             journal: true,
@@ -215,7 +215,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Path to Selection",
             menu: &[],
             shortcut: Some("Cmd+Shift+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "add")"##,
+            params: r##"{"name":str|"work"|"layer"|"typePath"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "add")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "add"),
             journal: true,
@@ -225,7 +225,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Subtract Path from Selection",
             menu: &[],
             shortcut: Some("Cmd+Alt+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
+            params: r##"{"name":str|"work"|"layer"|"typePath"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
             enabled: has_doc,
             run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
             journal: true,
@@ -235,7 +235,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.fill",
             "Fill Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true}"##,
+            r##"{"name":str|"work"|"layer"|"typePath"="work","layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true}"##,
             has_layer,
             path_fill
         ),
@@ -243,7 +243,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.stroke",
             "Stroke Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false (taper both ends when the brush follows pen pressure),"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise; tools past the Eraser run their paint.* command along the path and take its params)"##,
+            r##"{"name":str|"work"|"layer"|"typePath"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false (taper both ends when the brush follows pen pressure),"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise; tools past the Eraser run their paint.* command along the path and take its params)"##,
             has_layer,
             path_stroke
         ),

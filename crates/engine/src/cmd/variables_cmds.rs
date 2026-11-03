@@ -121,7 +121,9 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::NoLayer(layer));
         }
         let kind = parse_kind(d).ok_or_else(|| bad("image.variables.define", "a def needs a valid `type`"))?;
-        if defs.iter().any(|e: &VariableDef| e.name == name) {
+        // As in Photoshop, one variable may drive several layers (all of one type: a data set's
+        // value is typed by the name), but each layer at most once.
+        if defs.iter().any(|e: &VariableDef| e.name == name && (e.layer == layer || std::mem::discriminant(&e.kind) != std::mem::discriminant(&kind))) {
             return Err(bad("image.variables.define", format!("duplicate variable `{name}`")));
         }
         defs.push(VariableDef { name: name.to_string(), layer, kind });
@@ -156,8 +158,8 @@ fn data_sets(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Apply one data set's values to the document (visibility, text, pixels). A history step.
 fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<()> {
-    for dv in &set.values {
-        let Some(def) = vars.def(&dv.variable) else { continue };
+    // Every layer linked to the variable takes its value.
+    for (dv, def) in set.values.iter().flat_map(|dv| vars.defs.iter().filter(|d| d.name == dv.variable).map(move |d| (dv, d))) {
         match (&def.kind, &dv.value) {
             (VarKind::Visibility, VarValue::Visibility(show)) => {
                 if let Some(l) = doc.layer_mut(def.layer) {

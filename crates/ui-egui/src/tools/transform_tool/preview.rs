@@ -2,8 +2,9 @@ use super::{Color32, Document, LayerContent, LayerId, ViewXform, pos2};
 
 /// Texels of the moving pixels over `b`: full resolution unless the long side exceeds the GPU's
 /// `max_side` (#91: this used to be capped at 2048 px, so big layers previewed blurry), plus the
-/// uv extent covering `b`. `bare` leaves the layer's own style, opacity and fill out of a
-/// flattened render: the styled preview applies them to the moved pixels itself.
+/// uv extent covering `b`. `bare` leaves the layer's own style, opacity and fill, and the masks of
+/// the groups holding it, out of a flattened render: the styled preview applies them to the moved
+/// pixels itself (the group masks where they are, not moved with the pixels: #9941).
 pub(super) fn preview_image(
     doc: &Document,
     id: LayerId,
@@ -35,6 +36,9 @@ pub(super) fn preview_image(
                 l.effects.enabled = false;
                 l.opacity = 1.0;
                 l.fill_opacity = 1.0;
+            }
+            if bare {
+                unmask_holders(&mut solo.layers, id, 0);
             }
             let buf = photocraft_compose::render(&solo, b);
             let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
@@ -252,4 +256,28 @@ pub(crate) fn solo_layer(layers: &mut [photocraft_doc::Layer], id: LayerId) {
 
 fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
+}
+
+/// Switch off the masks of the groups holding `id` in `layers`. True when `id` was found.
+fn unmask_holders(layers: &mut [photocraft_doc::Layer], id: LayerId, depth: usize) -> bool {
+    if depth > 256 {
+        return false;
+    }
+    for l in layers {
+        if l.id == id {
+            return true;
+        }
+        if let LayerContent::Group(g) = &mut l.content
+            && unmask_holders(&mut g.children, id, depth + 1)
+        {
+            if let Some(m) = &mut l.mask {
+                m.enabled = false;
+            }
+            if let Some(v) = &mut l.vector_mask {
+                v.enabled = false;
+            }
+            return true;
+        }
+    }
+    false
 }

@@ -235,6 +235,7 @@ fn export_supported_document(
     if let Some(Some(data)) = slices_resource {
         resources.push(ImageResource::new(crate::slices_map::SLICES, data));
     }
+    variables_resources(doc, &mut ex, &mut resources);
     resources.push(version_info_resource(real_merged));
 
     let has_layers = !ex.records.is_empty();
@@ -385,6 +386,17 @@ fn merged_image(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt, fmt: &
         planes = merged_planes(doc, fmt, cmyk_of(fmt), false, &Interrupt::cancel_only(&|| ctl.cancelled())).0;
     }
     (planes, has_alpha)
+}
+
+/// Image variables and data sets: the preserved resources while unchanged, else regenerated (or
+/// dropped when the document has none).
+fn variables_resources(doc: &Document, ex: &mut Ex, resources: &mut Vec<ImageResource>) {
+    let (fresh, warning) = crate::variables_map::export_resources(doc, &ex.layer_ids);
+    ex.warnings.extend(warning);
+    if let Some(fresh) = fresh {
+        resources.retain(|r| !crate::variables_map::is_variables_resource(r.id));
+        resources.extend(fresh.into_iter().map(|(id, data)| ImageResource::new(id, data)));
+    }
 }
 
 fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex) {

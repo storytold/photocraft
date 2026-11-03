@@ -46,6 +46,8 @@ pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_deletes_work_path, deselect_loaded_path, free_transform_path, targeted_vector_mask, work_path_shown,
 };
 #[cfg(test)]
+pub(crate) use paths_panel::can_paint;
+#[cfg(test)]
 use paths_panel::path_context_actions;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_footer, paths_panel};
 #[cfg(test)]

@@ -1747,3 +1747,36 @@ fn capture_font_field_gpu_visual_fixtures() {
         }
     }
 }
+
+/// #10427: hiding the class list and showing it again sizes the preview header to the full menu at
+/// once. The header used to start at the narrow width measured with the classes hidden and grow
+/// back over several frames (faster while the pointer moved, each move giving one more frame).
+#[test]
+fn showing_the_classes_again_sizes_the_preview_header_at_once() {
+    let mut h = library_harness(&[], &[]);
+    h.run_steps(3);
+    let wide = popup_width(&h);
+    // The press and the release take a frame each, so the toggle lands in the second frame; from
+    // the next one on the header has its width.
+    let widths_after = |h: &mut Harness<'static, LibState>, button: &str| {
+        h.get_by_label(button).click();
+        (0..6)
+            .map(|_| {
+                h.step();
+                popup_width(h)
+            })
+            .collect::<Vec<f32>>()
+    };
+    let hidden = widths_after(&mut h, "Hide Font Classes");
+    let narrow = hidden[5];
+    assert!(narrow < wide - 50.0, "hiding the classes narrows the menu: {narrow} vs {wide}");
+    assert!(hidden[2..].iter().all(|w| (w - narrow).abs() < 1.0), "header widths after hiding the classes: {hidden:?}");
+    for _ in 0..2 {
+        let shown = widths_after(&mut h, "Show Font Classes");
+        // Shown again, the header is full width from the first frame the classes are drawn in
+        // (frame 1), not a step of a growth.
+        assert!(shown[1..].iter().all(|w| (w - wide).abs() < 1.0), "header widths after showing the classes: {shown:?}, full {wide}");
+        let hidden = widths_after(&mut h, "Hide Font Classes");
+        assert!(hidden[2..].iter().all(|w| (w - narrow).abs() < 1.0), "header widths after hiding the classes: {hidden:?}, narrow {narrow}");
+    }
+}

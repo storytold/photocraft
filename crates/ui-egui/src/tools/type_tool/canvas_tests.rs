@@ -3435,6 +3435,56 @@ fn over_existing_type_on_a_shape_the_pointer_is_the_plain_i_beam_and_a_click_edi
     assert_eq!(text_layer(&app.session.active().unwrap().doc, LayerId(text)).unwrap().shape, photocraft_doc::text::TextShape::Point);
 }
 
+/// #10099: type made on the selected Work Path gets its own path, the Paths panel's
+/// "<Layer> Type Path", which becomes the target path. The Work Path it was made on is neither
+/// drawn beside it nor edited by Direct Selection (a drag reshaped the Work Path and left the
+/// type behind, and both paths were drawn), until it is selected in the Paths panel again.
+#[test]
+fn type_on_the_work_path_gets_its_own_target_type_path() {
+    use crate::direct_select::{PathRef, active_paths, candidates};
+    use crate::vector_ui::{PathRow, path_rows};
+    let mut app = new_app();
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polyline(&[(300.0, 400.0), (500.0, 300.0), (700.0, 400.0)])]));
+    // Just drawn with the Pen, the Work Path is selected in the Paths panel.
+    app.ui.selected_path = Some("work".into());
+    assert!(crate::vector_ui::can_paint(&app), "the Background takes paint");
+    click_at(&mut app, 300.0, 400.0);
+    let id = app.ui.text_edit.as_ref().expect("editing").layer;
+    assert!(matches!(text_layer(&app.session.active().unwrap().doc, LayerId(id)).unwrap().shape, photocraft_doc::text::TextShape::Path { .. }));
+    assert_eq!(app.ui.selected_path.as_deref(), Some(photocraft_engine::vector_cmds::TYPE_PATH), "the Type Path is the target path");
+    let st = app.session.active().unwrap();
+    let rows = path_rows(&st.doc, st.active_layer);
+    let kinds: Vec<_> = rows.iter().map(|r| (r.kind, r.name.ends_with(" Type Path"))).collect();
+    assert_eq!(kinds, [(PathRow::Work, false), (PathRow::TypePath, true)], "Work Path and the Type Path are two rows");
+    // Fill and Stroke paint pixel layers: with the type layer selected they are dimmed rather
+    // than failing on it.
+    assert!(!crate::vector_ui::can_paint(&app), "a type layer takes no paint");
+    for tool in [crate::state::Tool::DirectSelection, crate::state::Tool::Pen] {
+        app.ui.tool = tool;
+        let refs: Vec<_> = candidates(&app).into_iter().map(|(r, _)| r).collect();
+        assert_eq!(refs, [PathRef::TypePath(id)], "{tool:?}: only the Type Path is drawn and edited");
+        assert_eq!(active_paths(&app).first().map(|(r, _)| *r), Some(PathRef::TypePath(id)));
+    }
+    // Hidden, the Work Path is no Type tool target either: a click on its outline makes point
+    // type rather than more type on it.
+    assert!(path_target(&app, 500.0, 300.0).is_none(), "the hidden Work Path is not a target");
+    // Selected in the Paths panel again, the Work Path shows and is edited first.
+    app.ui.selected_path = Some("work".into());
+    assert_eq!(active_paths(&app).first().map(|(r, _)| *r), Some(PathRef::Work));
+    assert!(candidates(&app).iter().any(|(r, _)| *r == PathRef::TypePath(id)));
+    assert!(matches!(path_target(&app, 500.0, 300.0), Some(PathClick::OnPath { shape: None, .. })), "shown, it is a target again");
+    // With the layer's vector mask targeted too, the Type Path selected in the panel is what
+    // Direct Selection edits; otherwise the targeted mask is, as before.
+    let rect = json!({"subpaths": [{"closed": true, "knots": [[10, 10], [200, 10], [200, 100], [10, 100]]}]});
+    app.run("layer.vectorMask.add", json!({"layer": id, "path": rect})).unwrap();
+    app.ui.vector_mask_target = true;
+    app.ui.selected_path = Some(photocraft_engine::vector_cmds::TYPE_PATH.into());
+    assert_eq!(active_paths(&app).first().map(|(r, _)| *r), Some(PathRef::TypePath(id)));
+    app.ui.selected_path = None;
+    assert_eq!(active_paths(&app).first().map(|(r, _)| *r), Some(PathRef::Layer(id)));
+}
+
 #[test]
 fn paths_with_too_many_anchors_are_not_hover_targets() {
     // The hover hit-tests every segment each frame, so huge paths are skipped (click and pointer alike).

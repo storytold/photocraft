@@ -67,6 +67,7 @@ mod psd_thumbnail;
 mod psd_type_bounds;
 mod psd_type_photoshop_bytes;
 mod psd_unknown_adjustment;
+mod psd_variables;
 mod psd_vertical_type;
 mod raw;
 mod resolution_axes;
