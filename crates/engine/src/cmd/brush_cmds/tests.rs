@@ -1169,13 +1169,14 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     assert!(s.execute("tools.setBrush", json!({ "brush": scatter(1e38) })).is_err());
     assert!(s.execute("paint.stroke", stroke.clone()).is_ok());
     // The maximum (1000 %) is accepted and paints a finite, well-formed dab.
-    for patch in [scatter(10.0), dual(10.0)] {
+    for (patch, primary_on_canvas) in [(scatter(10.0), false), (dual(10.0), true)] {
         let mut s = new();
         s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
         let r = s.execute("paint.stroke", stroke.clone()).unwrap();
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
-        // A dab scattered clear of the canvas is not rasterized, so its damage is empty.
-        let off_canvas = d[2] == 0 && d[3] == 0;
+        // A dab scattered clear of the canvas is not rasterized, so its damage is empty. The dual
+        // brush scatters only its own tip: the primary dab stays on the canvas and always paints.
+        let off_canvas = !primary_on_canvas && d[2] == 0 && d[3] == 0;
         assert!(off_canvas || (d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0), "{r}");
     }
     // Control: 200 % scatter paints where it did before the cap (the soft default tip reaches a

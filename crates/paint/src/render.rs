@@ -949,7 +949,8 @@ impl StrokeRenderer {
         self
     }
 
-    /// Override the dab-area budget ([`MAX_STROKE_DAB_AREA`]) for this stroke.
+    /// Override the dab-area budget ([`MAX_STROKE_DAB_AREA`]) for this stroke. Set it before the first
+    /// dab: it replaces what is left, so pixels already charged are not carried over.
     pub fn with_dab_area_budget(mut self, pixels: u64) -> Self {
         self.area_left = pixels;
         self.dual_area_left = pixels;
