@@ -388,6 +388,12 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     for id in ["edit.generativeFill", "layer.generative.more", "layer.generative.retry", "layer.generative.agree"] {
         assert!(authorize_engine_step(id, &serde_json::json!({"fill": 1, "term": "until_revoked"})).is_err(), "{id}");
     }
+    // Save Fill Diagnostics writes captured pixels to disk: the person's alone.
+    for params in [serde_json::json!({}), serde_json::json!({"folder": "/tmp", "layer": 3})] {
+        let e = authorize_desktop_engine_command("layer.generative.saveDiagnostics", &params).unwrap_err().to_string();
+        assert!(e.contains("diagnostics"), "{e}");
+        assert!(authorize_engine_step("layer.generative.saveDiagnostics", &params).is_err());
+    }
     // Looking at fills, flipping variations and discarding send nothing.
     for id in ["layer.generative.fills", "layer.generative.selectVariation", "layer.generative.discard"] {
         assert!(authorize_engine_step(id, &serde_json::json!({})).is_ok(), "{id}");

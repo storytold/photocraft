@@ -129,7 +129,8 @@ const HOLE: f32 = 128.0;
 /// reads as a gap to fill. Dimming didn't make the model draw dark shapes into bright scenes.
 const PLACEHOLDER: f32 = 0.35;
 
-fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
+/// `px` (RGBA, 8-bit, `w`×`h`) as PNG.
+pub(super) fn encode_rgba(px: Vec<u8>, w: u32, h: u32) -> Result<Vec<u8>> {
     let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).map_err(other)?;
     codecs::encode(&img, Format::Png, &Default::default()).map_err(other)
 }

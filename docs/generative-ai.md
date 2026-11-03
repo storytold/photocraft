@@ -145,7 +145,36 @@ Automation can't do any of this on the person's behalf: the commands that send p
 (`edit.generativeFill`, `layer.generative.more`, `.retry` and `.agree`) are refused to the control
 channel, MCP and actions, and confirming the prompt or the consent dialog through the control
 channel is judged as those commands. Agents can look (`layer.generative.fills`), flip variations
-and discard fills.
+and discard fills. Save Fill Diagnostics (`layer.generative.saveDiagnostics`) is refused to them
+too: it writes the pictures a fill sent and got back, and must not be a way to copy document
+pixels out.
+
+## Diagnostics
+
+A fill that came back wrong can be looked at as it was before anyone adjusts prompts or blending:
+**Save Fill Diagnostics…** (the Layers panel's menu on a generative layer or a variation, the
+link under Properties › Variations, or the status bar's list for a failed fill) asks for a folder
+and writes a new folder there with
+
+- `crop.png`: the area as rendered from the visible layers in sRGB at the request size, before
+  the selection was cleared (this is not sent);
+- `source.png`, `mask.png`, `prompt.txt`: exactly what was sent (for an empty prompt, the fixed
+  instruction to continue the picture);
+- `returned-N.png` (or `.jpg`, `.webp`): each picture exactly as the service returned it;
+- `composite-N.png`: each placed variation shown alone, over the area, from the document as it is
+  now;
+- `summary.json`: model, connection, destination, area and request size, each returned picture's
+  size, how it was lined up (or why it was refused), and whether colour matching ran or why it was
+  skipped.
+
+PhotoCraft sends the prompt; the service's adapter in the shared AI layer may wrap it in an
+instruction of its own (Gemini's does), which PhotoCraft never sees. The summary says so rather
+than guess at it.
+
+Nothing is logged or written without being asked. The capture is kept in memory for the session
+only: for the last 8 fills that landed (Generate More counts as one) and for a failed fill until it
+is retried or discarded. A generative layer that was undone or deleted no longer offers it. The
+web build doesn't offer it.
 
 ## When it can't run, and errors
 
@@ -173,6 +202,7 @@ cancelled fill shows nothing.
 | `layer.generative.discard` | `{fill}` or `{fills: [...]}` stops or forgets fills |
 | `layer.generative.fills` | lists fills in progress (`queued`, `running`, `consent`, `failed`) and whether the tool can run |
 | `layer.generative.areas` | the selection's separate areas |
+| `layer.generative.saveDiagnostics` | `{folder, layer?}` or `{folder, fill}` writes what a fill sent and got back (see [Diagnostics](#diagnostics)); the person's only |
 
 ## For developers
 

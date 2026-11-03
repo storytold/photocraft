@@ -20,6 +20,7 @@ use crate::state::DialogKind;
 const FILL: &str = photocraft_engine::genai_cmds::FILL;
 const SELECT_VARIATION: &str = photocraft_engine::genai_cmds::SELECT_VARIATION;
 const MORE: &str = photocraft_engine::genai_cmds::MORE;
+const SAVE: &str = photocraft_engine::genai_cmds::SAVE_DIAGNOSTICS;
 /// Long side of a variation thumbnail, in texels.
 const THUMB: u32 = 96;
 /// Most separate areas of a selection the prompt dialog offers to fill one by one (each is its
@@ -62,8 +63,42 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             }
             Some(Ok(json!({"dialog": open_prompt(app)})))
         }
+        SAVE if params.get("folder").is_none() => Some(save_diagnostics(app, params)),
         _ => None,
     }
+}
+
+/// What Save Fill Diagnostics does, for its tooltips.
+fn diagnostics_tip() -> &'static str {
+    tl!("Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.")
+}
+
+/// Save Fill Diagnostics…: ask for a folder, then write what the fill (`fill`, `layer` or the
+/// active generative layer) sent and got back into a new folder there. Desktop only.
+fn save_diagnostics(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    if !offered(app) {
+        return Err(NO_AI.into());
+    }
+    let mut target = params.as_object().cloned().unwrap_or_default();
+    if !target.contains_key("fill") && !target.contains_key("layer") {
+        let layer = app.session.generative_layer().ok_or_else(|| tl!("Select a generative layer first.").to_owned())?;
+        target.insert("layer".into(), json!(layer.0));
+    }
+    app.ask_folder(move |app, dir| {
+        target.insert("folder".into(), json!(dir));
+        let r = app.run(SAVE, Value::Object(target));
+        if let Ok(v) = &r {
+            let folder = v.get("folder").and_then(Value::as_str).unwrap_or(&dir).to_owned();
+            app.ui.status = crate::i18n::fmt(tl!("Saved Generative Fill diagnostics to {folder}"), &[("folder", &folder)]);
+            app.ui.status_error = false;
+        }
+        r
+    })
+}
+
+/// Does this app offer Save Fill Diagnostics for `layer` (desktop, and a capture is kept)?
+pub fn offers_diagnostics(app: &PhotocraftApp, layer: LayerId) -> bool {
+    offered(app) && app.session.generative_has_diagnostics(layer)
 }
 
 /// Does this app offer Generative AI at all (the desktop app; not the web build)?
@@ -411,6 +446,13 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         for line in note_lines(note) {
             ui.add_space(2.0);
             faint(ui, &line);
+        }
+    }
+    if offers_diagnostics(app, group_id) && ui.link(egui::RichText::new(tl!("Save Fill Diagnostics…")).size(12.0)).on_hover_text(diagnostics_tip()).clicked()
+    {
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, SAVE, json!({"layer": group_id.0})) {
+            app.ui.status = e;
         }
     }
     if let Some(i) = chosen

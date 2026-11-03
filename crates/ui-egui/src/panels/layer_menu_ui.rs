@@ -149,6 +149,16 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         let mut rename = false;
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
         items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
+        // A generative layer made in this session: what its fills sent and got back (desktop).
+        if !on_set && crate::genai_ui::offers_diagnostics(app, l.id) {
+            ui.separator();
+            if ui.button(tl!("Save Fill Diagnostics…")).clicked() {
+                // Like a menu item: it asks for a folder, for the layer clicked.
+                actions.push(("layer.select".into(), json!({"layer": l.id.0})));
+                actions.push((photocraft_engine::genai_cmds::SAVE_DIAGNOSTICS.into(), Value::Null));
+                ui.close();
+            }
+        }
         ui.separator();
         if ui.button(tl!("Rename Layer…")).clicked() {
             rename = true;

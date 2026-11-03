@@ -98,3 +98,81 @@ fn a_result_framed_differently_is_refused_not_stretched() {
     let r = s.execute(FILL, json!({"variations": 1})).unwrap();
     assert_eq!(r["matching"][0]["framing"]["state"], "same");
 }
+
+#[test]
+fn save_fill_diagnostics_writes_what_was_sent_and_returned_only_when_asked() {
+    let mut s = session(160, 160);
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
+    let f = install(&mut s, Fake { echo: Some(-40), ..fake([0, 0, 0]) });
+    let dir = tempfile::tempdir().unwrap();
+    assert!(s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy()})).is_err(), "no generative layer yet");
+    let r = s.execute(FILL, json!({"prompt": "a lake", "variations": 2})).unwrap();
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing is written on its own");
+    assert!(s.is_enabled(SAVE_DIAGNOSTICS));
+    let group = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    assert!(s.generative_has_diagnostics(group));
+    assert!(s.execute(SAVE_DIAGNOSTICS, json!({})).is_err(), "needs a folder");
+    assert!(s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().join("missing").to_string_lossy()})).is_err());
+    let saved = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy()})).unwrap();
+    let out = std::path::PathBuf::from(saved["folder"].as_str().unwrap());
+    assert_eq!(out.parent(), Some(dir.path()));
+    let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["composite-1.png", "composite-2.png", "crop.png", "mask.png", "prompt.txt", "returned-1.png", "returned-2.png", "source.png", "summary.json"]
+    );
+    // Exactly what was sent.
+    let sent = f.sent.lock().unwrap()[0].clone();
+    assert_eq!(std::fs::read(out.join("source.png")).unwrap(), sent.source_png);
+    assert_eq!(std::fs::read(out.join("mask.png")).unwrap(), sent.mask_png);
+    assert_eq!(std::fs::read_to_string(out.join("prompt.txt")).unwrap(), "a lake");
+    let summary: Value = serde_json::from_slice(&std::fs::read(out.join("summary.json")).unwrap()).unwrap();
+    let fill = &summary["fills"][0];
+    assert_eq!(fill["model"], "Fake 1");
+    assert_eq!(fill["connection"], "Fake");
+    assert_eq!(fill["requestSize"], json!([160, 160]));
+    assert_eq!(fill["variations"][0]["colourMatching"], "ran");
+    assert_eq!(fill["variations"][0]["placed"]["framing"]["state"], "same");
+    assert_eq!(fill["variations"][0]["returnedSize"], json!([160, 160]));
+    assert!(fill["instructionNote"].as_str().unwrap().contains("doesn't see"));
+    // A second save never replaces the first.
+    let again = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "layer": group.0})).unwrap();
+    assert_ne!(again["folder"], saved["folder"]);
+    // Undone, the layer is gone and so is the command.
+    assert!(s.undo());
+    assert!(!s.generative_has_diagnostics(group));
+    assert!(s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "layer": group.0})).is_err());
+}
+
+#[test]
+fn a_failed_fill_keeps_its_capture_until_retried_or_discarded() {
+    let mut s = banded();
+    install(&mut s, Fake { size: Some((1536, 1024)), ..fake([0, 0, 255]) });
+    let job = started(&mut s, FILL, json!({"prompt": "x", "variations": 1}));
+    assert!(s.wait_job(job).is_err());
+    let fills = s.generative_fills();
+    assert_eq!((fills[0].state, fills[0].diagnostics), ("failed", true));
+    let dir = tempfile::tempdir().unwrap();
+    let saved = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "fill": fills[0].id})).unwrap();
+    let out = std::path::PathBuf::from(saved["folder"].as_str().unwrap());
+    let summary: Value = serde_json::from_slice(&std::fs::read(out.join("summary.json")).unwrap()).unwrap();
+    let v = &summary["fills"][0]["variations"][0];
+    assert!(v["refused"].as_str().unwrap().contains("1536×1024"), "{v}");
+    assert_eq!(v["composite"], Value::Null);
+    assert!(out.join("returned-1.png").is_file(), "the picture as returned, to look at");
+    assert!(summary["fills"][0]["failure"].is_string());
+    s.execute(DISCARD, json!({"fill": fills[0].id})).unwrap();
+    assert!(s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "fill": fills[0].id})).is_err());
+}
+
+#[test]
+fn only_the_last_fills_keep_their_capture() {
+    let mut s = session(64, 64);
+    install(&mut s, fake([0, 0, 255]));
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let groups: Vec<photocraft_doc::LayerId> =
+        (0..=diag::KEEP).map(|_| photocraft_doc::LayerId(s.execute(FILL, json!({"variations": 1})).unwrap()["layer"].as_u64().unwrap())).collect();
+    assert!(!s.generative_has_diagnostics(groups[0]), "the oldest was let go");
+    assert!(groups[1..].iter().all(|g| s.generative_has_diagnostics(*g)));
+}

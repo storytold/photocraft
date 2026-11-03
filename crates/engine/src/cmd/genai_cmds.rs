@@ -40,11 +40,13 @@ use crate::jobs::{JobCtx, JobId};
 use crate::{EngineError, Result, Session};
 
 mod areas;
+mod diag;
 mod pixels;
 mod queue;
 mod remote;
 
 pub use areas::MAX_AREAS;
+pub use diag::SAVE_DIAGNOSTICS;
 pub use queue::MAX_PARALLEL;
 
 pub use pixels::{ColourMatch, Framing};
@@ -60,6 +62,9 @@ pub const FILLS: &str = "layer.generative.fills";
 pub const AREAS: &str = "layer.generative.areas";
 /// The commands that send document pixels to an AI service: automation may not run them.
 pub const SENDS: [&str; 4] = [FILL, MORE, RETRY, AGREE];
+/// The commands only the person may run: Save Fill Diagnostics writes the pictures a fill sent and
+/// got back, and automation must not be able to copy document pixels out through it.
+pub const PERSON_ONLY: [&str; 1] = [SAVE_DIAGNOSTICS];
 const LABEL: &str = "Generative Fill";
 /// Why the tool is off where no app supplied a [`GenerativeAi`] (the web build, the CLI).
 pub const NO_AI: &str = "Generative Fill needs the PhotoCraft desktop app.";
@@ -141,6 +146,8 @@ pub(crate) struct GenState {
     turns: Arc<queue::Turns>,
     /// How each variation made in this session was lined up and colour-matched, by its layer.
     notes: std::collections::HashMap<LayerId, VariationNote>,
+    /// What the last few landed fills sent and got back, for Save Fill Diagnostics (memory only).
+    captures: diag::Captures,
 }
 
 /// How a variation was placed: how the returned picture was lined up with the area sent, and
@@ -183,6 +190,8 @@ struct FillStatus {
     plan: Mutex<Option<Arc<dyn FillPlan>>>,
     /// Waiting for the person to agree to sending it (nothing sent yet).
     consent: AtomicBool,
+    /// What a failed fill sent and got back, for Save Fill Diagnostics (memory only).
+    capture: Mutex<Option<Arc<diag::Capture>>>,
 }
 
 impl FillStatus {
@@ -200,6 +209,14 @@ impl FillStatus {
 
     fn set_plan(&self, plan: Option<Arc<dyn FillPlan>>) {
         *self.plan.lock().unwrap_or_else(PoisonError::into_inner) = plan;
+    }
+
+    fn capture(&self) -> Option<Arc<diag::Capture>> {
+        self.capture.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn set_capture(&self, c: Option<diag::Capture>) {
+        *self.capture.lock().unwrap_or_else(PoisonError::into_inner) = c.map(Arc::new);
     }
 
     /// The error kind of a failure, kept for the shell (it offers setup for `auth`).
@@ -283,6 +300,8 @@ pub struct FillInfo {
     pub error_kind: Option<AiErrorKind>,
     /// Generate More for an existing generative layer.
     pub more: bool,
+    /// A failed fill whose request and results Save Fill Diagnostics can write.
+    pub diagnostics: bool,
 }
 
 impl Fill {
@@ -326,6 +345,7 @@ impl Fill {
             error,
             error_kind,
             more: self.input.into.is_some(),
+            diagnostics: state == "failed" && self.status.capture().is_some(),
         })
     }
 }
@@ -453,6 +473,7 @@ fn start(s: &mut Session, id: u64) -> Result<Value> {
     let fill = s.genai_state.fills.iter().find(|f| f.id == id).ok_or_else(|| bad(format!("no Generative Fill {id} is waiting")))?;
     let (doc, input, status, turns) = (fill.doc, Arc::clone(&fill.input), Arc::clone(&fill.status), Arc::clone(&s.genai_state.turns));
     status.set_error(None);
+    status.set_capture(None);
     status.consent.store(false, Ordering::Relaxed);
     let spawning = s.spawning();
     let worker = Arc::clone(&status);
@@ -470,7 +491,7 @@ fn start(s: &mut Session, id: u64) -> Result<Value> {
             }
             r
         },
-        move |s, (placed, source)| land(s, id, placed, source),
+        move |s, made| land(s, id, made),
     );
     let started = match &r {
         Ok(v) if spawning => v.get("job").and_then(Value::as_u64).map(|j| (v.clone(), JobId(j))),
@@ -501,15 +522,16 @@ fn start(s: &mut Session, id: u64) -> Result<Value> {
     }
 }
 
+/// What a fill's job made: the pictures placed, what was sent, and the capture of what came back.
+struct Made {
+    placed: Vec<Placed>,
+    prepared: Arc<Prepared>,
+    capture: diag::Capture,
+}
+
 /// A fill's AI part: what is sent, the plan (and consent), a turn at the service, the results
 /// placed.
-fn fill_work(
-    ctx: &JobCtx,
-    input: &FillInput,
-    ai: &dyn crate::genai::GenerativeAi,
-    turns: &queue::Turns,
-    status: &FillStatus,
-) -> Result<(Vec<Placed>, Arc<Prepared>)> {
+fn fill_work(ctx: &JobCtx, input: &FillInput, ai: &dyn crate::genai::GenerativeAi, turns: &queue::Turns, status: &FillStatus) -> Result<Made> {
     let prepared = input.prepared(ctx)?;
     ctx.check()?;
     // The plan the person agreed to, or a fresh one from the model chosen now.
@@ -527,13 +549,27 @@ fn fill_work(
         return Err(EngineError::Other(NEEDS_CONSENT.into()));
     }
     let _turn = turns.take(ctx, &status.queued)?;
+    let mut capture = diag::Capture {
+        prepared: Arc::clone(&prepared),
+        area: input.area,
+        typed: input.prompt.clone(),
+        disclosure: Some(plan.disclosure().clone()),
+        more: input.into.is_some(),
+        returned: Vec::new(),
+        failure: None,
+        group: input.into,
+    };
     let results = match remote::run_jobs(ctx, plan.as_ref(), input.count) {
         Err(remote::Stopped::Failed(f)) if f.kind == AiErrorKind::ConsentRequired => {
             status.consent.store(true, Ordering::Relaxed);
             status.set_error(Some((NEEDS_CONSENT.into(), Some(AiErrorKind::ConsentRequired))));
             return Err(EngineError::Other(NEEDS_CONSENT.into()));
         }
-        Err(remote::Stopped::Failed(f)) => return Err(failed(status, &f)),
+        Err(remote::Stopped::Failed(f)) => {
+            capture.failure = Some(f.message.clone());
+            status.set_capture(Some(capture));
+            return Err(failed(status, &f));
+        }
         r => remote::into_result(r)?,
     };
     ctx.check()?;
@@ -541,19 +577,21 @@ fn fill_work(
     // A picture that can't be placed (unreadable, framed differently) is dropped like a failed
     // variation, as long as another one is placed.
     let mut placed = Vec::new();
-    let mut refused = None;
-    for bytes in &results {
-        match pixels::place(bytes, input.area, &prepared.reference) {
-            Ok(p) => placed.push(p),
-            Err(e) => {
-                refused.get_or_insert(e);
-            }
-        }
+    for bytes in results {
+        let outcome = pixels::place(&bytes, input.area, &prepared.reference).map(|p| {
+            let note = VariationNote::of(&p);
+            placed.push(p);
+            note
+        });
+        capture.returned.push(diag::Returned { bytes, outcome, layer: None });
     }
-    if let (true, Some(why)) = (placed.is_empty(), refused) {
+    if placed.is_empty() {
+        let why = capture.returned.iter().find_map(|r| r.outcome.as_ref().err().cloned()).unwrap_or_else(|| "the AI service returned no picture".into());
+        capture.failure = Some(why.clone());
+        status.set_capture(Some(capture));
         return Err(failed(status, &AiFailure::new(AiErrorKind::Provider, why)));
     }
-    Ok((placed, prepared))
+    Ok(Made { placed, prepared, capture })
 }
 
 /// Keep `f`'s kind for the shell and turn it into the job's error.
@@ -565,7 +603,8 @@ fn failed(status: &FillStatus, f: &AiFailure) -> EngineError {
 /// Fill `id`'s results arrive (on its document): a new group masked by the selection, one layer
 /// per variation with the first showing, above the layer that was active when it started; or,
 /// for Generate More, more variations in the generative layer. One undo step.
-fn land(s: &mut Session, id: u64, placed: Vec<Placed>, prepared: Arc<Prepared>) -> Result<Value> {
+fn land(s: &mut Session, id: u64, made: Made) -> Result<Value> {
+    let Made { placed, prepared, capture } = made;
     // Discarded meanwhile.
     let i = s.genai_state.fills.iter().position(|f| f.id == id).ok_or(EngineError::Cancelled)?;
     let fill = s.genai_state.fills.remove(i);
@@ -588,6 +627,7 @@ fn land(s: &mut Session, id: u64, placed: Vec<Placed>, prepared: Arc<Prepared>) 
             Ok(ids)
         })?;
         let matching = note_variations(s, &ids, &placed);
+        keep_capture(s, capture, group, &ids);
         return Ok(json!({"layer": group.0, "variations": ids, "matching": matching, "fill": id}));
     }
     let (group, ids) = s.edit(LABEL, |doc, active| {
@@ -608,7 +648,19 @@ fn land(s: &mut Session, id: u64, placed: Vec<Placed>, prepared: Arc<Prepared>) 
     let area = input.area;
     s.genai_state.sources.insert(group, Arc::new(Source { prompt: input.prompt.clone(), area, prepared }));
     let matching = note_variations(s, &ids, &placed);
+    keep_capture(s, capture, group, &ids);
     Ok(json!({"layer": group.0, "variations": ids, "bounds": [area.x0, area.y0, area.width(), area.height()], "matching": matching, "fill": id}))
+}
+
+/// Keep what fill landed in `group` as variations `ids` sent and got back, each placed picture
+/// tied to its layer, for Save Fill Diagnostics.
+fn keep_capture(s: &mut Session, mut capture: diag::Capture, group: LayerId, ids: &[u64]) {
+    capture.group = Some(group);
+    let mut ids = ids.iter();
+    for r in capture.returned.iter_mut().filter(|r| r.outcome.is_ok()) {
+        r.layer = ids.next().map(|id| LayerId(*id));
+    }
+    s.genai_state.captures.push(capture);
 }
 
 /// Keep how each new variation (layer `ids`, in `placed`'s order) was placed, for Properties, and
@@ -890,6 +942,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r#"{} lists the Generative Fills that haven't landed and whether the tool can run: {fills:[{id, job, document, anchor, name, prompt, bounds:[x0,y0,x1,y1], state:"queued"|"running"|"consent"|"failed", queue_position, progress, elapsed_ms, error, error_kind, more}], parallel, status:{state:"ready"|"unavailable", …}}."#,
             enabled: |_| Ok(()),
             run: fills,
+            journal: false,
+        },
+        CommandSpec {
+            id: SAVE_DIAGNOSTICS,
+            label: "Save Fill Diagnostics…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"folder":text,"layer":id?,"fill":id?} writes what a Generative Fill sent and got back into a new folder inside `folder`: the area as rendered before the selection was cleared, the picture, mask and prompt exactly as sent, each picture as the service returned it, each placed variation composited, and summary.json (model, connection, sizes, how each picture was lined up, whether colour matching ran or why not). For the active generative layer (or `layer`), or a failed fill (`fill`). Kept in memory only for the last 8 fills of the session; nothing is written unless this runs. Desktop only; not available to automation."#,
+            enabled: diag::save_enabled,
+            run: diag::save,
             journal: false,
         },
         CommandSpec {

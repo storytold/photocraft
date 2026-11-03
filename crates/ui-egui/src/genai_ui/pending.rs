@@ -109,6 +109,7 @@ pub fn is_generative(id: &str) -> bool {
 /// Shell actions a tag or row asks for besides commands.
 const REVIEW: &str = "genai.review";
 const SETUP: &str = "genai.setup";
+const DIAGNOSTICS: &str = gc::SAVE_DIAGNOSTICS;
 
 /// A failure as the person reads it: the shared layer's message, except where its guide says
 /// to put it plainly (a busy service, an internal fault).
@@ -299,6 +300,14 @@ fn run_actions(app: &mut PhotocraftApp, actions: Vec<(&'static str, Value)>) {
         }
         if id == SETUP {
             super::open_setup(app);
+            continue;
+        }
+        // It asks for a folder first.
+        if id == DIAGNOSTICS {
+            if let Err(e) = super::save_diagnostics(app, &params) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
             continue;
         }
         if let Err(e) = app.run(id, params) {
@@ -578,6 +587,12 @@ fn list(app: &mut PhotocraftApp, ui: &mut egui::Ui, fills: &[FillInfo]) {
             ui.label(RichText::new(what).size(12.0).color(t.text)).on_hover_text(hover(f));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 buttons(ui, f, 20.0, true, &mut actions);
+                if f.diagnostics
+                    && super::offered(app)
+                    && crate::icons::button(ui, "file", 20.0, false, tl!("Save Fill Diagnostics…")).on_hover_text(super::diagnostics_tip()).clicked()
+                {
+                    actions.push((DIAGNOSTICS, json!({"fill": f.id})));
+                }
                 if crate::icons::button(ui, "search", 20.0, false, tl!("Go to area")).clicked() {
                     go = Some(f.clone());
                 }
