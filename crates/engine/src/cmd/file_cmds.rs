@@ -48,17 +48,24 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
+pub use open::{
+    PLACE_EMBEDDED, historical_xcf_sample_order, open_bytes_as, open_bytes_as_with_options, open_bytes_as_with_sample_order, place_bytes, raw_defaults,
+};
+pub(crate) use open::{
+    PlaceInput, apply_place, import, import_with_options, raw_open_resolution, raw_resolution, tag_exr_colorspace,
+    tag_exr_colorspace_with_policy,
+};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
 #[cfg(test)]
 use paths::openable_name;
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::same_open_files;
 pub use paths::{
-    extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
-    template_name, untitled_name,
+    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination,
+    same_file, saves_in_place, template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
 pub(crate) use place_steps::PlaceSteps;
@@ -129,6 +136,7 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).name = name;
         }
         self.path = Some(path);
+        self.source_read_only = false;
         self.saved_revision = self.revision;
     }
 }
@@ -235,6 +243,7 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Register file, copy, batch and processor contracts, including explicit historical open continuation.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -242,6 +251,16 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
+        CommandSpec {
+            id: "file.open",
+            label: "Open…",
+            menu: &["File"],
+            shortcut: Some("Cmd+O"),
+            params: r#"{"path":string?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"heldHistoricalXcfOpen":uint?,"cancel":bool=false,"interactive":bool=false,"approveHighMemory":bool=false}"#,
+            enabled: |_| Ok(()),
+            journal: false,
+            run: crate::jobs::open_command,
+        },
         spec!("file.closeAll", "Close All", &["File"], Some("Cmd+Alt+W"), "{}", has_doc, |s, _| close_all(s)),
         spec!(
             "file.closeOthers",
@@ -284,7 +303,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
             native,
             open_as
         ),
@@ -316,7 +335,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -325,7 +344,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, true)
         ),

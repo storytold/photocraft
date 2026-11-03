@@ -805,6 +805,8 @@ pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Register auxiliary native editing, filter and layer-style commands with their existing menu identities and parameter
+/// contracts.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {

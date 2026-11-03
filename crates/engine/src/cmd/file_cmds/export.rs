@@ -1,4 +1,4 @@
-use super::paths::{join, sanitize, stem, write_file};
+use super::paths::{check_import_destination, join, sanitize, stem, write_file};
 use super::save::{SaveOpts, encode};
 use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Surface, Value, from_rgba_into, json, str_param};
 
@@ -7,9 +7,34 @@ use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect
 pub(super) fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layersToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
-    let report = export_layers_report_with(s, p, |name, bytes| write_file(&join(&dir, name), bytes))?;
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    preflight_layer_exports(s, p, |name| check_import_destination(state, &join(&dir, name)))?;
+    let report = export_layers_report_with(s, p, |name, bytes| {
+        let path = join(&dir, name);
+        check_import_destination(state, &path)?;
+        write_file(&path, bytes)
+    })?;
     let files: Vec<String> = report.files.iter().map(|name| join(&dir, name)).collect();
     Ok(json!({"files": files, "skipped": report.skipped}))
+}
+
+/// Share the exact exported filename contract between destination preflight and encoded output.
+fn layer_export_name(prefix: &str, index: usize, layer: &Layer, format: &str) -> String {
+    format!("{}_{index:04}_{}.{format}", sanitize(prefix), sanitize(&layer.name))
+}
+
+/// Check every derived destination before the first write, retaining visible/adjustment numbering without encoding twice.
+fn preflight_layer_exports(s: &Session, p: &Value, mut check: impl FnMut(&str) -> Result<()>) -> Result<()> {
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&state.doc.name));
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
+    for (index, layer) in state.doc.layers.iter().rev().filter(|layer| layer.visible || !visible_only).enumerate() {
+        if !matches!(layer.content, LayerContent::Adjustment(_)) {
+            check(&layer_export_name(&prefix, index, layer, &format))?;
+        }
+    }
+    Ok(())
 }
 
 /// The bodies of `file.export.layersToFiles`, streamed to `write` as a single-component filename
@@ -91,7 +116,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
-        let name = format!("{}_{:04}_{}.{format}", sanitize(&prefix), index, sanitize(&l.name));
+        let name = layer_export_name(&prefix, index, l, &format);
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
@@ -234,6 +259,7 @@ pub(super) fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
     let cube = bake_cube_layers(size as usize, &title, &layers);
     match p.get("path").and_then(Value::as_str) {
         Some(path) => {
+            check_import_destination(d, path)?;
             write_file(path, cube.as_bytes())?;
             Ok(json!({"path": path, "size": size, "layerCount": count}))
         }
