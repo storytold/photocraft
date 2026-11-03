@@ -8,10 +8,28 @@ pub(super) fn sync_view_state(app: &mut PhotocraftApp) {
         app.prefs_rt.show_rulers = Some(want);
     }
     let rev = app.session.prefs.rev();
-    if app.prefs_rt.action_sets_rev != Some(rev) {
-        app.ui.actions.collapsed_sets =
-            app.session.prefs().collapsed_action_sets.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
-        app.prefs_rt.action_sets_rev = Some(rev);
+    if app.prefs_rt.action_sets_state.as_ref().map(|(rev, _)| *rev) != Some(rev) {
+        let recording = app.session.actions.recording.is_some() || crate::actions::suspended(app);
+        let choices = &app.session.prefs().collapsed_action_sets;
+        if let Some((_, previous)) = app.prefs_rt.action_sets_state.as_ref().filter(|_| recording) {
+            // An unrelated preference must not erase a temporary reveal or a manual collapse.
+            // Explicit changes to a folder's own preference still apply while recording.
+            for (name, collapsed) in choices {
+                if previous.get(name) != Some(collapsed) {
+                    app.ui.actions.collapsed_sets.retain(|set| set != name);
+                    if *collapsed {
+                        app.ui.actions.collapsed_sets.push(name.clone());
+                    }
+                }
+            }
+            for name in previous.keys().filter(|name| !choices.contains_key(*name)) {
+                app.ui.actions.collapsed_sets.retain(|set| set != name);
+            }
+            app.ui.actions.collapsed_sets.sort();
+        } else {
+            app.ui.actions.collapsed_sets = choices.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
+        }
+        app.prefs_rt.action_sets_state = Some((rev, choices.clone()));
     }
 }
 

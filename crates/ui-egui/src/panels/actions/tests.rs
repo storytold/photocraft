@@ -1257,8 +1257,91 @@ fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
     assert_eq!(list[1].set.as_deref(), Some("Web"));
 }
 
-/// Recording into a collapsed, selected set (New Action or Start Recording) expands the set
-/// again, so the new action and its steps show.
+/// Drive real recording, preference synchronization and panel rendering across the same frames.
+fn recording_folder_survives_preference_sync(entry: &str) {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set) in [("Record target", "Retouch"), ("Ordinary", "Portrait")] {
+        let mut action = Action::new(name, vec![]);
+        action.set = Some(set.into());
+        app.session.actions.list.push(action);
+    }
+    app.run("prefs.set", json!({"path": "collapsedActionSets", "value": {"Retouch": true, "Portrait": false}})).unwrap();
+    app.ui.actions.select(0, None);
+    let mut h = Harness::builder().with_size(vec2(420.0, 640.0)).build_ui_state(
+        |ui, app| {
+            crate::prefs_ui::tick(app, ui.ctx());
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    assert!(h.query_by_label("Record target").is_none());
+    assert!(h.query_by_label("Ordinary").is_some());
+    match entry {
+        "panel" => h.get_by_label("Start Recording").click(),
+        "direct" => {
+            h.state_mut().run("actions.record", json!({"action": 0})).unwrap();
+        }
+        "dialog" => {
+            let app = h.state_mut();
+            let id = crate::dialogs::open_command_dialog(app, "actions.record", "New Action");
+            let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+            fields.insert("name".into(), json!("Dialog target"));
+            fields.insert("set".into(), json!("Retouch"));
+            crate::dialogs::confirm(app, id).unwrap();
+        }
+        _ => panic!("unknown recording entry point"),
+    }
+    h.run_steps(3);
+    let index = h.state().session.actions.recording.unwrap().1;
+    let name = h.state().session.actions.list[index].name.clone();
+    assert!(h.query_by_label(&name).is_some(), "{entry}: the recording row is initially revealed");
+    let reveal = h.state().ui.actions.reveal_recording;
+    let saved = h.state().session.prefs().collapsed_action_sets.clone();
+    assert_eq!(saved.get("Retouch"), Some(&true));
+    for (command, params) in [("prefs.set", json!({"path": "general.beepWhenDone", "value": true})), ("prefs.reset", json!({"path": "general.beepWhenDone"}))] {
+        h.state_mut().run(command, params).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().session.actions.recording.map(|(_, i)| i), Some(index));
+        assert_eq!(h.state().ui.actions.reveal_recording, reveal, "no new recording step caused the reveal");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets, saved, "temporary reveal must not save an expansion");
+        assert!(h.query_by_label(&name).is_some(), "{entry}: recording row survives {command} and preference sync");
+        assert!(h.query_by_label("Ordinary").is_some(), "an unrelated open folder stays open");
+    }
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    h.state_mut().run("prefs.set", json!({"path": "general.beepWhenDone", "value": true})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().session.actions.recording.is_none());
+    assert!(h.query_by_label(&name).is_none(), "after stop, normal preference sync restores the saved collapse");
+    assert_eq!(h.state().session.prefs().collapsed_action_sets, saved);
+    h.state_mut().run("prefs.set", json!({"path": "collapsedActionSets.Retouch", "value": false})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label(&name).is_some(), "a nonrecording expansion remains legitimate");
+    h.state_mut().run("prefs.reset", json!({"path": "collapsedActionSets.Retouch"})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label(&name).is_some());
+    assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Portrait"), Some(&false));
+}
+
+#[test]
+fn recording_folder_reveal_survives_panel_recording_preference_sync() {
+    recording_folder_survives_preference_sync("panel");
+}
+
+#[test]
+fn recording_folder_reveal_survives_direct_recording_preference_sync() {
+    recording_folder_survives_preference_sync("direct");
+}
+
+#[test]
+fn recording_folder_reveal_survives_dialog_recording_preference_sync() {
+    recording_folder_survives_preference_sync("dialog");
+}
+
+/// Recording into a collapsed, selected set expands it so its new action and steps show.
 #[test]
 fn recording_into_a_collapsed_set_expands_it() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -1286,6 +1369,13 @@ fn recording_into_a_collapsed_set_expands_it() {
         assert!(h.state().ui.actions.collapsed_sets.is_empty(), "{label}");
         assert_eq!(h.state().ui.actions.selected, Some(1), "{label}");
         assert!(h.query_by_label("Action 2").is_some(), "{label}");
+        // An explicit manual collapse remains valid, including when another step is recorded.
+        click_set_triangle(&mut h, "Retouch");
+        assert!(h.query_by_label("Action 2").is_none(), "{label}");
+        h.state_mut().run("layer.new.layer", json!({"name": "Recorded edit"})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Action 2").is_none(), "{label}: new steps must respect manual collapse");
+        assert_eq!(h.state().session.prefs().collapsed_action_sets.get("Retouch"), Some(&true));
         h.state_mut().run("actions.stop", json!({})).unwrap();
     }
 }

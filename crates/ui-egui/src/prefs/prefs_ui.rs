@@ -50,8 +50,8 @@ pub struct Runtime {
     pub(crate) gpu_style: Option<crate::gpu_canvas::CanvasStyle>,
     /// `unitsAndRulers.showRulers` as last applied to View › Rulers.
     show_rulers: Option<bool>,
-    /// Preferences revision last applied to the Actions panel's folder disclosures.
-    action_sets_rev: Option<u64>,
+    /// Revision and folder choices last applied; recording may temporarily reveal a folder.
+    action_sets_state: Option<(u64, BTreeMap<String, bool>)>,
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
