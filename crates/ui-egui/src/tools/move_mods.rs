@@ -84,13 +84,20 @@ fn moving(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
 }
 
+/// The pointer reflects the pending copy, then the latched duplication for the whole drag.
+pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
+    if moving(app) && app.move_mods.start.is_some() { app.move_mods.alt || app.move_mods.dup_from.is_some() } else { alt }
+}
+
 /// Duplicates the selected layers (the copies become the selection), remembering the history
 /// length before so [`fold_history`] can merge the copy and the move into one step.
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
     match app.run("layer.duplicate", json!({"inPlace": true})) {
-        Ok(_) => Some(before),
+        // The state just before the copy's: in non-linear history the copy's step also moved
+        // the later states in front of it (`History::record`), and those must stay.
+        Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
         Err(e) => {
             app.ui.status = e;
             None
@@ -186,7 +193,8 @@ pub fn finish(app: &mut PhotocraftApp) {
 /// ⌥-drag's copy is taken back.
 pub fn abandon(app: &mut PhotocraftApp) {
     if std::mem::take(&mut app.move_mods).dup_from.is_some() {
-        app.session.undo();
+        // Exactly, also in non-linear history (where an undo would land on a later state).
+        app.session.rollback();
     }
 }
 
@@ -195,6 +203,9 @@ pub fn abandon(app: &mut PhotocraftApp) {
 /// where ⌘ is the temporary Move tool (`hold_keys::cmd_nudges`, #2474). Returns true when a key
 /// was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    if app.ui.text_edit.is_some() {
+        return false;
+    }
     use egui::{Key, Modifiers};
     let cmd = ctx.input(|i| i.modifiers.command) && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() && !cmd {
