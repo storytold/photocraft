@@ -343,6 +343,10 @@ fn every_colour_mode_saves_or_mattes_its_transparency() {
                         let merged = f.to_f32_samples().unwrap();
                         assert_eq!(img.layout().channels(), white.len(), "{case}");
                         assert!(merged.iter().zip(white).all(|(a, b)| (a - b).abs() < 1e-2), "{case}: merged {:?} vs {white:?}", &merged[..white.len()]);
+                        // Only the transparent corner is matted: the opaque centre at (1, 1)
+                        // (sample 5 of the 4-px-wide image) keeps its colour.
+                        let centre = &merged[5 * white.len()..6 * white.len()];
+                        assert!(centre.iter().zip(white).any(|(a, b)| (a - b).abs() >= 1e-2), "{case}: centre {centre:?} is matte white");
                         // The corner was transparent: now the mode's white, read back opaque.
                         let LayerContent::Raster(s) = &back.layers[0].content else { panic!("raster") };
                         let want = photocraft_raster::from_rgba(&back.pixel_format(), [1.0, 1.0, 1.0, 1.0]);

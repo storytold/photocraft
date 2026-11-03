@@ -76,10 +76,9 @@ fn every_depth_layout_and_compression() {
     }
 }
 
-/// A 128×128 image of 2×2 tiles, one `opaque` pixel and three `clear` ones (alpha last), and the
-/// first pixel of its first reduced level.
-fn first_level_pixel(layout: ChannelLayout, opaque: &[u8], clear: &[u8]) -> Vec<u8> {
-    let tile = [opaque, clear, clear, clear];
+/// A 128×128 image of 2×2 `tile`s (top left, top right, bottom left, bottom right; alpha last),
+/// and the first pixel of its first reduced level.
+fn first_level_pixel(layout: ChannelLayout, tile: [&[u8]; 4]) -> Vec<u8> {
     let mut data = Vec::new();
     for _ in 0..64 {
         for x in 0..128 {
@@ -101,10 +100,18 @@ fn first_level_pixel(layout: ChannelLayout, opaque: &[u8], clear: &[u8]) -> Vec<
 fn colour_is_weighted_by_alpha() {
     // One opaque pixel and three transparent ones of another colour: the level keeps the opaque
     // colour at a quarter alpha. Unweighted, the transparent colour would bleed in (pink, not red).
-    assert_eq!(first_level_pixel(ChannelLayout::Rgba, &[255, 0, 0, 255], &[255, 255, 255, 0]), [255, 0, 0, 64]);
+    assert_eq!(first_level_pixel(ChannelLayout::Rgba, [&[255, 0, 0, 255], &[255, 255, 255, 0], &[255, 255, 255, 0], &[255, 255, 255, 0]]), [255, 0, 0, 64]);
     // Gray and CMYK reach the same path with other channel counts.
-    assert_eq!(first_level_pixel(ChannelLayout::GrayA, &[40, 255], &[255, 0]), [40, 64]);
-    assert_eq!(first_level_pixel(ChannelLayout::CmykA, &[200, 10, 30, 90, 255], &[0, 0, 0, 0, 0]), [200, 10, 30, 90, 64]);
+    assert_eq!(first_level_pixel(ChannelLayout::GrayA, [&[40, 255], &[255, 0], &[255, 0], &[255, 0]]), [40, 64]);
+    assert_eq!(first_level_pixel(ChannelLayout::CmykA, [&[200, 10, 30, 90, 255], &[0; 5], &[0; 5], &[0; 5]]), [200, 10, 30, 90, 64]);
+}
+
+#[test]
+fn colour_is_weighted_between_translucent_pixels() {
+    // Two half-transparent pixels of different colours (red, blue) and two clear ones: the level
+    // averages the two by their alpha (purple), where copying either pixel would give red or blue.
+    let tile: [&[u8]; 4] = [&[255, 0, 0, 128], &[0, 0, 255, 128], &[0; 4], &[0; 4]];
+    assert_eq!(first_level_pixel(ChannelLayout::Rgba, tile), [128, 0, 128, 64]);
 }
 
 #[test]
