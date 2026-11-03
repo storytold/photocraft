@@ -57,7 +57,7 @@ fn bounded_readback_matches_independent_cpu_oracle() {
     // GPU bounded readback in bands of 16 rows
     let mut gpu_banded = Vec::new();
     let mut total_rows = 0;
-    render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 16, 32 * 1024, |band_rect, px| {
+    render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 16, 32 * 1024, &photocraft_raster::Interrupt::NONE, |band_rect, px| {
         total_rows += band_rect.height();
         gpu_banded.extend_from_slice(&px);
         Ok::<(), std::convert::Infallible>(())
@@ -101,6 +101,7 @@ fn bounded_readback_strictly_respects_staging_budget() {
         rect,
         0, // let provider calculate bounded rows
         budget,
+        &photocraft_raster::Interrupt::NONE,
         |band_rect, px| {
             let actual_staging = band_rect.height() as u64 * row_staging_bytes;
             assert!(actual_staging <= budget as u64, "band staging {} exceeds budget {}", actual_staging, budget);
@@ -125,6 +126,7 @@ fn hostile_dimensions_rejects_without_huge_allocation() {
         doc.bounds(),
         0,
         128, // less than 256
+        &photocraft_raster::Interrupt::NONE,
         |_r, _px| Ok::<(), String>(()),
     );
     assert!(matches!(res, Err(ReadbackError::AllocationFailed(_))));
@@ -132,16 +134,29 @@ fn hostile_dimensions_rejects_without_huge_allocation() {
     // 2. Wide document where 1 full row cannot fit in staging budget
     let wide_doc = sample_doc(10_000, 10);
     let small_budget = 4096; // 4 KiB cannot fit 1 row of 10,000 pixels (>= 80 KiB)
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &wide_doc, wide_doc.bounds(), 0, small_budget, |_r, _px| Ok::<(), String>(()));
+    let res =
+        render_bands(&mut comp, ctx.device(), ctx.queue(), &wide_doc, wide_doc.bounds(), 0, small_budget, &photocraft_raster::Interrupt::NONE, |_r, _px| {
+            Ok::<(), String>(())
+        });
     assert!(matches!(res, Err(ReadbackError::Unsupported(_))), "must safely fall back when 1 row cannot fit in budget: {res:?}");
 
     // 3. Multi-chunk wide document spanning multiple chunk boundaries works via banding
     let multi_chunk_doc = sample_doc(2500, 64);
     let mut multi_chunk_px = Vec::new();
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &multi_chunk_doc, multi_chunk_doc.bounds(), 16, DEFAULT_MAX_STAGING_BYTES, |_r, px| {
-        multi_chunk_px.extend_from_slice(&px);
-        Ok::<(), String>(())
-    });
+    let res = render_bands(
+        &mut comp,
+        ctx.device(),
+        ctx.queue(),
+        &multi_chunk_doc,
+        multi_chunk_doc.bounds(),
+        16,
+        DEFAULT_MAX_STAGING_BYTES,
+        &photocraft_raster::Interrupt::NONE,
+        |_r, px| {
+            multi_chunk_px.extend_from_slice(&px);
+            Ok::<(), String>(())
+        },
+    );
     assert!(res.is_ok(), "multi-chunk canvas must succeed via banding: {res:?}");
     assert_eq!(multi_chunk_px.len(), 2500 * 64);
 }
@@ -152,7 +167,7 @@ fn sink_cancellation_and_error_preservation() {
     let doc = sample_doc(128, 128);
 
     let mut band_count = 0;
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, |_r, _px| {
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_r, _px| {
         band_count += 1;
         Err("abort_sink_now")
     });
@@ -162,6 +177,20 @@ fn sink_cancellation_and_error_preservation() {
         Err(ReadbackError::Sink(e)) => assert_eq!(e, "abort_sink_now"),
         other => panic!("expected ReadbackError::Sink, got {other:?}"),
     }
+}
+
+#[test]
+fn readback_honors_cancellation_before_waiting() {
+    let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
+    let doc = sample_doc(128, 128);
+    let cancelled = photocraft_raster::Interrupt::cancel_only(&|| true);
+    let mut called = false;
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &cancelled, |_rect, _px| {
+        called = true;
+        Ok::<(), std::convert::Infallible>(())
+    });
+    assert!(matches!(res, Err(ReadbackError::Cancelled)), "a cancelled readback must stop before the device wait: {res:?}");
+    assert!(!called, "no band may be delivered after cancellation");
 }
 
 #[test]
@@ -186,9 +215,19 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
     let rect = doc.bounds();
     if let Err(reason) = comp.supports(&doc) {
         assert!(reason.0.contains("float effect-map render targets"), "unexpected unsupported feature: {reason:?}");
-        let result = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 32, 32 * 1024, |_, _| -> Result<(), std::convert::Infallible> {
-            panic!("unsupported layer effects must not emit pixels");
-        });
+        let result = render_bands(
+            &mut comp,
+            ctx.device(),
+            ctx.queue(),
+            &doc,
+            rect,
+            32,
+            32 * 1024,
+            &photocraft_raster::Interrupt::NONE,
+            |_, _| -> Result<(), std::convert::Infallible> {
+                panic!("unsupported layer effects must not emit pixels");
+            },
+        );
         assert!(matches!(result, Err(ReadbackError::Unsupported(_))));
         eprintln!("SKIPPED effect seam parity: {reason:?}; verified unsupported-feature rejection instead");
         return;
@@ -197,7 +236,7 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
 
     // Render with bands of 32 rows so the shadow seamlessly crosses multiple band boundaries
     let mut banded = Vec::new();
-    render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 32, 32 * 1024, |_band_rect, px| {
+    render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, rect, 32, 32 * 1024, &photocraft_raster::Interrupt::NONE, |_band_rect, px| {
         banded.extend_from_slice(&px);
         Ok::<(), std::convert::Infallible>(())
     })
@@ -216,7 +255,7 @@ fn float_documents_are_rejected_before_readback() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
     let doc = Document::with_background("f32", Size::new(64, 64), ColorMode::Rgb, SampleType::F32, Color::WHITE);
     let mut called = false;
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, |_rect, _px| {
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_rect, _px| {
         called = true;
         Ok::<(), std::convert::Infallible>(())
     });
@@ -229,10 +268,11 @@ fn bounded_readback_handles_empty_rect() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
     let doc = sample_doc(100, 100);
     let mut called = false;
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, Rect::new(0, 0, 0, 0), 16, 64 * 1024, |_rect, _px| {
-        called = true;
-        Ok::<(), std::convert::Infallible>(())
-    });
+    let res =
+        render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, Rect::new(0, 0, 0, 0), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_rect, _px| {
+            called = true;
+            Ok::<(), std::convert::Infallible>(())
+        });
     assert!(res.is_ok());
     assert!(!called, "sink should not be called for empty rect");
 }
@@ -247,7 +287,9 @@ fn bounded_readback_notices_device_fault() {
     health.mark(photocraft_gpu::Fault::Lost("simulated driver crash".into()));
     comp.set_health(health);
 
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, |_rect, _px| Ok::<(), std::convert::Infallible>(()));
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_rect, _px| {
+        Ok::<(), std::convert::Infallible>(())
+    });
 
     assert!(matches!(res, Err(ReadbackError::DeviceLost(_))));
 }

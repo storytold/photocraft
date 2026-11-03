@@ -679,10 +679,20 @@ fn export_stages_with_renderer(
         ));
     }
     if ext == "ora" {
-        return ora::export(doc);
+        let mut res = ora::export(doc)?;
+        if let Some(r) = renderer {
+            res.warnings.push("OpenRaster export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res);
     }
     if ext == "pdf" {
-        return pdf::export(doc);
+        let mut res = pdf::export(doc)?;
+        if let Some(r) = renderer {
+            res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res);
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);

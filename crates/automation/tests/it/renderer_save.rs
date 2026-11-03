@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use photocraft_automation::{Headless, files};
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{DocId, Document, Rect, Size};
-use photocraft_io::{BandRenderer, ExportOptions, IoError, RenderBand, RenderError};
+use photocraft_io::{BandRenderer, CpuRenderer, ExportOptions, IoError, RenderBand, RenderError};
 
 struct FailingRenderer;
 
@@ -17,6 +17,7 @@ impl BandRenderer for FailingRenderer {
         _doc: &Document,
         _rect: Rect,
         _band_rows: i32,
+        _ctl: &photocraft_raster::Interrupt<'_>,
         _sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
     ) -> Result<(), RenderError> {
         Err(RenderError::Execution("forced renderer failure".into()))
@@ -54,6 +55,7 @@ impl BandRenderer for ForgetRecordingRenderer {
         _doc: &Document,
         _rect: Rect,
         _band_rows: i32,
+        _ctl: &photocraft_raster::Interrupt<'_>,
         _sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
     ) -> Result<(), RenderError> {
         Ok(())
@@ -76,4 +78,72 @@ fn closing_a_document_forgets_its_renderer_caches() {
 
     let forgotten = forgotten.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     assert_eq!(forgotten, vec![id], "closing a document must release its renderer caches");
+}
+
+#[test]
+fn closing_a_document_through_a_command_forgets_its_renderer_caches() {
+    let forgotten = Arc::new(Mutex::new(Vec::new()));
+    let mut h = Headless::trusted_local();
+    for name in ["first", "second"] {
+        h.session.open_document(Document::with_background(name, Size::new(16, 16), ColorMode::Rgb, SampleType::U8, Color::WHITE), None);
+    }
+    let closed = h.session.documents()[0].doc.id;
+    h.set_renderer(Some(Box::new(ForgetRecordingRenderer { forgotten: forgotten.clone() })));
+
+    // `file.close` removes the document through the session, not `Headless::close`.
+    h.command_run("file.close", serde_json::json!({"document": 0})).expect("close command");
+
+    let forgotten = forgotten.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert_eq!(forgotten, vec![closed], "a command that closes a document must release its renderer caches");
+}
+
+struct DiagnosingRenderer {
+    diagnostics: Vec<String>,
+}
+
+impl BandRenderer for DiagnosingRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &photocraft_raster::Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        self.push_diagnostic("renderer diagnostic survives a failed write".into());
+        let mut cpu = CpuRenderer;
+        cpu.render_bands(doc, rect, band_rows, ctl, sink)
+    }
+
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    fn push_diagnostic(&mut self, diagnostic: String) {
+        if !self.diagnostics.contains(&diagnostic) {
+            self.diagnostics.push(diagnostic);
+        }
+    }
+}
+
+#[test]
+fn failed_atomic_write_keeps_renderer_diagnostics_for_the_caller() {
+    let dir = std::env::temp_dir().join(format!("photocraft-renderer-write-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    // A directory at the destination makes the final atomic rename fail after encoding.
+    let target = dir.join("target.png");
+    fs::create_dir(&target).unwrap();
+
+    let mut doc = Document::with_background("test", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut top = doc.layers[0].clone();
+    top.name = "top".into();
+    doc.layers.push(top);
+
+    let mut renderer = DiagnosingRenderer { diagnostics: Vec::new() };
+    let res = files::save_with_renderer(&doc, &target, Some("png"), &ExportOptions::default(), None, Some(&mut renderer));
+    assert!(res.is_err(), "a write over a directory must fail: {res:?}");
+    let diagnostics = renderer.drain_diagnostics();
+    assert!(diagnostics.iter().any(|d| d.contains("failed write")), "diagnostics drained before the failed write must be queued again: {diagnostics:?}");
+    let _ = fs::remove_dir_all(&dir);
 }

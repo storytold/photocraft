@@ -146,7 +146,14 @@ impl GpuRenderer {
 }
 
 impl BandRenderer for GpuRenderer {
-    fn render_bands(&mut self, doc: &Document, rect: Rect, band_rows: i32, sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>) -> Result<(), RenderError> {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &photocraft_raster::Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
         let max_staging = self.max_staging_bytes;
         self.ensure_init()?;
 
@@ -172,7 +179,7 @@ impl BandRenderer for GpuRenderer {
         let device = ctx.device();
         let queue = ctx.queue();
 
-        readback::render_bands(comp, device, queue, doc, rect, band_rows, max_staging, |band_rect, pixels| sink(RenderBand { rect: band_rect, pixels }))
+        readback::render_bands(comp, device, queue, doc, rect, band_rows, max_staging, ctl, |band_rect, pixels| sink(RenderBand { rect: band_rect, pixels }))
             .map_err(|e| {
                 let render_err = match e {
                     readback::ReadbackError::Unsupported(s) => RenderError::Unsupported(s),

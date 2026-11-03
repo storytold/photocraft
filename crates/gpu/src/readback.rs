@@ -1,6 +1,7 @@
 use std::fmt;
 
 use photocraft_color::SampleType;
+use photocraft_raster::Interrupt;
 
 use super::textures::Stats;
 use super::{Compositor, Document, Rect, Unsupported};
@@ -105,11 +106,38 @@ pub fn render_to_vec_stats(
     Ok((out, stats))
 }
 
+/// Wait for submitted readback work in short slices, checking `ctl` between them and keeping the
+/// overall `timeout`. A slice timeout means the work is still running, not that the device failed.
+#[cfg(not(target_arch = "wasm32"))]
+fn poll_wait_cancellable<E>(device: &wgpu::Device, timeout: std::time::Duration, ctl: &Interrupt<'_>) -> Result<(), ReadbackError<E>> {
+    const SLICE: std::time::Duration = std::time::Duration::from_millis(100);
+    let start = std::time::Instant::now();
+    loop {
+        if ctl.cancelled() {
+            return Err(ReadbackError::Cancelled);
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Err(ReadbackError::DeviceLost(format!("GPU readback did not finish within {} s", timeout.as_secs())));
+        }
+        let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(remaining.min(SLICE)) })
+        }));
+        match poll {
+            Ok(Ok(status)) if status.wait_finished() => return Ok(()),
+            Ok(Ok(_)) => {}
+            Ok(Err(wgpu::PollError::Timeout)) => {}
+            Ok(Err(e)) => return Err(ReadbackError::DeviceLost(format!("GPU device poll failed: {e}"))),
+            Err(_) => return Err(ReadbackError::DeviceLost("GPU device lost during poll".into())),
+        }
+    }
+}
+
 /// Readback of a composite in bounded horizontal bands.
 ///
 /// Binds staging buffer memory to at most `max_staging_bytes`, mapping and transferring
 /// one band of rows at a time, so arbitrarily large documents can be exported without
-/// unbounded staging allocation.
+/// unbounded staging allocation. `ctl` cancels the wait between bounded poll slices.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub fn render_bands<E>(
@@ -120,6 +148,7 @@ pub fn render_bands<E>(
     rect: Rect,
     band_rows: i32,
     max_staging_bytes: usize,
+    ctl: &Interrupt<'_>,
     mut sink: impl FnMut(Rect, Vec<[f32; 4]>) -> Result<(), E>,
 ) -> Result<(), ReadbackError<E>>
 where
@@ -129,6 +158,7 @@ where
     if rect.is_empty() {
         return Ok(());
     }
+    ctl.check().map_err(|_| ReadbackError::Cancelled)?;
     // Band readback goes through a half-precision staging texture on every adapter, so values
     // above 65504 become infinity and the rest lose mantissa bits. Keep F32 exports on the CPU
     // compositor, where the writer receives the document's full precision.
@@ -245,19 +275,20 @@ where
         }
 
         match comp.health() {
-            Some(h) if !h.wait_timeout(device, None, READBACK_WAIT_TIMEOUT) => {
-                let message = h.fault().map_or_else(|| format!("GPU readback did not finish within {} s", READBACK_WAIT_TIMEOUT.as_secs()), |f| f.to_string());
-                return Err(ReadbackError::DeviceLost(message));
-            }
-            Some(_) => {}
+            Some(h) => match h.wait_timeout_cancellable(device, None, READBACK_WAIT_TIMEOUT, &|| ctl.cancelled()) {
+                super::health::WaitOutcome::Finished => {}
+                super::health::WaitOutcome::Cancelled => return Err(ReadbackError::Cancelled),
+                super::health::WaitOutcome::TimedOut => {
+                    let message =
+                        h.fault().map_or_else(|| format!("GPU readback did not finish within {} s", READBACK_WAIT_TIMEOUT.as_secs()), |f| f.to_string());
+                    return Err(ReadbackError::DeviceLost(message));
+                }
+            },
             None => {
-                let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_WAIT_TIMEOUT) })
-                }));
-                match poll {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => return Err(ReadbackError::DeviceLost(format!("GPU device poll timed out or failed: {e}"))),
-                    Err(_) => return Err(ReadbackError::DeviceLost("GPU device lost during poll".into())),
+                // No health monitor: poll in the same short slices so cancellation is not
+                // blocked until the whole readback deadline elapses.
+                if let Err(e) = poll_wait_cancellable(device, READBACK_WAIT_TIMEOUT, ctl) {
+                    return Err(e);
                 }
             }
         }

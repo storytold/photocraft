@@ -82,6 +82,12 @@ mod tests {
         let doc1 = make_test_doc(64, 64, SampleType::U8);
         h.session.open_document(doc1, None);
         let png1_initial = h.render_png(Some(0), 0).expect("initial render");
+        let diagnostics = h.drain_diagnostics();
+        if diagnostics.iter().any(|d| d.contains("no GPU adapter available") || d.contains("could not build GPU compositor")) {
+            return;
+        }
+        assert!(diagnostics.iter().any(|d| d.contains("GPU adapter:")), "GPU was not initialized: {diagnostics:?}");
+        assert!(!diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "initial render fell back to CPU: {diagnostics:?}");
         let img1_initial = decode(&png1_initial).expect("decode initial");
 
         // 2. Mutate Doc 1 in place (change top layer opacity to 0.1)
@@ -92,6 +98,8 @@ mod tests {
             })
             .expect("edit opacity");
         let png1_mutated = h.render_png(Some(0), 0).expect("mutated render");
+        let mutated_diagnostics = h.drain_diagnostics();
+        assert!(!mutated_diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "mutated render fell back to CPU: {mutated_diagnostics:?}");
         let img1_mutated = decode(&png1_mutated).expect("decode mutated");
 
         assert_ne!(img1_initial.data(), img1_mutated.data(), "mutating document must invalidate cache and produce fresh pixels");
@@ -104,6 +112,8 @@ mod tests {
         h.session.open_document(doc2, None);
 
         let png2 = h.render_png(Some(1), 0).expect("doc2 render");
+        let doc2_diagnostics = h.drain_diagnostics();
+        assert!(!doc2_diagnostics.iter().any(|d| d.contains("GPU rendering unavailable")), "second-document render fell back to CPU: {doc2_diagnostics:?}");
         let img2 = decode(&png2).expect("decode doc2");
 
         assert_ne!(img2.data(), img1_mutated.data(), "distinct document must not return stale pixels from previous doc");
@@ -149,7 +159,7 @@ mod tests {
                 // Direct GPU renderer invocation (MUST NOT fall back to CPU)
                 let mut gpu_pixels = Vec::new();
                 gpu_renderer
-                    .render_bands(&doc, doc.bounds(), 16, &mut |band| {
+                    .render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |band| {
                         gpu_pixels.extend_from_slice(&band.pixels);
                         Ok::<(), photocraft_io::IoError>(())
                     })
@@ -176,7 +186,8 @@ mod tests {
 
         // 32-bit float needs the CPU compositor: band readback would quantise it to half.
         let f32_doc = make_test_doc(64, 64, SampleType::F32);
-        let f32_res = gpu_renderer.render_bands(&f32_doc, f32_doc.bounds(), 16, &mut |_| Ok::<(), photocraft_io::IoError>(()));
+        let f32_res =
+            gpu_renderer.render_bands(&f32_doc, f32_doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
         assert!(
             matches!(f32_res, Err(photocraft_io::RenderError::Unsupported(_))),
             "F32 documents must be rejected so the export falls back to CPU: {f32_res:?}"
@@ -221,11 +232,14 @@ mod tests {
         let doc = make_test_doc(64, 64, SampleType::U8);
 
         // 1. Cancellation preservation
-        let cancel_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Cancelled));
+        let cancel_res =
+            gpu_renderer.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Err(photocraft_io::IoError::Cancelled));
         assert!(matches!(cancel_res, Err(photocraft_io::RenderError::Cancelled)), "cancellation must be preserved: {cancel_res:?}");
 
         // 2. Sink I/O error preservation
-        let sink_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &mut |_| Err(photocraft_io::IoError::Read("simulated sink error".into())));
+        let sink_res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| {
+            Err(photocraft_io::IoError::Read("simulated sink error".into()))
+        });
         assert!(matches!(sink_res, Err(photocraft_io::RenderError::Sink(_))), "sink error must be preserved as RenderError::Sink: {sink_res:?}");
     }
 
@@ -243,7 +257,7 @@ mod tests {
         gpu_renderer.set_max_staging_bytes(32 * 1024);
 
         let mut received_rows = 0;
-        let res = gpu_renderer.render_bands(&doc, doc.bounds(), 0, &mut |band| {
+        let res = gpu_renderer.render_bands(&doc, doc.bounds(), 0, &photocraft_raster::Interrupt::NONE, &mut |band| {
             received_rows += band.rect.height();
             Ok(())
         });
