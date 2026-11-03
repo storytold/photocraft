@@ -1290,6 +1290,23 @@ fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
     let out = write_file_info(Some(&commented), &json!({"authorTitle": "Artist"}));
     assert!(out.find("AuthorsPosition").unwrap() < out.find("<!--").unwrap(), "the edit is not inside the comment: {out}");
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A `</rdf:RDF>` inside a CDATA section neither hides the real end tag (which would replace
+    // the packet) nor tricks the writer into inserting inside the section (#11116).
+    let cdata = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/><rdf:li><![CDATA[ </rdf:RDF> fake ]]></rdf:li></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&cdata), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the CDATA packet keeps its properties: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit is before the real end tag: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A foreign element whose name merely starts like the RDF one (`<rdf:RDFjunk>`) is not the
+    // RDF start tag, and its `</rdf:RDFjunk>` is not the end tag (#11116).
+    let lookalike = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:RDFjunk xmlns:rdf="http://example.com/other"><r:Thing/></rdf:RDFjunk></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&lookalike), &json!({"authorTitle": "Artist"}));
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "{out}");
+    assert!(out.rfind("<rdf:Description rdf:about=\"\"").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit sits inside the RDF element: {out}");
     // A packet with no RDF end tag at all (self-closing) still gets the canonical packet.
     let selfclosed = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/></x:xmpmeta>"#);
     let out = write_file_info(Some(&selfclosed), &json!({"authorTitle": "Artist"}));
