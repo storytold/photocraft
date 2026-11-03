@@ -21,7 +21,11 @@ impl PhotocraftApp {
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
-        self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+        // The folder last saved to is a path from the same history (#9656).
+        self.session.prefs.edit(|p| {
+            p.file_handling.recent_files.clear();
+            p.file_handling.last_save_folder.clear();
+        });
     }
 
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The

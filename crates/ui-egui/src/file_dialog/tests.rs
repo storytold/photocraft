@@ -782,6 +782,15 @@ fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
     app.poll_file_dialog(&ctx, None);
 }
 
+/// #9656: Clear Recent Files also forgets the remembered save folder.
+#[test]
+fn clearing_recent_files_forgets_the_last_save_folder() {
+    let (mut app, _, _) = jpeg_app(None, false);
+    app.run("prefs.set", json!({"path": "fileHandling.lastSaveFolder", "value": "/exports"})).unwrap();
+    app.clear_recent();
+    assert!(app.session.prefs().file_handling.last_save_folder.is_empty());
+}
+
 /// #9656: with Save As to Original Folder off, File › Save of a flat file that asks for a name
 /// still offers the document's own file; only Save As moves to the remembered folder.
 #[test]
