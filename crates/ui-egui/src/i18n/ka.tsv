@@ -1232,7 +1232,6 @@
 	No character style	სიმბოლოს სტილის გარეშე
 	No document	დოკუმენტი არ არის
 	No matching commands	შესაბამისი ბრძანება ვერ მოიძებნა
-	No matching fonts	შესაბამისი შრიფტები არ არის
 	No presets for the current tool.	მიმდინარე ხელსაწყოს პრესეტები არ არის.
 	No presets of this type.	ამ ტიპის პრესეტები არ არის.
 	No properties	თვისებები არ არის
@@ -4552,53 +4551,90 @@ layerLabel	Magenta	მეწამული
 	Font size presets	შრიფტის ზომის პრესეტები
 	Leading presets	სტრიქონთა დაშორების პრესეტები
 	Tracking presets	ტრეკინგის პრესეტები
-# Added with origin/main (2026-10-31): Select and Mask, histogram, pen, window menu
+# Select and Mask workspace
+	Color Aware	ფერის გათვალისწინებით
+	Decontaminate Colors	ფერების გაწმენდა
+	Edge Detection	კიდის აღმოჩენა
+	Global Refinements	გლობალური დაზუსტებები
+	High Quality Preview	მაღალი ხარისხის წინასწარი ნახვა
+	Object Aware	ობიექტის გათვალისწინებით
+	Real-Time Refinement	დაზუსტება რეალურ დროში
+	Refine Edge Brush Tool	კიდის დაზუსტების ფუნჯის ხელსაწყო
+	Refine Hair	თმის დაზუსტება
+	Refine Mode	დაზუსტების რეჟიმი
+	Remember Settings	პარამეტრების დამახსოვრება
+	View Mode	ხედის რეჟიმი
+	Object Aware needs a segmentation model, which isn't available yet	„ობიექტის გათვალისწინებით“ რეჟიმს სჭირდება სეგმენტაციის მოდელი, რომელიც ჯერ მიუწვდომელია
+	Refine Hair needs hair detection, which isn't available yet	„თმის დაზუსტებას“ სჭირდება თმის აღმოჩენა, რომელიც ჯერ მიუწვდომელია
+	Select and Mask was closed: its document is no longer the active one	„მონიშვნა და ნიღაბი“ დაიხურა: მისი დოკუმენტი აღარ არის აქტიური
+	Select and Mask was closed: another layer was selected	„მონიშვნა და ნიღაბი“ დაიხურა: მონიშნულია სხვა შრე
+	Path operations	ტრაექტორიის ოპერაციები
+	Drag to move the selected path	გადაათრიეთ მონიშნული ტრაექტორიის გადასაადგილებლად
+	Move effect up	ეფექტის აწევა
+	Move effect down	ეფექტის ჩამოწევა
+	Delete effect	ეფექტის წაშლა
+	Current Layer:	მიმდინარე შრე:
+	The path was kept as the Work Path	ტრაექტორია შენარჩუნდა სამუშაო ტრაექტორიად
+	The path was discarded	ტრაექტორია გაუქმდა
+	Select Layer Under Cursor	კურსორის ქვეშ არსებული შრის მონიშვნა
+	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	გადაათრიეთ გამოსახულებაზე შეზღუდვის დასამატებლად; Shift — ჰორიზონტალური/ვერტიკალური; წასაშლელად დაწკაპეთ მარჯვენა ღილაკით.
 	CPU Rendering	CPU-რენდერინგი
 	Calculating…	გამოითვლება…
 	Click to refresh histogram with uncached data	დაწკაპეთ ჰისტოგრამის ქეშის გარეშე მონაცემებით განსაახლებლად
-	Color Aware	ფერის გათვალისწინებით
-	Convert to Shape…	ფიგურად გარდაქმნა…
 	Count:	რაოდენობა:
-	Current Layer:	მიმდინარე შრე:
-	Decontaminate Colors	ფერების გაწმენდა
-	Delete Hidden Layers	დამალული შრეების წაშლა
-	Delete effect	ეფექტის წაშლა
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	გადაათრიეთ გამოსახულებაზე შეზღუდვის დასამატებლად; Shift — ჰორიზონტალური/ვერტიკალური; წასაშლელად დაწკაპეთ მარჯვენა ღილაკით.
-	Drag to move the selected path	გადაათრიეთ მონიშნული ტრაექტორიის გადასაადგილებლად
 	Drawn on the CPU: {reason}. Click for System Info.	დახატულია CPU-ზე: {reason}. დაწკაპეთ სისტემის ინფორმაციის სანახავად.
-	Edge Detection	კიდის აღმოჩენა
-	Fit Layer on Screen	შრის ეკრანში ჩატევა
-	Flow:	ნაკადი:
-	Global Refinements	გლობალური დაზუსტებები
-	High Quality Preview	მაღალი ხარისხის წინასწარი ნახვა
 	Level:	დონე:
-	Move effect down	ეფექტის ჩამოწევა
-	Move effect up	ეფექტის აწევა
-	Object Aware	ობიექტის გათვალისწინებით
-	Object Aware needs a segmentation model, which isn't available yet	„ობიექტის გათვალისწინებით“ რეჟიმს სჭირდება სეგმენტაციის მოდელი, რომელიც ჯერ მიუწვდომელია
-	Path operations	ტრაექტორიის ოპერაციები
 	Percentile:	პროცენტილი:
-	Real-Time Refinement	დაზუსტება რეალურ დროში
-	Refine Edge Brush Tool	კიდის დაზუსტების ფუნჯის ხელსაწყო
-	Refine Edge…	კიდის დაზუსტება…
-	Refine Hair	თმის დაზუსტება
-	Refine Hair needs hair detection, which isn't available yet	„თმის დაზუსტებას“ სჭირდება თმის აღმოჩენა, რომელიც ჯერ მიუწვდომელია
-	Refine Mode	დაზუსტების რეჟიმი
 	Release Notes	გამოშვების შენიშვნები
-	Remember Settings	პარამეტრების დამახსოვრება
-	Reset Essentials	ძირითადის საწყისზე დაბრუნება
-	Rounded Rectangle Tool	მომრგვალებული მართკუთხედის ხელსაწყო
-	Select and Mask was closed: another layer was selected	„მონიშვნა და ნიღაბი“ დაიხურა: მონიშნულია სხვა შრე
-	Select and Mask was closed: its document is no longer the active one	„მონიშვნა და ნიღაბი“ დაიხურა: მისი დოკუმენტი აღარ არის აქტიური
 	Show Channels in Color	არხების ფერად ჩვენება
 	Show Statistics	სტატისტიკის ჩვენება
 	Source:	წყარო:
-	Status Bar	სტატუსის ზოლი
-	The path was discarded	ტრაექტორია გაუქმდა
-	The path was kept as the Work Path	ტრაექტორია შენარჩუნდა სამუშაო ტრაექტორიად
-	Tile Horizontally	ჰორიზონტალურად განლაგება
-	Tile Vertically	ვერტიკალურად განლაგება
 	Uncached Refresh	განახლება ქეშის გარეშე
 	Update and Restart	განახლება და გადატვირთვა
-	View Mode	ხედის რეჟიმი
-	Select Layer Under Cursor	კურსორის ქვეშ არსებული შრის მონიშვნა
+	Convert to Shape…	ფიგურად გარდაქმნა…
+	Delete Hidden Layers	დამალული შრეების წაშლა
+	Fit Layer on Screen	შრის ეკრანში ჩატევა
+	Flow:	ნაკადი:
+	Refine Edge…	კიდის დაზუსტება…
+	Reset Essentials	ძირითადის საწყისზე დაბრუნება
+	Rounded Rectangle Tool	მომრგვალებული მართკუთხედის ხელსაწყო
+	Status Bar	სტატუსის ზოლი
+	Tile Horizontally	ჰორიზონტალურად განლაგება
+	Tile Vertically	ვერტიკალურად განლაგება
+	Edit Brush…	ფუნჯის რედაქტირება…
+@plural	{n} document|{n} documents	{n} დოკუმენტი
+@plural	{n} pixel|{n} pixels	{n} პიქსელი
+cameraRaw	Before (Y)	მანამდე (Y)
+cameraRaw	Camera Raw ({name})	Camera Raw ({name})
+cameraRaw	Camera Raw Filter ({layer})	Camera Raw ფილტრი ({layer})
+cameraRaw	Camera Raw isn't open	Camera Raw არ არის გახსნილი
+cameraRaw	Cancel	გაუქმება
+cameraRaw	Cancelled opening {name}	{name}-ის გახსნა გაუქმდა
+cameraRaw	Cancelled {label}	გაუქმდა: {label}
+cameraRaw	Color Priority	ფერის პრიორიტეტი
+cameraRaw	Developing {name}	მუშავდება {name}
+cameraRaw	Full-resolution preview unavailable	სრული გარჩევადობის გადახედვა მიუწვდომელია
+cameraRaw	Grain	მარცვლოვნება
+cameraRaw	Highlight Clipping Warning (O)	ღია ტონების მოკვეთის გაფრთხილება (O)
+cameraRaw	Highlight Priority	ღია ტონების პრიორიტეტი
+cameraRaw	Load Settings…	პარამეტრების ჩატვირთვა…
+cameraRaw	Load settings from a Camera Raw .xmp file	პარამეტრების ჩატვირთვა Camera Raw-ის .xmp ფაილიდან
+cameraRaw	Loaded Camera Raw settings from {file}	Camera Raw-ის პარამეტრები ჩაიტვირთა {file}-დან
+cameraRaw	Noise Reduction	ხმაურის შემცირება
+cameraRaw	OK	OK
+cameraRaw	Open	გახსნა
+cameraRaw	Opened {name}	გაიხსნა {name}
+cameraRaw	Paint Overlay	საღებავით გადაფარვა
+cameraRaw	Save Settings…	პარამეტრების შენახვა…
+cameraRaw	Save these settings as a Camera Raw .xmp file	ამ პარამეტრების შენახვა Camera Raw-ის .xmp ფაილად
+cameraRaw	Shadow Clipping Warning (U)	ჩრდილების მოკვეთის გაფრთხილება (U)
+cameraRaw	Sharpening	გამკვეთრება
+cameraRaw	Show Lab Color Readouts	Lab ფერის მნიშვნელობების ჩვენება
+cameraRaw	Show Red at 3 o'clock	წითლის ჩვენება 3 საათის მიმართულებით
+cameraRaw	Show Selected Region	მონიშნული რეგიონის ჩვენება
+cameraRaw	Show Skin Tone Indicator	კანის ტონის მაჩვენებლის ჩვენება
+cameraRaw	Show Vectorscope	ვექტორსკოპის ჩვენება
+cameraRaw	Tone Histogram	ტონების ჰისტოგრამა
+cameraRaw	Vignetting	ვინიეტირება
+cameraRaw	White Balance: As Shot	თეთრის ბალანსი: როგორც გადაღებულია
+	No matching fonts	შესაბამისი შრიფტები არ არის
