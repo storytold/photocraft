@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "id": "qwen-2.1/outpaint-turbo",
+    "name": "Generative Expand (Qwen-Image-2.1, Outpaint LoRA, 6-step Turbo)",
+    "family": "qwen-image-2.1",
+    "task": "expand",
+    "license": "research",
+    "licenseNote": "Qwen-Image-2.1 (Alibaba Qwen, 2026-09-20) ships under the Qwen Research License Agreement: research and evaluation use only; commercial use needs a separate agreement with Alibaba. Turn on Allow Research-Only Models in Preferences › AI Integrations to use it.",
+    "needsImage": true,
+    "needsMask": false,
+    "defaults": {
+      "steps": 6,
+      "guidance": 1.0
+    },
+    "models": [
+      {
+        "placeholder": "unet",
+        "folder": "diffusion_models",
+        "default": "qwen_image_2.1_bf16.safetensors"
+      },
+      {
+        "placeholder": "clip",
+        "folder": "text_encoders",
+        "default": "qwen3vl_8b_bf16.safetensors"
+      },
+      {
+        "placeholder": "vae",
+        "folder": "vae",
+        "default": "qwen_image_2.1_vae_bf16.safetensors"
+      }
+    ],
+    "notes": "Served by ShotoPhopEX's native worker (genai-native gn-diffusion qwen-2.1/outpaint-turbo) when loras/ holds both AusBoss's qwen-image-2.1-outpaint-v2.safetensors and Viggle's Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors: the grey (#808080) padded canvas is image 1 as it is and the target its size, the Outpaint LoRA then the Turbo LoRA unmerged at strength 1, six steps on Viggle's own shifted sigmas at CFG 1. The prompt is the Outpaint LoRA's instruction and a Scene: caption, built by generate.expand. No ComfyUI graph.",
+    "creator": "Alibaba Qwen",
+    "description": "Continues people and scenes past the edge in six steps",
+    "badges": [],
+    "estimatedSeconds": {
+      "base": 3,
+      "perMegapixel": 3
+    },
+    "pages": [
+      "edit"
+    ],
+    "parameters": [],
+    "expandMargin": 1.0
+  }
+}

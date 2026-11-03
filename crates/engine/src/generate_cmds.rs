@@ -3628,6 +3628,14 @@ struct ExpandPlan {
 /// 1 to 2 MP (people and outfits), v1 for large ones from a small picture at about 1 MP.
 pub(crate) const OUTPAINT_LORA: &str = "qwen-image-2.1-outpaint-v2.safetensors";
 pub(crate) const OUTPAINT_LORA_WIDE: &str = "qwen-image-2.1-outpaint.safetensors";
+/// Viggle's Turbo LoRA for Qwen-Image-2.1 (v0.3, six steps on its own sigmas): with it and the
+/// v2 Outpaint LoRA in `loras/`, an expand runs the native worker's [`OUTPAINT_TURBO_TEMPLATE`],
+/// which stacks both itself: 2.3 to 2.8 s against 8.7 to 8.9 s for 25 steps with the Outpaint
+/// LoRA alone, close in quality (portrait, street, coast, Cody's PC, 2026-11-03).
+pub(crate) const OUTPAINT_TURBO_LORA: &str = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r128.safetensors";
+pub(crate) const OUTPAINT_TURBO_TEMPLATE: &str = "qwen-2.1/outpaint-turbo";
+/// The 2.1 edit the plain Outpaint LoRA runs on.
+const OUTPAINT_EDIT_TEMPLATE: &str = "qwen-2.1/edit";
 /// The picture's share of the grown canvas below which the v1 file goes first.
 const OUTPAINT_WIDE_SHARE: f64 = 0.3;
 const OUTPAINT_PIXELS: u64 = 1_572_864;
@@ -3643,7 +3651,11 @@ pub(crate) const OUTPAINT_INSTRUCTION: &str =
 /// prompt on 2511 could not continue a person cut off at the picture's edge, and a prompt
 /// that named her painted a second copy of her (Cody's portrait, 2026-11-03); the LoRA was
 /// trained on exactly this.
-fn outpaint_lora(s: &Session, (ow, oh): (u32, u32), (nw, nh): (u32, u32)) -> Option<(&'static str, u64)> {
+/// How an expand goes through the Outpaint LoRA: the template, the LoRA the request names (none
+/// when the template adds its own), and the request size.
+type OutpaintRoute = (&'static str, Option<&'static str>, u64);
+
+fn outpaint_lora(s: &Session, (ow, oh): (u32, u32), (nw, nh): (u32, u32)) -> Option<OutpaintRoute> {
     if !(s.prefs().integrations.allow_research_models && loras::runs_native(s, "qwen-2.1/edit")) {
         return None;
     }
@@ -3655,11 +3667,15 @@ fn outpaint_lora(s: &Session, (ow, oh): (u32, u32), (nw, nh): (u32, u32)) -> Opt
     pick_outpaint_lora(|f| std::path::Path::new(&root).join("loras").join(f).is_file(), share)
 }
 
-/// Of the Outpaint LoRA files `has` finds, the one for a picture that is `share` of its grown
-/// canvas (v1 first below [`OUTPAINT_WIDE_SHARE`], else v2), with its request size.
-fn pick_outpaint_lora(has: impl Fn(&str) -> bool, share: f64) -> Option<(&'static str, u64)> {
+/// The route through the Outpaint LoRA files `has` finds: the six-step Turbo template when the
+/// Turbo LoRA and v2 are both there; else the 2.1 edit with the file for a picture that is
+/// `share` of its grown canvas (v1 first below [`OUTPAINT_WIDE_SHARE`], else v2).
+fn pick_outpaint_lora(has: impl Fn(&str) -> bool, share: f64) -> Option<OutpaintRoute> {
+    if has(OUTPAINT_LORA) && has(OUTPAINT_TURBO_LORA) {
+        return Some((OUTPAINT_TURBO_TEMPLATE, None, OUTPAINT_PIXELS));
+    }
     let order = if share < OUTPAINT_WIDE_SHARE { [OUTPAINT_LORA_WIDE, OUTPAINT_LORA] } else { [OUTPAINT_LORA, OUTPAINT_LORA_WIDE] };
-    order.into_iter().find(|f| has(f)).map(|f| (f, if f == OUTPAINT_LORA_WIDE { OUTPAINT_WIDE_PIXELS } else { OUTPAINT_PIXELS }))
+    order.into_iter().find(|f| has(f)).map(|f| (OUTPAINT_EDIT_TEMPLATE, Some(f), if f == OUTPAINT_LORA_WIDE { OUTPAINT_WIDE_PIXELS } else { OUTPAINT_PIXELS }))
 }
 
 /// The Outpaint LoRA's prompt: its instruction, then the scene.
@@ -3746,7 +3762,7 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
     }
     let lora = if auto { outpaint_lora(s, (ow, oh), (nw, nh)) } else { None };
     let Common { template, prompt, negative, seed, steps, guidance, models, name } = match lora {
-        Some(_) => plan_common(s, EXPAND, &q, "qwen-2.1/edit", Task::Edit, &default_model)?,
+        Some((t, ..)) => plan_common(s, EXPAND, &q, t, if t == OUTPAINT_EDIT_TEMPLATE { Task::Edit } else { Task::Expand }, &default_model)?,
         None => plan_common(s, EXPAND, &q, if auto { DEFAULT_EXPAND_TEMPLATE } else { &requested }, Task::Expand, &default_model)?,
     };
     if lora.is_some() {
@@ -3777,7 +3793,7 @@ fn plan_expand(s: &Session, p: &Value) -> Result<ExpandPlan> {
     }
     let name = name.unwrap_or_else(|| "Generative Expand".to_string());
     let tuning = match lora {
-        Some((file, max_pixels)) => Tuning { loras: vec![(file.to_string(), 1.0)], max_pixels, ..Tuning::default() },
+        Some((_, file, max_pixels)) => Tuning { loras: file.map(|f| (f.to_string(), 1.0)).into_iter().collect(), max_pixels, ..Tuning::default() },
         None => Tuning::default(),
     };
     let outpaint = lora.map(|_| if blank { String::new() } else { p.get("prompt").and_then(Value::as_str).unwrap_or_default().trim().to_string() });
