@@ -287,9 +287,7 @@ where
             None => {
                 // No health monitor: poll in the same short slices so cancellation is not
                 // blocked until the whole readback deadline elapses.
-                if let Err(e) = poll_wait_cancellable(device, READBACK_WAIT_TIMEOUT, ctl) {
-                    return Err(e);
-                }
+                poll_wait_cancellable(device, READBACK_WAIT_TIMEOUT, ctl)?;
             }
         }
 
