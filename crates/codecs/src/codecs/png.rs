@@ -290,7 +290,12 @@ fn bounded_text(input: &[u8], compressed: bool, latin1: bool, limit: usize) -> R
             let Ok(status) = decoder.decompress(tail, &mut scratch, flate2::FlushDecompress::None) else {
                 // The backend may write a batch before it reports corruption: charge it too.
                 let written = usize::try_from(decoder.total_out().saturating_sub(start_out)).unwrap_or(usize::MAX);
-                return Ok((None, output.len().saturating_add(written)));
+                // Latin-1 text is charged at its UTF-8 length, as on the success path.
+                let charged = match scratch.get(..written) {
+                    Some(batch) if latin1 => latin1_len(batch).unwrap_or(usize::MAX),
+                    _ => written,
+                };
+                return Ok((None, output.len().saturating_add(charged)));
             };
             let Some(batch) = usize::try_from(decoder.total_out() - start_out).ok().and_then(|len| scratch.get(..len)) else { return Ok((None, output.len())) };
             append(&mut output, batch)?;
