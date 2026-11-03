@@ -80,9 +80,9 @@ use photocraft_ui_egui::PhotocraftApp;
 
 use photocraft_ui_egui::os_window::APP_ID;
 
-/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
-/// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
-/// keeps its traffic lights over the integrated title strip.
+/// Windows and Linux can use the app's title bar, with its own caption buttons and edge resizing
+/// (`photocraft_ui_egui::titlebar`); the preference below selects the mode. macOS always keeps its
+/// system traffic lights over the integrated title strip.
 const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
 
 /// Whether this start draws its own title bar: Windows and Linux do, unless Preferences ›
@@ -346,7 +346,10 @@ fn main() -> eframe::Result {
         let args: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(photocraft_genai::native::engine_main(&args));
     }
-    // First, so the panic hook and every start-up warning are recorded (`logging`).
+    // Before anything starts a thread: may re-execute this process with glibc tuned to return
+    // the memory of closed documents (#8743).
+    photocraft_engine::malloc_tuning::apply();
+    // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
     #[cfg(not(target_arch = "wasm32"))]
@@ -958,9 +961,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pc-titlebar-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("prefs.json");
-        assert_eq!(super::custom_titlebar(None), super::CUSTOM_TITLEBAR, "no preferences file: the default");
+        let default_custom = super::CUSTOM_TITLEBAR;
+        assert_eq!(super::custom_titlebar(None), default_custom, "no preferences file: the platform default");
         std::fs::write(&file, "not json").unwrap();
-        assert_eq!(super::custom_titlebar(Some(&file)), super::CUSTOM_TITLEBAR, "an unreadable file: the default");
+        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an unreadable file: the platform default");
+        std::fs::write(&file, r#"{"interface":{}}"#).unwrap();
+        assert_eq!(super::custom_titlebar(Some(&file)), default_custom, "an older preference file: the platform default");
         std::fs::write(&file, r#"{"interface":{"systemTitleBar":true}}"#).unwrap();
         assert!(!super::custom_titlebar(Some(&file)));
         assert_eq!(super::native_options(false).viewport.decorations, Some(true));
