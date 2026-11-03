@@ -545,7 +545,7 @@ fn flat_document(
 /// metadata are the whole-image decoder's. The tiles and one group of rows are checked against
 /// free memory before the first tile exists (see [`crate::memory`]).
 fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
-    import_png_streamed_with(name, bytes, ctl, min_bytes, crate::memory::available())
+    import_png_streamed_with(name, bytes, ctl, min_bytes, crate::memory::available)
 }
 
 /// [`import_png_streamed`], with the memory the machine can still use given (see
