@@ -97,9 +97,19 @@ pub fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     }
 }
 
-/// Open the Fill dialog; returns its id.
+/// Open Fill with the current editing target, so live UI changes cannot redirect confirmation.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
-    let f = fields(app);
+    let mut f = fields(app);
+    let target = app.with_mask_target(COMMAND, json!({}));
+    let target = target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app));
+    if let Some(st) = app.session.active() {
+        f.insert("__document".into(), json!(st.doc.id.0));
+        // Alpha and Quick Mask belong to the document, independently of its active layer.
+        if target.as_str() != Some("quickMask") && target.get("channel").is_none() {
+            f.insert("__layer".into(), json!(st.active_layer));
+        }
+    }
+    f.insert("__target".into(), target);
     app.ui.open_dialog(crate::state::DialogKind::Command, f)
 }
 
@@ -123,11 +133,18 @@ pub fn params(f: &Map<String, Value>) -> Value {
     {
         p[k] = v.clone();
     }
+    if let Some(target) = f.get("__target") {
+        p["target"] = target.clone();
+    }
     p
 }
 
 /// OK: remember the choices, then fill.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let st = app.session.active().ok_or(tl!("The document is closed"))?;
+    if f.get("__document").and_then(Value::as_u64) != Some(st.doc.id.0) || f.get("__layer").is_some_and(|layer| layer != &json!(st.active_layer)) {
+        return Err(tl!("The document or active layer changed. Open Fill again.").into());
+    }
     let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
     app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
     app.run(COMMAND, params(f))
