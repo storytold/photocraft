@@ -462,6 +462,9 @@ pub struct UiState {
     /// version, which shows the default layout: saved again unchanged until the layout changes.
     #[serde(skip)]
     pub docking_kept: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The exact translated restore notice, so clearing it never erases another status.
+    #[serde(skip)]
+    pub docking_restore_status: Option<String>,
     /// Panels belonging to explicitly collapsed custom tab groups.
     #[serde(default)]
     pub docking_collapsed: Vec<String>,
@@ -637,6 +640,7 @@ impl Default for UiState {
             docking: None,
             docking_returns: Default::default(),
             docking_kept: None,
+            docking_restore_status: None,
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
