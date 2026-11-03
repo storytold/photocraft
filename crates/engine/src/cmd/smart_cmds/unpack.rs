@@ -45,11 +45,14 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
     Ok(layers)
 }
 
+/// Embedded sources found so far, by uuid (`None`: not in the contents).
+type EmbeddedSources = std::collections::HashMap<String, Option<(String, Arc<Vec<u8>>)>>;
+
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
 /// behind: embed those sources so the nested smart objects keep rendering in the document.
 /// `embedded` holds each file found so far by uuid: layers naming the same file share one copy
 /// of its bytes rather than each retaining their own.
-fn embed_nested(meta: &Metadata, l: &mut Layer, embedded: &mut std::collections::HashMap<String, Option<(String, Arc<Vec<u8>>)>>) {
+fn embed_nested(meta: &Metadata, l: &mut Layer, embedded: &mut EmbeddedSources) {
     let found = match &l.content {
         LayerContent::Smart(SmartObject { source: SmartSource::Linked { path }, .. }) => embedded
             .entry(path.clone())
