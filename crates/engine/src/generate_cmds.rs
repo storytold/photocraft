@@ -396,7 +396,21 @@ const ENHANCE_SCENE_REQUEST: &str = "Describe this picture.";
 /// The seed of an Expand's scene caption: fixed, so the same picture gets the same caption
 /// whatever the expand's own seed, and a re-roll reuses the encoded prompt and references
 /// instead of paying a new encode (the in-app benchmark, 2026-11-03: every new seed missed).
-const EXPAND_CAPTION_SEED: u64 = 0x5EED_CA9;
+const EXPAND_CAPTION_SEED: u64 = 0x5EED_CA95;
+
+/// The last Expand caption, keyed on the picture it describes: a re-roll of the same picture
+/// skips the chat (about 4 s) and the text encoder's reload for it (about 2.8 s), which the
+/// fixed [`EXPAND_CAPTION_SEED`] would give back word for word anyway.
+static EXPAND_CAPTION: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+
+/// The key of [`EXPAND_CAPTION`]: the described picture's size and pixels.
+fn caption_key(picture: &Rgba8) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (picture.width, picture.height).hash(&mut h);
+    picture.data.hash(&mut h);
+    h.finish()
+}
 
 /// The user turn of [`EnhanceKind::Backdrop`].
 const ENHANCE_BACKDROP_REQUEST: &str = "Describe the background of this picture.";
@@ -4059,19 +4073,29 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
                     let seen = Rgba8::new(seen.width, seen.height, seen.pixels).map_err(gen_err)?;
                     let (rw, rh) = matte_request_size(seen.width, seen.height);
                     let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
-                    ctx.progress(0.0, "Describing the picture");
-                    enhance_prompt(
-                        thinker.as_ref(),
-                        EnhanceKind::Scene,
-                        ENHANCE_SCENE_REQUEST,
-                        Some(&seen),
-                        None,
-                        EXPAND_CAPTION_SEED,
-                        &JobProgress::span(ctx, 0.0, 0.03),
-                    )
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()
+                    let key = caption_key(&seen);
+                    let cached = EXPAND_CAPTION.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(k, _)| *k == key).map(|(_, c)| c.clone());
+                    if let Some(caption) = cached {
+                        caption
+                    } else {
+                        ctx.progress(0.0, "Describing the picture");
+                        let caption = enhance_prompt(
+                            thinker.as_ref(),
+                            EnhanceKind::Scene,
+                            ENHANCE_SCENE_REQUEST,
+                            Some(&seen),
+                            None,
+                            EXPAND_CAPTION_SEED,
+                            &JobProgress::span(ctx, 0.0, 0.03),
+                        )
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                        if !caption.is_empty() {
+                            *EXPAND_CAPTION.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, caption.clone()));
+                        }
+                        caption
+                    }
                 } else {
                     typed.clone()
                 };
