@@ -276,8 +276,14 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The drawn rows, top to bottom (#1721): the space between them and below the last
             // one is a drop zone too.
             let mut drawn: Vec<(LayerId, Rect)> = Vec::new();
-            // Where Generative Fills still generating will land.
-            crate::genai_ui::layer_rows_unplaced(app, ui, doc.id, &rows);
+            // Where Generative Fills still generating will land. A fill whose layer isolation or
+            // the filter hides has no row to sit by, so it goes at the top with the unplaced.
+            let shown: Vec<(usize, &Layer)> = rows
+                .iter()
+                .copied()
+                .filter(|&(_, l)| photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) && filter.shows(l))
+                .collect();
+            crate::genai_ui::layer_rows_unplaced(app, ui, doc.id, &shown);
             for &(depth, l) in &rows {
                 // Select › Isolate Layers.
                 if !photocraft_engine::select_extra_cmds::isolation_shows(&doc, &isolated, l.id) {

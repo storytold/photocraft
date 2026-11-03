@@ -317,16 +317,27 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt, "separate": separate})));
     let mut params = Map::new();
     params.insert("prompt".into(), json!(prompt));
+    let consent_ids = |app: &PhotocraftApp| -> Vec<u64> { app.session.generative_fills().iter().filter(|f| f.state == "consent").map(|f| f.id).collect() };
+    // An area that wasn't sent for a reason other than waiting for consent: its error is kept,
+    // whatever the other areas did.
+    let mut failed: Option<String> = None;
     let r = if separate && (2..=MAX_SEPARATE).contains(&areas) {
         // One fill per area, side by side.
         let mut last = Ok(Value::Null);
         for k in 0..areas {
             let mut p = params.clone();
             p.insert("area".into(), json!(k));
+            let before = consent_ids(app);
             last = app.run(FILL, Value::Object(p));
             // One waiting for consent isn't a failure: the others are asked about with it.
-            if last.is_err() && !app.session.generative_fills().iter().any(|f| f.state == "consent") {
-                break;
+            let asked = consent_ids(app).iter().any(|id| !before.contains(id));
+            if let Err(e) = &last
+                && !asked
+            {
+                failed.get_or_insert_with(|| e.clone());
+                if consent_ids(app).is_empty() {
+                    break;
+                }
             }
         }
         last
@@ -335,8 +346,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     };
     // A fill that must be agreed to first waits for the person: ask now.
     consent::ask_if_waiting(app);
-    let waiting = app.session.generative_fills().iter().any(|f| f.state == "consent");
-    if waiting && r.is_err() {
+    let waiting = !consent_ids(app).is_empty();
+    if waiting && r.is_err() && failed.is_none() {
         // Run inline, the wait came back as the command's error: it is a question, not a failure.
         app.ui.status.clear();
         app.ui.status_error = false;
@@ -346,7 +357,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     if (r.is_ok() || waiting) && app.background_jobs {
         let _ = app.run("select.deselect", json!({}));
     }
-    if waiting { Ok(Value::Null) } else { r }
+    match failed {
+        Some(e) => Err(e),
+        None if waiting => Ok(Value::Null),
+        None => r,
+    }
 }
 
 /// The Generative Fill button for the selection tools' options bar, next to Select and Mask….

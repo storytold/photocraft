@@ -8,7 +8,7 @@
 //! typed into a buffer outside the dialog's fields (so `ui.inspect` and the control channel never
 //! see it), handed to the layer once, and kept in the OS keychain by it.
 
-use photocraft_engine::genai::{AiFailure, ConnectionProblem, ServiceKind, SetupView};
+use photocraft_engine::genai::{AiFailure, AiStatus, ConnectionProblem, ServiceKind, SetupView};
 
 use crate::PhotocraftApp;
 
@@ -26,9 +26,9 @@ pub struct State {
     #[cfg(not(target_arch = "wasm32"))]
     busy: Option<std::sync::mpsc::Receiver<Result<(), AiFailure>>>,
     /// The last outcome to show: (text, is an error).
-    message: Option<(String, bool)>,
-    /// The shared settings as last read, and when.
-    view: Option<(f64, Result<SetupView, String>)>,
+    pub(super) message: Option<(String, bool)>,
+    /// The shared settings as last read, when, and the tool's status then.
+    view: Option<(f64, AiStatus, Result<SetupView, String>)>,
 }
 
 fn kind_name(k: ServiceKind) -> &'static str {
@@ -55,23 +55,30 @@ fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-/// The shared settings, read again after [`REFRESH_S`] or once something changed them.
-fn view(app: &mut PhotocraftApp, now: f64) -> Result<SetupView, String> {
-    if let Some((at, v)) = &app.genai.setup.view
+/// The shared settings, read again after [`REFRESH_S`], once something here changed them, or as
+/// soon as the tool's status (`status`, refreshed about every second) differs from when they were
+/// read: a model chosen or a connection removed in another Craft app shows in the rows as soon as
+/// in the status line, without reading the settings (and the keychain) every second.
+fn view(app: &mut PhotocraftApp, now: f64, status: &AiStatus) -> Result<SetupView, String> {
+    if let Some((at, seen, v)) = &app.genai.setup.view
         && now - at < REFRESH_S
+        && seen == status
     {
         return v.clone();
     }
     let v = app.session.generative_ai().map_or_else(|| Err(super::NO_AI.to_owned()), |ai| ai.setup().map_err(|e| e.message));
-    app.genai.setup.view = Some((now, v.clone()));
+    app.genai.setup.view = Some((now, status.clone(), v.clone()));
     v
 }
 
-fn changed(app: &mut PhotocraftApp, r: Result<(), AiFailure>) {
+/// A choice or removal here was made: read the settings again, and show its error or clear the
+/// last one.
+pub(super) fn changed(app: &mut PhotocraftApp, r: Result<(), AiFailure>) {
     app.genai.setup.view = None;
-    if let Err(e) = r {
-        app.genai.setup.message = Some((e.message, true));
-    }
+    app.genai.setup.message = match r {
+        Ok(()) => None,
+        Err(e) => Some((e.message, true)),
+    };
 }
 
 /// The section's rows, drawn under Preferences › Integrations.
@@ -83,14 +90,15 @@ pub fn prefs_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let now = ui.input(|i| i.time);
     poll(app, ui.ctx());
     heading(ui, tl!("Generative AI"));
-    super::status_lines(ui, &app.session.generative_status());
+    let status = app.session.generative_status();
+    super::status_lines(ui, &status);
     super::faint(
         ui,
         tl!(
             "Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings."
         ),
     );
-    let setup = match view(app, now) {
+    let setup = match view(app, now, &status) {
         Ok(v) => v,
         Err(e) => {
             ui.add(egui::Label::new(egui::RichText::new(e).color(t.danger).size(12.0)).wrap());

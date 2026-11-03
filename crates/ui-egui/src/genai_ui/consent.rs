@@ -15,29 +15,46 @@ use crate::state::DialogKind;
 
 pub const CONSENT_MARK: &str = "__genaiConsent";
 
-/// The waiting fills and what the first of them would send, if any wait.
-fn waiting(app: &PhotocraftApp) -> Option<(Vec<u64>, Disclosure)> {
+/// The fills waiting for the same destination as the first one that waits, and what each of
+/// them would send, if any wait.
+fn waiting(app: &PhotocraftApp) -> Option<(Vec<u64>, Vec<Disclosure>)> {
     let fills = app.session.generative_fills();
     let first = fills.iter().find(|f| f.state == "consent")?;
     let disclosure = app.session.generative_fill_disclosure(first.id)?;
-    let ids = fills
+    let (ids, disclosures) = fills
         .iter()
         .filter(|f| f.state == "consent")
-        .filter(|f| {
-            app.session.generative_fill_disclosure(f.id).is_some_and(|d| d.destination == disclosure.destination && d.connection == disclosure.connection)
+        .filter_map(|f| app.session.generative_fill_disclosure(f.id).map(|d| (f.id, d)))
+        .filter(|(_, d)| d.destination == disclosure.destination && d.connection == disclosure.connection)
+        .unzip();
+    Some((ids, disclosures))
+}
+
+/// What the prompt lists: each kind of data sent, with every waiting fill's size of it (one
+/// answer covers them all, so each one's sizes are shown, not just the first's).
+fn items(disclosures: &[Disclosure]) -> Value {
+    let Some(first) = disclosures.first() else { return json!([]) };
+    let items: Vec<Value> = first
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let sizes: Vec<Option<u64>> = disclosures.iter().map(|d| d.items.get(i).filter(|x| x.input == item.input).and_then(|x| x.bytes)).collect();
+            json!({"input": item.input, "kind": item.kind, "bytes": item.bytes, "sizes": sizes})
         })
-        .map(|f| f.id)
         .collect();
-    Some((ids, disclosure))
+    json!(items)
 }
 
 /// Ask about fills waiting for consent: open the prompt, or add newly waiting fills for the same
 /// destination to the one that is open.
 pub fn ask_if_waiting(app: &mut PhotocraftApp) {
-    let Some((ids, disclosure)) = waiting(app) else { return };
+    let Some((ids, disclosures)) = waiting(app) else { return };
+    let Some(disclosure) = disclosures.first().cloned() else { return };
     if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.fields.contains_key(CONSENT_MARK)) {
         if d.fields.get("destination").and_then(Value::as_str) == Some(disclosure.destination.as_str()) {
             d.fields.insert("fills".into(), json!(ids));
+            d.fields.insert("items".into(), items(&disclosures));
         }
         return;
     }
@@ -51,7 +68,7 @@ pub fn ask_if_waiting(app: &mut PhotocraftApp) {
     f.insert("destination".into(), json!(disclosure.destination));
     f.insert("connection".into(), json!(disclosure.connection));
     f.insert("model".into(), json!(disclosure.model));
-    f.insert("items".into(), serde_json::to_value(&disclosure.items).unwrap_or(Value::Null));
+    f.insert("items".into(), items(&disclosures));
     f.insert("term".into(), json!(ConsentTerm::ThisTime.id()));
     app.ui.open_dialog(DialogKind::Command, f);
 }
@@ -63,18 +80,18 @@ fn size(bytes: u64) -> String {
     if b >= K * K { format!("{:.1} MB", b / (K * K)) } else { format!("{:.0} KB", (b / K).ceil().max(1.0)) }
 }
 
-/// What a disclosed item is, in words.
-fn item_text(input: &str, bytes: Option<u64>) -> String {
+/// What a disclosed item is, in words, with its size in each fill that waits (in order).
+pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
     let what = match input {
         "source" => tl!("The picture around the selection"),
         "mask" => tl!("The selection's shape"),
         "prompt" => return tl!("Your prompt").to_owned(),
         _ => tl!("Other data"),
     };
-    match bytes {
-        Some(b) => format!("{what} · {}", size(b)),
-        None => what.to_owned(),
+    if sizes.is_empty() {
+        return what.to_owned();
     }
+    format!("{what} · {}", sizes.iter().map(|b| size(*b)).collect::<Vec<_>>().join(", "))
 }
 
 fn term_label(t: ConsentTerm) -> &'static str {
@@ -97,7 +114,11 @@ pub fn body(_app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Val
     ui.add_space(6.0);
     for item in f.get("items").and_then(Value::as_array).cloned().unwrap_or_default() {
         let input = item.get("input").and_then(Value::as_str).unwrap_or("");
-        ui.label(format!("•  {}", item_text(input, item.get("bytes").and_then(Value::as_u64))));
+        let sizes: Vec<u64> = match item.get("sizes").and_then(Value::as_array) {
+            Some(each) => each.iter().filter_map(Value::as_u64).collect(),
+            None => item.get("bytes").and_then(Value::as_u64).into_iter().collect(),
+        };
+        ui.add(egui::Label::new(format!("•  {}", item_text(input, &sizes))).wrap());
     }
     let n = f.get("fills").and_then(Value::as_array).map_or(0, Vec::len) as u64;
     if n > 1 {
@@ -120,15 +141,23 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let term = f.get("term").and_then(Value::as_str).unwrap_or(ConsentTerm::ThisTime.id()).to_owned();
     let ids: Vec<u64> = f.get("fills").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
     let mut last = Ok(Value::Null);
+    let mut first_error = None;
     for id in ids {
         let still = app.session.generative_fills().iter().any(|f| f.id == id && f.state == "consent");
         if still {
             last = app.run(AGREE, json!({"fill": id, "term": term}));
+            // A later fill starting doesn't hide that an earlier one couldn't.
+            if let Err(e) = &last {
+                first_error.get_or_insert_with(|| e.clone());
+            }
         }
     }
     // Others may have come to wait meanwhile (another destination): ask about them next.
     ask_if_waiting(app);
-    last
+    match first_error {
+        Some(e) => Err(e),
+        None => last,
+    }
 }
 
 /// Don't Send: the fills it asked about are discarded; nothing of them was sent.
@@ -138,4 +167,6 @@ pub fn cancelled(app: &mut PhotocraftApp, f: &Map<String, Value>) {
     if !waiting.is_empty() {
         let _ = app.run(DISCARD, json!({"fills": waiting}));
     }
+    // Fills for another destination may have come to wait behind this prompt: ask about them now.
+    ask_if_waiting(app);
 }
