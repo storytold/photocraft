@@ -609,6 +609,24 @@ fn vectorcraft_smart_render_converts_into_the_document_profile() {
     assert!((warped.pixel(5, 20)[0] - 0.214).abs() < 0.01, "{:?}", warped.pixel(5, 20));
 }
 
+#[test]
+fn vectorcraft_raster_place_converts_before_resampling_at_every_depth() {
+    for depth in [8, 16, 32] {
+        for explicit in [true, false] {
+            let mut s = session(40, 40, depth);
+            Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+            s.edit_prefs(|p| p.general.always_create_smart_objects_when_placing = explicit);
+            let params = if explicit { json!({"smartObject": false, "scale": 200}) } else { json!({"scale": 200}) };
+            let r = place_bytes(&mut s, "Gray.vectorcraft", vectorcraft_file(20, 20, "0.5 0.5 0.5"), None, &params).unwrap();
+            assert_eq!(r["smartObject"], false);
+            let layer = doc(&s).layers.last().unwrap();
+            let LayerContent::Raster(px) = &layer.content else { panic!("expected raster layer") };
+            assert!((px.pixel(5, 20)[0] - 0.214).abs() < 0.01, "depth {depth}, explicit {explicit}: {:?}", px.pixel(5, 20));
+            assert!(px.pixel(35, 20)[3] < 0.01, "transparent half stays transparent");
+        }
+    }
+}
+
 /// Stack Mode on a VectorCraft smart object: a small artboard stacks; one drawn near the PDF
 /// rasterizer's 64-million-pixel limit is refused before its frames are made.
 #[test]

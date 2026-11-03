@@ -159,7 +159,8 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let fmt = d.doc.pixel_format();
-    let vector = photocraft_io::svg::is_svg(&bytes) || photocraft_io::vectorcraft::is_vectorcraft(&bytes);
+    let vectorcraft = photocraft_io::vectorcraft::is_vectorcraft(&bytes);
+    let vector = photocraft_io::svg::is_svg(&bytes) || vectorcraft;
     let opts = crate::jobs::import_options(s.prefs());
     let imported = photocraft_io::import_with_options(name, &bytes, &opts).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
     if imported.preview_only {
@@ -182,14 +183,29 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         _ => (cw / 2.0, ch / 2.0),
     };
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    let mut px = flattened_checked(&src, fmt, "file.place")?;
+    // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an
+    // embedded place lands as a plain pixel layer. A linked place is always a smart object.
+    let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
+    // Convert the imported sRGB pixels before resampling or changing color model. A raster
+    // placement has no smart-object render later to perform this conversion for it.
+    let mut px = if vectorcraft && !smart {
+        use photocraft_cms::{Builtin, Intent, Transform};
+        let profile = crate::color_cmds::document_profile(&d.doc);
+        if d.doc.mode == ColorMode::Rgb && profile.to_bytes().as_ref() == Builtin::Srgb.profile().to_bytes().as_ref() {
+            flattened_checked(&src, fmt, "file.place")?
+        } else {
+            let source = flattened_checked(&src, src.pixel_format(), "file.place")?;
+            let transform = Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true)
+                .map_err(|e| EngineError::Other(format!("can't convert the VectorCraft placement's colours: {e}")))?;
+            crate::color_cmds::convert_surface(&source, ColorMode::Rgb, fmt, &transform).convert(fmt)
+        }
+    } else {
+        flattened_checked(&src, fmt, "file.place")?
+    };
     if (scale - 1.0).abs() > 1e-9 {
         px = resize_surface(&px, scale, scale, Resample::Bicubic);
     }
     let px = translate_surface(&px, dx as i32, dy as i32);
-    // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off, an
-    // embedded place lands as a plain pixel layer. A linked place is always a smart object.
-    let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(s.prefs().general.always_create_smart_objects_when_placing);
     let source = match linked {
         Some(path) => SmartSource::Linked { path },
         None => SmartSource::Embedded { file_name: file_name(name), bytes: Arc::new(bytes) },
