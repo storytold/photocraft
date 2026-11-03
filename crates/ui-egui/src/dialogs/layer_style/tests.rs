@@ -82,7 +82,9 @@ fn the_gradient_drag_needs_its_layer() {
     let id = s.active().unwrap().active_layer.unwrap();
     let mut f = Map::new();
     f.insert("layer".into(), json!(id.0));
-    assert!(gradient_layer_bounds(&s, &f).is_some_and(|[w, h]| w > 0.0 && h > 0.0), "the dialog's layer");
+    // An empty new layer has no size yet; the lookup is what matters here (`drag_gradient` keeps
+    // the bounds at 1 px or more).
+    assert_ne!(gradient_layer_bounds(&s, &f), None, "the dialog's layer");
     f.insert("layer".into(), json!(id.0 + 1000));
     assert_eq!(gradient_layer_bounds(&s, &f), None, "a layer that is gone");
     f.remove("layer");
