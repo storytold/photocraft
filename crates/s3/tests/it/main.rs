@@ -29,7 +29,7 @@ pub fn doc(seed: u8) -> Document {
 }
 
 pub fn with_previews() -> SaveOptions {
-    SaveOptions { thumbnail: Some(Rgba8Image::new(4, 3)), composite: Some(Rgba8Image::new(9, 5)) }
+    SaveOptions { thumbnail: Some(Rgba8Image::new(4, 3)), composite: Some(Rgba8Image::new(9, 5)), ..Default::default() }
 }
 
 pub fn load(store: &S3Store) -> Result<Document> {

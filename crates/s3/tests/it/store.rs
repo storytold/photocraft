@@ -2,6 +2,7 @@
 //! configuration errors.
 
 use photocraft_format::{BundleStore, ByteSource, FormatError, PcraftWriter, SaveOptions};
+use photocraft_raster::Rgba8Image;
 use photocraft_s3::{S3Store, is_conflict};
 
 use crate::fake::FakeS3;
@@ -27,7 +28,7 @@ fn a_save_uploads_new_objects_once_then_moves_the_head_conditionally() {
     // The manifest is created only if absent, after every object; previews it has none of are cleared.
     assert_eq!(
         rest.iter().map(|r| (r.method.as_str(), r.key.as_str())).collect::<Vec<_>>(),
-        [("PUT", "docs/a/manifest.json"), ("DELETE", "docs/a/thumb.png"), ("DELETE", "docs/a/composite/preview.png")]
+        [("PUT", "docs/a/manifest.json"), ("DELETE", "docs/a/thumb.png"), ("DELETE", "docs/a/composite/preview.png"), ("DELETE", "docs/a/composite/full.png")]
     );
     assert_eq!(rest[0].condition, absent);
     assert!(log.iter().all(|r| r.authorization.starts_with("AWS4-HMAC-SHA256 Credential=test-key/")), "{log:?}");
@@ -44,10 +45,12 @@ fn a_save_uploads_new_objects_once_then_moves_the_head_conditionally() {
 fn previews_follow_the_head() {
     let s3 = FakeS3::start();
     let mut store = S3Store::new(s3.config(), "pool/", "docs/p/").unwrap();
-    PcraftWriter::new().save_to(&doc(1), &mut store, &with_previews()).unwrap();
+    let opts = SaveOptions { full_composite: Some(Rgba8Image::new(6, 4)), ..with_previews() };
+    PcraftWriter::new().save_to(&doc(1), &mut store, &opts).unwrap();
     let thumb = s3.object("docs/p/thumb.png").unwrap();
     assert!(thumb.starts_with(b"\x89PNG"));
     assert!(s3.object("docs/p/composite/preview.png").is_some());
+    assert!(s3.object("docs/p/composite/full.png").is_some());
     assert_eq!(store.get("thumb.png", usize::MAX).unwrap(), thumb);
 
     PcraftWriter::new().save_to(&doc(1), &mut store, &SaveOptions::default()).unwrap();

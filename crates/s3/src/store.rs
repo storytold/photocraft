@@ -11,7 +11,7 @@ use crate::client::{Client, Condition, Put, S3Config, io_error};
 
 const MANIFEST: &str = "manifest.json";
 /// The previews a bundle can hold (`format`'s preview paths).
-const PREVIEWS: [&str; 2] = ["thumb.png", "composite/preview.png"];
+const PREVIEWS: [&str; 3] = ["thumb.png", "composite/preview.png", "composite/full.png"];
 /// Default for [`S3Store::set_parallel_uploads`].
 pub const DEFAULT_PARALLEL_UPLOADS: usize = 16;
 

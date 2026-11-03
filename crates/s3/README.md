@@ -22,6 +22,7 @@ Signature Version 4 over `ureq` (the client the app's updater already ships).
 <document>manifest.json          the document's head: the version you open
 <document>thumb.png              previews of that version
 <document>composite/preview.png
+<document>composite/full.png
 ```
 
 ## Saving
