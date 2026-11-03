@@ -565,10 +565,12 @@ fn provider_memory_approval_refusal_cannot_launch_an_unowned_open_job() {
         photocraft_io::memory::with_mock_memory(memory, || {
             let options = photocraft_engine::jobs::import_options(app.session.prefs());
             assert!(matches!(photocraft_io::import_for_open("memory.psd", &bytes, &options), Err(photocraft_io::IoError::PsdApprovalRequired { .. })));
-            provider.set_resources(
-                provider.snapshot()["connectionId"].as_str().unwrap(),
-                vec![file_providers::Resource { id: "memory".into(), name: "memory.psd".into(), updated_at: String::new() }],
-            ).unwrap();
+            provider
+                .set_resources(
+                    provider.snapshot()["connectionId"].as_str().unwrap(),
+                    vec![file_providers::Resource { id: "memory".into(), name: "memory.psd".into(), updated_at: String::new() }],
+                )
+                .unwrap();
             let request = provider.request_open("memory").unwrap();
             provider.take_events();
             provider.open(request.clone(), "memory.psd".into(), bytes).unwrap();

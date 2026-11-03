@@ -177,6 +177,12 @@ the host to consider a deep link consumed. Failed decoding emits `openFailed`; c
 emits `openCancelled`. Failed fetches use `cancelOpen` so an absent file cannot leave the
 provider permanently busy.
 
+PSD/TIFF imports that require additional memory approval fail the synchronous provider
+request with `openFailed`; they do not leave a local background open running after that
+failure. This bridge does not implement a provider memory-approval continuation. Ordinary
+local opens retain the editor's existing approval flow, including while a provider is
+registered. Memory limits and admission checks are not bypassed.
+
 Pending reads remain busy for account/disconnection and leave guards, but are not active
 saves: they do not hide an unrelated unsaved-changes prompt or prevent its answer.
 
