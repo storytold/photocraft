@@ -1,5 +1,36 @@
 use super::*;
 
+#[test]
+/// Require preferred capture points to remain legal with identical checkpoint tuples when a compatible plain-layer
+/// tail grows.
+fn capture_points_survive_compatible_plain_tail_extension() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Layer;
+    use photocraft_geom::Size;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("Tail boundaries", Size::new(8, 8), ColorMode::Rgb, depth);
+        for count in 1..=25 {
+            let mut layer = Layer::raster("Plain", doc.pixel_format());
+            layer.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.2, 0.4, 0.6, 0.5]);
+            doc.layers.push(layer);
+            let before = plan::plan(&doc).unwrap();
+            let (runs, complete) = batch_layout(&before);
+            let captures = capture_starts(&runs, &complete);
+            let actual = run_starts(&runs);
+            assert!(captures.iter().zip(&actual).all(|(capture, start)| !capture || *start));
+            let selected: Vec<_> = before.checkpoints.iter().filter(|point| captures[point.pass_end]).copied().collect();
+            let mut extended = doc.clone();
+            extended.layers.push(doc.layers.last().unwrap().duplicate());
+            let after = plan::plan(&extended).unwrap();
+            let after_starts = run_starts(&batch_runs(&after));
+            for point in selected {
+                assert!(after.checkpoints.contains(&point), "{depth:?} length{count}: capture tuple changed after compatible extension");
+                assert!(after_starts[point.pass_end], "{depth:?} length{count}: capture moved inside an extended batch");
+            }
+        }
+    }
+}
+
 /// A run joins `LayerBlend` passes that only feed each other, at most `BATCH` of them, and
 /// never ends in the slot it reads from.
 fn check_runs(p: &Plan<'_>) -> Vec<usize> {

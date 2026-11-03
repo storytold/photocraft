@@ -40,6 +40,24 @@ pub(crate) enum Command {
     Serve(ServeArgs),
 }
 
+// Explicit decoding policy shared by every file-reading subcommand.
+#[derive(Args)]
+pub(crate) struct ImportArgs {
+    /// Explicit sample byte order for unmarked high-depth XCF7-11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
+}
+
+/// Accept only the explicit historical byte-order spellings, avoiding unmarked platform or sample plausibility
+/// guesses.
+fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, &'static str> {
+    match value {
+        "little-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::LittleEndian),
+        "big-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::BigEndian),
+        _ => Err("expected little-endian or big-endian"),
+    }
+}
+
 // How an image is written: shared by `convert`, `run` and `batch`.
 #[derive(Args)]
 pub(crate) struct ExportArgs {
@@ -95,6 +113,8 @@ pub(crate) struct ExportArgs {
 /// --in-place allows it.
 #[derive(Args)]
 pub(crate) struct ConvertArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The file to read
     #[arg(value_name = "IN")]
     pub(crate) input: PathBuf,
@@ -116,6 +136,8 @@ pub(crate) struct ConvertArgs {
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     pub(crate) file: PathBuf,
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
@@ -137,6 +159,8 @@ pub(crate) struct InfoArgs {
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
 #[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
 pub(crate) struct RunArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The document to open
     pub(crate) file: Option<PathBuf>,
     /// Start from a new document with these JSON parameters instead of opening a file
@@ -182,6 +206,8 @@ pub(crate) enum Step {
 /// loaded, so its steps can play other actions of the set.
 #[derive(Args)]
 pub(crate) struct BatchArgs {
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     /// The action list: actions.json, a droplet, or a Photoshop Actions file (.atn)
     #[arg(long, value_name = "FILE")]
     pub(crate) actions: PathBuf,

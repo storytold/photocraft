@@ -4330,3 +4330,35 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.
 	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
 	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.
+
+# Native XCF import report
+	Import Conversion Report	İçe Aktarma Dönüştürme Raporu
+	Import-time outcomes. Editing uses native PhotoCraft rules.	İçe aktarma sırasındaki sonuçlar. Düzenleme, PhotoCraft’ın yerel kurallarını kullanır.
+	A newer report format is retained. Its details cannot be displayed.	Daha yeni biçimde bir rapor saklanıyor. Ayrıntıları görüntülenemiyor.
+	No conversion report was recorded.	Dönüştürme raporu kaydedilmedi.
+	No entries on this page.	Bu sayfada kayıt yok.
+	Layer mask	Katman maskesi
+	Source item	Kaynak öğe
+	{first}–{last} of {total}	{total} kayıttan {first}–{last}
+	Native equivalent	Yerel eşdeğer
+	Native approximation	Yerel yaklaştırma
+	Retained, not applied	Saklandı, uygulanmadı
+	Nonessential data skipped	Gerekli olmayan veriler atlandı
+	Unknown outcome	Bilinmeyen sonuç
+	Native rules	Yerel kurallar
+	Native capability limit	Yerel özellik sınırı
+	Conversion not implemented	Dönüştürme uygulanmamış
+	Resource unavailable	Kaynak kullanılamıyor
+	Invalid optional data	Geçersiz isteğe bağlı veriler
+	Retention limit	Saklama sınırı
+	Precision conversion	Hassasiyet dönüştürme
+	Unknown reason	Bilinmeyen neden
+	Native layer {id} (removed; historical reference)	Yerel katman {id} (silindi; geçmiş başvurusu)
+	Native layer: {name}	Yerel katman: {name}
+	Alpha Percentile	Alfa yüzdelik dilimi
+	Alpha Weighted	Alfa ağırlıklı
+	Color Percentile	Renk yüzdelik dilimi
+	Connectivity	Bağlantılılık
+	Disc	Dairesel komşuluk
+	Each	Her kanal
+	Value	Değer

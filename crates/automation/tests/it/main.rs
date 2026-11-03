@@ -17,3 +17,4 @@ mod openraster;
 mod raw_defaults;
 mod renderer_save;
 mod smart_filter_authorization;
+mod xcf_native_workflows;

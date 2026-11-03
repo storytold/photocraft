@@ -1951,20 +1951,26 @@ mod multi_layer_formatting {
         // list has arrived. The loaded menu takes six passes alone, but under a loaded parallel
         // run the list arrives in more batches and it took ten. Allow 16 passes; a UI that never
         // settles still fails, because `run` errors on any pass past the cap.
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(16).build_ui_state(
-            move |ui, app| {
-                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    if properties {
-                        ui.set_width(340.0);
-                        super::super::type_properties(app, ui);
-                    } else {
-                        ui.horizontal(|ui| super::super::options_bar(app, ui));
+        // Apply the app theme before the harness's deterministic visuals disable caret blinking.
+        let mut h = Harness::builder()
+            .with_size(vec2(1100.0, 800.0))
+            .with_max_steps(16)
+            .with_context_setup(|ctx| {
+                PhotocraftApp::setup_context(ctx, Default::default());
+            })
+            .build_ui_state(
+                move |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        if properties {
+                            ui.set_width(340.0);
+                            super::super::type_properties(app, ui);
+                        } else {
+                            ui.horizontal(|ui| super::super::options_bar(app, ui));
+                        }
                     }
-                }
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, Default::default());
+                },
+                app,
+            );
         h.run_steps(4);
         h
     }

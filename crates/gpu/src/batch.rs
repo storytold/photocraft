@@ -100,7 +100,7 @@ pub(crate) const BATCH: usize = 4;
 /// The runs depend on the plan alone, never on the prefix cache: a compiler may give a layer
 /// other bits batched than drawn alone (FXC on D3D12 does), and reusing a prefix must stay exact
 /// (#5286). The cache captures and resumes only at `run_starts` instead.
-pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
+pub(crate) fn batch_layout(plan: &Plan<'_>) -> (Vec<usize>, Vec<bool>) {
     let passes = &plan.passes;
     let n = passes.len();
     let reads = |p: &plan::Pass<'_>, s: plan::Slot| [p.a, p.b, p.c, p.d].contains(&Some(s));
@@ -128,7 +128,7 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
     let extra = |p: &plan::Pass<'_>| lead(p) && p.mask.is_none() && p.flags & plan::F_TEXT_GAMMA == 0 && p.mode != photocraft_color::BlendMode::Dissolve;
     (0..n)
         .map(|i| {
-            let Some(first) = passes.get(i).filter(|p| lead(p)) else { return 1 };
+            let Some(first) = passes.get(i).filter(|p| lead(p)) else { return (1, true) };
             let (mut k, mut best) = (1, 1);
             while k < BATCH && feeds_next.get(i + k - 1).copied().unwrap_or(false) && passes.get(i + k).is_some_and(extra) {
                 k += 1;
@@ -136,9 +136,33 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
                     best = k;
                 }
             }
-            best
+            // Full lookahead keeps ordinary plain-tail capture boundaries legal
+            // when a later insertion extends this batch. Run grouping is unchanged.
+            (best, !extra(first) || k == BATCH)
         })
-        .collect()
+        .unzip()
+}
+
+/// Expose the unchanged render grouping to independent batching tests.
+#[cfg(test)]
+pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
+    batch_layout(plan).0
+}
+
+/// Prefer complete-lookahead capture boundaries without narrowing the set of legal restore points.
+pub(crate) fn capture_starts(runs: &[usize], complete: &[bool]) -> Vec<bool> {
+    let mut starts = vec![false; runs.len() + 1];
+    let mut i = 0;
+    while i < runs.len() {
+        let next = i.saturating_add(runs.get(i).copied().unwrap_or(1).max(1));
+        if complete.get(i).copied().unwrap_or(false)
+            && let Some(start) = starts.get_mut(next)
+        {
+            *start = true;
+        }
+        i = next;
+    }
+    starts
 }
 
 /// For each pass and the end of the plan, whether the executor draws `runs` (`batch_runs`) so

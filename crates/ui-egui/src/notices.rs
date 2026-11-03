@@ -39,6 +39,8 @@ pub struct Notice {
     /// setting: for a warning the user must not miss, such as nearly full memory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sticky: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_report_document: Option<photocraft_doc::DocId>,
 }
 
 impl Notice {
@@ -61,6 +63,7 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
         args: Vec::new(),
         shown_at: None,
         sticky: false,
+        import_report_document: None,
     });
     cap_notices(app);
     id
@@ -184,6 +187,17 @@ pub fn io_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
     post(app, title, warnings.to_vec(), false, None);
 }
 
+/// Import notices link only to the converted document they describe.
+pub fn import_warnings(app: &mut PhotocraftApp, what: &str, warnings: &[String]) {
+    io_warnings(app, what, warnings);
+    if !warnings.is_empty() && crate::import_report::available(app) {
+        let doc = app.session.active().map(|s| s.doc.id);
+        if let Some(notice) = app.ui.notices.last_mut() {
+            notice.import_report_document = doc;
+        }
+    }
+}
+
 /// Report a failed file operation: the status bar shows it as an error and a notice keeps it on
 /// screen until dismissed.
 pub fn error(app: &mut PhotocraftApp, message: String) {
@@ -237,6 +251,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
+    let mut conversion_report = false;
     // Clear the status bar (~24 px) and leave the dock's edge some air.
     let area = egui::Area::new(egui::Id::unique("photocraft-notices"))
         .order(egui::Order::Foreground)
@@ -270,12 +285,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             let text = crate::i18n::fmt(tl!("…and {n} more"), &[("n", &(n.lines.len() - MAX_LINES).to_string())]);
                             ui.label(egui::RichText::new(text).color(t.text_faint));
                         }
+                        if n.import_report_document.is_some()
+                            && n.import_report_document == app.session.active().map(|s| s.doc.id)
+                            && crate::import_report::available(app)
+                            && ui.button(format!("{}…", tl!("Import Conversion Report"))).clicked()
+                        {
+                            conversion_report = true;
+                        }
                     });
                 ui.add_space(6.0);
             }
         });
     if let Some(id) = dismiss_id {
         dismiss(app, id);
+    }
+    if conversion_report {
+        crate::import_report::open(app);
     }
     let (auto_hide, duration) = {
         let i = &app.session.prefs().interface;
