@@ -226,6 +226,38 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
     })
 }
 
+/// Serialize editable tone records without the persistence serializer's display rounding.
+/// Opening a recorded Action must not quantize accepted Levels values or point coordinates
+/// before the user edits them. Pencil maps are already quantized by the checked parser.
+pub fn to_dialog_params(adj: &Adjustment) -> Value {
+    match adj {
+        Adjustment::Levels { master, per_channel, space, black } => {
+            let record = |c: &LevelsChannel| {
+                json!({
+                    "inBlack": c.in_black * 255.0, "gamma": c.gamma, "inWhite": c.in_white * 255.0,
+                    "outBlack": c.out_black * 255.0, "outWhite": c.out_white * 255.0
+                })
+            };
+            let mut params = record(if *space == ToneSpace::Lab { &per_channel[0] } else { master });
+            for (key, channel) in channel_keys(*space).iter().zip(per_channel.iter().chain(std::iter::once(black))) {
+                params[*key] = record(channel);
+            }
+            params
+        }
+        Adjustment::Curves { master, per_channel, space, black, pencil: false } => {
+            let record = |c: &[CurvePoint]| json!(c.iter().map(|p| [p.input * 255.0, p.output * 255.0]).collect::<Vec<_>>());
+            let mut params = json!({"points":record(if *space == ToneSpace::Lab { &per_channel[0] } else { master })});
+            let identity = identity_curve();
+            let ink = if black.len() >= 2 { black } else { &identity };
+            for (key, channel) in channel_keys(*space).iter().zip(per_channel.iter().chain(std::iter::once(ink))) {
+                params[*key] = record(channel);
+            }
+            params
+        }
+        _ => to_params(adj),
+    }
+}
+
 /// The complete parameter set of `adj` (the inverse of [`from_params`]).
 pub fn to_params(adj: &Adjustment) -> Value {
     match adj {

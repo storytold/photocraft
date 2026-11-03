@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use crate::{EngineError, Result, Session, channel_cmds::ChannelTarget};
 
 mod tone;
+#[cfg(test)]
+mod tone_dialog_tests;
 
 /// A bounded, cheap-to-copy set of native colour components (never transparency).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -491,6 +493,40 @@ fn adjust_plane(
     out.put_tiles(done.into_iter().flatten());
     *plane = out;
     Ok(())
+}
+
+/// Resolve Levels/Curves settings for an editable native colour set. Unlike a whole-image
+/// Lab adjustment, a set has separate combined and Lightness records. Parse before serializing
+/// so legacy `gray` aliases, pencil maps and smoothing seed the same settings as execution.
+/// Returns adjustment fields only; callers retain their captured target and dialog metadata.
+pub fn tone_dialog_params(kind: &str, p: &Value, mode: photocraft_color::ColorMode, colors: ColorChannels) -> Result<Value> {
+    use photocraft_doc::{Adjustment, adjust::ToneSpace};
+    let count = photocraft_doc::Document::pixel_format_for(mode, photocraft_color::SampleType::U8).mode.color_channels();
+    if !matches!(kind, "levels" | "curves") || colors.len() < 2 || colors.indices().any(|i| i >= count) {
+        return Err(EngineError::Other("tone dialog requires Levels or Curves and a valid native colour set".into()));
+    }
+    let parsed = crate::adjust_params::from_params(kind, p, None, mode)?;
+    let mut adjustment = tone_adjustment(kind, p, parsed, mode, colors)?;
+    // Native-set execution applies records by component index, independently of the serialized
+    // tone-space label. Use native names so hidden foreign-space keys cannot replace the editor.
+    match &mut adjustment {
+        Adjustment::Levels { space, .. } | Adjustment::Curves { space, .. } => *space = crate::adjust_params::default_space(mode),
+        _ => return Err(EngineError::Other("unsupported tone adjustment".into())),
+    }
+    let mut canonical = crate::adjust_params::to_dialog_params(&adjustment);
+    if mode == photocraft_color::ColorMode::Lab {
+        // The ordinary Lab serializer aliases the root record to Lightness. Serialize the true
+        // master separately, without copying RGB component names into the native parameters.
+        match &mut adjustment {
+            Adjustment::Levels { space, .. } | Adjustment::Curves { space, .. } => *space = ToneSpace::Rgb,
+            _ => return Err(EngineError::Other("unsupported tone adjustment".into())),
+        }
+        let master = crate::adjust_params::gray_tone_params(&crate::adjust_params::to_dialog_params(&adjustment));
+        if let (Some(out), Some(master)) = (canonical.as_object_mut(), master.as_object()) {
+            out.extend(master.clone());
+        }
+    }
+    Ok(canonical)
 }
 
 /// A selected set has a real combined record even in Lab, whose normal composite record aliases

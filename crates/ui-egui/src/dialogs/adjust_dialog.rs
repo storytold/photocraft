@@ -324,7 +324,9 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
     let spec = photocraft_engine::commands::find(command)?;
     let mode = curve_mode(app, kind, &fields);
     let defaults = photocraft_engine::adjust_params::default_for(kind, mode).ok()?;
-    let gray_target = matches!(kind, "levels" | "curves") && isolated(app, &fields).is_some_and(|c| c.gray.is_some());
+    let isolated = matches!(kind, "levels" | "curves").then(|| isolated(app, &fields)).flatten();
+    let gray_target = isolated.as_ref().is_some_and(|c| c.gray.is_some());
+    let color_set = isolated.and_then(|c| c.components);
     let mut supplied = if gray_target {
         photocraft_engine::adjust_params::gray_tone_params(&Value::Object(std::mem::take(&mut fields))).as_object().cloned().unwrap_or_default()
     } else {
@@ -332,13 +334,19 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
     };
     // Resolve a recorded gray alias before adding defaults: Levels' alias would otherwise
     // override visible control edits, while Curves' default points would hide the alias entirely.
-    if gray_target
-        && supplied.contains_key("gray")
-        && let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, &Value::Object(supplied.clone()), None, mode)
-        && let Value::Object(canonical) = photocraft_engine::adjust_params::to_params(&adjustment)
-    {
-        supplied.remove("gray");
-        supplied.extend(canonical);
+    if (gray_target || color_set.is_some()) && supplied.contains_key("gray") {
+        let params = Value::Object(supplied.clone());
+        let canonical = if let Some(colors) = color_set {
+            photocraft_engine::color_channels::tone_dialog_params(kind, &params, mode, colors)
+        } else {
+            photocraft_engine::adjust_params::from_params(kind, &params, None, mode).map(|a| photocraft_engine::adjust_params::to_dialog_params(&a))
+        };
+        if let Ok(Value::Object(canonical)) = canonical {
+            supplied = photocraft_engine::adjust_params::gray_tone_params(&params).as_object().cloned().unwrap_or_default();
+            supplied.remove("gray");
+            supplied.remove("smooth"); // Already applied by parsing; never smooth a second time.
+            supplied.extend(canonical);
+        }
     }
     fields.insert("__command".into(), json!(command));
     fields.insert("__label".into(), json!(spec.label));
@@ -348,7 +356,11 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
     if let Value::Object(mut p) = photocraft_engine::adjust_params::to_params(&defaults) {
         // An invalid gray alias must reach engine validation: seeded identity points would
         // otherwise override it. Valid aliases were already canonicalized above.
-        if gray_target && kind == "curves" && supplied.get("gray").is_some_and(|v| !v.is_null()) && supplied.get("points").is_none_or(Value::is_null) {
+        if (gray_target || color_set.is_some())
+            && kind == "curves"
+            && supplied.get("gray").is_some_and(|v| !v.is_null())
+            && supplied.get("points").is_none_or(Value::is_null)
+        {
             p.remove("points");
         }
         fields.extend(p);

@@ -150,6 +150,22 @@ Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned craft-fonts i
 
 Current evidence is retained in `plan/merge-main-20261103/` (gitignored).
 
+## Colour-set Action dialog follow-up (2026-11-03)
+
+The compatibility review after #9274 reproduced recorded `gray` aliases opening colour-set Levels with a neutral Gamma field, or Curves with identity points. The Action's explicit native set now resolves its tone records before dialog defaults are merged. The shared engine resolver retains Lab's separate combined and Lightness records, native CMYK Black and other component settings, and once-only pencil conversion/smoothing. Scalar alias normalization also consumes smoothing once. Dialog initialization preserves accepted Levels and point-coordinate precision without changing the ordinary persistence serializer.
+
+Six new UI regression functions exercise actual modal Action playback beside a selected `Saved sky` alpha: 108 RGB/CMYK/Lab × U8/U16/F32 preview/commit/undo/redo comparisons, feathered selections, combined-control edits, invalid aliases and pencil maps, explicit-points precedence, cancel, literal target addressing, unchanged Action records and separate Lab recall. Two engine regressions cover every multi-component native subset (including full explicit sets), point/map inputs, native records, high-precision settings and invalid requests. Untargeted components, transparency, masks, other planes and selection coverage remain unchanged.
+
+Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned font input:
+
+- Full engine/UI `cargo test`: **8,289 passed, 0 failed, 43 normally ignored**, including doctest builds, with `--test-threads=1`. After the sole test-only Clippy cleanup extracted a raw-parameter builder, both integration suites passed again: **555 passed, 0 failed, 6 normally ignored**. No production code changed after the full run.
+- Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. The ignored full-registry adversarial command test passed separately. Changed-corpus checking correctly skipped because no corpus-critical paths differ from integrated main.
+- Four fresh RGB/Lab colour-set Action captures were inspected: Levels Gamma 2, inverted point Curves and a smoothed pencil curve all seed the visible combined controls. All 39 regression functions introduced by this PR remain registered.
+- Repeated review/fix passes addressed alias precedence, separate Lab records, repeated smoothing and parameter precision. The final scoped review found no further actionable issues. The initial three regression functions failed before the fix. The interrupted initial full-test run and first Clippy failure are retained alongside the successful final evidence.
+- Only dialog initialization and tone-parameter serialization changed; no pixel-processing, proxy or per-frame drag path changed. Historical 24 MP measurements below remain dated; no new performance comparison or Windows/macOS result is claimed.
+
+Current evidence is retained in `plan/colour-set-action-fix-20261103/` (gitignored).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).
