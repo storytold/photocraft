@@ -1146,7 +1146,13 @@ fn inching_between_touching_submenu_rows_switches_at_once() {
 fn row_fill(h: &Harness<'static, PhotocraftApp>, rect: egui::Rect) -> Option<egui::Color32> {
     fn walk(shape: &egui::Shape, rect: egui::Rect, out: &mut Option<egui::Color32>) {
         match shape {
-            egui::Shape::Rect(r) if r.fill.a() > 0 && rect.x_range().contains(r.rect.center().x) && (r.rect.center().y - rect.center().y).abs() < 3.0 && (r.rect.height() - rect.height()).abs() < 6.0 && r.rect.width() > rect.width() * 0.6 => {
+            egui::Shape::Rect(r)
+                if r.fill.a() > 0
+                    && rect.x_range().contains(r.rect.center().x)
+                    && (r.rect.center().y - rect.center().y).abs() < 3.0
+                    && (r.rect.height() - rect.height()).abs() < 6.0
+                    && r.rect.width() > rect.width() * 0.6 =>
+            {
                 *out = Some(r.fill);
             }
             egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, rect, out)),
@@ -1273,7 +1279,8 @@ fn a_submenu_let_go_while_the_pointer_rests_disappears() {
         open(&mut h, menu);
         let all = rows(&h, 0);
         let src = all.iter().position(|r| r.command.is_none() && r.enabled).expect("a submenu row");
-        let (dest, _) = all.iter().enumerate().skip(src + 1).filter(|(_, r)| r.command.is_some() && r.enabled).nth(nth_command - 1).expect("a command row below it");
+        let (dest, _) =
+            all.iter().enumerate().skip(src + 1).filter(|(_, r)| r.command.is_some() && r.enabled).nth(nth_command - 1).expect("a command row below it");
         let (from, to) = (all[src].rect, all[dest].rect);
         // As far across as down, so it counts as heading for the submenu.
         let down = to.center().y - from.center().y;
@@ -1528,7 +1535,11 @@ fn in_a_submenu_touching_submenu_rows_switch_at_once() {
                 (false, false) => '.',
             });
             if to.contains(egui::pos2(x, y - (to.center().y - from.center().y).signum() * 2.0)) && open_submenu_row_at(&h, 1) != Some(want) {
-                wrong.push(format!("{}: step {s}, the pointer is on row {want} but row {:?}'s submenu is open", if down { "down" } else { "up" }, open_submenu_row_at(&h, 1)));
+                wrong.push(format!(
+                    "{}: step {s}, the pointer is on row {want} but row {:?}'s submenu is open",
+                    if down { "down" } else { "up" },
+                    open_submenu_row_at(&h, 1)
+                ));
             }
         }
         let handovers = seen.as_bytes().windows(2).filter(|w| w[0] != w[1]).count();
