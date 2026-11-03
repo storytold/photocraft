@@ -386,6 +386,44 @@ fn ineligible_documents_show_no_display() {
     assert!(request(&app, 0).is_none(), "fill layer");
 }
 
+/// While a background job runs the display draws nothing and neither scans nor builds its
+/// texture. It comes back once the job is done.
+#[test]
+fn a_running_job_holds_the_display() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let ctx = egui::Context::default();
+    let mut app = ramp_app(ColorMode::Rgb, SampleType::U8);
+    open_levels(&mut app, json!({"inBlack": 100}), Some("shadows"));
+    let gate = Arc::new(AtomicBool::new(false));
+    let open = gate.clone();
+    let started = app
+        .session
+        .start_job(
+            "test.slow",
+            json!({}),
+            "Slow",
+            false,
+            move |job| {
+                while !open.load(Ordering::Relaxed) {
+                    job.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Ok(())
+            },
+            |_, ()| Ok(json!({})),
+        )
+        .unwrap();
+    let photocraft_engine::jobs::Started::Job(job) = started else { panic!("ran inline") };
+    assert!(app.session.has_jobs());
+    assert!(paint_view(&mut app, &ctx, &view(10.0)).is_none());
+    assert!(app.levels_clipping.is_none(), "no scan and no texture while the job runs");
+    gate.store(true, Ordering::Relaxed);
+    app.session.wait_job(job).unwrap();
+    assert!(!app.session.has_jobs());
+    assert!(paint_view(&mut app, &ctx, &view(10.0)).is_some(), "back once the job is done");
+}
+
 /// A Smart Filter's Levels dialog edits the filter, not the layer's pixels: no display, and its
 /// cache goes as if no Levels dialog were open, even over a pixel layer.
 #[test]

@@ -360,6 +360,11 @@ pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Paint
         app.levels_clipping = None;
         return;
     }
+    // A background job holds the workers and may replace the document: no thresholds, scan or
+    // image until it ends.
+    if app.session.has_jobs() {
+        return;
+    }
     let Some(req) = request(app, idx) else { return };
     let Some(thr) = thresholds(&req.adj, req.doc.pixel_format().sample) else { return };
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, 8192);
