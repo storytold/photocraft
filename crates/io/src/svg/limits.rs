@@ -166,38 +166,58 @@ impl Walk {
         Ok(profile)
     }
 
+    // The recursion through plain groups is the deep one (usvg allows 1,000+ levels), so only small
+    // functions sit on it; everything with many locals is kept off it with `inline(never)`.
     fn node(&mut self, node: &usvg::Node, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
         self.visited += 1;
         if self.visited > MAX_NODES {
             return Err(Refusal { complex: true, message: format!("the drawing has more than {MAX_NODES} elements to check") });
         }
         match node {
+            usvg::Node::Group(g) if !g.should_isolate() => self.plain(g, ts, cx),
             usvg::Node::Group(g) => self.group(g, ts, cx),
             usvg::Node::Text(t) => self.group(t.flattened(), ts, cx),
-            usvg::Node::Path(p) if p.is_visible() => {
-                let mut profile = Profile::default();
-                for paint in p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint())) {
-                    if let usvg::Paint::Pattern(pattern) = paint {
-                        profile = profile.max(self.pattern(pattern, ts, cx)?);
-                    }
-                }
-                Ok(profile)
-            }
-            usvg::Node::Path(_) => Ok(Profile::default()),
-            // resvg draws an embedded SVG on a pixmap the size of the current one, with its own 5 × 5 clamp.
-            usvg::Node::Image(image) => {
-                let usvg::ImageKind::SVG(tree) = image.kind() else { return Ok(Profile::default()) };
-                if cx.images >= MAX_IMAGE_DEPTH {
-                    return Err(limit("embedded SVG images are nested too deeply", MAX_IMAGE_DEPTH));
-                }
-                let bytes = cx.layer * 4.0;
-                need(cx.live + bytes, || "an embedded SVG image".to_string())?;
-                let nested = Cx { live: cx.live + bytes, cap: 25.0 * cx.layer, depth: cx.depth + 1, images: cx.images + 1, nest: cx.nest + 1, ..cx };
-                deeper(nested)?;
-                let inside = self.nodes(tree.root().children(), ts, nested)?;
-                Ok(Profile { extra: bytes, ..Profile::default() }.max(inside.under(bytes, [1, 0, 1, 1])))
+            usvg::Node::Path(p) => self.path(p, ts, cx),
+            usvg::Node::Image(image) => self.image(image, ts, cx),
+        }
+    }
+
+    /// A plain group is no layer.
+    fn plain(&mut self, g: &usvg::Group, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        if cx.nest >= MAX_NEST {
+            return Err(limit("groups are nested too deeply", MAX_NEST));
+        }
+        let inside = self.nodes(g.children(), ts.pre_concat(g.transform()), Cx { nest: cx.nest + 1, ..cx })?;
+        Ok(inside.under(0.0, [0, 0, 0, 1]))
+    }
+
+    #[inline(never)]
+    fn path(&mut self, p: &usvg::Path, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        let mut profile = Profile::default();
+        if !p.is_visible() {
+            return Ok(profile);
+        }
+        for paint in p.fill().map(|f| f.paint()).into_iter().chain(p.stroke().map(|s| s.paint())) {
+            if let usvg::Paint::Pattern(pattern) = paint {
+                profile = profile.max(self.pattern(pattern, ts, cx)?);
             }
         }
+        Ok(profile)
+    }
+
+    /// resvg draws an embedded SVG on a pixmap the size of the current one, with its own 5 × 5 clamp.
+    #[inline(never)]
+    fn image(&mut self, image: &usvg::Image, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        let usvg::ImageKind::SVG(tree) = image.kind() else { return Ok(Profile::default()) };
+        if cx.images >= MAX_IMAGE_DEPTH {
+            return Err(limit("embedded SVG images are nested too deeply", MAX_IMAGE_DEPTH));
+        }
+        let bytes = cx.layer * 4.0;
+        need(cx.live + bytes, || "an embedded SVG image".to_string())?;
+        let nested = Cx { live: cx.live + bytes, cap: 25.0 * cx.layer, depth: cx.depth + 1, images: cx.images + 1, nest: cx.nest + 1, ..cx };
+        deeper(nested)?;
+        let inside = self.nodes(tree.root().children(), ts, nested)?;
+        Ok(Profile { extra: bytes, ..Profile::default() }.max(inside.under(bytes, [1, 0, 1, 1])))
     }
 
     /// Walk a definition shared by reference (pattern, mask, filter image) once per transform and
@@ -224,15 +244,14 @@ impl Walk {
         Ok(p)
     }
 
+    #[inline(never)]
     fn group(&mut self, g: &usvg::Group, ts: tiny_skia::Transform, cx: Cx) -> Result<Profile, Refusal> {
+        if !g.should_isolate() {
+            return self.plain(g, ts, cx);
+        }
         let ts = ts.pre_concat(g.transform());
         if cx.nest >= MAX_NEST {
             return Err(limit("groups are nested too deeply", MAX_NEST));
-        }
-        // A plain group is no layer.
-        if !g.should_isolate() {
-            let inside = self.nodes(g.children(), ts, Cx { nest: cx.nest + 1, ..cx })?;
-            return Ok(inside.under(0.0, [0, 0, 0, 1]));
         }
         let Some(bb) = g.layer_bounding_box().transform(ts) else { return Ok(Profile::default()) };
         let own = px((f64::from(bb.width()).ceil() + 4.0) * (f64::from(bb.height()).ceil() + 4.0)).min(cx.cap);
