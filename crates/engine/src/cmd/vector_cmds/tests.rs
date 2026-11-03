@@ -404,6 +404,58 @@ fn path_to_selection_matches_analytic_shape() {
 }
 
 #[test]
+fn path_to_shape_makes_a_shape_layer_from_the_work_path_in_one_step() {
+    let mut s = session(80, 80, 8);
+    let square = json!({"subpaths": [{"knots": [[10, 10], [50, 10], [50, 50], [10, 50]]}]});
+    s.execute("path.set", json!({"path": square})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let info = s.execute("path.toShape", json!({"fill": "#ff0000"})).unwrap();
+    let id = LayerId(info["layer"].as_u64().unwrap());
+    let d = doc(&s);
+    let LayerContent::Shape(sh) = &d.layer(id).unwrap().content else { panic!("not a shape layer") };
+    assert_eq!(sh.path.subpaths[0].knots.len(), 4);
+    assert_eq!(sh.fill, Some(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0))));
+    // The Work Path became the shape's path.
+    assert!(d.work_path.is_none());
+    assert_eq!(s.active().unwrap().active_layer, Some(id));
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    s.undo();
+    assert!(doc(&s).layer(id).is_none());
+    assert!(doc(&s).work_path.is_some());
+}
+
+#[test]
+fn path_to_shape_keeps_a_saved_path() {
+    let mut s = session(80, 80, 8);
+    let tri = json!({"subpaths": [{"knots": [[10, 10], [50, 10], [30, 50]]}]});
+    s.execute("path.set", json!({"name": "Tri", "path": tri})).unwrap();
+    let info = s.execute("path.toShape", json!({"name": "Tri", "layerName": "Roof"})).unwrap();
+    assert_eq!(info["name"], "Roof");
+    assert_eq!(doc(&s).paths[0].name, "Tri");
+}
+
+#[test]
+fn path_to_shape_rejects_bad_input_without_changing_history() {
+    let mut s = session(80, 80, 8);
+    assert!(s.execute("path.toShape", json!({})).is_err(), "no path");
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"name": "missing"}),
+        json!({"fill": "not a colour"}),
+        json!({"fill": 42}),
+        json!({"stroke": {"width": -1}}),
+        json!({"stroke": {"width": 1e100}}),
+        json!({"stroke": true}),
+    ] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "accepted {p}");
+        assert_eq!(*doc(&s), before, "{p} modified the document");
+        assert_eq!(s.active().unwrap().history.past_len(), history, "{p} changed history");
+    }
+}
+
+#[test]
 fn path_make_selection_rejects_invalid_options_without_changing_history() {
     let mut s = session(80, 80, 8);
     s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60], [12, 60]]}]}})).unwrap();

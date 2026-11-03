@@ -424,16 +424,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let l = live_from_params(CMD, kind, p, None)?;
         (vector::shapes::live_path(&l), Some(l))
     };
-    let fg = s.tools.foreground;
-    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-    let fill = match p.get("fill") {
-        Some(v) => parse_fill(v).map_err(|e| bad(CMD, e))?,
-        None => Some(Fill::Solid(fgc)),
-    };
-    let stroke = match p.get("stroke") {
-        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(CMD, e))?,
-        None => None,
-    };
+    let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
@@ -457,6 +448,49 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
         let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
+        *active = Some(id);
+        Ok(id)
+    })?;
+    shape_info(s, id)
+}
+
+/// A new shape layer's `fill` (default the foreground colour) and `stroke` (default none).
+fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, Option<photocraft_doc::ShapeStroke>)> {
+    let fg = s.tools.foreground;
+    let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    let fill = match p.get("fill") {
+        Some(v) => parse_fill(v).map_err(|e| bad(cmd, e))?,
+        None => Some(Fill::Solid(fgc)),
+    };
+    let stroke = match p.get("stroke") {
+        Some(v) => parse_stroke(v, None, fgc).map_err(|e| bad(cmd, e))?,
+        None => None,
+    };
+    Ok((fill, stroke))
+}
+
+/// The Pen options bar's Make: Shape: a new shape layer from the work path or a saved path, as one
+/// History step. The Work Path becomes the shape's path, so it is gone afterwards; a saved path
+/// stays. With no work path, `"work"` takes the active layer's path, as the other path commands do.
+pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.toShape";
+    let name = p.get("name").and_then(Value::as_str);
+    let path = super::resolve_path(s, name)?;
+    if path.subpaths.iter().all(|sp| sp.knots.is_empty()) {
+        return Err(bad(CMD, "the path is empty"));
+    }
+    let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
+    vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let layer_name = p.get("layerName").and_then(Value::as_str).map(str::to_string);
+    let consume_work = super::is_work(name);
+    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let id = s.edit("New Shape Layer", |doc, active| {
+        refresh_shape(doc, &mut sh);
+        let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
+        let id = crate::layer_place::insert_new(doc, *active, Layer::new(name, LayerContent::Shape(sh)), crate::layer_place::Place::AutoEditable);
+        if consume_work {
+            doc.work_path = None;
+        }
         *active = Some(id);
         Ok(id)
     })?;
