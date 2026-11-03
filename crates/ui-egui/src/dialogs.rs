@@ -392,6 +392,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
 
 /// A filter-style dialog: scrolling parameters with the in-dialog preview window under them.
 fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) {
+    crate::filter_dialog::refresh_match_color_sources(&app.session, fields);
     // Color Settings: the monitor profile in use can change while it is open.
     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
@@ -897,7 +898,8 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
-fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+fn confirm_generic_command(app: &mut PhotocraftApp, mut d: Dialog) -> Result<Value, String> {
+    crate::filter_dialog::refresh_match_color_sources(&app.session, &mut d.fields);
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);

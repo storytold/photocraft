@@ -270,6 +270,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
     let stale = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -323,6 +324,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
@@ -471,6 +473,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
     let key = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: Vec::new(),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
