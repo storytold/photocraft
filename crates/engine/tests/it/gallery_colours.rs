@@ -42,7 +42,7 @@ fn stamp_uses_only_the_selected_colors() {
                 s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth, "background": "#808080"})).unwrap();
                 s.execute("tools.setColors", json!({"foreground": fg, "background": bg})).unwrap();
                 s.execute("filter.gallery.stamp", json!({"lightDarkBalance": 25, "smoothness": smoothness})).unwrap();
-                for p in image(&mut s).chunks_exact(4) {
+                for p in image(&mut s).as_chunks::<4>().0 {
                     assert!(p[..3] == ink || p[..3] == paper, "{depth}-bit, smoothness {smoothness}: Stamp added an intermediate color: {p:?}");
                     assert_eq!(p[3], 1.0);
                 }
@@ -88,7 +88,7 @@ fn stamp_smoothness_changes_spatial_detail() {
         let fine = render(1);
         let smooth = render(50);
         assert_ne!(fine, smooth, "{depth}-bit: Smoothness must change the spatial result");
-        for p in fine.chunks_exact(4).chain(smooth.chunks_exact(4)) {
+        for p in fine.as_chunks::<4>().0.iter().chain(smooth.as_chunks::<4>().0.iter()) {
             assert!(p[..3] == [0.0; 3] || p[..3] == [1.0; 3]);
         }
     }
