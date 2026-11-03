@@ -50,6 +50,9 @@ pub struct DocIndex {
 pub struct OpenParams {
     /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
+    /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
+    #[serde(default)]
+    pub approve_high_memory: bool,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -69,6 +72,23 @@ pub struct PlaceParams {
     /// Centre of the placed layer, in document pixels.
     #[serde(default)]
     pub center: Option<[f64; 2]>,
+    /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
+    #[serde(default)]
+    pub approve_high_memory: bool,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceSmartObjectParams {
+    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
+    pub path: String,
+    /// Headless mode only: document index from `session_list` (default: the active document).
+    /// Bridge mode rejects `index`.
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// The Smart Object layer: an id or a name (default: the active layer).
+    #[serde(default)]
+    pub layer: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -163,6 +183,17 @@ pub struct SaveParams {
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
     #[serde(default, rename = "tiffLayers")]
     pub tiff_layers: bool,
+    /// TIFF: image compression, "none" (the default), "lzw" or "zip".
+    #[serde(default, rename = "tiffCompression")]
+    pub tiff_compression: Option<String>,
+    /// TIFF: Save Transparency. On keeps the transparency, ahead of any alpha or spot channels;
+    /// off composites the image over white. Unset: kept unless the document has alpha or spot
+    /// channels.
+    #[serde(default, rename = "tiffTransparency")]
+    pub tiff_transparency: Option<bool>,
+    /// TIFF: Save Image Pyramid, half-size copies after the full image.
+    #[serde(default, rename = "tiffPyramid")]
+    pub tiff_pyramid: bool,
     /// TGA: 24 or 32 bits per pixel. 32 writes the alpha channel (or else the transparency) as the
     /// alpha, 24 none. Unset: 32 with an alpha channel or transparency, else 24.
     #[serde(default, rename = "tgaBits")]
@@ -170,6 +201,17 @@ pub struct SaveParams {
     /// DPX: 8, 10, 12 or 16 bits per sample. Unset: 8 for an 8-bit document, else 16.
     #[serde(default, rename = "dpxBits")]
     pub dpx_bits: Option<u8>,
+    /// DDS: "none" (uncompressed, the default), "bc1" (DXT1: alpha on or off), "bc2" (DXT3) or
+    /// "bc3" (DXT5).
+    #[serde(default, rename = "ddsCompression")]
+    pub dds_compression: Option<String>,
+    /// DDS: also write the full mip chain, each level a box filter of the one above.
+    #[serde(default, rename = "ddsMipmaps")]
+    pub dds_mipmaps: bool,
+    /// .pcraft: request the flattened document at its canvas size as `composite/full.png`.
+    /// The save may omit it; check the manifest's `full_composite` member. Off by default.
+    #[serde(default, rename = "pcraftFullComposite")]
+    pub pcraft_full_composite: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -308,7 +350,7 @@ pub struct MenuParams {
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
-    /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
+    /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
     /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
@@ -321,7 +363,9 @@ pub struct UiSetParams {
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
     /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100),
     /// auto_adjust, classic_mode and auto_center_preview), cropFill (background or contentAware,
-    /// the Crop tool's Fill), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// the Crop tool's Fill), penMode (path or shape, the Pen tools' mode), penPathOp (newLayer,
+    /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
+    /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
     /// `shape.edit` names and units; colour comes from `tools.setColors`. camTransformOnDrop (bool,
     /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
@@ -329,7 +373,14 @@ pub struct UiSetParams {
     /// "mode"), kinds (a list of layer kinds), name (matches part of the layer name) and mode (a
     /// blend mode name) for the Layers panel filter). strokeTrace (true, false, "stderr" or "off":
     /// the stroke latency trace at runtime; a CSV file is set at launch with --stroke-trace, not
-    /// over this channel). Other fields are an error.
+    /// over this channel). updatesOpen (bool, the Help › Check for Updates window).
+    /// histogramPanel (an object patching view ("compact", "expanded" or "allChannels"), channel
+    /// ("composite", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "a", "b",
+    /// "luminosity" or "colors"), showChannelsInColor, showStatistics and source ("entireImage",
+    /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
+    /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
+    /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
+    /// `histogram`. Other fields are an error.
     pub fields: Value,
 }
 
@@ -405,6 +456,14 @@ fn strict_node(v: &mut Value, defs: &serde_json::Map<String, Value>, depth: usiz
     }
 }
 
+/// Both the bare engine list and older bridge wrappers own their rows already.
+fn into_command_rows(mut reply: Value) -> Vec<Value> {
+    match reply {
+        Value::Array(rows) => rows,
+        _ => reply.get_mut("commands").and_then(Value::as_array_mut).map(std::mem::take).unwrap_or_default(),
+    }
+}
+
 fn ok_json(v: &Value) -> CallToolResult {
     let text = match json_bytes(v).and_then(|bytes| String::from_utf8(bytes).map_err(|error| AutomationError::Other(error.to_string()))) {
         Ok(text) => text,
@@ -442,11 +501,62 @@ fn png_result(png: &[u8], note: String) -> CallToolResult {
     bounded_tool_result(CallToolResult::success(vec![Content::image(b64, "image/png"), Content::text(note)]))
 }
 
+/// Adds the typed byte counts of a memory refusal to an error object: an approval request keeps
+/// its soft limit, hard limit and (when known) capacity; a hard refusal keeps only its required
+/// and hard amounts, because no approval can raise that ceiling.
+fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
+    let Some(obj) = obj.as_object_mut() else { return };
+    match err {
+        AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram })
+        | AutomationError::Engine(photocraft_engine::EngineError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram, .. }) => {
+            obj.insert("required".into(), json!(required));
+            obj.insert("soft".into(), json!(soft_limit));
+            obj.insert("softLimit".into(), json!(soft_limit));
+            obj.insert("hard".into(), json!(hard_limit));
+            obj.insert("hardLimit".into(), json!(hard_limit));
+            if let Some(avail) = available_ram {
+                obj.insert("available".into(), json!(avail));
+                obj.insert("availableRam".into(), json!(avail));
+            }
+        }
+        AutomationError::Import(photocraft_io::IoError::PsdImportBudget { required, limit })
+        | AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required, limit, .. }) => {
+            obj.insert("required".into(), json!(required));
+            obj.insert("hard".into(), json!(limit));
+            obj.insert("hardLimit".into(), json!(limit));
+        }
+        _ => {}
+    }
+}
+
 fn to_result(r: Result<Value, AutomationError>) -> Result<CallToolResult, McpError> {
     Ok(match r {
         Ok(v) => ok_json(&v),
-        Err(e) => fail(e),
+        Err(e) => {
+            let mut obj = json!({"error": e.to_string()});
+            attach_memory_error_details(&mut obj, &e);
+            let text = serde_json::to_string(&obj).unwrap_or_else(|_| e.to_string());
+            CallToolResult::error(vec![Content::text(text)])
+        }
     })
+}
+
+/// A `doc_place` call's command options, including the explicit high-memory approval.
+fn place_options(p: &PlaceParams) -> Value {
+    let mut opts = serde_json::Map::new();
+    if let Some(v) = p.scale {
+        opts.insert("scale".into(), json!(v));
+    }
+    if let Some(v) = p.fit {
+        opts.insert("fit".into(), json!(v));
+    }
+    if let Some(v) = p.center {
+        opts.insert("center".into(), json!(v));
+    }
+    if p.approve_high_memory {
+        opts.insert("approveHighMemory".into(), json!(true));
+    }
+    Value::Object(opts)
 }
 
 fn bridge_only(name: &str) -> Result<CallToolResult, McpError> {
@@ -593,30 +703,25 @@ impl PhotocraftMcp {
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        if let Some(r) = self.headless_op(move |h| h.open(&path)).await {
+        let approve = p.approve_high_memory;
+        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        to_result(b.call("app.open", json!({"path": p.path})).await)
+        let mut params = json!({"path": p.path});
+        if approve {
+            params["approveHighMemory"] = json!(true);
+        }
+        to_result(b.call("app.open", params).await)
     }
 
     #[tool(
-        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit` and `center` are the command's own."
+        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit`, `center` and `approve_high_memory` (one-shot PSD/PSB consent, default false) are the command's own."
     )]
     async fn doc_place(&self, Parameters(p): Parameters<PlaceParams>) -> Result<CallToolResult, McpError> {
-        let mut opts = serde_json::Map::new();
-        if let Some(v) = p.scale {
-            opts.insert("scale".into(), json!(v));
-        }
-        if let Some(v) = p.fit {
-            opts.insert("fit".into(), json!(v));
-        }
-        if let Some(v) = p.center {
-            opts.insert("center".into(), json!(v));
-        }
-        let opts = Value::Object(opts);
+        let opts = place_options(&p);
         // Bridge mode runs the app on this machine, which reads the path itself like any command.
         let mut bridge_params = opts.clone();
         if let Some(o) = bridge_params.as_object_mut() {
@@ -630,7 +735,33 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Export each exported layer of the document as its own file beneath the write root (the capability-scoped Layers to Files). A file that already exists is an error, not an overwrite."
+        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer)."
+    )]
+    async fn doc_replace_smart_object(&self, Parameters(p): Parameters<ReplaceSmartObjectParams>) -> Result<CallToolResult, McpError> {
+        let mut opts = serde_json::Map::new();
+        if let Some(v) = p.layer {
+            opts.insert("layer".into(), v);
+        }
+        let opts = Value::Object(opts);
+        // Bridge mode runs the app on this machine, which reads the path itself like any command.
+        let mut bridge_params = opts.clone();
+        if let Some(o) = bridge_params.as_object_mut() {
+            o.insert("path".into(), Value::String(p.path.clone()));
+        }
+        let (path, index) = (p.path, p.index);
+        if let Some(r) = self.headless_op(move |h| h.replace_smart_object(index, &path, &opts)).await {
+            return to_result(r);
+        }
+        // The app's command runs on its active document: an `index` it cannot honour is refused
+        // rather than dropped, or another document's contents would be replaced.
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; in bridge mode select the document in the app first"));
+        }
+        self.run_command("layer.smartObjects.replaceContents".into(), bridge_params, true).await
+    }
+
+    #[tool(
+        description = "Export top-level layers as files (groups merged). Returns files and skipped: [{layer, name, reason}] for hidden layers (visible_only) and adjustments with no pixels of their own. Workspace exports resolve beneath the write root, also return count of written files, and reject existing files instead of overwriting them. Trusted-local/bridge exports use the engine command's file access policy."
     )]
     async fn doc_export_layers(&self, Parameters(p): Parameters<ExportLayersParams>) -> Result<CallToolResult, McpError> {
         let mut opts = serde_json::Map::new();
@@ -728,7 +859,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. Returns warnings about anything the format cannot hold.")]
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own         file. `pcraftFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -820,10 +951,7 @@ impl PhotocraftMcp {
         };
         let needle = p.filter.map(|f| f.to_lowercase());
         let enabled_only = p.enabled_only.unwrap_or(false);
-        let items: Vec<Value> = all
-            .as_array()
-            .cloned()
-            .unwrap_or_else(|| all.get("commands").and_then(Value::as_array).cloned().unwrap_or_default())
+        let items: Vec<Value> = into_command_rows(all)
             .into_iter()
             .filter(|c| {
                 needle.as_ref().is_none_or(|n| photocraft_engine::commands::list_entry_matches(c, n))
@@ -878,7 +1006,11 @@ impl PhotocraftMcp {
             let was_error = response.is_err();
             let result = match response {
                 Ok(value) => json!({"ok": true, "result": value}),
-                Err(error) => json!({"ok": false, "error": error.to_string()}),
+                Err(error) => {
+                    let mut obj = json!({"ok": false, "error": error.to_string()});
+                    attach_memory_error_details(&mut obj, &error);
+                    obj
+                }
             };
             if let Err(error) = reply_budget.charge(&result) {
                 failed += 1;
@@ -1001,15 +1133,29 @@ impl PhotocraftMcp {
             Some((_, Some(bits))) => Some(bits),
             Some((b, None)) => return Ok(fail(format!("`dpxBits` must be 8, 10, 12 or 16, got {b}"))),
         };
+        let tiff_compression = match photocraft_engine::file_cmds::tiff_compression_param(&json!({"tiffCompression": p.tiff_compression}), "save") {
+            Ok(c) => c,
+            Err(e) => return Ok(fail(e.to_string())),
+        };
+        if let Some(q) = p.quality.filter(|q| !(1..=100).contains(q)) {
+            return Ok(fail(format!("`quality` must be a whole number from 1 to 100, got {q}")));
+        }
+        let dds_compression = match p.dds_compression.as_deref().map(|c| (c, photocraft_io::DdsCompression::from_name(c))) {
+            None => None,
+            Some((_, Some(c))) => Some(c),
+            Some((c, None)) => return Ok(fail(format!("`ddsCompression` must be none, bc1, bc2 or bc3, got {c:?}"))),
+        };
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
-            // does) and the Targa bits, so the other options are headless-only. Saying so beats
-            // saving with defaults while the caller believes their quality or format was applied.
+            // does), the Targa bits, the DDS options and the TIFF compression, transparency and
+            // pyramid, so the other options are headless-only. Saying so beats saving with
+            // defaults while the caller believes their quality or format was applied.
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
                 p.tiff_layers.then_some("tiffLayers"),
+                p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
                 p.index.is_some().then_some("index"),
             ]
@@ -1026,15 +1172,42 @@ impl PhotocraftMcp {
             if let Some(bits) = tga_bits {
                 params["tgaBits"] = json!(bits.bits());
             }
+            if let Some(c) = dds_compression {
+                params["ddsCompression"] = json!(c.name());
+            }
+            if p.dds_mipmaps {
+                params["ddsMipmaps"] = json!(true);
+            }
+            // The app's TIFF Options answer, as its Save As takes it.
+            if let Some(c) = &p.tiff_compression {
+                params["tiffCompression"] = json!(c);
+            }
+            if let Some(t) = p.tiff_transparency {
+                params["tiffTransparency"] = json!(t);
+            }
+            if p.tiff_pyramid {
+                params["tiffPyramid"] = json!(true);
+            }
             return to_result(b.call("app.save", params).await);
         }
         let Some(r) = self
             .headless_op(move |h| {
-                let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, tga_bits, ..Default::default() };
+                let mut opts = photocraft_io::ExportOptions {
+                    tiff_layers: p.tiff_layers,
+                    tiff_transparency: p.tiff_transparency,
+                    tga_bits,
+                    pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
+                    ..Default::default()
+                };
                 opts.encode.dpx_bits = dpx_bits;
+                if let Some(c) = tiff_compression {
+                    opts.encode.tiff_compression = c;
+                }
+                opts.encode.tiff_pyramid = p.tiff_pyramid;
+                opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
                 if let Some(q) = p.quality {
-                    opts.encode.jpeg_quality = q.clamp(1, 100);
-                    opts.encode.webp_quality = q.clamp(1, 100);
+                    opts.encode.jpeg_quality = q;
+                    opts.encode.webp_quality = q;
                     opts.encode.webp_lossless = false;
                 }
                 let path = p.path.map(PathBuf::from);
@@ -1060,6 +1233,29 @@ pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_rows_keep_bare_and_wrapped_replies_compatible() {
+        let rows = json!([{"id":"first","params":{"nested":[1,2]}}, {"id":"second","enabled":false}]);
+        assert_eq!(into_command_rows(rows.clone()), rows.as_array().unwrap().clone());
+        assert_eq!(into_command_rows(json!({"commands":rows,"other":"ignored"})), rows.as_array().unwrap().clone());
+        for reply in [json!(null), json!(false), json!(3), json!("invalid"), json!({}), json!({"commands":null}), json!({"commands":{}}), json!([])] {
+            assert!(into_command_rows(reply).is_empty());
+        }
+    }
+
+    #[test]
+    fn command_rows_reuse_the_owned_array_and_nested_strings() {
+        for wrapped in [false, true] {
+            let rows = json!([{"id":"first","params":"documentation".repeat(64)}]);
+            let array = rows.as_array().unwrap().as_ptr();
+            let text = rows[0]["params"].as_str().unwrap().as_ptr();
+            let reply = if wrapped { Value::Object([("commands".into(), rows)].into_iter().collect()) } else { rows };
+            let moved = into_command_rows(reply);
+            assert_eq!(moved.as_ptr(), array, "wrapped={wrapped}: move the original allocation");
+            assert_eq!(moved[0]["params"].as_str().unwrap().as_ptr(), text, "wrapped={wrapped}: retain nested allocations");
+        }
+    }
 
     #[test]
     fn strict_schema_inlines_refs_and_stops_on_recursive_definitions() {
@@ -1156,6 +1352,66 @@ mod tests {
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_doc_open_schema_and_structured_error() {
+        let schema = &PhotocraftMcp::tool_router().map["doc_open"].attr.input_schema;
+        assert_eq!(schema["properties"]["approve_high_memory"]["type"], "boolean");
+        let omitted: OpenParams = serde_json::from_value(json!({"path": "file.psd"})).unwrap();
+        assert!(!omitted.approve_high_memory);
+        let approved: OpenParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
+        assert!(approved.approve_high_memory);
+        for invalid in [Value::Null, json!("true"), json!(1)] {
+            assert!(serde_json::from_value::<OpenParams>(json!({"path": "file.psd", "approve_high_memory": invalid})).is_err());
+        }
+
+        let err = AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired {
+            required: 6000,
+            soft_limit: 3000,
+            hard_limit: 9000,
+            available_ram: Some(12000),
+        });
+        let res = to_result(Err(err)).unwrap();
+        assert_eq!(res.is_error, Some(true));
+        let text = &res.content.first().and_then(|c| c.as_text()).unwrap().text;
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["required"], 6000);
+        assert_eq!(v["soft"], 3000);
+        assert_eq!(v["hard"], 9000);
+        assert_eq!(v["available"], 12000);
+    }
+
+    /// #10897: the MCP `doc_place` tool takes the same strict, defaulted approval as `doc_open`
+    /// and forwards it as the command's `approveHighMemory` option. A hard refusal keeps its
+    /// typed `required`/`hardLimit` fields and claims nothing about a soft limit or capacity.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_doc_place_schema_approval_and_structured_hard_error() {
+        let schema = &PhotocraftMcp::tool_router().map["doc_place"].attr.input_schema;
+        assert_eq!(schema["properties"]["approve_high_memory"]["type"], "boolean");
+        let omitted: PlaceParams = serde_json::from_value(json!({"path": "file.psd"})).unwrap();
+        assert!(!omitted.approve_high_memory);
+        assert!(place_options(&omitted).get("approveHighMemory").is_none(), "false is not forwarded");
+        let approved: PlaceParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
+        assert!(approved.approve_high_memory);
+        assert_eq!(place_options(&approved)["approveHighMemory"], true);
+        let explicit_false: PlaceParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": false})).unwrap();
+        assert!(!explicit_false.approve_high_memory);
+        for invalid in [Value::Null, json!("true"), json!(1)] {
+            assert!(serde_json::from_value::<PlaceParams>(json!({"path": "file.psd", "approve_high_memory": invalid})).is_err(), "{invalid}");
+        }
+
+        let err = AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { name: "huge.psd".into(), required: 9_000, limit: 8_000 });
+        let res = to_result(Err(err)).unwrap();
+        assert_eq!(res.is_error, Some(true));
+        let text = &res.content.first().and_then(|c| c.as_text()).unwrap().text;
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["required"], 9_000);
+        assert_eq!(v["hard"], 8_000);
+        assert_eq!(v["hardLimit"], 8_000);
+        for absent in ["soft", "softLimit", "available", "availableRam"] {
+            assert!(v.get(absent).is_none(), "a hard refusal has no {absent}: {v}");
+        }
+    }
+
     /// The MCP server applies finished jobs before every tool call too (#503).
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_tools_see_a_finished_background_job() {
@@ -1175,7 +1431,7 @@ mod tests {
                 break;
             }
             assert!(t.elapsed().as_secs() < 60, "doc_inspect never saw the finished job: {inspected}");
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     }
 }

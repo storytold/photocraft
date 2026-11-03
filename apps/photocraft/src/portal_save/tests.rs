@@ -36,17 +36,22 @@ fn mock_portal(script: Script) -> Option<(zbus::blocking::Connection, Seen, std:
 /// once the user is done with it (here after 300 ms).
 fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
     use std::io::BufRead;
+    let spawns = crate::CHILD_SPAWNS.read().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut daemon =
         std::process::Command::new("dbus-daemon").args(["--session", "--nofork", "--print-address=1"]).stdout(std::process::Stdio::piped()).spawn().ok()?;
+    drop(spawns);
     let mut address = String::new();
     std::io::BufReader::new(daemon.stdout.take()?).read_line(&mut address).ok()?;
     let address = address.trim().to_string();
     let server = zbus::blocking::connection::Builder::address(address.as_str()).unwrap().name("org.freedesktop.portal.Desktop").unwrap().build().unwrap();
     let seen: Seen = Arc::default();
     let log = seen.clone();
+    // A stream only gets the messages that arrive after it exists: made in the thread, it could
+    // miss a `SaveFile` sent before the thread got going, and the call would wait forever.
+    let messages = zbus::blocking::MessageIterator::from(&server);
     std::thread::spawn(move || {
         let mut script = script.into_iter();
-        for msg in zbus::blocking::MessageIterator::from(&server) {
+        for msg in messages {
             let Ok(msg) = msg else { break };
             let header = msg.header();
             if header.message_type() != zbus::message::Type::MethodCall || header.member().map(|m| m.as_str()) != Some("SaveFile") {
@@ -229,4 +234,34 @@ fn a_single_file_type_keeps_the_typed_extension() {
     let req = SaveRequest { filters: vec![("Color Swatches".into(), vec!["aco".into()])], ..request("Swatches.aco") };
     assert_eq!(save_as(&conn, req).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.ase")));
     daemon.kill().ok();
+}
+
+/// The same single type, with the name left as the dialog shows it: the bare stem comes back, and
+/// that one type gives it its extension instead of a file named `Swatches` being written.
+#[test]
+fn a_single_file_type_gives_the_bare_name_its_extension() {
+    let typed: &'static str = "file:///tmp/photocraft-none/Swatches";
+    let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some((typed, "Color Swatches")))]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    let req = SaveRequest { filters: vec![("Color Swatches".into(), vec!["aco".into()])], ..request("Swatches.aco") };
+    assert_eq!(save_as(&conn, req).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.aco")));
+    daemon.kill().ok();
+}
+
+/// Which type's extensions the returned name gets. The portal cases above need a `dbus-daemon`,
+/// so the rule itself is checked here too, which needs none.
+#[test]
+fn the_type_that_gives_the_extension_is_the_one_picked() {
+    let one: Vec<Filter> = vec![("Color Swatches".into(), vec!["aco".into()])];
+    // One type offered: the dialog reports no pick, and it was given the stem.
+    assert_eq!(chosen_type(&one, None), Some(0));
+    assert_eq!(chosen_type(&one, Some(0)), Some(0));
+    let many: Vec<Filter> = request("test").filters;
+    assert_eq!(chosen_type(&many, Some(1)), Some(1));
+    // Several types and no pick: nothing to add, as before.
+    assert_eq!(chosen_type(&many, None), None);
+    // An answer naming a type this dialog never offered is not a pick either.
+    assert_eq!(chosen_type(&many, Some(99)), None);
 }
