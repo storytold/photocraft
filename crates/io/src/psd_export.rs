@@ -195,7 +195,9 @@ impl Ex {
         (-1..self.cc as i16).map(|id| self.encode(id, &[], 0, 0)).collect()
     }
 
-    fn pixel_channels(&self, s: &Surface, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
+    /// `stored` is the rect the layer was read with (see `Layer::psd_rect`): kept while the
+    /// pixels fit inside it, so margins of untouched pixels aren't cropped on resave.
+    fn pixel_channels(&self, s: &Surface, stored: Option<photocraft_geom::Rect>, name: &str) -> (PsdRect, Vec<ChannelData>, Vec<String>) {
         let mut warnings = Vec::new();
         let s = if s.format() != self.fmt {
             warnings.push(format!("layer \"{name}\": pixels converted from {:?} to {:?}", s.format(), self.fmt));
@@ -203,14 +205,15 @@ impl Ex {
         } else {
             s.clone()
         };
-        let r = s.content_bounds();
-        if r.is_empty() {
+        let content = s.content_bounds();
+        if content.is_empty() {
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
         // A layer record is one dense rectangle, so a few pixels far apart make a box of mostly
         // nothing, gathered and then copied again. Past the cap the layer is saved empty, said so.
-        let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
-        if dense > MAX_LAYER_GATHER_BYTES {
+        let dense = |r: photocraft_geom::Rect| u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
+        let r = stored.filter(|k| k.contains_rect(&content) && dense(*k) <= MAX_LAYER_GATHER_BYTES).unwrap_or(content);
+        if dense(r) > MAX_LAYER_GATHER_BYTES {
             warnings.push(format!("layer \"{name}\" spans {}×{} px, too large to write: saved without its pixels", r.width(), r.height()));
             return (PsdRect::default(), self.empty_channels(), warnings);
         }
@@ -290,7 +293,7 @@ impl Ex {
     fn record(&mut self, l: &Layer, extra: Vec<TaggedBlock>, pixels: Option<&Surface>) -> LayerRecord {
         let id = self.layer_id(l);
         let (rect, mut channels, warnings) = match pixels {
-            Some(s) => self.pixel_channels(s, &l.name),
+            Some(s) => self.pixel_channels(s, l.psd_rect, &l.name),
             None => (PsdRect::default(), self.empty_channels(), Vec::new()),
         };
         self.warnings.extend(warnings);

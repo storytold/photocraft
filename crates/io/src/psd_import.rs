@@ -476,6 +476,8 @@ impl Ctx<'_> {
         // Blend If lives in the layer record's blending ranges.
         l.blend_if = crate::blocks::blend_if_from_ranges(&rec.blending_ranges);
         l.psd_id = rec.layer_id();
+        let r = rec.rect;
+        l.psd_rect = (!r.is_empty()).then(|| Rect::new(r.left, r.top, r.right, r.bottom));
         // The layer's XMP packet (`shmd` › `cust` › `layerXMP`) becomes the field; the rest of
         // `shmd` stays in `psd_blocks`, where export puts the packet back.
         if let Some(i) = l.psd_blocks.iter().position(|(k, _)| k == b"shmd")
