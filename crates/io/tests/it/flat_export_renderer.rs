@@ -152,41 +152,70 @@ fn single_layer_and_cmyk_exports_report_that_the_renderer_was_not_used() {
     );
 }
 
-#[test]
-fn fallback_warning_does_not_leak_into_the_next_export() {
-    struct FailOnceRenderer {
-        failed: bool,
-    }
-    impl BandRenderer for FailOnceRenderer {
-        fn render_bands(
-            &mut self,
-            doc: &Document,
-            rect: Rect,
-            band_rows: i32,
-            ctl: &Interrupt<'_>,
-            sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
-        ) -> Result<(), RenderError> {
-            if !self.failed {
-                self.failed = true;
-                return Err(RenderError::Device("forced device loss".into()));
-            }
-            let mut cpu = CpuRenderer;
-            cpu.render_bands(doc, rect, band_rows, ctl, sink)
+struct FailOnceDiagnosingRenderer {
+    failed: bool,
+    diagnostics: Vec<String>,
+}
+
+impl BandRenderer for FailOnceDiagnosingRenderer {
+    fn render_bands(
+        &mut self,
+        doc: &Document,
+        rect: Rect,
+        band_rows: i32,
+        ctl: &Interrupt<'_>,
+        sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
+    ) -> Result<(), RenderError> {
+        if !self.failed {
+            self.failed = true;
+            self.push_diagnostic("GPU readback error: forced device loss".into());
+            return Err(RenderError::Device("forced device loss".into()));
         }
+        let mut cpu = CpuRenderer;
+        cpu.render_bands(doc, rect, band_rows, ctl, sink)
     }
 
+    fn drain_diagnostics(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.diagnostics)
+    }
+
+    fn push_diagnostic(&mut self, diagnostic: String) {
+        self.diagnostics.push(diagnostic);
+    }
+}
+
+#[test]
+fn fallback_diagnostics_stay_with_the_failed_export() {
     let doc = synthetic_doc();
     let opts = ExportOptions::default();
-    let mut renderer = FailOnceRenderer { failed: false };
+    let mut renderer = FailOnceDiagnosingRenderer { failed: false, diagnostics: Vec::new() };
     let first = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("first export retries on CPU");
     assert!(first.warnings.iter().any(|w| w.contains("falling back to CPU")), "the failed export reports its fallback: {:?}", first.warnings);
+    assert!(
+        first.warnings.iter().any(|w| w.contains("GPU readback error")),
+        "the failed attempt's queued diagnostics belong to its retry result: {:?}",
+        first.warnings
+    );
 
     let second = export_flat_with_renderer(&doc, Format::Png, &opts, &Interrupt::NONE, Some(&mut renderer)).expect("second export uses the GPU path");
+    assert!(!second.warnings.iter().any(|w| w.contains("falling back to CPU")), "a fallback warning must not carry into a later export: {:?}", second.warnings);
     assert!(
-        !second.warnings.iter().any(|w| w.contains("falling back to CPU")),
-        "a fallback warning from an earlier export must not carry into a later successful one: {:?}",
+        !second.warnings.iter().any(|w| w.contains("GPU readback error")),
+        "queued diagnostics must not carry into a later successful export: {:?}",
         second.warnings
     );
+}
+
+#[test]
+fn failed_cpu_retry_leaves_queued_diagnostics_on_the_renderer() {
+    let doc = synthetic_doc();
+    let opts = ExportOptions::default();
+    let mut renderer = FailOnceDiagnosingRenderer { failed: false, diagnostics: Vec::new() };
+    let cancelled = Interrupt::cancel_only(&|| true);
+    let res = export_flat_with_renderer(&doc, Format::Png, &opts, &cancelled, Some(&mut renderer));
+    assert!(matches!(res, Err(IoError::Cancelled)), "the CPU retry must observe cancellation: {res:?}");
+    let diagnostics = renderer.drain_diagnostics();
+    assert!(diagnostics.iter().any(|d| d.contains("GPU readback error")), "diagnostics must stay queued when the retry also fails: {diagnostics:?}");
 }
 
 #[test]

@@ -68,7 +68,7 @@ fn bounded_readback_matches_independent_cpu_oracle() {
     assert_eq!(cpu_pixels.len(), gpu_banded.len());
     for (i, (c, g)) in cpu_pixels.iter().zip(&gpu_banded).enumerate() {
         for ch in 0..4 {
-            assert!((c[ch] - g[ch]).abs() < 2.0 / 255.0, "pixel {i} ch {ch} differs from CPU oracle: cpu={}, gpu={}", c[ch], g[ch]);
+            assert!((c[ch] - g[ch]).abs() <= 1.0 / 255.0, "pixel {i} ch {ch} differs from CPU oracle: cpu={}, gpu={}", c[ch], g[ch]);
         }
     }
 }
@@ -194,6 +194,23 @@ fn readback_honors_cancellation_before_waiting() {
 }
 
 #[test]
+fn readback_honors_cancellation_between_bands() {
+    let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
+    let doc = sample_doc(128, 128);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let is_cancelled = || cancel.load(std::sync::atomic::Ordering::SeqCst);
+    let cancelled = photocraft_raster::Interrupt::cancel_only(&is_cancelled);
+    let mut calls = 0usize;
+    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &cancelled, |_rect, _px| {
+        calls += 1;
+        cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok::<(), std::convert::Infallible>(())
+    });
+    assert!(matches!(res, Err(ReadbackError::Cancelled)), "cancellation set after the first band must stop the readback: {res:?}");
+    assert_eq!(calls, 1, "only the first band may be delivered");
+}
+
+#[test]
 fn bounded_readback_preserves_effect_halos_across_seams() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
     let (w, h) = (256, 256);
@@ -251,16 +268,19 @@ fn bounded_readback_preserves_effect_halos_across_seams() {
 }
 
 #[test]
-fn float_documents_are_rejected_before_readback() {
+fn high_depth_documents_are_rejected_before_readback() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
-    let doc = Document::with_background("f32", Size::new(64, 64), ColorMode::Rgb, SampleType::F32, Color::WHITE);
-    let mut called = false;
-    let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_rect, _px| {
-        called = true;
-        Ok::<(), std::convert::Infallible>(())
-    });
-    assert!(matches!(res, Err(ReadbackError::Unsupported(_))), "F32 must be rejected before readback: {res:?}");
-    assert!(!called, "no band may be read for a 32-bit float document");
+    // Half-precision uploads cannot preserve 16-bit samples, so U16 joins F32 on the CPU path.
+    for depth in [SampleType::U16, SampleType::F32] {
+        let doc = Document::with_background("high_depth", Size::new(64, 64), ColorMode::Rgb, depth, Color::WHITE);
+        let mut called = false;
+        let res = render_bands(&mut comp, ctx.device(), ctx.queue(), &doc, doc.bounds(), 16, 64 * 1024, &photocraft_raster::Interrupt::NONE, |_rect, _px| {
+            called = true;
+            Ok::<(), std::convert::Infallible>(())
+        });
+        assert!(matches!(res, Err(ReadbackError::Unsupported(_))), "{depth:?} must be rejected before readback: {res:?}");
+        assert!(!called, "no band may be read for a {depth:?} document");
+    }
 }
 
 #[test]

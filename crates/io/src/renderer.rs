@@ -114,6 +114,11 @@ impl BandRenderer for CpuRenderer {
         sink: &mut dyn FnMut(RenderBand) -> Result<(), IoError>,
     ) -> Result<(), RenderError> {
         ctl.check().map_err(|_| RenderError::Cancelled)?;
-        photocraft_compose::render_bands(doc, rect, band_rows, |buf| sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })).map_err(RenderError::sink)
+        photocraft_compose::render_bands(doc, rect, band_rows, |buf| {
+            // Stop at the next band when the sink cancels, instead of composing the whole canvas.
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            sink(RenderBand { rect: buf.rect, pixels: buf.into_px() })
+        })
+        .map_err(RenderError::sink)
     }
 }

@@ -161,12 +161,15 @@ pub fn save_bytes_with_renderer(
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{name}`; pass a format")))?;
     if ext == photocraft_format::EXTENSION {
         let named = named_for_output(doc, name);
+        // Encode before draining: if the options check or the encode fails, the queued
+        // diagnostics stay with the renderer for the caller to report alongside the error.
+        let bytes = photocraft_format::save_to_bytes(&named, &native_options(&named, opts)?)?;
         let mut warnings = Vec::new();
         if let Some(r) = renderer {
             warnings.push("native .pcraft format uses CPU compositor for previews".into());
             warnings.extend(r.drain_diagnostics());
         }
-        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts)?)?, warnings));
+        return Ok((bytes, warnings));
     }
     let result = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     Ok((result.bytes, result.warnings))
