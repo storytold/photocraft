@@ -1,16 +1,53 @@
-//! Bounded stored effect records; execution follows in later slices.
+//! Stored configuration translated once into ordinary native data.
+
+use photocraft_doc::SmartFilter;
+
+mod color;
 
 mod config;
 
+mod core_composites;
+
+mod curves_and_quantization;
+
 mod envelope;
 
+mod residual_spatial;
+
+mod residual_tone;
+
+mod residual_transform;
+
 mod resources;
+
+mod schema;
+
+mod spatial;
+
+mod tone;
 
 pub(super) use config::parse_config;
 
 pub(super) use envelope::{decode, read_pointers};
 
 pub(super) use resources::literal_rgb;
+
+/// Owner-local geometry after native embedding, and the native document policy.
+pub(super) struct MappingContext<'a> {
+    pub mode: photocraft_color::ColorMode,
+    pub linear: bool,
+    pub owner_bounds: photocraft_geom::Rect,
+    /// Bounds the native filter evaluates, after any ordinary owner-local embedding.
+    pub native_filter_bounds: photocraft_geom::Rect,
+    pub target_profile: Option<std::sync::Arc<Vec<u8>>>,
+    /// Resolution of the actual native construction frame, for pixel-to-point type.
+    pub resolution_dpi: f32,
+    /// Existing import allowance remaining before any generated resource allocation.
+    pub remaining_generation_bytes: usize,
+    /// Existing copied/native parameter allowance, before encoding generated resources.
+    pub remaining_metadata_bytes: usize,
+    pub interrupt: photocraft_raster::Interrupt<'a>,
+}
 
 /// One parsed effect; file order and argument order remain explicit.
 #[derive(Debug)]
@@ -215,6 +252,230 @@ impl<'a> StoredEffect<'a> {
     }
 }
 
+/// Native commands only. Each helper owns an exact finite identity batch.
+#[derive(Debug, Default)]
+pub(super) struct NativeMapping {
+    /// Transient request for ordinary RGB Smart contents inside a Gray owner.
+    /// Materialized as native document mode/profile; never persisted as a rule.
+    pub working_rgb: bool,
+    pub filters: Vec<SmartFilter>,
+    /// Ordinary resources needed by generated native fills or filter structures.
+    pub patterns: Vec<photocraft_doc::Pattern>,
+    /// Ordinary native layer styles, evaluated at the native pipeline location.
+    /// Mixed filter/style stage ordering requires an owner-local native wrapper.
+    pub layer_effects: Vec<photocraft_doc::effects::Effect>,
+    /// Transient native placement request, materialized as ordinary smart contents.
+    /// No source operation identity is stored as a transform rule.
+    pub quarter_turns: u8,
+    /// Clockwise ordinary native placement; mutually exclusive with quarter_turns.
+    pub rotation_degrees: f64,
+    /// Fixed native document construction for a mapping that needs more than a filter.
+    /// Never serialized as an executable plan; the importer materializes native layers.
+    pub structure: Option<NativeStructure>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(super) enum NativeStructure {
+    Replace {
+        layer: Box<photocraft_doc::Layer>,
+        patterns: Vec<photocraft_doc::Pattern>,
+    },
+    Composite {
+        branches: Vec<NativeBranch>,
+    },
+    /// Import-time construction only. Index zero is the current native input;
+    /// each step adds one result and may reference only earlier native results.
+    /// Source node names/text never enter this representation or native saves.
+    Stages {
+        steps: Vec<NativeStage>,
+        output: usize,
+    },
+}
+
+/// Ordinary native channel selection used only while constructing static data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeMaskComponent {
+    Alpha,
+    /// Native Apply Image composite policy: arithmetic mean of color channels.
+    Composite,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeMapCoordinates {
+    Offsets,
+    Positions,
+}
+
+#[derive(Debug)]
+pub(super) enum NativeStage {
+    /// One-time ordinary native alignment using actual earlier native extents.
+    Align {
+        input: usize,
+        target: usize,
+        horizontal: f64,
+        vertical: f64,
+        margin_x: f64,
+        margin_y: f64,
+        snap: bool,
+    },
+    /// Convert a captured native XY resource once into an embedded native Displace map.
+    Displace {
+        input: usize,
+        map: usize,
+        coordinates: NativeMapCoordinates,
+        scale: f32,
+        wrap: bool,
+        metadata_limit: usize,
+    },
+    /// Capture an earlier native result as an ordinary opaque channel raster.
+    Channel {
+        input: usize,
+        component: NativeMaskComponent,
+    },
+    /// Attach a static ordinary native pixel mask; no live source graph binding.
+    Mask {
+        input: usize,
+        mask: usize,
+        component: NativeMaskComponent,
+        invert: bool,
+        scale: f32,
+    },
+    Apply {
+        input: usize,
+        mapping: Box<NativeMapping>,
+    },
+    Join {
+        below: usize,
+        above: usize,
+        blend: photocraft_color::BlendMode,
+        opacity: f32,
+    },
+    /// Ordinary Photoshop-style knockout: upper transparency punches through
+    /// the native backdrop while its fill is hidden. No source blend callback.
+    Knockout {
+        below: usize,
+        above: usize,
+        opacity: f32,
+    },
+}
+
+/// Validate a bounded flat native construction plan before materialization.
+/// References must point to existing inputs, and stage controls must satisfy their native domains.
+pub(super) fn validate_stages(steps: &[NativeStage], output: usize) -> std::result::Result<(), MappingFailure> {
+    if steps.len() > 64 || output > steps.len() {
+        return Err("Native construction plan exceeds its step or output bounds".into());
+    }
+    for (index, step) in steps.iter().enumerate() {
+        let available = index + 1; // Includes the original native input at zero.
+        match step {
+            NativeStage::Align { input, target, horizontal, vertical, margin_x, margin_y, .. } => {
+                if *input >= available
+                    || *target >= available
+                    || !(-2.0..=3.0).contains(horizontal)
+                    || !(-2.0..=3.0).contains(vertical)
+                    || ![horizontal, vertical, margin_x, margin_y].iter().all(|value| value.is_finite())
+                {
+                    return Err("Native alignment requires earlier inputs and finite bounded controls".into());
+                }
+            }
+            NativeStage::Displace { input, map, scale, metadata_limit, .. } => {
+                if *input >= available
+                    || *map >= available
+                    || !scale.is_finite()
+                    || !(0.0..=5000.0).contains(scale)
+                    || *metadata_limit == 0
+                    || *metadata_limit > super::MAX_METADATA_BYTES
+                {
+                    return Err("Native displacement requires earlier inputs and finite bounded scale".into());
+                }
+            }
+            NativeStage::Channel { input, .. } => {
+                if *input >= available {
+                    return Err("Native channel capture requires an earlier input".into());
+                }
+            }
+            NativeStage::Mask { input, mask, scale, .. } => {
+                if *input >= available || *mask >= available || !scale.is_finite() || !(0.0..=1.0).contains(scale) {
+                    return Err("Native pixel mask requires earlier inputs and finite normalized scale".into());
+                }
+            }
+            NativeStage::Apply { input, mapping } => {
+                if *input >= available || matches!(mapping.structure, Some(NativeStructure::Stages { .. })) {
+                    return Err("Native construction requires earlier inputs and a flat stage list".into());
+                }
+            }
+            NativeStage::Join { below, above, blend, opacity } => {
+                if *below >= available
+                    || *above >= available
+                    || *blend == photocraft_color::BlendMode::PassThrough
+                    || !opacity.is_finite()
+                    || !(0.0..=1.0).contains(opacity)
+                {
+                    return Err("Native construction join requires earlier inputs, a layer blend mode and finite normalized opacity".into());
+                }
+            }
+            NativeStage::Knockout { below, above, opacity } => {
+                if *below >= available || *above >= available || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) {
+                    return Err("Native knockout requires earlier inputs and finite normalized opacity".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(super) struct NativeBranch {
+    pub filters: Vec<SmartFilter>,
+    pub blend: photocraft_color::BlendMode,
+    pub clipped: bool,
+    pub opacity: f32,
+    pub fill_opacity: f32,
+    pub advanced: photocraft_doc::AdvancedBlending,
+    /// Ordinary smart-object placement in owner-local native document coordinates.
+    pub transform: photocraft_doc::Affine,
+    /// Temporary owner-local native canvas. Input placement is rebased into it;
+    /// filters run there, then ordinary outer placement restores this origin.
+    pub filter_frame: Option<photocraft_geom::Rect>,
+    /// Ordinary native Smart Object projective placement, in owner-local coordinates.
+    pub perspective: Option<[f64; 9]>,
+    /// Coverage lives in owner-local document coordinates, as on any native layer.
+    pub mask: Option<photocraft_doc::LayerMask>,
+    pub vector_mask: Option<photocraft_doc::VectorMask>,
+    pub layer_effects: Vec<photocraft_doc::effects::Effect>,
+    /// Styles applied to the completed native styled branch, through ordinary embedded contents.
+    pub post_layer_effects: Vec<photocraft_doc::effects::Effect>,
+    /// A direct native fill instead of another copy of the current input.
+    pub fill: Option<photocraft_doc::Fill>,
+}
+
+impl Default for NativeBranch {
+    /// Create a neutral native branch with identity placement, full opacity and no implicit filters, masks or styles.
+    fn default() -> Self {
+        Self {
+            filters: Vec::new(),
+            blend: photocraft_color::BlendMode::Normal,
+            clipped: false,
+            opacity: 1.0,
+            fill_opacity: 1.0,
+            advanced: photocraft_doc::AdvancedBlending::default(),
+            transform: photocraft_doc::Affine::IDENTITY,
+            filter_frame: None,
+            perspective: None,
+            mask: None,
+            vector_mask: None,
+            layer_effects: Vec::new(),
+            post_layer_effects: Vec::new(),
+            fill: None,
+        }
+    }
+}
+
+/// None: identity belongs to another helper. Err: known identity cannot be safely
+/// mapped for these arguments; preserve/report it without changing siblings.
+pub(super) type MappingResult = Option<std::result::Result<NativeMapping, MappingFailure>>;
+
 #[derive(Debug)]
 pub(super) struct MappingFailure {
     pub reason: photocraft_doc::import_conversion::ConversionReason,
@@ -239,5 +500,95 @@ impl From<&str> for MappingFailure {
     /// Preserve a borrowed adapter diagnostic through the same owned missing-mapping conversion.
     fn from(message: &str) -> Self {
         message.to_owned().into()
+    }
+}
+
+/// Create a visible full-strength native Smart Filter whose supplied command and parameters remain ordinary native data.
+pub(super) fn native_filter(command: &str, params: serde_json::Value) -> SmartFilter {
+    SmartFilter { command: command.into(), params, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true }
+}
+
+/// Validate source errors, operation version and the frozen argument schema before dispatching to finite native mapping helpers.
+/// Unknown or unsupported cases return a reportable failure instead of applying defaults.
+pub(super) fn map(effect: &StoredEffect<'_>, context: &MappingContext) -> std::result::Result<NativeMapping, MappingFailure> {
+    context
+        .interrupt
+        .check()
+        .map_err(|error| MappingFailure { reason: photocraft_doc::import_conversion::ConversionReason::NativePolicy, message: error.to_string() })?;
+    if !effect.errors.is_empty() || effect.arguments.iter().any(|argument| matches!(argument.value, ArgumentValue::Invalid { .. })) {
+        return Err(MappingFailure {
+            reason: photocraft_doc::import_conversion::ConversionReason::InvalidOptionalData,
+            message: "Invalid stored effect configuration is retained without application".into(),
+        });
+    }
+    let expected = if effect.operation == "gegl:exposure" { "1:0" } else { "0:0" };
+    if effect.version.is_some_and(|version| version != expected) {
+        return Err(format!("Stored operation version is not mapped for {}", effect.operation).into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for argument in &effect.arguments {
+        if !seen.insert(argument.name) {
+            return Err(MappingFailure {
+                reason: photocraft_doc::import_conversion::ConversionReason::InvalidOptionalData,
+                message: format!("Duplicate stored operation argument {}", argument.name),
+            });
+        }
+        if schema::fields(effect.operation).is_some_and(|fields| !fields.contains(&argument.name)) {
+            return Err(format!("Stored operation argument {} is not mapped for {}", argument.name, effect.operation).into());
+        }
+    }
+    tone::map(effect, context)
+        .or_else(|| curves_and_quantization::map(effect, context))
+        .or_else(|| color::map(effect, context))
+        .or_else(|| resources::map(effect, context))
+        .or_else(|| spatial::map(effect, context))
+        .or_else(|| residual_tone::map(effect, context))
+        .or_else(|| core_composites::map(effect, context))
+        .or_else(|| residual_transform::map(effect, context))
+        .unwrap_or_else(|| Err(format!("Native mapping is unfinished for stored operation {}", effect.operation).into()))
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use photocraft_doc::import_conversion::ConversionReason;
+
+    /// Build a bounded native mapping context with deterministic mode, profile, geometry and interrupt settings for unit tests.
+    fn context() -> MappingContext<'static> {
+        MappingContext {
+            mode: photocraft_color::ColorMode::Rgb,
+            linear: false,
+            owner_bounds: photocraft_geom::Rect::new(0, 0, 2, 1),
+            native_filter_bounds: photocraft_geom::Rect::new(0, 0, 2, 1),
+            target_profile: None,
+            resolution_dpi: 72.0,
+            remaining_generation_bytes: crate::xcf::MAX_PIXEL_BYTES,
+            remaining_metadata_bytes: crate::xcf::MAX_METADATA_BYTES,
+            interrupt: photocraft_raster::Interrupt::NONE,
+        }
+    }
+
+    /// Verify unknown source fields and operation versions cannot be silently replaced by a native default mapping.
+    #[test]
+    fn unknown_stored_controls_are_never_silently_applied_as_native_defaults() {
+        for operation in ["gegl:grid", "gegl:video-degradation", "gegl:gaussian-blur", "gimp:fill-source"] {
+            let effect = StoredEffect::test(operation, vec![Argument { name: "future-control", value: ArgumentValue::Float(0.75) }]);
+            let failure = map(&effect, &context()).unwrap_err();
+            assert_eq!(failure.reason, ConversionReason::MissingMapping, "{operation}");
+            assert!(failure.message.contains("future-control"));
+        }
+    }
+
+    /// Reject duplicate stored arguments while preserving only the deliberately admitted schema aliases.
+    #[test]
+    fn duplicate_known_arguments_are_invalid_but_schema_aliases_are_explicit() {
+        let effect = StoredEffect::test(
+            "gegl:gaussian-blur",
+            vec![Argument { name: "std-dev-x", value: ArgumentValue::Float(1.0) }, Argument { name: "std-dev-x", value: ArgumentValue::Float(2.0) }],
+        );
+        assert_eq!(map(&effect, &context()).unwrap_err().reason, ConversionReason::InvalidOptionalData);
+        assert_eq!(schema::fields("gegl:motion-blur"), schema::fields("gegl:motion-blur-linear"));
+        assert_eq!(schema::fields("gegl:invert"), schema::fields("gegl:invert-linear"));
+        assert!(schema::fields("user-installed:operation").is_none());
     }
 }
