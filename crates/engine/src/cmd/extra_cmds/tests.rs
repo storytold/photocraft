@@ -24,7 +24,7 @@ fn equalize_average_and_clouds_edit_the_targeted_channel() {
                 s.tools.foreground = [0.0, 0.0, 0.0, 1.0];
                 s.tools.background = [1.0, 1.0, 1.0, 1.0];
                 s.execute("edit.fill", json!({"contents": "color", "color": "#808080"})).unwrap();
-                let p = match target {
+                let mut p = match target {
                     "quickMask" => {
                         s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
                         json!({"seed": 1})
@@ -39,6 +39,10 @@ fn equalize_average_and_clouds_edit_the_targeted_channel() {
                         json!({"seed": 1, "target": "mask"})
                     }
                 };
+                // Average has no seed parameter; only Clouds uses it.
+                if cmd == "filter.blur.average" {
+                    p.as_object_mut().unwrap().remove("seed");
+                }
                 // Two levels in the target, so Equalize and Average have something to change.
                 let edit_target = json!({ "target": if target == "alpha" { json!({"channel": 0}) } else { json!(target) } });
                 s.edit("levels", |doc, active| {
