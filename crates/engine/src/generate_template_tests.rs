@@ -107,3 +107,18 @@ fn the_krea2_fill_takes_denoise_and_its_writer_sees_a_grey_hole() {
     let mask = Gray8 { width: 2, height: 1, data: vec![200, 50] };
     assert_eq!(grey_where(&image, &mask).data, vec![128, 128, 128, 255, 40, 50, 60, 255]);
 }
+
+/// The AnyPaint fill's prompt writer asks the worker for Krea 2's own encoder (no swap to
+/// Qwen-Image-2.1's 8B and back); the other rewriters leave the encoder to the worker.
+#[test]
+fn the_krea2_fill_writes_its_prompt_on_krea2s_encoder() {
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    s.execute(FILL, json!({"prompt": "a red hat", "template": "krea2-turbo/fill", "enhance": true, "seed": 3})).unwrap();
+    s.execute(FILL, json!({"prompt": "a red hat", "template": "qwen-2.1/fill", "enhance": true, "seed": 3})).unwrap();
+    let st = fake.state();
+    let chats: Vec<&serde_json::Value> = st.runs.iter().map(|r| &r.request).filter(|r| r["params"].get("system").is_some()).collect();
+    assert_eq!(chats.len(), 2, "one rewrite each");
+    assert_eq!(chats[0]["params"]["encoder"], KREA2_CHAT_ENCODER);
+    assert!(chats[1]["params"].get("encoder").is_none(), "{}", chats[1]);
+}

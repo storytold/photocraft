@@ -34,9 +34,9 @@ getrandom = { workspace = true }
 # on candle, plan Phase 1 / Rust rebuild R1), pinned by commit; the repository is private for now,
 # so `.cargo/config.toml` fetches it with the system git. The NVIDIA runtime libraries come from a
 # folder the user names (`integrations.runtimePath`), put on the worker's `PATH`.
-gn-engine = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "a02d6b036387b69c5adb48fbca489c0e5f1a8da0" }
-gn-perception = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "a02d6b036387b69c5adb48fbca489c0e5f1a8da0", default-features = false, features = ["engine"] }
-gn-diffusion = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "a02d6b036387b69c5adb48fbca489c0e5f1a8da0", features = ["cuda"], optional = true }
+gn-engine = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "5df6d4342ff0daaa32fbccd32796464a799f2d70" }
+gn-perception = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "5df6d4342ff0daaa32fbccd32796464a799f2d70", default-features = false, features = ["engine"] }
+gn-diffusion = { git = "https://github.com/CodyChuGit/genai-native.git", rev = "5df6d4342ff0daaa32fbccd32796464a799f2d70", features = ["cuda"], optional = true }
 # The worker's log: the engines speak `tracing`; with `RUST_LOG` set the worker writes their
 # phase timings (load, encode, sampling, decode) to its stderr.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }

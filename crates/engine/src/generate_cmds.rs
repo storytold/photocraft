@@ -352,6 +352,10 @@ pub(crate) enum EnhanceKind {
     FillScene,
 }
 
+/// The worker's chat `encoder` that answers on Krea 2's Qwen3-VL-4B (genai-native
+/// `CHAT_ON_KREA2`).
+const KREA2_CHAT_ENCODER: &str = "krea2";
+
 /// The system turn of [`EnhanceKind::FillScene`]: AusBoss's "Write the prompt" step of the
 /// Krea 2 Inpaint Masked workflow (v1.3), which the AnyPaint LoRA follows best: it was trained
 /// on descriptions of the complete output picture, not of the patch.
@@ -461,6 +465,12 @@ pub(crate) fn enhance_prompt(
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
+    // AnyPaint's prompt is written by Krea 2's own Qwen3-VL-4B, as in AusBoss's workflow: the
+    // fill that follows finds Krea 2 still resident instead of loading it again after
+    // Qwen-Image-2.1's 8B answered (21.9-24.3 s a fill with enhance before, 2.4-4.1 s after).
+    if kind == EnhanceKind::FillScene {
+        params.insert("encoder".to_string(), Value::String(KREA2_CHAT_ENCODER.to_string()));
+    }
     for attempt in 0..2u64 {
         let req = Request {
             template: template.to_string(),
@@ -2677,7 +2687,7 @@ fn grey_where(image: &Rgba8, mask: &Gray8) -> Rgba8 {
     if (mask.width, mask.height) != (image.width, image.height) {
         return out;
     }
-    for (px, m) in out.data.chunks_exact_mut(4).zip(&mask.data) {
+    for (px, m) in out.data.as_chunks_mut::<4>().0.iter_mut().zip(&mask.data) {
         if *m > 127 {
             px[..3].copy_from_slice(&[128, 128, 128]);
         }
