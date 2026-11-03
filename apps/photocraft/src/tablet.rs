@@ -125,8 +125,9 @@ pub fn spawn_x11(feed: &StylusFeed, display: Option<DisplayKind>) {
         log::info!("tablet pressure: not available on this display server ({display:?})");
         return;
     }
-    if let Err(e) = photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
-        log::warn!("{e}");
+    match photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
+        Ok(_) => log::info!("tablet: XInput2 background reader started"),
+        Err(e) => log::warn!("{e}"),
     }
 }
 
@@ -249,6 +250,60 @@ mod tests {
         });
         assert!(heavy_w > light_w * 2.0, "width responds: {light_w} → {heavy_w}");
         assert!(heavy_dark > light_dark + 0.3, "opacity responds: {light_dark} → {heavy_dark}");
+    }
+
+    /// Replay #10460's reported values through the public mapper, real feed and brush consumer.
+    /// The master/slave ordering is a control, not an asserted recording of the reporter's app.
+    #[test]
+    fn intuos_pressure_reaches_brush_with_sparse_axes_and_master_events() {
+        for master_first in [false, true] {
+            let mut state = xi::State::default();
+            state.set_devices([
+                xi::Device::new(19, "Wacom Intuos3 6x11 Pen stylus", [(2, "Abs Pressure".into(), 0.0, 65536.0)]),
+                xi::Device::new(12, "Mouse", [(0, "Rel X".into(), -1.0, -1.0)]),
+            ]);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.session.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.ui.tool = Tool::Brush;
+            let feed = app.stylus.feed.clone();
+            let send = sink(feed);
+            let dispatch = |update| {
+                if let Update::Set(sample) = update {
+                    send(sample);
+                }
+            };
+            let raw = [53107.0, 50289.0, 17296.0];
+            for (index, value) in raw.into_iter().enumerate() {
+                if master_first {
+                    dispatch(state.handle(2, [(2, value)]));
+                }
+                dispatch(state.handle(19, xi::valuators(&[1 << 2], &[value])));
+                if !master_first {
+                    dispatch(state.handle(2, [(2, value)]));
+                }
+                dispatch(state.handle(19, [(0, 10.0)]));
+                dispatch(state.handle(99, [(2, value)]));
+                let pressure = app.stylus.pressure();
+                assert!((f64::from(pressure) - value / 65536.0).abs() < 1e-6);
+                let x = 10.0 + index as f64 * 40.0;
+                let event = if index == 0 { ToolEvent::Down { x, y: 20.0, pressure } } else { ToolEvent::Move { x, y: 20.0, pressure } };
+                tool_event(&mut app, event, egui::Modifiers::NONE);
+            }
+            dispatch(state.handle(19, [(2, 0.0)]));
+            dispatch(state.handle(19, []));
+            assert_eq!(app.stylus.pressure(), 0.0, "a lift is not mouse pressure");
+            tool_event(&mut app, ToolEvent::Up { x: 90.0, y: 20.0 }, egui::Modifiers::NONE);
+            let (_, stroke) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
+            for (index, value) in raw.into_iter().enumerate() {
+                assert_eq!(stroke["points"][index][2], json!((value / 65536.0) as f32 as f64));
+            }
+            dispatch(state.handle(12, [(0, 1.0)]));
+            assert_eq!(app.stylus.pressure(), 1.0, "a genuine mouse remains full strength");
+            app.stylus.use_pressure = false;
+            dispatch(state.handle(19, [(2, 53107.0)]));
+            assert_eq!(app.stylus.pressure(), 1.0, "the preference still disables pressure");
+        }
     }
 
     /// `/proc/bus/input/devices` of a laptop with a Wacom Intuos Pro attached (64-bit longs: the
