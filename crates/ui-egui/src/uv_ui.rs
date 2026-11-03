@@ -860,8 +860,7 @@ fn refresh_with_lighting(app: &mut PhotocraftApp, ctx: &egui::Context, cache: &m
                 // Keep the unmasked material image so a live mask Fill can update its overlay
                 // independently of the document compositor.
                 patch_image(&mut cache.mask_base[material], [w, h], buffer_rect, rgba.clone())?;
-                let factor = doc.size.width.max(doc.size.height).div_ceil(w.max(h)).max(1);
-                crate::uv_mask::overlay(app, index, &doc, rect, [w, h], &mut rgba, factor);
+                crate::uv_mask::overlay(app, index, &doc, buffer_rect, [w, h], &mut rgba);
             }
             if let Some(t) = cache.textures.get_mut(material) {
                 patch_image(t, [w, h], buffer_rect, rgba)?;

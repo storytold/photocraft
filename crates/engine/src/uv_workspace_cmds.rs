@@ -30,7 +30,8 @@ fn switch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Also admit sessions populated by headless imports before the UI was attached.
     if active && !s.uv_workspace.initialized && s.uv.scene.is_some() {
-        let ids: std::collections::HashSet<_> = s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).collect();
+        let ids: std::collections::HashSet<_> =
+            s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).chain(s.uv.replaced_document_ids.iter().copied()).collect();
         let selected = s.active().map(|st| st.doc.id);
         let mut uv = Vec::new();
         for st in std::mem::take(&mut s.docs) {

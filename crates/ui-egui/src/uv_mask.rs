@@ -48,8 +48,8 @@ pub(crate) fn overlay(
     rect: photocraft_geom::Rect,
     output_size: [u32; 2],
     pixels: &mut [[f32; 4]],
-    factor: u32,
 ) {
+    let output_size = [output_size[0].min(doc.size.width), output_size[1].min(doc.size.height)];
     let Some(st) = app.session.documents().get(index) else {
         return;
     };
@@ -66,7 +66,7 @@ pub(crate) fn overlay(
     let px = if let Some(proxy) = live_fill {
         crate::channel_view::render_fill_mask_proxy(doc, &view, rect, output_size, look, &proxy)
     } else {
-        crate::channel_view::render(doc, &view, rect, factor, look, st.active_layer)
+        crate::channel_view::render_reduced_grid(doc, &view, rect, output_size, look, st.active_layer)
     };
     blend_overlay(pixels, px);
 }
@@ -74,6 +74,44 @@ pub(crate) fn overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reduced_mask_overlay_matches_full_grid_for_partial_damage() {
+        use photocraft_geom::Rect;
+        use serde_json::json;
+        let _gpu = photocraft_testkit::gpu_lock();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width":1001,"height":777})).unwrap();
+        app.session.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        app.session
+            .edit("seed mask edge", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(501, 389, 1001, 777), &[1.0]);
+                Ok(())
+            })
+            .unwrap();
+        for mode in ["gray", "overlay"] {
+            app.session.execute("view.layerMask", json!({"mode":mode})).unwrap();
+            let doc = app.session.active().unwrap().doc.clone();
+            let full = photocraft_compose::render_reduced_damage(&doc, 512, 397, doc.bounds());
+            let partial = photocraft_compose::render_reduced_damage(&doc, 512, 397, Rect::new(475, 360, 530, 420));
+            let mut full_pixels = vec![[0.1, 0.2, 0.3, 1.0]; full.px.len()];
+            let mut partial_pixels = vec![[0.1, 0.2, 0.3, 1.0]; partial.px.len()];
+            overlay(&app, 0, &doc, full.rect, [512, 397], &mut full_pixels);
+            overlay(&app, 0, &doc, partial.rect, [512, 397], &mut partial_pixels);
+            if mode == "gray" {
+                // Output cell (256, 199) covers native columns 500..502 and rows 389..391:
+                // exactly half of its samples lie in the white quadrant.
+                assert_eq!(full_pixels[199 * 512 + 256], [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+            } else {
+                assert_ne!(full_pixels[0][0], full_pixels[0][1], "Overlay mode must retain its colored rubylith");
+            }
+            assert!(full_pixels.windows(2).any(|pair| pair[0] != pair[1]), "the overlay must show the mask boundary");
+            for y in 0..partial.rect.height() as usize {
+                let start = (partial.rect.y0 as usize + y) * 512 + partial.rect.x0 as usize;
+                let width = partial.rect.width() as usize;
+                assert_eq!(&partial_pixels[y * width..(y + 1) * width], &full_pixels[start..start + width]);
+            }
+        }
+    }
     #[test]
     fn overlay_skips_mismatched_pixel_grids_and_blends_matching_grids() {
         let original = [[0.1, 0.2, 0.3, 0.4], [0.4, 0.3, 0.2, 0.1]];

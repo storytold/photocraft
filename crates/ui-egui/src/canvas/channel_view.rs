@@ -120,6 +120,58 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look,
     render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused })
 }
 
+/// Area-average a channel view on the compositor's global reduced-image grid. `r` is in output
+/// pixels, including its origin for damage updates. Native pixels are rendered in bounded bands.
+#[cfg(feature = "uv-workbench")]
+pub(crate) fn render_reduced_grid(
+    doc: &Document,
+    view: &ChannelView,
+    r: Rect,
+    output_size: [u32; 2],
+    look: Look,
+    active: Option<photocraft_doc::LayerId>,
+) -> Option<Vec<Color32>> {
+    let [w, h] = [output_size[0].min(doc.size.width), output_size[1].min(doc.size.height)];
+    if view.is_plain(doc) || r.is_empty() || w == 0 || h == 0 || r.x0 < 0 || r.y0 < 0 || r.x1 as u32 > w || r.y1 as u32 > h {
+        return None;
+    }
+    let span = |t: u32, full: u32, reduced: u32| {
+        let start = u64::from(t) * u64::from(full) / u64::from(reduced);
+        let end = ((u64::from(t) + 1) * u64::from(full) / u64::from(reduced)).max(start + 1).min(u64::from(full));
+        (start as i32, end as i32)
+    };
+    let columns: Vec<_> = (r.x0 as u32..r.x1 as u32).map(|x| span(x, doc.size.width, w)).collect();
+    let sx0 = columns.first()?.0;
+    let sx1 = columns.last()?.1;
+    let feathered = feathered_view_mask(doc, view);
+    let mut result = Vec::with_capacity(r.width() as usize * r.height() as usize);
+    for y in r.y0 as u32..r.y1 as u32 {
+        let (sy0, sy1) = span(y, doc.size.height, h);
+        let mut sums = vec![[0u64; 4]; columns.len()];
+        // Even extreme aspect ratios never allocate a complete native channel image.
+        for by0 in (sy0..sy1).step_by(32) {
+            let band = Rect::new(sx0, by0, sx1, (by0 + 32).min(sy1));
+            let mut unused = None;
+            let pixels = render_prepared(doc, view, band, 1, look, active, CompositeSource { cached: None, fresh: &mut unused }, feathered.as_ref())?;
+            for row in pixels.chunks_exact(band.width() as usize) {
+                for (sum, &(x0, x1)) in sums.iter_mut().zip(&columns) {
+                    for pixel in &row[(x0 - sx0) as usize..(x1 - sx0) as usize] {
+                        for (sum, value) in sum.iter_mut().zip(pixel.to_array()) {
+                            *sum += u64::from(value);
+                        }
+                    }
+                }
+            }
+        }
+        for (sum, &(x0, x1)) in sums.into_iter().zip(&columns) {
+            let count = (x1 - x0) as u64 * (sy1 - sy0) as u64;
+            let [r, g, b, a] = sum.map(|value| ((value + count / 2) / count) as u8);
+            result.push(Color32::from_rgba_premultiplied(r, g, b, a));
+        }
+    }
+    Some(result)
+}
+
 /// Colorize the shared low-resolution Fill proxy for either the 2D channel overlay or the UV
 /// map. `r` is in output-image coordinates; the proxy is stretched over the document extent.
 #[cfg(feature = "uv-workbench")]
@@ -166,6 +218,32 @@ fn render_with_source(
     active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
 ) -> Option<Vec<Color32>> {
+    let feathered = feathered_view_mask(doc, v);
+    render_prepared(doc, v, r, factor, look, active, source, feathered.as_ref())
+}
+
+fn feathered_view_mask(doc: &Document, v: &ChannelView) -> Option<Surface> {
+    v.layer_mask
+        .and_then(|view| doc.layer(view.layer))
+        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
+        .and_then(|layer| {
+            let mut pixel_mask_layer = layer.clone();
+            pixel_mask_layer.vector_mask = None;
+            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_prepared(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    active: Option<photocraft_doc::LayerId>,
+    source: CompositeSource<'_>,
+    feathered_mask: Option<&Surface>,
+) -> Option<Vec<Color32>> {
     if v.is_plain(doc) || r.is_empty() {
         return None;
     }
@@ -175,16 +253,7 @@ fn render_with_source(
     // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
     // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
     // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
-    let feathered_mask = v
-        .layer_mask
-        .and_then(|view| doc.layer(view.layer))
-        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
-        .and_then(|layer| {
-            let mut pixel_mask_layer = layer.clone();
-            pixel_mask_layer.vector_mask = None;
-            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
-        });
-    let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
+    let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match shown_mask {
         Some((m, MaskViewMode::Gray)) => return Some(mask_px(m, r, factor, |g| Color32::from_gray(q(g)))),

@@ -542,6 +542,57 @@ mod fill_worker_tests {
     }
 
     #[test]
+    fn uv_fill_proxy_overlay_uses_global_output_coordinates_for_partial_damage() {
+        use photocraft_geom::Rect;
+        let _gpu = photocraft_testkit::gpu_lock();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width":1001,"height":777})).unwrap();
+        app.session.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        for mode in ["gray", "overlay"] {
+            app.session.execute("view.layerMask", json!({"mode":mode})).unwrap();
+            let state = app.session.active().unwrap();
+            let (doc, revision, layer) = (state.doc.clone(), state.revision, state.active_layer.unwrap());
+            let proxy = FillMaskProxy {
+                generation: 1,
+                doc: doc.id,
+                revision,
+                layer,
+                index: 0,
+                key: 1,
+                size: [3, 2],
+                values: Arc::new(vec![0.0, 0.4, 1.0, 1.0, 0.3, 0.0]),
+            };
+            app.uv_mask_paint_preview = Some(Preview {
+                generation: 1,
+                doc: doc.id,
+                revision,
+                layer,
+                index: 0,
+                opacity: 1.0,
+                bounds: Some([0, 0, 1001, 777]),
+                rotation: Some(0.0),
+                shown: None,
+                mask_sampler: FillMaskSampler { ready: Some(proxy), ..Default::default() },
+                materialized: None,
+            });
+            let damage = photocraft_compose::render_reduced_damage(&doc, 512, 397, Rect::new(300, 350, 750, 440)).rect;
+            let mut full = vec![[0.1, 0.2, 0.3, 1.0]; 512 * 397];
+            let mut partial = vec![[0.1, 0.2, 0.3, 1.0]; damage.width() as usize * damage.height() as usize];
+            crate::uv_mask::overlay(&app, 0, &doc, Rect::new(0, 0, 512, 397), [512, 397], &mut full);
+            crate::uv_mask::overlay(&app, 0, &doc, damage, [512, 397], &mut partial);
+            if mode == "overlay" {
+                assert_ne!(full[0][0], full[0][1], "the live Overlay proxy must retain its colored rubylith");
+            }
+            assert!(full.windows(2).any(|pair| pair[0] != pair[1]), "the live proxy must be visible");
+            for y in 0..damage.height() as usize {
+                let start = (damage.y0 as usize + y) * 512 + damage.x0 as usize;
+                let width = damage.width() as usize;
+                assert_eq!(&partial[y * width..(y + 1) * width], &full[start..start + width]);
+            }
+        }
+    }
+
+    #[test]
     fn replacing_queued_fill_jobs_does_not_cancel_the_running_sample() {
         let first_started = Arc::new(Barrier::new(2));
         let first_release = Arc::new(Barrier::new(2));

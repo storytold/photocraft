@@ -222,6 +222,8 @@ pub struct UvState {
     pub(crate) exported_revisions: std::collections::HashMap<DocId, u64>,
     pub(crate) saved_revisions: std::collections::HashMap<DocId, u64>,
     pub(crate) saved_generation: u64,
+    /// Documents detached from a material slot remain owned by the UV project as loose docs.
+    pub(crate) replaced_document_ids: std::collections::HashSet<DocId>,
     pub scene: Option<Arc<Scene>>,
     pub topology: Option<Arc<Topology>>,
     /// Single-entry cache for the full-resolution shell ownership map used by live mask Blur.
@@ -468,7 +470,8 @@ fn previous_uv_documents(s: &Session) -> Vec<DocId> {
     if s.uv_workspace.active {
         return s.documents().iter().map(|st| st.doc.id).collect();
     }
-    let owned: std::collections::HashSet<_> = s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).collect();
+    let owned: std::collections::HashSet<_> =
+        s.uv.all_bindings().flatten().copied().chain(s.uv.saved_revisions.keys().copied()).chain(s.uv.replaced_document_ids.iter().copied()).collect();
     s.documents().iter().filter(|st| owned.contains(&st.doc.id)).map(|st| st.doc.id).collect()
 }
 fn mesh(s: &Session) -> std::result::Result<(), String> {
@@ -973,17 +976,19 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         generation,
         ..Default::default()
     };
-    close_clean_previous_documents(s, &previous);
+    let retained_previous = close_clean_previous_documents(s, &previous);
+    s.uv.replaced_document_ids.extend(retained_previous);
     let _ = activate(s, active_material);
     inspect(s, &Value::Null)
 }
 
-fn close_clean_previous_documents(s: &mut Session, previous: &[DocId]) {
+fn close_clean_previous_documents(s: &mut Session, previous: &[DocId]) -> Vec<DocId> {
     for id in previous {
         if let Some(index) = s.documents().iter().position(|st| st.doc.id == *id && !st.is_dirty()) {
             s.close(index);
         }
     }
+    previous.iter().copied().filter(|id| s.documents().iter().any(|st| st.doc.id == *id)).collect()
 }
 
 fn channel(p: &Value, default: Channel) -> Result<Channel> {
@@ -998,6 +1003,7 @@ fn bindings(s: &Session) -> &[Option<DocId>] {
 fn bind(s: &mut Session, material: usize, id: DocId, kind: Channel) {
     s.uv.clear_mask_shell_ids_cache();
     s.uv.blocked_exports.remove(&id);
+    let previous = s.uv.map_bindings(kind).get(material).copied().flatten();
     let count = s.uv.bindings.len();
     let target = match kind {
         Channel::Normal => &mut s.uv.normal_bindings,
@@ -1006,6 +1012,12 @@ fn bind(s: &mut Session, material: usize, id: DocId, kind: Channel) {
     };
     if let Some(b) = target.get_mut(material) {
         *b = Some(id);
+    }
+    s.uv.replaced_document_ids.remove(&id);
+    if let Some(previous) = previous.filter(|previous| *previous != id)
+        && !s.uv.all_bindings().flatten().any(|bound| *bound == previous)
+    {
+        s.uv.replaced_document_ids.insert(previous);
     }
     s.uv.set_channel(kind);
 }
@@ -1845,6 +1857,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
         open_borders: project.open_borders,
         padding: project.padding,
         generation: s.uv.generation.wrapping_add(1),
+        replaced_document_ids: Default::default(),
     };
     let slots = project
         .selection_documents
@@ -1857,7 +1870,8 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
             s.uv.selection_masks.insert(id.0, mask);
         }
     }
-    close_clean_previous_documents(s, &previous);
+    let retained_previous = close_clean_previous_documents(s, &previous);
+    s.uv.replaced_document_ids.extend(retained_previous);
     let _ = activate(s, s.uv.material);
     let mut result = inspect(s, &Value::Null)?;
     result["view"] = s.uv.project_view.clone();
@@ -2098,10 +2112,118 @@ mod asset_path_tests {
         session.execute("layer.new.layer", json!({"name":"Unsaved UV edit"})).unwrap();
         session.add_document(super::Document::new("Clean UV test", super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
         let clean_id = session.active().expect("clean document was added").doc.id;
-        super::close_clean_previous_documents(&mut session, &[document_id, clean_id]);
+        let retained = super::close_clean_previous_documents(&mut session, &[document_id, clean_id]);
+        assert_eq!(retained, vec![document_id]);
         assert_eq!(session.documents().len(), 1);
         assert_eq!(session.documents()[0].doc.id, document_id);
         assert!(session.documents()[0].is_dirty());
+    }
+
+    fn imported_headless_session() -> crate::Session {
+        let mut session = crate::Session::new();
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        session.execute("uv.model.import", json!({"path":model})).unwrap();
+        session
+    }
+
+    fn add_uv_test_document(session: &mut crate::Session, name: &str) -> photocraft_doc::DocId {
+        let index = session.add_document(super::Document::new(name, super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
+        session.documents()[index].doc.id
+    }
+
+    #[test]
+    fn headless_create_and_bind_replacements_track_only_uv_owned_documents() {
+        let mut session = imported_headless_session();
+        let material = session.uv.material;
+        session.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let first = session.uv.bindings[material].unwrap();
+        session.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let second = session.uv.bindings[material].unwrap();
+        let unrelated = add_uv_test_document(&mut session, "Unrelated clean document");
+        let third = add_uv_test_document(&mut session, "Replacement texture");
+        let third_index = session.documents().iter().position(|doc| doc.doc.id == third).unwrap();
+        session.set_active(third_index);
+        session.execute("uv.texture.bind", json!({"material":material})).unwrap();
+
+        assert!(session.uv.replaced_document_ids.contains(&first));
+        assert!(session.uv.replaced_document_ids.contains(&second));
+        assert!(!session.uv.replaced_document_ids.contains(&third));
+        let previous = super::previous_uv_documents(&session);
+        assert!(previous.contains(&first) && previous.contains(&second));
+        assert!(!previous.contains(&unrelated), "unbound ordinary documents are not swept into UV ownership");
+    }
+
+    #[test]
+    fn headless_model_replacement_keeps_dirty_uv_and_unrelated_documents_for_save() {
+        let mut session = imported_headless_session();
+        let material = session.uv.material;
+        session.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let dirty_uv = session.uv.bindings[material].unwrap();
+        session.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let replaced_clean = session.uv.bindings[material].unwrap();
+        let dirty_index = session.documents().iter().position(|doc| doc.doc.id == dirty_uv).unwrap();
+        session.set_active(dirty_index);
+        session.execute("layer.new.layer", json!({"name":"Unsaved detached edit"})).unwrap();
+
+        let clean_unrelated = add_uv_test_document(&mut session, "Unrelated clean");
+        let dirty_unrelated = add_uv_test_document(&mut session, "Unrelated dirty");
+        session.execute("layer.new.layer", json!({"name":"Unrelated edit"})).unwrap();
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        session.execute("uv.model.import", json!({"path":model})).unwrap();
+
+        assert!(session.documents().iter().any(|doc| doc.doc.id == dirty_uv));
+        assert!(session.uv.replaced_document_ids.contains(&dirty_uv));
+        assert!(!session.documents().iter().any(|doc| doc.doc.id == replaced_clean));
+        assert!(session.documents().iter().any(|doc| doc.doc.id == clean_unrelated));
+        assert!(session.documents().iter().any(|doc| doc.doc.id == dirty_unrelated));
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("replacement.pcuv");
+        session.execute("uv.project.save", json!({"path":project})).unwrap();
+        let mut restored = crate::Session::new();
+        restored.execute("uv.project.load", json!({"path":project})).unwrap();
+        for name in ["Unrelated clean", "Unrelated dirty"] {
+            assert!(restored.documents().iter().any(|doc| doc.doc.name == name), "{name} was saved as a loose UV document");
+        }
+        assert!(restored.documents().iter().any(|doc| doc.doc.layers.iter().any(|layer| layer.name == "Unsaved detached edit")));
+    }
+
+    #[test]
+    fn restored_unbound_loose_document_uses_saved_revision_tracking_for_ownership() {
+        let mut source = imported_headless_session();
+        let material = source.uv.material;
+        source.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let loose = source.uv.bindings[material].unwrap();
+        source.execute("uv.texture.create", json!({"width":8,"height":8})).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("loose.pcuv");
+        source.execute("uv.project.save", json!({"path":project})).unwrap();
+
+        let mut clean_restored = crate::Session::new();
+        clean_restored.execute("uv.project.load", json!({"path":project})).unwrap();
+        let clean_loose =
+            clean_restored.uv.saved_revisions.keys().copied().find(|id| !clean_restored.uv.all_bindings().flatten().any(|bound| bound == id)).unwrap();
+        clean_restored.uv.replaced_document_ids.clear();
+        let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        clean_restored.execute("uv.model.import", json!({"path":model})).unwrap();
+        assert!(!clean_restored.documents().iter().any(|doc| doc.doc.id == clean_loose), "clean restored loose docs close on model replacement");
+
+        let mut restored = crate::Session::new();
+        restored.execute("uv.project.load", json!({"path":project})).unwrap();
+        let restored_loose = restored.uv.saved_revisions.keys().copied().find(|id| !restored.uv.all_bindings().flatten().any(|bound| bound == id)).unwrap();
+        assert_ne!(restored_loose, loose);
+        restored.uv.replaced_document_ids.clear();
+        assert!(super::previous_uv_documents(&restored).contains(&restored_loose));
+
+        let index = restored.documents().iter().position(|doc| doc.doc.id == restored_loose).unwrap();
+        restored.set_active(index);
+        restored.execute("layer.new.layer", json!({"name":"Dirty restored loose"})).unwrap();
+        let unrelated = add_uv_test_document(&mut restored, "Unrelated after load");
+        restored.execute("uv.project.load", json!({"path":project})).unwrap();
+
+        assert!(restored.documents().iter().any(|doc| doc.doc.id == restored_loose));
+        assert!(restored.uv.replaced_document_ids.contains(&restored_loose));
+        assert!(restored.documents().iter().any(|doc| doc.doc.id == unrelated));
     }
 
     #[test]
