@@ -213,10 +213,9 @@ fn click_swatch(h: &mut Harness<'_, PhotocraftApp>, folder: &str, name: &str) {
     h.run_steps(2);
 }
 
-/// Click the open Color Picker's hex field (found by the colour it shows) and select its text.
+/// Click the open Color Picker's Hex text widget and select its displayed text.
 fn focus_hex(h: &mut Harness<'_, PhotocraftApp>) {
-    let shown = h.state().ui.dialogs.last().expect("the Color Picker dialog").fields["color"].as_str().unwrap().trim_start_matches('#').to_ascii_uppercase();
-    h.get_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.value().as_deref() == Some(shown.as_str())).expect("the hex field").click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Color").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.run_steps(1);
@@ -236,6 +235,9 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
         h.run_steps(3);
         let id = h.state().ui.dialogs.last().expect("the Color Picker dialog").id;
         let opened = h.state().ui.dialogs.last().unwrap().fields["color"].clone();
+        // Hex edits keep the destination's representation: float RGB for this picker in a
+        // float document, legacy hex before float-picker support. Both encode the exact RGB.
+        let chosen = if opened.is_array() { json!([18.0_f32 / 255.0, 171.0_f32 / 255.0, 239.0_f32 / 255.0]) } else { json!("#12abef") };
         focus_hex(&mut h);
         for ch in "12AB".chars() {
             h.event(Event::Text(ch.to_string()));
@@ -246,13 +248,13 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
             h.event(Event::Text(ch.to_string()));
             h.run_steps(1);
         }
-        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#12abef", "the partial text was kept");
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], chosen, "the partial text was kept");
         // An invalid/multi-byte value leaves the colour untouched.
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
         h.event(Event::Text("zé!".into()));
         h.run_steps(2);
-        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#12abef");
+        assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], chosen);
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         let want = [18.0 / 255.0, 171.0 / 255.0, 239.0 / 255.0, original[3]];
         let tools = &h.state().session.tools;
