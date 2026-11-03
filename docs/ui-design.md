@@ -113,7 +113,9 @@ Mode controls in every theme. The options bar keeps Flip Horizontal and Flip Ver
 beside the tool icon for ordinary tools and near Cancel and Commit when Free Transform is open.
 They use the Edit › Transform commands on the selected pixels or active
 layer, and turn an open Free Transform box in place. Long options rows scroll horizontally. Both scrollers bring newly focused
-controls into view and retain the existing tool actions and popups.
+controls into view and retain the existing tool actions and popups. At compact widths, Free
+Transform keeps X/Y/W/H complete and puts angle, skew, and interpolation in More controls. At the
+760-point minimum window width, More also contains W/H so the visible fields stay complete.
 
 The offscreen regression fixture uses production panels, fonts and SVG loaders across every
 theme, 800×480 and 1280×720 point viewports, and 1×, 1.5× and 2× display scales. To retain its

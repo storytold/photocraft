@@ -1368,7 +1368,11 @@ mod toolbar_tests {
     }
 
     fn flip_harness(app: PhotocraftApp, kind: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, PhotocraftApp> {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        flip_harness_sized(app, kind, 800.0)
+    }
+
+    fn flip_harness_sized(app: PhotocraftApp, kind: crate::theme::ThemeKind, width: f32) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 600.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     options_bar(app, ui);
@@ -1450,6 +1454,39 @@ mod toolbar_tests {
             assert_eq!(layer_pixel(h.state(), green_at.0, green_at.1), [0.0, 1.0, 0.0, 1.0], "{button} must commit the flipped pixels");
             assert_ne!(layer_pixel(h.state(), 2, 3), [0.0, 1.0, 0.0, 1.0], "{button} must move the source pixels");
             assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 1, "{button} must commit one history entry");
+        }
+    }
+
+    #[test]
+    fn compact_transform_keeps_complete_fields_and_advanced_controls() {
+        let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
+        let ctx = h.ctx.clone();
+        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+        h.run_steps(2);
+        let height = h.get_by_label("Height").rect();
+        let more = h.get_by_label("More transform controls").rect();
+        let flips = h.get_by_label("Flip Horizontal").rect();
+        assert!(height.right() < more.left() && more.right() < flips.left(), "compact fields and actions must not overlap: {height:?} {more:?} {flips:?}");
+        h.get_by_label("More transform controls").click();
+        h.run_steps(2);
+        for label in ["Rotate", "Set horizontal skew", "Set vertical skew", "Interpolation"] {
+            assert!(h.query_by_label(label).is_some(), "compact transform must expose {label}");
+        }
+    }
+
+    #[test]
+    fn minimum_width_transform_keeps_size_fields_in_more() {
+        let mut h = flip_harness_sized(asymmetric_layer(), crate::theme::ThemeKind::Studio, 760.0);
+        let ctx = h.ctx.clone();
+        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+        h.run_steps(2);
+        let more = h.get_by_label("More transform controls").rect();
+        let flip = h.get_by_label("Flip Horizontal").rect();
+        assert!(more.right() < flip.left() && flip.right() < 760.0, "the minimum-width actions must fit: {more:?} {flip:?}");
+        h.get_by_label("More transform controls").click();
+        h.run_steps(2);
+        for label in ["Width", "Height", "Rotate", "Set horizontal skew", "Set vertical skew", "Interpolation"] {
+            assert!(h.query_by_label(label).is_some(), "minimum-width transform must expose {label}");
         }
     }
 

@@ -201,7 +201,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else {
         transform_fields(app, &mut row, &t);
     }
-    crate::widgets::vline(&mut row, 22.0);
     let start = row.min_rect().right().min(split);
     let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
     let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -209,12 +208,31 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
+    let available = ui.available_width();
+    let compact = available < 510.0;
+    let narrow = available < 435.0;
+    position_size_fields_with(app, ui, t, !narrow);
+    if compact {
+        let more = crate::icons::button(ui, "ellipsis", 18.0, false, tl!("More transform controls"));
+        more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("More transform controls")));
+        egui::Popup::menu(&more).show(|ui| {
+            if narrow {
+                ui.horizontal(|ui| position_size_fields(app, ui, t));
+            }
+            ui.horizontal(|ui| advanced_transform_fields(app, ui, t));
+        });
+        return;
+    }
+    advanced_transform_fields(app, ui, t);
+}
+
+/// Angle, skew and interpolation stay reachable through the compact bar's More menu.
+fn advanced_transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
     let tk = crate::theme::Tokens::get(ui.ctx());
     let (_, _, angle, skew_h) = readout(t);
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
-    position_size_fields(app, ui, t);
     crate::widgets::vline(ui, 22.0);
     let mut a = angle as f32;
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 22.0), egui::Sense::hover());
@@ -284,6 +302,11 @@ fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>) -> Optio
 
 /// The reference point's X/Y and the W/H scale fields (with the aspect link) of the options bar.
 pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
+    position_size_fields_with(app, ui, t, true);
+}
+
+fn position_size_fields_with(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession, show_size: bool) {
+    let compact = ui.available_width() < 510.0;
     let tk = crate::theme::Tokens::get(ui.ctx());
     let (sx, sy, _, _) = readout(t);
     let lbl = |ui: &mut egui::Ui, s: &str| {
@@ -302,15 +325,19 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     let mut px = pivot[0] as f32;
     let mut py = pivot[1] as f32;
     lbl(ui, "X:");
-    let rx = crate::widgets::value_field(ui, &mut px, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0).accessible_name("X");
+    let position_width = if compact { 60.0 } else { 72.0 };
+    let rx = crate::widgets::value_field(ui, &mut px, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", position_width).accessible_name("X");
     lbl(ui, "Y:");
-    let ry = crate::widgets::value_field(ui, &mut py, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0).accessible_name("Y");
+    let ry = crate::widgets::value_field(ui, &mut py, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", position_width).accessible_name("Y");
     if (rx.changed() || ry.changed())
         && let Some(s) = app.ui.transform.as_mut()
     {
         let (dx, dy) = (px as f64 - s.pivot[0], py as f64 - s.pivot[1]);
         s.quad = s.quad.map(|q| [q[0] + dx, q[1] + dy]);
         s.pivot = [px as f64, py as f64];
+    }
+    if !show_size {
+        return;
     }
     crate::widgets::vline(ui, 22.0);
     // W and H in the unit picked from their right-click menu: the scale in percent, or the box's
@@ -322,7 +349,13 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     let (mut w, mut h) = (size_shown(&u, sx, side_w), size_shown(&u, sy, side_h));
     let (suffix, places) = (u.unit.suffix(), u.unit.decimals() as u32);
     // Lengths need more room than a percentage ("2116.67 mm").
-    let size_w = if u.unit == photocraft_engine::prefs::Unit::Percent { 66.0 } else { 84.0 };
+    let size_w = if u.unit == photocraft_engine::prefs::Unit::Percent {
+        if compact { 51.0 } else { 66.0 }
+    } else if compact {
+        68.0
+    } else {
+        84.0
+    };
     // Whatever their unit, W and H take any other typed in (`500 px` or `2 in` in percent, `50%`
     // in a length), converted at the document's resolution against the box's original side (#6284).
     let units = crate::widgets::FieldUnits { unit: u.unit, dpi: u.dpi, ppi: u.ppi };
