@@ -257,6 +257,13 @@ pub fn apply_dab_stroke(
     let ctx = crate::BrushContext::new(&stroke.brush);
     let bounds = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
     let outer = Rect::new(bounds.x0 - halo, bounds.y0 - halo, bounds.x1 + halo, bounds.y1 + halo);
+    // The working copy is dense over the whole stroke rectangle, so two distant dabs ask for the
+    // area between them. Refuse before reading it.
+    // shortcut: an over-budget stroke paints nothing rather than erroring; return a Result once
+    // the engine's callers can report one.
+    if !fits_dab_stroke_budget(outer, target.channels()) {
+        return Rect::EMPTY;
+    }
     let orig = Region::read(target, outer);
     let mut work = orig.clone();
     for (i, d) in ds.iter().enumerate() {
@@ -264,6 +271,18 @@ pub fn apply_dab_stroke(
     }
     mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
     bounds
+}
+
+/// Bytes a sequential-dab stroke's dense buffers may take: the original and working copies over the
+/// grown stroke rectangle and the mixed result, `f32` samples.
+const MAX_DAB_STROKE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
+
+/// Whether [`apply_dab_stroke`]'s three `channels`-deep planes over `outer` fit [`MAX_DAB_STROKE_BYTES`].
+fn fits_dab_stroke_budget(outer: Rect, channels: usize) -> bool {
+    (outer.width() as u64)
+        .checked_mul(outer.height() as u64)
+        .and_then(|px| px.checked_mul(channels as u64)?.checked_mul(3 * size_of::<f32>() as u64))
+        .is_some_and(|b| b <= MAX_DAB_STROKE_BYTES)
 }
 
 /// Mix a sequential-dab stroke's working pixels `work` back over the original `orig` at
@@ -509,6 +528,19 @@ mod tests {
                 assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{fmt:?} {mode:?} {p:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_dab_stroke_between_distant_points_is_refused_before_reading() {
+        assert!(fits_dab_stroke_budget(Rect::new(0, 0, 4096, 4096), 4));
+        assert!(!fits_dab_stroke_budget(Rect::new(0, 0, 300_000, 300_000), 1));
+        assert!(!fits_dab_stroke_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), usize::MAX));
+        // Two small dabs 40000 px apart on both axes: a 1.6 Gpx working rectangle.
+        let mut s = Surface::new(PixelFormat::GRAY8);
+        let st = stroke(&[(0.0, 0.0), (40_000.0, 40_000.0)], 6.0, 1.0);
+        let mut called = false;
+        assert_eq!(apply_dab_stroke(&mut s, &st, None, false, 2, |_, _| called = true), Rect::EMPTY);
+        assert!(!called);
     }
 
     #[test]
