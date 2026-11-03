@@ -140,7 +140,7 @@ mod tests {
     fn preview_pixels(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<Vec<[f32; 4]>> {
         let idx = app.session.active_index().unwrap();
         crate::canvas::ensure_filter_preview(app, idx, ctx)?;
-        app.filter_preview.as_ref().and_then(|p| p.result.as_ref()).map(|d| photocraft_compose::flatten(d).px)
+        app.filter_preview.as_ref().and_then(|p| p.result.as_ref()).map(|d| photocraft_compose::flatten(d).into_px())
     }
 
     /// A Displace dialog a client filled with a refused map previews nothing and reports it,
@@ -153,7 +153,7 @@ mod tests {
         let (mut app, ctx) = confined_app();
         app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         app.session.execute("filter.render.clouds", json!({"seed": 4})).unwrap();
-        let original = photocraft_compose::flatten(&app.session.active().unwrap().doc).px;
+        let original = photocraft_compose::flatten(&app.session.active().unwrap().doc).into_px();
         let values = [("mapPath", json!(map.to_string_lossy())), ("horizontal", json!(50)), ("vertical", json!(50))];
 
         // A confined client opens and fills the dialog: its preview is refused like OK is.
