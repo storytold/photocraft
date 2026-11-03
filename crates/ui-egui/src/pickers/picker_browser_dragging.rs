@@ -153,11 +153,6 @@ impl DragSession {
         self.candidate.as_ref()
     }
 
-    /// Return the candidate to commit, but only when it is valid.
-    pub(crate) fn commit_position(&self) -> Option<&DropPosition> {
-        self.candidate.as_ref().filter(|candidate| candidate.validity == DropValidity::Valid).map(|candidate| &candidate.position)
-    }
-
     /// Return the exact source/destination pair only when the current candidate is valid.
     pub(crate) fn validated_intent(&self) -> Result<Option<DropMoveIntent>, DropRejection> {
         let Some(candidate) = self.candidate.as_ref() else {
@@ -223,6 +218,7 @@ fn container_outline_rects(rect: Rect) -> [Rect; 4] {
 }
 
 /// Convert a geometric hit region into one semantic operation and its matching indicator.
+#[cfg(test)]
 pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hierarchy: &PickerBrowserHierarchy) -> Option<DropCandidate> {
     resolve_drop_candidate_with_selection(source, &[], hit, hierarchy)
 }
@@ -469,7 +465,7 @@ mod tests {
         let selected_group = NodeId::from("folder");
         let candidate = resolve_drop_candidate_with_selection(
             &NodeId::from("card"),
-            &[selected_group.clone()],
+            std::slice::from_ref(&selected_group),
             &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("other".into()))),
             &tree,
         )

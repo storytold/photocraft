@@ -787,16 +787,21 @@ fn every_preset_picker_title_bar_has_square_bottom_corners() {
     for panel in PRESET_PICKERS {
         let h = floating_picker_harness(panel);
         let floating = h.ctx.memory(|memory| memory.area_rect(floating_picker_area_id(panel))).unwrap();
-        let title = h.output().shapes.iter().find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(shape)
-                if (shape.rect.top() - floating.top()).abs() < 0.5
-                    && (shape.rect.width() - floating.width()).abs() < 0.5
-                    && (shape.rect.height() - 14.0).abs() < 0.5 =>
-            {
-                Some(shape)
-            }
-            _ => None,
-        }).unwrap_or_else(|| panic!("{panel} title bar background should be painted"));
+        let title = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(shape)
+                    if (shape.rect.top() - floating.top()).abs() < 0.5
+                        && (shape.rect.width() - floating.width()).abs() < 0.5
+                        && (shape.rect.height() - 14.0).abs() < 0.5 =>
+                {
+                    Some(shape)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{panel} title bar background should be painted"));
         assert_eq!(title.corner_radius.sw, 0, "{panel} title bar bottom-left corner must be square");
         assert_eq!(title.corner_radius.se, 0, "{panel} title bar bottom-right corner must be square");
     }

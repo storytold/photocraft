@@ -23,10 +23,10 @@ use crate::brush_preview;
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
 
-pub use crate::pickers::brush_browser::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, grouped_presets};
-pub(crate) use crate::pickers::brush_browser::{clear_texture_pattern_selection, full_uv, run_or_status};
 pub use crate::brush_preview::{preview_pixels, preview_sig};
 pub use crate::brush_sections::section_body;
+pub use crate::pickers::brush_browser::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, grouped_presets};
+pub(crate) use crate::pickers::brush_browser::{clear_texture_pattern_selection, full_uv, run_or_status};
 pub use photocraft_engine::brush_cmds::brush_patch;
 
 /// Sections in Photoshop's order. The bool says whether the section has an enable box.

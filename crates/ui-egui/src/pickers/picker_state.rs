@@ -337,12 +337,12 @@ impl PresetUi {
     pub(crate) fn remove_hierarchy_entry(&mut self, panel: &str, parent: &str, entry: &HierarchyOrderEntry) {
         if let Some(entries) = self.hierarchy_order.get_mut(panel).and_then(|parents| parents.get_mut(parent)) {
             entries.retain(|candidate| candidate != entry);
-            if entries.is_empty() {
-                if let Some(parents) = self.hierarchy_order.get_mut(panel) {
-                    parents.remove(parent);
-                    if parents.is_empty() {
-                        self.hierarchy_order.remove(panel);
-                    }
+            if entries.is_empty()
+                && let Some(parents) = self.hierarchy_order.get_mut(panel)
+            {
+                parents.remove(parent);
+                if parents.is_empty() {
+                    self.hierarchy_order.remove(panel);
                 }
             }
         }
@@ -490,6 +490,7 @@ impl PresetUi {
 
     /// Remove a legacy unqualified Item from sibling sequences in the panel. RootItem identities
     /// require the source-group-aware helper below.
+    #[cfg(test)]
     pub(crate) fn delete_hierarchy_item(&mut self, panel: &str, key: &str) {
         if let Some(orders) = self.hierarchy_order.get_mut(panel) {
             for entries in orders.values_mut() {
@@ -731,6 +732,7 @@ impl PresetUi {
     /// Apply the Brushes panel's header-drop convention to asset groups: the upper third inserts
     /// before the target at its sibling level; the remainder nests into the target. A root group
     /// dropped onto a nested header's edge becomes a sibling of that nested group, not a root.
+    #[cfg(test)]
     pub(crate) fn drop_group_on_header(&mut self, panel: &str, names: &[String], child: &str, target: &str, edge: bool) {
         if child == target || !names.iter().any(|n| n == child) || !names.iter().any(|n| n == target) {
             return;
@@ -892,7 +894,7 @@ mod tests {
         assert!(state.is_selected_item("panel", "Root", &["Folder A".into()], "same"));
         assert!(!state.is_selected_item("panel", "Root", &["Folder B".into()], "same"));
         state.set_selected("panel", "same");
-        assert!(state.selected_group_path.get("panel").is_none());
+        assert!(!state.selected_group_path.contains_key("panel"));
     }
 
     #[test]
@@ -1379,7 +1381,7 @@ mod tests {
         );
         output.textures_delta.clear();
         super::persist(&mut app, &ctx);
-        assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_none(), "an in-progress drag must not persist an intermediate hierarchy");
+        assert!(!app.session.prefs().dialogs.contains_key("pickerBrowserUi"), "an in-progress drag must not persist an intermediate hierarchy");
 
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -1395,7 +1397,7 @@ mod tests {
         );
         output.textures_delta.clear();
         super::persist(&mut app, &ctx);
-        assert!(app.session.prefs().dialogs.get("pickerBrowserUi").is_some(), "the completed hierarchy is persisted after release");
+        assert!(app.session.prefs().dialogs.contains_key("pickerBrowserUi"), "the completed hierarchy is persisted after release");
     }
 
     #[test]

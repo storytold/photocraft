@@ -181,7 +181,8 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
         );
     }
     if let Some(panel) = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize) {
-        if app.ui.docking.is_none() && !matches!(panel, "brushes" | "gradients" | "swatches" | "patterns" | "styles" | "shapes" | "toolPresets" | "cloneSource") {
+        if app.ui.docking.is_none() && !matches!(panel, "brushes" | "gradients" | "swatches" | "patterns" | "styles" | "shapes" | "toolPresets" | "cloneSource")
+        {
             return None;
         }
         let showing = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));

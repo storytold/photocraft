@@ -114,12 +114,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         let panel = &id["window.panel.".len()..];
         let floating = app.ui.docking.as_ref().is_some_and(|layout| layout.floating.iter().any(|group| group.panels.iter().any(|member| member == panel)));
         let show = params.get("show").and_then(Value::as_bool).unwrap_or(!floating);
-        return crate::panel_docking::command(
-            app,
-            if show { "window.panel.float" } else { "window.panel.close" },
-            &json!({"panel":panel}),
-        )
-        .unwrap_or(Ok(Value::Null));
+        return crate::panel_docking::command(app, if show { "window.panel.float" } else { "window.panel.close" }, &json!({"panel":panel}))
+            .unwrap_or(Ok(Value::Null));
     }
     if let Some(result) = crate::panel_docking::command(app, id, &params) {
         return result;

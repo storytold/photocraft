@@ -50,7 +50,6 @@ fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_sta
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    grid_indent: 8.0,
                     all_groups_open: true,
                     compact_context_menus: false,
                     item_size: Some(vec2(72.0, 48.0)),
@@ -109,7 +108,6 @@ fn harness_with_intent_capture(
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    grid_indent: 8.0,
                     all_groups_open: true,
                     compact_context_menus: false,
                     item_size: Some(vec2(72.0, 48.0)),
@@ -269,7 +267,6 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    grid_indent: 8.0,
                     all_groups_open: true,
                     compact_context_menus: false,
                     item_size: Some(vec2(72.0, 48.0)),
@@ -364,7 +361,6 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    grid_indent: 8.0,
                     all_groups_open: true,
                     compact_context_menus: false,
                     item_size: Some(vec2(72.0, 48.0)),
@@ -513,7 +509,7 @@ fn actual_card_edge_drop_reorders_mixed_siblings_at_both_halves_across_many_card
 
 #[test]
 fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
-    for offset in [-2.5, -1.0, 1.0, 2.5] {
+    for offset in [-5.0, -4.0, -2.0, -1.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
         let lower_header = h.get_by_label("B").rect();
@@ -523,7 +519,7 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
         assert_eq!(a.iter().filter(|entry| **entry == HierarchyOrderEntry::Group("C".into())).count(), 1);
         let c_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
         let b_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
-        if offset < 0.0 {
+        if offset < -3.0 {
             let last_inner_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a3".into())).unwrap();
             assert!(c_index > last_inner_index, "upper gap half appends after the upper group's last direct child: {a:?}");
         } else {
@@ -533,8 +529,8 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
 }
 
 #[test]
-fn actual_gap_after_a_nested_subtree_anchors_to_the_trailing_parent_card() {
-    for (offset, upper) in [(-1.0, true), (1.0, false)] {
+fn actual_gap_after_a_nested_subtree_anchors_after_the_preceding_root_group() {
+    for (offset, upper) in [(-5.0, true), (-1.0, false)] {
         let mut groups = nested_group_tree();
         groups.push(group("D", vec![]));
         let mut h = harness_with_state(groups, vec2(520.0, 900.0), with_b_nested_in_a());
@@ -544,11 +540,12 @@ fn actual_gap_after_a_nested_subtree_anchors_to_the_trailing_parent_card() {
         pointer_drag(&mut h, source, point);
 
         if upper {
-            let a = &h.state().0.hierarchy_order[PANEL]["A"];
-            let d_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Group("D".into())).expect("D should join A's sibling sequence");
-            let last_card_index = a.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a3".into())).unwrap();
-            assert!(d_index > last_card_index, "upper half should append after A's trailing card, not inside B: {a:?}");
-            assert!(!h.state().0.hierarchy_order[PANEL].get("").is_some_and(|root| root.contains(&HierarchyOrderEntry::Group("D".into()))));
+            let root = &h.state().0.hierarchy_order[PANEL][""];
+            let d_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("D".into())).expect("D should remain a root sibling");
+            let a_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
+            let c_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
+            assert!(a_index < d_index && d_index < c_index, "upper half should append after the preceding root subtree: {root:?}");
+            assert!(!h.state().0.hierarchy_order[PANEL]["A"].contains(&HierarchyOrderEntry::Group("D".into())));
         } else {
             let root = &h.state().0.hierarchy_order[PANEL][""];
             let d_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("D".into())).unwrap();
@@ -714,7 +711,6 @@ fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
                     canvas: Rect::NOTHING,
                     flush: false,
                     center_grid: false,
-                    grid_indent: 8.0,
                     all_groups_open: true,
                     compact_context_menus: false,
                     item_size: Some(vec2(72.0, 48.0)),
@@ -981,7 +977,10 @@ fn actual_multi_card_drag_preserves_selection_order_for_every_drop_region() {
                     let last = h.get_by_label("C card 1").rect();
                     pos2(last.center().x, last.bottom() + 10.0)
                 }
-                _ => unreachable!(),
+                _ => {
+                    assert!(["before", "after", "prepend", "append"].contains(&region), "unexpected drop region: {region}");
+                    Pos2::ZERO
+                }
             };
 
             pointer_drag(&mut h, source, target);
@@ -1199,17 +1198,18 @@ fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
             let source = h.get_by_label("A").rect().center();
             let target = match region {
                 "before" | "after" => {
-                    let upper = h.get_by_label("C").rect();
                     let lower = h.get_by_label("D").rect();
-                    let gap_middle = (upper.bottom() + lower.top()) * 0.5;
-                    pos2(upper.center().x, gap_middle + if region == "before" { 1.0 } else { -1.0 })
+                    pos2(lower.center().x, lower.top() + if region == "before" { -1.0 } else { -5.0 })
                 }
                 "prepend" => h.get_by_label("C").rect().center(),
                 "append" => {
                     let last = h.get_by_label("D").rect();
                     pos2(last.center().x, last.bottom() + 10.0)
                 }
-                _ => unreachable!(),
+                _ => {
+                    assert!(["before", "after", "prepend", "append"].contains(&region), "unexpected drop region: {region}");
+                    Pos2::ZERO
+                }
             };
 
             pointer_drag(&mut h, source, target);
@@ -1242,17 +1242,18 @@ fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_so
                 let source = if source_kind == "group" { h.get_by_label("A").rect().center() } else { h.get_by_label("B card 1").rect().center() };
                 let target = match region {
                     "before" | "after" => {
-                        let upper = h.get_by_label("C").rect();
                         let lower = h.get_by_label("D").rect();
-                        let gap_middle = (upper.bottom() + lower.top()) * 0.5;
-                        pos2(upper.center().x, gap_middle + if region == "before" { 1.0 } else { -1.0 })
+                        pos2(lower.center().x, lower.top() + if region == "before" { -1.0 } else { -5.0 })
                     }
                     "prepend" => h.get_by_label("C").rect().center(),
                     "append" => {
                         let last = h.get_by_label("D").rect();
                         pos2(last.center().x, last.bottom() + 10.0)
                     }
-                    _ => unreachable!(),
+                    _ => {
+                        assert!(["before", "after", "prepend", "append"].contains(&region), "unexpected drop region: {region}");
+                        Pos2::ZERO
+                    }
                 };
 
                 pointer_drag(&mut h, source, target);
@@ -1582,7 +1583,7 @@ fn actual_nested_card_drop_between_root_groups_promotes_card_to_root_level() {
     let mut h = harness(nested_group_tree(), vec2(520.0, 900.0));
     let source = h.get_by_label("A card 1").rect().center();
     let b_header = h.get_by_label("B").rect();
-    let target = pos2(b_header.center().x, b_header.top() + 0.5);
+    let target = pos2(b_header.center().x, b_header.top() - 1.0);
 
     pointer_drag(&mut h, source, target);
 

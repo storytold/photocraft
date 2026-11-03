@@ -306,7 +306,8 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
     let at = fractional_point(&h, 1.0);
     tap(&mut h, at, Modifiers::NONE, true);
     let picker = h.ctx.memory(|m| m.area_rect(egui::Id::new("canvas-brush-picker"))).unwrap();
-    let (name, identity) = h.state().session.tools.presets.first().map(|preset| (preset.name.clone(), crate::pickers::brush_browser::preview_identity(preset))).unwrap();
+    let (name, identity) =
+        h.state().session.tools.presets.first().map(|preset| (preset.name.clone(), crate::pickers::brush_browser::preview_identity(preset))).unwrap();
     let card = h.query_all_by_label(&name).find(|n| picker.contains(n.rect().center())).expect("visible preset card").rect();
     // Open by the right edge so the action lands outside the picker on a foreground menu.
     tap(&mut h, pos2(card.right() - 20.0, card.center().y), Modifiers::NONE, false);

@@ -15,7 +15,10 @@ use serde_json::Value;
 pub(crate) enum HierarchyOrderEntry {
     Item(String),
     /// An item lifted out of its owning group into the root sibling sequence.
-    RootItem { group: String, key: String },
+    RootItem {
+        group: String,
+        key: String,
+    },
     Group(String),
 }
 
@@ -99,10 +102,10 @@ pub struct PickerBrowserData {
 
 impl PickerBrowserData {
     /// Return the containing group for a group entry. Root groups have no parent.
+    #[cfg(test)]
     pub(crate) fn parent_of(&self, panel: &str, group: &str) -> Option<&str> {
         self.hierarchy_order.get(panel)?.iter().find_map(|(parent, entries)| {
-            (!parent.is_empty() && entries.iter().any(|entry| matches!(entry, HierarchyOrderEntry::Group(name) if name == group)))
-                .then_some(parent.as_str())
+            (!parent.is_empty() && entries.iter().any(|entry| matches!(entry, HierarchyOrderEntry::Group(name) if name == group))).then_some(parent.as_str())
         })
     }
 
@@ -111,7 +114,9 @@ impl PickerBrowserData {
         let mut parents = BTreeMap::new();
         if let Some(sequences) = self.hierarchy_order.get(panel) {
             for (parent, entries) in sequences {
-                if parent.is_empty() { continue; }
+                if parent.is_empty() {
+                    continue;
+                }
                 for entry in entries {
                     if let HierarchyOrderEntry::Group(group) = entry {
                         parents.entry(group.clone()).or_insert_with(|| parent.clone());
@@ -128,7 +133,9 @@ impl PickerBrowserData {
         let mut projection = BTreeMap::new();
         for (panel, parents) in &self.hierarchy_order {
             for (parent, entries) in parents {
-                if parent.is_empty() { continue; }
+                if parent.is_empty() {
+                    continue;
+                }
                 for entry in entries {
                     if let HierarchyOrderEntry::Group(group) = entry {
                         projection.entry(panel.clone()).or_insert_with(BTreeMap::new).entry(group.clone()).or_insert_with(|| parent.clone());
@@ -146,9 +153,13 @@ impl PickerBrowserData {
     }
 
     fn insert_legacy_group(&mut self, panel: &str, parent: &str, group: &str, before_item: Option<&str>) {
-        if self.has_group_membership(panel, group) { return; }
+        if self.has_group_membership(panel, group) {
+            return;
+        }
         let entries = self.hierarchy_order.entry(panel.to_string()).or_default().entry(parent.to_string()).or_default();
-        let at = before_item.and_then(|key| entries.iter().position(|entry| matches!(entry, HierarchyOrderEntry::Item(item) if item == key))).unwrap_or(entries.len());
+        let at = before_item
+            .and_then(|key| entries.iter().position(|entry| matches!(entry, HierarchyOrderEntry::Item(item) if item == key)))
+            .unwrap_or(entries.len());
         entries.insert(at, HierarchyOrderEntry::Group(group.to_string()));
     }
 
@@ -183,23 +194,37 @@ impl PickerBrowserData {
                 .filter_map(|entry| if let HierarchyOrderEntry::Group(group) = entry { Some(group.clone()) } else { None })
                 .collect();
             while let Some(group) = pending.pop() {
-                if !seen.insert(group.clone()) { continue; }
+                if !seen.insert(group.clone()) {
+                    continue;
+                }
                 out.push(HierarchyOrderEntry::Group(group.clone()));
                 if let Some(children) = layout.hierarchy_order.get(panel).and_then(|orders| orders.get(&group)) {
-                    pending.extend(children.iter().rev().filter_map(|entry| {
-                        if let HierarchyOrderEntry::Group(child) = entry { Some(child.clone()) } else { None }
-                    }));
+                    pending.extend(children.iter().rev().filter_map(
+                        |entry| {
+                            if let HierarchyOrderEntry::Group(child) = entry { Some(child.clone()) } else { None }
+                        },
+                    ));
                 }
             }
         }
 
-        let root_groups: Vec<String> = self.hierarchy_order.get(panel).and_then(|orders| orders.get("")).into_iter().flatten().filter_map(|entry| {
-            if let HierarchyOrderEntry::Group(group) = entry { Some(group.clone()) } else { None }
-        }).collect();
+        let root_groups: Vec<String> = self
+            .hierarchy_order
+            .get(panel)
+            .and_then(|orders| orders.get(""))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| if let HierarchyOrderEntry::Group(group) = entry { Some(group.clone()) } else { None })
+            .collect();
         let mut seen: BTreeSet<String> = root_groups.iter().cloned().collect();
-        let child_groups: BTreeSet<String> = self.hierarchy_order.get(panel).into_iter().flat_map(|orders| orders.values()).flatten().filter_map(|entry| {
-            if let HierarchyOrderEntry::Group(group) = entry { Some(group.clone()) } else { None }
-        }).collect();
+        let child_groups: BTreeSet<String> = self
+            .hierarchy_order
+            .get(panel)
+            .into_iter()
+            .flat_map(|orders| orders.values())
+            .flatten()
+            .filter_map(|entry| if let HierarchyOrderEntry::Group(group) = entry { Some(group.clone()) } else { None })
+            .collect();
         let mut root_groups = root_groups;
         let mut root_extras = Vec::new();
         if let Some(orders) = self.hierarchy_order.get(panel) {
@@ -217,7 +242,9 @@ impl PickerBrowserData {
         // Corrupt/orphaned cycles are still made visible at root, in deterministic key order.
         if let Some(orders) = self.hierarchy_order.get(panel) {
             for (parent, entries) in orders {
-                if parent.is_empty() { continue; }
+                if parent.is_empty() {
+                    continue;
+                }
                 for entry in entries {
                     if let HierarchyOrderEntry::Group(group) = entry
                         && seen.insert(group.clone())
@@ -242,8 +269,12 @@ impl PickerBrowserData {
             }
             orders.retain(|parent, entries| parent.is_empty() || !entries.is_empty());
             orders.is_empty()
-        } else { false };
-        if remove_panel { self.hierarchy_order.remove(panel); }
+        } else {
+            false
+        };
+        if remove_panel {
+            self.hierarchy_order.remove(panel);
+        }
     }
 }
 
@@ -263,14 +294,26 @@ impl Serialize for PickerBrowserData {
         let mut state = serializer.serialize_struct("PickerBrowserData", field_count)?;
         state.serialize_field("toggled", &self.toggled)?;
         if has_order {
-            let wire: BTreeMap<String, BTreeMap<String, Vec<HierarchyOrderEntryWire>>> = normalized.hierarchy_order.iter().map(|(panel, parents)| {
-                (panel.clone(), parents.iter().map(|(parent, entries)| {
-                    (parent.clone(), entries.iter().map(|entry| HierarchyOrderEntryWire::from_entry(entry, parent.is_empty())).collect())
-                }).collect())
-            }).collect();
+            let wire: BTreeMap<String, BTreeMap<String, Vec<HierarchyOrderEntryWire>>> = normalized
+                .hierarchy_order
+                .iter()
+                .map(|(panel, parents)| {
+                    (
+                        panel.clone(),
+                        parents
+                            .iter()
+                            .map(|(parent, entries)| {
+                                (parent.clone(), entries.iter().map(|entry| HierarchyOrderEntryWire::from_entry(entry, parent.is_empty())).collect())
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
             state.serialize_field("hierarchyOrder", &wire)?;
         }
-        if has_parents { state.serialize_field("groupParent", &parents)?; }
+        if has_parents {
+            state.serialize_field("groupParent", &parents)?;
+        }
         state.end()
     }
 }
@@ -292,12 +335,22 @@ struct PickerBrowserDataWire {
 impl<'de> Deserialize<'de> for PickerBrowserData {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = PickerBrowserDataWire::deserialize(deserializer)?;
-        let hierarchy_order = wire.hierarchy_order.into_iter().map(|(panel, parents)| {
-            (panel, parents.into_iter().map(|(parent, entries)| {
-                let parent_is_root = parent.is_empty();
-                (parent, entries.into_iter().map(|entry| entry.into_entry(parent_is_root)).collect())
-            }).collect())
-        }).collect();
+        let hierarchy_order = wire
+            .hierarchy_order
+            .into_iter()
+            .map(|(panel, parents)| {
+                (
+                    panel,
+                    parents
+                        .into_iter()
+                        .map(|(parent, entries)| {
+                            let parent_is_root = parent.is_empty();
+                            (parent, entries.into_iter().map(|entry| entry.into_entry(parent_is_root)).collect())
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
         let mut layout = Self { toggled: wire.toggled, hierarchy_order };
 
         // Migrate old group/item anchors first so they retain their intended position before a
@@ -310,9 +363,21 @@ impl<'de> Deserialize<'de> for PickerBrowserData {
         }
         for ((panel, parent, before_item), groups) in anchored_groups {
             let missing: Vec<String> = groups.into_iter().filter(|group| !layout.has_group_membership(&panel, group)).collect();
-            if missing.is_empty() { continue; }
+            if missing.is_empty() {
+                continue;
+            }
             let entries = layout.hierarchy_order.entry(panel).or_default().entry(parent).or_default();
-            let at = before_item.as_deref().and_then(|key| entries.iter().position(|entry| matches!(entry, HierarchyOrderEntry::Item(item) if item == key))).unwrap_or(entries.len());
+            // Legacy item anchors can name a card that was never serialized into the split
+            // hierarchy fields (card order was otherwise implicit in the asset library). Keep a
+            // placeholder token after the migrated group so the relative position survives until
+            // the browser projects the actual available card identities and filters stale keys.
+            let at = before_item.as_deref().map_or(entries.len(), |key| {
+                entries.iter().position(|entry| matches!(entry, HierarchyOrderEntry::Item(item) if item == key)).unwrap_or_else(|| {
+                    let at = entries.len();
+                    entries.push(HierarchyOrderEntry::Item(key.to_owned()));
+                    at
+                })
+            });
             entries.splice(at..at, missing.into_iter().map(HierarchyOrderEntry::Group));
         }
 
@@ -365,14 +430,16 @@ fn lenient_group_parent<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BT
             .filter_map(|(group, parent)| parent.as_str().map(|parent| (group.clone(), parent.to_owned())))
             .take(MAX_LEGACY_GROUP_ENTRIES)
             .collect();
-        if !parents.is_empty() { out.insert(panel.clone(), parents); }
+        if !parents.is_empty() {
+            out.insert(panel.clone(), parents);
+        }
     }
     Ok(out)
 }
 
-fn lenient_group_item_anchors<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<BTreeMap<String, BTreeMap<String, (String, Option<String>)>>, D::Error> {
+type LegacyGroupItemAnchors = BTreeMap<String, BTreeMap<String, (String, Option<String>)>>;
+
+fn lenient_group_item_anchors<'de, D: Deserializer<'de>>(deserializer: D) -> Result<LegacyGroupItemAnchors, D::Error> {
     let value = Value::deserialize(deserializer)?;
     let mut out = BTreeMap::new();
     for (panel, groups) in value.as_object().into_iter().flatten() {
@@ -381,7 +448,9 @@ fn lenient_group_item_anchors<'de, D: Deserializer<'de>>(
             .iter()
             .filter_map(|(group, anchor)| {
                 let anchor = anchor.as_array()?;
-                if anchor.len() != 2 { return None; }
+                if anchor.len() != 2 {
+                    return None;
+                }
                 let parent = anchor.first()?.as_str()?.to_owned();
                 let before_item = match anchor.get(1)? {
                     Value::Null => None,
@@ -392,7 +461,9 @@ fn lenient_group_item_anchors<'de, D: Deserializer<'de>>(
             })
             .take(MAX_LEGACY_GROUP_ENTRIES)
             .collect();
-        if !anchors.is_empty() { out.insert(panel.clone(), anchors); }
+        if !anchors.is_empty() {
+            out.insert(panel.clone(), anchors);
+        }
     }
     Ok(out)
 }
@@ -416,10 +487,7 @@ mod tests {
 
         assert_eq!(layout.parent_of("panel", "Child"), Some("Parent"));
         assert_eq!(layout.parent_of("panel", "Grandchild"), Some("Child"));
-        assert_eq!(
-            layout.hierarchy_order["panel"]["Parent"],
-            [Entry::Group("Child".into()), Entry::Item("card-a".into())]
-        );
+        assert_eq!(layout.hierarchy_order["panel"]["Parent"], [Entry::Group("Child".into()), Entry::Item("card-a".into())]);
         assert_eq!(layout.hierarchy_order["panel"][""], [Entry::Group("Parent".into()), Entry::Group("Root sibling".into())]);
 
         let written = serde_json::to_value(layout).unwrap();
@@ -459,12 +527,18 @@ mod tests {
                 "B": [{"type":"item", "key":"b-card"}, {"type":"group", "key":"C"}],
                 "C": [{"type":"item", "key":"c-card"}]
             }}
-        })).unwrap();
+        }))
+        .unwrap();
 
         layout.flatten_group_nesting("panel");
         assert_eq!(
             layout.hierarchy_order["panel"][""],
-            [Entry::Group("A".into()), Entry::RootItem { group: "Original".into(), key: "root-card".into() }, Entry::Group("B".into()), Entry::Group("C".into())]
+            [
+                Entry::Group("A".into()),
+                Entry::RootItem { group: "Original".into(), key: "root-card".into() },
+                Entry::Group("B".into()),
+                Entry::Group("C".into())
+            ]
         );
         assert_eq!(layout.hierarchy_order["panel"]["A"], [Entry::Item("a-card".into())]);
         assert_eq!(layout.hierarchy_order["panel"]["B"], [Entry::Item("b-card".into())]);
@@ -494,36 +568,41 @@ mod tests {
     #[test]
     fn root_item_persistence_preserves_same_key_in_distinct_source_groups() {
         let mut layout = PickerBrowserData::default();
-        layout.hierarchy_order.insert("panel".into(), [(String::new(), vec![
-            Entry::RootItem { group: "First".into(), key: "same".into() },
-            Entry::RootItem { group: "First".into(), key: "same".into() },
-            Entry::RootItem { group: "Second".into(), key: "same".into() },
-        ])].into());
+        layout.hierarchy_order.insert(
+            "panel".into(),
+            [(
+                String::new(),
+                vec![
+                    Entry::RootItem { group: "First".into(), key: "same".into() },
+                    Entry::RootItem { group: "First".into(), key: "same".into() },
+                    Entry::RootItem { group: "Second".into(), key: "same".into() },
+                ],
+            )]
+            .into(),
+        );
 
         let written = serde_json::to_value(&layout).unwrap();
         let serialized = written["hierarchyOrder"]["panel"][""].as_array().unwrap();
         assert_eq!(serialized.len(), 2, "duplicate identity is collapsed, distinct owners remain");
 
         let restored: PickerBrowserData = serde_json::from_value(written).unwrap();
-        assert_eq!(restored.hierarchy_order["panel"][""], [
-            Entry::RootItem { group: "First".into(), key: "same".into() },
-            Entry::RootItem { group: "Second".into(), key: "same".into() },
-        ]);
+        assert_eq!(
+            restored.hierarchy_order["panel"][""],
+            [Entry::RootItem { group: "First".into(), key: "same".into() }, Entry::RootItem { group: "Second".into(), key: "same".into() },]
+        );
     }
 
     #[test]
     fn root_item_wire_tokens_round_trip_unicode_group_and_item_keys() {
         let mut layout = PickerBrowserData::default();
-        layout.hierarchy_order.insert("panel".into(), [(String::new(), vec![
-            Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() },
-        ])].into());
+        layout
+            .hierarchy_order
+            .insert("panel".into(), [(String::new(), vec![Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() }])].into());
 
         let written = serde_json::to_value(&layout).unwrap();
         let restored: PickerBrowserData = serde_json::from_value(written).unwrap();
 
-        assert_eq!(restored.hierarchy_order["panel"][""], [
-            Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() },
-        ]);
+        assert_eq!(restored.hierarchy_order["panel"][""], [Entry::RootItem { group: "素材/暖色🎨".into(), key: "夕焼け🌅:soft".into() },]);
     }
 
     #[test]
@@ -532,7 +611,8 @@ mod tests {
         let layout: PickerBrowserData = serde_json::from_value(serde_json::json!({"hierarchyOrder": {"panel": {
             "Original": [{"type":"item", "key": token}],
             "": [{"type":"item", "key":"__picker-root-item:v1:8:Original9:root-card"}]
-        }}})).unwrap();
+        }}}))
+        .unwrap();
         assert_eq!(layout.hierarchy_order["panel"]["Original"], [Entry::Item(token.into())]);
         assert_eq!(layout.hierarchy_order["panel"][""], [Entry::RootItem { group: "Original".into(), key: "root-card".into() }]);
     }
@@ -542,19 +622,29 @@ mod tests {
         let root_item_token = "__picker-root-item:v1:8:Original9:root-card";
         let literal_marker_token = "__picker-root-item:literal:v1:4:card";
         let mut layout = PickerBrowserData::default();
-        layout.hierarchy_order.insert("panel".into(), [(String::new(), vec![
-            Entry::Item(root_item_token.into()),
-            Entry::Item(literal_marker_token.into()),
-            Entry::RootItem { group: "Original".into(), key: "root-card".into() },
-        ])].into());
+        layout.hierarchy_order.insert(
+            "panel".into(),
+            [(
+                String::new(),
+                vec![
+                    Entry::Item(root_item_token.into()),
+                    Entry::Item(literal_marker_token.into()),
+                    Entry::RootItem { group: "Original".into(), key: "root-card".into() },
+                ],
+            )]
+            .into(),
+        );
 
         let written = serde_json::to_value(&layout).unwrap();
         let restored: PickerBrowserData = serde_json::from_value(written).unwrap();
-        assert_eq!(restored.hierarchy_order["panel"][""], [
-            Entry::Item(root_item_token.into()),
-            Entry::Item(literal_marker_token.into()),
-            Entry::RootItem { group: "Original".into(), key: "root-card".into() },
-        ]);
+        assert_eq!(
+            restored.hierarchy_order["panel"][""],
+            [
+                Entry::Item(root_item_token.into()),
+                Entry::Item(literal_marker_token.into()),
+                Entry::RootItem { group: "Original".into(), key: "root-card".into() },
+            ]
+        );
     }
 
     #[test]
@@ -574,17 +664,14 @@ mod tests {
                 "Wrong item": ["Canonical", false],
                 "Wrong length": ["Canonical"]
             }, "wrong panel shape": "not an object"}
-        })).unwrap();
+        }))
+        .unwrap();
 
         assert_eq!(layout.parent_of("panel", "Canonical"), None);
         assert_eq!(layout.parent_of("panel", "Valid child"), Some("Canonical"));
-        assert_eq!(layout.hierarchy_order["panel"]["Canonical"], [
-            Entry::Group("Valid anchored".into()),
-            Entry::Group("Valid child".into()),
-        ]);
+        assert_eq!(layout.hierarchy_order["panel"]["Canonical"], [Entry::Group("Valid anchored".into()), Entry::Group("Valid child".into()),]);
         let written = serde_json::to_value(layout).unwrap();
         assert!(written.get("groupOrder").is_none());
         assert!(written.get("groupItemAnchors").is_none());
     }
 }
-

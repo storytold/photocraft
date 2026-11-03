@@ -13,14 +13,24 @@ use super::picker_state::{HierarchyOrderEntry, PresetUi};
 /// is derived from the canonical tree after the move, not from the ID's original projection path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HierarchyIdentity {
-    Item { group: String, key: String },
+    Item {
+        group: String,
+        key: String,
+    },
     Group(String),
     /// A nested folder identified by its owning root group and full folder path.
     /// This identity is domain-owned and must not be persisted through the legacy
     /// name-keyed `PresetUi` hierarchy representation.
-    Folder { group: String, path: Vec<String> },
+    Folder {
+        group: String,
+        path: Vec<String>,
+    },
     /// An item inside a nested folder, qualified by its owning root group and full folder path.
-    FolderItem { group: String, path: Vec<String>, key: String },
+    FolderItem {
+        group: String,
+        path: Vec<String>,
+        key: String,
+    },
 }
 
 /// Apply one resolved browser drop and persist the resulting canonical child sequences.
@@ -176,15 +186,8 @@ mod tests {
         ]);
         let mut state = PresetUi::default();
 
-        commit_hierarchy_move(
-            &mut state,
-            "gradients",
-            &mut hierarchy,
-            &NodeId::from("B"),
-            &DropPosition::Before { target: NodeId::from("one") },
-            &identities,
-        )
-        .unwrap();
+        commit_hierarchy_move(&mut state, "gradients", &mut hierarchy, &NodeId::from("B"), &DropPosition::Before { target: NodeId::from("one") }, &identities)
+            .unwrap();
 
         assert_eq!(
             state.hierarchy_order["gradients"]["A"],
@@ -195,11 +198,8 @@ mod tests {
 
     #[test]
     fn commit_moves_cards_into_groups_and_back_to_root_without_losing_identity() {
-        let mut hierarchy = PickerBrowserHierarchy::new(vec![
-            HierarchyNode::group("A", vec![HierarchyNode::item("child")]),
-            HierarchyNode::item("root-card"),
-        ])
-        .unwrap();
+        let mut hierarchy =
+            PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("child")]), HierarchyNode::item("root-card")]).unwrap();
         let identities = BTreeMap::from([
             (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
             (NodeId::from("child"), HierarchyIdentity::Item { group: "A".into(), key: "child".into() }),
@@ -228,7 +228,8 @@ mod tests {
             &identities,
         )
         .unwrap();
-        let [HierarchyOrderEntry::Group(group), HierarchyOrderEntry::RootItem { group: source_group, key }] = state.hierarchy_order["gradients"][""].as_slice() else {
+        let [HierarchyOrderEntry::Group(group), HierarchyOrderEntry::RootItem { group: source_group, key }] = state.hierarchy_order["gradients"][""].as_slice()
+        else {
             panic!("the lifted card must be persisted as one typed root item");
         };
         assert_eq!(group, "A");
@@ -267,7 +268,8 @@ mod tests {
 
     #[test]
     fn incomplete_adapter_identity_map_rejects_before_changing_tree_or_persistence() {
-        let mut hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("a1")]), HierarchyNode::item("root-one")]).unwrap();
+        let mut hierarchy =
+            PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("a1")]), HierarchyNode::item("root-one")]).unwrap();
         let original_hierarchy = hierarchy.clone();
         let mut state = PresetUi::default();
         state.set_hierarchy_order("gradients", "", vec![HierarchyOrderEntry::Group("A".into())]);

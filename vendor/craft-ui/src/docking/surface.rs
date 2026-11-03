@@ -573,11 +573,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             Rect::from_min_max(pos2(rect.left(), title_rect.bottom()), pos2(rect.right(), (title_rect.bottom() + self.style.tab_height).min(rect.bottom())));
         ui.painter().rect_filled(strip, 0.0, self.style.tab_background);
         if title_bar {
-            ui.painter().rect_filled(
-                title_rect,
-                egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 },
-                self.style.tab_background,
-            );
+            ui.painter().rect_filled(title_rect, egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, self.style.tab_background);
             ui.painter().line_segment([pos2(title_rect.left(), title_rect.bottom()), pos2(title_rect.right(), title_rect.bottom())], self.style.border);
         }
 

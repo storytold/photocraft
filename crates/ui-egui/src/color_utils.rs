@@ -40,9 +40,8 @@ fn with_luminance(color: Color32, luminance: f32) -> Color32 {
 
     let scale = target / source_luminance;
     let channel = |value: u8| {
-        (egui::ecolor::gamma_from_linear((egui::ecolor::linear_from_gamma(f32::from(value) / 255.0) * scale).clamp(0.0, 1.0)) * 255.0)
-            .round()
-            .clamp(0.0, 255.0) as u8
+        (egui::ecolor::gamma_from_linear((egui::ecolor::linear_from_gamma(f32::from(value) / 255.0) * scale).clamp(0.0, 1.0)) * 255.0).round().clamp(0.0, 255.0)
+            as u8
     };
     Color32::from_rgba_unmultiplied(channel(color.r()), channel(color.g()), channel(color.b()), color.a())
 }

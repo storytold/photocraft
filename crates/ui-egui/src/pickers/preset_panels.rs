@@ -119,58 +119,52 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for g in &src {
         texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
     }
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
-        run(app, "style.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
-            .map(|_| ())
-            .ok_or_else(|| "The Style library rejected the item move.".to_owned())
+    let events = {
+        let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+            run(app, "style.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+                .map(|_| ())
+                .ok_or_else(|| "The Style library rejected the item move.".to_owned())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: "styles",
+            groups: &groups,
+            options: BrowserOptions {
+                canvas,
+                flush: false,
+                center_grid: false,
+                all_groups_open: false,
+                compact_context_menus: false,
+                item_size: None,
+                list_item_height: None,
+                domain_hierarchy_actions: false,
+                root_item_group: None,
+            },
+            // Cross-group membership uses the Style domain command; sibling/group order is saved
+            // in the canonical picker layout state.
+            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            item_context_menu: Some(standard_item_context_menu),
+            group_context_menu: Some(standard_group_context_menu),
+            nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
+            hierarchy_item_move: Some(&mut commit_item_move),
+            paint_group: None,
+            paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+                ui.painter().rect_filled(rect, 2.0, t.field);
+                ui.painter().image(texes[group_index][item_index].id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            },
+            paint_list_item: None,
+        };
+        picker_shell(
+            ui,
+            &mut st,
+            &mut adapter,
+            ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new style from the selected layer"))), ..Default::default() },
+        )
     };
-    let mut adapter = BrowserAdapter {
-        panel: "styles",
-        groups: &groups,
-        options: BrowserOptions {
-            canvas,
-            flush: false,
-            center_grid: false,
-            grid_indent: 8.0,
-            all_groups_open: false,
-            compact_context_menus: false,
-            item_size: None,
-            list_item_height: None,
-            domain_hierarchy_actions: false,
-            root_item_group: None,
-        },
-        // Cross-group membership uses the Style domain command; sibling/group order is saved
-        // in the canonical picker layout state.
-        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
-        item_context_menu: Some(standard_item_context_menu),
-        group_context_menu: Some(standard_group_context_menu),
-        nested_group_context_menu: None,
-        canonical_hierarchy_move: None,
-        hierarchy_item_move: Some(&mut commit_item_move),
-        paint_group: None,
-        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
-            ui.painter().rect_filled(rect, 2.0, t.field);
-            ui.painter().image(texes[group_index][item_index].id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-        },
-        paint_list_item: None,
-    };
-    let events = picker_shell(
-        ui,
-        &mut st,
-        &mut adapter,
-        ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new style from the selected layer"))), ..Default::default() },
-    );
-    drop(adapter);
-    drop(commit_item_move);
     app.ui.presets_ui = st;
     let shift = ui.input(|i| i.modifiers.shift);
     for e in events {
         match &e {
-            BrowserAction::Select(k) | BrowserAction::Activate(k) => {
-                app.ui.presets_ui.set_selected("styles", k);
-                // Clicking applies to the selected layers (⇧ adds to their effects).
-                run(app, "style.presets.apply", json!({"preset": k, "add": shift}));
-            }
             BrowserAction::SelectItem { group, group_path, key } | BrowserAction::ActivateItem { group, group_path, key } => {
                 app.ui.presets_ui.set_selected_item("styles", group, group_path, key);
                 run(app, "style.presets.apply", json!({"preset": key, "add": shift}));
@@ -205,75 +199,64 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
-        run(app, "shape.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
-            .map(|_| ())
-            .ok_or_else(|| "The Shape library rejected the item move.".to_owned())
+    let events = {
+        let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+            run(app, "shape.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+                .map(|_| ())
+                .ok_or_else(|| "The Shape library rejected the item move.".to_owned())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: "shapes",
+            groups: &groups,
+            options: BrowserOptions {
+                canvas,
+                flush: false,
+                center_grid: false,
+                all_groups_open: false,
+                compact_context_menus: false,
+                item_size: None,
+                list_item_height: None,
+                domain_hierarchy_actions: false,
+                root_item_group: None,
+            },
+            // The projection also contains the derived `Custom Shapes` group, whose items live in
+            // edit_state.custom_shapes and have no move command. Until that source supports the same
+            // canonical move contract, keep drag semantics disabled for this mixed-source adapter.
+            capabilities: BrowserCapabilities {
+                item_drag: false,
+                item_drop: false,
+                group_drag: false,
+                selection: true,
+                activation: true,
+                canonical_hierarchy_drag: false,
+            },
+            item_context_menu: Some(standard_item_context_menu),
+            group_context_menu: Some(standard_group_context_menu),
+            nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
+            hierarchy_item_move: Some(&mut commit_item_move),
+            paint_group: None,
+            paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+                let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
+                ui.painter().image(texture.id(), rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
+            },
+            paint_list_item: None,
+        };
+        picker_shell(
+            ui,
+            &mut st,
+            &mut adapter,
+            ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new shape from the current path"))), ..Default::default() },
+        )
     };
-    let mut adapter = BrowserAdapter {
-        panel: "shapes",
-        groups: &groups,
-        options: BrowserOptions {
-            canvas,
-            flush: false,
-            center_grid: false,
-            grid_indent: 8.0,
-            all_groups_open: false,
-            compact_context_menus: false,
-            item_size: None,
-            list_item_height: None,
-            domain_hierarchy_actions: false,
-            root_item_group: None,
-        },
-        // The projection also contains the derived `Custom Shapes` group, whose items live in
-        // edit_state.custom_shapes and have no move command. Until that source supports the same
-        // canonical move contract, keep drag semantics disabled for this mixed-source adapter.
-        capabilities: BrowserCapabilities {
-            item_drag: false,
-            item_drop: false,
-            group_drag: false,
-            selection: true,
-            activation: true,
-            canonical_hierarchy_drag: false,
-        },
-        item_context_menu: Some(standard_item_context_menu),
-        group_context_menu: Some(standard_group_context_menu),
-        nested_group_context_menu: None,
-        canonical_hierarchy_move: None,
-        hierarchy_item_move: Some(&mut commit_item_move),
-        paint_group: None,
-        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
-            let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
-            ui.painter().image(texture.id(), rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
-        },
-        paint_list_item: None,
-    };
-    let events = picker_shell(
-        ui,
-        &mut st,
-        &mut adapter,
-        ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new shape from the current path"))), ..Default::default() },
-    );
-    drop(adapter);
-    drop(commit_item_move);
     app.ui.presets_ui = st;
     let fill = shape_fill(app);
     for e in events {
         match &e {
-            BrowserAction::Select(k) => {
-                // Selecting a shape picks it for the Custom Shape tool (and switches to it).
-                app.ui.presets_ui.set_selected("shapes", k);
-                app.ui.presets_ui.custom_shape = k.clone();
-                app.ui.tool = Tool::CustomShape;
-            }
             BrowserAction::SelectItem { group, group_path, key } => {
                 app.ui.presets_ui.set_selected_item("shapes", group, group_path, key);
                 app.ui.presets_ui.custom_shape = key.clone();
                 app.ui.tool = Tool::CustomShape;
-            }
-            BrowserAction::Activate(k) => {
-                app.ui.presets_ui.custom_shape = k.clone();
-                run(app, "shape.presets.place", json!({"preset": k, "fill": fill}));
             }
             BrowserAction::ActivateItem { group, group_path, key } => {
                 app.ui.presets_ui.set_selected_item("shapes", group, group_path, key);
@@ -889,7 +872,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                grid_indent: 8.0,
                 all_groups_open: false,
                 compact_context_menus: false,
                 item_size: None,
@@ -935,7 +917,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                grid_indent: 8.0,
                 all_groups_open: false,
                 compact_context_menus: false,
                 item_size: None,
@@ -975,11 +956,11 @@ mod tests {
         let calls = Rc::new(Cell::new(0));
         let observed_height = Rc::new(Cell::new(0.0_f32));
         let observed_clip_height = Rc::new(Cell::new(0.0_f32));
-        let observed_content_height = Rc::new(Cell::new(0.0_f32));
+        let observed_outer_height = Rc::new(Cell::new(0.0_f32));
         let call_count = Rc::clone(&calls);
         let height = Rc::clone(&observed_height);
         let clip_height = Rc::clone(&observed_clip_height);
-        let content_height = Rc::clone(&observed_content_height);
+        let outer_height = Rc::clone(&observed_outer_height);
         let mut search = move |ui: &mut egui::Ui| {
             call_count.set(call_count.get() + 1);
             ui.label("Brush search");
@@ -991,8 +972,8 @@ mod tests {
                     height.set(allocated_h);
                     clip_height.set(ui.clip_rect().height());
                     ui.allocate_exact_size(vec2(ui.available_width(), allocated_h + 80.0), Sense::hover());
-                    content_height.set(ui.min_rect().height());
                 });
+                outer_height.set(ui.min_rect().height());
             },
             app,
         );
@@ -1001,7 +982,7 @@ mod tests {
         assert!(observed_height.get() > 100.0, "the custom renderer receives the space remaining after shell controls");
         assert!(observed_height.get() <= 260.0, "the custom renderer respects its consumer height cap");
         assert!(observed_clip_height.get() <= observed_height.get(), "the renderer is clipped to its allocated browser viewport");
-        assert!(observed_content_height.get() <= observed_height.get(), "an oversized renderer cannot grow beyond the browser viewport");
+        assert!(observed_outer_height.get() <= 300.0, "an oversized renderer cannot grow the picker beyond its window");
     }
 
     #[test]
@@ -1046,7 +1027,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                grid_indent: 8.0,
                 all_groups_open: false,
                 compact_context_menus: false,
                 item_size: None,
@@ -1282,18 +1262,10 @@ mod tests {
         );
     }
 
-    fn consumer_item_menu(
-        ui: &mut egui::Ui,
-        _st: &mut PresetUi,
-        _panel: &str,
-        item: &ItemView,
-        _group: &GroupView,
-        _names: &[String],
-        _selected: &[(String, ItemView)],
-        ev: &mut Vec<BrowserAction>,
-    ) {
+    fn consumer_item_menu(ui: &mut egui::Ui, _st: &mut PresetUi, args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>, ev: &mut Vec<BrowserAction>) {
+        let crate::pickers::asset_browser::ItemContextMenuArgs { item, group, .. } = args;
         if ui.button("Consumer item operation").clicked() {
-            ev.push(BrowserAction::Delete(item.key.clone()));
+            ev.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
             ui.close();
         }
     }
@@ -1322,7 +1294,6 @@ mod tests {
                 canvas: Rect::NOTHING,
                 flush: false,
                 center_grid: false,
-                grid_indent: 8.0,
                 all_groups_open: false,
                 compact_context_menus: false,
                 item_size: None,
@@ -1355,7 +1326,7 @@ mod tests {
         h.run_steps(2);
         h.get_by_label("Consumer item operation").click();
         h.run_steps(2);
-        assert!(matches!(h.state().last(), Some(BrowserAction::Delete(key)) if key == "only"));
+        assert!(matches!(h.state().last(), Some(BrowserAction::DeleteItem { key, .. }) if key == "only"));
 
         let header = last_group_headers(&h.ctx, "consumer-actions").first().map(|(_, r)| r.center()).expect("group hit target recorded");
         h.event(egui::Event::PointerMoved(header));

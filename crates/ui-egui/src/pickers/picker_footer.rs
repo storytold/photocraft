@@ -23,7 +23,6 @@ impl<'a> FooterOptions<'a> {
 /// User intent produced by the shared footer, before the shell translates it into browser events.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FooterAction {
-    Delete(String),
     DeleteItem { group: String, group_path: Vec<String>, key: String },
     New,
     NewGroup,
@@ -47,10 +46,9 @@ pub(crate) fn draw(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, footer: Fo
             if footer.delete
                 && crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
                 && let Some(key) = st.selected.get(panel).cloned()
+                && let (Some(group), Some(group_path)) = (st.selected_group.get(panel).cloned(), st.selected_group_path.get(panel).cloned())
             {
-                if let (Some(group), Some(group_path)) = (st.selected_group.get(panel).cloned(), st.selected_group_path.get(panel).cloned()) {
-                    actions.push(FooterAction::DeleteItem { group, group_path, key });
-                }
+                actions.push(FooterAction::DeleteItem { group, group_path, key });
             }
             if footer.new_item && crate::icons::button(ui, "plus", 24.0, false, footer.new_tip).clicked() {
                 actions.push(FooterAction::New);

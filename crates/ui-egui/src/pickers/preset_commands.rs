@@ -49,13 +49,6 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                     app.ui.presets_ui.rename_hierarchy_item_at_path(panel, group, group_path, key, text);
                 }
                 true
-            } else { false }
-        }
-        BrowserAction::Delete(k) => {
-            if run(app, &edit, json!({"action": "delete", "preset": k})).is_some() {
-                app.ui.presets_ui.clear_selected(panel);
-                app.ui.presets_ui.delete_hierarchy_item(panel, k);
-                true
             } else {
                 false
             }
@@ -67,7 +60,9 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                 }
                 app.ui.presets_ui.delete_hierarchy_item_at_path(panel, group, group_path, key);
                 true
-            } else { false }
+            } else {
+                false
+            }
         }
         BrowserAction::Move(k, g) => run(app, &edit, json!({"action": "move", "preset": k, "to": g})).is_some(),
         BrowserAction::MoveItem(k, g, index) => {
@@ -119,9 +114,7 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                 false
             }
         }
-        BrowserAction::Select(_)
-        | BrowserAction::SelectItem { .. }
-        | BrowserAction::Activate(_)
+        BrowserAction::SelectItem { .. }
         | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)
         | BrowserAction::RenameNestedGroup { .. }

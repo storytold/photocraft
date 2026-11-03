@@ -80,11 +80,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Swatches are applied by clicking; dragging a swatch onto the canvas has no action. Keep
     // hierarchy reordering enabled without advertising a dead canvas-drop destination.
     let canvas = Rect::NOTHING;
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
-        run(app, "swatches.move", json!({"swatch": key, "group": source_group, "to": destination_group, "position": index}))
-            .map(|_| ())
-            .ok_or_else(|| "The Swatches library rejected the item move.".to_owned())
-    };
     // In a very short dock, the menu and footer need priority over the optional search row.
     // Preserve the user's search preference so it returns when the panel is tall enough again.
     let compact = ui.available_height() < 90.0;
@@ -93,41 +88,44 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         st.search_visible.insert(PANEL.into(), false);
     }
     st.sizes.entry(PANEL.to_string()).or_insert(DEFAULT_SIZE);
-    // Flat, touching squares, as in Photoshop's Swatches panel (#5103).
-    let mut adapter = BrowserAdapter {
-        panel: PANEL,
-        groups: &groups,
-        options: BrowserOptions {
-            canvas,
-            flush: true,
-            center_grid: false,
-            grid_indent: 8.0,
-            all_groups_open: true,
-            compact_context_menus: false,
-            item_size: None,
-            list_item_height: None,
-            domain_hierarchy_actions: false,
-            root_item_group: None,
-        },
-        // Cross-group membership uses the Swatches domain command; sibling/group order is saved
-        // in the canonical picker layout state.
-        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
-        item_context_menu: Some(standard_item_context_menu),
-        group_context_menu: Some(standard_group_context_menu),
-        nested_group_context_menu: None,
-        canonical_hierarchy_move: None,
-        hierarchy_item_move: Some(&mut commit_item_move),
-        paint_group: None,
-        paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
-            let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);
-            ui.painter().rect_filled(rect, CornerRadius::ZERO, color);
-        },
-        paint_list_item: None,
+    let events = {
+        let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+            run(app, "swatches.move", json!({"swatch": key, "group": source_group, "to": destination_group, "position": index}))
+                .map(|_| ())
+                .ok_or_else(|| "The Swatches library rejected the item move.".to_owned())
+        };
+        // Flat, touching squares, as in Photoshop's Swatches panel (#5103).
+        let mut adapter = BrowserAdapter {
+            panel: PANEL,
+            groups: &groups,
+            options: BrowserOptions {
+                canvas,
+                flush: true,
+                center_grid: false,
+                all_groups_open: true,
+                compact_context_menus: false,
+                item_size: None,
+                list_item_height: None,
+                domain_hierarchy_actions: false,
+                root_item_group: None,
+            },
+            // Cross-group membership uses the Swatches domain command; sibling/group order is saved
+            // in the canonical picker layout state.
+            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            item_context_menu: Some(standard_item_context_menu),
+            group_context_menu: Some(standard_group_context_menu),
+            nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
+            hierarchy_item_move: Some(&mut commit_item_move),
+            paint_group: None,
+            paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
+                let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);
+                ui.painter().rect_filled(rect, CornerRadius::ZERO, color);
+            },
+            paint_list_item: None,
+        };
+        picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new swatch"))), ..Default::default() })
     };
-    let events =
-        picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new swatch"))), ..Default::default() });
-    drop(adapter);
-    drop(commit_item_move);
     if compact {
         if let Some(was_visible) = search_was_visible {
             st.search_visible.insert(PANEL.into(), was_visible);
@@ -147,17 +145,9 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         app.ui.presets_ui.set_selected(PANEL, k);
     };
     match e {
-        BrowserAction::Select(k) => {
-            sel(app, &k);
-            use_swatch(app, &k, background);
-        }
         BrowserAction::SelectItem { group, group_path, key } => {
             app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &key);
             use_swatch(app, &key, background);
-        }
-        BrowserAction::Activate(k) => {
-            sel(app, &k);
-            app.ui.presets_ui.renaming = Some((PANEL.into(), k.clone(), k));
         }
         BrowserAction::ActivateItem { group, group_path, key } => {
             app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &key);
@@ -181,15 +171,11 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
                 }
             }
         }
-        BrowserAction::Delete(k) => {
-            if run(app, "swatches.delete", json!({"swatch": k})).is_some() {
-                app.ui.presets_ui.clear_selected(PANEL);
-                app.ui.presets_ui.delete_hierarchy_item(PANEL, &k);
-            }
-        }
         BrowserAction::DeleteItem { group, group_path, key } => {
             if run(app, "swatches.delete", json!({"swatch": key})).is_some() {
-                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) { app.ui.presets_ui.clear_selected(PANEL); }
+                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) {
+                    app.ui.presets_ui.clear_selected(PANEL);
+                }
                 app.ui.presets_ui.delete_hierarchy_item_in_group(PANEL, &group, &key);
             }
         }
@@ -423,12 +409,11 @@ mod tests {
         h.run_steps(3);
     }
 
-    /// The first swatch, positioned from the rendered group header so optional shell controls
-    /// (such as the search row) do not make tests click the header or search field instead.
+    /// The first swatch's actual rendered bounds keep the target stable across shell controls and
+    /// layout insets.
     fn first_cell(h: &Harness<'_, PhotocraftApp>) -> egui::Pos2 {
-        let origin = h.ctx.input(|i| i.viewport_rect()).min;
-        let header_bottom = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL).first().map(|(_, rect)| rect.bottom()).unwrap_or(origin.y);
-        egui::pos2(origin.x + 8.0 + 20.0 + DEFAULT_SIZE / 2.0, header_bottom + 2.0 + DEFAULT_SIZE / 2.0)
+        let first_name = h.state().session.presets.swatches.first().and_then(|group| group.items.first()).map(|item| item.name.as_str()).unwrap();
+        h.get_by_label(first_name).rect().center()
     }
 
     /// Harness construction renders once before the test installs the app's named theme fonts.
@@ -521,7 +506,8 @@ mod tests {
         assert_eq!(h.state().ui.presets_ui.selected.get(PANEL).map(String::as_str), Some("Black"));
         // The footer's trash deletes the selection.
         let n = h.state().session.presets.swatches[0].items.len();
-        handle(h.state_mut(), BrowserAction::Delete("Black".into()), false);
+        let group = h.state().session.presets.swatches[0].name.clone();
+        handle(h.state_mut(), BrowserAction::DeleteItem { group, group_path: Vec::new(), key: "Black".into() }, false);
         assert_eq!(h.state().session.presets.swatches[0].items.len(), n - 1);
     }
 
@@ -633,11 +619,8 @@ mod tests {
         let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
-        let target_rect = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL)
-            .into_iter()
-            .find(|(name, _)| name == &target_group)
-            .map(|(_, rect)| rect)
-            .unwrap();
+        let target_rect =
+            crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == &target_group).map(|(_, rect)| rect).unwrap();
         let source_rect = h.get_by_label(&card).rect();
 
         // A card and a group use the same drop-onto-group target semantics.
@@ -658,7 +641,8 @@ mod tests {
         assert!(headers.len() >= 2);
         let (target_group, _) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
-        let target_item = h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let target_item =
+            h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let root_order_before = h.state().ui.presets_ui.display_order(PANEL, &headers.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
 
         // Aim at the left half of the first swatch so the group is inserted before that card.

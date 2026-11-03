@@ -121,65 +121,60 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
     let ctx = ui.ctx().clone();
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
-        run(app, "pattern.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
-            .map(|_| ())
-            .ok_or_else(|| "The Pattern library rejected the item move.".to_owned())
+    let events = {
+        let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+            run(app, "pattern.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+                .map(|_| ())
+                .ok_or_else(|| "The Pattern library rejected the item move.".to_owned())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: "patterns",
+            groups: &groups,
+            options: BrowserOptions {
+                canvas,
+                flush: false,
+                center_grid: false,
+                all_groups_open: false,
+                compact_context_menus: false,
+                item_size: None,
+                list_item_height: None,
+                domain_hierarchy_actions: false,
+                root_item_group: None,
+            },
+            // Cross-group membership uses the Pattern domain command; sibling/group order is saved
+            // in the canonical picker layout state.
+            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
+            group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
+            nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
+            hierarchy_item_move: Some(&mut commit_item_move),
+            paint_group: None,
+            paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+                if let Some(pattern) =
+                    groups.get(group_index).and_then(|group| group.items.get(item_index)).and_then(|item| lib.iter().find(|pattern| pattern.id == item.key))
+                {
+                    let texture = pattern_texture(&ctx, pattern);
+                    ui.painter().image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                }
+            },
+            paint_list_item: None,
+        };
+        picker_shell(
+            ui,
+            &mut st,
+            &mut adapter,
+            ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new pattern from the selection"))), ..Default::default() },
+        )
     };
-    let mut adapter = BrowserAdapter {
-        panel: "patterns",
-        groups: &groups,
-        options: BrowserOptions {
-            canvas,
-            flush: false,
-            center_grid: false,
-            grid_indent: 8.0,
-            all_groups_open: false,
-            compact_context_menus: false,
-            item_size: None,
-            list_item_height: None,
-            domain_hierarchy_actions: false,
-            root_item_group: None,
-        },
-        // Cross-group membership uses the Pattern domain command; sibling/group order is saved
-        // in the canonical picker layout state.
-        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
-        item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
-        group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
-        nested_group_context_menu: None,
-        canonical_hierarchy_move: None,
-        hierarchy_item_move: Some(&mut commit_item_move),
-        paint_group: None,
-        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
-            if let Some(pattern) =
-                groups.get(group_index).and_then(|group| group.items.get(item_index)).and_then(|item| lib.iter().find(|pattern| pattern.id == item.key))
-            {
-                let texture = pattern_texture(&ctx, pattern);
-                ui.painter().image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-            }
-        },
-        paint_list_item: None,
-    };
-    let events = picker_shell(
-        ui,
-        &mut st,
-        &mut adapter,
-        ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new pattern from the selection"))), ..Default::default() },
-    );
-    drop(adapter);
-    drop(commit_item_move);
     app.ui.presets_ui = st;
     for event in events {
         match &event {
-            BrowserAction::Select(key) => {
-                app.ui.presets_ui.set_selected("patterns", key);
-                run(app, "pattern.presets.select", json!({"pattern": key}));
-            }
             BrowserAction::SelectItem { group, group_path, key } => {
                 app.ui.presets_ui.set_selected_item("patterns", group, group_path, key);
                 run(app, "pattern.presets.select", json!({"pattern": key}));
             }
-            BrowserAction::Activate(key) | BrowserAction::Drop(key, _) => {
+            BrowserAction::Drop(key, _) => {
                 app.ui.presets_ui.set_selected("patterns", key);
                 run(app, "pattern.presets.apply", json!({"pattern": key}));
             }
@@ -240,13 +235,10 @@ fn compact_context_menu_close_later(ui: &egui::Ui, panel: &str) {
 pub(crate) fn compact_item_context_menu(
     ui: &mut egui::Ui,
     st: &mut PresetUi,
-    panel: &str,
-    item: &ItemView,
-    group: &GroupView,
-    group_names: &[String],
-    selected_items: &[(String, ItemView)],
+    args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>,
     ev: &mut Vec<BrowserAction>,
 ) {
+    let crate::pickers::asset_browser::ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     if ui.button(tl!("Rename…")).clicked() {
@@ -324,7 +316,6 @@ pub(crate) fn compact_pattern_browser(
             canvas: Rect::NOTHING,
             flush: false,
             center_grid: false,
-            grid_indent: 8.0,
             all_groups_open: false,
             compact_context_menus: true,
             item_size: None,
@@ -374,12 +365,6 @@ pub(crate) fn compact_pattern_browser(
         ui.allocate_ui_with_layout(vec2(browser_width, browser_h), egui::Layout::top_down(egui::Align::Min), |browser_ui| {
             for event in browser(browser_ui, &mut state, &mut adapter, browser_h) {
                 match event {
-                    BrowserAction::Select(id) | BrowserAction::Activate(id) => {
-                        if id != selected {
-                            picked = Some(id);
-                        }
-                        browser_ui.close();
-                    }
                     BrowserAction::SelectItem { group, group_path, key } | BrowserAction::ActivateItem { group, group_path, key } => {
                         state.set_selected_item(panel, &group, &group_path, &key);
                         if key != selected {
@@ -467,7 +452,7 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
         // Compact consumers keep their own selection key, so deleting an unrelated pattern must
         // not clear the Brush Texture picker's current pattern.
         let deleted_key = match &event {
-            BrowserAction::Delete(key) | BrowserAction::DeleteItem { key, .. } => Some(key.as_str()),
+            BrowserAction::DeleteItem { key, .. } => Some(key.as_str()),
             _ => None,
         };
         let selected_before = deleted_key.and_then(|_| app.ui.presets_ui.selected.get(panel).cloned());
@@ -483,9 +468,6 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
                     match &event {
                         BrowserAction::RenameGroup(from, to) => state.rename_group(panel, from, to),
                         BrowserAction::DeleteGroup(name) => state.delete_group(panel, name),
-                        BrowserAction::Delete(key) if state.selected.get(panel) == Some(key) => {
-                            state.selected.remove(panel);
-                        }
                         BrowserAction::DeleteItem { key, .. } if state.selected.get(panel) == Some(key) => {
                             state.selected.remove(panel);
                         }

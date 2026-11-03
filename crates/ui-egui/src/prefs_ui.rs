@@ -3282,7 +3282,12 @@ mod tests {
         let bad = json!({"brushPicker": {"showName": false, "showStroke": false, "showTip": false, "scale": 9.0}}).to_string();
         let (mut app3, _) = app_with_saved(Some(bad));
         load(&mut app3);
-        assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::brush_picker::SCALE_RANGE.end(), "legacy preference after restore: {:?}", app3.session.prefs().brush_picker);
+        assert_eq!(
+            app3.ui.presets_ui.brush_picker.scale,
+            *crate::pickers::brush_picker::SCALE_RANGE.end(),
+            "legacy preference after restore: {:?}",
+            app3.session.prefs().brush_picker
+        );
         tick(&mut app3, &ctx);
         assert_eq!(app3.ui.presets_ui.brush_picker.scale, *crate::pickers::brush_picker::SCALE_RANGE.end());
         assert!(!app3.ui.presets_ui.brush_picker.show_name && !app3.ui.presets_ui.brush_picker.show_stroke && app3.ui.presets_ui.brush_picker.show_tip);

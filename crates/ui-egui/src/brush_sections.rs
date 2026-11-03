@@ -464,7 +464,14 @@ fn texture(
                         .max_size(max)
                         .show(ui, |ui| {
                             let browser_h = ui.available_height();
-                            crate::pickers::pattern_browser::compact_pattern_browser(ui, patterns, groups, selected_pattern, "brush-texture-patterns", browser_h)
+                            crate::pickers::pattern_browser::compact_pattern_browser(
+                                ui,
+                                patterns,
+                                groups,
+                                selected_pattern,
+                                "brush-texture-patterns",
+                                browser_h,
+                            )
                         })
                 })
                 .and_then(|r| r.inner)

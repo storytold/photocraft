@@ -120,8 +120,11 @@ mod tests {
                 }
                 for (index, name) in names.iter().enumerate() {
                     let default_open = index == 0 || all_groups_open;
-                    assert_eq!(group_open(&state, "gradients", index, name, all_groups_open), default_open != (toggles & (1 << index) != 0),
-                        "all_groups_open={all_groups_open}, toggle mask={toggles:05b}, group={name}");
+                    assert_eq!(
+                        group_open(&state, "gradients", index, name, all_groups_open),
+                        default_open != (toggles & (1 << index) != 0),
+                        "all_groups_open={all_groups_open}, toggle mask={toggles:05b}, group={name}"
+                    );
                 }
             }
         }

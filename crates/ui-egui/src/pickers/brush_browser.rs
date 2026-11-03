@@ -22,6 +22,8 @@ use crate::pickers::picker_browser_model::{ContainerId, DropPosition, NodeId};
 use crate::pickers::picker_state::{NestedGroupRenameState, PresetUi};
 use crate::theme::Tokens;
 
+type BrushDropDestination = (String, Vec<String>, Option<(&'static str, String)>);
+
 /// Run a brush command, reporting failures in the status bar and returning whether it succeeded.
 pub(crate) fn run_or_status(app: &mut PhotocraftApp, id: &str, p: Value) -> bool {
     match app.run(id, p) {
@@ -85,6 +87,7 @@ pub struct Renaming {
 /// Brushes panel view state (serde, so the control channel can read and drive it).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+#[derive(Default)]
 pub struct BrushesPanelState {
     /// Collapsed groups: a group's label, or for a nested group the root label and its path joined
     /// with `/` ([`crate::brushes_tab::group_view_key`]).
@@ -93,12 +96,6 @@ pub struct BrushesPanelState {
     pub filter: String,
     pub view: BrushesView,
     pub renaming: Option<Renaming>,
-}
-
-impl Default for BrushesPanelState {
-    fn default() -> Self {
-        Self { collapsed: Vec::new(), filter: String::new(), view: BrushesView::default(), renaming: None }
-    }
 }
 
 /// What a preset list does after drawing (the presets are borrowed while it draws).
@@ -297,7 +294,7 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
         return Err("The ungrouped Brush collection cannot be moved as a group.".to_owned());
     }
 
-    let destination = |id: &NodeId| -> Result<(String, Vec<String>, Option<(&'static str, String)>), String> {
+    let destination = |id: &NodeId| -> Result<BrushDropDestination, String> {
         match identities.get(id) {
             Some(HierarchyIdentity::Item { group, key }) => Ok((group.clone(), Vec::new(), Some(("item", key.clone())))),
             Some(HierarchyIdentity::FolderItem { group, path, key }) => Ok((group.clone(), path.clone(), Some(("item", key.clone())))),
@@ -376,31 +373,28 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
             if let Some(name) = source_name {
                 match target_kind.as_ref().map(|(kind, _)| *kind) {
                     Some("item") => {
-                        let (_, key) = target_kind.expect("item target");
+                        let Some((_, key)) = target_kind.as_ref() else {
+                            return Err("The Brush drop target is not an item.".to_owned());
+                        };
+                        let source_key = source_item.unwrap_or_default();
                         if !after {
-                            let before = resolve_before_item_name(presets, &key)?;
+                            let before = resolve_before_item_name(presets, key)?;
                             Ok(Action::MoveBefore { name, group: target_group_name, folder: Some(target_parent), before })
                         } else {
                             let target_index = presets
                                 .iter()
-                                .position(|preset| preview_identity(preset) == key)
+                                .position(|preset| preview_identity(preset) == key.as_str())
                                 .ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
-                            let index = brush_item_index(
-                                presets,
-                                &target_group,
-                                target_index + 1,
-                                match source {
-                                    HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key,
-                                    _ => unreachable!(),
-                                },
-                            );
+                            let index = brush_item_index(presets, &target_group, target_index + 1, source_key);
                             Ok(Action::Move { name, group: target_group_name, folder: Some(target_parent), index: Some(index) })
                         }
                     }
                     Some("folder") => {
-                        let (_, leaf) = target_kind.expect("folder target");
+                        let Some((_, leaf)) = target_kind.as_ref() else {
+                            return Err("The Brush drop target is not a folder.".to_owned());
+                        };
                         let before_index = if after {
-                            match brush_next_sibling_after_folder(presets, &target_group, &target_parent, &leaf, None) {
+                            match brush_next_sibling_after_folder(presets, &target_group, &target_parent, leaf, None) {
                                 Some(BrushSiblingAnchor::Folder(next)) => {
                                     let mut path = target_parent.clone();
                                     path.push(next);
@@ -411,20 +405,10 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
                             }
                         } else {
                             let mut path = target_parent.clone();
-                            path.push(leaf);
+                            path.push(leaf.clone());
                             presets.iter().position(|preset| preset.group == target_group && preset.folder.starts_with(&path))
                         };
-                        let index = before_index.map(|index| {
-                            brush_item_index(
-                                presets,
-                                &target_group,
-                                index,
-                                match source {
-                                    HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => key,
-                                    _ => unreachable!(),
-                                },
-                            )
-                        });
+                        let index = before_index.map(|index| brush_item_index(presets, &target_group, index, source_item.unwrap_or_default()));
                         Ok(Action::Move { name, group: target_group_name, folder: Some(target_parent), index })
                     }
                     _ => Err("A Brush preset cannot be inserted at the top-level group boundary.".to_owned()),
@@ -465,13 +449,15 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
                         Ok(move_into(None, before, None))
                     }
                     Some("folder") => {
-                        let (_, leaf) = target_kind.expect("folder target");
+                        let Some((_, leaf)) = target_kind.as_ref() else {
+                            return Err("The Brush drop target is not a folder.".to_owned());
+                        };
                         let (before, before_item) = if after {
                             match brush_next_sibling_after_folder(
                                 presets,
                                 &target_group,
                                 &target_parent,
-                                &leaf,
+                                leaf,
                                 (!source_folder.is_empty() && source_group == &target_group).then_some(source_folder.as_slice()),
                             ) {
                                 Some(BrushSiblingAnchor::Folder(next)) => (Some(next), None),
@@ -479,12 +465,14 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
                                 None => (None, None),
                             }
                         } else {
-                            (Some(leaf), None)
+                            (Some(leaf.clone()), None)
                         };
                         Ok(move_into(Some((target_group_name, target_parent)), before, before_item))
                     }
                     Some("item") => {
-                        let (_, key) = target_kind.expect("item target");
+                        let Some((_, key)) = target_kind.as_ref() else {
+                            return Err("The Brush drop target is not an item.".to_owned());
+                        };
                         let source_is_preset = |preset: &&BrushPreset| {
                             if source_folder.is_empty() {
                                 preset.group == *source_group
@@ -495,20 +483,19 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
                         let (before, before_item) = if after {
                             let after_index = presets
                                 .iter()
-                                .position(|preset| preview_identity(preset) == key)
+                                .position(|preset| preview_identity(preset) == key.as_str())
                                 .ok_or_else(|| "The target Brush no longer exists.".to_owned())?;
                             match presets
                                 .iter()
                                 .skip(after_index + 1)
-                                .filter(|preset| preset.group == target_group && preset.folder.starts_with(&target_parent) && !source_is_preset(preset))
-                                .next()
+                                .find(|preset| preset.group == target_group && preset.folder.starts_with(&target_parent) && !source_is_preset(preset))
                             {
                                 Some(next) if next.folder == target_parent => (None, Some(next.name.clone())),
                                 Some(next) => (Some(next.folder[target_parent.len()].clone()), None),
                                 None => (None, None),
                             }
                         } else {
-                            (None, Some(resolve_before_item_name(presets, &key)?))
+                            (None, Some(resolve_before_item_name(presets, key)?))
                         };
                         Ok(move_into(Some((target_group_name, target_parent)), before, before_item))
                     }
@@ -557,11 +544,6 @@ pub(crate) fn picker_browser(
         .collect();
     let identities = brush_hierarchy_identities(&groups);
     let mut hierarchy_actions = Vec::new();
-    let mut canonical_move = |intent: &DropMoveIntent| {
-        let action = brush_drop_intent_to_action(presets, &identities, intent)?;
-        hierarchy_actions.push(action);
-        Ok(())
-    };
 
     preset_ui.sizes.insert(PANEL.to_string(), 40.0);
     match current {
@@ -603,46 +585,50 @@ pub(crate) fn picker_browser(
         let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
         paint_brush_list_row(ui, rect, preset, selected);
     };
-    let mut adapter = BrowserAdapter {
-        panel: PANEL,
-        groups: &groups,
-        options: BrowserOptions {
-            canvas: egui::Rect::NOTHING,
-            flush: false,
-            center_grid: tip_only(show),
-            grid_indent: 8.0,
-            all_groups_open: true,
-            // The brush picker is an egui Area, not a parent Menu; use a normal context popup so
-            // its menu actions can extend beyond the picker without being dismissed as a submenu.
-            compact_context_menus: false,
-            item_size: Some(vec2(card_w, card_h)),
-            list_item_height: Some(44.0),
-            domain_hierarchy_actions: true,
-            root_item_group: None,
-        },
-        // Brush folders are projected from each item's full `group_path` by the canonical tree.
-        // The shared resolver emits path-aware domain actions; Brush dispatches those through its
-        // engine commands rather than persisting folder structure in generic `PresetUi` state.
-        capabilities: BrowserCapabilities {
-            item_drag: true,
-            item_drop: true,
-            group_drag: true,
-            selection: true,
-            activation: true,
-            canonical_hierarchy_drag: true,
-        },
-        item_context_menu: Some(brush_item_context_menu),
-        group_context_menu: Some(brush_group_context_menu),
-        nested_group_context_menu: Some(brush_nested_group_context_menu),
-        canonical_hierarchy_move: Some(&mut canonical_move),
-        hierarchy_item_move: None,
-        paint_group: None,
-        paint_item: &mut paint_item,
-        paint_list_item: Some(&mut paint_list_item),
+    let browser_actions = {
+        let mut canonical_move = |intent: &DropMoveIntent| {
+            let action = brush_drop_intent_to_action(presets, &identities, intent)?;
+            hierarchy_actions.push(action);
+            Ok(())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: PANEL,
+            groups: &groups,
+            options: BrowserOptions {
+                canvas: egui::Rect::NOTHING,
+                flush: false,
+                center_grid: tip_only(show),
+                all_groups_open: true,
+                // The brush picker is an egui Area, not a parent Menu; use a normal context popup so
+                // its menu actions can extend beyond the picker without being dismissed as a submenu.
+                compact_context_menus: false,
+                item_size: Some(vec2(card_w, card_h)),
+                list_item_height: Some(44.0),
+                domain_hierarchy_actions: true,
+                root_item_group: None,
+            },
+            // Brush folders are projected from each item's full `group_path` by the canonical tree.
+            // The shared resolver emits path-aware domain actions; Brush dispatches those through its
+            // engine commands rather than persisting folder structure in generic `PresetUi` state.
+            capabilities: BrowserCapabilities {
+                item_drag: true,
+                item_drop: true,
+                group_drag: true,
+                selection: true,
+                activation: true,
+                canonical_hierarchy_drag: true,
+            },
+            item_context_menu: Some(brush_item_context_menu),
+            group_context_menu: Some(brush_group_context_menu),
+            nested_group_context_menu: Some(brush_nested_group_context_menu),
+            canonical_hierarchy_move: Some(&mut canonical_move),
+            hierarchy_item_move: None,
+            paint_group: None,
+            paint_item: &mut paint_item,
+            paint_list_item: Some(&mut paint_list_item),
+        };
+        asset_browser::browser(ui, preset_ui, &mut adapter, allocated_height)
     };
-    let browser_actions = asset_browser::browser(ui, preset_ui, &mut adapter, allocated_height);
-    drop(adapter);
-    drop(canonical_move);
     paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", PANEL)));
 
     let mut actions = browser_actions_to_actions(presets, browser_actions);
@@ -655,9 +641,7 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
     browser_actions
         .into_iter()
         .filter_map(|action| match action {
-            BrowserAction::Select(key) => occurrence_name(presets, &key).map(Action::Select),
             BrowserAction::SelectItem { key, .. } => occurrence_name(presets, &key).map(Action::Select),
-            BrowserAction::Activate(key) => occurrence_name(presets, &key).map(Action::Choose),
             BrowserAction::ActivateItem { key, .. } => occurrence_name(presets, &key).map(Action::Choose),
             BrowserAction::Rename(key, text) => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: Vec::new(), text }))
@@ -665,7 +649,6 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::RenameItem { group: _, group_path, key, text } => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text }))
             }
-            BrowserAction::Delete(key) => occurrence_name(presets, &key).map(Action::Delete),
             BrowserAction::DeleteItem { key, .. } => occurrence_name(presets, &key).map(Action::Delete),
             BrowserAction::Move(key, group) => {
                 occurrence_name(presets, &key).map(|name| Action::Move { name, group: group_key(presets, &group), folder: Some(Vec::new()), index: None })
@@ -715,13 +698,10 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
 fn brush_item_context_menu(
     ui: &mut egui::Ui,
     st: &mut PresetUi,
-    panel: &str,
-    item: &ItemView,
-    group: &GroupView,
-    _group_names: &[String],
-    selected_items: &[(String, ItemView)],
+    args: crate::pickers::asset_browser::ItemContextMenuArgs<'_>,
     actions: &mut Vec<BrowserAction>,
 ) {
+    let crate::pickers::asset_browser::ItemContextMenuArgs { panel, item, group, selected_items, .. } = args;
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete Brushes")) } else { tl!("Delete Brush").to_string() };
@@ -1324,11 +1304,6 @@ pub fn preset_list(
         .collect();
     let identities = brush_hierarchy_identities(&groups);
     let mut hierarchy_actions = Vec::new();
-    let mut canonical_move = |intent: &DropMoveIntent| {
-        let action = brush_drop_intent_to_action(presets, &identities, intent)?;
-        hierarchy_actions.push(action);
-        Ok(())
-    };
     let list = st.view == BrushesView::List;
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
         let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
@@ -1344,42 +1319,46 @@ pub fn preset_list(
             paint_brush_list_row(ui, rect, preset, selected);
         }
     };
-    let mut adapter = BrowserAdapter {
-        panel: PANEL,
-        groups: &groups,
-        options: BrowserOptions {
-            canvas: egui::Rect::NOTHING,
-            flush: false,
-            center_grid: true,
-            grid_indent: layout.indent,
-            all_groups_open: true,
-            compact_context_menus: false,
-            item_size: Some(vec2(layout.cell, layout.cell + 6.0)),
-            list_item_height: Some(44.0),
-            domain_hierarchy_actions: true,
-            root_item_group: None,
-        },
-        // Use the same canonical path-aware hierarchy as the floating Brush picker.
-        capabilities: BrowserCapabilities {
-            item_drag: true,
-            item_drop: true,
-            group_drag: true,
-            selection: true,
-            activation: true,
-            canonical_hierarchy_drag: true,
-        },
-        item_context_menu: Some(brush_item_context_menu),
-        group_context_menu: Some(brush_group_context_menu),
-        nested_group_context_menu: Some(brush_nested_group_context_menu),
-        canonical_hierarchy_move: Some(&mut canonical_move),
-        hierarchy_item_move: None,
-        paint_group: None,
-        paint_item: &mut paint_item,
-        paint_list_item: list.then_some(&mut paint_list_item as &mut crate::pickers::asset_browser::PaintListItem<'_>),
+    let browser_actions = {
+        let mut canonical_move = |intent: &DropMoveIntent| {
+            let action = brush_drop_intent_to_action(presets, &identities, intent)?;
+            hierarchy_actions.push(action);
+            Ok(())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: PANEL,
+            groups: &groups,
+            options: BrowserOptions {
+                canvas: egui::Rect::NOTHING,
+                flush: false,
+                center_grid: true,
+                all_groups_open: true,
+                compact_context_menus: false,
+                item_size: Some(vec2(layout.cell, layout.cell + 6.0)),
+                list_item_height: Some(44.0),
+                domain_hierarchy_actions: true,
+                root_item_group: None,
+            },
+            // Use the same canonical path-aware hierarchy as the floating Brush picker.
+            capabilities: BrowserCapabilities {
+                item_drag: true,
+                item_drop: true,
+                group_drag: true,
+                selection: true,
+                activation: true,
+                canonical_hierarchy_drag: true,
+            },
+            item_context_menu: Some(brush_item_context_menu),
+            group_context_menu: Some(brush_group_context_menu),
+            nested_group_context_menu: Some(brush_nested_group_context_menu),
+            canonical_hierarchy_move: Some(&mut canonical_move),
+            hierarchy_item_move: None,
+            paint_group: None,
+            paint_item: &mut paint_item,
+            paint_list_item: list.then_some(&mut paint_list_item as &mut crate::pickers::asset_browser::PaintListItem<'_>),
+        };
+        asset_browser::browser(ui, preset_ui, &mut adapter, layout.max_height)
     };
-    let browser_actions = asset_browser::browser(ui, preset_ui, &mut adapter, layout.max_height);
-    drop(adapter);
-    drop(canonical_move);
     sync_browser_state_to_brush_state(st, preset_ui, presets, PANEL);
     paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", layout.id)));
     let mut actions = browser_actions_to_actions(presets, browser_actions);

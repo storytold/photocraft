@@ -39,10 +39,14 @@ pub(crate) fn hierarchy_tree<'a, T>(items: Vec<(&'a [String], &'a T)>, max_depth
 /// group presentation/interaction, and collapse policy; traversal owns recursive sequencing.
 /// Adjacent presets are batched into one `draw_items` call and flushed before each group header;
 /// children are traversed only when `is_open` returns true and `max_depth` has not been reached.
+#[cfg(test)]
 type HierarchyOpen<'a, 'b, T> = dyn FnMut(&HierarchyGroup<'a, T>) -> bool + 'b;
+#[cfg(test)]
 type HierarchyDrawGroup<'a, 'b, T> = dyn FnMut(&mut egui::Ui, &HierarchyGroup<'a, T>, bool, usize) + 'b;
+#[cfg(test)]
 type HierarchyDrawItems<'a, 'b, T> = dyn FnMut(&mut egui::Ui, &[&'a T], usize) + 'b;
 
+#[cfg(test)]
 pub(crate) fn draw_hierarchy<'a, 'b, T>(
     ui: &mut egui::Ui,
     nodes: &[HierarchyNode<'a, T>],
@@ -236,15 +240,15 @@ mod tests {
             output.textures_delta.clear();
 
             let expected_groups = [("A", 0usize), ("A/B", 1usize), ("A/B/C", 2usize), ("D", 0usize)]
-            .into_iter()
-            .filter(|(path, _)| match *path {
-                "A" | "D" => true,
-                "A/B" => open.contains("A"),
-                "A/B/C" => open.contains("A") && open.contains("A/B"),
-                _ => false,
-            })
-            .map(|(path, depth)| (path.to_owned(), open.contains(path), depth))
-            .collect::<Vec<_>>();
+                .into_iter()
+                .filter(|(path, _)| match *path {
+                    "A" | "D" => true,
+                    "A/B" => open.contains("A"),
+                    "A/B/C" => open.contains("A") && open.contains("A/B"),
+                    _ => false,
+                })
+                .map(|(path, depth)| (path.to_owned(), open.contains(path), depth))
+                .collect::<Vec<_>>();
             assert_eq!(*groups_seen.borrow(), expected_groups, "collapse mask {mask:04b}");
 
             let mut expected_items = vec![(0usize, "root-before".to_owned())];

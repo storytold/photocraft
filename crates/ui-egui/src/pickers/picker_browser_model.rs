@@ -244,10 +244,10 @@ impl PickerBrowserHierarchy {
                 if node.id() == id {
                     return Some(parent.clone());
                 }
-                if node.is_group() {
-                    if let Some(found) = find(node.children(), id, &ContainerId::Group(node.id().clone())) {
-                        return Some(found);
-                    }
+                if node.is_group()
+                    && let Some(found) = find(node.children(), id, &ContainerId::Group(node.id().clone()))
+                {
+                    return Some(found);
                 }
             }
             None
@@ -280,9 +280,14 @@ impl PickerBrowserHierarchy {
 
         // Resolve the target's sibling index before removal. Adjust it when source and destination
         // are the same sequence so the result remains immediately adjacent to the target.
-        let target_index = if destination.2 { Some((0, false)) } else { destination.1.as_ref().and_then(|(target, after)| {
-            self.children(&destination.0)?.iter().position(|node| node.id() == target).map(|index| (index, *after))
-        }) };
+        let target_index = if destination.2 {
+            Some((0, false))
+        } else {
+            destination
+                .1
+                .as_ref()
+                .and_then(|(target, after)| self.children(&destination.0)?.iter().position(|node| node.id() == target).map(|index| (index, *after)))
+        };
         if let Some((target, _)) = &destination.1
             && target_index.is_none()
         {
@@ -294,18 +299,15 @@ impl PickerBrowserHierarchy {
             .children(&source_parent)
             .and_then(|nodes| nodes.iter().position(|node| node.id() == source))
             .ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
-        let source_snapshot = self
-            .children(&source_parent)
-            .ok_or_else(|| HierarchyError::MissingSource(source.clone()))?
-            .iter()
-            .map(|node| node.id().clone())
-            .collect();
+        let source_snapshot =
+            self.children(&source_parent).ok_or_else(|| HierarchyError::MissingSource(source.clone()))?.iter().map(|node| node.id().clone()).collect();
         let mut insertion_index =
             target_index.map(|(index, after)| index + usize::from(after)).unwrap_or_else(|| self.children(&destination.0).map_or(0, <[_]>::len));
         if source_parent == destination.0 && source_index < insertion_index {
             insertion_index -= 1;
         }
-        let destination_snapshot = self.children(&destination.0)
+        let destination_snapshot = self
+            .children(&destination.0)
             .ok_or_else(|| match &destination.0 {
                 ContainerId::Root => HierarchyError::InvalidTree,
                 ContainerId::Group(id) => HierarchyError::MissingContainer(id.clone()),
@@ -327,12 +329,12 @@ impl PickerBrowserHierarchy {
 
     /// Apply a previously resolved move, rejecting it if the hierarchy changed in the meantime.
     pub(crate) fn apply_resolved_move(&mut self, resolved: ResolvedMove) -> Result<(), HierarchyError> {
-        let current_source_index = self.children(&resolved.source_parent)
-            .and_then(|nodes| nodes.iter().position(|node| node.id() == &resolved.source));
+        let current_source_index = self.children(&resolved.source_parent).and_then(|nodes| nodes.iter().position(|node| node.id() == &resolved.source));
         if current_source_index != Some(resolved.source_index) {
             return Err(HierarchyError::MissingSource(resolved.source));
         }
-        let current_source: Vec<NodeId> = self.children(&resolved.source_parent)
+        let current_source: Vec<NodeId> = self
+            .children(&resolved.source_parent)
             .ok_or_else(|| match &resolved.source_parent {
                 ContainerId::Root => HierarchyError::InvalidTree,
                 ContainerId::Group(id) => HierarchyError::MissingContainer(id.clone()),
@@ -343,7 +345,8 @@ impl PickerBrowserHierarchy {
         if current_source != resolved.source_snapshot {
             return Err(HierarchyError::InvalidTree);
         }
-        let current_destination: Vec<NodeId> = self.children(&resolved.destination)
+        let current_destination: Vec<NodeId> = self
+            .children(&resolved.destination)
             .ok_or_else(|| match &resolved.destination {
                 ContainerId::Root => HierarchyError::InvalidTree,
                 ContainerId::Group(id) => HierarchyError::MissingContainer(id.clone()),
@@ -544,9 +547,7 @@ mod tests {
             Node::group("destination", vec![Node::item("target")]),
         ])
         .unwrap();
-        let resolved = hierarchy
-            .resolve_move(&NodeId::from("moving"), &DropPosition::Before { target: "target".into() })
-            .unwrap();
+        let resolved = hierarchy.resolve_move(&NodeId::from("moving"), &DropPosition::Before { target: "target".into() }).unwrap();
 
         hierarchy.move_node(&NodeId::from("first"), &DropPosition::After { target: "last".into() }).unwrap();
         let before = hierarchy.clone();
@@ -675,10 +676,7 @@ mod tests {
 
         for (position, expected) in cases {
             let mut hierarchy = PickerBrowserHierarchy::new(vec![
-                Node::group(
-                    "parent",
-                    vec![Node::item("first"), Node::group("moving", vec![Node::item("nested-card")]), Node::item("last")],
-                ),
+                Node::group("parent", vec![Node::item("first"), Node::group("moving", vec![Node::item("nested-card")]), Node::item("last")]),
                 Node::item("root-first"),
                 Node::item("root-last"),
             ])
@@ -708,10 +706,7 @@ mod tests {
 
     #[test]
     fn constructor_rejects_duplicate_ids_and_excessive_depth() {
-        assert_eq!(
-            PickerBrowserHierarchy::new(vec![Node::item("duplicate"), Node::group("duplicate", vec![])]),
-            Err(HierarchyError::InvalidTree)
-        );
+        assert_eq!(PickerBrowserHierarchy::new(vec![Node::item("duplicate"), Node::group("duplicate", vec![])]), Err(HierarchyError::InvalidTree));
         let item = Node::item("item-without-children");
         assert!(!item.is_group());
         assert!(item.children().is_empty());
@@ -729,9 +724,7 @@ mod tests {
             nested = Node::group(format!("group-{depth}"), vec![nested]);
         }
         let mut hierarchy = PickerBrowserHierarchy::new(vec![nested, Node::item("extra")]).unwrap();
-        hierarchy
-            .move_node(&NodeId::from("extra"), &DropPosition::AppendTo { container: ContainerId::Group("group-0".into()) })
-            .unwrap();
+        hierarchy.move_node(&NodeId::from("extra"), &DropPosition::AppendTo { container: ContainerId::Group("group-0".into()) }).unwrap();
         assert_eq!(hierarchy.parent_of(&NodeId::from("extra")), Some(ContainerId::Group("group-0".into())));
     }
 
@@ -757,9 +750,7 @@ mod tests {
             nested = Node::group(format!("group-{depth}"), vec![nested]);
         }
         let mut hierarchy = PickerBrowserHierarchy::new(vec![nested, Node::group("destination", vec![])]).unwrap();
-        hierarchy
-            .move_node(&NodeId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Root })
-            .unwrap();
+        hierarchy.move_node(&NodeId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
         assert_eq!(hierarchy.parent_of(&NodeId::from("group-32")), Some(ContainerId::Root));
     }
 
@@ -781,10 +772,11 @@ mod tests {
                             let siblings = hierarchy.children_of(&target_parent).expect("target parent exists");
                             let source_index = siblings.iter().position(|node| node.id() == source).expect("source is a sibling of target");
                             let target_index = siblings.iter().position(|node| node.id() == target).expect("target remains a sibling");
-                            match position {
-                                DropPosition::Before { .. } => assert_eq!(source_index + 1, target_index, "source={source:?}, target={target:?}"),
-                                DropPosition::After { .. } => assert_eq!(target_index + 1, source_index, "source={source:?}, target={target:?}"),
-                                _ => unreachable!(),
+                            if matches!(&position, DropPosition::Before { .. }) {
+                                assert_eq!(source_index + 1, target_index, "source={source:?}, target={target:?}");
+                            } else {
+                                assert!(matches!(&position, DropPosition::After { .. }), "expected a before/after position: {position:?}");
+                                assert_eq!(target_index + 1, source_index, "source={source:?}, target={target:?}");
                             }
                             assert_same_nodes(&hierarchy, &node_ids);
                         }
@@ -808,7 +800,9 @@ mod tests {
             for container in &containers {
                 let positions = match container {
                     ContainerId::Root => vec![DropPosition::AppendTo { container: ContainerId::Root }],
-                    ContainerId::Group(group) => vec![DropPosition::PrependTo { group: group.clone() }, DropPosition::AppendTo { container: container.clone() }],
+                    ContainerId::Group(group) => {
+                        vec![DropPosition::PrependTo { group: group.clone() }, DropPosition::AppendTo { container: container.clone() }]
+                    }
                 };
                 for position in positions {
                     let mut hierarchy = original.clone();
@@ -816,10 +810,11 @@ mod tests {
                         Ok(()) => {
                             assert_eq!(hierarchy.parent_of(source), Some(container.clone()), "source={source:?}, position={position:?}");
                             let siblings = hierarchy.children_of(container).expect("valid destination container");
-                            match position {
-                                DropPosition::PrependTo { .. } => assert_eq!(siblings.first().map(Node::id), Some(source)),
-                                DropPosition::AppendTo { .. } => assert_eq!(siblings.last().map(Node::id), Some(source)),
-                                _ => unreachable!(),
+                            if matches!(&position, DropPosition::PrependTo { .. }) {
+                                assert_eq!(siblings.first().map(Node::id), Some(source));
+                            } else {
+                                assert!(matches!(&position, DropPosition::AppendTo { .. }), "expected a prepend/append position: {position:?}");
+                                assert_eq!(siblings.last().map(Node::id), Some(source));
                             }
                             assert_same_nodes(&hierarchy, &node_ids);
                         }

@@ -105,65 +105,59 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let root_order = missing_root_items;
     state.set_hierarchy_order("gradients", "", root_order);
     let canvas = canvas_drop_rect(app);
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
-        run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
-            .map(|_| ())
-            .ok_or_else(|| "The Gradient library rejected the item move.".to_owned())
+    let events = {
+        let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+            run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+                .map(|_| ())
+                .ok_or_else(|| "The Gradient library rejected the item move.".to_owned())
+        };
+        let mut adapter = BrowserAdapter {
+            panel: "gradients",
+            groups: &groups,
+            options: BrowserOptions {
+                canvas,
+                flush: false,
+                center_grid: false,
+                all_groups_open: false,
+                compact_context_menus: false,
+                item_size: None,
+                list_item_height: None,
+                domain_hierarchy_actions: false,
+                root_item_group: Some(ROOT_ITEMS_GROUP),
+            },
+            // Cross-group membership uses the Gradient domain command; sibling/group order is saved
+            // in the canonical picker layout state.
+            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            item_context_menu: Some(standard_item_context_menu),
+            group_context_menu: Some(standard_group_context_menu),
+            nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
+            hierarchy_item_move: Some(&mut commit_item_move),
+            paint_group: None,
+            paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+                let group = &groups[group_index];
+                let key = &group.items[item_index].key;
+                let stops = library
+                    .iter()
+                    .find(|g| g.name == group.name)
+                    .and_then(|g| g.items.iter().find(|item| &item.name == key))
+                    .map(|item| item.resolve(foreground, background))
+                    .unwrap_or_default();
+                paint_gradient(ui, rect, &stops);
+            },
+            paint_list_item: None,
+        };
+        picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() })
     };
-    let mut adapter = BrowserAdapter {
-        panel: "gradients",
-        groups: &groups,
-        options: BrowserOptions {
-            canvas,
-            flush: false,
-            center_grid: false,
-            grid_indent: 8.0,
-            all_groups_open: false,
-            compact_context_menus: false,
-            item_size: None,
-            list_item_height: None,
-            domain_hierarchy_actions: false,
-            root_item_group: Some(ROOT_ITEMS_GROUP),
-        },
-        // Cross-group membership uses the Gradient domain command; sibling/group order is saved
-        // in the canonical picker layout state.
-        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
-        item_context_menu: Some(standard_item_context_menu),
-        group_context_menu: Some(standard_group_context_menu),
-        nested_group_context_menu: None,
-        canonical_hierarchy_move: None,
-        hierarchy_item_move: Some(&mut commit_item_move),
-        paint_group: None,
-        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
-            let group = &groups[group_index];
-            let key = &group.items[item_index].key;
-            let stops = library
-                .iter()
-                .find(|g| g.name == group.name)
-                .and_then(|g| g.items.iter().find(|item| &item.name == key))
-                .map(|item| item.resolve(foreground, background))
-                .unwrap_or_default();
-            paint_gradient(ui, rect, &stops);
-        },
-        paint_list_item: None,
-    };
-    let events =
-        picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() });
-    drop(adapter);
-    drop(commit_item_move);
     app.ui.presets_ui = state;
 
     for event in events {
         match &event {
-            BrowserAction::Select(key) => {
-                app.ui.presets_ui.set_selected("gradients", key);
-                run(app, "gradient.presets.select", json!({"preset": key}));
-            }
             BrowserAction::SelectItem { group, group_path, key } => {
                 app.ui.presets_ui.set_selected_item("gradients", group, group_path, key);
                 run(app, "gradient.presets.select", json!({"preset": key}));
             }
-            BrowserAction::Activate(key) | BrowserAction::Drop(key, _) => {
+            BrowserAction::Drop(key, _) => {
                 app.ui.presets_ui.set_selected("gradients", key);
                 run(app, "gradient.presets.apply", json!({"preset": key}));
             }
@@ -381,7 +375,7 @@ mod tests {
             let target = match drop_position {
                 "gap_upper" | "gap_lower" => {
                     let second_header = headers[1].1;
-                    let offset = if drop_position == "gap_upper" { -9.0 } else { -3.0 };
+                    let offset = if drop_position == "gap_upper" { -5.0 } else { -1.0 };
                     egui::pos2(second_header.center().x, second_header.top() + offset)
                 }
                 "root_end" => {
@@ -398,18 +392,21 @@ mod tests {
                         .name
                         .clone();
                     if h.query_all_by_label(&last_key).next().is_none() {
-                        let header = last_header.center();
-                        h.event(Event::PointerMoved(header));
-                        h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                        let disclosure = egui::pos2(last_header.left() + 9.0, last_header.center().y);
+                        h.event(Event::PointerMoved(disclosure));
+                        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
                         h.run_steps(1);
-                        h.event(Event::PointerButton { pos: header, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
                         h.run_steps(2);
                     }
                     let last_card = h.get_by_label(&last_key).rect();
                     // Drop well into the blank trailing area, not merely the narrow gap after the card.
                     egui::pos2(last_card.center().x, last_card.bottom() + 48.0)
                 }
-                _ => unreachable!(),
+                _ => {
+                    assert!(matches!(drop_position, "gap_upper" | "gap_lower" | "root_end"), "unexpected drop position: {drop_position}");
+                    egui::Pos2::ZERO
+                }
             };
             h.event(Event::PointerMoved(source));
             h.run_steps(1);
@@ -448,7 +445,7 @@ mod tests {
                     );
                 }
                 "root_end" => assert_eq!(root_order.last(), Some(&moved), "the card must remain at the root sequence's end: {root_order:?}"),
-                _ => unreachable!(),
+                _ => assert!(matches!(drop_position, "gap_upper" | "gap_lower" | "root_end"), "unexpected drop position: {drop_position}"),
             }
             assert!(last_group_headers(&h.ctx, "gradients").iter().all(|(name, _)| name != ROOT_ITEMS_GROUP));
         }
@@ -538,13 +535,12 @@ mod tests {
 
         let headers = last_group_headers(&h.ctx, "gradients");
         assert!(headers.len() >= 2, "gradient group headers are visible");
-        let (target_group, target_header) = &headers[0];
+        let (target_group, _) = &headers[0];
         let (moving_group, moving_header) = headers.last().unwrap();
         let target_item =
             h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
-        let size = *h.state().ui.presets_ui.sizes.get("gradients").unwrap_or(&40.0);
-        let origin = h.ctx.input(|input| input.viewport_rect().min);
-        let target = egui::pos2(origin.x + 8.0 + 20.0 + size * 0.5 - 5.0, target_header.bottom() + 2.0 + size * 0.5);
+        let target_card = h.get_by_label(&target_item).rect();
+        let target = egui::pos2(target_card.left() + 1.0, target_card.center().y);
 
         h.event(egui::Event::PointerMoved(moving_header.center()));
         h.run_steps(1);
@@ -559,7 +555,7 @@ mod tests {
 
         let state = &h.state().ui.presets_ui;
         assert_eq!(state.parent_of("gradients", moving_group), Some(target_group.as_str()));
-        assert_eq!(state.hierarchy_order["gradients"][target_group].get(0), Some(&HierarchyOrderEntry::Group(moving_group.clone())));
+        assert_eq!(state.hierarchy_order["gradients"][target_group].first(), Some(&HierarchyOrderEntry::Group(moving_group.clone())));
         assert_eq!(state.hierarchy_order["gradients"][target_group].get(1), Some(&HierarchyOrderEntry::Item(target_item)));
         let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(state.display_order("gradients", &names).len(), names.len());

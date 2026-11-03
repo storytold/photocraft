@@ -82,7 +82,6 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         ui.add_space(4.0);
         let footer_actions = crate::pickers::picker_footer::draw(ui, st, &panel, footer);
         events.extend(footer_actions.into_iter().map(|action| match action {
-            crate::pickers::picker_footer::FooterAction::Delete(key) => BrowserAction::Delete(key),
             crate::pickers::picker_footer::FooterAction::DeleteItem { group, group_path, key } => BrowserAction::DeleteItem { group, group_path, key },
             crate::pickers::picker_footer::FooterAction::New => BrowserAction::New,
             crate::pickers::picker_footer::FooterAction::NewGroup => BrowserAction::NewGroup,
@@ -113,15 +112,12 @@ pub(crate) fn picker_shell_custom<R>(
     // height alone is advisory: a renderer that asks for more can otherwise grow the picker past
     // its window and push the footer out of the shell.
     let browser_size = egui::vec2(ui.max_rect().width(), allocated_h);
-    let browser_rect = egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(), ui.cursor().min.y), browser_size);
-    let result = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(browser_rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-            ui.set_min_size(browser_size);
-            ui.set_max_size(browser_size);
-            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-            draw_browser(ui, allocated_h)
-        })
-        .inner;
+    let (browser_rect, _) = ui.allocate_exact_size(browser_size, egui::Sense::hover());
+    let mut browser_ui = ui.new_child(egui::UiBuilder::new().max_rect(browser_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    browser_ui.set_min_size(browser_size);
+    browser_ui.set_max_size(browser_size);
+    browser_ui.set_clip_rect(browser_ui.clip_rect().intersect(browser_rect));
+    let result = draw_browser(&mut browser_ui, allocated_h);
     if let Some((footer, _)) = shell.footer {
         ui.add_space(4.0);
         footer(ui);
