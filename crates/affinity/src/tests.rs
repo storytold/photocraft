@@ -312,6 +312,25 @@ mod archive {
     }
 
     #[test]
+    fn allocation_records_are_charged_across_every_table() {
+        let d = doc();
+        let mut file = synth::container(&[("doc.dat", &d, Method::Stored), ("other.dat", &d, Method::Stored)], None);
+        let fat = u64::from_le_bytes(file[16..24].try_into().unwrap()) as usize;
+        // Chain a copy of the (valid, two-record) table after it; the copy is the last table.
+        let second = file.len();
+        let table = file[fat..].to_vec();
+        file.extend(&table);
+        file[fat + 4..fat + 12].copy_from_slice(&(second as u64).to_le_bytes());
+        let files = second + 4 + 8 + 8 + 24;
+        // Each count alone is within the archive budget of 2^25; together they exceed it by one.
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 1).to_le_bytes());
+        assert_eq!(Archive::open(&file, Limits::default()).unwrap_err(), Error::Limit("too many allocation records"));
+        // Exactly the budget is allowed: the second table is walked (and fails on missing data).
+        file[files..files + 4].copy_from_slice(&((1u32 << 25) - 2).to_le_bytes());
+        assert!(matches!(Archive::open(&file, Limits::default()), Err(Error::Malformed(_))));
+    }
+
+    #[test]
     fn hostile_streams_fail_cleanly() {
         let deep = (0..2000).fold(Vec::new(), |inner, _| vec![(tag(b"Chld"), F::Obj(tag(b"Grup"), inner))]);
         assert_eq!(stream::parse(&synth::stream(&deep)).unwrap_err(), Error::Limit("objects nested too deeply"));
