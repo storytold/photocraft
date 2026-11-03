@@ -100,7 +100,7 @@ use options_bar::LAYER_PCT_W;
 pub use options_bar::options_bar;
 #[cfg(test)]
 use options_bar::options_bar_height;
-pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, opt_label};
+pub(crate) use options_bar::{FIXED_SIZE_MAX_PX, flip_buttons, opt_label};
 pub use panel_state::{migrate_panel_state, panel_state_id, remember_panel_state};
 pub use properties::properties_window;
 #[cfg(test)]
@@ -1432,18 +1432,25 @@ mod toolbar_tests {
 
     #[test]
     fn options_bar_flip_buttons_turn_an_open_transform_box() {
-        let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
-        let ctx = h.ctx.clone();
-        crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
-        h.run_steps(2);
-        let before = h.state().session.active().unwrap().history.past_len();
-        let quad = h.state().ui.transform.as_ref().unwrap().quad;
-        h.get_by_label("Flip Horizontal").click();
-        h.run_steps(2);
-        assert_ne!(h.state().ui.transform.as_ref().unwrap().quad, quad);
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), before, "the button changes the box until Commit");
-        crate::transform_tool::commit(h.state_mut());
-        assert_eq!(layer_pixel(h.state(), 5, 3), [0.0, 1.0, 0.0, 1.0]);
+        for (button, green_at) in [("Flip Horizontal", (5, 3)), ("Flip Vertical", (2, 6))] {
+            let mut h = flip_harness(asymmetric_layer(), crate::theme::ThemeKind::Studio);
+            let ctx = h.ctx.clone();
+            crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
+            h.run_steps(2);
+            let flip = h.get_by_label(button).rect();
+            let commit = h.get_by_label("Commit transform").rect();
+            assert!(flip.right() < commit.left() && commit.left() - flip.right() < 160.0, "{button} belongs near the transform actions: {flip:?} {commit:?}");
+            let before = h.state().session.active().unwrap().history.past_len();
+            let quad = h.state().ui.transform.as_ref().unwrap().quad;
+            h.get_by_label(button).click();
+            h.run_steps(2);
+            assert_ne!(h.state().ui.transform.as_ref().unwrap().quad, quad, "{button} must change the box");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), before, "{button} changes the box until Commit");
+            crate::transform_tool::commit(h.state_mut());
+            assert_eq!(layer_pixel(h.state(), green_at.0, green_at.1), [0.0, 1.0, 0.0, 1.0], "{button} must commit the flipped pixels");
+            assert_ne!(layer_pixel(h.state(), 2, 3), [0.0, 1.0, 0.0, 1.0], "{button} must move the source pixels");
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), before + 1, "{button} must commit one history entry");
+        }
     }
 
     // Regression test for #2241: Quick Mask and Screen Mode ignored the two-column toolbar and

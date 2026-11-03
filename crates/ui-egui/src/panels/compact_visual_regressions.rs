@@ -50,9 +50,10 @@ fn flip_controls_remain_visible_in_a_narrow_options_bar() {
             let tool = harness.get_by_label("Move Tool").rect();
             for label in ["Flip Horizontal", "Flip Vertical"] {
                 let rect = harness.get_by_label(label).rect();
-                assert!(rect.left() >= 0.0 && rect.right() <= 320.0, "{kind:?} {direction:?}: {label} is outside the narrow options bar: {rect:?}");
+                assert!(rect.left() >= 10.0 && rect.right() <= 310.0, "{kind:?} {direction:?}: {label} is outside the options bar's inner margin: {rect:?}");
                 let trailing = if direction == crate::direction::Dir::Rtl { rect.center().x < tool.center().x } else { rect.center().x > tool.center().x };
                 assert!(trailing, "{kind:?} {direction:?}: {label} should follow the tool options");
+                assert!((rect.center().x - tool.center().x).abs() < 130.0, "{kind:?} {direction:?}: {label} should stay beside the tool icon");
             }
         }
     }

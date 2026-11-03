@@ -126,11 +126,11 @@ fn skew_about_pivot(app: &mut PhotocraftApp, skew_h: f64, skew_v: f64) {
     }
 }
 
-/// Width of the mode, cancel and commit cluster kept on the right of the options bar.
-const ACTIONS_W: f32 = 140.0;
+/// Width of flip, mode, cancel and commit actions kept at the end of the options bar.
+const ACTIONS_W: f32 = 221.0;
 
 /// Width of the action buttons when they follow the Warp fields (one more than the box bar: Reset).
-const WARP_ACTIONS_W: f32 = 176.0;
+const WARP_ACTIONS_W: f32 = 257.0;
 
 /// Reach of the reference point X/Y fields: the largest document side (`image.canvasSize`'s limit).
 pub(super) const POSITION_LIMIT_PX: f32 = 300_000.0;
@@ -183,9 +183,8 @@ pub(super) fn size_pct(u: &crate::layer_props_ui::LenUnit, v: f32, side: f64) ->
 }
 
 /// Options bar while transforming: the fields (reference point X/Y, W/H %, angle, interpolation,
-/// or the warp controls), then the mode switch, cancel and commit right after them. A bar too
-/// narrow for both pins the buttons to the right edge and clips the fields, so Commit and Cancel
-/// are always reachable.
+/// or the warp controls), then flip, mode, cancel and commit actions. A narrow bar clips fields
+/// while keeping these actions reachable.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(t) = app.ui.transform.clone() else { return };
     let bar = ui.available_rect_before_wrap();
@@ -558,19 +557,20 @@ fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool, 
             reset_warp(app);
         }
     }
-    if !mode_switch {
-        return;
-    }
-    crate::widgets::vline(ui, 22.0);
-    let mode = crate::icons::button(ui, "grid-3x3", 26.0, warping, tl!("Switch between free transform and warp modes"));
-    mode.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Switch between free transform and warp modes"));
-    if mode.clicked() {
-        if warping {
-            leave_warp(app);
-        } else {
-            enter_warp(app, &ui.ctx().clone());
+    if mode_switch {
+        crate::widgets::vline(ui, 22.0);
+        let mode = crate::icons::button(ui, "grid-3x3", 26.0, warping, tl!("Switch between free transform and warp modes"));
+        mode.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Switch between free transform and warp modes"));
+        if mode.clicked() {
+            if warping {
+                leave_warp(app);
+            } else {
+                enter_warp(app, &ui.ctx().clone());
+            }
         }
     }
+    crate::widgets::vline(ui, 22.0);
+    crate::panels::flip_buttons(app, ui, 24.0);
 }
 
 /// Scale the box along its own axes about the reference point.

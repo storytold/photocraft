@@ -4,6 +4,9 @@ use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Va
 use photocraft_paint::BrushSettings;
 
 // Custom controls also need to bring keyboard focus into a scroll viewport.
+const CAPTION_RECTS_ID: &str = "options-bar-caption-rects";
+
+/// Reveal a focused control with its adjacent caption, including in RTL rows.
 pub(super) fn reveal_focused_control(ui: &egui::Ui) {
     // read_response reprocesses pointer events. Reading a popup's newly focused field
     // during its opening click can undo the focus that the popup just requested.
@@ -24,8 +27,26 @@ pub(super) fn reveal_focused_control(ui: &egui::Ui) {
     {
         // A focused icon can label a control whose text extends to its reading end.
         // Start alignment leaves room for that text in a narrow options bar.
-        let start = if crate::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min };
-        ui.scroll_to_rect(response.rect, Some(start));
+        let rtl = crate::direction::is_rtl();
+        let start = if rtl { egui::Align::Max } else { egui::Align::Min };
+        let pass = ui.ctx().cumulative_pass_nr();
+        let caption = ui
+            .data(|data| data.get_temp::<(u64, Vec<egui::Rect>)>(egui::Id::unique(CAPTION_RECTS_ID)))
+            .filter(|(saved_pass, _)| *saved_pass == pass)
+            .and_then(|(_, rects)| {
+                rects
+                    .into_iter()
+                    .filter_map(|rect| {
+                        let gap = if rtl { rect.left() - response.rect.right() } else { response.rect.left() - rect.right() };
+                        // The field response can be inset within its allocated box (suffixes
+                        // and popup arrows), so allow more than the row's one visible gap.
+                        (rect.top() < response.rect.bottom() && rect.bottom() > response.rect.top() && gap >= 0.0 && gap <= ui.spacing().item_spacing.x * 4.0)
+                            .then_some((gap, rect))
+                    })
+                    .min_by(|(a, _), (b, _)| a.total_cmp(b))
+                    .map(|(_, rect)| rect)
+            });
+        ui.scroll_to_rect(caption.map_or(response.rect, |rect| rect.union(response.rect)), Some(start));
     }
 }
 
@@ -53,41 +74,52 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.style_mut().spacing.scroll = egui::style::ScrollStyle { bar_width: 4.0, ..egui::style::ScrollStyle::floating() };
             let flip_size = 24.0;
             ui.with_layout(crate::direction::row(), |ui| {
-                let options_width = (ui.available_width() - flip_size * 2.0 - 16.0).max(0.0);
+                let gap = ui.spacing().item_spacing.x;
+                let transforming = app.ui.transform.is_some();
+                // The tool icon stays fixed. Outside Free Transform, keep flips beside it;
+                // during Free Transform the flips live with the reference-point controls.
+                let base_width = if t.pro { 26.0 + 9.0 + 26.0 + 10.0 + 9.0 + gap * 4.0 } else { 28.0 + 9.0 + gap };
+                let fixed_width = base_width + if transforming { 0.0 } else { flip_size * 2.0 + 9.0 + gap * 3.0 };
+                ui.allocate_ui_with_layout(vec2(fixed_width, ui.available_height()), crate::direction::row(), |ui| {
+                    if t.pro {
+                        crate::chrome_ui::home_button(app, ui);
+                        widgets::vline(ui, 22.0);
+                    }
+                    let tool_icon = icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
+                    // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools (#2825).
+                    let mut reset = None;
+                    tool_icon.context_menu(|ui| {
+                        if ui.button(tl!("Reset Tool")).clicked() {
+                            reset = Some("tool.reset");
+                            ui.close();
+                        }
+                        if ui.button(tl!("Reset All Tools")).clicked() {
+                            reset = Some("tool.resetAll");
+                            ui.close();
+                        }
+                    });
+                    if let Some(id) = reset
+                        && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, json!({}))
+                    {
+                        app.ui.status = e;
+                    }
+                    if t.pro {
+                        let (r, _) = ui.allocate_exact_size(vec2(10.0, 20.0), Sense::hover());
+                        icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
+                    }
+                    widgets::vline(ui, 22.0);
+                    if !transforming {
+                        flip_buttons(app, ui, flip_size);
+                        widgets::vline(ui, 22.0);
+                    }
+                });
+                let options_width = (ui.available_width() - gap).max(0.0);
                 ui.allocate_ui_with_layout(vec2(options_width, ui.available_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
                     egui::ScrollArea::horizontal().id_salt("tool-options").auto_shrink([false, false]).show(ui, |ui| {
                         // Font ink can extend beyond its advance width at fractional positions.
                         // Include its gutter in the container layout, including right-aligned actions.
                         egui::Frame::NONE.inner_margin(egui::Margin { right: 2, ..Default::default() }).show(ui, |ui| {
                             crate::direction::horizontal_centered(ui, |ui| {
-                                if t.pro {
-                                    crate::chrome_ui::home_button(app, ui);
-                                    widgets::vline(ui, 22.0);
-                                }
-                                let tool_icon =
-                                    icons::button(ui, icons::tool_icon(app.ui.tool), if t.pro { 26.0 } else { 28.0 }, !t.pro, tl!(app.ui.tool.label()));
-                                // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools (#2825).
-                                let mut reset = None;
-                                tool_icon.context_menu(|ui| {
-                                    if ui.button(tl!("Reset Tool")).clicked() {
-                                        reset = Some("tool.reset");
-                                        ui.close();
-                                    }
-                                    if ui.button(tl!("Reset All Tools")).clicked() {
-                                        reset = Some("tool.resetAll");
-                                        ui.close();
-                                    }
-                                });
-                                if let Some(id) = reset
-                                    && let Err(e) = crate::menus::invoke(app, ui.ctx(), id, json!({}))
-                                {
-                                    app.ui.status = e;
-                                }
-                                if t.pro {
-                                    let (r, _) = ui.allocate_exact_size(vec2(10.0, 20.0), Sense::hover());
-                                    icons::paint(ui, r, "chevron-down", 10.0, t.text_faint);
-                                }
-                                widgets::vline(ui, 22.0);
                                 if app.ui.transform.is_some() {
                                     crate::transform_tool::options_bar(app, ui);
                                     return;
@@ -152,15 +184,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         });
                     });
                 });
-                widgets::vline(ui, 22.0);
-                flip_buttons(app, ui, flip_size);
             });
         });
 }
 
 /// Keep selection and layer flips available for every tool, including an open Free Transform box.
 /// Both buttons use the same commands as Edit › Transform and agent control.
-fn flip_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, size: f32) {
+pub(crate) fn flip_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, size: f32) {
     for (id, icon, label) in
         [("edit.transform.flipHorizontal", "flip-horizontal", tl!("Flip Horizontal")), ("edit.transform.flipVertical", "flip-vertical", tl!("Flip Vertical"))]
     {
@@ -764,6 +794,16 @@ pub(crate) fn opt_label(ui: &mut egui::Ui, s: &str) {
     let text = if t.pro && !s.ends_with(':') { format!("{s}:") } else { s.to_string() };
     let label = ui.add(egui::Label::new(RichText::new(tl!(&text)).color(t.text_dim)).selectable(false));
     widgets::scrub_option_label(ui, &label);
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.data_mut(|data| {
+        let key = egui::Id::unique(CAPTION_RECTS_ID);
+        let (saved_pass, mut rects) = data.get_temp::<(u64, Vec<egui::Rect>)>(key).unwrap_or_default();
+        if saved_pass != pass {
+            rects.clear();
+        }
+        rects.push(label.rect);
+        data.insert_temp(key, (pass, rects));
+    });
 }
 
 /// The largest Fixed Size side, in pixels.
@@ -811,4 +851,50 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
 fn hint(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(s).color(t.text_faint));
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn focused_field_reveals_its_caption() {
+        for direction in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _direction = crate::direction::direction_scope(direction);
+            let mut harness = egui_kittest::Harness::builder().with_size(vec2(320.0, 100.0)).build_ui_state(
+                move |ui, value: &mut f32| {
+                    ui.allocate_ui_with_layout(vec2(160.0, 40.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                        egui::ScrollArea::horizontal().id_salt("focus-test").show(ui, |ui| {
+                            ui.allocate_ui_with_layout(vec2(360.0, 24.0), crate::direction::row(), |ui| {
+                                if direction == crate::direction::Dir::Ltr {
+                                    ui.add_space(200.0);
+                                }
+                                opt_label(ui, "Opacity");
+                                let field = widgets::value_field_named(ui, "Opacity", value, 0.0..=100.0, "%", 60.0);
+                                ui.data_mut(|data| {
+                                    data.insert_temp(egui::Id::unique("focus-test-field"), field.id);
+                                    data.insert_temp(egui::Id::unique("focus-test-clip"), ui.clip_rect());
+                                });
+                                reveal_focused_control(ui);
+                            });
+                        });
+                    });
+                },
+                50.0,
+            );
+            harness.run_steps(2);
+            let field_id = harness.ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::unique("focus-test-field"))).unwrap();
+            harness.ctx.memory_mut(|memory| memory.request_focus(field_id));
+            harness.run_steps(20);
+            let clip = harness.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("focus-test-clip"))).unwrap();
+            let (_, captions) = harness.ctx.data(|data| data.get_temp::<(u64, Vec<egui::Rect>)>(egui::Id::unique(CAPTION_RECTS_ID))).unwrap();
+            let caption = captions[0];
+            let field = harness.ctx.read_response(field_id).unwrap().rect;
+            assert!(
+                caption.left() >= clip.left() - 1.0 && caption.right() <= clip.right() + 1.0,
+                "{direction:?}: caption {caption:?} and field {field:?} outside {clip:?}"
+            );
+            assert!(field.left() >= clip.left() - 1.0 && field.right() <= clip.right() + 1.0, "{direction:?}: field {field:?} outside {clip:?}");
+        }
+    }
 }
