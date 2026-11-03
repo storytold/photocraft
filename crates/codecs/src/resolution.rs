@@ -517,16 +517,40 @@ pub fn xmp_with_resolution(xmp: &str, ppi: (f32, f32)) -> Cow<'_, str> {
 fn exif_without_thumbnail(exif: &[u8]) -> Option<Vec<u8>> {
     let body = tiff_body(exif);
     let prefix = exif.len() - body.len();
-    let (_, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
+    let (order, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
     let next = prefix.checked_add(first)?.checked_add(count.checked_mul(entry_bytes)?)?;
     let width = if big_tiff { 8 } else { 4 };
     // In bounds: `ifd0_entries` checked that the whole pointer is present.
     if exif.get(next..next.checked_add(width)?)?.iter().all(|b| *b == 0) {
         return None;
     }
+    // Classic TIFF: also blank the thumbnail JPEG itself (IFD1's JPEGInterchangeFormat/Length),
+    // which stays recoverable in the block once nothing points at it.
+    let thumb = (!big_tiff).then(|| thumbnail_range(order, body, next - prefix)).flatten();
     let mut out = exif.to_vec();
     out.get_mut(next..next + width)?.fill(0);
+    if let Some((off, len)) = thumb
+        && let Some(jpeg) = prefix.checked_add(off).and_then(|a| out.get_mut(a..a.checked_add(len)?))
+    {
+        jpeg.fill(0);
+    }
     Some(out)
+}
+
+/// IFD1's thumbnail JPEG as (offset, length) in `body`, from the next-IFD pointer at `ptr`.
+fn thumbnail_range(order: Order, body: &[u8], ptr: usize) -> Option<(usize, usize)> {
+    let ifd1 = usize::try_from(order.u32(body, ptr)?).ok()?;
+    let (mut off, mut len) = (None, None);
+    for i in 0..usize::from(order.u16(body, ifd1)?) {
+        let e = ifd1.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let value = if order.u16(body, e + 2)? == 3 { usize::from(order.u16(body, e + 8)?) } else { usize::try_from(order.u32(body, e + 8)?).ok()? };
+        match order.u16(body, e)? {
+            0x0201 => off = Some(value),
+            0x0202 => len = Some(value),
+            _ => {}
+        }
+    }
+    Some((off?, len?))
 }
 
 /// The EXIF to write next to upright pixels at resolution `ppi`: Orientation 1 (see
