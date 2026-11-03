@@ -25,12 +25,23 @@ fn channel_filter_transparency_follows_native_alpha_format() {
                         kernel: vec![0.; 25],
                         scale: 1.,
                         offset: 0.,
-                        channels,
+                        channels: channels.clone(),
                         alpha_weighted: false,
                         edge: algo::convolution::Edge::Repeat,
                     });
                     for filter in [noise, convolution] {
                         assert_eq!(edits_transparency(&filter, &layer), alpha && selected, "{mode:?}/{depth:?}/{alpha}/{selected}");
+                    }
+                    for channels in [None, Some(channels)] {
+                        let all_channels = channels.is_none();
+                        let percentile = FilterParams::Percentile(algo::rank::Params {
+                            radius: 2,
+                            color_percentile: 50.,
+                            alpha_percentile: 50.,
+                            shape: algo::rank::Neighborhood::Disc,
+                            channels,
+                        });
+                        assert_eq!(edits_transparency(&percentile, &layer), alpha && (all_channels || selected), "{mode:?}/{depth:?}/{alpha}/{selected}");
                     }
                 }
                 assert!(edits_transparency(&FilterParams::ColorToAlpha { color: [1.; 4], transparency_threshold: 0., opacity_threshold: 1. }, &layer));
