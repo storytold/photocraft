@@ -1242,7 +1242,9 @@ fn heading_for_a_submenu_hands_the_highlight_over_once() {
         }
         // Arrange lit, then Workspace lit: at most one handover, nothing else.
         let handovers = lit.as_bytes().windows(2).filter(|w| w[0] != w[1]).count();
-        if lit.contains(['2', '.']) || !lit.ends_with('W') || handovers > 1 {
+        // Over three or more frames the first sample is still on Arrange: Workspace lit there
+        // means it took the highlight before the pointer left.
+        if lit.contains(['2', '.']) || !lit.ends_with('W') || handovers > 1 || (frames >= 3 && !lit.starts_with('A')) {
             wrong.push(format!("{frames} frames, {dx:+} px: {lit}"));
         }
         if kept + 2 < (super::AIM_REST * 120.0) as usize {
@@ -1330,7 +1332,8 @@ fn leaving_a_submenu_for_another_row_hands_the_highlight_over() {
             h.run_steps(1);
             let (left, landed) = (row_fill(&h, row), row_fill(&h, dest));
             seen.push(match (left, landed == Some(accent)) {
-                (Some(c), _) if c == accent => 'L',
+                (Some(c), true) if c == accent => '2',
+                (Some(c), false) if c == accent => 'L',
                 (Some(_), true) => '2',
                 (Some(_), false) => 'g',
                 (None, true) => 'D',
@@ -1760,6 +1763,11 @@ fn with_the_pointer_parked_the_keys_open_any_submenu() {
 #[test]
 fn an_empty_help_search_lets_the_arrows_change_menus() {
     let mut h = harness_dt(1.0 / 120.0);
+    // Help is the last menu: → from it goes round to File.
+    open(&mut h, "File");
+    let file = Nav::current(&h.ctx).top;
+    key(&mut h, egui::Key::Escape);
+    h.run_steps(5);
     open(&mut h, "Help");
     let help = Nav::current(&h.ctx).top;
     key(&mut h, egui::Key::ArrowLeft);
@@ -1771,7 +1779,7 @@ fn an_empty_help_search_lets_the_arrows_change_menus() {
     assert_eq!(Nav::current(&h.ctx).top, help, "→ comes back");
     key(&mut h, egui::Key::ArrowRight);
     h.run_steps(5);
-    assert_ne!(Nav::current(&h.ctx).top, help, "→ leaves it the other way");
+    assert_eq!(Nav::current(&h.ctx).top, file, "→ leaves it the other way, for File");
 }
 
 /// A highlighted row has the arrows, also with text in Help's search field: they stayed with the
