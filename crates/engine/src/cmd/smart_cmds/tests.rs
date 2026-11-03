@@ -1397,3 +1397,84 @@ fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_source
     drop(newest);
     assert!(weak.upgrade().is_none());
 }
+
+/// Layer › Smart Objects › Reset Transform: a smart object scaled, rotated, distorted and warped
+/// goes back to its contents' own size and orientation, with no warp, centred where it was, in
+/// one step. It is greyed on one that isn't transformed, and refuses other layers.
+#[test]
+fn reset_transform_puts_a_smart_object_back_at_its_own_size_and_orientation() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 40, "y": 60, "width": 60, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let bounds = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let original = bounds(&s);
+    assert!(!s.is_enabled("layer.smartObjects.resetTransform"), "nothing to reset yet");
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err(), "greyed: nothing to reset");
+    s.execute("edit.transform", json!({"scaleX": 150, "scaleY": 80, "rotate": 25, "dx": 30, "dy": 20})).unwrap();
+    s.execute("edit.transform", json!({"rect": [20, 40, 180, 160], "quad": [[30, 45], [170, 40], [180, 160], [20, 150]]})).unwrap();
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 40})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart") };
+    let b = super::rendering::source_box(&st.doc, sm).unwrap();
+    let centre = placement(sm).apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+    let steps = st.history.past_len();
+    assert!(s.is_enabled("layer.smartObjects.resetTransform"));
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart") };
+    assert!(sm.warp.is_none() && sm.perspective.is_none());
+    assert_eq!([sm.transform.m[0], sm.transform.m[1], sm.transform.m[2], sm.transform.m[3]], [1.0, 0.0, 0.0, 1.0], "own size and orientation");
+    let now = placement(sm).apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+    assert!((now.0 - centre.0).abs() <= 0.5 && (now.1 - centre.1).abs() <= 0.5, "centred where it was: {now:?} vs {centre:?}");
+    let r = bounds(&s);
+    assert_eq!((r.width(), r.height()), (original.width(), original.height()), "the contents' own size");
+    assert_eq!(st.history.past_len(), steps + 1, "one step");
+    s.undo();
+    let LayerContent::Smart(sm) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("smart") };
+    assert!(sm.warp.is_some() && sm.perspective.is_some(), "Undo brings it all back");
+    // Other layers are refused.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err());
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({"layer": 999_999})).is_err());
+}
+
+/// Reset Transform takes a linked layer mask back with the contents and refuses a
+/// position-locked smart object.
+#[test]
+fn reset_transform_takes_the_linked_mask_along_and_respects_locks() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let _ = s.execute("select.deselect", json!({}));
+    let id = s.active().unwrap().active_layer.unwrap();
+    let mask_box = |s: &Session| {
+        let m = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.clone();
+        let px = m.read_region(photocraft_geom::Rect::new(0, 0, 128, 128));
+        let on: Vec<usize> = (0..128 * 128).filter(|k| px[*k] > 0.5).collect();
+        let (xs, ys): (Vec<usize>, Vec<usize>) = on.iter().map(|k| (k % 128, k / 128)).unzip();
+        (*xs.iter().min().unwrap(), *ys.iter().min().unwrap(), *xs.iter().max().unwrap(), *ys.iter().max().unwrap())
+    };
+    let original = mask_box(&s);
+    s.execute("edit.transform", json!({"scaleX": 50, "scaleY": 50})).unwrap();
+    assert_ne!(mask_box(&s), original, "the transform moved the mask");
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(id).unwrap().locks.position = true;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("layer.smartObjects.resetTransform", json!({})).is_err(), "locked");
+    s.undo();
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let back = mask_box(&s);
+    let near = |a: usize, b: usize| (a as i64 - b as i64).abs() <= 1;
+    assert!(near(back.0, original.0) && near(back.1, original.1) && near(back.2, original.2) && near(back.3, original.3), "{back:?} vs {original:?}");
+}

@@ -77,6 +77,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
             LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
             LayerContent::Smart(_) => {
                 v.push(Some((tl!("Edit Contents"), "layer.smartObjects.editContents")));
+                v.push(Some((tl!("Reset Transform"), "layer.smartObjects.resetTransform")));
                 v.push(Some((tl!("Replace Contents…"), "layer.smartObjects.replaceContents")));
                 v.push(Some((tl!("Relink to File…"), "layer.smartObjects.relinkToFile")));
                 v.push(Some((tl!("Convert to Layers"), "layer.smartObjects.convertToLayers")));

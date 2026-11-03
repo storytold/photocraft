@@ -768,7 +768,12 @@ fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
 }
 
 fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
-    let a = p.get("quad")?.as_array()?;
+    corners_param(p, "quad")
+}
+
+/// Four `[x, y]` points under `key`, all finite.
+fn corners_param(p: &Value, key: &str) -> Option<[[f64; 2]; 4]> {
+    let a = p.get(key)?.as_array()?;
     if a.len() != 4 {
         return None;
     }
@@ -777,7 +782,7 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
         let c = v.as_array()?;
         q[i] = [c.first()?.as_f64()?, c.get(1)?.as_f64()?];
     }
-    Some(q)
+    q.iter().flatten().all(|v| v.is_finite()).then_some(q)
 }
 
 /// `p`, with the Channels panel's targeted alpha channel or Quick Mask as its `"target"` when it
@@ -838,7 +843,18 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
             [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64]
         }
     };
-    let h = if let Some(q) = quad_param(p) {
+    // `from`: where the box started when that wasn't the rect's corners (a smart object's box
+    // opens on its placement, rotated or distorted, #3649); the transform is from there to `quad`.
+    let from = match p.get("from") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(corners_param(p, "from").ok_or_else(|| bad("`from` must be four [x, y] points"))?),
+    };
+    if from.is_some() && quad_param(p).is_none() {
+        return Err(bad("`from` needs `quad`"));
+    }
+    let h = if let (Some(f), Some(q)) = (from, quad_param(p)) {
+        Homography::quad_to_quad(f, q).ok_or_else(|| bad("degenerate quad"))?
+    } else if let Some(q) = quad_param(p) {
         Homography::rect_to_quad(rect, q).ok_or_else(|| bad("degenerate quad"))?
     } else if let Some(m) = p.get("matrix").and_then(Value::as_array) {
         let v: Vec<f64> = m.iter().filter_map(Value::as_f64).collect();
@@ -952,7 +968,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers but the Background, as Photoshop's Free Transform with several selected),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers but the Background, as Photoshop's Free Transform with several selected),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"from":[[x,y]×4]? (with `quad`: the box's corners before it moved, instead of the rect's; transforms from there to `quad`),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

@@ -458,3 +458,181 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
     let r = warp_layer(Some(&sel), Locks::default(), &mut l, &w, rect, Interp::Bicubic, None, &ctl);
     assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
 }
+
+/// #8927: Warp mode on a distorted smart object edits its warp in source space: the start is no
+/// warp over the contents (which fill that box unplaced) with the Distort as the placement.
+/// Committed with `contents`, the mesh is stored exactly, also with a point pulled far outside its
+/// box (the render reaches it), and with a moved placement in the same step. Untouched is no step;
+/// bad input is refused.
+#[test]
+fn a_smart_objects_warp_is_edited_and_stored_in_source_space() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 16, "width": 32, "height": 16})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let quad = [[8.0, 16.0], [56.0, 4.0], [40.0, 32.0], [8.0, 32.0]];
+    s.execute("edit.transform", json!({"rect": [8, 16, 40, 32], "quad": quad})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let layer = st.doc.layer(id).unwrap();
+    let (w, place) = smart_warp_source(&st.doc, layer).unwrap();
+    assert!(w.is_identity());
+    let b = w.bounds;
+    for (corner, want) in [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].iter().zip(quad) {
+        let (x, y) = place.apply(corner[0], corner[1]);
+        assert!((x - want[0]).abs() < 1e-6 && (y - want[1]).abs() < 1e-6, "{corner:?} → ({x}, {y}), not {want:?}");
+    }
+    let c = smart_unplaced_contents(&st.doc, layer).unwrap().0.content_bounds();
+    assert_eq!([f64::from(c.x0), f64::from(c.y0), f64::from(c.x1), f64::from(c.y1)], b, "the contents fill the box");
+    let steps = s.active().unwrap().history.past_len();
+    let r = s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w})).unwrap();
+    assert_eq!(r["changed"], false, "untouched");
+    // Bad input: no step.
+    for bad in [
+        json!({"layer": id.0, "contents": true}),
+        json!({"layer": id.0, "contents": true, "warp": w, "placement": [1, 0, 0]}),
+        json!({"layer": id.0, "contents": true, "warp": w, "placement": [0, 0, 0, 0, 0, 0, 0, 0, 0]}),
+        json!({"layer": id.0, "contents": true, "warp": w, "placement": "identity"}),
+    ] {
+        assert!(s.execute("edit.transform.warp", bad.clone()).is_err(), "accepted {bad}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // A grid point pulled 40 px out to the right of the contents' box, in source space.
+    let before = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let mut pulled = w.clone();
+    if let Some(m) = pulled.mesh.as_mut() {
+        m.points[7][0] += 40.0;
+    }
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": pulled})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart") };
+    assert_eq!(sm.warp.as_ref(), Some(&pulled), "stored as it was edited");
+    assert_eq!(crate::smart_cmds::placement(sm).0, place.0, "the Distort is kept");
+    let after = st.doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    assert!(after.x1 > before.x1 + 10, "the pulled part renders past the box: {after:?}, was {before:?}");
+    assert_eq!(st.history.past_len(), steps + 1);
+    // A moved placement in the same step.
+    let shifted = Homography([1.0, 0.0, 5.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).mul(&place);
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": pulled, "placement": shifted.0})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Smart(sm) = &st.doc.layer(id).unwrap().content else { panic!("smart") };
+    let got = crate::smart_cmds::placement(sm);
+    let (x, y) = got.apply(b[0], b[1]);
+    assert!((x - 13.0).abs() < 1e-6 && (y - 16.0).abs() < 1e-6, "moved 5 px: ({x}, {y})");
+    assert_eq!(st.history.past_len(), steps + 2);
+    // A pixel layer has no contents to warp.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(s.execute("edit.transform.warp", json!({"contents": true, "warp": w})).is_err());
+}
+
+/// The contents warp moves a linked layer mask with the contents, refuses a position-locked
+/// smart object, and refuses a placement that would make an absurd layer, all without a step.
+#[test]
+fn a_contents_warp_takes_its_linked_mask_along_and_respects_locks_and_size() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 20, "height": 30})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let _ = s.execute("select.deselect", json!({}));
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (w, place) = smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    let mask_bounds = |s: &Session| {
+        let m = s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.clone();
+        let px = m.read_region(Rect::new(0, 0, 128, 128));
+        let xs: Vec<usize> = (0..128 * 128).filter(|k| px[*k] > 0.5).map(|k| k % 128).collect();
+        (*xs.iter().min().unwrap(), *xs.iter().max().unwrap())
+    };
+    let before = mask_bounds(&s);
+    let shifted = Homography([1.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).mul(&place);
+    let steps = s.active().unwrap().history.past_len();
+    // Absurd: refused before allocating.
+    let huge = Homography([1e5, 0.0, 0.0, 0.0, 1e5, 0.0, 0.0, 0.0, 1.0]).mul(&place);
+    assert!(s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": huge.0})).is_err());
+    // Locked: refused.
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(id).unwrap().locks.position = true;
+        Ok(())
+    })
+    .unwrap();
+    let locked_steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": shifted.0})).is_err());
+    assert_eq!(s.active().unwrap().history.past_len(), locked_steps);
+    s.undo();
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // The linked mask moves with the contents.
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": shifted.0})).unwrap();
+    let after = mask_bounds(&s);
+    assert_eq!((after.0 as i64 - before.0 as i64, after.1 as i64 - before.1 as i64), (10, 10), "the mask follows: {before:?} → {after:?}");
+}
+
+/// The contents warp moves the selection outline with the contents, as a warp of the layer does.
+#[test]
+fn a_contents_warp_moves_the_selection_with_the_contents() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 20, "height": 30})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (w, place) = smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    let before = st.doc.selection.as_ref().unwrap().content_bounds();
+    let shifted = Homography([1.0, 0.0, 10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).mul(&place);
+    s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": w, "placement": shifted.0})).unwrap();
+    let after = s.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
+    assert!((after.x0 - before.x0 - 10).abs() <= 1 && (after.x1 - before.x1 - 10).abs() <= 1, "{before:?} → {after:?}");
+}
+
+/// A contents warp whose mesh reaches far outside its box is refused before anything is
+/// rendered, with or without a placement, and what lies outside a warp moves with its edge
+/// rather than collapsing onto it.
+#[test]
+fn a_contents_warp_prices_the_meshs_reach_and_moves_what_is_outside() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let (w, place) = smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    let steps = st.history.past_len();
+    let mut far = w.to_mesh(1, 1);
+    far.points[5] = [1e7, -1e7];
+    let far = Warp::custom(far, w.bounds);
+    for placement in [None, Some(place.0)] {
+        let err = s.execute("edit.transform.warp", json!({"layer": id.0, "contents": true, "warp": far, "placement": placement}));
+        assert!(err.is_err(), "{err:?}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    // A warp that moves the contents' right edge 10 px right takes a point 5 px past that edge
+    // along, 5 px past where the edge went.
+    let b = w.bounds;
+    let mut shift = w.to_mesh(1, 1);
+    for (k, p) in shift.points.iter_mut().enumerate() {
+        if k % 4 == 3 {
+            p[0] += 10.0;
+        }
+    }
+    let shifted = Warp::custom(shift, b);
+    let (ex, ey) = place.apply(b[2] + 5.0, (b[1] + b[3]) / 2.0);
+    let forward = contents_move(place, None, place, Some(shifted.clone())).unwrap();
+    let (fx, fy) = forward(ex, ey);
+    let (gx, gy) = place.apply(b[2] + 15.0, (b[1] + b[3]) / 2.0);
+    assert!((fx - gx).abs() < 1e-6 && (fy - gy).abs() < 1e-6, "({fx}, {fy}) vs ({gx}, {gy})");
+    // And back: the old warp's outside is found from its edge too.
+    let back = contents_move(place, Some(shifted), place, None).unwrap();
+    let (bx, by) = back(gx, gy);
+    assert!((bx - ex).abs() < 1e-3 && (by - ey).abs() < 1e-3, "({bx}, {by}) vs ({ex}, {ey})");
+}

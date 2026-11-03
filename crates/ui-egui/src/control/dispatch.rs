@@ -1288,8 +1288,8 @@ fn secondary_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &Pointer
 fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
-    // Right-click while transforming: the box's menu, as on the canvas.
-    if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) {
+    // Right-click while transforming: the box's menu, as on the canvas (in Warp mode too).
+    if app.ui.transform.is_some() {
         if down {
             crate::canvas_tool_menu::open_transform(app, ctx, screen_point(app, x, y));
         }

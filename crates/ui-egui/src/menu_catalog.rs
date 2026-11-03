@@ -346,6 +346,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer", "Smart Objects"], "Update All Modified Content", None, "layer.smartObjects.updateAllModifiedContent"),
     (&["Layer", "Smart Objects"], "---", None, "---"),
     (&["Layer", "Smart Objects"], "Edit Contents", None, "layer.smartObjects.editContents"),
+    (&["Layer", "Smart Objects"], "Reset Transform", None, "layer.smartObjects.resetTransform"),
     (&["Layer", "Smart Objects"], "Relink to File…", None, "layer.smartObjects.relinkToFile"),
     (&["Layer", "Smart Objects"], "Replace Contents…", None, "layer.smartObjects.replaceContents"),
     (&["Layer", "Smart Objects"], "Export Contents…", None, "layer.smartObjects.exportContents"),

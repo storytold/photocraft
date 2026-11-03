@@ -124,6 +124,14 @@ impl Homography {
         Some(Self::square_to_quad(quad)?.mul(&to_unit))
     }
 
+    /// The transform taking quad `from` onto quad `to` (corners clockwise from top-left), as a
+    /// box that started at `from` and was dragged to `to` moves what it holds. `None` for
+    /// degenerate quads.
+    pub fn quad_to_quad(from: [[f64; 2]; 4], to: [[f64; 2]; 4]) -> Option<Homography> {
+        let back = Self::square_to_quad(from)?.inverse()?;
+        Some(Self::square_to_quad(to)?.mul(&back))
+    }
+
     /// Approximate linear scale of the mapping near `(x, y)` (sqrt of the Jacobian determinant).
     pub fn local_scale(&self, x: f64, y: f64) -> f64 {
         let e = 0.5;

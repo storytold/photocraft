@@ -138,6 +138,13 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        start: None,
+        warp_place: None,
+        held_warp: None,
+        held_place: None,
+        warp_entry: None,
+        warp_box: None,
+        warp_origin: None,
         layers: Vec::new(),
     })
 }

@@ -278,19 +278,22 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modi
         if warps_type(app) {
             return Some(CursorIcon::Default);
         }
+        // A smart object's warp is in its contents' space (#8927): the pointer is taken there.
+        let (doc_p, tol) = (p, tol / t.warp_scale_at(p));
+        let p = t.doc_to_warp(doc_p);
         let armed = app.transform_preview.as_ref().and_then(|pv| pv.split_tool);
         let quick_split = mods.alt || mods.command;
         if armed.is_some() || quick_split {
             // One search for the grid position under the pointer, for both the kind and the arrow.
             let m = w.to_mesh(1, 1);
             let at = m.param_at(p);
-            let tool = armed.unwrap_or_else(|| quick_split_kind(&m, w.bounds, at));
-            return Some(split_cursor(&m, tool, at, xf));
+            let tool = armed.unwrap_or_else(|| quick_split_kind(&m, w.bounds, at, t.warp_unit(p)));
+            return Some(split_cursor(&m, tool, at, xf, &|q| t.warp_to_doc(q)));
         }
         if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() {
             return Some(CursorIcon::Crosshair);
         }
-        return Some(if w.mesh.as_ref().and_then(|m| surface_at(m, p)).is_some() { CursorIcon::Grab } else { CursorIcon::Default });
+        return Some(if w.mesh.as_ref().and_then(|m| surface_at(m, p, t.warp_unit(p))).is_some() { CursorIcon::Grab } else { CursorIcon::Default });
     }
     let h = handle_at(app, t, p, tol);
     if !mode_allows(t.mode, h) || (t.content_aware.is_some() && h == Hit::Outside) {

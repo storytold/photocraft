@@ -512,7 +512,7 @@ pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> b
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
 /// Scale stays Free Transform's mode (only Free Transform is checked). Rotate is its own mode.
-/// Warp is not a box mode (it is its own session), and `for_command` would read it as Free.
+/// Warp is checked while warping (it is no box mode: `for_command` would read it as Free).
 pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
     if menu.crop.is_some() {
         return crop_checked(app, menu, command);
@@ -526,7 +526,12 @@ pub(crate) fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: 
     if menu.text || menu.type_layer {
         return type_checked(app, command);
     }
+    let warping = app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some());
+    if menu.transform && command == "edit.transform.warp" {
+        return warping;
+    }
     menu.transform
+        && !warping
         && matches!(command, "edit.freeTransform" | "edit.transform.rotate" | "edit.transform.skew" | "edit.transform.distort" | "edit.transform.perspective")
         && app.ui.transform.as_ref().is_some_and(|t| t.mode == crate::state::TransformMode::for_command(command))
 }
@@ -788,8 +793,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
         return PASTEBOARD_MENU.iter().flatten().any(|(_, id)| *id == command);
     }
     // Warp needs a layer, selection or path box: a lone mask or channel keeps the plain box.
+    // Checked while warping, where choosing it again changes nothing.
     if menu.transform && command == "edit.transform.warp" {
-        return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none());
+        return app.ui.transform.as_ref().is_some_and(|t| t.target.is_none());
     }
     if menu.anchor.is_some() && command == FILL_SCREEN {
         return app.session.active().is_some();

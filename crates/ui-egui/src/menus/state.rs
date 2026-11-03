@@ -105,8 +105,11 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         | "edit.transform.rotate"
         | "edit.transform.skew"
         | "edit.transform.distort"
+        // While warping a layer they leave Warp for that mode and keep the warp (the canvas menu,
+        // Edit › Transform). Transform Selection, paths and Warp Text don't keep it: there they
+        // stay greyed, so the warp isn't dropped unasked.
         | "edit.transform.perspective" => match &app.ui.transform {
-            Some(t) => t.warp.is_none(),
+            Some(t) => t.warp.is_none() || crate::transform_tool::holds_warp(app),
             None => app.session.active().and_then(|s| s.active_layer).is_some(),
         },
         // A targeted layer mask enables what edits it (Invert on an adjustment layer's mask).

@@ -35,7 +35,7 @@ pub(crate) use begin::begin_content_aware;
 pub(crate) use begin::moving_layers;
 #[cfg(test)]
 pub(crate) use begin::moving_texel;
-pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_type};
+pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, holds_warp, leave_warp, warps_type};
 pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
 #[cfg(test)]
@@ -122,7 +122,8 @@ pub struct TransformPreview {
     warp_drag: Option<WarpDrag>,
     /// Armed split tool. None while the buttons are off and control points drag as usual.
     split_tool: Option<SplitTool>,
-    /// Document point the split guide is following (a drag, or the hover while placing).
+    /// Point the split guide is following (a drag, or the hover while placing), in the warp's
+    /// space ([`TransformSession::doc_to_warp`]).
     split_pointer: Option<[f64; 2]>,
     split_placing: bool,
     /// Option-click places a split without a button armed.
@@ -142,6 +143,17 @@ pub struct TransformPreview {
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
     /// A box over several layers (#6501): their composite, which `texture` holds.
     several: Option<Several>,
+    /// Where `texture`'s corners were when the box opened, when that isn't the box itself: a
+    /// smart object's unplaced contents, placed by its rotation or Distort (#3649). The box's move
+    /// since it opened takes them along.
+    placed: Option<[[f64; 2]; 4]>,
+    /// A smart object's contents unplaced, and the box in the contents' space they cover: what a
+    /// warp in the contents' space (`warp_place`, `held_place`) is drawn from. `texture` stays
+    /// the box's, so Undo across the Warp toggle never pairs the wrong texels with the wrong space.
+    contents: Option<(crate::transform_tex::PreviewTextures, [f64; 4])>,
+    /// The selection outline bent by a warp, as last drawn ([`draw::selection_ants`]): mapping it
+    /// through a smart object's warp inverts a mesh, so it is redone only when something moved.
+    ants: std::sync::Mutex<Option<draw::BentAnts>>,
 }
 
 /// The moving pixels of a box over several layers ([`begin_several`]): the layers composited on
@@ -253,15 +265,38 @@ struct Step {
     quad: [[f64; 2]; 4],
     pivot: [f64; 2],
     warp: Option<Warp>,
+    start: Option<[[f64; 2]; 4]>,
+    warp_place: Option<[f64; 9]>,
+    held: Option<(Warp, Option<[f64; 9]>)>,
+    warp_entry: Option<Warp>,
+    warp_box: Option<crate::state::WarpBox>,
+    warp_origin: Option<(Warp, [f64; 9])>,
 }
 
 impl Step {
     fn of(t: &TransformSession) -> Self {
-        Step { rect: t.rect, quad: t.quad, pivot: t.pivot, warp: t.warp.clone() }
+        let held = t.held_warp.clone().map(|w| (w, t.held_place));
+        Step {
+            rect: t.rect,
+            quad: t.quad,
+            pivot: t.pivot,
+            warp: t.warp.clone(),
+            start: t.start,
+            warp_place: t.warp_place,
+            held,
+            warp_entry: t.warp_entry.clone(),
+            warp_box: t.warp_box.clone(),
+            warp_origin: t.warp_origin.clone(),
+        }
     }
 
     fn restore(self, t: &mut TransformSession) {
-        (t.rect, t.quad, t.pivot, t.warp) = (self.rect, self.quad, self.pivot, self.warp);
+        (t.rect, t.quad, t.pivot, t.warp, t.start, t.warp_place) = (self.rect, self.quad, self.pivot, self.warp, self.start, self.warp_place);
+        (t.warp_entry, t.warp_box, t.warp_origin) = (self.warp_entry, self.warp_box, self.warp_origin);
+        (t.held_warp, t.held_place) = match self.held {
+            Some((w, p)) => (Some(w), p),
+            None => (None, None),
+        };
     }
 }
 
