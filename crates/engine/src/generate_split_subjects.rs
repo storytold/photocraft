@@ -121,8 +121,12 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             // woman stayed in the background, measured in the app 2026-11-02). The prompt
             // names it when given, else the vision-language model does from the hole's views,
             // else the detector's prompt.
+            // A person is named "person": the vision-language model named one by their clothes
+            // ("the blue tank top") and the edit model, told to remove the top, kept the person
+            // and repainted their body on every seed (measured in the app 2026-11-03).
             let name = match asked.as_deref() {
                 Some(p) => Some(p.to_string()),
+                None if subject_left_in(&finder.only(PERSON), doc, *active, &hole, ctx)? => Some(PERSON.to_string()),
                 None => name_selected(doc, &job, area, &hole, ctx)?,
             };
             let name = name.unwrap_or_else(|| found_by.clone());
@@ -195,7 +199,8 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             }
             let Some((background, fill_seed)) = fill else {
                 return Err(EngineError::Other(format!(
-                    "Split into Layers could not clear the {name} out of the background: the fill painted it back on {FILL_TRIES} tries, so nothing was changed"
+                    "Split into Layers could not clear the {} out of the background: the fill painted it back on {FILL_TRIES} tries, so nothing was changed",
+                    check_prompt(&found_by).trim_start_matches("the ")
                 )));
             };
             ctx.progress(0.95, "Placing");
@@ -252,10 +257,13 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
 /// is for is a person painted back.
 fn check_prompt(found_by: &str) -> &str {
     match found_by {
-        "the main subject" | "the foreground object" | "object" => "person",
+        "the main subject" | "the foreground object" | "object" => PERSON,
         p => p,
     }
 }
+
+/// The detector's and the removal's word for a person.
+const PERSON: &str = "person";
 
 /// Fills tried before Split gives up on a background with the subject painted back.
 const FILL_TRIES: u32 = 3;
