@@ -113,3 +113,142 @@ fn same_board_and_moves_without_two_boards_keep_canvas_position() {
         assert_pixels(&s, red, [-1_500_000_000, 0]);
     }
 }
+
+/// Publicly created Adjustment/Fill content, with the nearest optional positioned state.
+fn nonpixel_layer(s: &mut Session, board: LayerId, kind: &str, state: &str) -> LayerId {
+    let command = if kind == "adjustment" { "layer.newAdjustmentLayer.invert" } else { "layer.newFillLayer.solidColor" };
+    let params = if kind == "adjustment" { json!({}) } else { json!({"color": "#ff0000"}) };
+    let id = LayerId(s.execute(command, params).unwrap()["layer"].as_u64().unwrap());
+    s.edit("Set move fixture state", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        layer.mask = None;
+        layer.vector_mask = None;
+        layer.effects.reference = None;
+        match state {
+            "linked mask" | "unlinked mask" => {
+                let mut mask = photocraft_doc::LayerMask::hide_all();
+                mask.surface.fill_rect(Rect::new(1, 2, 3, 4), &[1.0]);
+                mask.linked = state == "linked mask";
+                layer.mask = Some(mask);
+            }
+            "linked vector" | "unlinked vector" => {
+                let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)])]);
+                let mut mask = photocraft_doc::VectorMask::new(path);
+                mask.linked = state == "linked vector";
+                layer.vector_mask = Some(mask);
+            }
+            "reference" => layer.effects.reference = Some((1.0, 2.0)),
+            "none" => {}
+            _ => panic!("unknown state"),
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.moveTo", move_into(id, board)).unwrap();
+    id
+}
+
+fn unpositioned_move(kind: &str) {
+    for state in ["none", "unlinked mask", "unlinked vector"] {
+        let (mut s, _red, a, b) = two_boards([-1_500_000_000, 0], [1_500_000_000, 0]);
+        let id = nonpixel_layer(&mut s, a, kind, state);
+        let before = s.active().unwrap().doc.clone();
+        let shifted = photocraft_engine::layer_multi_cmds::moved(&before, &[id], 5, 7).unwrap();
+        assert_eq!(shifted.layer(id), before.layer(id), "{kind}/{state}: no state moves");
+        let params = move_into(id, b);
+        s.execute("layer.moveTo", params.clone()).unwrap_or_else(|e| panic!("{kind}/{state}: unpositioned layer must reparent: {e}"));
+        let preview = preview_move(&before, &params, true).expect("unpositioned move has a preview");
+        assert_eq!(*s.active().unwrap().doc, preview);
+        assert_eq!(s.active().unwrap().doc.artboard_of(id), Some(b));
+        assert_eq!(s.active().unwrap().doc.layer(id), before.layer(id), "{kind}/{state}");
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
+fn unpositioned_adjustment_can_reparent_between_distant_boards() {
+    unpositioned_move("adjustment");
+}
+
+#[test]
+fn unpositioned_fill_can_reparent_between_distant_boards() {
+    unpositioned_move("fill");
+}
+
+#[test]
+fn positioned_adjustment_and_fill_overflow_still_refuses_atomically() {
+    for kind in ["adjustment", "fill"] {
+        for state in ["linked mask", "linked vector", "reference"] {
+            let (mut s, _red, a, b) = two_boards([-1_500_000_000, 0], [1_500_000_000, 0]);
+            let id = nonpixel_layer(&mut s, a, kind, state);
+            let before = s.active().unwrap().clone();
+            let shifted = photocraft_engine::layer_multi_cmds::moved(&before.doc, &[id], 5, 7).unwrap();
+            assert_ne!(shifted.layer(id), before.doc.layer(id), "{kind}/{state}: positioned state moves");
+            let params = move_into(id, b);
+            assert!(s.execute("layer.moveTo", params.clone()).is_err(), "{kind}/{state}");
+            let after = s.active().unwrap();
+            assert_eq!(after.doc, before.doc);
+            assert_eq!(after.active_layer, before.active_layer);
+            assert_eq!(after.selected_layers, before.selected_layers);
+            assert_eq!(after.layer_anchor, before.layer_anchor);
+            assert_eq!(after.revision, before.revision);
+            assert_eq!(after.history.entries(), before.history.entries());
+            assert!(preview_move(&before.doc, &params, true).is_none());
+        }
+    }
+}
+
+#[test]
+fn representable_nonpixel_moves_match_the_existing_translation_path() {
+    for kind in ["adjustment", "fill"] {
+        for state in ["none", "unlinked mask", "linked mask", "unlinked vector", "linked vector", "reference"] {
+            let (mut s, _red, a, b) = two_boards([0, 0], [32, 16]);
+            let id = nonpixel_layer(&mut s, a, kind, state);
+            let before = s.active().unwrap().doc.clone();
+            let shifted = photocraft_engine::layer_multi_cmds::moved(&before, &[id], 32, 16).unwrap();
+            let params = move_into(id, b);
+            let preview = preview_move(&before, &params, true).unwrap();
+            s.execute("layer.moveTo", params).unwrap();
+            assert_eq!(*s.active().unwrap().doc, preview, "{kind}/{state}");
+            assert_eq!(s.active().unwrap().doc.layer(id), shifted.layer(id), "{kind}/{state}");
+        }
+    }
+}
+
+#[test]
+fn cross_board_copy_positions_the_landed_copy_and_keeps_the_source() {
+    let (mut s, red, a, b) = two_boards([0, 0], [32, 16]);
+    let before = s.active().unwrap().doc.clone();
+    let mut params = move_into(red, b);
+    params["copy"] = json!(true);
+    let preview = preview_move(&before, &params, true).unwrap();
+    let copy = LayerId(s.execute("layer.moveTo", params).unwrap()["layer"].as_u64().unwrap());
+    assert_ne!(copy, red);
+    assert_eq!(s.active().unwrap().doc.artboard_of(copy), Some(b));
+    assert_eq!(s.active().unwrap().doc.artboard_of(red), Some(a));
+    assert_eq!(s.active().unwrap().doc.layer(red), before.layer(red));
+    assert_pixels(&s, copy, [32, 16]);
+    assert_pixels(&s, red, [0, 0]);
+    // Preview allocates its own copy ID; compare its placed pixels rather than those IDs.
+    let preview_copy = preview.layer(b).unwrap().children().unwrap().last().unwrap();
+    assert_eq!(preview_copy.surface(), s.active().unwrap().doc.layer(copy).unwrap().surface());
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[test]
+fn overflowing_cross_board_copy_refuses_without_leaving_a_copy() {
+    let (mut s, red, _a, b) = two_boards([-1_500_000_000, 0], [1_500_000_000, 0]);
+    let before = s.active().unwrap().clone();
+    let mut params = move_into(red, b);
+    params["copy"] = json!(true);
+    assert!(s.execute("layer.moveTo", params.clone()).is_err());
+    let after = s.active().unwrap();
+    assert_eq!(after.doc, before.doc);
+    assert_eq!(after.selected_layers, before.selected_layers);
+    assert_eq!(after.active_layer, before.active_layer);
+    assert_eq!(after.history.entries(), before.history.entries());
+    assert_eq!(after.revision, before.revision);
+    assert!(preview_move(&before.doc, &params, true).is_none());
+}

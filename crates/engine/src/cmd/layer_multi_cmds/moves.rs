@@ -334,6 +334,16 @@ fn board_offsets(doc: &Document, ids: &[LayerId], from: &[Origin]) -> Result<Vec
             continue;
         }
         let (Some(dx), Some(dy)) = (dst.x0.checked_sub(board.x0), dst.y0.checked_sub(board.y0)) else {
+            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            // Plain adjustment/fill content has no position; only its linked masks or effects
+            // reference would move. Keep accepting those no-shift reparentings at any distance.
+            if matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_))
+                && layer.effects.reference.is_none()
+                && layer.mask.as_ref().is_none_or(|mask| !mask.linked)
+                && layer.vector_mask.as_ref().is_none_or(|mask| !mask.linked)
+            {
+                continue;
+            }
             return Err(bad("layer.moveTo", "these artboards are too far apart to preserve the layer's position"));
         };
         shifts.push((id, dx, dy));
