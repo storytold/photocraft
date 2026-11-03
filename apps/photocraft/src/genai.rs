@@ -71,6 +71,7 @@ struct StatusCache {
 }
 
 impl StatusCache {
+    /// The answer on hand and when it was read, if any.
     fn get(&self) -> Option<(Instant, AiStatus)> {
         self.value.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
@@ -111,6 +112,7 @@ fn fill_role() -> Result<Role, AiError> {
         .ok_or_else(|| AiError::new(ErrorKind::Internal, "The shared AI catalogue has no Generative Fill tool."))
 }
 
+/// PhotoCraft's app id in the shared layer.
 fn app_id() -> Result<AppId, AiError> {
     AppId::new(APP).map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))
 }
@@ -202,6 +204,7 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// A consent term as the shared layer names it.
 fn core_term(t: ConsentTerm) -> craft_ai_core::ConsentTerm {
     match t {
         ConsentTerm::ThisTime => craft_ai_core::ConsentTerm::ThisTime,
@@ -231,6 +234,7 @@ impl GenerativeAi for CraftAi {
         }
     }
 
+    /// Check the request against the chosen model and say what it would send, and where.
     fn plan(&self, request: FillRequest) -> Result<Arc<dyn FillPlan>, AiFailure> {
         let req = Request::new(self.role.capability.clone())
             .with_input(InputRole::Source, Payload::inline("image/png", request.source_png).map_err(failure)?)
@@ -270,6 +274,7 @@ impl GenerativeAi for CraftAi {
         Ok(Arc::new(Planned { client: Arc::clone(&self.client), plan, disclosure, consent: self.consent.clone(), this_time: Mutex::new(None) }))
     }
 
+    /// The saved connections and the models Generative Fill could use, from the shared settings.
     fn setup(&self) -> Result<SetupView, AiFailure> {
         let connections = self
             .manager
@@ -309,6 +314,7 @@ impl GenerativeAi for CraftAi {
         Ok(SetupView { connections, models, store: Some(self.manager.store_path().display().to_string()) })
     }
 
+    /// Check a new connection with the service, then save it (its key to the keychain).
     fn connect(&self, kind: ServiceKind, value: &str) -> Result<(), AiFailure> {
         let key = preset_key(kind);
         let preset = PRESETS
@@ -338,6 +344,7 @@ impl GenerativeAi for CraftAi {
         }
     }
 
+    /// Remove a saved connection and the choices that used it.
     fn disconnect(&self, connection: &str) -> Result<(), AiFailure> {
         let id = ConnectionId::new(connection).map_err(|e| AiFailure::new(AiErrorKind::InvalidRequest, e.to_string()))?;
         let r = self.manager.delete(&id).map(|_| ()).map_err(failure);
@@ -345,6 +352,7 @@ impl GenerativeAi for CraftAi {
         r
     }
 
+    /// Make `model` on `connection` the suite's choice for Generative Fill.
     fn choose(&self, connection: &str, model: &str) -> Result<(), AiFailure> {
         let bad = |e: craft_ai_core::ids::IdError| AiFailure::new(AiErrorKind::InvalidRequest, e.to_string());
         let (connection, model) = (ConnectionId::new(connection).map_err(bad)?, ModelId::new(model).map_err(bad)?);
@@ -398,10 +406,12 @@ impl FillPlan for Planned {
         &self.disclosure
     }
 
+    /// Does nothing on file, and no yes on this plan, cover it?
     fn needs_consent(&self) -> bool {
         self.plan.needs_consent(&self.ledger())
     }
 
+    /// Record the person's yes for `term`; only a remembered term is written to the consent file.
     fn agree(&self, term: ConsentTerm) -> Result<(), AiFailure> {
         let term = core_term(term);
         let mut saved = self.consent.as_ref().map(ConsentFile::load_or_empty).unwrap_or_default();
@@ -417,6 +427,7 @@ impl FillPlan for Planned {
         Ok(())
     }
 
+    /// Submit one job with this plan's consent (reads the key and calls the service).
     fn start(&self) -> Result<Box<dyn FillJob>, AiFailure> {
         let job = self.client.start(&self.plan, &self.ledger()).map_err(failure)?;
         Ok(Box::new(Running { job, images: Vec::new() }))
@@ -431,6 +442,7 @@ struct Running {
 }
 
 impl FillJob for Running {
+    /// Where the job stands, keeping the pictures that arrived.
     fn poll(&mut self) -> Result<JobPoll, AiFailure> {
         let snap = self.job.poll().map_err(failure)?;
         for e in snap.events {
@@ -453,6 +465,7 @@ impl FillJob for Running {
         })
     }
 
+    /// Ask the service to stop the job.
     fn cancel(&mut self) -> Result<(), AiFailure> {
         self.job.cancel().map_err(failure)
     }

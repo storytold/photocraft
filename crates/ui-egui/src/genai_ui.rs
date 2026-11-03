@@ -112,6 +112,7 @@ pub fn menu_visible(app: &PhotocraftApp) -> bool {
     offered(app)
 }
 
+/// Is this the prompt dialog or the consent prompt?
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(PROMPT_MARK) || fields.contains_key(CONSENT_MARK)
 }
@@ -127,6 +128,7 @@ pub fn ok_label(fields: &Map<String, Value>) -> Option<std::borrow::Cow<'static,
     }
 }
 
+/// The consent prompt's Cancel reads Don't Send.
 pub fn cancel_label(fields: &Map<String, Value>) -> Option<&'static str> {
     fields.contains_key(CONSENT_MARK).then(|| tl!("Don't Send"))
 }
@@ -143,6 +145,7 @@ pub fn can_confirm(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
     !fields.contains_key(PROMPT_MARK) || app.session.generative_status().is_ready()
 }
 
+/// Open the prompt dialog (or return the open one), with the last prompt and separate-areas choice.
 fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.fields.contains_key(PROMPT_MARK)) {
         return d.id;
@@ -162,6 +165,7 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
+/// Draw the prompt dialog or the consent prompt.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.contains_key(CONSENT_MARK) {
         consent::body(app, ui, f);
@@ -198,6 +202,7 @@ pub fn open_setup(app: &mut PhotocraftApp) -> u64 {
     crate::prefs_ui::open_preferences(app, SETUP_SECTION)
 }
 
+/// The prompt dialog: the prompt, separate areas, what Generate will do and which model; setup instead when the tool can't run.
 fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let status = app.session.generative_status();
     if !status.is_ready() {
@@ -271,6 +276,7 @@ pub(crate) fn cost_text(status: &AiStatus, n: u64) -> Vec<String> {
     lines
 }
 
+/// Draw [`cost_text`].
 fn cost_lines(ui: &mut egui::Ui, status: &AiStatus, n: u64) {
     let t = crate::theme::Tokens::get(ui.ctx());
     for line in cost_text(status, n) {
@@ -425,6 +431,7 @@ fn variation_image(variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) 
     Some(egui::ColorImage::new([w, h], out))
 }
 
+/// A variation's thumbnail texture, made again only when its pixels or the mask changed.
 fn variation_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, variation: &Layer, mask: Option<&photocraft_doc::LayerMask>) -> Option<egui::TextureId> {
     let rev = variation.surface().map_or(0, crate::surface_fingerprint) ^ mask.map_or(0, |m| crate::surface_fingerprint(&m.surface));
     if let Some((r, tex)) = app.genai.thumbs.get(&variation.id)

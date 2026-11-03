@@ -192,6 +192,7 @@ impl ConsentTerm {
         }
     }
 
+    /// The term with stable name `id`, if there is one.
     pub fn from_id(id: &str) -> Option<ConsentTerm> {
         ConsentTerm::ALL.into_iter().find(|t| t.id() == id)
     }

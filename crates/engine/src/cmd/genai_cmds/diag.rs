@@ -95,6 +95,7 @@ fn captures(s: &Session, p: &Value) -> Result<Vec<Arc<Capture>>> {
     Ok(found)
 }
 
+/// On for an active generative layer that kept its capture, or while a failed fill keeps one.
 pub(super) fn save_enabled(s: &Session) -> std::result::Result<(), String> {
     match s.generative_layer() {
         Some(g) if !s.genai_state.captures.of(g).is_empty() => Ok(()),

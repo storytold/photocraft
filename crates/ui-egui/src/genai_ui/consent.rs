@@ -94,6 +94,7 @@ pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
     format!("{what} · {}", sizes.iter().map(|b| size(*b)).collect::<Vec<_>>().join(", "))
 }
 
+/// A consent term as the prompt offers it.
 fn term_label(t: ConsentTerm) -> &'static str {
     match t {
         ConsentTerm::ThisTime => tl!("Only this time"),
@@ -103,6 +104,7 @@ fn term_label(t: ConsentTerm) -> &'static str {
     }
 }
 
+/// The consent prompt: where it goes, what is sent with each fill's sizes, and how long the yes lasts.
 pub fn body(_app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let get = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_owned();

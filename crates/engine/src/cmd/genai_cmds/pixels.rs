@@ -23,6 +23,7 @@ const RESULT_SIDE: u32 = 8192;
 /// it unchanged.
 const SHAPES: [(u32, u32); 3] = [(1, 1), (3, 2), (2, 3)];
 
+/// Any error as an engine error.
 pub(super) fn other(e: impl std::fmt::Display) -> EngineError {
     EngineError::Other(e.to_string())
 }
@@ -543,6 +544,7 @@ pub(super) fn place(bytes: &[u8], area: Rect, reference: &Reference) -> std::res
     Ok(Placed { surface: placed, framing, colour })
 }
 
+/// A variation layer named `Variation n` holding `pixels` in the document's mode and depth.
 pub(super) fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
     let converted = to_document(doc, pixels)?;
     let mut layer = Layer::raster(format!("Variation {n}"), converted.format());

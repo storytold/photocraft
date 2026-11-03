@@ -31,6 +31,7 @@ pub struct State {
     view: Option<(f64, AiStatus, Result<SetupView, String>)>,
 }
 
+/// A service's name as setup lists it.
 fn kind_name(k: ServiceKind) -> &'static str {
     match k {
         ServiceKind::OpenAi => "OpenAI",
@@ -40,6 +41,7 @@ fn kind_name(k: ServiceKind) -> &'static str {
     }
 }
 
+/// What is wrong with a connection, in words.
 fn problem_text(p: ConnectionProblem) -> &'static str {
     match p {
         ConnectionProblem::NoKey => tl!("No key saved"),

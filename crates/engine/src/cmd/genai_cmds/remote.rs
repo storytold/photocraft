@@ -32,6 +32,7 @@ pub(super) enum Stopped {
 }
 
 impl From<Stopped> for EngineError {
+    /// Cancelled stays cancelled; a failure becomes its message.
     fn from(s: Stopped) -> EngineError {
         match s {
             Stopped::Cancelled => EngineError::Cancelled,
@@ -76,6 +77,7 @@ pub(super) fn run_jobs(ctx: &JobCtx, plan: &dyn FillPlan, count: usize) -> std::
     }
 }
 
+/// [`run_jobs`] off the web: start, poll and retry the jobs until each is done or the fill is cancelled or times out.
 #[cfg(not(target_arch = "wasm32"))]
 fn run_native(ctx: &JobCtx, plan: &dyn FillPlan, count: usize) -> std::result::Result<Vec<Vec<u8>>, Stopped> {
     let model = plan.disclosure().model.clone();

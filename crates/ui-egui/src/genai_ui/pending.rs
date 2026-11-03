@@ -72,6 +72,7 @@ struct Shape {
 }
 
 impl Shape {
+    /// A fill's outline and veil grid, from its selection within bounds `b`.
     fn new(doc: DocId, mask: &Surface, b: photocraft_geom::Rect) -> Shape {
         let outline = crate::outline::outline_scaled_serial(mask, b, crate::outline::bounded_step(b, 1));
         let cell = (b.width().max(b.height()).max(1) as f32 / VEIL_CELLS as f32).max(1.0);
@@ -127,6 +128,7 @@ fn needs_setup(f: &FillInfo) -> bool {
     matches!(f.error_kind, Some(AiErrorKind::Auth | AiErrorKind::Unsupported))
 }
 
+/// Fill `f`'s shape as drawn, made once and kept.
 fn shape(app: &mut PhotocraftApp, f: &FillInfo) -> Option<Arc<Shape>> {
     if let Some(s) = app.genai.pending.shapes.get(&f.id) {
         return Some(Arc::clone(s));
@@ -292,6 +294,7 @@ fn buttons(ui: &mut egui::Ui, f: &FillInfo, size: f32, reversed: bool, actions: 
     }
 }
 
+/// Run what the tags, rows and list asked for: commands, the consent prompt, setup or Save Fill Diagnostics.
 fn run_actions(app: &mut PhotocraftApp, actions: Vec<(&'static str, Value)>) {
     for (id, params) in actions {
         if id == REVIEW {
@@ -435,6 +438,7 @@ pub fn layer_rows_unplaced(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: DocI
     rows(app, ui, &fills, 0);
 }
 
+/// Draw the rows of `fills` and act on their clicks.
 fn rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, fills: &[FillInfo], depth: usize) {
     if fills.is_empty() {
         return;

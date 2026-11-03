@@ -196,6 +196,7 @@ struct FillStatus {
 }
 
 impl FillStatus {
+    /// Why it failed, and how the AI layer classed it.
     fn error(&self) -> Option<(String, Option<AiErrorKind>)> {
         self.error.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
@@ -208,14 +209,17 @@ impl FillStatus {
         self.plan.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
+    /// Keep (or forget) the plan it sends.
     fn set_plan(&self, plan: Option<Arc<dyn FillPlan>>) {
         *self.plan.lock().unwrap_or_else(PoisonError::into_inner) = plan;
     }
 
+    /// What a failed fill sent and got back, if kept.
     fn capture(&self) -> Option<Arc<diag::Capture>> {
         self.capture.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
+    /// Keep (or forget) what a failed fill sent and got back.
     fn set_capture(&self, c: Option<diag::Capture>) {
         *self.capture.lock().unwrap_or_else(PoisonError::into_inner) = c.map(Arc::new);
     }
@@ -351,6 +355,7 @@ impl Fill {
     }
 }
 
+/// A bad-params error for Generative Fill.
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: FILL.into(), msg: msg.into() }
 }
@@ -365,6 +370,7 @@ fn ai_ready(s: &Session) -> std::result::Result<SharedAi, String> {
     }
 }
 
+/// Generative Fill needs a document, a selection on the canvas and a tool that can run.
 fn fill_enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     let sel = st.doc.selection.as_ref().ok_or("no selection")?;
@@ -374,6 +380,7 @@ fn fill_enabled(s: &Session) -> std::result::Result<(), String> {
     ai_ready(s).map(|_| ())
 }
 
+/// `key` as a variation count, 1 to 4 (3 when missing).
 fn variations_param(p: &Value, key: &str, cmd: &str) -> Result<usize> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(DEFAULT_VARIATIONS),
@@ -416,6 +423,7 @@ pub(crate) struct Source {
     prepared: Arc<Prepared>,
 }
 
+/// Edit › Generative Fill: check the params, take the selection (or one area of it) and start the fill.
 fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let prompt = match p.get("prompt") {
         None | Some(Value::Null) => String::new(),
@@ -460,6 +468,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     start(s, id)
 }
 
+/// Remember a new fill and return its id.
 fn add_fill(s: &mut Session, doc: DocId, anchor: Option<LayerId>, input: FillInput) -> u64 {
     let g = &mut s.genai_state;
     g.next_fill += 1;
@@ -674,12 +683,14 @@ fn note_variations(s: &mut Session, ids: &[u64], placed: &[Placed]) -> Vec<Varia
     notes
 }
 
+/// `fill` as a fill id.
 fn fill_param(p: &Value, cmd: &str) -> Result<u64> {
     p.get("fill")
         .and_then(Value::as_u64)
         .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "`fill` must be a fill id (see layer.generative.fills)".into() })
 }
 
+/// Retry needs a tool that can run.
 fn retry_enabled(s: &Session) -> std::result::Result<(), String> {
     ai_ready(s).map(|_| ())
 }
@@ -707,6 +718,7 @@ fn fills_param(p: &Value, cmd: &str) -> Result<Vec<u64>> {
     }
 }
 
+/// Agreeing needs the app's generative AI.
 fn agree_enabled(s: &Session) -> std::result::Result<(), String> {
     s.generative_ai().map(|_| ()).ok_or_else(|| NO_AI.into())
 }
@@ -756,6 +768,7 @@ fn discard(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"discarded": ids}))
 }
 
+/// `layer.generative.fills`: the fills that haven't landed, and whether the tool can run.
 fn fills(s: &mut Session, _: &Value) -> Result<Value> {
     s.tidy_generative_fills();
     Ok(json!({"fills": s.generative_fills(), "parallel": MAX_PARALLEL, "status": s.generative_status()}))
@@ -768,11 +781,13 @@ pub fn selection_areas(s: &Session) -> Vec<Rect> {
     areas::Areas::find(sel, st.doc.bounds()).rects().to_vec()
 }
 
+/// Listing areas needs a selection.
 fn areas_enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     st.doc.selection.as_ref().map(|_| ()).ok_or_else(|| "no selection".into())
 }
 
+/// `layer.generative.areas`: the selection's separate areas.
 fn areas(s: &mut Session, _: &Value) -> Result<Value> {
     let rects: Vec<[i32; 4]> = selection_areas(s).iter().map(|r| [r.x0, r.y0, r.x1, r.y1]).collect();
     Ok(json!({"areas": rects}))
@@ -814,10 +829,12 @@ impl Session {
     }
 }
 
+/// The variation commands need an active generative layer.
 fn select_enabled(s: &Session) -> std::result::Result<(), String> {
     generative_target(s, &Value::Null).map(|_| ()).ok_or_else(|| "select a generative layer first".into())
 }
 
+/// Show variation `index` of the generative layer alone, in one undo step.
 fn select_variation(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |msg: &str| EngineError::BadParams { cmd: SELECT_VARIATION.into(), msg: msg.into() };
     let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first"))?;
@@ -837,6 +854,7 @@ fn select_variation(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": group.0, "index": index}))
 }
 
+/// Generate More needs an active generative layer and a tool that can run.
 fn more_enabled(s: &Session) -> std::result::Result<(), String> {
     select_enabled(s)?;
     ai_ready(s).map(|_| ())
@@ -874,6 +892,7 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
     start(s, id)
 }
 
+/// Generative Fill's commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
