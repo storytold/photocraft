@@ -1067,7 +1067,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&name).color(t.text_dim));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            crate::widgets::color_edit_button_srgb(ui, &mut edit).on_hover_text(&name);
+                            crate::widgets::color_edit_button_srgb(ui, &mut edit, &name).on_hover_text(&name);
                             ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
                         });
                     });
