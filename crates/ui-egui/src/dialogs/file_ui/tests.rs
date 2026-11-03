@@ -740,6 +740,8 @@ fn print_size_keeps_a_typed_fractional_width() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // 30 × 15 in: wide enough that a scale rounded to 0.01 % would move 2.5 in to 2.499 in.
     app.run("file.new", json!({"width": 3000, "height": 1500, "resolution": 100})).unwrap();
+    app.session.printer_source =
+        Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     // Opened once the fonts are set up: the harness draws a frame as it is built.
@@ -774,6 +776,8 @@ fn print_size_survives_leaving_the_linked_field() {
     use egui_kittest::{Harness, kittest::Queryable};
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 120, "height": 168, "resolution": 72})).unwrap();
+    app.session.printer_source =
+        Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let id = open_print(h.state_mut());
