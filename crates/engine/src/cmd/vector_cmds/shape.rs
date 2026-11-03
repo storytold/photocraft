@@ -474,7 +474,11 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// stays. With no work path, `"work"` takes the active layer's path, as the other path commands do.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
-    let name = p.get("name").and_then(Value::as_str);
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => Some(n.as_str()),
+        Some(_) => return Err(bad(CMD, "`name` must be a path name: \"work\", \"layer\" or a saved path's name")),
+    };
     let path = super::resolve_path(s, name)?;
     if path.subpaths.iter().all(|sp| sp.knots.is_empty()) {
         return Err(bad(CMD, "the path is empty"));

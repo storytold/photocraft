@@ -443,6 +443,8 @@ fn path_to_shape_rejects_bad_input_without_changing_history() {
     let history = s.active().unwrap().history.past_len();
     for p in [
         json!({"name": "missing"}),
+        json!({"name": 42}),
+        json!({"name": ["work"]}),
         json!({"fill": "not a colour"}),
         json!({"fill": 42}),
         json!({"stroke": {"width": -1}}),
