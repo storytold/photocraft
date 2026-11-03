@@ -743,6 +743,34 @@ faults the Layered and 2511 checkpoints' pages on every core: Split at 640 px af
 warm, three runs each, the DiT ready at 8.8–10.4 s instead of 10.9–11.8 s and the Split done in
 18.2–20.3 s instead of 20.2–21.3 s.
 
+## 5k. MOSS-Image loads and the chat head's cache (ShotoPhopEX, 2026-11-03)
+
+genai-native #28: MOSS-Image's INT8 ConvRot linears were read with seek + read_exact, permuted and
+(the fused q/k/v) reordered byte by byte on one thread. In a 7.5 s warm load of both files that
+was 3.0 s of reading, 1.95 s of reordering and 0.5 s of permuting. They are now gathered from a
+mapping of the file on every core in one pass. All 209 + 168 INT8 modules are identical to the
+old read. `tests/moss_load_bench.rs`, three warm rounds: 7.39–7.55 s down to 4.14–5.44 s (text
+encoder 3.2–3.3 s to 2.6–3.2 s, DiT 4.2 s to 1.6–2.3 s).
+
+genai-native #29 keeps the chat head's Q8_0 blocks (0.66 GB) on disk next to the INT8 cache, keyed
+by the text encoder files' path, size and mtime. Before, every first chat after another model
+family read the 1.2 GB bf16 `lm_head` and quantized it; now it reads the blocks back. The bench
+(`tests/q8_cache_bench.rs`) has 1.56–1.71 s quantized against 0.24–0.26 s from the cache, with
+the same blocks.
+
+In the app: a build of da7bee22f with both PRs, two sessions of MOSS → Remove → MOSS → Remove →
+Upscale → Remove ×2, the first with `QIR_Q8_CACHE=0`.
+
+| | cache off | cache on |
+|---|---|---|
+| MOSS load, text encoder + DiT (2nd image, after a Remove) | 2.82 + 2.07 s | 2.65 + 1.95 s |
+| chat head on a swap-back Remove, 1st / 2nd | 1.80 / 1.38 s | 0.46 / 0.28 s |
+| Remove after a MOSS image, 1st / 2nd | 19.0 / 11.5 s | 16.0 / 10.9 s |
+
+The MOSS load was 8.9 s a swap before #28. Every output is byte-identical between the two
+sessions. At the Upscale the card was 0.94–1.04 GB short with the head resident, so dropping the
+0.65 GB head first (#23, closed) would not have kept the text encoder.
+
 ## 5i. Content-Aware Fill, Remove and Spot Healing through the model (ShotoPhopEX, 2026-10-21)
 
 The lighthouse picture's red boat (`final-fill-s11.png`, 1024², the 200×120 rectangle at
