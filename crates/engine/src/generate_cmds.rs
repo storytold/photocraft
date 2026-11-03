@@ -350,6 +350,8 @@ pub(crate) enum EnhanceKind {
     Image,
     /// A picture: name its main subject (Remove Background with no prompt).
     Subject,
+    /// A picture: describe its background alone (Generative Expand with no prompt).
+    Backdrop,
 }
 
 /// The system turn of [`EnhanceKind::Subject`]: a short noun phrase the matte can follow.
@@ -357,6 +359,15 @@ const ENHANCE_SUBJECT_SYSTEM: &str = "You see a picture. Reply with one noun phr
 
 /// The user turn of [`EnhanceKind::Subject`].
 const ENHANCE_SUBJECT_REQUEST: &str = "Name the main subject of this picture.";
+
+/// The system turn of [`EnhanceKind::Backdrop`]: what Generative Expand continues into the new
+/// canvas. Told only to "continue the scene", Qwen-Image-2.1 and 2511 both painted another
+/// copy of the person into the added area; named as a backdrop with no people, 2511 continued
+/// it cleanly (Cody's portrait, in the app, 2026-11-03).
+const ENHANCE_BACKDROP_SYSTEM: &str = "You see a picture. Reply with one noun phrase of four to twelve words describing only its background and setting, leaving out every person, animal and main subject, for example \"a plain grey studio wall\" or \"an orange curtain backdrop above a red carpet\". Reply with the phrase only: no sentence, no quotes, no full stop.";
+
+/// The user turn of [`EnhanceKind::Backdrop`].
+const ENHANCE_BACKDROP_REQUEST: &str = "Describe the background of this picture.";
 
 /// Where a region sits on a canvas, in words ("upper-left part", "centre", "right part").
 pub(crate) fn place_in_words(region: Rect, canvas: Rect) -> String {
@@ -442,6 +453,7 @@ pub(crate) fn enhance_prompt(
         EnhanceKind::Presence => ENHANCE_PRESENCE_SYSTEM.to_string(),
         EnhanceKind::FillRef => ENHANCE_FILL_REF_SYSTEM.to_string(),
         EnhanceKind::Subject => ENHANCE_SUBJECT_SYSTEM.to_string(),
+        EnhanceKind::Backdrop => ENHANCE_BACKDROP_SYSTEM.to_string(),
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
@@ -609,7 +621,9 @@ pub(crate) fn native21_auto(s: &Session, command: &str, removal: bool) -> Option
     let t = match command {
         FILL if removal => "qwen-2.1/edit",
         FILL => "qwen-2.1/fill",
-        EXPAND => "qwen-2.1/expand",
+        // Expand stays on 2511's own tiers: its sampler keeps the picture's latent outside the
+        // mask, while 2.1 samples the whole canvas from noise and drew the subject again over
+        // the picture even with a backdrop-only prompt on four sides (2026-11-03).
         EDIT => "qwen-2.1/edit",
         _ => return None,
     };
@@ -3528,12 +3542,37 @@ struct Pads {
     bottom: u32,
 }
 
-/// The prompt an expand uses when none is given (an instruction, so it takes the imperative
-/// wrapper of the template).
-const EXPAND_DEFAULT_PROMPT: &str = "extend the scene beyond its original edges, continuing it naturally";
+/// The prompt an expand uses when none is given and the background could not be described:
+/// the background alone, no people. "Extend the scene beyond its original edges, continuing it
+/// naturally" had both models paint a second copy of the person into the new area (Cody's
+/// portrait, 2026-11-02).
+const EXPAND_DEFAULT_PROMPT: &str = "the same background continuing outward, empty, with no people or other subjects";
+
+/// The prompt an expand with no prompt sends: `backdrop` (the vision-language model's
+/// description of the picture's background, [`EnhanceKind::Backdrop`]) continuing in the
+/// direction the canvas grows, with no people.
+fn expand_backdrop_prompt(backdrop: &str, pads: &Pads) -> String {
+    let way = match (pads.left > 0, pads.top > 0, pads.right > 0, pads.bottom > 0) {
+        (false, true, false, false) => "upward",
+        (false, false, false, true) => "downward",
+        (true, false, false, false) => "to the left",
+        (false, false, true, false) => "to the right",
+        _ => "outward",
+    };
+    let b = backdrop.trim().trim_end_matches(['.', '!', ';', ',']).trim();
+    let b = b
+        .strip_prefix("the ")
+        .or_else(|| b.strip_prefix("The "))
+        .or_else(|| b.strip_prefix("a "))
+        .or_else(|| b.strip_prefix("A "))
+        .or_else(|| b.strip_prefix("an "))
+        .or_else(|| b.strip_prefix("An "))
+        .unwrap_or(b);
+    format!("the same {b} continuing {way}, empty, with no people or other subjects")
+}
 const MAX_EXPAND_SIDE: u32 = 16_384;
 
-fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32))> {
+fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32), bool)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let side = |key: &str| -> Result<u32> {
@@ -3587,8 +3626,8 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32))> {
     }
     // The prompt is optional here: without one the model continues the scene.
     let mut q = p.clone();
+    let blank = p.get("prompt").and_then(Value::as_str).is_none_or(|t| t.trim().is_empty());
     if let Some(o) = q.as_object_mut() {
-        let blank = o.get("prompt").and_then(Value::as_str).is_none_or(|t| t.trim().is_empty());
         if blank {
             o.insert("prompt".into(), Value::String(EXPAND_DEFAULT_PROMPT.into()));
         }
@@ -3667,6 +3706,7 @@ fn plan_expand(s: &Session, p: &Value) -> Result<(FillPlan, Pads, (u32, u32))> {
         },
         pads,
         (nw, nh),
+        blank,
     ))
 }
 
@@ -3677,7 +3717,7 @@ fn expand_enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// `generate.expand`: grow the canvas and have the model paint the new area, as one undo step.
 fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
-    let (plan, pads, (nw, nh)) = plan_expand(s, p)?;
+    let (plan, pads, (nw, nh), describe) = plan_expand(s, p)?;
     let backend = backend(s)?;
     let FillPlan { template, prompt, negative, seed, steps, guidance, name, models, rect, variations, auto, edge, enhance, refs, grow, erase, tuning } = plan;
     let label = name.clone();
@@ -3713,6 +3753,28 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
         move |doc, active, ctx| {
             // Canvas Size with a transparent extension: the picture moves by the left/top pads.
             let (ow, oh) = (doc.size.width, doc.size.height);
+            // No prompt: the vision-language model describes the background, and the model is
+            // asked for that alone (else it paints the subject again into the new area).
+            let mut job = job;
+            if describe {
+                let seen = photocraft_compose::render(doc, doc.bounds()).to_rgba8();
+                let seen = Rgba8::new(seen.width, seen.height, seen.pixels).map_err(gen_err)?;
+                let (rw, rh) = matte_request_size(seen.width, seen.height);
+                let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
+                ctx.progress(0.0, "Describing the background");
+                let said = enhance_prompt(
+                    job.thinker.as_ref(),
+                    EnhanceKind::Backdrop,
+                    ENHANCE_BACKDROP_REQUEST,
+                    Some(&seen),
+                    None,
+                    job.seed,
+                    &JobProgress::span(ctx, 0.0, 0.04),
+                );
+                if let Some(b) = said.ok().flatten() {
+                    job.prompt = expand_backdrop_prompt(&b, &pads);
+                }
+            }
             // The document on screen keeps its size and origin until the result lands: the
             // pictures of the run go on the request area moved back by the pads, past the canvas.
             ctx.preview_at(rect.translate(-(pads.left as i32), -(pads.top as i32)));

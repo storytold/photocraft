@@ -557,15 +557,20 @@ fn expand_grows_the_canvas_and_paints_the_added_area_in_one_step() {
     // corner), nothing transparent in it, and the default prompt as an instruction.
     let st = fake.state();
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(96), Some(64)));
-    let g = &st.runs[0].request;
+    // First the vision-language model describes the background (no prompt was given), then
+    // the expand asks for that background alone, continuing the way the canvas grows.
+    assert_eq!(st.runs.len(), 2, "the description, then the expand");
+    assert_eq!(st.runs[0].request["prompt"], ENHANCE_BACKDROP_REQUEST);
+    let g = &st.runs[1].request;
     let prompt = g["prompt"].as_str().unwrap_or_default().to_string();
-    assert!(prompt.starts_with("extend the scene beyond its original edges"), "{prompt}");
+    assert!(prompt.contains("the same Enhanced: Describe the background of this picture continuing outward, empty, with no people"), "{prompt}");
     // The model's reference is the picture alone: the 64×48 picture at (0, 0) of the 96×64
     // request, in the request's upscaled pixels (512 wide → ×5.33).
     assert_eq!((g["params"]["ref_x"].as_u64(), g["params"]["ref_y"].as_u64()), (Some(0), Some(0)));
     let (cw, ch) = (g["params"]["ref_w"].as_u64().unwrap(), g["params"]["ref_h"].as_u64().unwrap());
     assert!((330..=352).contains(&cw) && (240..=264).contains(&ch), "{cw}×{ch}");
-    let sent = st.pictures[0].clone();
+    // (pictures[0] is what the describer saw; [1] is the expand request's picture.)
+    let sent = st.pictures[1].clone();
     assert!(sent.data.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "no transparent pixels reach the model");
     // The added canvas reaches the model continuing the picture's edge pixels (the 96×64 rect
     // goes out at 512 px wide), not as a wall of grey.
@@ -978,4 +983,22 @@ fn the_split_kept_is_the_one_whose_layers_hold_the_picture() {
     // Two such layers beat one, and of two with one each the fuller wins.
     assert!(split_separation(&[full(), layer(10), layer(20)]) > split_separation(&[full(), layer(50), layer(0)]));
     assert!(split_separation(&[full(), layer(40), layer(0)]) > split_separation(&[full(), layer(5), layer(0)]));
+}
+
+#[test]
+fn an_expand_without_a_prompt_asks_for_the_background_alone() {
+    let top = Pads { left: 0, top: 500, right: 0, bottom: 0 };
+    assert_eq!(
+        expand_backdrop_prompt("An orange curtain backdrop above a red carpet.", &top),
+        "the same orange curtain backdrop above a red carpet continuing upward, empty, with no people or other subjects"
+    );
+    let all = Pads { left: 1, top: 1, right: 1, bottom: 1 };
+    assert!(expand_backdrop_prompt("a plain grey wall", &all).starts_with("the same plain grey wall continuing outward"));
+    // A typed prompt goes as typed: no description is asked for.
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    s.execute(EXPAND, json!({"right": 32, "prompt": "more sea", "seed": 9})).unwrap();
+    let st = fake.state();
+    assert_eq!(st.runs.len(), 1);
+    assert!(st.runs[0].request["prompt"].as_str().unwrap().contains("more sea"));
 }
