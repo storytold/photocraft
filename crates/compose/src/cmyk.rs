@@ -410,7 +410,7 @@ fn adjust_inks(adj: &Adjustment, buf: &mut CmykBuffer, depth: SampleType) {
     let luts = matches!(adj, Adjustment::Levels { .. } | Adjustment::Curves { .. }).then(|| super::adjust::tone_luts_depth(adj, Some(depth)));
     let tone = |ch: usize, v: f32| match adj {
         Adjustment::Invert => 1.0 - v,
-        Adjustment::Posterize { levels } => super::adjust::posterize(v, *levels),
+        Adjustment::Posterize { levels } => super::adjust::posterize_in(v, *levels, Some(depth)),
         _ => luts.as_ref().and_then(|t| t.get(ch)).map_or(v, |t| lut_at(t, v)),
     };
     for p in &mut buf.px {
