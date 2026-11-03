@@ -1418,6 +1418,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=b8f7d93b00dfb8f172938f3d2d796ae62dcfe123#b8f7d93b00dfb8f172938f3d2d796ae62dcfe123"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -5070,7 +5080,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "arboard",
  "async-io",
@@ -5125,7 +5135,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-affinity"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -5135,7 +5145,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-algo"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "criterion",
  "photocraft-color",
@@ -5150,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-automation"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
  "cap-std",
@@ -5175,7 +5185,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-cli"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -5194,7 +5204,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-cms"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "moxcms",
  "rayon",
@@ -5202,7 +5212,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-codecs"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "craft-jpeg",
  "exr",
@@ -5226,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-color"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-cms",
  "serde",
@@ -5234,7 +5244,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-compose"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "criterion",
  "photocraft-cms",
@@ -5250,7 +5260,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-doc"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -5261,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-engine"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -5308,9 +5318,10 @@ dependencies = [
 
 [[package]]
 name = "photocraft-format"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "blake3",
+ "craft-pcraft-format",
  "crc32fast",
  "exacl",
  "flate2",
@@ -5331,14 +5342,14 @@ dependencies = [
 
 [[package]]
 name = "photocraft-geom"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "photocraft-gpu"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "bytemuck",
  "half",
@@ -5359,14 +5370,14 @@ dependencies = [
 
 [[package]]
 name = "photocraft-heif"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "heic-rs",
 ]
 
 [[package]]
 name = "photocraft-io"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "blake3",
  "craft-docpath",
@@ -5402,18 +5413,18 @@ dependencies = [
 
 [[package]]
 name = "photocraft-ipp"
-version = "0.19.0"
+version = "0.20.1"
 
 [[package]]
 name = "photocraft-ops"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-doc",
 ]
 
 [[package]]
 name = "photocraft-paint"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-cms",
  "photocraft-color",
@@ -5427,7 +5438,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-plugins"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -5443,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-psd"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -5455,7 +5466,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-raster"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-color",
  "photocraft-geom",
@@ -5466,7 +5477,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-raw"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "flate2",
  "image",
@@ -5481,7 +5492,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-tablet"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
@@ -5493,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-testkit"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "memory-stats",
  "serde_json",
@@ -5501,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-text"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "flate2",
  "parley",
@@ -5516,7 +5527,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-ui-egui"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
  "craft-print",
@@ -5575,7 +5586,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-vector"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "photocraft-color",
  "photocraft-doc",
@@ -5586,7 +5597,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-web"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "eframe",
  "egui",
@@ -5608,7 +5619,7 @@ dependencies = [
 
 [[package]]
 name = "photocraft-web-boot"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "flate2",
  "js-sys",
@@ -6783,6 +6794,17 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sctk-adwaita"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6277f0217056f77f1d8f49f2950ac6c278c0d607c45f5ee99328d792ede24ec"
+dependencies = [
+ "log",
+ "smithay-client-toolkit 0.19.2",
+ "tiny-skia",
+]
 
 [[package]]
 name = "security-framework"
@@ -9069,6 +9091,7 @@ dependencies = [
  "raw-window-handle",
  "redox_syscall 0.4.1",
  "rustix 0.38.44",
+ "sctk-adwaita",
  "smithay-client-toolkit 0.19.2",
  "smol_str",
  "tracing",
@@ -9346,7 +9369,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.19.0"
+version = "0.20.1"
 dependencies = [
  "chrono",
  "serde",
