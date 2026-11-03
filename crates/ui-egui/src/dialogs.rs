@@ -280,6 +280,7 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::open_prompt::owns_memory(fields) => crate::open_prompt::memory_body(ui, fields),
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
@@ -297,6 +298,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
+        _ if crate::actions::owns_new_set(fields) => crate::actions::new_set_body(ui, fields),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
         _ if crate::rasterize_prompt::owns(fields) => crate::rasterize_prompt::body(ui, fields),
@@ -520,6 +522,8 @@ fn button_row(
 fn ok_label(d: &Dialog) -> &'static str {
     if d.kind == DialogKind::NewDocument {
         tl!("Create")
+    } else if crate::open_prompt::owns_memory(&d.fields) {
+        tl!("Open anyway")
     } else if crate::open_prompt::owns_damage(&d.fields) {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
@@ -847,6 +851,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_insert_stop,
+    crate::actions::owns_new_set,
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
@@ -995,6 +1000,7 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
 /// and small editors are here, the rest in `confirm_command_more`.
 fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::open_prompt::owns_memory(&d.fields) => crate::open_prompt::answer_memory(app, true),
         _ if crate::open_prompt::owns_damage(&d.fields) => crate::open_prompt::answer_damage(app, true),
         _ if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         _ if crate::brush_preset_dialog::owns(&d.fields) => crate::brush_preset_dialog::confirm(app, &d.fields),
@@ -1012,6 +1018,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
+        _ if crate::actions::owns_new_set(&d.fields) => crate::actions::new_set_confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
         _ if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
@@ -1067,7 +1074,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
     // Cancel on a profile prompt opens neither its file nor the ones still to come.
-    if crate::open_prompt::owns_damage(&closed.fields) {
+    if crate::open_prompt::owns_memory(&closed.fields) {
+        crate::open_prompt::answer_memory(app, false)?;
+    } else if crate::open_prompt::owns_damage(&closed.fields) {
         crate::open_prompt::answer_damage(app, false)?;
     } else if crate::open_prompt::owns(&closed.fields) {
         crate::open_prompt::answer(app, None)?;
