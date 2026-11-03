@@ -280,9 +280,16 @@ fn crop_frame_outline(painter: &egui::Painter, q: [Pos2; 4], look: crate::crop_o
         FrameLook::Untouched => {
             // Dashed like a selection outline: 4 px black, then 4 px light grey. Static rather
             // than marching, so an untouched frame doesn't keep the canvas repainting.
-            let ring: Vec<Pos2> = q.iter().copied().chain(q.first().copied()).collect();
-            painter.add(egui::Shape::line(ring.clone(), Stroke::new(1.0, Color32::from_gray(210))));
-            painter.extend(egui::Shape::dashed_line(&ring, Stroke::new(1.0, Color32::BLACK), 4.0, 4.0));
+            // Each edge is cut to the visible area first: zoomed far in, a frame's edges run
+            // thousands of points off screen, and dashing them all would make a shape per dash.
+            let view = painter.clip_rect().expand(4.0);
+            for i in 0..4 {
+                let (a, b) = (q[i], q[(i + 1) % 4]);
+                if let Some([a, b]) = clip_segment(a, b, view) {
+                    painter.line_segment([a, b], Stroke::new(1.0, Color32::from_gray(210)));
+                    painter.extend(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, Color32::BLACK), 4.0, 4.0));
+                }
+            }
             grey
         }
         FrameLook::Started => {
@@ -290,6 +297,30 @@ fn crop_frame_outline(painter: &egui::Painter, q: [Pos2; 4], look: crate::crop_o
             grey
         }
     }
+}
+
+/// The part of the segment `a`–`b` inside `r` (Liang–Barsky), or None when none of it is.
+fn clip_segment(a: Pos2, b: Pos2, r: Rect) -> Option<[Pos2; 2]> {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-d.x, a.x - r.min.x), (d.x, r.max.x - a.x), (-d.y, a.y - r.min.y), (d.y, r.max.y - a.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    (t0.is_finite() && t1.is_finite()).then(|| [a + d * t0, a + d * t1])
 }
 
 /// The crop overlay's guides, each unit-square point placed on screen by `at`.
@@ -659,5 +690,48 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod clip_segment_tests {
+    use super::{Pos2, Rect, clip_segment, pos2};
+
+    fn view() -> Rect {
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 50.0))
+    }
+
+    /// Within a hundredth of a point, far below a device pixel: f32 on edges tens of thousands of
+    /// points long can't do better, and the screen doesn't need it to.
+    fn near(a: Pos2, b: Pos2) -> bool {
+        (a - b).length() < 1e-2
+    }
+
+    #[test]
+    fn a_segment_inside_is_kept_whole() {
+        let [a, b] = clip_segment(pos2(10.0, 10.0), pos2(90.0, 40.0), view()).unwrap();
+        assert!(near(a, pos2(10.0, 10.0)) && near(b, pos2(90.0, 40.0)));
+    }
+
+    #[test]
+    fn a_segment_running_far_off_screen_is_cut_to_the_view() {
+        // A frame edge at 3200 % runs tens of thousands of points past the view.
+        let [a, b] = clip_segment(pos2(-40_000.0, 20.0), pos2(40_000.0, 20.0), view()).unwrap();
+        assert!(near(a, pos2(0.0, 20.0)) && near(b, pos2(100.0, 20.0)), "{a:?} {b:?}");
+        let [a, b] = clip_segment(pos2(50.0, -1000.0), pos2(50.0, 1000.0), view()).unwrap();
+        assert!(near(a, pos2(50.0, 0.0)) && near(b, pos2(50.0, 50.0)));
+    }
+
+    #[test]
+    fn a_slanted_segment_through_a_corner_is_cut_on_both_sides() {
+        let [a, b] = clip_segment(pos2(-10.0, -10.0), pos2(60.0, 60.0), view()).unwrap();
+        assert!(near(a, pos2(0.0, 0.0)) && near(b, pos2(50.0, 50.0)), "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn a_segment_outside_the_view_draws_nothing() {
+        assert!(clip_segment(pos2(-50.0, 10.0), pos2(-5.0, 40.0), view()).is_none(), "left of it");
+        assert!(clip_segment(pos2(10.0, 60.0), pos2(90.0, 90.0), view()).is_none(), "below it");
+        assert!(clip_segment(pos2(-10.0, 70.0), pos2(70.0, 200.0), view()).is_none(), "past a corner");
     }
 }

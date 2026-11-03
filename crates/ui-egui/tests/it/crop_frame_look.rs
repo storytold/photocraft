@@ -96,3 +96,24 @@ fn classic_mode_keeps_the_look_it_had() {
     assert_eq!(look, FrameLook::Classic);
     assert!(guides && shield, "Classic Mode shows its overlay and shield as before, even untouched");
 }
+
+#[test]
+fn a_press_that_has_not_moved_yet_is_not_a_change() {
+    // The first change is a drag; a press held still leaves the untouched look in every mode.
+    for show in MODES {
+        let mut app = crop_app(show);
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "down", "x": 50, "y": 40}]}));
+        assert_eq!(drawn(&app), (false, false, FrameLook::Untouched), "{show:?}: pressed, not moved");
+        control(&mut app, "ui.pointer", json!({"tool": "Crop", "events": [{"kind": "move", "x": 150, "y": 90}]}));
+        assert_eq!(drawn(&app).2, FrameLook::Started, "{show:?}: the move is the first change");
+    }
+}
+
+#[test]
+fn show_cropped_area_off_still_hides_what_is_outside_an_untouched_frame() {
+    let mut app = crop_app(OverlayShow::Always);
+    app.ui.tool_options.crop_shield.show_cropped_area = false;
+    let ctx = egui::Context::default();
+    assert!(photocraft_ui_egui::crop_shield::current(&app, &ctx).is_some(), "the opaque outside fill stays");
+    assert!(current_guides(&app, 300.0, 200.0).is_empty(), "but no overlay before the first change");
+}

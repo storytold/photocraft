@@ -112,11 +112,13 @@ pub fn canvas_color(app: &PhotocraftApp, ctx: &egui::Context) -> Color32 {
 
 /// The shield over the pending crop box now ([`fill`]).
 pub fn current(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Color32> {
+    let s = &app.ui.tool_options.crop_shield;
     // No shield before the crop has started: an untouched frame shows only itself (#10930).
-    if !crate::crop_overlay::crop_started(app) {
+    // Show Cropped Area off still hides everything outside the frame, as it does once started.
+    if s.shows_cropped_area() && !crate::crop_overlay::crop_started(app) {
         return None;
     }
-    fill(&app.ui.tool_options.crop_shield, canvas_color(app, ctx), app.crop.drag.is_some())
+    fill(s, canvas_color(app, ctx), app.crop.drag.is_some())
 }
 
 /// Show Cropped Area is off with the Crop tool showing a box: nothing outside it shows.

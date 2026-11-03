@@ -246,12 +246,25 @@ pub fn current_guides(app: &PhotocraftApp, w: f32, h: f32) -> Vec<Polyline> {
 }
 
 /// Whether the crop has started: its frame was changed since it was made (it is no longer the
-/// untouched default frame), or is being changed now. Until then the reference application shows
+/// untouched default frame), or a drag is changing it now. Until then the reference application shows
 /// only the frame, with no shield and no overlay in any show mode; both start with the first change
 /// and stay until the crop is committed or cancelled (#10930). Classic Mode wasn't measured and
 /// keeps the behaviour it had.
 pub fn crop_started(app: &PhotocraftApp) -> bool {
-    app.ui.tool_options.crop_shield.classic_mode || app.crop.drag.is_some() || !app.crop.default_frame
+    app.ui.tool_options.crop_shield.classic_mode || !app.crop.default_frame || drag_changed(app)
+}
+
+/// Whether the drag in progress has changed the frame since its press. A press that hasn't moved
+/// anything yet is not the first change, so it leaves the untouched look (#10930). The tests mirror
+/// the ones `crop_ui` uses when a drag ends.
+fn drag_changed(app: &PhotocraftApp) -> bool {
+    use crate::crop_ui::CropDrag;
+    match &app.crop.drag {
+        None => false,
+        Some(CropDrag::Draw { anchor, cur, .. }) => anchor != cur,
+        Some(CropDrag::Move { rect, .. } | CropDrag::Resize { rect, .. } | CropDrag::MoveImage { rect, .. }) => app.ui.crop_rect != Some(*rect),
+        Some(CropDrag::Rotate { from, .. } | CropDrag::TurnImage { from, .. }) => crate::crop_ui::angle(app) != *from,
+    }
 }
 
 /// How the crop frame's outline and handles are drawn (#10930).
