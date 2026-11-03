@@ -1136,3 +1136,20 @@ fn migration_preserves_duplicate_names_but_refuses_duplicate_ids() {
     assert!(mem.read(PATTERNS_FILE, 1 << 20).is_err());
     assert_eq!(mem.read(LEGACY_PATTERNS_FILE, MAX_PATTERNS_BYTES).unwrap(), old);
 }
+
+/// A symlink planted among the presets must not carry a managed write to its target: the
+/// document writer follows links on purpose, the store confines itself to its directory.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_preset_entry_is_refused_not_written_through() {
+    let dir = TempDir::new("symlink");
+    let outside = dir.0.join("outside.txt");
+    std::fs::write(&outside, b"victim").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.0.join("planted.json")).unwrap();
+    let be = DirBackend::new(&dir.0);
+    let e = be.write("planted.json", b"{}").unwrap_err();
+    assert!(e.contains("symbolic link"), "{e}");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
+    be.write("fresh.json", b"{}").unwrap();
+    assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
