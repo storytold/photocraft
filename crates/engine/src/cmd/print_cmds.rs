@@ -930,6 +930,8 @@ fn driver_printable(p: &Value) -> Option<Value> {
     Some(json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]))
 }
 
+/// Lays out and renders the print page as a PDF for `cmd` and, when the params ask for it, sends
+/// it to the printer through `spooler`; returns the job summary (paper, image rect, spooler).
 fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spooler>) -> Result<Value> {
     let fit = p.get("scaleToFit").and_then(Value::as_bool).unwrap_or(false);
     let driver = (fit && native_route(p, spooler)).then(|| with_driver_printable(p));
@@ -1012,14 +1014,7 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
 /// that both load first (#5884, #8272).
 fn require_windows_pdf() -> Result<()> {
     #[cfg(target_os = "windows")]
-    {
-        if !system_dll_loads(WINDOWS_PDF_DLL) {
-            return Err(other(
-                "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
-            ));
-        }
-        require_print_tickets()?;
-    }
+    require_windows_pdf_at(&system_root())?;
     Ok(())
 }
 
@@ -1027,7 +1022,25 @@ fn require_windows_pdf() -> Result<()> {
 /// API), which stripped Windows images can lack; the apps delay-load it (#8272).
 fn require_print_tickets() -> Result<()> {
     #[cfg(target_os = "windows")]
-    if !system_dll_loads(PRINT_TICKET_DLL) {
+    require_print_tickets_at(&system_root())?;
+    Ok(())
+}
+
+/// [`require_windows_pdf`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_windows_pdf_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, WINDOWS_PDF_DLL)) {
+        return Err(other(
+            "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
+    }
+    require_print_tickets_at(system_root)
+}
+
+/// [`require_print_tickets`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_print_tickets_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, PRINT_TICKET_DLL)) {
         return Err(other(
             "printing this page needs the Windows Print Ticket component (prntvpt.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
         ));
@@ -1040,12 +1053,13 @@ const WINDOWS_PDF_DLL: &str = "Windows.Data.Pdf.dll";
 #[cfg(target_os = "windows")]
 const PRINT_TICKET_DLL: &str = "prntvpt.dll";
 
+/// The running Windows directory (`%SystemRoot%`), `C:\Windows` if the variable is unset.
 #[cfg(target_os = "windows")]
-fn system_dll_loads(name: &str) -> bool {
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
-    dll_loads(&system_dll(std::path::Path::new(&root), name))
+fn system_root() -> std::path::PathBuf {
+    std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from)
 }
 
+/// Where the system DLL `name` lives under the Windows directory `system_root`.
 #[cfg(target_os = "windows")]
 fn system_dll(system_root: &std::path::Path, name: &str) -> std::path::PathBuf {
     system_root.join("System32").join(name)
