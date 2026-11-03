@@ -70,7 +70,7 @@ fn the_default_template_preferences_pick_the_template() {
     assert_eq!(r["template"], "qwen-edit-2511/fill");
     s.edit_prefs(|p| p.integrations.default_fill_template = String::new());
     let r = s.execute(FILL, json!({"prompt": "x"})).unwrap();
-    assert_eq!(r["template"], "qwen-2.1/fill", "native auto uses 2.1 when research is allowed");
+    assert_eq!(r["template"], "krea2-turbo/fill", "native auto runs Krea 2 AnyPaint when the worker serves it");
 
     // A preference naming an unknown or wrong-task template is a clear error, not a panic.
     s.edit_prefs(|p| p.integrations.default_fill_template = "nope/fill".into());
@@ -95,4 +95,30 @@ fn template_preferences_are_validated_when_set() {
     assert!(p.set("integrations.generativeTimeoutSecs", json!(1)).is_err());
     assert!(p.set("integrations.defaultEditModel", json!("a/b.safetensors")).is_err());
     assert_eq!(p.integrations.default_fill_template, "qwen-2.1/fill");
+}
+
+/// Krea 2 AnyPaint: its template is a Krea 2 fill that takes `denoise`, and its prompt writer is
+/// shown the crop with the selection flattened to mid-grey (AusBoss's "Write the prompt").
+#[test]
+fn the_krea2_fill_takes_denoise_and_its_writer_sees_a_grey_hole() {
+    assert!(krea2_fill("krea2-turbo/fill") && !krea2_fill("qwen-2.1/fill") && !krea2_fill("krea2-turbo/edit"));
+    assert!(takes_denoise("krea2-turbo/fill"));
+    let image = Rgba8 { width: 2, height: 1, data: vec![10, 20, 30, 255, 40, 50, 60, 255] };
+    let mask = Gray8 { width: 2, height: 1, data: vec![200, 50] };
+    assert_eq!(grey_where(&image, &mask).data, vec![128, 128, 128, 255, 40, 50, 60, 255]);
+}
+
+/// The AnyPaint fill's prompt writer asks the worker for Krea 2's own encoder (no swap to
+/// Qwen-Image-2.1's 8B and back); the other rewriters leave the encoder to the worker.
+#[test]
+fn the_krea2_fill_writes_its_prompt_on_krea2s_encoder() {
+    let fake = FakeNative::start().unwrap();
+    let mut s = session(&fake.url);
+    s.execute(FILL, json!({"prompt": "a red hat", "template": "krea2-turbo/fill", "enhance": true, "seed": 3})).unwrap();
+    s.execute(FILL, json!({"prompt": "a red hat", "template": "qwen-2.1/fill", "enhance": true, "seed": 3})).unwrap();
+    let st = fake.state();
+    let chats: Vec<&serde_json::Value> = st.runs.iter().map(|r| &r.request).filter(|r| r["params"].get("system").is_some()).collect();
+    assert_eq!(chats.len(), 2, "one rewrite each");
+    assert_eq!(chats[0]["params"]["encoder"], KREA2_CHAT_ENCODER);
+    assert!(chats[1]["params"].get("encoder").is_none(), "{}", chats[1]);
 }

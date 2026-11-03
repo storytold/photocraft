@@ -4,6 +4,26 @@ Newest entry first. Terse: what landed, numbers, what is still open. Upstream ke
 the gitignored `log/devlog.md`; this one is tracked so the next session (any machine, any agent)
 can pick up.
 
+## 2026-11-03: AnyPaint fill speed pass (the prompt writer on Krea 2's own encoder)
+
+Measured in the app (scratch instance, the owner's prefs, portrait / street / coast, seed 42).
+A fill with enhance took 21.9–24.3 s: its prompt writer ran on Qwen-Image-2.1's 8B, which
+loads 2.1 (text encoder 5.2 s, DiT 2.5 s) and then Krea 2 again. genai-native
+`krea2-anypaint-speed` (5df6d43) gives Krea 2 its own chat on its Qwen3-VL-4B (head tied to the
+token embedding, Q8_0), what AusBoss's workflow writes the prompt with; the FillScene rewrite
+asks for it (`encoder: "krea2"`). Now 2.4–4.1 s with the same pictures
+(`anypaint-test/speed/rewriter-8b-vs-4b.png`). Warm stages: rewrite 0.9–1.3 s, encode
+0.13–0.36 s, 8 steps 0.7–2.3 s, decode 0.03–0.1 s, select.byPoint ~0.4 s; typed prompt 1.0–2.8 s.
+
+Also measured: Fill `auto` runs `krea2-turbo/fill`; AnyPaint as outpaint (canvas grown around
+S/V/W, the new area selected, enhance) 7.3–7.8 s, seamless, continues the figure.
+
+**Still open**
+
+- The portrait's blouse click: candidates 0/1/2 are the whole person, a face-and-neck strip and
+  a chest patch; none is the blouse alone (select by text gets it). A click that means a
+  garment needs another route (a text prompt from the clicked region, or SAM's part masks).
+
 ## 2026-11-03: upstream PhotoCraft 0.20 (v0.20.1) merged
 
 Upstream tagged 0.20 as `v0.20.1` (no `v0.20.0` tag); merged it into `photoshopex` (267 commits

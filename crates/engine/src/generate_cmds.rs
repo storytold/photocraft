@@ -347,7 +347,19 @@ pub(crate) enum EnhanceKind {
     Subject,
     /// A picture: describe its background alone (Generative Expand with no prompt).
     Backdrop,
+    /// A fill on Krea 2 AnyPaint: the crop with the selection flattened to grey; describe the
+    /// whole finished picture with the user's words in the grey area.
+    FillScene,
 }
+
+/// The worker's chat `encoder` that answers on Krea 2's Qwen3-VL-4B (genai-native
+/// `CHAT_ON_KREA2`).
+const KREA2_CHAT_ENCODER: &str = "krea2";
+
+/// The system turn of [`EnhanceKind::FillScene`]: AusBoss's "Write the prompt" step of the
+/// Krea 2 Inpaint Masked workflow (v1.3), which the AnyPaint LoRA follows best: it was trained
+/// on descriptions of the complete output picture, not of the patch.
+const ENHANCE_FILL_SCENE_SYSTEM: &str = "You see a picture with a flat mid-grey area that will be painted. Write one text-to-image prompt describing this picture as it will look when finished: one paragraph of 40 to 80 words covering the subject, setting, materials, lighting and camera style, with the grey area showing what the user asks for. Never call it grey, blank, masked, selected or painted, and describe it as part of the finished scene. Keep the user's words where they are specific. Reply with the prompt only: no title, no quotes, no markdown.";
 
 /// The system turn of [`EnhanceKind::Subject`]: a short noun phrase the matte can follow.
 const ENHANCE_SUBJECT_SYSTEM: &str = "You see a picture. Reply with one noun phrase of three to eight words naming its main subject as the picture shows it, for example \"the man in a white t-shirt\" or \"the red vintage car\". Reply with the phrase only: no sentence, no quotes, no full stop.";
@@ -449,9 +461,16 @@ pub(crate) fn enhance_prompt(
         EnhanceKind::FillRef => ENHANCE_FILL_REF_SYSTEM.to_string(),
         EnhanceKind::Subject => ENHANCE_SUBJECT_SYSTEM.to_string(),
         EnhanceKind::Backdrop => ENHANCE_BACKDROP_SYSTEM.to_string(),
+        EnhanceKind::FillScene => ENHANCE_FILL_SCENE_SYSTEM.to_string(),
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
+    // AnyPaint's prompt is written by Krea 2's own Qwen3-VL-4B, as in AusBoss's workflow: the
+    // fill that follows finds Krea 2 still resident instead of loading it again after
+    // Qwen-Image-2.1's 8B answered (21.9-24.3 s a fill with enhance before, 2.4-4.1 s after).
+    if kind == EnhanceKind::FillScene {
+        params.insert("encoder".to_string(), Value::String(KREA2_CHAT_ENCODER.to_string()));
+    }
     for attempt in 0..2u64 {
         let req = Request {
             template: template.to_string(),
@@ -610,7 +629,7 @@ pub fn angle_instruction(rotation: u32, tilt: i32, zoom: u32) -> Option<String> 
 pub(crate) fn native21_auto(s: &Session, command: &str, removal: bool) -> Option<&'static str> {
     let t = match command {
         FILL if removal => "qwen-2.1/edit",
-        FILL => "qwen-2.1/fill",
+        FILL => NATIVE21_FILL,
         // Expand stays on 2511's own tiers: its sampler keeps the picture's latent outside the
         // mask, while 2.1 samples the whole canvas from noise and drew the subject again over
         // the picture even with a backdrop-only prompt on four sides (2026-11-03).
@@ -619,6 +638,14 @@ pub(crate) fn native21_auto(s: &Session, command: &str, removal: bool) -> Option
     };
     (s.prefs().integrations.allow_research_models && loras::runs_native(s, t)).then_some(t)
 }
+
+/// The 2.1 fill `auto` falls back to on the native worker.
+const NATIVE21_FILL: &str = "qwen-2.1/fill";
+/// What `auto` runs for a prompted fill on the native worker with research-only models allowed:
+/// Krea 2 with the AnyPaint LoRA when the worker serves it (its files and the LoRA there), else
+/// the 2.1 fill. Measured in the app 2026-11-03 on three photos: AnyPaint swapped the blouse,
+/// the bicycle and the pine cleanly in 1.1–3.2 s warm, the 2.1 fill in 10.6–13.3 s.
+pub const NATIVE_FILL_ORDER: &[&str] = &["krea2-turbo/fill", NATIVE21_FILL];
 
 /// The crop a removal on Qwen-Image-2.1 goes out at when `maxPixels` is left at the default:
 /// 0.75 MP, the size the 2.1 removal runs were measured at (1 MP is 2511's).
@@ -1732,7 +1759,9 @@ fn plan_fill(s: &Session, p: &Value) -> Result<FillPlan> {
     {
         as_edit = opt_bool(FILL, p, "fillAsEdit", false)?;
         base = if as_edit { native21_auto(s, EDIT, false).unwrap_or(t).to_string() } else { t.to_string() };
-        auto = false;
+        // A prompted fill still picks inside the job: Krea 2 AnyPaint when the worker serves it
+        // ([`NATIVE_FILL_ORDER`]), else this 2.1 fill.
+        auto = !as_edit;
     }
     // A fill from references on the native worker: the 2.1 edit template, which takes nine
     // references beside the picture, instead of 2511's fill-ref on ComfyUI (the Rust rebuild,
@@ -2617,10 +2646,20 @@ fn rewritten_fill_prompt(
     image: &Rgba8,
     prompt: String,
     place: Option<&str>,
+    scene: Option<&Gray8>,
     seed: u64,
     ctx: &JobCtx,
 ) -> String {
     ctx.progress(0.02, "Improving the prompt");
+    // Krea 2 AnyPaint: the whole finished picture described, the area seen as flat grey.
+    if let (Some(mask), true) = (scene, command == FILL && refs.images.is_empty()) {
+        let grey = grey_where(image, mask);
+        let words = format!("What the grey area shows: {}", prompt.trim());
+        return match enhance_prompt(thinker, EnhanceKind::FillScene, &words, Some(&grey), None, seed, &JobProgress::span(ctx, 0.02, 0.05)) {
+            Ok(Some(p)) => p,
+            Ok(None) | Err(_) => prompt,
+        };
+    }
     // A fill from a reference shows the rewriter the picture (its hole grey) and the first
     // reference side by side, so it can name what to take as the reference shows it.
     let fill_ref = command == FILL && !refs.images.is_empty();
@@ -2639,6 +2678,26 @@ fn rewritten_fill_prompt(
         Ok(Some(p)) => p,
         Ok(None) | Err(_) => prompt,
     }
+}
+
+/// `image` with the pixels where `mask` is over half flattened to mid-grey (what AusBoss's
+/// prompt writer is shown); `image` as it is when the sizes differ.
+fn grey_where(image: &Rgba8, mask: &Gray8) -> Rgba8 {
+    let mut out = image.clone();
+    if (mask.width, mask.height) != (image.width, image.height) {
+        return out;
+    }
+    for (px, m) in out.data.as_chunks_mut::<4>().0.iter_mut().zip(&mask.data) {
+        if *m > 127 {
+            px[..3].copy_from_slice(&[128, 128, 128]);
+        }
+    }
+    out
+}
+
+/// Whether `template` is a Krea 2 fill (AnyPaint), whose prompt describes the finished picture.
+fn krea2_fill(template: &str) -> bool {
+    template::find(template).is_ok_and(|t| t.meta.family == "krea2" && t.meta.task == Task::Fill)
 }
 
 /// What a whole-picture route changed beside the hole, connected to it (`change_band`): the
@@ -2806,7 +2865,8 @@ fn fill_region(
     let prompt = if let Some(r) = rewritten {
         r
     } else if enhance && outpaint.is_none() {
-        rewritten_fill_prompt(thinker.as_ref(), command, &refs, &image, prompt, place.as_deref(), seed, ctx)
+        let scene = krea2_fill(&template_id).then_some(&mask);
+        rewritten_fill_prompt(thinker.as_ref(), command, &refs, &image, prompt, place.as_deref(), scene, seed, ctx)
     } else {
         prompt
     };
@@ -3490,7 +3550,7 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
         command: if as_edit { EDIT } else { FILL },
         template_id: template.meta.id.clone(),
         auto,
-        auto_order: auto_order(FILL, quality(s)),
+        auto_order: if template.meta.id == NATIVE21_FILL { NATIVE_FILL_ORDER } else { auto_order(FILL, quality(s)) },
         prompt,
         negative,
         seed,
