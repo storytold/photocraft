@@ -267,6 +267,22 @@ fn the_snapped_area_fits_the_texture_limit() {
     }
 }
 
+/// However big the display, the display builds at most `MAX_BLOCKS` blocks: an 8K canvas at
+/// 100 % gets bigger blocks instead of a 33M-texel texture, while 2560×1440 keeps one block per
+/// device pixel.
+#[test]
+fn a_huge_display_grows_the_blocks() {
+    let bounds = Rect::new(0, 0, 20000, 20000);
+    let (_, f) = view_area(&xf_over(0, 2564, 0, 1444), bounds, 1.0, 8192).unwrap();
+    assert_eq!(f, 1, "2560×1440: one block per device pixel");
+    for (w, h) in [(7680, 4320), (8192, 8192), (15360, 8640)] {
+        let (r, f) = view_area(&xf_over(0, w, 0, h), bounds, 1.0, 8192).unwrap();
+        let blocks = u64::from(r.width().div_ceil(f)) * u64::from(r.height().div_ceil(f));
+        assert!(blocks <= MAX_BLOCKS, "{w}×{h}: {blocks} blocks of {f}");
+        assert!(blocks > MAX_BLOCKS / 4, "{w}×{h}: no coarser than needed ({blocks} blocks of {f})");
+    }
+}
+
 /// How many meshes among `shapes` (shape lists included) draw texture `tex`.
 fn meshes_with(shapes: &[egui::epaint::ClippedShape], tex: egui::TextureId) -> usize {
     fn count(s: &egui::Shape, tex: egui::TextureId) -> usize {

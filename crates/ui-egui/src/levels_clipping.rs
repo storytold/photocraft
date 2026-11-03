@@ -319,8 +319,13 @@ pub struct Cache {
     tex: Option<egui::TextureHandle>,
 }
 
+/// Most blocks the display builds (2048 × 2048). A 2560×1440 canvas still gets one block per
+/// device pixel, a bigger one bigger blocks: the block stats stay under 50 MB, the texture at
+/// 16 MB, and a slider move near the 2 ms `levels_clipping_bench` measures for 3.7M blocks.
+const MAX_BLOCKS: u64 = 2048 * 2048;
+
 /// The visible part of the document in `xf` and the block size giving about one texel per screen
-/// pixel (`ppp` physical pixels per point), within `max_side` texels a side.
+/// pixel (`ppp` physical pixels per point), within `max_side` texels a side and [`MAX_BLOCKS`].
 fn view_area(xf: &ViewXform, bounds: Rect, ppp: f32, max_side: u32) -> Option<(Rect, u32)> {
     let device_zoom = xf.zoom * ppp;
     if !(device_zoom.is_finite() && device_zoom > 0.0) {
@@ -332,14 +337,15 @@ fn view_area(xf: &ViewXform, bounds: Rect, ppp: f32, max_side: u32) -> Option<(R
     }
     let max_side = max_side.max(1);
     let (w, h) = (visible.width(), visible.height());
-    let mut factor = ((1.0 / device_zoom).floor().clamp(1.0, 65536.0) as u32).max(w.div_ceil(max_side)).max(h.div_ceil(max_side));
+    let budget = ((u64::from(w) * u64::from(h)) as f64 / MAX_BLOCKS as f64).sqrt().ceil() as u32;
+    let mut factor = ((1.0 / device_zoom).floor().clamp(1.0, 65536.0) as u32).max(w.div_ceil(max_side)).max(h.div_ceil(max_side)).max(budget);
     // Snap to the block grid so panning keeps the blocks where they were. That can widen the area
     // by up to a block, so grow the blocks until the snapped area fits.
     loop {
         let f = i32::try_from(factor).ok()?;
         let r = Rect::new(visible.x0.div_euclid(f) * f, visible.y0.div_euclid(f) * f, visible.x1, visible.y1).intersect(&bounds);
         let (bw, bh) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
-        if bw <= max_side && bh <= max_side {
+        if bw <= max_side && bh <= max_side && u64::from(bw) * u64::from(bh) <= MAX_BLOCKS {
             return Some((r, factor));
         }
         factor = factor.checked_add(1)?;
