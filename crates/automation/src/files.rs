@@ -58,14 +58,20 @@ pub fn previews(doc: &Document) -> SaveOptions {
 }
 
 /// [`previews`], plus the full-size composite when `opts` asks for it and it can be rendered
-/// ([`ExportOptions::pcraft_full_composite`]).
-fn native_options(doc: &Document, opts: &ExportOptions) -> SaveOptions {
+/// ([`ExportOptions::pcraft_full_composite`]). Fails when a scratch tile of `doc` could not be
+/// read while they were rendered: the previews may then hold placeholder pixels, and the
+/// bundle's own scratch checks only cover reads made after it starts.
+fn native_options(doc: &Document, opts: &ExportOptions) -> Result<SaveOptions, AutomationError> {
+    doc.scratch_health().map_err(AutomationError::Io)?;
+    let generation = photocraft_raster::spill::read_error_generation();
     let mut out = previews(doc);
     if opts.pcraft_full_composite {
         out.full_composite = photocraft_io::pcraft_full_composite(doc);
         out.full_composite_icc = out.full_composite.as_ref().map(|_| photocraft_io::pcraft_full_composite_icc(doc));
     }
-    out
+    photocraft_raster::spill::check_since(generation).map_err(AutomationError::Io)?;
+    doc.scratch_health().map_err(AutomationError::Io)?;
+    Ok(out)
 }
 
 /// Encode the name the saved native bundle will report on reopening. Save As updates
@@ -109,7 +115,7 @@ pub fn save_with_renderer(
         let named = named_for_output(doc, &path.to_string_lossy());
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
-        w.save_path(&named, path, &native_options(&named, opts))?;
+        w.save_path(&named, path, &native_options(&named, opts)?)?;
         let mut warnings = Vec::new();
         if let Some(r) = renderer {
             warnings.push("native .pcraft format uses CPU compositor for previews".into());
@@ -160,7 +166,7 @@ pub fn save_bytes_with_renderer(
             warnings.push("native .pcraft format uses CPU compositor for previews".into());
             warnings.extend(r.drain_diagnostics());
         }
-        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts))?, warnings));
+        return Ok((photocraft_format::save_to_bytes(&named, &native_options(&named, opts)?)?, warnings));
     }
     let result = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     Ok((result.bytes, result.warnings))
