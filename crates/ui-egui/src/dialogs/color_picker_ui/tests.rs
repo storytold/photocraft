@@ -198,7 +198,7 @@ fn component_strip_preserves_samples_and_smooth_topology() {
                 assert!(bands.is_valid());
                 assert_eq!((bands.vertices.len(), bands.indices.len()), (4 * WEB_CELLS, 6 * WEB_CELLS));
                 assert_eq!(bands.calc_bounds(), original.calc_bounds());
-                for (band, row) in bands.vertices.chunks_exact(4).zip(original.vertices.chunks_exact(4 * WEB_CELLS)) {
+                for (band, row) in bands.vertices.as_chunks::<4>().0.iter().zip(original.vertices.as_chunks::<{ 4 * WEB_CELLS }>().0.iter()) {
                     for (a, b) in band.iter().zip([&row[0], &row[row.len() - 3], &row[row.len() - 2], &row[3]]) {
                         assert_eq!((a.pos, a.uv, a.color), (b.pos, b.uv, b.color));
                     }
