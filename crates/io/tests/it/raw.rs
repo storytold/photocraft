@@ -399,6 +399,7 @@ fn a_large_gps_directory_keeps_the_exif_directory() {
     let exif = tiff(vec![(42036, Val::Ascii("RF24-105mm F4 L IS USM".into()))]);
     let block = photocraft_codecs::raw_exif_from_directories(None, Some(&exif), Some(&gps)).expect("EXIF");
     assert_eq!(photocraft_algo::exif::read(&block).lens.as_deref(), Some("RF24-105mm F4 L IS USM"));
+    assert!(ifd0_tags(&block).contains(&34853), "the large GPS directory");
 }
 
 /// A CR3 preview that carries an EXIF block of its own (here only an orientation) still gets the
@@ -432,6 +433,8 @@ fn a_damaged_cmt2_gives_way_to_a_later_one() {
     let boxes = [
         (*b"CMT1", tiff(vec![(271, Val::Ascii("Canon".into()))])),
         (*b"CMT2", b"II*\0\xff\xff\0\0".to_vec()),
+        // An Olympus-style header with a readable IFD: not an EXIF block either.
+        (*b"CMT2", [b"IIRO".as_slice(), &tiff(vec![(33434, Val::Rational(vec![(1, 8)]))])[4..]].concat()),
         (*b"CMT2", tiff(vec![(33434, Val::Rational(vec![(1, 200)]))])),
     ];
     let r = import("shot.cr3", &photocraft_raw::testgen::cr3_with_boxes(&jpeg, &boxes)).unwrap();

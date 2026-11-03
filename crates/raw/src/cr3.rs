@@ -139,9 +139,12 @@ struct Found<'a> {
     gps: Option<&'a [u8]>,
 }
 
-/// `body` when it is a TIFF stream whose first directory reads: a damaged CMT box is passed over
-/// for a later one.
+/// `body` when it is a classic TIFF stream (`II*\0` or `MM\0*`, what an EXIF block can be)
+/// whose first directory reads: a damaged CMT box is passed over for a later one.
 fn readable_tiff(body: &[u8]) -> Option<&[u8]> {
+    if !matches!(body.get(..4), Some(b"II*\0" | b"MM\0*")) {
+        return None;
+    }
     let t = Tiff::new(body)?;
     t.ifd_at(t.first_ifd, 0).map(|_| body)
 }
