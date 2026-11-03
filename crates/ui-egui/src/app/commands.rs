@@ -53,7 +53,6 @@ impl PhotocraftApp {
         if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
             self.ui.symmetry_transform = None;
         }
-        let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         if self.automation_input
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
@@ -92,6 +91,8 @@ impl PhotocraftApp {
         if let Some(r) = vector_ui::path_clip_intercept(self, id, &params) {
             return r;
         }
+        // After the intercepts: a refresh there (or the menu) read the OS clipboard already.
+        let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
@@ -108,10 +109,17 @@ impl PhotocraftApp {
             };
             if let Some(mode) = paste_as {
                 // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
-                let (imported, svg_error) = match self.import_os_svg_clipboard() {
-                    Ok(imported) => (imported, None),
-                    Err(error) if mode == "pixels" => (false, Some(error)),
-                    Err(error) => return Err(error),
+                // A refresh above (the path clipboard's intercept or the menu) already read the
+                // OS clipboard: its import stands, and an unchanged older SVG must not
+                // replace the clip it installed.
+                let (imported, svg_error) = if clip_read {
+                    (true, None)
+                } else {
+                    match self.import_os_svg_clipboard() {
+                        Ok(imported) => (imported, None),
+                        Err(error) if mode == "pixels" => (false, Some(error)),
+                        Err(error) => return Err(error),
+                    }
                 };
                 if mode == "pixels"
                     && !imported

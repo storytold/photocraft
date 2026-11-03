@@ -62,11 +62,13 @@ impl PhotocraftApp {
         };
         // Already imported, or a newer internal copy (pixels or a path component): either
         // stays until the external bytes change. A raster mirror an ordinary paste took of
-        // these bytes is not their vectors.
+        // these bytes is not their vectors. `false` (nothing imported) lets Paste As pixels
+        // fall through to the bitmap import: the OS clipboard can hold both, and the bitmap
+        // may have changed even while these bytes did not.
         let holds_vectors_or_newer =
             self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some() || !self.clip_external) || self.session.path_clipboard.is_some();
         if self.os_clip_svg.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
-            return Ok(true);
+            return Ok(false);
         }
         let clip = photocraft_engine::edit_cmds::Clip::from_svg(&source).map_err(|error| {
             let error = error.to_string();

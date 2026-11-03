@@ -64,9 +64,16 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
     // A newer OS clipboard image supersedes a path clip, like any newer clip: refresh the import
     // first — its freshness guard leaves an unchanged OS image (and known-fresh internal
     // content) alone, and learns the baseline it needs to order the two clips. Routing then
-    // dispatches whatever is still the freshest clip.
-    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
-        let _ = app.import_os_clipboard();
+    // dispatches whatever is still the freshest clip. A successful refresh installed the
+    // newest OS clip: the paste dispatch below must not re-import over it (like the menu's
+    // paste in `invoke`).
+    if id == "edit.paste"
+        && app.session.path_clipboard.is_some()
+        && app.services.clipboard_get_image.is_some()
+        && !app.clip_read_for_paste
+        && app.import_os_clipboard().unwrap_or(false)
+    {
+        app.clip_read_for_paste = true;
     }
     // The intercept only takes the plain menu/shortcut form: explicit params address the
     // command elsewhere (a mask, a channel, a layer), and a live component selection must not
@@ -387,7 +394,8 @@ mod tests {
 
     /// Paste As with an OS SVG that is unchanged since its import must not clear a newer path
     /// clip: the unchanged-SVG check counts the path clipboard as a current internal copy, like
-    /// the bitmap import's freshness rule does.
+    /// the bitmap import's freshness rule does. A changed OS bitmap, on the other hand, still
+    /// imports and displaces the path clip (one clipboard).
     #[test]
     fn paste_as_keeps_a_newer_path_clip_when_the_os_svg_is_unchanged() {
         const SOURCE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path d="M2 2 L38 2 L38 18 L2 18 Z" fill="#335577"/></svg>"##;
@@ -402,26 +410,28 @@ mod tests {
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         // Paste As shape imports the OS SVG (first observation: nothing to compare it against).
         app.run("edit.paste", json!({"as": "shape"})).unwrap();
-        let (w, h, bytes) = {
-            let clip = app.session.clipboard.as_ref().unwrap();
-            let b = clip.bounds;
-            let mut pixels = vec![[0u8; 4]; b.size().area() as usize];
-            clip.surface.read_rgba8_into(b, &mut pixels);
-            (b.width(), b.height(), pixels.into_iter().flatten().collect::<Vec<u8>>())
-        };
-        // The OS clipboard now mirrors the SVG's raster, unchanged.
-        *image.lock().unwrap() = Some((w, h, bytes));
-        // One component to copy later, addressed by id; the pen adds it to the pasted shape.
+        // The OS clipboard then mirrors the SVG's raster; a plain paste takes the bitmap over
+        // the vectors, establishing the signature baseline a later change is measured against.
+        *image.lock().unwrap() = Some((2, 1, vec![0, 0, 255, 255, 0, 0, 255, 255]));
+        app.run("edit.paste", json!({})).unwrap();
+        // A newer path clip replaces the pixel clipboard (one clipboard); the pen adds the
+        // square to the pasted SVG shape, addressed by id.
         app.ui.tool = Tool::Pen;
         app.ui.tool_options.vector_mode = "shape".into();
         square(&mut app, 20.0, 20.0, 50.0);
         let (id, _) = shape(&app);
-        // A newer path clip replaces the pixel clipboard (one clipboard).
         app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
         assert!(app.session.path_clipboard.is_some() && app.session.clipboard.is_none());
-        // Paste As pixels: nothing newer to import (the SVG and its mirror are unchanged), so
-        // the paste has nothing to lay down — and the path clip must survive it.
+        // Paste As pixels with the unchanged mirror: nothing newer to import, so the paste has
+        // nothing to lay down — and the path clip must survive it.
         let _ = app.run("edit.paste", json!({"as": "pixels"}));
         assert!(app.session.path_clipboard.is_some(), "the unchanged older SVG must not clear the newer path clip");
+        // A changed OS bitmap imports after all and displaces the path clip.
+        *image.lock().unwrap() = Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]));
+        app.run("edit.paste", json!({"as": "pixels"})).unwrap();
+        let clip = app.session.clipboard.as_ref().expect("the changed bitmap is the session clipboard now");
+        assert_eq!(clip.bounds, photocraft_geom::Rect::new(0, 0, 2, 1));
+        assert_eq!(clip.surface.rgba(0, 0), [0.0, 1.0, 0.0, 1.0], "Paste As pixels imported the changed bitmap");
+        assert!(app.session.path_clipboard.is_none(), "and the changed bitmap displaced the path clip");
     }
 }
