@@ -177,7 +177,7 @@ pub const MAX_RESOLVED_SLICES: usize = 10_000;
 /// edge; free cells merge into horizontal runs per row band, then runs with identical columns
 /// merge down, which yields the few large auto slices Photoshop shows.
 pub fn auto_slices(canvas: Rect, taken: &[Rect]) -> Vec<Rect> {
-    partition(canvas, taken).1
+    partition(canvas, taken, false).1
 }
 
 /// Splits `canvas` by `rects` (later rects on top) in one sweep: for each rect, the pieces of it
@@ -189,7 +189,7 @@ pub fn auto_slices(canvas: Rect, taken: &[Rect]) -> Vec<Rect> {
 /// same owner and columns merge down. Resolving each rect against the rects above it separately
 /// rebuilt that grid once per rect and re-marked shared overlaps every time, which was quartic in
 /// the slice count for nested rectangles and let a crafted document stall canvas drawing.
-fn partition(canvas: Rect, rects: &[Rect]) -> (Vec<Vec<Rect>>, Vec<Rect>) {
+fn partition(canvas: Rect, rects: &[Rect], want_owned: bool) -> (Vec<Vec<Rect>>, Vec<Rect>) {
     let mut owned_runs: Vec<Vec<Rect>> = vec![Vec::new(); rects.len()];
     let mut free_runs: Vec<Rect> = Vec::new();
     if canvas.is_empty() {
@@ -259,7 +259,11 @@ fn partition(canvas: Rect, rects: &[Rect]) -> (Vec<Vec<Rect>>, Vec<Rect>) {
             if let (Some(&x0), Some(&x1)) = (xs.get(c), xs.get(end)) {
                 let run = Rect::new(x0, band_y0, x1, band_y1);
                 match owned_runs.get_mut(who) {
-                    Some(runs) => runs.push(run),
+                    Some(runs) => {
+                        if want_owned {
+                            runs.push(run);
+                        }
+                    }
                     None => free_runs.push(run),
                 }
             }
@@ -316,7 +320,7 @@ fn merge_down(runs: Vec<Rect>) -> Vec<Rect> {
 pub fn resolve(doc: &Document) -> Vec<ResolvedSlice> {
     let base = base_name(doc);
     let rects: Vec<Rect> = doc.slices.list.iter().take(MAX_RESOLVED_SLICES).map(|s| s.rect).collect();
-    let (owned, free) = partition(doc.bounds(), &rects);
+    let (owned, free) = partition(doc.bounds(), &rects, true);
     let mut all: Vec<(Option<usize>, Rect)> = owned.into_iter().enumerate().flat_map(|(i, pieces)| pieces.into_iter().map(move |p| (Some(i), p))).collect();
     all.extend(free.into_iter().map(|r| (None, r)));
     all.sort_by_key(|(_, r)| (r.y0, r.x0));
@@ -528,7 +532,7 @@ mod tests {
                     Rect::new(x, y, x + next(70), y + next(60))
                 })
                 .collect();
-            let (owned, free) = partition(canvas, &rects);
+            let (owned, free) = partition(canvas, &rects, true);
             let got: Vec<(usize, Rect)> = owned.into_iter().enumerate().flat_map(|(i, ps)| ps.into_iter().map(move |p| (i, p))).collect();
             let (want, want_free) = reference_resolve(canvas, &rects);
             assert_eq!(got, want, "pieces for {rects:?}");
