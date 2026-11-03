@@ -53,8 +53,8 @@
 	Right	راست
 	Open Recent	فایل‌های اخیر
 	Clear Recent Files	پاک کردن فایل‌های اخیر
-	Remove from Recent	حذف از اخیر
-	Remove {name} from Recent	حذف {name} از اخیر
+	Remove from Recent	حذف از فهرست موارد اخیر
+	Remove {name} from Recent	حذف {name} از فهرست موارد اخیر
 	Close	بستن
 	Minimize	کمینه
 	Maximize	بیشینه
@@ -91,7 +91,7 @@
 	Conditional Mode Change…	تغییر مشروط حالت…
 	Fit Image…	تناسب تصویر…
 	Lens Correction…	اصلاح لنز…
-	Merge to HDR Pro…	ادغام به HDR Pro…
+	Merge to HDR Pro…	ادغام با HDR Pro…
 	Photomerge…	فتومرچ…
 	Scripts	اسکریپت‌ها
 	Image Processor…	پردازشگر تصویر…
@@ -374,17 +374,17 @@
 	Duplicate Frame	تکثیر فریم
 	Frame from Layers	فریم از لایه‌ها
 	Video Frames to Layers…	فریم‌های ویدیو به لایه‌ها…
-	Rasterize	شبکه‌ای کردن
-	Rasterize Type	شبکه‌ای کردن تایپ
-	Rasterize Type Layer	شبکه‌ای کردن لایهٔ تایپ
-	Rasterize Shape	شبکه‌ای کردن شکل
+	Rasterize	پیکسلی‌سازی
+	Rasterize Type	پیکسلی‌سازی متن
+	Rasterize Type Layer	پیکسلی‌سازی لایهٔ متن
+	Rasterize Shape	پیکسلی‌سازی شکل
 	New Guide Layout…	طرح راهنمای جدید…
 	New Guides From Shape	راهنماهای جدید از شکل
 	Lock Layers…	قفل لایه‌ها…
 	Link Layers	پیوند لایه‌ها
 	Select Linked Layers	انتخاب لایه‌های پیوندشده
 	Merge Layers	ادغام لایه‌ها
-	Merge Down	ادغام به پایین
+	Merge Down	ادغام با لایهٔ زیرین
 	Merge Visible	ادغام لایه‌های مرئی
 	Stamp Visible	مهر لایه‌های مرئی
 	Select Layer Above	انتخاب لایه بالا
@@ -782,7 +782,7 @@
 	Absolute Colorimetric	سنجش رنگ مطلق
 	Action	اکشن
 	Adaptive	انطباقی
-	Adaptive Wide Angle isn't open	واید انطباقی باز نیست
+	Adaptive Wide Angle isn't open	ابزار Adaptive Wide Angle باز نیست
 	Add	افزودن
 	Add Layer Mask	افزودن ماسک لایه
 	Add Stop	افزودن ایست
@@ -1185,7 +1185,7 @@
 	Linear Gradient	گرادیان خطی
 	Link layers	پیوند لایه‌ها
 	Link width and height	پیوند عرض و ارتفاع
-	Liquify is not open	مایع‌سازی باز نیست
+	Liquify is not open	ابزار Liquify باز نیست
 	Load	بارگذاری
 	Load 3D LUT…	بارگذاری LUT سه‌بعدی…
 	Load channel as selection	بارگذاری کانال به‌عنوان انتخاب
@@ -1731,8 +1731,8 @@
 	Quick Mask	ماسک سریع
 	Quick Selection Tool	ابزار انتخاب سریع
 	Radial	شعاعی
-	Rasterize Layer	شبکه‌ای کردن لایه
-	Rasterize Layers	شبکه‌ای کردن لایه‌ها
+	Rasterize Layer	پیکسلی‌سازی لایه
+	Rasterize Layers	پیکسلی‌سازی لایه‌ها
 	Ratio	نسبت
 	Recent	اخیر
 	Rectangle Tool	ابزار مستطیل
@@ -2053,9 +2053,9 @@
 	Fill Layer	لایه پرکننده
 	Smart Object Layer	لایه شیء هوشمند
 	Create Warped Text	ایجاد متن تغییر شکل یافته
-	Rasterize Smart Object	شبکه‌ای کردن شیء هوشمند
-	Rasterize Fill Content	شبکه‌ای کردن محتوای پرکردگی
-	Rasterize Layer Style	شبکه‌ای کردن سبک لایه
+	Rasterize Smart Object	پیکسلی‌سازی شیء هوشمند
+	Rasterize Fill Content	پیکسلی‌سازی محتوای پرشده
+	Rasterize Layer Style	پیکسلی‌سازی سبک لایه
 	Unlock: picking a preset replaces these settings	باز کردن قفل: انتخاب یک پیش‌تنظیم این تنظیمات را جایگزین می‌کند
 	Lock: keep these settings when picking another preset	قفل: حفظ این تنظیمات هنگام انتخاب پیش‌تنظیم دیگر
 	Diameter:	قطر:
@@ -2126,7 +2126,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	مسیری برای ایجاد انتخاب وجود ندارد: یکی را با ابزار قلم بکشید یا یکی را در پنل مسیرها انتخاب کنید.
 	Cancel opening	لغو باز کردن
 	Cancelled opening {name}	باز کردن {name} لغو شد
-	Developing {name}	در حال ظهور {name}
+	Developing {name}	در حال پردازش {name}
 	Cancelled {label}	{label} لغو شد
 	Esc to cancel	Esc برای لغو
 	Opened {name}	«{name}» باز شد
@@ -2445,8 +2445,8 @@ fontWeight	Italic	کج
 	Transparency Threshold	آستانه شفافیت
 	Opacity Threshold	آستانهٔ کدری
 	PhotoCraft — Screen Color Picker	PhotoCraft — انتخابگر رنگ صفحه
-	Rasterize svg groups deeper than	شبکه‌ای کردن گروه‌های SVG عمیق‌تر از
-	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	۰ این آستانه را خاموش می‌کند؛ گروه‌های SVG که بیش از ۱۰۰ سطح تودرتو باشند همواره شبکه‌ای می‌شوند.
+	Rasterize svg groups deeper than	پیکسلی‌سازی گروه‌های SVG عمیق‌تر از
+	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	۰ این آستانه را غیرفعال می‌کند؛ گروه‌های SVG با عمق تودرتویی بیش از ۱۰۰ سطح، همیشه پیکسلی‌سازی می‌شوند.
 	Rule of Thirds	قانون یک‌سوم
 	Triangle	مثلث
 	Golden Ratio	نسبت طلایی
@@ -2634,7 +2634,7 @@ curves	Smooth	نرم
 	Clear Brush Strokes	پاک کردن قلم‌موها
 	Show rulers	نمایش خط‌کش‌ها
 	Click to place · Alt-click or drag off-canvas to remove	برای قرار دادن کلیک کنید · Alt-کلیک یا کشیدن به بیرون بوم برای حذف
-	No document open	سندی باز نیست
+	No document open	هیچ سندی باز نیست
 	{n} of {max} sample points	{n} از {max} نقطه نمونه
 	Emulsion Down	امولسیون به پایین
 	Functions	توابع
