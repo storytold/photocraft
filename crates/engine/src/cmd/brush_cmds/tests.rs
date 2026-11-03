@@ -35,7 +35,12 @@ fn stroke_backwards_compatible() {
 fn a_stroke_from_far_off_the_canvas_paints_only_what_reaches_it() {
     // Dabs that cannot reach the canvas are not rasterized (their coverage is never read).
     let mut s = session(80, 80);
-    let r = s.execute("paint.stroke", json!({"points": [[-100_000, 20], [70, 20], [70, 60]], "size": 6, "color": "#0000ff", "brush": {"hardness": 0.5, "smoothing": {"amount": 0.0}}})).unwrap();
+    let r = s
+        .execute(
+            "paint.stroke",
+            json!({"points": [[-100_000, 20], [70, 20], [70, 60]], "size": 6, "color": "#0000ff", "brush": {"hardness": 0.5, "smoothing": {"amount": 0.0}}}),
+        )
+        .unwrap();
     assert!(rgba(&s, 40, 20)[3] > 0.9, "the part on the canvas is painted: {:?} {r}", rgba(&s, 40, 20));
     assert!(rgba(&s, 70, 50)[3] > 0.9);
     assert_eq!(rgba(&s, 40, 40)[3], 0.0);

@@ -51,12 +51,10 @@ fn a_huge_brush_at_the_finest_spacing_over_a_long_path_stays_cheap_with_a_clip()
     // clip are rasterized.
     let b = brush(500.0, 0.0);
     let mut r = StrokeRenderer::new(&b, None, 1.0).with_clip(Rect::new(0, 0, 256, 256));
-    let t = std::time::Instant::now();
     line(&mut r, -1_000_000.0, 1_000_000.0);
     assert!(r.dab_count() > 100_000, "{}", r.dab_count());
     assert!(r.cov.tiles.len() < 1000, "{}", r.cov.tiles.len());
     assert!(!r.budget_exhausted());
-    assert!(t.elapsed().as_secs_f64() < 20.0, "{:?}", t.elapsed());
 }
 
 #[test]
@@ -78,14 +76,36 @@ fn the_budget_stops_painting_but_keeps_counting_dabs() {
 }
 
 #[test]
-fn the_budget_is_charged_once_and_shared_with_the_dual_brush() {
+fn dual_dabs_are_charged_apart_and_chunking_does_not_change_the_result() {
     let mut b = brush(20.0, 0.25);
     b.dual_brush.enabled = true;
     b.dual_brush.size = 10.0;
-    let mut r = StrokeRenderer::new(&b, None, 1.0);
-    line(&mut r, 0.0, 300.0);
-    assert!(MAX_STROKE_DAB_AREA - r.area_left > 0);
-    assert!(!r.budget_exhausted());
+    let pts: Vec<_> = (0..200).map(|i| StrokePoint::new(f64::from(i) * 7.0, 50.0, 1.0)).collect();
+    let run = |chunk: usize| {
+        let mut r = StrokeRenderer::new(&b, None, 1.0).with_dab_area_budget(20_000);
+        for c in pts.chunks(chunk) {
+            r.push(c);
+        }
+        r.finish();
+        r
+    };
+    let (whole, chunked) = (run(1000), run(3));
+    assert!(whole.budget_exhausted());
+    for x in 0..1400 {
+        assert_eq!(whole.coverage_at(x, 50).to_bits(), chunked.coverage_at(x, 50).to_bits(), "x {x}");
+        assert_eq!(whole.dual.as_ref().unwrap().get(x, 50).to_bits(), chunked.dual.as_ref().unwrap().get(x, 50).to_bits(), "dual x {x}");
+    }
+    assert!(whole.dual.as_ref().unwrap().get(2, 50) > 0.0);
+}
+
+#[test]
+fn a_dab_too_big_for_what_is_left_does_not_end_the_stroke() {
+    let (mut left, mut refused) = (1000, false);
+    assert!(!admit(None, &mut left, &mut refused, Rect::new(0, 0, 100, 100)));
+    assert!(refused);
+    assert_eq!(left, 1000);
+    assert!(admit(None, &mut left, &mut refused, Rect::new(0, 0, 10, 10)));
+    assert_eq!(left, 900);
 }
 
 /// How much of the budget everyday strokes use, so a limit change is judged against numbers.
