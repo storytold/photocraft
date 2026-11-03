@@ -27,6 +27,8 @@ struct Fake {
     /// What `connect` was given (the key, for checking where it went).
     connected: Mutex<Vec<(ServiceKind, String)>>,
     chosen: Mutex<Option<(String, String)>>,
+    /// How long reading the setup takes (a slow keychain).
+    setup_delay: std::time::Duration,
 }
 
 fn fake() -> Fake {
@@ -40,6 +42,7 @@ fn fake() -> Fake {
         sent: AtomicUsize::new(0),
         connected: Mutex::new(Vec::new()),
         chosen: Mutex::new(None),
+        setup_delay: std::time::Duration::ZERO,
     }
 }
 
@@ -125,6 +128,7 @@ impl GenerativeAi for Ai {
         Ok(Arc::new(Plan { fake: Arc::clone(&self.0), request, disclosure, agreed: AtomicBool::new(false) }))
     }
     fn setup(&self) -> Result<SetupView, AiFailure> {
+        std::thread::sleep(self.0.setup_delay);
         let chosen = self.0.chosen.lock().unwrap().clone();
         Ok(SetupView {
             connections: vec![ConnectionRow {
@@ -391,11 +395,36 @@ fn one_answer_covers_every_area_filled_at_once() {
     assert_eq!(app.session.active().unwrap().doc.layers.iter().filter(|l| l.is_group()).count(), 2);
 }
 
+/// Step `h` until the setup's read of the shared settings (on a worker) has answered.
+fn setup_read(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
+    for _ in 0..400 {
+        h.run_steps(1);
+        if h.query_by_label("Model for Generative Fill").is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the setup was never read");
+}
+
+#[test]
+fn a_slow_setup_read_never_holds_up_the_frame() {
+    let (app, _) = app_with(Fake { setup_delay: std::time::Duration::from_millis(400), ..fake() });
+    let mut h = harness(|ui, app: &mut PhotocraftApp| prefs_section(app, ui), app);
+    let started = std::time::Instant::now();
+    h.run_steps(2);
+    assert!(started.elapsed() < std::time::Duration::from_millis(300), "the read runs on a worker");
+    h.get_by_label("Generative Fill uses Fill One (Fake).");
+    assert!(h.query_by_label("Model for Generative Fill").is_none(), "nothing to show until it answers");
+    setup_read(&mut h);
+    h.get_by_label("Fill One");
+}
+
 #[test]
 fn setup_lists_models_chooses_and_connects_without_the_key_in_any_field() {
     let (app, f) = app_with(fake());
     let mut h = harness(|ui, app: &mut PhotocraftApp| prefs_section(app, ui), app);
-    h.run_steps(2);
+    setup_read(&mut h);
     h.get_by_label("Generative AI");
     h.get_by_label("Generative Fill uses Fill One (Fake).");
     h.get_by_label("Fake");

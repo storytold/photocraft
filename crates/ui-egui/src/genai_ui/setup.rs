@@ -29,6 +29,12 @@ pub struct State {
     pub(super) message: Option<(String, bool)>,
     /// The shared settings as last read, when, and the tool's status then.
     view: Option<(f64, AiStatus, Result<SetupView, String>)>,
+    /// The last read is out of date (something here changed the settings): read them again.
+    stale: bool,
+    /// The settings being read off the interface thread (they include the keychain), with the
+    /// tool's status when the read started.
+    #[cfg(not(target_arch = "wasm32"))]
+    reading: Option<(AiStatus, std::sync::mpsc::Receiver<Result<SetupView, String>>)>,
 }
 
 /// A service's name as setup lists it.
@@ -60,23 +66,70 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 /// The shared settings, read again after [`REFRESH_S`], once something here changed them, or as
 /// soon as the tool's status (`status`, refreshed about every second) differs from when they were
 /// read: a model chosen or a connection removed in another Craft app shows in the rows as soon as
-/// in the status line, without reading the settings (and the keychain) every second.
-fn view(app: &mut PhotocraftApp, now: f64, status: &AiStatus) -> Result<SetupView, String> {
-    if let Some((at, seen, v)) = &app.genai.setup.view
-        && now - at < REFRESH_S
-        && seen == status
-    {
-        return v.clone();
+/// in the status line, without reading the settings (and the keychain) every second. The read
+/// runs on a worker: until it answers the last read shows, or nothing before the first.
+fn view(app: &mut PhotocraftApp, ctx: &egui::Context, now: f64, status: &AiStatus) -> Option<Result<SetupView, String>> {
+    finish_read(app, ctx, now);
+    let s = &app.genai.setup;
+    let current = s.view.as_ref().is_some_and(|(at, seen, _)| !s.stale && now - at < REFRESH_S && seen == status);
+    if !current {
+        start_read(app, ctx, now, status);
     }
-    let v = app.session.generative_ai().map_or_else(|| Err(super::NO_AI.to_owned()), |ai| ai.setup().map_err(|e| e.message));
-    app.genai.setup.view = Some((now, status.clone(), v.clone()));
-    v
+    app.genai.setup.view.as_ref().map(|(_, _, v)| v.clone())
 }
+
+/// Read the shared settings on a worker, unless a read is under way.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_read(app: &mut PhotocraftApp, ctx: &egui::Context, now: f64, status: &AiStatus) {
+    if app.genai.setup.reading.is_some() {
+        return;
+    }
+    app.genai.setup.stale = false;
+    let Some(ai) = app.session.generative_ai().cloned() else {
+        app.genai.setup.view = Some((now, status.clone(), Err(super::NO_AI.to_owned())));
+        return;
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let repaint = ctx.clone();
+    let spawned = std::thread::Builder::new().name("photocraft-ai-setup".into()).spawn(move || {
+        let _ = tx.send(ai.setup().map_err(|e| e.message));
+        repaint.request_repaint();
+    });
+    match spawned {
+        Ok(_) => app.genai.setup.reading = Some((status.clone(), rx)),
+        Err(e) => app.genai.setup.view = Some((now, status.clone(), Err(e.to_string()))),
+    }
+}
+
+/// A read of the shared settings under way: done?
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_read(app: &mut PhotocraftApp, ctx: &egui::Context, now: f64) {
+    let Some((status, rx)) = &app.genai.setup.reading else { return };
+    match rx.try_recv() {
+        Ok(v) => {
+            app.genai.setup.view = Some((now, status.clone(), v));
+            app.genai.setup.reading = None;
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => app.genai.setup.reading = None,
+    }
+}
+
+/// The web build has no shared AI layer to read: say so at once.
+#[cfg(target_arch = "wasm32")]
+fn start_read(app: &mut PhotocraftApp, _: &egui::Context, now: f64, status: &AiStatus) {
+    app.genai.setup.stale = false;
+    let v = app.session.generative_ai().map_or_else(|| Err(super::NO_AI.to_owned()), |ai| ai.setup().map_err(|e| e.message));
+    app.genai.setup.view = Some((now, status.clone(), v));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn finish_read(_: &mut PhotocraftApp, _: &egui::Context, _: f64) {}
 
 /// A choice or removal here was made: read the settings again, and show its error or clear the
 /// last one.
 pub(super) fn changed(app: &mut PhotocraftApp, r: Result<(), AiFailure>) {
-    app.genai.setup.view = None;
+    app.genai.setup.stale = true;
     app.genai.setup.message = match r {
         Ok(()) => None,
         Err(e) => Some((e.message, true)),
@@ -100,12 +153,14 @@ pub fn prefs_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             "Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings."
         ),
     );
-    let setup = match view(app, now, &status) {
-        Ok(v) => v,
-        Err(e) => {
+    let setup = match view(app, ui.ctx(), now, &status) {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
             ui.add(egui::Label::new(egui::RichText::new(e).color(t.danger).size(12.0)).wrap());
             return;
         }
+        // The first read hasn't answered yet.
+        None => return,
     };
 
     heading(ui, tl!("Model for Generative Fill"));
@@ -232,7 +287,7 @@ pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match rx.try_recv() {
         Ok(r) => {
             app.genai.setup.busy = None;
-            app.genai.setup.view = None;
+            app.genai.setup.stale = true;
             app.genai.setup.message = Some(match r {
                 Ok(()) => (tl!("Connected.").to_owned(), false),
                 Err(e) => (e.message, true),
