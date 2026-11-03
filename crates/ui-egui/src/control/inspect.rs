@@ -34,6 +34,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "scratch": photocraft_raster::spill::stats(),
         "memory": photocraft_raster::memory::stats(),
         "tool": app.ui.tool,
+        "actions": crate::actions::inspect(app),
         "toolOptions": app.ui.tool_options,
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,

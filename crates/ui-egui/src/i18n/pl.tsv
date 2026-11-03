@@ -4139,3 +4139,109 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kolor punktu
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Akcja została zapisana, ale nie udało się zapisać preferencji potwierdzania: {error}
+	Add a brief description for this action…	Dodaj krótki opis tej akcji…
+	Allow Tool Recording	Zezwalaj na nagrywanie narzędzi
+	Answer the open Actions editor question first	Najpierw odpowiedz na otwarte pytanie w edytorze akcji
+	Apply to background	Zastosuj do tła
+	Apply to subject	Zastosuj do obiektu
+	Back	Wstecz
+	Black and white	Czarno-białe
+	Cancel and continue editing	Anuluj i kontynuuj edycję
+	Choose color	Wybierz kolor
+	Choose icon	Wybierz ikonę
+	Classic Actions	Klasyczne akcje
+	Clear All Actions	Wyczyść wszystkie akcje
+	Clear search	Wyczyść wyszukiwanie
+	Click action	Kliknięcie
+	Close the open Actions editor first	Najpierw zamknij otwarty edytor akcji
+	Collapse all	Zwiń wszystko
+	Colour lookup tables	Tablice przekształcania kolorów
+	Confirm or cancel the open action dialog first	Najpierw zatwierdź lub anuluj otwarte okno dialogowe akcji
+	Control	Ctrl
+	Default icon	Domyślna ikona
+	Delete Action	Usuń akcję
+	Delete action	Usuń akcję
+	Delete group	Usuń grupę
+	Delete step	Usuń krok
+	Delete the action "{name}"?	Usunąć akcję „{name}”?
+	Delete the group "{name}"?	Usunąć grupę „{name}”?
+	Discard	Odrzuć
+	Download	Pobierz
+	Duplicate Action	Powiel akcję
+	Duplicate action	Powiel akcję
+	Duplicate group	Powiel grupę
+	Duplicate step	Powiel krok
+	Edit Action	Edytuj akcję
+	Edit action	Edytuj akcję
+	Edit step settings	Edytuj ustawienia kroku
+	Enable step	Włącz krok
+	Expand all	Rozwiń wszystko
+	Export Action…	Eksportuj akcję…
+	Finish or cancel action playback and the pending step first	Najpierw zakończ lub anuluj odtwarzanie akcji i oczekujący krok
+	Finishing step…	Kończenie kroku…
+	Generated layer effects	Wygenerowane efekty warstwy
+	Generated styles	Wygenerowane style
+	Grey	Szary
+	Harmonize layers	Harmonizuj warstwy
+	Hue and saturation	Barwa i nasycenie
+	Import Actions…	Importuj akcje…
+	Import actions or create a new action to get started.	Zaimportuj akcje lub utwórz nową akcję, aby rozpocząć.
+	Insert Action	Wstaw akcję
+	Insert Conditional	Wstaw warunek
+	Insert Menu Item	Wstaw element menu
+	Insert Path	Wstaw ścieżkę
+	Insert Stop	Wstaw zatrzymanie
+	Insert…	Wstaw…
+	Keyboard shortcut	Skrót klawiaturowy
+	Lavender	Lawendowy
+	Layer effects	Efekty warstwy
+	Light blue	Jasnoniebieski
+	List size	Rozmiar listy
+	Magic wand	Różdżka
+	Merge layers	Scal warstwy
+	Move step down	Przesuń krok w dół
+	Move step up	Przesuń krok w górę
+	New group	Nowa grupa
+	No steps yet	Brak kroków
+	Object selection	Zaznaczanie obiektów
+	On	Wł.
+	Play Action	Odtwórz akcję
+	Play Actions	Odtwórz akcje
+	Play action	Odtwórz akcję
+	Play from selected step	Odtwórz od wybranego kroku
+	Playback Options…	Opcje odtwarzania…
+	Play…	Odtwórz…
+	Preview on hover	Podgląd po najechaniu
+	Record	Nagrywaj
+	Recording	Nagrywanie
+	Remove background	Usuń tło
+	Save Action	Zapisz akcję
+	Search actions	Szukaj akcji
+	Select an existing action step to play	Wybierz istniejący krok akcji do odtworzenia
+	Select subject	Zaznacz obiekt główny
+	Show grid	Pokaż siatkę
+	Show step settings	Pokaż ustawienia kroku
+	Smart removal	Inteligentne usuwanie
+	Sort & View options	Opcje sortowania i widoku
+	Start recording to build your action	Rozpocznij nagrywanie, aby utworzyć akcję
+	Steps	Kroki
+	Stored action step	Zapisany krok akcji
+	Stored settings	Zapisane ustawienia
+	Teal	Morski
+	Text	Tekst
+	Text colour	Kolor tekstu
+	The draft steps changed. Cancel this dialog and reopen the step.	Kroki wersji roboczej uległy zmianie. Anuluj to okno dialogowe i ponownie otwórz krok.
+	The dragged action changed; drag it again	Przeciągana akcja uległa zmianie; przeciągnij ją ponownie
+	The editor response does not belong to this draft	Odpowiedź edytora nie należy do tej wersji roboczej
+	There are unsaved changes. Do you want to save or discard them?	Istnieją niezapisane zmiany. Zapisać je czy odrzucić?
+	This editor page is closed	Ta strona edytora jest zamknięta
+	This step dialog belongs to another editor	To okno dialogowe kroku należy do innego edytora
+	Wait for the current action step to finish	Poczekaj na zakończenie bieżącego kroku akcji
+	You haven't created any actions	Nie utworzono jeszcze żadnych akcji
+	Yours	Twoje
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Akcje bez grupy

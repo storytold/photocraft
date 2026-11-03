@@ -471,6 +471,16 @@ fn run(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Value, S
     if !valid_workspace(&workspace) {
         return Err("docking action contains an unknown panel".into());
     }
+    if closed.iter().any(|panel| panel == "actions") {
+        let mut params = serde_json::to_value(&command).map_err(|error| error.to_string())?;
+        let id = params.get("command").and_then(Value::as_str).ok_or("docking command has no identity")?.to_string();
+        if let Some(fields) = params.as_object_mut() {
+            fields.remove("command");
+        }
+        if let Some(result) = crate::actions::guard_navigation(app, &id, params) {
+            return result;
+        }
+    }
     let reveal = panel.filter(|_| reveals(&command));
     if let Some(panel) = &reveal
         && workspace.layout.panel_state(panel) != PanelState::Front
@@ -1013,6 +1023,12 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
     let members = group_members(&workspace.layout, panel);
     if members.is_empty() {
         return Err("panel is hidden".into());
+    }
+    if operation == "close"
+        && members.iter().any(|member| member == "actions")
+        && let Some(result) = crate::actions::guard_navigation(app, "window.panel.group", params.clone())
+    {
+        return result;
     }
     let mut collapsed = collapsed_members(app, &workspace.layout);
     match operation {

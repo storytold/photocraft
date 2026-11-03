@@ -46,6 +46,9 @@ pub struct Action {
     /// Raw editor glyph identifier; empty uses the default glyph. Keep unknown identifiers verbatim.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub icon: String,
+    /// Opaque imported sidecar data, moved with this action. The ATN library codec owns durability.
+    #[serde(skip)]
+    pub atn_metadata: Option<crate::atn_cmds::ActionMetadata>,
     #[serde(default)]
     pub steps: Vec<(String, Value)>,
     /// Indices of steps excluded from playback (unchecked in the Actions panel).
@@ -94,6 +97,7 @@ impl Action {
             name: name.into(),
             description: String::new(),
             icon: String::new(),
+            atn_metadata: None,
             steps,
             disabled: BTreeSet::new(),
             dialogs: BTreeSet::new(),
@@ -140,6 +144,8 @@ pub struct ActionState {
     pub held_playback: Option<u64>,
     #[serde(skip)]
     pub playback_nonce: u64,
+    #[serde(skip)]
+    pub playback_yielding: bool,
     /// Journal length when recording started, and the action index being recorded into.
     #[serde(skip)]
     pub recording: Option<(usize, usize)>,
@@ -164,6 +170,9 @@ pub struct ActionState {
     /// an empty one isn't remembered past the session.
     #[serde(skip)]
     pub sets: Vec<String>,
+    /// Opaque metadata bound to actual set rows, including metadata-bearing empty sets.
+    #[serde(skip)]
+    pub(crate) atn_set_rows: Vec<crate::atn_cmds::sidecar::SetRowMetadata>,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
@@ -728,6 +737,30 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
+    if p.get("set").is_some() {
+        if p.get("action").is_some() || p.get("step").is_some() {
+            return Err(bad("actions.delete", "select either a set or an action/step"));
+        }
+        let set = p.get("set").and_then(Value::as_str).ok_or_else(|| bad("actions.delete", "`set` must be a set name"))?;
+        if !crate::actions_edit_cmds::set_names(s).iter().any(|name| name == set) {
+            return Err(bad("actions.delete", "the selected set no longer exists"));
+        }
+        if s.actions.recording_active() {
+            return Err(bad("actions.delete", "stop recording before deleting a set"));
+        }
+        let set = set.to_string();
+        let removed: Vec<_> = s
+            .actions
+            .list
+            .iter()
+            .enumerate()
+            .filter_map(|(index, action)| (crate::atn_cmds::logical_set_name(action.set.as_deref()) == set).then_some(index))
+            .collect();
+        let names = remove_actions(s, &removed);
+        crate::atn_cmds::sidecar::retire_sets(&mut s.actions, &std::collections::HashSet::from([set.clone()]));
+        s.actions.touch();
+        return Ok(json!({"deletedSet": set, "deleted": names}));
+    }
     let idx = resolve(&s.actions.list, p, "actions.delete")?;
     if let Some(step) = p.get("step") {
         let step = step.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("actions.delete", "step must be a non-negative integer"))?;
@@ -755,19 +788,50 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.touch();
         return Ok(result);
     }
-    if s.actions.recording.is_some() {
+    if s.actions.recording_active() {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
-    let name = s.actions.list.remove(idx).name;
+    let names = remove_actions(s, &[idx]);
     s.actions.touch();
-    // Its function key goes with it, or the next action given the same name would inherit it.
-    let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
-    if s.prefs().shortcuts.contains_key(&key) {
+    Ok(json!({"deleted": names.first()}))
+}
+
+/// Delete validated, sorted library indices as one edit. References follow surviving
+/// identities; calls to deleted targets become invalid rather than playing a replacement.
+/// Embedded libraries in other commands' JSON own their own references and stay untouched.
+fn remove_actions(s: &mut Session, removed: &[usize]) -> Vec<String> {
+    let old_len = s.actions.list.len();
+    let names: Vec<_> = removed.iter().filter_map(|&index| s.actions.list.get(index).map(|action| action.name.clone())).collect();
+    for (id, params) in s.actions.list.iter_mut().flat_map(|action| &mut action.steps) {
+        for &key in call_keys(id) {
+            let Some(value) = params.get(key) else { continue };
+            if value.as_str().is_some_and(|name| names.iter().any(|deleted| deleted == name)) {
+                params[key] = Value::Null;
+            } else if let Some(index) = num(value).and_then(|index| usize::try_from(index).ok()).filter(|&index| index < old_len) {
+                match removed.binary_search(&index) {
+                    Ok(_) => params[key] = Value::Null,
+                    Err(0) => {}
+                    Err(before) => params[key] = json!(index - before),
+                }
+            }
+        }
+    }
+    let mut index = 0;
+    s.actions.list.retain(|_| {
+        let keep = removed.binary_search(&index).is_err();
+        index += 1;
+        keep
+    });
+    let keys: Vec<_> = names.iter().map(|name| format!("{PLAY_SHORTCUT_PREFIX}{name}")).collect();
+    if keys.iter().any(|key| s.prefs().shortcuts.contains_key(key) || s.prefs().alternate_shortcuts.contains_key(key)) {
         s.edit_prefs(|prefs| {
-            prefs.shortcuts.remove(&key);
+            for key in &keys {
+                prefs.shortcuts.remove(key);
+                prefs.alternate_shortcuts.remove(key);
+            }
         });
     }
-    Ok(json!({"deleted": name}))
+    names
 }
 
 /// The Actions panel check marks. With `step`, switch one step on or off; without it, switch
@@ -950,7 +1014,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Delete Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?} → {deleted:name} or {action, deletedStep, steps:count}. step is 0-based, including pending recorded steps. Whole-action deletion is refused while recording."##,
+            params: r##"{"action":name|index, "step":index?} or {"set":name} → {deleted:name} or {action,deletedStep,steps} or {deletedSet,deleted:[name…]}. Step is 0-based, including pending recorded steps. Deleting a folder also deletes its contents, including an empty folder. Whole-action/folder deletion requires recording to be stopped. Calls to survivors keep their target; calls to deleted actions become invalid."##,
             enabled: always,
             run: delete,
             journal: false,

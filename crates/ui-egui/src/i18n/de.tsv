@@ -3551,3 +3551,109 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Die Aktion wurde gespeichert, die Bestätigungseinstellung konnte jedoch nicht gespeichert werden: {error}
+	Add a brief description for this action…	Fügen Sie eine kurze Beschreibung dieser Aktion hinzu…
+	Allow Tool Recording	Werkzeugaufzeichnung zulassen
+	Answer the open Actions editor question first	Beantworten Sie zuerst die offene Frage im Aktionseditor
+	Apply to background	Auf Hintergrund anwenden
+	Apply to subject	Auf Motiv anwenden
+	Back	Zurück
+	Black and white	Schwarzweiß
+	Cancel and continue editing	Abbrechen und weiter bearbeiten
+	Choose color	Farbe wählen
+	Choose icon	Symbol wählen
+	Classic Actions	Klassische Aktionen
+	Clear All Actions	Alle Aktionen löschen
+	Clear search	Suche löschen
+	Click action	Klickaktion
+	Close the open Actions editor first	Schließen Sie zuerst den geöffneten Aktionseditor
+	Collapse all	Alle einklappen
+	Colour lookup tables	Farbzuordnungstabellen
+	Confirm or cancel the open action dialog first	Bestätigen Sie zuerst den geöffneten Aktionsdialog oder brechen Sie ihn ab
+	Control	Ctrl
+	Default icon	Standardsymbol
+	Delete Action	Aktion löschen
+	Delete action	Aktion löschen
+	Delete group	Gruppe löschen
+	Delete step	Schritt löschen
+	Delete the action "{name}"?	Aktion „{name}“ löschen?
+	Delete the group "{name}"?	Gruppe „{name}“ löschen?
+	Discard	Verwerfen
+	Download	Herunterladen
+	Duplicate Action	Aktion duplizieren
+	Duplicate action	Aktion duplizieren
+	Duplicate group	Gruppe duplizieren
+	Duplicate step	Schritt duplizieren
+	Edit Action	Aktion bearbeiten
+	Edit action	Aktion bearbeiten
+	Edit step settings	Schritteinstellungen bearbeiten
+	Enable step	Schritt aktivieren
+	Expand all	Alle ausklappen
+	Export Action…	Aktion exportieren…
+	Finish or cancel action playback and the pending step first	Schließen Sie zuerst die Aktionswiedergabe und den ausstehenden Schritt ab oder brechen Sie beides ab
+	Finishing step…	Schritt wird abgeschlossen…
+	Generated layer effects	Erzeugte Ebeneneffekte
+	Generated styles	Erzeugte Stile
+	Grey	Grau
+	Harmonize layers	Ebenen harmonisieren
+	Hue and saturation	Farbton und Sättigung
+	Import Actions…	Aktionen importieren…
+	Import actions or create a new action to get started.	Importieren Sie Aktionen oder erstellen Sie eine neue Aktion, um zu beginnen.
+	Insert Action	Aktion einfügen
+	Insert Conditional	Bedingung einfügen
+	Insert Menu Item	Menüeintrag einfügen
+	Insert Path	Pfad einfügen
+	Insert Stop	Stopp einfügen
+	Insert…	Einfügen…
+	Keyboard shortcut	Tastenkombination
+	Lavender	Lavendel
+	Layer effects	Ebeneneffekte
+	Light blue	Hellblau
+	List size	Listengröße
+	Magic wand	Zauberstab
+	Merge layers	Ebenen zusammenfügen
+	Move step down	Schritt nach unten verschieben
+	Move step up	Schritt nach oben verschieben
+	New group	Neue Gruppe
+	No steps yet	Noch keine Schritte
+	Object selection	Objektauswahl
+	On	Ein
+	Play Action	Aktion wiedergeben
+	Play Actions	Aktionen wiedergeben
+	Play action	Aktion wiedergeben
+	Play from selected step	Ab ausgewähltem Schritt wiedergeben
+	Playback Options…	Wiedergabeoptionen…
+	Play…	Wiedergeben…
+	Preview on hover	Vorschau beim Darüberfahren
+	Record	Aufzeichnen
+	Recording	Aufzeichnung
+	Remove background	Hintergrund entfernen
+	Save Action	Aktion speichern
+	Search actions	Aktionen suchen
+	Select an existing action step to play	Wählen Sie einen vorhandenen Aktionsschritt zur Wiedergabe
+	Select subject	Motiv auswählen
+	Show grid	Raster einblenden
+	Show step settings	Schritteinstellungen anzeigen
+	Smart removal	Intelligentes Entfernen
+	Sort & View options	Sortier- und Ansichtsoptionen
+	Start recording to build your action	Starten Sie die Aufzeichnung, um Ihre Aktion zu erstellen
+	Steps	Schritte
+	Stored action step	Gespeicherter Aktionsschritt
+	Stored settings	Gespeicherte Einstellungen
+	Teal	Blaugrün
+	Text	Text
+	Text colour	Textfarbe
+	The draft steps changed. Cancel this dialog and reopen the step.	Die Entwurfsschritte wurden geändert. Brechen Sie diesen Dialog ab und öffnen Sie den Schritt erneut.
+	The dragged action changed; drag it again	Die gezogene Aktion wurde geändert; ziehen Sie sie erneut
+	The editor response does not belong to this draft	Die Antwort des Editors gehört nicht zu diesem Entwurf
+	There are unsaved changes. Do you want to save or discard them?	Es gibt ungespeicherte Änderungen. Möchten Sie sie speichern oder verwerfen?
+	This editor page is closed	Diese Editorseite ist geschlossen
+	This step dialog belongs to another editor	Dieser Schrittdialog gehört zu einem anderen Editor
+	Wait for the current action step to finish	Warten Sie, bis der aktuelle Aktionsschritt abgeschlossen ist
+	You haven't created any actions	Sie haben noch keine Aktionen erstellt
+	Yours	Eigene
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Nicht gruppierte Aktionen

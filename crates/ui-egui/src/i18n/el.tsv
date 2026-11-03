@@ -4220,3 +4220,107 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Η ενέργεια αποθηκεύτηκε, αλλά δεν ήταν δυνατή η αποθήκευση της προτίμησης επιβεβαίωσης: {error}
+	Add a brief description for this action…	Προσθέστε μια σύντομη περιγραφή για αυτή την ενέργεια…
+	Allow Tool Recording	Να επιτρέπεται η καταγραφή εργαλείων
+	Answer the open Actions editor question first	Απαντήστε πρώτα στην ανοιχτή ερώτηση στον επεξεργαστή ενεργειών
+	Apply to background	Εφαρμογή στο φόντο
+	Apply to subject	Εφαρμογή στο θέμα
+	Black and white	Ασπρόμαυρο
+	Cancel and continue editing	Ακύρωση και συνέχεια επεξεργασίας
+	Choose color	Επιλογή χρώματος
+	Choose icon	Επιλογή εικονιδίου
+	Classic Actions	Κλασικές ενέργειες
+	Clear All Actions	Εκκαθάριση όλων των ενεργειών
+	Clear search	Εκκαθάριση αναζήτησης
+	Click action	Ενέργεια κλικ
+	Close the open Actions editor first	Κλείστε πρώτα τον ανοιχτό επεξεργαστή ενεργειών
+	Collapse all	Σύμπτυξη όλων
+	Colour lookup tables	Πίνακες αντιστοίχισης χρωμάτων
+	Confirm or cancel the open action dialog first	Επιβεβαιώστε ή ακυρώστε πρώτα τον ανοιχτό διάλογο ενέργειας
+	Control	Ctrl
+	Default icon	Προεπιλεγμένο εικονίδιο
+	Delete Action	Διαγραφή ενέργειας
+	Delete action	Διαγραφή ενέργειας
+	Delete group	Διαγραφή ομάδας
+	Delete step	Διαγραφή βήματος
+	Delete the action "{name}"?	Διαγραφή της ενέργειας «{name}»;
+	Delete the group "{name}"?	Διαγραφή της ομάδας «{name}»;
+	Discard	Απόρριψη
+	Download	Λήψη
+	Duplicate Action	Διπλασιασμός ενέργειας
+	Duplicate action	Διπλασιασμός ενέργειας
+	Duplicate group	Διπλασιασμός ομάδας
+	Duplicate step	Διπλασιασμός βήματος
+	Edit Action	Επεξεργασία ενέργειας
+	Edit action	Επεξεργασία ενέργειας
+	Edit step settings	Επεξεργασία ρυθμίσεων βήματος
+	Enable step	Ενεργοποίηση βήματος
+	Expand all	Ανάπτυξη όλων
+	Export Action…	Εξαγωγή ενέργειας…
+	Finish or cancel action playback and the pending step first	Ολοκληρώστε ή ακυρώστε πρώτα την αναπαραγωγή της ενέργειας και το εκκρεμές βήμα
+	Finishing step…	Ολοκλήρωση βήματος…
+	Generated layer effects	Παραγόμενα εφέ επιπέδου
+	Generated styles	Παραγόμενα στυλ
+	Grey	Γκρι
+	Harmonize layers	Εναρμόνιση επιπέδων
+	Hue and saturation	Απόχρωση και κορεσμός
+	Import Actions…	Εισαγωγή ενεργειών…
+	Import actions or create a new action to get started.	Εισαγάγετε ενέργειες ή δημιουργήστε μια νέα ενέργεια για να ξεκινήσετε.
+	Insert Action	Εισαγωγή ενέργειας
+	Insert Conditional	Εισαγωγή συνθήκης
+	Insert Menu Item	Εισαγωγή στοιχείου μενού
+	Insert Path	Εισαγωγή διαδρομής
+	Insert Stop	Εισαγωγή διακοπής
+	Insert…	Εισαγωγή…
+	Keyboard shortcut	Συντόμευση πληκτρολογίου
+	Lavender	Λεβάντα
+	Layer effects	Εφέ επιπέδου
+	Light blue	Ανοιχτό μπλε
+	List size	Μέγεθος λίστας
+	Magic wand	Μαγικό ραβδί
+	Merge layers	Συγχώνευση επιπέδων
+	Move step down	Μετακίνηση βήματος κάτω
+	Move step up	Μετακίνηση βήματος πάνω
+	New group	Νέα ομάδα
+	No steps yet	Δεν υπάρχουν βήματα ακόμη
+	Object selection	Επιλογή αντικειμένου
+	Play Action	Αναπαραγωγή ενέργειας
+	Play Actions	Αναπαραγωγή ενεργειών
+	Play action	Αναπαραγωγή ενέργειας
+	Play from selected step	Αναπαραγωγή από το επιλεγμένο βήμα
+	Playback Options…	Επιλογές αναπαραγωγής…
+	Play…	Αναπαραγωγή…
+	Preview on hover	Προεπισκόπηση κατά την αιώρηση
+	Record	Καταγραφή
+	Recording	Γίνεται καταγραφή
+	Remove background	Αφαίρεση φόντου
+	Save Action	Αποθήκευση ενέργειας
+	Search actions	Αναζήτηση ενεργειών
+	Select an existing action step to play	Επιλέξτε ένα υπάρχον βήμα ενέργειας για αναπαραγωγή
+	Select subject	Επιλογή κύριου θέματος
+	Show grid	Εμφάνιση πλέγματος
+	Show step settings	Εμφάνιση ρυθμίσεων βήματος
+	Smart removal	Έξυπνη αφαίρεση
+	Sort & View options	Επιλογές ταξινόμησης και προβολής
+	Start recording to build your action	Ξεκινήστε την καταγραφή για να δημιουργήσετε την ενέργειά σας
+	Steps	Βήματα
+	Stored action step	Αποθηκευμένο βήμα ενέργειας
+	Stored settings	Αποθηκευμένες ρυθμίσεις
+	Teal	Πετρόλ
+	Text	Κείμενο
+	Text colour	Χρώμα κειμένου
+	The draft steps changed. Cancel this dialog and reopen the step.	Τα βήματα του προσχεδίου άλλαξαν. Ακυρώστε αυτόν τον διάλογο και ανοίξτε ξανά το βήμα.
+	The dragged action changed; drag it again	Η ενέργεια που σύρατε άλλαξε· σύρετέ την ξανά
+	The editor response does not belong to this draft	Η απόκριση του επεξεργαστή δεν ανήκει σε αυτό το προσχέδιο
+	There are unsaved changes. Do you want to save or discard them?	Υπάρχουν μη αποθηκευμένες αλλαγές. Θέλετε να τις αποθηκεύσετε ή να τις απορρίψετε;
+	This editor page is closed	Αυτή η σελίδα του επεξεργαστή είναι κλειστή
+	This step dialog belongs to another editor	Αυτός ο διάλογος βήματος ανήκει σε άλλον επεξεργαστή
+	Wait for the current action step to finish	Περιμένετε να ολοκληρωθεί το τρέχον βήμα ενέργειας
+	You haven't created any actions	Δεν έχετε δημιουργήσει καμία ενέργεια
+	Yours	Δικές σας
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Μη ομαδοποιημένες ενέργειες

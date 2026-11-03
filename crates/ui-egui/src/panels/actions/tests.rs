@@ -1,4 +1,6 @@
 use super::*;
+// These unchanged assertions exercise the Classic presentation explicitly.
+use super::{classic_panel as panel, classic_panel_menu as panel_menu};
 
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {

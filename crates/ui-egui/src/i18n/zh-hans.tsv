@@ -3205,3 +3205,109 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	动作已保存，但无法保存确认偏好设置：{error}
+	Add a brief description for this action…	为此动作添加简短描述…
+	Allow Tool Recording	允许录制工具操作
+	Answer the open Actions editor question first	请先回答动作编辑器中打开的问题
+	Apply to background	应用于背景
+	Apply to subject	应用于主体
+	Back	返回
+	Black and white	黑白
+	Cancel and continue editing	取消并继续编辑
+	Choose color	选择颜色
+	Choose icon	选择图标
+	Classic Actions	经典动作
+	Clear All Actions	清除所有动作
+	Clear search	清除搜索
+	Click action	点击操作
+	Close the open Actions editor first	请先关闭已打开的动作编辑器
+	Collapse all	全部折叠
+	Colour lookup tables	颜色查找表
+	Confirm or cancel the open action dialog first	请先确认或取消已打开的动作对话框
+	Control	Ctrl
+	Default icon	默认图标
+	Delete Action	删除动作
+	Delete action	删除动作
+	Delete group	删除组
+	Delete step	删除步骤
+	Delete the action "{name}"?	删除动作“{name}”？
+	Delete the group "{name}"?	删除组“{name}”？
+	Discard	放弃
+	Download	下载
+	Duplicate Action	复制动作
+	Duplicate action	复制动作
+	Duplicate group	复制组
+	Duplicate step	复制步骤
+	Edit Action	编辑动作
+	Edit action	编辑动作
+	Edit step settings	编辑步骤设置
+	Enable step	启用步骤
+	Expand all	全部展开
+	Export Action…	导出动作…
+	Finish or cancel action playback and the pending step first	请先完成或取消动作播放及待处理步骤
+	Finishing step…	正在完成步骤…
+	Generated layer effects	生成的图层效果
+	Generated styles	生成的样式
+	Grey	灰色
+	Harmonize layers	协调图层
+	Hue and saturation	色相与饱和度
+	Import Actions…	导入动作…
+	Import actions or create a new action to get started.	导入动作或创建新动作，即可开始使用。
+	Insert Action	插入动作
+	Insert Conditional	插入条件
+	Insert Menu Item	插入菜单项
+	Insert Path	插入路径
+	Insert Stop	插入停止
+	Insert…	插入…
+	Keyboard shortcut	键盘快捷键
+	Lavender	薰衣草色
+	Layer effects	图层效果
+	Light blue	浅蓝色
+	List size	列表大小
+	Magic wand	魔棒
+	Merge layers	合并图层
+	Move step down	下移步骤
+	Move step up	上移步骤
+	New group	新建组
+	No steps yet	尚无步骤
+	Object selection	对象选择
+	On	开启
+	Play Action	播放动作
+	Play Actions	播放动作
+	Play action	播放动作
+	Play from selected step	从所选步骤播放
+	Playback Options…	播放选项…
+	Play…	播放…
+	Preview on hover	悬停时预览
+	Record	录制
+	Recording	正在录制
+	Remove background	移除背景
+	Save Action	保存动作
+	Search actions	搜索动作
+	Select an existing action step to play	选择要播放的现有动作步骤
+	Select subject	选择主体
+	Show grid	显示网格
+	Show step settings	显示步骤设置
+	Smart removal	智能移除
+	Sort & View options	排序与视图选项
+	Start recording to build your action	开始录制以创建动作
+	Steps	步骤
+	Stored action step	已保存的动作步骤
+	Stored settings	已保存的设置
+	Teal	青绿色
+	Text	文本
+	Text colour	文本颜色
+	The draft steps changed. Cancel this dialog and reopen the step.	草稿步骤已更改。请取消此对话框并重新打开该步骤。
+	The dragged action changed; drag it again	拖动的动作已更改；请重新拖动
+	The editor response does not belong to this draft	编辑器响应不属于此草稿
+	There are unsaved changes. Do you want to save or discard them?	有未保存的更改。要保存还是放弃？
+	This editor page is closed	此编辑器页面已关闭
+	This step dialog belongs to another editor	此步骤对话框属于另一个编辑器
+	Wait for the current action step to finish	请等待当前动作步骤完成
+	You haven't created any actions	您尚未创建任何动作
+	Yours	我的动作
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	未分组动作

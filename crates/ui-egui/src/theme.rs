@@ -214,6 +214,24 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Semantic Actions thumbnail palette in ATN colour-index order. These are application
+    /// colours, independent of stored metadata; uncoloured/unknown values use the card tokens.
+    pub fn action_swatches(&self) -> [Color32; 12] {
+        [
+            self.card,
+            Color32::from_rgb(196, 64, 64),
+            Color32::from_rgb(204, 120, 40),
+            Color32::from_rgb(196, 176, 48),
+            Color32::from_rgb(56, 140, 72),
+            Color32::from_rgb(64, 158, 216),
+            Color32::from_rgb(152, 120, 192),
+            self.text_dim,
+            Color32::from_rgb(40, 152, 152),
+            Color32::from_rgb(48, 104, 176),
+            Color32::from_rgb(192, 64, 144),
+            Color32::from_rgb(120, 72, 168),
+        ]
+    }
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]

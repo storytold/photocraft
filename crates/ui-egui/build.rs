@@ -17,7 +17,12 @@ use std::fmt::Write as _;
 use serde_json::Value;
 
 fn main() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR").filter(|path| !path.is_empty()) else {
+        println!("cargo::error=CARGO_MANIFEST_DIR is missing; cannot generate source-bound UI assets");
+        return;
+    };
+    let manifest_dir = std::path::PathBuf::from(manifest_dir);
+    let dir = manifest_dir.join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| serde_json::from_str::<Value>(t).map_err(|e| e.to_string()))
         .unwrap_or(Value::Null);
     let people =
@@ -26,7 +31,7 @@ fn main() {
     if let Err(e) = std::fs::write(&out, generate(&json, &people)) {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
-    pack_catalogs();
+    pack_catalogs(&manifest_dir);
     deflate_egui_fonts();
 }
 
@@ -82,9 +87,9 @@ fn catalog_entry(line: &str) -> Option<(&str, &str)> {
 ///
 /// Both are deflated. A catalog that can't be written is a build error (`include_bytes!` would
 /// fail on it anyway, with a less helpful message).
-fn pack_catalogs() {
+fn pack_catalogs(manifest_dir: &std::path::Path) {
     use std::io::Write as _;
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/i18n");
+    let src = manifest_dir.join("src/i18n");
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default()).join("i18n");
     println!("cargo::rerun-if-changed={}", src.display());
     let deflate = |bytes: &[u8]| -> std::io::Result<Vec<u8>> {

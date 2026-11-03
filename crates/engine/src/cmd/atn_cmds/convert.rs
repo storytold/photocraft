@@ -1,7 +1,7 @@
 use super::descriptors::{desc, get_obj, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
-use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
 use crate::actions_cmds::{color_from_atn, color_to_atn};
 
 // ------------------------------------------------------------------ import
@@ -20,6 +20,10 @@ pub struct Unsupported {
 pub struct Imported {
     pub set: String,
     pub actions: Vec<Action>,
+    /// Real physical sets in file order, indexing `actions`; the recognized sidecar is absent.
+    pub sets: Vec<ImportedSet>,
+    /// Function keys by action position, avoiding duplicate-name association during load.
+    pub action_keys: Vec<Option<String>>,
     /// Function keys the file assigns, as `(action name, key)`.
     pub function_keys: Vec<(String, String)>,
     pub unsupported: Vec<Unsupported>,
@@ -27,6 +31,16 @@ pub struct Imported {
     /// The encoding the file's 8-bit step names were read in (`"GBK"`, `"Shift_JIS"`,
     /// `"macintosh"`…); `None` when none needed one.
     pub encoding: Option<String>,
+}
+
+/// One real physical set and its positional range in the converted action list.
+#[derive(Clone, Debug)]
+pub struct ImportedSet {
+    /// Logical display name after the reserved empty-wire category rule.
+    pub name: String,
+    /// This physical set's actions before session collision renaming.
+    pub actions: std::ops::Range<usize>,
+    pub(crate) metadata: Option<std::sync::Arc<super::sidecar::SetMetadata>>,
 }
 
 fn photoshop_step(item: &AtnItem, label: String) -> (String, Value) {
@@ -65,16 +79,21 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
+fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, total: &mut usize) -> std::result::Result<Action, String> {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     action.color = color_from_atn(a.color);
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = match (event_for(&item.event), &item.descriptor) {
-            (Some(e), Some(d)) => (e.from)(d),
-            (Some(e), None) => (e.from)(&Descriptor::default()),
-            (None, _) => Mapped::Unsupported { harmless: false },
+        let mapped = if super::sidecar::has_payload(item) {
+            // An unrecognized metadata-bearing Stop stays visible/opaque, never silently loses its payload.
+            Mapped::Unsupported { harmless: false }
+        } else {
+            match (event_for(&item.event), &item.descriptor) {
+                (Some(e), Some(d)) => (e.from)(d),
+                (Some(e), None) => (e.from)(&Descriptor::default()),
+                (None, _) => Mapped::Unsupported { harmless: false },
+            }
         };
         let (new_steps, enabled) = match mapped {
             Mapped::Steps(mut s) => {
@@ -88,6 +107,10 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
         };
         for mut s in new_steps {
+            *total = total.checked_add(1).filter(|total| *total <= atn::MAX_TOTAL_ITEMS).ok_or("too many converted steps in actions archive")?;
+            if action.steps.len() >= atn::MAX_ITEMS {
+                return Err("too many converted steps in one action".into());
+            }
             normalise(&mut s.1);
             let idx = action.steps.len();
             action.steps.push(s);
@@ -99,7 +122,7 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
         }
     }
-    action
+    Ok(action)
 }
 
 /// Convert a `.atn` file. Fails only when the file is unreadable: every step imports, as a
@@ -111,16 +134,55 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// [`import`], reading 8-bit step names in `encoding` (a label such as `"shift_jis"` or
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
-    let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
-    let set = file.name.to_string_lossy();
-    let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
-    let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
-    for a in &file.actions {
-        let action = convert_action(&file, a, &set, &mut out.unsupported);
-        if a.function_key > 0 {
-            out.function_keys.push((action.name.clone(), function_key_name(a.function_key, a.shift, a.command)));
+    let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    let mut metadata = super::sidecar::decode(&files)?;
+    let mut out = Imported::default();
+    let mut total = 0usize;
+    let reserved = std::iter::once(super::UNGROUPED_SET.to_string()).chain(
+        files
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| metadata.hidden != Some(*index))
+            .map(|(_, file)| clip_name(&file.name.to_string_lossy()))
+            .filter(|name| !name.is_empty() && name != super::UNGROUPED_SET),
+    );
+    let mut set_names = UniqueNames::new(reserved);
+    for (index, file) in files.iter().enumerate() {
+        out.warnings.extend(file.warnings.iter().cloned());
+        if out.encoding.is_none() {
+            out.encoding = file.encoding.clone();
         }
-        out.actions.push(action);
+        if metadata.hidden == Some(index) {
+            continue;
+        }
+        let set = file.name.to_string_lossy();
+        let set = if set.is_empty() {
+            super::UNGROUPED_SET.to_string()
+        } else if set == super::UNGROUPED_SET {
+            let renamed = set_names.claim(&set);
+            out.warnings.push(format!("set `{set}` imported as `{renamed}` to keep the ungrouped category distinct"));
+            renamed
+        } else {
+            clip_name(&set)
+        };
+        if out.sets.is_empty() {
+            out.set = set.clone();
+        }
+        let start = out.actions.len();
+        for (at, action) in file.actions.iter().enumerate() {
+            let mut converted = convert_action(file, action, &set, &mut out.unsupported, &mut total)?;
+            if let Some(value) = metadata.actions.get_mut(index).and_then(|actions| actions.get_mut(at)).and_then(Option::take) {
+                super::sidecar::apply(&mut converted, value);
+            }
+            let key = (action.function_key > 0).then(|| function_key_name(action.function_key, action.shift, action.command));
+            if let Some(key) = &key {
+                out.function_keys.push((converted.name.clone(), key.clone()));
+            }
+            out.action_keys.push(key);
+            out.actions.push(converted);
+        }
+        let source = metadata.sets.get_mut(index).and_then(Option::take);
+        out.sets.push(ImportedSet { name: set, actions: start..out.actions.len(), metadata: source });
     }
     Ok(out)
 }
@@ -225,14 +287,59 @@ pub fn export(
     function_keys: &[(String, String)],
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
-    let mut skipped = Vec::new();
-    let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
-    for a in actions {
-        // Until sidecar writing is implemented, never silently discard editor metadata.
-        // skipUnsupported applies to steps, not the action's description or icon.
-        if !a.description.is_empty() || !a.icon.is_empty() {
-            return Err(format!("action `{}` has editor metadata that requires ATN sidecar support", a.name));
+    if actions.len() > atn::MAX_TOTAL_ACTIONS {
+        return Err("too many actions in actions archive".into());
+    }
+    let selection = super::sidecar::Selection { actions: actions.to_vec(), source: super::sidecar::source_for(actions)? };
+    export_groups(&[(set, selection)], function_keys, skip_unsupported)
+}
+
+pub(super) fn export_groups(
+    groups: &[(&str, super::sidecar::Selection<'_>)],
+    function_keys: &[(String, String)],
+    skip_unsupported: bool,
+) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
+    if groups.is_empty() || groups.len() > atn::MAX_SETS {
+        return Err("invalid number of sets in actions archive".into());
+    }
+    let mut actions = 0usize;
+    let mut steps = 0usize;
+    for (_, group) in groups {
+        if group.actions.len() > atn::MAX_ACTIONS {
+            return Err("too many actions in one set".into());
         }
+        actions = actions.checked_add(group.actions.len()).filter(|count| *count <= atn::MAX_TOTAL_ACTIONS).ok_or("too many actions in actions archive")?;
+        for action in &group.actions {
+            if action.steps.len() > atn::MAX_ITEMS {
+                return Err("too many steps in one action".into());
+            }
+            steps = steps.checked_add(action.steps.len()).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many steps in actions archive")?;
+        }
+    }
+    let mut skipped = Vec::new();
+    let mut files = Vec::with_capacity(groups.len().min(atn::MAX_SETS));
+    let mut written = 0usize;
+    for (set, selection) in groups {
+        files.push(export_set(set, &selection.actions, function_keys, skip_unsupported, &mut skipped, &mut written)?);
+    }
+    let selected: Vec<_> =
+        groups.iter().map(|(_, selection)| super::sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone() }).collect();
+    super::sidecar::append(&mut files, &selected)?;
+    let bytes = atn::write_sets(&files).map_err(|error| error.to_string())?;
+    Ok((bytes, skipped))
+}
+
+fn export_set(
+    set: &str,
+    actions: &[&Action],
+    function_keys: &[(String, String)],
+    skip_unsupported: bool,
+    skipped: &mut Vec<Skipped>,
+    written: &mut usize,
+) -> std::result::Result<AtnFile, String> {
+    let mut file =
+        AtnFile { name: UnicodeString::new_nul(super::wire_set_name(set)), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
+    for a in actions {
         let color = color_to_atn(&a.color).ok_or_else(|| format!("action `{}` has an invalid colour", a.name))?;
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, color, ..Default::default() };
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
@@ -255,6 +362,7 @@ pub fn export(
                 ));
             };
             for mut item in items {
+                *written = written.checked_add(1).filter(|count| *count <= atn::MAX_TOTAL_ITEMS).ok_or("too many output steps in actions archive")?;
                 item.enabled = a.step_enabled(i);
                 item.with_dialog = a.dialogs.contains(&i);
                 item.dialog_options = if item.with_dialog { 2 } else { 0 };
@@ -263,8 +371,7 @@ pub fn export(
         }
         file.actions.push(out);
     }
-    let bytes = atn::write(&file).map_err(|e| e.to_string())?;
-    Ok((bytes, skipped))
+    Ok(file)
 }
 
 // ------------------------------------------------------------------ commands
@@ -272,18 +379,18 @@ pub fn export(
 /// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
 /// taken list per candidate is cubic when an action file repeats one base name many times, so
 /// membership uses a set and the next suffix to try is cached per base name.
-pub(super) struct UniqueNames {
+pub(crate) struct UniqueNames {
     taken: std::collections::HashSet<String>,
     next_suffix: std::collections::HashMap<String, u32>,
 }
 
 impl UniqueNames {
-    pub(super) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
+    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
         UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
     }
 
     /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(super) fn claim(&mut self, name: &str) -> String {
+    pub(crate) fn claim(&mut self, name: &str) -> String {
         if self.taken.insert(name.to_string()) {
             return name.to_string();
         }

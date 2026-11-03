@@ -15,6 +15,39 @@ use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::icons;
 use crate::theme::Tokens;
 
+mod editor;
+mod editor_glyphs;
+mod editor_picker;
+mod modern;
+
+pub(crate) use modern::Runtime;
+pub(crate) use modern::discarded;
+pub(crate) use modern::{delete_body, delete_cancel, delete_confirm, guard_exit, guard_navigation, modals, owns_delete, shutdown, tick};
+pub(crate) use modern::{editor_busy, inspect, layout_checked, layout_command, persist, restore};
+
+pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.actions_layout == crate::state::ActionsLayout::Classic {
+        classic_panel(app, ui);
+    } else {
+        modern::panel(app, ui);
+    }
+}
+
+pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.actions_layout == crate::state::ActionsLayout::Classic {
+        classic_panel_menu(app, ui);
+        ui.separator();
+        modern::layout_menu(app, ui);
+    } else {
+        modern::panel_menu(app, ui);
+    }
+}
+
+/// Translate only the reserved category's display caption, never a stored group identity.
+fn set_label(set: &str) -> String {
+    if set == photocraft_engine::atn_cmds::UNGROUPED_SET { tl!("Ungrouped Actions").to_string() } else { set.to_string() }
+}
+
 /// Which row is selected and which rows are expanded. The action list itself is
 /// [`photocraft_engine::Session::actions`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -37,6 +70,8 @@ pub struct ActionsUi {
     /// The action whose name is being edited in place (double-click on its name).
     #[serde(skip)]
     renaming: Option<RenameAction>,
+    #[serde(skip)]
+    search: String,
 }
 
 impl ActionsUi {
@@ -86,7 +121,14 @@ fn selected_set(app: &PhotocraftApp) -> Option<&str> {
 /// The actions of the selected set, in list order (empty when no set is selected, or it is empty).
 fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
     let Some(set) = selected_set(app) else { return Vec::new() };
-    app.session.actions.list.iter().enumerate().filter(|(_, a)| a.set.as_deref() == Some(set)).map(|(i, _)| i).collect()
+    app.session
+        .actions
+        .list
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| photocraft_engine::atn_cmds::logical_set_name(a.set.as_deref()) == set)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// What Play plays: the selected action; with a set folder selected, every action of that set in
@@ -312,7 +354,16 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
     let mut ran = 0u64;
     let mut failed = None;
     let mut paused = None;
+    let mut yielded = false;
     for (i, (id, p)) in action.enabled_steps().skip_while(|(i, _)| *i < frame.from) {
+        if app.actions_runtime.quantum == Some(0) {
+            app.actions_runtime.yielded = Some(frame.after(i));
+            yielded = true;
+            break;
+        }
+        if let Some(left) = &mut app.actions_runtime.quantum {
+            *left = left.saturating_sub(1);
+        }
         if !actions_cmds::consume_playback_step(&mut app.session) {
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
             break;
@@ -398,6 +449,12 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
                     paused = Some(inner.clone());
                     break;
                 }
+                if value.get("yielded").and_then(Value::as_bool) == Some(true) {
+                    app.actions_runtime.parents.push(frame.after(i + 1));
+                    ran = ran.saturating_add(value.get("ran").and_then(Value::as_u64).unwrap_or(0));
+                    yielded = true;
+                    break;
+                }
                 ran += 1;
             }
             Err(error) => {
@@ -410,6 +467,7 @@ fn run_frame(app: &mut PhotocraftApp, frame: Frame, used: Option<u64>, preserve_
     Ok(match (failed, paused) {
         (Some(f), _) => json!({"action": action.name, "ran": ran, "failed": f}),
         (None, Some(p)) => json!({"action": action.name, "ran": ran, "paused": p}),
+        (None, None) if yielded => json!({"action": action.name, "ran": ran, "yielded":true}),
         (None, None) => json!({"action": action.name, "ran": ran}),
     })
 }
@@ -474,7 +532,8 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     }
     app.ui.actions.expanded[i] = true;
     // Its set too, in case its folder is collapsed.
-    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
+    if let Some(action) = app.session.actions.list.get(i) {
+        let set = photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref());
         app.ui.actions.collapsed_sets.retain(|c| c != set);
     }
 }
@@ -705,7 +764,8 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
 fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, String> {
     let selected_set = app.ui.actions.selected.is_none().then(|| app.ui.actions.selected_set.clone()).flatten();
     let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
-    let set = set.or(selected_set).or_else(|| selected_action(app).and_then(|a| a.set.clone()));
+    let set =
+        set.or(selected_set).or_else(|| selected_action(app).map(|action| photocraft_engine::atn_cmds::logical_set_name(action.set.as_deref()).to_string()));
     let params = match &set {
         Some(set) => json!({"set": set, "skipUnsupported": true}),
         None => json!({"skipUnsupported": true}),
@@ -852,10 +912,13 @@ pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), Strin
 
 /// A failed step ends its owner once, without rolling back document work.
 pub fn abandoned(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
-    if let Some(paused) = fields.get(RESUME).and_then(|token| app.paused_playbacks.take(token))
-        && let Some(record) = paused.record
-    {
-        record.finish(&mut app.session);
+    if let Some(paused) = fields.get(RESUME).and_then(|token| app.paused_playbacks.take(token)) {
+        if paused.incremental {
+            modern::cancel(app);
+        }
+        if let Some(record) = paused.record {
+            record.finish(&mut app.session);
+        }
     }
 }
 
@@ -871,6 +934,7 @@ pub(crate) struct PausedPlayback {
     then: Vec<Action>,
     ran: u64,
     used: u64,
+    incremental: bool,
 }
 
 #[derive(Debug, Default)]
@@ -883,7 +947,8 @@ impl PausedPlaybacks {
     fn pause(&mut self, frame: Frame, dialog: u64, gate: Option<Gate>, used: u64) -> Result<u64, String> {
         let token = self.last.checked_add(1).ok_or("action step dialog identities exhausted")?;
         self.last = token;
-        self.paused.insert(token, PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used });
+        self.paused
+            .insert(token, PausedPlayback { frame, dialog, gate, record: None, parents: Vec::new(), then: Vec::new(), ran: 0, used, incremental: false });
         Ok(token)
     }
 
@@ -972,6 +1037,10 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     }
     let saved = app.session.authorize;
     app.session.authorize = paused.gate.or(saved);
+    if paused.incremental {
+        app.session.authorize = saved;
+        return modern::resume_tick(app, paused);
+    }
     let preserve_tail = paused.record.as_ref().is_some_and(|owner| owner.is_preview());
     let source = paused.frame.action.clone();
     let mut played = run_owned(app, paused.frame, paused.parents, paused.record, paused.ran.saturating_add(1), paused.used, preserve_tail);
@@ -1020,7 +1089,7 @@ pub fn stopped(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>)
 }
 
 /// The Actions entries of the panel group's menu ("…").
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn classic_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut act: Option<&str> = None;
     let recording = app.session.actions.recording.is_some();
     let any = !app.session.actions.list.is_empty();
@@ -1139,7 +1208,9 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
         // Dropped among another set's actions: the action joins that set (the row above wins).
         let list = &app.session.actions.list;
         let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1)).and_then(|a| a.set.clone());
-        if list.get(to).is_some_and(|a| a.set != neighbour) {
+        if list.get(to).is_some_and(|a| {
+            photocraft_engine::atn_cmds::logical_set_name(a.set.as_deref()) != photocraft_engine::atn_cmds::logical_set_name(neighbour.as_deref())
+        }) {
             let _ = app.run("actions.assignSet", json!({"action": to, "set": neighbour}));
         }
     }
@@ -1214,17 +1285,21 @@ struct Row {
 /// The panel's order: actions outside any set first, then each set folder (in order of first
 /// appearance) with its actions. Indices are into the engine's flat list.
 fn display_order(rows: &[Row]) -> Vec<usize> {
-    let mut order: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r.set.is_none()).map(|(i, _)| i).collect();
+    let mut order: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| photocraft_engine::atn_cmds::logical_set_name(row.set.as_deref()) == photocraft_engine::atn_cmds::UNGROUPED_SET)
+        .map(|(i, _)| i)
+        .collect();
     let mut sets: Vec<&str> = Vec::new();
     for r in rows {
-        if let Some(set) = r.set.as_deref()
-            && !sets.contains(&set)
-        {
+        let set = photocraft_engine::atn_cmds::logical_set_name(r.set.as_deref());
+        if set != photocraft_engine::atn_cmds::UNGROUPED_SET && !sets.contains(&set) {
             sets.push(set);
         }
     }
     for set in sets {
-        order.extend(rows.iter().enumerate().filter(|(_, r)| r.set.as_deref() == Some(set)).map(|(i, _)| i));
+        order.extend(rows.iter().enumerate().filter(|(_, row)| photocraft_engine::atn_cmds::logical_set_name(row.set.as_deref()) == set).map(|(i, _)| i));
     }
     order
 }
@@ -1239,7 +1314,8 @@ struct SetHeaderResult {
 
 fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, selected: bool, tokens: &Tokens) -> SetHeaderResult {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, set));
+    let label = set_label(set);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &label));
     if selected {
         ui.painter().rect_filled(rect, 0.0, tokens.row_selected);
     } else if response.hovered() {
@@ -1259,7 +1335,7 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
         12.0,
         tokens.icon,
     );
-    ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, set, egui::FontId::proportional(12.0), tokens.text);
+    ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.0), tokens.text);
     let summary = crate::i18n::trn(crate::i18n::current(), count, "{n} action", "{n} actions");
     ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, summary, egui::FontId::proportional(11.0), tokens.text_faint);
     // As on an action row, a click in the triangle's column collapses or expands and one on the
@@ -1283,7 +1359,8 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
 /// was chosen.
 fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<(String, bool, bool)>, Option<String>) {
     let (mut clicked, mut save) = (None, None);
-    for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
+    let sets = photocraft_engine::actions_edit_cmds::set_names(&app.session);
+    for set in sets.iter().filter(|set| !rows.iter().any(|row| photocraft_engine::atn_cmds::logical_set_name(row.set.as_deref()) == set.as_str())) {
         let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
         let collapsed = app.ui.actions.collapsed_sets.contains(set);
         let result = draw_set_header(ui, set, 0, collapsed, selected, t);
@@ -1339,7 +1416,7 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
     });
 }
 
-pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn classic_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
     let rows: Vec<Row> = app
@@ -1353,7 +1430,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             steps: visible_steps(app, i),
             disabled: a.disabled.clone(),
             dialogs: a.dialogs.clone(),
-            set: a.set.clone(),
+            set: (photocraft_engine::atn_cmds::logical_set_name(a.set.as_deref()) != photocraft_engine::atn_cmds::UNGROUPED_SET)
+                .then(|| a.set.clone())
+                .flatten(),
             color: a.color.clone(),
         })
         .collect();

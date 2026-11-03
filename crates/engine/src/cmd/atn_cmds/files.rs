@@ -1,5 +1,6 @@
-use super::convert::{UniqueNames, export, import_with_encoding};
-use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
+use super::convert::{export_groups, import_with_encoding};
+use super::sidecar;
+use super::{Action, DEFAULT_SET, EngineError, Result, Session, UniqueNames, Value, bad, json};
 
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
@@ -17,7 +18,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
+            if imp.sets.len() != 1 {
+                return Err(bad(cmd, "set override requires exactly one real set"));
+            }
             imp.set = n.trim().to_string();
+            if let Some(set) = imp.sets.first_mut() {
+                set.name = imp.set.clone();
+            }
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }
@@ -29,28 +36,90 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
-    if replace {
-        s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
+    let targets: std::collections::HashSet<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
+    let keep = |action: &&Action| !replace || !targets.contains(super::logical_set_name(action.set.as_deref()));
+    let retained = s.actions.list.iter().filter(keep).count();
+    if retained.checked_add(imp.actions.len()).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS) {
+        return Err(bad(cmd, "combined action library exceeds the action limit"));
     }
-    let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    let mut total_steps = 0usize;
+    for action in s.actions.list.iter().filter(keep).chain(imp.actions.iter()) {
+        total_steps = total_steps
+            .checked_add(action.steps.len())
+            .filter(|count| *count <= super::atn::MAX_TOTAL_ITEMS)
+            .ok_or_else(|| bad(cmd, "combined action library exceeds the step limit"))?;
+    }
+    let old_groups = sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?;
+    let retained_groups: Vec<_> = old_groups.iter().filter(|(name, _)| !replace || !targets.contains(*name)).collect();
+    let sidecar_needed = imp.sets.iter().any(|set| set.metadata.is_some())
+        || retained_groups.iter().any(|(_, selection)| {
+            selection.source.is_some()
+                || selection.actions.iter().any(|action| action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty())
+        });
+    let overhead = usize::from(sidecar_needed);
+    if retained_groups.len().checked_add(imp.sets.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_SETS) {
+        return Err(bad(cmd, "combined action library exceeds the set limit"));
+    }
+    if retained.checked_add(imp.actions.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS)
+        || total_steps.checked_add(overhead).is_none_or(|count| count > super::atn::MAX_TOTAL_ITEMS)
+    {
+        return Err(bad(cmd, "combined action library leaves no space for its metadata sidecar"));
+    }
+    drop(retained_groups);
+    drop(old_groups);
+    let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| targets.contains(*name)).cloned().collect();
+    let old_rows = s.actions.sets.iter().filter(|name| !replace || !targets.contains(*name)).count();
+    let new_rows = if imp.sets.iter().any(|set| set.metadata.is_some()) {
+        imp.sets.len()
+    } else {
+        imp.sets
+            .iter()
+            .filter(|set| set.actions.is_empty() || previous_rows.contains(&set.name))
+            .map(|set| set.name.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    };
+    if old_rows.checked_add(new_rows).is_none_or(|count| count > super::atn::MAX_SETS) {
+        return Err(bad(cmd, "too many action set rows"));
+    }
+    let mut set_for = vec![0usize; imp.actions.len()];
+    for (index, set) in imp.sets.iter().enumerate() {
+        set_for.get_mut(set.actions.clone()).ok_or_else(|| bad(cmd, "invalid imported set range"))?.fill(index);
+    }
+    if imp.action_keys.len() != imp.actions.len() {
+        return Err(bad(cmd, "invalid imported shortcut positions"));
+    }
+    let mut taken = UniqueNames::new(s.actions.list.iter().filter(keep).map(|action| action.name.clone()));
     let mut names = Vec::with_capacity(imp.actions.len());
-    // The file's name of each action that had to be renamed, and its new name.
-    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut renamed: Vec<std::collections::HashMap<String, String>> = vec![Default::default(); imp.sets.len()];
+    let mut global: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     let mut steps = 0usize;
     let mut added = Vec::with_capacity(imp.actions.len());
-    for mut a in imp.actions {
+    let mut keys = Vec::new();
+    for (index, mut a) in imp.actions.into_iter().enumerate() {
         let name = taken.claim(&a.name);
-        if name != a.name {
-            renamed.entry(a.name.clone()).or_insert_with(|| name.clone());
+        let group = set_for.get(index).and_then(|set| renamed.get_mut(*set)).ok_or_else(|| bad(cmd, "invalid imported action position"))?;
+        group.entry(a.name.clone()).or_insert_with(|| name.clone());
+        global
+            .entry(a.name.clone())
+            .and_modify(|entry| {
+                if entry.as_ref() != Some(&name) {
+                    *entry = None;
+                }
+            })
+            .or_insert(Some(name.clone()));
+        if let Some(key) = imp.action_keys.get(index).and_then(Option::as_ref) {
+            keys.push((name.clone(), key.clone()));
         }
         a.name = name.clone();
         steps = steps.saturating_add(a.steps.len());
         names.push(name);
         added.push(a);
     }
-    // Play and Conditional steps call actions by name: follow the renames in the actions just
-    // loaded, each target looked up once by the name the file gave it.
-    for a in &mut added {
+    // Resolve imported calls within their physical set first; never use another set's first
+    // duplicate display name for metadata or shortcuts. Ambiguous cross-set calls fail before commit.
+    for (index, a) in added.iter_mut().enumerate() {
+        let local = set_for.get(index).and_then(|set| renamed.get(*set)).ok_or_else(|| bad(cmd, "invalid imported action position"))?;
         for (id, params) in &mut a.steps {
             let keys: &[&str] = match id.as_str() {
                 "actions.play" => &["action"],
@@ -58,19 +127,36 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
                 _ => &[],
             };
             for key in keys {
-                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed.get(n)) {
-                    params[*key] = json!(to);
+                if let Some(target) = params.get(*key).and_then(Value::as_str) {
+                    let to = if let Some(to) = local.get(target) {
+                        Some(to)
+                    } else {
+                        match global.get(target) {
+                            Some(Some(to)) => Some(to),
+                            Some(None) => return Err(bad(cmd, "ambiguous cross-set action call; source set is required")),
+                            None => None,
+                        }
+                    };
+                    if let Some(to) = to {
+                        params[*key] = json!(to);
+                    }
                 }
             }
         }
     }
-    s.actions.list.extend(added);
-    // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
-    // Set made.
-    if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.sets.contains(&imp.set) {
-        s.actions.sets.push(imp.set.clone());
+    let set_names: Vec<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
+    if replace {
+        s.actions.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
+        sidecar::retire_sets(&mut s.actions, &targets);
     }
-    let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
+    s.actions.list.extend(added);
+    for set in imp.sets {
+        if set.metadata.is_some() {
+            sidecar::install_row(&mut s.actions, &set.name, set.metadata);
+        } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !s.actions.sets.contains(&set.name) {
+            sidecar::install_row(&mut s.actions, &set.name, None);
+        }
+    }
     if !keys.is_empty() {
         s.edit_prefs(|prefs| {
             for (name, key) in &keys {
@@ -83,6 +169,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     s.actions.touch();
     Ok(json!({
         "set": imp.set,
+        "sets": set_names,
         "actions": names,
         "steps": steps,
         "unsupported": imp.unsupported,
@@ -108,29 +195,43 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
-    let (set, actions): (String, Vec<&Action>) = if p.get("action").is_some() {
+    let mut groups = if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
-        (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
-    } else if let Some(set) = set_param {
-        let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
-        // An empty set New Set made is written with no actions, as Photoshop saves one.
-        if list.is_empty() && !s.actions.sets.contains(&set) {
+        vec![(set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()), sidecar::selection(&s.actions, a))]
+    } else if let Some(set) = &set_param {
+        let groups = sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))?;
+        if groups.is_empty() {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
-        (set, list)
+        groups.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
     } else {
-        if s.actions.list.is_empty() {
+        if s.actions.list.is_empty() && s.actions.sets.is_empty() {
             return Err(bad(cmd, "there are no actions to save"));
         }
-        (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
+        sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
     };
-    let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
+    // Preserve the old default single-set output name; a multi-set Save keeps each real group.
+    if p.get("action").is_none() && set_param.is_none() && groups.len() == 1 {
+        if let Some((name, _)) = groups.first_mut() {
+            if name != super::UNGROUPED_SET {
+                *name = DEFAULT_SET.to_string();
+            }
+        }
+    }
+    let names: Vec<String> = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.name.clone()).collect();
+    let set_names: Vec<String> = groups.iter().map(|(name, _)| name.clone()).collect();
+    let set = set_param.or_else(|| set_names.first().cloned()).unwrap_or_else(|| DEFAULT_SET.to_string());
     let keys: Vec<(String, String)> =
         s.prefs().shortcuts.iter().filter_map(|(k, v)| k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|n| (n.to_string(), v.clone()))).collect();
-    let (bytes, skipped) = export(&set, &actions, &keys, skip).map_err(|e| bad(cmd, e))?;
-    let steps: usize = actions.iter().map(|a| a.steps.len()).sum::<usize>().saturating_sub(skipped.len());
-    let mut out = json!({"set": set, "actions": names, "steps": steps, "bytes": bytes.len(), "skipped": skipped});
+    let steps: usize = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.steps.len()).sum();
+    let borrowed: Vec<_> = groups
+        .iter()
+        .map(|(name, selection)| (name.as_str(), sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone() }))
+        .collect();
+    let (bytes, skipped) = export_groups(&borrowed, &keys, skip).map_err(|error| bad(cmd, error))?;
+    let steps = steps.saturating_sub(skipped.len());
+    let mut out = json!({"set": set, "sets": set_names, "actions": names, "steps": steps, "bytes": bytes.len(), "skipped": skipped});
     match p.get("path") {
         None | Some(Value::Null) => {
             out["data"] = json!(photocraft_paint::tile::b64_encode(&bytes));

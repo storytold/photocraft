@@ -1,7 +1,9 @@
 //! The crate's integration tests, linked into one test binary.
 
 mod action_metadata;
+mod actions_duplicate;
 mod actions_editor_draft;
+mod actions_group_delete;
 mod actions_owned_preview;
 mod affinity;
 mod artboard_export_names;

@@ -29,6 +29,13 @@ pub struct Draft {
     pub(super) recording: Option<usize>,
 }
 
+impl Draft {
+    /// Runtime identity for the shell's owned page; never a persisted library identity.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 /// Only action bindings participate in the editor's shortcut stale guard.
 fn action_keys<T: Clone>(keys: &BTreeMap<String, T>) -> BTreeMap<String, T> {
     keys.iter().filter(|(key, _)| key.starts_with(super::PLAY_SHORTCUT_PREFIX)).map(|(key, value)| (key.clone(), value.clone())).collect()
@@ -159,6 +166,12 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(view(draft, &visible(s, draft)?))
 }
 
+/// Read an owned page without executing a command or changing floating-selection state.
+pub fn inspect(s: &Session, id: u64) -> Result<Value> {
+    let draft = s.actions.editor.as_ref().filter(|draft| draft.id == id).ok_or_else(|| bad(GET, "the editor no longer owns this draft"))?;
+    Ok(view(draft, &visible(s, draft)?))
+}
+
 /// Only deliberately edited shortcuts are normalized; imported unrelated strings remain intact.
 fn shortcut(text: &str, old: &str) -> Result<String> {
     if text == old || text.is_empty() {
@@ -183,6 +196,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(value) = p.get("icon") {
         // An unknown identifier is retained metadata; the picker can use a neutral display fallback.
         next.value.icon = value.as_str().ok_or_else(|| bad(UPDATE, "`icon` must be a string"))?.to_string();
+        crate::atn_cmds::sidecar::explicit_icon(&mut next.value);
     }
     if let Some(value) = p.get("color") {
         let color = value.as_str().ok_or_else(|| bad(UPDATE, "`color` must be a string"))?;

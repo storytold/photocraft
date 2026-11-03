@@ -1,4 +1,4 @@
-//! Native action-library metadata defaults and preservation, independent of ATN sidecars.
+//! Action metadata compatibility, editor staging and independent ATN sidecar output checks.
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionsFile},
@@ -8,6 +8,33 @@ use serde_json::json;
 
 const DESCRIPTION: &str = "  First line\nCafé 🌿\0  ";
 const UNKNOWN_ICON: &str = " future/editor-icon-图标 ";
+
+/// Independent PSD descriptor oracle: inspect the emitted sidecar without the Engine's
+/// importer or sidecar decoder agreeing with its own writer.
+fn assert_exported_metadata(bytes: &[u8], icon: &str) {
+    use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+    let files = photocraft_psd::atn::parse_sets(bytes).unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].name.to_string_lossy(), "Metadata set");
+    assert_eq!(files[0].actions.len(), 1);
+    assert_eq!(files[0].actions[0].name.to_string_lossy(), "Editable");
+    let wrapper = files[1].actions[0].items[0].descriptor.as_ref().unwrap();
+    let Some(D::RawData(payload)) = wrapper.get("modernizedActionData") else { panic!("sidecar raw payload missing") };
+    assert_eq!(payload.get(..4), Some(16u32.to_be_bytes().as_slice()));
+    let root = Descriptor::from_bytes(payload.get(4..).unwrap()).unwrap();
+    let Some(D::List(sets)) = root.get("sets") else { panic!("sidecar sets missing") };
+    assert_eq!(sets.len(), 1);
+    let D::Descriptor(set) = &sets[0] else { panic!("set descriptor expected") };
+    let Some(D::List(actions)) = set.get("actions") else { panic!("sidecar actions missing") };
+    assert_eq!(actions.len(), 1);
+    let D::Descriptor(action) = &actions[0] else { panic!("action descriptor expected") };
+    assert_eq!(action.get("actionDescriptionKey"), Some(&D::Text(UnicodeString::new(DESCRIPTION))));
+    assert_eq!(action.get("actionIconKey"), Some(&D::Text(UnicodeString::new(icon))));
+    assert_eq!(action.get("actionThumbnailTypeKey"), Some(&D::Integer(3)));
+    assert_eq!(action.get("actionPreconditionVal"), Some(&D::Integer(-1)));
+    assert_eq!(action.get("actionPreviewKey"), Some(&D::Boolean(false)));
+    assert_eq!(action.get("actionGenerativeKey"), Some(&D::Boolean(false)));
+}
 
 fn described(name: &str, icon: &str) -> Action {
     let mut action = Action::new(name, vec![("future.step".into(), json!({"raw": [0, 255], "nested": {"keep": true}}))]);
@@ -65,7 +92,7 @@ fn cloned_actions_keep_metadata_through_rename_and_real_preset_reload() {
     let mut session = Session::new();
     assert!(session.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
     assert_eq!(session.actions.list, initial.actions);
-    // This source has no actions.duplicate command. Exercise model duplication without claiming one.
+    // Exercise the model clone here; native duplication has its own regression tests.
     let mut copy = session.actions.list[1].clone();
     copy.name = "Copy".into();
     assert_eq!(copy.description, DESCRIPTION);
@@ -140,19 +167,28 @@ fn editor_metadata_stays_draft_until_save_and_discard_keeps_saved_values() {
         let mut reopened = Session::new();
         assert!(reopened.attach_preset_store(preset_store::open(Box::new(mem.clone()))).is_empty());
         assert_eq!(reopened.actions.list, native.actions);
-        // Before sidecar writing exists, export must refuse metadata rather than silently lose it.
+        // Metadata now exports through the real sidecar, including an unknown glyph identifier.
         let committed = session.actions.list.clone();
         let mut plain = original.clone();
         plain.description.clear();
         plain.icon.clear();
         for skip in [false, true] {
-            assert!(session.execute("actions.save", json!({"action": "Editable", "set": "Metadata set", "skipUnsupported": skip})).is_err());
+            let exported = session.execute("actions.save", json!({"action": "Editable", "set": "Metadata set", "skipUnsupported": skip})).unwrap();
+            assert!(exported["skipped"].as_array().unwrap().is_empty());
+            let bytes = photocraft_engine::paint::tile::b64_decode(exported["data"].as_str().unwrap()).unwrap();
+            assert_exported_metadata(&bytes, icon);
             let (bytes, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&plain], &[], skip).unwrap();
             assert!(!bytes.is_empty());
             assert!(skipped.is_empty());
             assert_eq!(session.actions.list, committed);
             assert_eq!(mem.read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap(), saved_bytes);
         }
+        let mut unsupported = original.clone();
+        unsupported.steps.push(("future.step".into(), json!({"raw": [0,255]})));
+        assert!(photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], false).is_err());
+        let (bytes, skipped) = photocraft_engine::atn_cmds::export("Metadata set", &[&unsupported], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1, "skipUnsupported affects steps, never metadata");
+        assert_exported_metadata(&bytes, icon);
         session.execute("actions.editor.update", json!({"draft": draft, "description": "Discard me", "icon": "UncommittedIcon"})).unwrap();
         session.execute("actions.editor.discard", json!({"draft": draft})).unwrap();
         assert_eq!(session.actions.list, vec![original]);

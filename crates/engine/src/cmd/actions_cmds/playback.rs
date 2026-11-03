@@ -28,6 +28,9 @@ fn classic_index(s: &Session, action: &Action) -> Option<usize> {
 
 /// Definition edits cannot invalidate a shell-owned capture, even through direct Session calls.
 pub fn admit(s: &Session, id: &str) -> Result<()> {
+    if s.actions.held_playback.is_some() && s.actions.playing == 0 && s.actions.playback_yielding {
+        return Err(bad(id, "wait for action playback to finish or cancel it first"));
+    }
     if s.actions.held_playback.is_some()
         && s.actions.playing == 0
         && id.starts_with("actions.")
@@ -38,11 +41,11 @@ pub fn admit(s: &Session, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(String, usize)>) -> Result<Option<Owner>> {
+fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(String, usize)>, required: bool) -> Result<Option<Owner>> {
     if s.actions.held_playback.is_some() {
         return Err(bad("actions.play", "another action owns a suspended playback"));
     }
-    if preview.is_none() && !s.actions.recording_active() {
+    if !required && preview.is_none() && !s.actions.recording_active() {
         return Ok(None);
     }
     // A job started in the old capture must land before its cursor is moved past preview work.
@@ -76,7 +79,7 @@ fn suspend(s: &mut Session, preview: Option<(u64, Arc<Action>)>, call: Option<(S
 pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Option<Owner>)> {
     admit(s, "actions.play")?;
     let (action, from) = super::playback_plan(s, params)?;
-    let owner = suspend(s, None, Some((action.name.clone(), from)))?;
+    let owner = suspend(s, None, Some((action.name.clone(), from)), false)?;
     Ok((Arc::new(action), from, owner))
 }
 
@@ -88,11 +91,25 @@ pub fn preview(s: &mut Session, draft: u64, from: usize) -> Result<(Arc<Action>,
     if from > action.steps.len() {
         return Err(bad("actions.editor.preview", "preview step is outside the draft"));
     }
-    let owner = suspend(s, Some((draft, action.clone())), None)?.ok_or_else(|| bad("actions.editor.preview", "preview ownership is unavailable"))?;
+    let owner = suspend(s, Some((draft, action.clone())), None, true)?.ok_or_else(|| bad("actions.editor.preview", "preview ownership is unavailable"))?;
     Ok((action, owner))
 }
 
 impl Owner {
+    /// A frame-spanning library call needs the same lease even without an active recorder.
+    pub fn library(s: &mut Session, params: &Value) -> Result<(Arc<Action>, usize, Self)> {
+        admit(s, "actions.play")?;
+        let (action, from) = super::playback_plan(s, params)?;
+        let owner = suspend(s, None, Some((action.name.clone(), from)), true)?.ok_or_else(|| bad("actions.play", "playback ownership is unavailable"))?;
+        Ok((Arc::new(action), from, owner))
+    }
+
+    /// Between UI ticks, reject unowned commands before their pre-command effects or jobs.
+    pub fn yielding(&self, s: &mut Session, yielding: bool) -> Result<()> {
+        self.validate(s)?;
+        s.actions.playback_yielding = yielding;
+        Ok(())
+    }
     pub fn is_preview(&self) -> bool {
         self.preview.is_some()
     }
@@ -129,6 +146,7 @@ impl Owner {
             return;
         }
         s.actions.held_playback = None;
+        s.actions.playback_yielding = false;
         if s.actions.take != self.take || s.actions.recording_active() {
             return;
         }

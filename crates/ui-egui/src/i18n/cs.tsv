@@ -4266,3 +4266,107 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Barva zarážky
 	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
 	Edit Brush…	Upravit štětec…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Akce byla uložena, ale předvolbu potvrzení se nepodařilo uložit: {error}
+	Add a brief description for this action…	Přidejte stručný popis této akce…
+	Allow Tool Recording	Povolit záznam nástrojů
+	Answer the open Actions editor question first	Nejprve odpovězte na otevřenou otázku v editoru akcí
+	Apply to background	Použít na pozadí
+	Apply to subject	Použít na objekt
+	Black and white	Černobílý
+	Cancel and continue editing	Zrušit a pokračovat v úpravách
+	Choose color	Vybrat barvu
+	Choose icon	Vybrat ikonu
+	Classic Actions	Klasické akce
+	Clear All Actions	Vymazat všechny akce
+	Clear search	Vymazat hledání
+	Click action	Akce kliknutí
+	Close the open Actions editor first	Nejprve zavřete otevřený editor akcí
+	Collapse all	Sbalit vše
+	Colour lookup tables	Tabulky pro převod barev
+	Confirm or cancel the open action dialog first	Nejprve potvrďte nebo zrušte otevřený dialog akce
+	Control	Ctrl
+	Default icon	Výchozí ikona
+	Delete Action	Odstranit akci
+	Delete action	Odstranit akci
+	Delete group	Odstranit skupinu
+	Delete step	Odstranit krok
+	Delete the action "{name}"?	Odstranit akci „{name}“?
+	Delete the group "{name}"?	Odstranit skupinu „{name}“?
+	Discard	Zahodit
+	Download	Stáhnout
+	Duplicate Action	Duplikovat akci
+	Duplicate action	Duplikovat akci
+	Duplicate group	Duplikovat skupinu
+	Duplicate step	Duplikovat krok
+	Edit Action	Upravit akci
+	Edit action	Upravit akci
+	Edit step settings	Upravit nastavení kroku
+	Enable step	Povolit krok
+	Expand all	Rozbalit vše
+	Export Action…	Exportovat akci…
+	Finish or cancel action playback and the pending step first	Nejprve dokončete nebo zrušte přehrávání akce a čekající krok
+	Finishing step…	Dokončování kroku…
+	Generated layer effects	Vygenerované efekty vrstvy
+	Generated styles	Vygenerované styly
+	Grey	Šedá
+	Harmonize layers	Sladit vrstvy
+	Hue and saturation	Odstín a sytost
+	Import Actions…	Importovat akce…
+	Import actions or create a new action to get started.	Začněte importem akcí nebo vytvořením nové akce.
+	Insert Action	Vložit akci
+	Insert Conditional	Vložit podmínku
+	Insert Menu Item	Vložit položku nabídky
+	Insert Path	Vložit cestu
+	Insert Stop	Vložit zastavení
+	Insert…	Vložit…
+	Keyboard shortcut	Klávesová zkratka
+	Lavender	Levandulová
+	Layer effects	Efekty vrstvy
+	Light blue	Světle modrá
+	List size	Velikost seznamu
+	Magic wand	Kouzelná hůlka
+	Merge layers	Sloučit vrstvy
+	Move step down	Posunout krok dolů
+	Move step up	Posunout krok nahoru
+	New group	Nová skupina
+	No steps yet	Zatím žádné kroky
+	Object selection	Výběr objektu
+	Play Action	Přehrát akci
+	Play Actions	Přehrát akce
+	Play action	Přehrát akci
+	Play from selected step	Přehrát od vybraného kroku
+	Playback Options…	Možnosti přehrávání…
+	Play…	Přehrát…
+	Preview on hover	Náhled při najetí ukazatele
+	Record	Zaznamenat
+	Recording	Záznam
+	Remove background	Odstranit pozadí
+	Save Action	Uložit akci
+	Search actions	Hledat akce
+	Select an existing action step to play	Vyberte existující krok akce k přehrání
+	Select subject	Vybrat hlavní objekt
+	Show grid	Zobrazit mřížku
+	Show step settings	Zobrazit nastavení kroku
+	Smart removal	Inteligentní odstranění
+	Sort & View options	Možnosti řazení a zobrazení
+	Start recording to build your action	Spusťte záznam a vytvořte svou akci
+	Steps	Kroky
+	Stored action step	Uložený krok akce
+	Stored settings	Uložená nastavení
+	Teal	Modrozelená
+	Text	Text
+	Text colour	Barva textu
+	The draft steps changed. Cancel this dialog and reopen the step.	Kroky konceptu se změnily. Zrušte tento dialog a krok znovu otevřete.
+	The dragged action changed; drag it again	Přetahovaná akce se změnila; přetáhněte ji znovu
+	The editor response does not belong to this draft	Odpověď editoru nepatří k tomuto konceptu
+	There are unsaved changes. Do you want to save or discard them?	Máte neuložené změny. Chcete je uložit, nebo zahodit?
+	This editor page is closed	Tato stránka editoru je zavřená
+	This step dialog belongs to another editor	Tento dialog kroku patří jinému editoru
+	Wait for the current action step to finish	Počkejte na dokončení aktuálního kroku akce
+	You haven't created any actions	Zatím jste nevytvořili žádné akce
+	Yours	Vaše
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Neseskupené akce

@@ -1102,6 +1102,11 @@ impl Session {
         !self.jobs.running.is_empty()
     }
 
+    /// A recorded step must finish before its owning editor can save or leave.
+    pub fn has_recording_job(&self) -> bool {
+        self.jobs.running.iter().any(|job| job.recorded_by == Some(self.actions.take))
+    }
+
     /// Running job `id`.
     pub fn job(&self, id: JobId) -> Option<JobInfo> {
         self.jobs.running.iter().find(|r| r.id == id).map(Running::info)

@@ -1,4 +1,4 @@
-//! Photoshop Actions files (`.atn`): one action set, its actions and their steps.
+//! Photoshop Actions files (`.atn`): action sets, their actions and their steps.
 //!
 //! Implemented clean-room from Adobe's "Photoshop File Formats" specification (the *Actions*
 //! and *Descriptor structure* sections) and observation of files Photoshop writes. No code was
@@ -6,7 +6,8 @@
 //! code-unit count + UTF-16BE, usually NUL-terminated) unless noted.
 //!
 //! ```text
-//! file   := version u32 (12 or 16), set name UnicodeString, expanded u8, count u32, count × action
+//! file   := version u32 (12 or 16), set (version 16 may hold further sets until EOF)
+//! set    := name UnicodeString, expanded u8, count u32, count × action
 //! action := function key u16 (0 = none, n = Fn), shift u8, command u8, colour u16,
 //!           name UnicodeString, expanded u8, count u32, count × item
 //! item   := expanded u8, enabled u8, with dialog u8, dialog options u8,
@@ -31,8 +32,9 @@
 //!
 //! [`parse`] never panics: every count is bounds-checked against the bytes left, descriptor
 //! nesting is bounded, and allocations are capped. [`write`] always produces version 16, so
-//! `parse(write(f)) == f` for files [`parse`] read, and `write(parse(b)) == b` for version 16 files
-//! Photoshop wrote; a version 12 file's legacy descriptors keep their meaning, not their layout.
+//! `parse(write(f)) == f` for sets [`parse`] read. The existing single-set API retains trailing-byte
+//! warnings. [`parse_sets`] and [`write_sets`] preserve complete version-16 multi-set files with
+//! one version header; a version-12 file's legacy descriptors keep their meaning, not their layout.
 
 use crate::codepage;
 use crate::descriptor::{Descriptor, UnicodeString};
@@ -40,6 +42,9 @@ use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, decode_legacy_name};
 
 mod legacy;
+mod sets;
+
+pub use sets::{MAX_SETS, MAX_TOTAL_ACTIONS, MAX_TOTAL_ITEMS, parse_sets, parse_sets_with_encoding, write_sets};
 
 /// The version written by this module (Photoshop 6 and every later release).
 pub const VERSION: u32 = 16;
@@ -237,7 +242,7 @@ fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
 }
 
 /// Read an action and its steps using the file's descriptor dialect.
-fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
+fn read_action(r: &mut Reader<'_>, legacy: bool, budget: Option<&mut sets::Budget>) -> Result<AtnAction> {
     let function_key = r.u16()?;
     let shift = r.u8()? != 0;
     let command = r.u8()? != 0;
@@ -249,6 +254,9 @@ fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
     r.check_count(u64::from(n), 20)?;
     if n as usize > MAX_ITEMS {
         return Err(PsdError::LimitExceeded("too many steps in one action"));
+    }
+    if let Some(budget) = budget {
+        budget.items(n as usize)?;
     }
     let mut items = Vec::with_capacity((n as usize).min(1024));
     for _ in 0..n {
@@ -278,11 +286,24 @@ pub fn parse_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<AtnFil
 
 fn parse_layout(data: &[u8]) -> Result<AtnFile> {
     let mut r = Reader::new(data);
+    let version = read_version(&mut r)?;
+    let mut file = read_set(&mut r, version == 12, None)?;
+    if !r.is_empty() {
+        file.warnings.push(format!("{} trailing bytes ignored", r.remaining()));
+    }
+    Ok(file)
+}
+
+fn read_version(r: &mut Reader<'_>) -> Result<u32> {
     let version = r.u32()?;
     if !matches!(version, 12 | VERSION) {
         return Err(PsdError::Unsupported(format!("actions file version {version} (supported versions: 12 and 16)")));
     }
-    let name = UnicodeString::read(&mut r)?;
+    Ok(version)
+}
+
+fn read_set(r: &mut Reader<'_>, legacy: bool, mut budget: Option<&mut sets::Budget>) -> Result<AtnFile> {
+    let name = UnicodeString::read(r)?;
     let expanded = r.u8()? != 0;
     let n = r.u32()?;
     // Each action needs at least its key, modifiers, colour, an empty name, the flag and a count.
@@ -290,21 +311,24 @@ fn parse_layout(data: &[u8]) -> Result<AtnFile> {
     if n as usize > MAX_ACTIONS {
         return Err(PsdError::LimitExceeded("too many actions in one set"));
     }
+    if let Some(budget) = budget.as_deref_mut() {
+        budget.actions(n as usize)?;
+    }
     let mut actions = Vec::with_capacity((n as usize).min(256));
     for _ in 0..n {
-        actions.push(read_action(&mut r, version == 12)?);
+        actions.push(read_action(r, legacy, budget.as_deref_mut())?);
     }
-    let mut warnings = Vec::new();
-    if !r.is_empty() {
-        warnings.push(format!("{} trailing bytes ignored", r.remaining()));
-    }
-    Ok(AtnFile { name, expanded, actions, warnings, encoding: None })
+    Ok(AtnFile { name, expanded, actions, warnings: Vec::new(), encoding: None })
 }
 
 /// The encoding of `f`'s 8-bit names that are not ASCII or UTF-8, or `None` if no name shown
 /// from them needs one; adds a warning when the guess is uncertain.
 fn name_encoding(f: &AtnFile, warnings: &mut Vec<String>) -> Option<&'static encoding_rs::Encoding> {
-    let items = || f.actions.iter().flat_map(|a| &a.items);
+    name_encoding_sets(std::slice::from_ref(f), warnings)
+}
+
+fn name_encoding_sets(files: &[AtnFile], warnings: &mut Vec<String>) -> Option<&'static encoding_rs::Encoding> {
+    let items = || files.iter().flat_map(|file| &file.actions).flat_map(|action| &action.items);
     let legacy = |b: &[u8]| !b.is_ascii();
     // Steps that store their name as Unicode too: the encoding that turns one into the other.
     let pairs: Vec<(&[u8], String)> = items()
@@ -333,13 +357,23 @@ fn name_encoding(f: &AtnFile, warnings: &mut Vec<String>) -> Option<&'static enc
         return None;
     }
     // The set, action and class names are UTF-16: their script points at the writer's locale.
-    let mut hint = f.name.to_string_lossy();
-    for name in f.actions.iter().map(|a| a.name.to_string_lossy()).chain(items().filter_map(class_name)) {
-        if hint.len() > codepage::GUESS_SAMPLE {
-            break;
+    let mut hint = String::new();
+    for (index, file) in files.iter().enumerate() {
+        if index == 0 {
+            hint = file.name.to_string_lossy();
+        } else if hint.len() <= codepage::GUESS_SAMPLE {
+            hint.push('\n');
+            hint.push_str(&file.name.to_string_lossy());
         }
-        hint.push('\n');
-        hint.push_str(&name);
+        for name in
+            file.actions.iter().map(|action| action.name.to_string_lossy()).chain(file.actions.iter().flat_map(|action| &action.items).filter_map(class_name))
+        {
+            if hint.len() > codepage::GUESS_SAMPLE {
+                break;
+            }
+            hint.push('\n');
+            hint.push_str(&name);
+        }
     }
     let guess = codepage::guess(&orphans, &hint);
     if guess.uncertain {
@@ -385,7 +419,12 @@ fn count(n: usize, what: &'static str) -> Result<u32> {
 pub fn write(f: &AtnFile) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     out.put_u32(VERSION);
-    f.name.write(&mut out);
+    write_set(&mut out, f)?;
+    Ok(out)
+}
+
+fn write_set(out: &mut Vec<u8>, f: &AtnFile) -> Result<()> {
+    f.name.write(out);
     out.put_u8(u8::from(f.expanded));
     out.put_u32(count(f.actions.len(), "too many actions")?);
     for a in &f.actions {
@@ -393,14 +432,14 @@ pub fn write(f: &AtnFile) -> Result<Vec<u8>> {
         out.put_u8(u8::from(a.shift));
         out.put_u8(u8::from(a.command));
         out.put_u16(a.color);
-        a.name.write(&mut out);
+        a.name.write(out);
         out.put_u8(u8::from(a.expanded));
         out.put_u32(count(a.items.len(), "too many steps")?);
         for item in &a.items {
-            write_item(&mut out, item)?;
+            write_item(out, item)?;
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]

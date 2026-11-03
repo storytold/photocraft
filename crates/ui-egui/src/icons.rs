@@ -224,6 +224,10 @@ pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, toolt
 }
 
 #[cfg(test)]
+#[path = "panels/actions/editor_glyph_tests.rs"]
+mod action_editor_glyph_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

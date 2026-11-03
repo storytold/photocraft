@@ -3543,3 +3543,109 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	Action disimpan, tetapi preferensi konfirmasi tidak dapat disimpan: {error}
+	Add a brief description for this action…	Tambahkan deskripsi singkat untuk action ini…
+	Allow Tool Recording	Izinkan perekaman alat
+	Answer the open Actions editor question first	Jawab dahulu pertanyaan yang terbuka di editor action
+	Apply to background	Terapkan ke latar belakang
+	Apply to subject	Terapkan ke subjek
+	Back	Kembali
+	Black and white	Hitam putih
+	Cancel and continue editing	Batal dan lanjutkan mengedit
+	Choose color	Pilih warna
+	Choose icon	Pilih ikon
+	Classic Actions	Action Klasik
+	Clear All Actions	Hapus Semua Action
+	Clear search	Hapus pencarian
+	Click action	Action klik
+	Close the open Actions editor first	Tutup dahulu editor action yang terbuka
+	Collapse all	Ciutkan semua
+	Colour lookup tables	Tabel pencarian warna
+	Confirm or cancel the open action dialog first	Konfirmasikan atau batalkan dahulu dialog action yang terbuka
+	Control	Ctrl
+	Default icon	Ikon bawaan
+	Delete Action	Hapus action
+	Delete action	Hapus action
+	Delete group	Hapus Grup
+	Delete step	Hapus langkah
+	Delete the action "{name}"?	Hapus action “{name}”?
+	Delete the group "{name}"?	Hapus grup “{name}”?
+	Discard	Buang
+	Download	Unduh
+	Duplicate Action	Duplikasikan action
+	Duplicate action	Duplikasikan action
+	Duplicate group	Duplikasikan grup
+	Duplicate step	Duplikasikan langkah
+	Edit Action	Sunting action
+	Edit action	Sunting action
+	Edit step settings	Sunting pengaturan langkah
+	Enable step	Aktifkan langkah
+	Expand all	Perluas semua
+	Export Action…	Ekspor Action…
+	Finish or cancel action playback and the pending step first	Selesaikan atau batalkan dahulu pemutaran action dan langkah yang tertunda
+	Finishing step…	Menyelesaikan langkah…
+	Generated layer effects	Efek layer yang dihasilkan
+	Generated styles	Gaya yang dihasilkan
+	Grey	Abu-abu
+	Harmonize layers	Selaraskan layer
+	Hue and saturation	Rona dan saturasi
+	Import Actions…	Impor Action…
+	Import actions or create a new action to get started.	Impor action atau buat action baru untuk memulai.
+	Insert Action	Sisipkan Action
+	Insert Conditional	Sisipkan kondisi
+	Insert Menu Item	Sisipkan item menu
+	Insert Path	Sisipkan jalur
+	Insert Stop	Sisipkan Berhenti
+	Insert…	Sisipkan…
+	Keyboard shortcut	Pintasan keyboard
+	Lavender	Lavender
+	Layer effects	Efek layer
+	Light blue	Biru Muda
+	List size	Ukuran daftar
+	Magic wand	Tongkat ajaib
+	Merge layers	Gabungkan Layer
+	Move step down	Pindahkan langkah ke bawah
+	Move step up	Pindahkan langkah ke atas
+	New group	Grup Baru
+	No steps yet	Belum ada langkah
+	Object selection	Pemilihan objek
+	On	Aktif
+	Play Action	Putar action
+	Play Actions	Putar semua action
+	Play action	Putar action
+	Play from selected step	Putar dari langkah yang dipilih
+	Playback Options…	Opsi Pemutaran…
+	Play…	Putar…
+	Preview on hover	Pratinjau saat penunjuk diarahkan
+	Record	Rekam
+	Recording	Merekam
+	Remove background	Hapus Background
+	Save Action	Simpan Action
+	Search actions	Cari action
+	Select an existing action step to play	Pilih langkah action yang sudah ada untuk diputar
+	Select subject	Pilih Subjek
+	Show grid	Tampilkan Grid
+	Show step settings	Tampilkan pengaturan langkah
+	Smart removal	Penghapusan cerdas
+	Sort & View options	Opsi Urutan & Tampilan
+	Start recording to build your action	Mulai merekam untuk membuat action Anda
+	Steps	Langkah
+	Stored action step	Langkah action tersimpan
+	Stored settings	Pengaturan tersimpan
+	Teal	Hijau kebiruan
+	Text	Teks
+	Text colour	Warna teks
+	The draft steps changed. Cancel this dialog and reopen the step.	Langkah draf berubah. Batalkan dialog ini dan buka kembali langkah tersebut.
+	The dragged action changed; drag it again	Action yang diseret berubah; seret lagi
+	The editor response does not belong to this draft	Respons editor bukan milik draf ini
+	There are unsaved changes. Do you want to save or discard them?	Ada perubahan yang belum disimpan. Simpan atau buang perubahan?
+	This editor page is closed	Halaman editor ini ditutup
+	This step dialog belongs to another editor	Dialog langkah ini milik editor lain
+	Wait for the current action step to finish	Tunggu hingga langkah action saat ini selesai
+	You haven't created any actions	Anda belum membuat action apa pun
+	Yours	Milik Anda
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Action tanpa grup

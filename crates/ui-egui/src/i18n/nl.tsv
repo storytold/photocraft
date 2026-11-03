@@ -4277,3 +4277,107 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+
+# Actions list and editor (10945/10946)
+	Action saved, but confirmation preference could not be saved: {error}	De actie is opgeslagen, maar de bevestigingsvoorkeur kon niet worden opgeslagen: {error}
+	Add a brief description for this action…	Voeg een korte beschrijving van deze actie toe…
+	Allow Tool Recording	Gereedschapsopname toestaan
+	Answer the open Actions editor question first	Beantwoord eerst de openstaande vraag in de actie-editor
+	Apply to background	Toepassen op achtergrond
+	Apply to subject	Toepassen op onderwerp
+	Black and white	Zwart-wit
+	Cancel and continue editing	Annuleren en verder bewerken
+	Choose color	Kleur kiezen
+	Choose icon	Pictogram kiezen
+	Classic Actions	Klassieke acties
+	Clear All Actions	Alle acties wissen
+	Clear search	Zoekopdracht wissen
+	Click action	Klikactie
+	Close the open Actions editor first	Sluit eerst de geopende actie-editor
+	Collapse all	Alles samenvouwen
+	Colour lookup tables	Kleuropzoektabellen
+	Confirm or cancel the open action dialog first	Bevestig of annuleer eerst het geopende actiedialoogvenster
+	Control	Ctrl
+	Default icon	Standaardpictogram
+	Delete Action	Actie verwijderen
+	Delete action	Actie verwijderen
+	Delete group	Groep verwijderen
+	Delete step	Stap verwijderen
+	Delete the action "{name}"?	De actie ‘{name}’ verwijderen?
+	Delete the group "{name}"?	De groep ‘{name}’ verwijderen?
+	Discard	Verwerpen
+	Download	Downloaden
+	Duplicate Action	Actie dupliceren
+	Duplicate action	Actie dupliceren
+	Duplicate group	Groep dupliceren
+	Duplicate step	Stap dupliceren
+	Edit Action	Actie bewerken
+	Edit action	Actie bewerken
+	Edit step settings	Stapinstellingen bewerken
+	Enable step	Stap inschakelen
+	Expand all	Alles uitvouwen
+	Export Action…	Actie exporteren…
+	Finish or cancel action playback and the pending step first	Voltooi of annuleer eerst het afspelen van de actie en de openstaande stap
+	Finishing step…	Stap afronden…
+	Generated layer effects	Gegenereerde laageffecten
+	Generated styles	Gegenereerde stijlen
+	Grey	Grijs
+	Harmonize layers	Lagen harmoniseren
+	Hue and saturation	Kleurtoon en verzadiging
+	Import Actions…	Acties importeren…
+	Import actions or create a new action to get started.	Importeer acties of maak een nieuwe actie om te beginnen.
+	Insert Action	Actie invoegen
+	Insert Conditional	Voorwaarde invoegen
+	Insert Menu Item	Menu-item invoegen
+	Insert Path	Pad invoegen
+	Insert Stop	Stop invoegen
+	Insert…	Invoegen…
+	Keyboard shortcut	Sneltoets
+	Lavender	Lavendel
+	Layer effects	Laageffecten
+	Light blue	Lichtblauw
+	List size	Lijstgrootte
+	Magic wand	Toverstaf
+	Merge layers	Lagen samenvoegen
+	Move step down	Stap omlaag verplaatsen
+	Move step up	Stap omhoog verplaatsen
+	New group	Nieuwe groep
+	No steps yet	Nog geen stappen
+	Object selection	Objectselectie
+	Play Action	Actie afspelen
+	Play Actions	Acties afspelen
+	Play action	Actie afspelen
+	Play from selected step	Vanaf geselecteerde stap afspelen
+	Playback Options…	Afspeelopties…
+	Play…	Afspelen…
+	Preview on hover	Voorbeeld bij aanwijzen
+	Record	Opnemen
+	Recording	Opname
+	Remove background	Achtergrond verwijderen
+	Save Action	Actie opslaan
+	Search actions	Acties zoeken
+	Select an existing action step to play	Selecteer een bestaande actiestap om af te spelen
+	Select subject	Onderwerp selecteren
+	Show grid	Raster tonen
+	Show step settings	Stapinstellingen tonen
+	Smart removal	Slim verwijderen
+	Sort & View options	Sorteer- en weergaveopties
+	Start recording to build your action	Start de opname om uw actie te maken
+	Steps	Stappen
+	Stored action step	Opgeslagen actiestap
+	Stored settings	Opgeslagen instellingen
+	Teal	Blauwgroen
+	Text	Tekst
+	Text colour	Tekstkleur
+	The draft steps changed. Cancel this dialog and reopen the step.	De conceptstappen zijn gewijzigd. Annuleer dit dialoogvenster en open de stap opnieuw.
+	The dragged action changed; drag it again	De gesleepte actie is gewijzigd; sleep deze opnieuw
+	The editor response does not belong to this draft	Het antwoord van de editor hoort niet bij dit concept
+	There are unsaved changes. Do you want to save or discard them?	Er zijn niet-opgeslagen wijzigingen. Wilt u deze opslaan of verwerpen?
+	This editor page is closed	Deze editorpagina is gesloten
+	This step dialog belongs to another editor	Dit stapdialoogvenster hoort bij een andere editor
+	Wait for the current action step to finish	Wacht tot de huidige actiestap is voltooid
+	You haven't created any actions	U hebt nog geen acties gemaakt
+	Yours	Uw acties
+
+# Actions reserved category caption (10945/10946)
+	Ungrouped Actions	Ongegroepeerde acties

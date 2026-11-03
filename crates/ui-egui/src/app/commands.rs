@@ -17,7 +17,13 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let discarded = (id == "actions.editor.discard").then(|| params.get("draft").and_then(Value::as_u64)).flatten();
         let result = self.run_command(id, params);
+        if result.is_ok()
+            && let Some(draft) = discarded
+        {
+            actions::discarded(self, draft);
+        }
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -70,6 +76,9 @@ impl PhotocraftApp {
             }
         }
         actions::suspended_guard(self, id)?;
+        if let Some(result) = actions::layout_command(self, id) {
+            return result;
+        }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }
