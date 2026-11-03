@@ -301,6 +301,10 @@ impl Layouter {
         let psd_first_baseline = if is_box && !vertical {
             t.psd_first_baseline
                 .as_ref()
+                // Native documents can carry an edited or malformed hint. Keep the same
+                // bounds used at PSD import so it cannot clip the first line away.
+                .filter(|_| box_rect.1.is_finite() && box_rect.3.is_finite() && box_rect.3 > 0.0)
+                .filter(|b| b.offset_px >= -0.5 && b.offset_px <= box_rect.3 + 0.5)
                 .and_then(|b| runs.first().filter(|r| b.matches(&r.style)).map(|_| box_rect.1 + b.offset_px))
                 .filter(|baseline| baseline.is_finite())
         } else {

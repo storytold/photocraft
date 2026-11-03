@@ -103,3 +103,21 @@ fn entering_psd_type_edit_without_typing_keeps_the_recorded_baseline() {
     let resized = photocraft_text::TextEngine::new().layout(text(&session, id), 72.0);
     assert!((resized.lines[0].baseline - recorded).abs() > 1.0, "a changed font size invalidates the PSD baseline");
 }
+
+#[test]
+fn invalid_native_psd_baseline_does_not_hide_the_first_line() {
+    let mut imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
+    let LayerContent::Text(layer) = &mut imported.layers[0].content else { panic!("type layer") };
+    let expected = {
+        let mut without_hint = layer.clone();
+        without_hint.psd_first_baseline = None;
+        photocraft_text::TextEngine::new().layout(&without_hint, 72.0).lines[0].baseline
+    };
+    layer.psd_first_baseline.as_mut().unwrap().offset_px = 1000.0;
+    let native = photocraft_io::export(&imported, "baseline.pcraft", &Default::default()).unwrap().bytes;
+    let reopened = photocraft_io::import("baseline.pcraft", &native).unwrap().document;
+    let LayerContent::Text(layer) = &reopened.layers[0].content else { panic!("type layer") };
+    let layout = photocraft_text::TextEngine::new().layout(layer, 72.0);
+    assert_eq!(layout.lines.len(), 1);
+    assert_eq!(layout.lines[0].baseline, expected);
+}
