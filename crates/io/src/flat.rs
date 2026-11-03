@@ -2442,14 +2442,15 @@ mod fused_tile_tests {
         let after_decode = || calls.fetch_add(1, Ordering::Relaxed) >= 1;
         let r = import_flat_with("t", &bytes, &Interrupt::cancel_only(&after_decode));
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
-        // The TIFF branch decodes without an interrupt, so a cancel is honoured after the
-        // decode too, never reported as a success.
+        // TIFF checks cancellation before decoding, including for damaged input.
         let tiff = codecs::encode(&img, Format::Tiff, &codecs::EncodeOptions::default()).unwrap();
         let r = import_flat_with("t", &tiff, &Interrupt::cancel_only(&yes));
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
-        // A decode error is still the error, not the cancel that follows it.
+        // Without cancellation, damaged input still reports its decode error.
         let broken = tiff.get(..8).unwrap_or_default();
         let r = import_flat_with("t", broken, &Interrupt::cancel_only(&yes));
+        assert!(matches!(r, Err(IoError::Cancelled)));
+        let r = import_flat_with("t", broken, &Interrupt::NONE);
         assert!(matches!(&r, Err(e) if !matches!(e, IoError::Cancelled)), "{:?}", r.map(|_| ()));
     }
 
