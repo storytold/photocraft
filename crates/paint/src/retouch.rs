@@ -376,6 +376,9 @@ impl Smudge {
     /// Apply one dab to the working copy.
     pub fn dab(&mut self, work: &mut Region, fp: &Footprint) {
         let (r, n) = (self.radius, work.ch);
+        if n == 0 {
+            return;
+        }
         let side = (2 * r + 1) as usize;
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let wr = work.rect;
@@ -443,7 +446,7 @@ impl Smudge {
         // Pick up: the carried colour keeps `strength` of itself. Row by row over the part of the
         // square inside the working copy.
         let keep = self.strength;
-        let (qx0, qx1) = ((wr.x0 - (cx - r)).clamp(0, side as i32) as usize, (wr.x1 - (cx - r)).clamp(0, side as i32) as usize);
+        let (qx0, qx1) = (wr.x0.saturating_sub(cx - r).clamp(0, side as i32) as usize, wr.x1.saturating_sub(cx - r).clamp(0, side as i32) as usize);
         if qx0 < qx1 {
             for qy in 0..side {
                 let y = cy + qy as i32 - r;
