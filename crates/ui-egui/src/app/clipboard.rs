@@ -60,9 +60,11 @@ impl PhotocraftApp {
             }
             return Ok(false);
         };
-        // Already imported, or a newer internal copy: either stays until the external bytes
-        // change. A raster mirror an ordinary paste took of these bytes is not their vectors.
-        let holds_vectors_or_newer = self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some() || !self.clip_external);
+        // Already imported, or a newer internal copy (pixels or a path component): either
+        // stays until the external bytes change. A raster mirror an ordinary paste took of
+        // these bytes is not their vectors.
+        let holds_vectors_or_newer =
+            self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some() || !self.clip_external) || self.session.path_clipboard.is_some();
         if self.os_clip_svg.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
             return Ok(true);
         }

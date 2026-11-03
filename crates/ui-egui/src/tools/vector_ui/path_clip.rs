@@ -121,6 +121,9 @@ mod tests {
     use crate::state::Tool;
     use crate::vector_ui::{pen_down, pen_up};
 
+    /// The mocked OS bitmap clipboard, as in `app::clipboard_tests`.
+    type OsImage = std::sync::Arc<std::sync::Mutex<Option<(u32, u32, Vec<u8>)>>>;
+
     /// A fresh app with a 200×200 document, drawing shapes with the Pen.
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -359,6 +362,7 @@ mod tests {
         app.run("edit.paste", json!({"center": [100.0, 50.0]})).unwrap();
         let pasted = saved(&app, "Pasted Path").expect("the pasted path");
         assert_eq!(pasted.subpaths.len(), 2, "and pastes whole");
+        assert_eq!(pasted.components().len(), 1, "the pasted component stays one component");
     }
 
     /// With no explicit centre, Paste centres on the view: pan the view, paste with no params,
@@ -379,5 +383,45 @@ mod tests {
         let pasted = saved(&app, "Pasted Path").expect("the pasted path");
         let (x0, y0, x1, y1) = pasted.control_bounds().unwrap();
         assert_eq!(((x0 + x1) / 2.0, (y0 + y1) / 2.0), (60.0, 40.0), "the bounds centre lands on the panned view centre");
+    }
+
+    /// Paste As with an OS SVG that is unchanged since its import must not clear a newer path
+    /// clip: the unchanged-SVG check counts the path clipboard as a current internal copy, like
+    /// the bitmap import's freshness rule does.
+    #[test]
+    fn paste_as_keeps_a_newer_path_clip_when_the_os_svg_is_unchanged() {
+        const SOURCE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path d="M2 2 L38 2 L38 18 L2 18 Z" fill="#335577"/></svg>"##;
+        let image: OsImage = std::sync::Arc::default();
+        let read = image.clone();
+        let services = crate::Services {
+            clipboard_get_svg: Some(Box::new(|| Ok(Some(SOURCE.as_bytes().to_vec())))),
+            clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        // Paste As shape imports the OS SVG (first observation: nothing to compare it against).
+        app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        let (w, h, bytes) = {
+            let clip = app.session.clipboard.as_ref().unwrap();
+            let b = clip.bounds;
+            let mut pixels = vec![[0u8; 4]; b.size().area() as usize];
+            clip.surface.read_rgba8_into(b, &mut pixels);
+            (b.width(), b.height(), pixels.into_iter().flatten().collect::<Vec<u8>>())
+        };
+        // The OS clipboard now mirrors the SVG's raster, unchanged.
+        *image.lock().unwrap() = Some((w, h, bytes));
+        // One component to copy later, addressed by id; the pen adds it to the pasted shape.
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "shape".into();
+        square(&mut app, 20.0, 20.0, 50.0);
+        let (id, _) = shape(&app);
+        // A newer path clip replaces the pixel clipboard (one clipboard).
+        app.run("path.copy", json!({"name": "layer", "layer": id.0, "subpaths": [0]})).unwrap();
+        assert!(app.session.path_clipboard.is_some() && app.session.clipboard.is_none());
+        // Paste As pixels: nothing newer to import (the SVG and its mirror are unchanged), so
+        // the paste has nothing to lay down — and the path clip must survive it.
+        let _ = app.run("edit.paste", json!({"as": "pixels"}));
+        assert!(app.session.path_clipboard.is_some(), "the unchanged older SVG must not clear the newer path clip");
     }
 }
