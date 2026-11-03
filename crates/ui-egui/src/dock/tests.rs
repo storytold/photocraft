@@ -994,3 +994,102 @@ fn unreadable_workspace_survives_fallback_rendering_with_restore_notice() {
         image.save(path).unwrap();
     }
 }
+
+fn retained_fallback(app: &mut PhotocraftApp) -> Value {
+    let mut saved = snapshot(app);
+    saved["docking"] = json!({"version":2,"layout":{"kind":"unreadable"}});
+    apply(app, &saved);
+    assert!(app.ui.docking_kept.is_some());
+    saved
+}
+fn set_ui(app: &mut PhotocraftApp, params: Value) -> Value {
+    let (request, _rx) = crate::control::ControlRequest::new("ui.set", params);
+    match crate::control::handle(app, &egui::Context::default(), &request) {
+        crate::control::Outcome::Done(reply) => reply,
+        _ => panic!("ui.set must reply immediately"),
+    }
+}
+#[test]
+fn native_fallback_edits_replace_retained_data_but_appearance_and_noops_keep_it() {
+    for case in ["toggle", "rail", "tabs", "dock", "visibility"] {
+        let (mut app, _, _) = app_with_layers();
+        retained_fallback(&mut app);
+        match case {
+            "toggle" => {
+                crate::menus::invoke(&mut app, &egui::Context::default(), "window.toggle.properties", json!({})).unwrap();
+            }
+            "rail" => rail_click(&mut app, Group::Color, true),
+            "tabs" => assert_eq!(set_ui(&mut app, json!({"dockTabs":{"color":1}}))["ok"], true),
+            "dock" => assert_eq!(set_ui(&mut app, json!({"dock":{"heights":{"color":190}}}))["ok"], true),
+            _ => {
+                let show = !app.ui.panels.color;
+                assert_eq!(set_ui(&mut app, json!({"panels":{"color":show}}))["ok"], true);
+            }
+        }
+        assert!(app.ui.docking_kept.is_none(), "{case}");
+        assert!(crate::panel_docking::load(&snapshot(&app)).is_some(), "native edit becomes a saved shared Workspace: {case}");
+        assert!(!app.ui.status.contains("has been preserved"));
+    }
+    let (mut app, _, _) = app_with_layers();
+    let saved = retained_fallback(&mut app);
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.toggle.toolbar", json!({})).unwrap();
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+    let same_tabs = serde_json::to_value(app.ui.dock_tabs).unwrap();
+    for params in [json!({"theme":"promedium"}), json!({"dockTabs":same_tabs}), json!({"panels":{"status_bar":false}})] {
+        assert_eq!(set_ui(&mut app, params)["ok"], true);
+        assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+    }
+    assert_eq!(set_ui(&mut app, json!({"dock":"invalid"}))["ok"], false);
+    assert_eq!(snapshot(&app)["docking"], saved["docking"]);
+}
+#[test]
+fn successful_restore_and_reset_clear_only_the_owned_warning_and_notice() {
+    for reset in [false, true] {
+        for unrelated in [false, true] {
+            let (mut app, _, _) = app_with_layers();
+            let good = snapshot(&app);
+            retained_fallback(&mut app);
+            retained_fallback(&mut app);
+            assert_eq!(app.ui.notices.iter().filter(|n| n.title == "The saved panel layout could not be restored.").count(), 1);
+            crate::notices::post(&mut app, "Unrelated notice", vec![], false, None);
+            if unrelated {
+                app.ui.status = "Unrelated status".into();
+                app.ui.status_error = true;
+            }
+            if reset {
+                crate::menus::apply_workspace(&mut app);
+                assert!(app.ui.docking.is_none(), "reset must leave the preset native layout active");
+            } else {
+                apply(&mut app, &good);
+            }
+            assert!(app.ui.docking_kept.is_none());
+            assert!(!app.ui.notices.iter().any(|n| n.title == "The saved panel layout could not be restored."));
+            assert!(app.ui.notices.iter().any(|n| n.title == "Unrelated notice"));
+            assert_eq!(app.ui.status, if unrelated { "Unrelated status" } else { "" });
+            assert_eq!(app.ui.status_error, unrelated);
+        }
+    }
+}
+#[test]
+fn restore_notice_is_visible_with_hidden_status_bar_and_fullscreen_chrome() {
+    use egui_kittest::kittest::Queryable as _;
+    let _gpu = photocraft_testkit::gpu_lock();
+    for mode in ["standard", "fullScreen"] {
+        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+            let (mut app, _, _) = app_with_layers();
+            app.ui.view.screen_mode = mode.into();
+            app.ui.panels.status_bar = false;
+            retained_fallback(&mut app);
+            app
+        });
+        h.run_steps(8);
+        assert!(h.query_by_label("The saved panel layout could not be restored.").is_some());
+        assert!(h.state().ui.docking_kept.is_some());
+        let image = h.render().unwrap();
+        if let Some(folder) = std::env::var_os("PHOTOCRAFT_RECOVERY_REVIEW_CAPTURES") {
+            std::fs::create_dir_all(&folder).unwrap();
+            image.save(std::path::PathBuf::from(folder).join(format!("{mode}.png"))).unwrap();
+        }
+    }
+}
