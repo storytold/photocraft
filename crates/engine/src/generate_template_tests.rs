@@ -69,8 +69,12 @@ fn the_default_template_preferences_pick_the_template() {
     let r = s.execute(FILL, json!({"prompt": "x", "template": "qwen-edit-2511/fill"})).unwrap();
     assert_eq!(r["template"], "qwen-edit-2511/fill");
     s.edit_prefs(|p| p.integrations.default_fill_template = String::new());
-    let r = s.execute(FILL, json!({"prompt": "x"})).unwrap();
+    let r = s.execute(FILL, json!({"prompt": "x", "enhance": true})).unwrap();
     assert_eq!(r["template"], "krea2-turbo/fill", "native auto runs Krea 2 AnyPaint when the worker serves it");
+    // A typed prompt taken verbatim: AnyPaint ignored "a blue vespa scooter" 4 of 4, the 2.1 fill
+    // drew it, so it goes to the 2.1 fill.
+    let r = s.execute(FILL, json!({"prompt": "a blue vespa scooter", "enhance": false})).unwrap();
+    assert_eq!(r["template"], "qwen-2.1/fill", "a verbatim prompt runs the 2.1 fill");
 
     // A preference naming an unknown or wrong-task template is a clear error, not a panic.
     s.edit_prefs(|p| p.integrations.default_fill_template = "nope/fill".into());
