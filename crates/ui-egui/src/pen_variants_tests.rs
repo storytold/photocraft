@@ -308,6 +308,43 @@ fn a_smooth_endpoint_carried_on_stays_smooth() {
     let (a, b) = ([anchor[0] - in_ctrl[0], anchor[1] - in_ctrl[1]], [out_ctrl[0] - anchor[0], out_ctrl[1] - anchor[1]]);
     assert!(b[0].hypot(b[1]) > 1.0, "the outgoing handle bends into the new segment: {out_ctrl:?}");
     assert!((a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "in line: {knots:?}");
+    // CodeRabbit on #10744: committed, the join is stored as a smooth knot.
+    crate::vector_ui::pen_commit(&mut app, false);
+    let work = work_path(&app);
+    assert_eq!(work.subpaths.len(), 1, "the same subpath, extended");
+    assert!(work.subpaths[0].knots[1].smooth, "{:?}", work.subpaths[0].knots[1]);
+}
+
+/// CodeRabbit on #10744: a curved path carried on from its first endpoint runs backwards, each
+/// knot's handles swapped, and that endpoint keeps the handle it had towards the path.
+#[test]
+fn a_curved_path_carries_on_from_its_first_endpoint_with_its_handles_swapped() {
+    use photocraft_doc::vector::{Knot, Subpath};
+    use photocraft_geom::Point;
+    let mut app = app(Tool::CurvaturePen);
+    let start = Knot::smooth(Point::new(20.0, 20.0), Point::new(10.0, 30.0), Point::new(30.0, 10.0));
+    set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![start, Knot::corner(80.0, 80.0)], op: Default::default() }]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 0]);
+    click(&mut app, 0.0, 100.0);
+    let pen = app.ui.pen.as_ref().expect("the path is carried on");
+    assert_eq!(pen.resumes.as_ref().map(|r| r.index), Some(0));
+    let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
+    assert_eq!(anchors, [[80.0, 80.0], [20.0, 20.0], [0.0, 100.0]], "backwards, then the new anchor");
+    assert_eq!(pen.knots[1][1], [30.0, 10.0], "the endpoint's handle towards the path: its old outgoing one");
+}
+
+/// CodeRabbit on #10744: a double-click on a knot of the path carried on (not the endpoint it
+/// carries on from) changes nothing: those knots keep their handles.
+#[test]
+fn toggling_a_carried_knot_changes_nothing() {
+    use photocraft_doc::vector::Subpath;
+    let mut app = app(Tool::CurvaturePen);
+    set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)])]);
+    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 2]);
+    click(&mut app, 140.0, 120.0);
+    let before = app.ui.pen.as_ref().map(|p| p.unlinked.clone());
+    crate::vector_ui::curvature_toggle(&mut app, 80.0, 20.0);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.unlinked.clone()), before, "the old corner stays as it was");
 }
 
 /// CodeRabbit on #10744: in Path mode the Pen carries on the work path, so an endpoint selected
@@ -326,8 +363,10 @@ fn an_endpoint_on_another_path_than_the_pen_draws_on_starts_a_new_one() {
     // The Paths panel on no path: the Pen draws on the work path, not the layer's.
     app.ui.selected_path = None;
     set_work_path(&mut app, vec![Subpath::polyline(&[(200.0, 20.0), (80.0, 80.0)])]);
-    select_anchor(&mut app, crate::direct_select::PathRef::Layer(shape), [0, 1]);
+    // The tool first: switching tools drops a Direct Selection selection.
     app.ui.tool = Tool::CurvaturePen;
+    select_anchor(&mut app, crate::direct_select::PathRef::Layer(shape), [0, 1]);
+    assert!(crate::direct_select::selected_open_end(&app).is_some(), "the shape's endpoint is selected");
     click(&mut app, 140.0, 150.0);
     let pen = app.ui.pen.as_ref().expect("a new path");
     assert!(pen.resumes.is_none() && pen.knots.len() == 1, "{pen:?}");

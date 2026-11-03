@@ -15,7 +15,7 @@ pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     for (i, was) in pen.fixed.iter().enumerate() {
         let Some(k) = pen.knots.get_mut(i) else { break };
         let (keep_in, keep_out) = (!(closed && i == 0), !(extended && i == last));
-        let smooth = !pen.unlinked.contains(&i);
+        let smooth = !corners.get(i).copied().unwrap_or(false);
         k[0] = was[0];
         if keep_in {
             k[1] = was[1];
@@ -135,6 +135,11 @@ pub fn curvature_toggle(app: &mut PhotocraftApp, x: f64, y: f64) {
     cancel_stale_pen(app);
     let Some(i) = curvature_hit(app, x, y) else { return };
     let Some(pen) = app.ui.pen.as_mut() else { return };
+    // The knots of a path carried on keep their handles (`curvature_refresh`), but for the
+    // endpoint drawing carries on from: toggling one of the others would change nothing.
+    if i + 1 < pen.fixed.len() {
+        return;
+    }
     if let Some(at) = pen.unlinked.iter().position(|&c| c == i) {
         pen.unlinked.remove(at);
     } else {
