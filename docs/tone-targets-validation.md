@@ -137,6 +137,19 @@ Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned craft-fonts i
 
 Current evidence is retained in `plan/merge-main-20261031/` (gitignored; work began on 2026-10-31).
 
+## Main integration and review (2026-11-03)
+
+Current main integrated: `81bd97376` (PhotoCraft 0.20.1; 532 incoming commits). All production code merged automatically. The sole conflict was competing documentation for the command-registry builder; main's comment is retained. Reviewed expanded Action set playback/recording, parameter resolution, adjustment-layer opacity handling and filter-mask layer lookup alongside the existing explicit target normalization. Target precedence, private-field sanitization, captured Smart Filter reopening and all 31 introduced regressions are retained. No CI workflow or contributor entry differs from main.
+
+Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned craft-fonts input:
+
+- Full engine/UI `cargo test`: **8,281 passed, 0 failed, 43 normally ignored**, including doctest builds. Tests used `--test-threads=1`, retaining the serial configuration from previous integrations; no current parallel-suite result is claimed.
+- The ignored full-registry adversarial command test passed separately. Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. Changed-corpus checking correctly skipped because no corpus-critical paths differ from integrated main.
+- Six fresh offscreen captures were inspected: named alpha and explicit filter-mask Levels/Curves, plus both Lab subset dialogs. The final scoped integration review found no further actionable issues in the merged changes.
+- Historical before/after benchmarks and broader workspace results remain dated. No new performance comparison, broad-workspace or Windows/macOS result is claimed for this comment-conflict merge.
+
+Current evidence is retained in `plan/merge-main-20261103/` (gitignored).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).
