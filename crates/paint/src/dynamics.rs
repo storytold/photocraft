@@ -895,10 +895,8 @@ mod streaming_tests {
     /// first, then built. The streamed walk must produce the same dabs.
     fn buffered(brush: &BrushSettings, pts: &[StrokePoint]) -> (Vec<Dab>, Vec<Dab>) {
         let brush = brush.bounded_for_render();
-        let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
         let mut smoother = Smoother::new(&brush.smoothing, 1.0);
         let mut walker = DabGenerator::new(&brush, 1.0).walker;
-        let _ = interval;
         let mut dual_walker = brush.dual_brush.enabled.then(|| PathWalker::new(None));
         let (mut builder, mut dual_builder) = (DabBuilder::new(&brush), brush.dual_brush.enabled.then(|| DualBuilder::new(&brush)));
         let (mut dabs, mut dual) = (Vec::new(), Vec::new());
@@ -988,7 +986,7 @@ mod streaming_tests {
     }
 
     #[test]
-    fn a_non_finite_opacity_flow_or_spacing_paints_as_the_default() {
+    fn a_nan_opacity_flow_hardness_or_spacing_paints_as_the_default() {
         let pts = path();
         let base = BrushSettings { size: 10.0, ..BrushSettings::default() };
         let (want, _) = streamed(&base, &pts, 1000);
@@ -1005,9 +1003,9 @@ mod streaming_tests {
             assert!(b.opacity.is_finite() && b.flow.is_finite() && b.hardness.is_finite() && b.spacing.is_finite());
         }
         // Finite values are not touched, even out of range.
-        let odd = BrushSettings { opacity: 3.0, flow: -1.0, spacing: 7.0, ..base };
+        let odd = BrushSettings { opacity: 3.0, flow: f32::NEG_INFINITY, spacing: f32::INFINITY, ..base };
         let b = odd.bounded_for_render();
-        assert_eq!((b.opacity, b.flow, b.spacing), (3.0, -1.0, 7.0));
+        assert_eq!((b.opacity, b.flow, b.spacing), (3.0, f32::NEG_INFINITY, f32::INFINITY));
     }
 
     #[test]
@@ -1021,5 +1019,12 @@ mod streaming_tests {
         assert_eq!(streamed(&brush, &dirty, 1000).0, streamed(&brush, &clean, 1000).0);
         brush.smoothing.amount = 0.0;
         assert_eq!(streamed(&brush, &dirty, 1000).0, streamed(&brush, &clean, 1000).0);
+    }
+
+    #[test]
+    fn a_long_pixel_grid_segment_streams() {
+        let brush = BrushSettings { size: 1.0, aliased: true, spacing: 1.0, ..BrushSettings::default() };
+        let (dabs, _) = streamed(&brush, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(2.0e6, 3.0, 1.0)], 1000);
+        assert_eq!(dabs.len(), 2_000_001);
     }
 }
