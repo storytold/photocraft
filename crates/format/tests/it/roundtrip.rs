@@ -1285,3 +1285,79 @@ fn persisted_version(bytes: &[u8]) -> u32 {
     let manifest: serde_json::Value = serde_json::from_slice(&r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
     manifest["format_version"].as_u64().unwrap() as u32
 }
+
+/// Deleting the variant's master must not leave an orphaned override that fails every
+/// later save: the save path prunes the override together with its variant (#7970 review).
+#[test]
+fn saving_after_master_deletion_succeeds_with_an_override_present() {
+    let mut doc = Document::new("override", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
+    doc.layers.push(Layer::group("Variant", vec![]));
+    doc.layers[1].id = LayerId(41);
+    doc.layers.push(Layer::group("Inside", vec![]));
+    doc.layers[2].id = LayerId(42);
+    doc.responsive.master = Some(LayerId(40));
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(40),
+        name: "V".into(),
+        layers: vec![photocraft_doc::responsive::LayerMapping { master_layer: LayerId(40), variant_layer: LayerId(42) }],
+    });
+    doc.responsive.overrides.push(photocraft_doc::responsive::LayerRuleOverride {
+        variant: LayerId(41),
+        layer: LayerId(42),
+        rule: photocraft_doc::responsive::LayerLayoutRule { layer: LayerId(42), ..test_rule() },
+    });
+    let mut back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    // Layer › Delete on the master (remove, then prune at save): the variant and its
+    // override go together, so the save still succeeds.
+    back.layers.retain(|l| l.id != LayerId(40));
+    let bytes = save_to_bytes(&back, &SaveOptions::default()).expect("save after master deletion");
+    let re = load_from_bytes(&bytes).unwrap();
+    assert!(re.responsive.overrides.is_empty());
+    assert!(re.responsive.variants.is_empty());
+}
+
+/// A file whose variant master is already missing (written by an older or foreign writer)
+/// loads, and the load-side prune keeps it savable: the override goes with the variant.
+#[test]
+fn loading_a_dangling_master_keeps_the_document_savable() {
+    let mut doc = Document::new("dangling-master", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Variant", vec![]));
+    doc.layers[0].id = LayerId(41);
+    doc.layers.push(Layer::group("Inside", vec![]));
+    doc.layers[1].id = LayerId(42);
+    doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
+        artboard: LayerId(41),
+        master: LayerId(99),
+        name: "V".into(),
+        layers: vec![],
+    });
+    doc.responsive.overrides.push(photocraft_doc::responsive::LayerRuleOverride {
+        variant: LayerId(41),
+        layer: LayerId(42),
+        rule: photocraft_doc::responsive::LayerLayoutRule { layer: LayerId(42), ..test_rule() },
+    });
+    // Serialize with the dangling master present (validation only counts, so this passes).
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let back = load_from_bytes(&bytes).unwrap();
+    // The remap drops the variant (master missing); the override must follow, and a
+    // re-save must succeed.
+    let again = save_to_bytes(&back, &SaveOptions::default()).expect("re-save of a dangling-master file");
+    let re = load_from_bytes(&again).unwrap();
+    assert!(re.responsive.overrides.is_empty());
+}
+
+fn test_rule() -> photocraft_doc::responsive::LayerLayoutRule {
+    photocraft_doc::responsive::LayerLayoutRule {
+        layer: LayerId(42),
+        anchor: Default::default(),
+        mode: Default::default(),
+        min_size: None,
+        max_size: None,
+        text_flow: Default::default(),
+        min_font_size_pt: None,
+        stack: None,
+    }
+}

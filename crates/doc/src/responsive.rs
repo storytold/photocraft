@@ -199,7 +199,8 @@ impl ResponsiveLayout {
             variant.layers.retain(|mapping| !ids.contains(&mapping.master_layer) && !ids.contains(&mapping.variant_layer));
         }
         self.rules.retain(|rule| !ids.contains(&rule.layer));
-        self.overrides.retain(|entry| !ids.contains(&entry.variant) && !ids.contains(&entry.layer) && !ids.contains(&entry.rule.layer));
+        let variant_artboards: std::collections::HashSet<LayerId> = self.variants.iter().map(|v| v.artboard).collect();
+        self.overrides.retain(|entry| variant_artboards.contains(&entry.variant) && !ids.contains(&entry.layer) && !ids.contains(&entry.rule.layer));
         self.safe_areas.retain(|area| !ids.contains(&area.artboard));
     }
 
@@ -216,7 +217,10 @@ impl ResponsiveLayout {
             variant.layers.retain(|mapping| !gone(mapping.master_layer) && !gone(mapping.variant_layer));
         }
         self.rules.retain(|rule| !gone(rule.layer));
-        self.overrides.retain(|entry| !gone(entry.variant) && !gone(entry.layer) && !gone(entry.rule.layer));
+        // An override lives on its variant: when the variant goes, the override goes with
+        // it, or every later save would fail validation with nothing able to clear it.
+        let variant_artboards: std::collections::HashSet<LayerId> = self.variants.iter().map(|v| v.artboard).collect();
+        self.overrides.retain(|entry| variant_artboards.contains(&entry.variant) && !gone(entry.layer) && !gone(entry.rule.layer));
         self.safe_areas.retain(|area| !gone(area.artboard));
     }
 
@@ -320,11 +324,15 @@ impl ResponsiveLayout {
             rule.layer = layer;
             true
         });
+        // An override needs its variant artboard to stay a variant (remap may drop the variant).
+        let variant_artboards: std::collections::HashSet<LayerId> = self.variants.iter().map(|v| v.artboard).collect();
         self.overrides.retain_mut(|entry| {
-            let (Some(variant), Some(layer), Some(rule_layer)) = (map.get(&entry.variant), map.get(&entry.layer), map.get(&entry.rule.layer)) else {
+            if !variant_artboards.contains(&entry.variant) {
+                return false;
+            }
+            let (Some(layer), Some(rule_layer)) = (map.get(&entry.layer), map.get(&entry.rule.layer)) else {
                 return false;
             };
-            entry.variant = *variant;
             entry.layer = *layer;
             entry.rule.layer = *rule_layer;
             true
