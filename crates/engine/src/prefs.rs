@@ -1225,8 +1225,16 @@ impl Preferences {
             return Ok(());
         }
         let value = match (path.strip_prefix("shortcuts."), &value) {
-            // Normalise shortcut spelling so conflicts compare equal.
-            (Some(_), Value::String(s)) if !s.is_empty() => Value::String(normalize_shortcut(s).ok_or_else(|| format!("`{s}` is not a valid shortcut"))?),
+            // Normalise shortcut spelling so conflicts compare equal. The map takes the entry
+            // directly: a batch of thousands of bindings must not serialise and parse the whole
+            // preferences for each (`keyboardShortcuts.set`).
+            (Some(id), Value::String(s)) if !s.is_empty() => {
+                let value = Value::String(normalize_shortcut(s).ok_or_else(|| format!("`{s}` is not a valid shortcut"))?);
+                check_value(path, &value)?;
+                let Value::String(normalized) = value else { unreachable!() };
+                self.shortcuts.insert(id.to_string(), normalized);
+                return Ok(());
+            }
             (Some(_), Value::Null) => {
                 // null = back to the default.
                 let id = &path["shortcuts.".len()..];

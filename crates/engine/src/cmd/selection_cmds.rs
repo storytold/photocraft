@@ -629,8 +629,10 @@ pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[
     // Only the rows the polygon spans (#4532): rows outside it are empty, and full-width rows
     // keep `polygon`'s coverage bit-identical (its x arithmetic is relative to the area's left
     // edge; its y samples are whole rows plus the same sub-row fractions).
-    let band = polygon_rows(pts, area);
-    let mask = sel::polygon(pts, band, b(p, "antiAlias", true));
+    // And only the columns it spans: a narrow outline on a wide canvas must not allocate every
+    // row at the canvas's width. `polygon_window` keeps the whole-canvas arithmetic.
+    let band = polygon_window_rect(pts, area);
+    let mask = sel::polygon_window(pts, area, band, b(p, "antiAlias", true));
     let m = mode(p);
     let selected = s.edit(label, |doc, _| {
         doc.selection = combine_band(doc.selection.as_ref(), &mask, band, m);
@@ -649,6 +651,18 @@ fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
     let clamp = |v: f32| v.clamp(area.y0 as f32, area.y1 as f32) as i32;
     let (y0, y1) = (clamp(lo.floor()), clamp(hi.ceil() + 1.0));
     if y0 >= y1 { Rect::EMPTY } else { Rect::new(area.x0, y0, area.x1, y1) }
+}
+
+/// [`polygon_rows`] cut to the columns the polygon spans (a pixel either side for coverage).
+fn polygon_window_rect(pts: &[(f32, f32)], area: Rect) -> Rect {
+    let rows = polygon_rows(pts, area);
+    let xs = pts.iter().map(|p| p.0).filter(|x| x.is_finite());
+    let (lo, hi) = xs.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
+    if lo > hi {
+        return Rect::EMPTY;
+    }
+    let clamp = |v: f32| v.clamp(area.x0 as f32, area.x1 as f32) as i32;
+    rows.intersect(&Rect::new(clamp(lo.floor() - 1.0), rows.y0, clamp(hi.ceil() + 1.0), rows.y1))
 }
 
 /// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the

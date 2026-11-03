@@ -85,8 +85,9 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
     xs.dedup();
     ys.sort_unstable();
     ys.dedup();
-    let col = |x: i32| xs.iter().position(|v| *v == x).unwrap_or(0);
-    let row = |y: i32| ys.iter().position(|v| *v == y).unwrap_or(0);
+    // Sorted and deduplicated: bisect, so a document of many slices is laid out in n log n.
+    let col = |x: i32| xs.binary_search(&x).unwrap_or(0);
+    let row = |y: i32| ys.binary_search(&y).unwrap_or(0);
     let (nc, nr) = (xs.len().saturating_sub(1), ys.len().saturating_sub(1));
     let mut taken = vec![false; nc * nr];
     let mut by_row: Vec<Vec<(usize, String)>> = vec![Vec::new(); nr];

@@ -18,6 +18,9 @@ const TS: usize = TILE_SIZE as usize;
 /// worth, 256 MB as GRAY8. A thin shape touches a whole tile wherever it passes, so this, not
 /// its area, bounds what painting it allocates.
 pub const MAX_PAINTED_TILES: usize = (1 << 28) / (TS * TS);
+/// Most edge crossings a polygon may need: every edge is visited on each sub-row it spans, so
+/// many tall, overlapping edges multiply work the tile count never shows.
+pub const MAX_EDGE_SAMPLES: u64 = 1 << 28;
 
 /// The part of the segment `a`–`b` inside `r` (Liang–Barsky), or `None` when it misses it.
 pub(crate) fn clip_segment(a: (f32, f32), b: (f32, f32), r: Rect) -> Option<((f32, f32), (f32, f32))> {
@@ -120,6 +123,11 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
         })
         .collect();
     edges.sort_by(|p, q| p.top.total_cmp(&q.top));
+    let (y0, y1) = (clip.y0 as f32, clip.y1 as f32);
+    let samples: u64 = edges.iter().map(|e| ((e.bottom.min(y1) - e.top.max(y0)).max(0.0) as u64 + 1) * SUB as u64).sum();
+    if samples > MAX_EDGE_SAMPLES {
+        return None;
+    }
     let crossings = |e: &[&Edge], y: f32, xs: &mut Vec<f32>| {
         xs.clear();
         xs.extend(e.iter().map(|&&Edge { a, b, .. }| a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0)));
@@ -266,6 +274,16 @@ mod tests {
 
     /// A thin sliver across a 100,000 px canvas: only the tiles along it are built (the dense
     /// rasteriser allocated its 10-billion-pixel bounding box; the #8783 review).
+    #[test]
+    fn many_tall_overlapping_edges_are_refused_before_rasterising() {
+        // Coincident edges cover few tiles but are each visited on every sub-row they span.
+        let clip = Rect::new(0, 0, 4, 1 << 15);
+        let points: Vec<(f32, f32)> = (0..20_000).map(|i| if i % 2 == 0 { (1.0, 0.0) } else { (2.0, (1 << 15) as f32) }).collect();
+        assert!(polygon_edge_tiles(&points, clip, MAX_PAINTED_TILES).is_some(), "the tile check alone admits it");
+        assert!(polygon_surface(&points, clip).is_none());
+        assert!(polygon_surface(&points[..20], clip).is_some(), "a few such edges are fine");
+    }
+
     #[test]
     fn a_thin_sliver_across_a_huge_canvas_costs_its_edge_tiles() {
         let clip = Rect::new(0, 0, 100_000, 100_000);
