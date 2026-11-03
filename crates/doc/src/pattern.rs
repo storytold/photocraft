@@ -270,7 +270,7 @@ mod tests {
     /// row/tile boundaries.
     fn bounded_row_hash_matches_existing_ids_for_native_depths_models_and_alpha() {
         use photocraft_color::{ColorMode, SampleType};
-        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
             for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 for alpha in [false, true] {
                     let format = PixelFormat::new(mode, depth, alpha);

@@ -183,7 +183,8 @@ pub fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
 
 /// [`blend_channel`] for 32-bit float documents, whose values may exceed 1: Linear Dodge (Add)
 /// and Divide don't clip at 1 there (Photoshop's 32-bit Add is how light is added in HDR), only
-/// at `f32::MAX`, so they stay finite. Every other mode is [`blend_channel`].
+/// at `f32::MAX`, so they stay finite. Other modes use [`blend_channel`], including
+/// Multiply's signed finite saturation for both HDR and coverage-compositing callers.
 #[inline]
 pub fn blend_channel_hdr(mode: BlendMode, cb: f32, cs: f32) -> f32 {
     channel(mode, cb, cs, f32::MAX)
@@ -195,7 +196,7 @@ fn channel(mode: BlendMode, cb: f32, cs: f32, hi: f32) -> f32 {
     match mode {
         BlendMode::Normal | BlendMode::Dissolve | BlendMode::PassThrough => cs,
         BlendMode::Darken => cb.min(cs),
-        BlendMode::Multiply => cb * cs,
+        BlendMode::Multiply => (cb * cs).clamp(-f32::MAX, f32::MAX),
         BlendMode::ColorBurn => color_burn(cb, cs),
         BlendMode::LinearBurn => (cb + cs - 1.0).max(0.0),
         BlendMode::Lighten => cb.max(cs),

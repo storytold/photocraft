@@ -171,9 +171,17 @@ fn older_bundles_without_import_conversion_still_load() {
 
 /// Rewrite only the fixture's report manifest to exercise corrupt framing and missing-blob validation.
 fn edit_import_manifest(bytes: &[u8], edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
+    edit_import_bundle(bytes, None, edit)
+}
+
+/// Preserve the report manifest while optionally omitting one named bundle entry.
+fn edit_import_bundle(bytes: &[u8], omit: Option<&str>, edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
     let zip = zip::ZipReader::new(bytes).unwrap();
     let mut out = zip::ZipWriter::new();
     for entry in &zip.entries {
+        if Some(entry.name.as_str()) == omit {
+            continue;
+        }
         let mut data = zip.read(entry, usize::MAX).unwrap();
         if entry.name == "manifest.json" {
             let mut value = serde_json::from_slice(&data).unwrap();
@@ -191,7 +199,18 @@ fn import_report_corrupt_framing_and_missing_blobs_fail_without_panic() {
     let mut doc = Document::new("Report framing", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     doc.metadata.import_conversion = Some(conversion_report().into());
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let zip = zip::ZipReader::new(&bytes).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&zip.read(zip.find("manifest.json").unwrap(), 1 << 20).unwrap()).unwrap();
+    let attachment = manifest["document"]["metadata"]["import_conversion"]["attachments"][0].as_str().unwrap();
+    let attachment_path = craft_pcraft_format::blob_path(attachment).unwrap();
+    assert!(zip.find(&attachment_path).is_some());
+    let missing_attachment = edit_import_bundle(&bytes, Some(&attachment_path), |_| {});
+    let missing_zip = zip::ZipReader::new(&missing_attachment).unwrap();
+    assert!(missing_zip.find(&attachment_path).is_none());
+    let unchanged: serde_json::Value = serde_json::from_slice(&missing_zip.read(missing_zip.find("manifest.json").unwrap(), 1 << 20).unwrap()).unwrap();
+    assert_eq!(unchanged, manifest);
     for bad in [
+        missing_attachment,
         edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["schema_version"] = 0.into()),
         edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["attachments"] = serde_json::json!([])),
         edit_import_manifest(&bytes, |v| v["document"]["metadata"]["import_conversion"]["record"] = "0".repeat(64).into()),

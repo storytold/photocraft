@@ -186,6 +186,10 @@ fn add_and_divide_clip_at_integer_depths_but_not_in_float() {
     assert_eq!(blend_channel_hdr(BlendMode::Divide, 3.0, -1.0), 1.0);
     assert_eq!(blend_channel_hdr(BlendMode::Divide, f32::MAX, 1e-30), f32::MAX);
     assert_eq!(blend_channel_hdr(BlendMode::LinearDodge, f32::MAX, f32::MAX), f32::MAX);
+    assert_eq!(blend_channel_hdr(BlendMode::Multiply, f32::MAX, 2.0), f32::MAX);
+    assert_eq!(blend_channel_hdr(BlendMode::Multiply, f32::MAX, -2.0), -f32::MAX);
+    assert_eq!(blend_channel_hdr(BlendMode::Multiply, -f32::MAX, -2.0), f32::MAX);
+    assert_eq!(blend_channel(BlendMode::Multiply, f32::MAX, 2.0), f32::MAX);
     assert!(blend_channel_hdr(BlendMode::LinearDodge, f32::INFINITY, 1.0).is_finite());
     // Every other separable mode is unchanged (the non-separable ones keep values above 1:
     // blend_rgb_within), and the in-range results agree.

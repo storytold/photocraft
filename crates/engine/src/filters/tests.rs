@@ -1,5 +1,44 @@
 use super::*;
 
+#[test]
+/// The last native color sample remains editable on opaque layers, while selected alpha still requires transparency edits.
+fn channel_filter_transparency_follows_native_alpha_format() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk] {
+        for depth in SampleType::ALL {
+            for alpha in [false, true] {
+                let format = PixelFormat::new(mode, depth, alpha);
+                let layer = Layer::new("Native channels", LayerContent::Raster(photocraft_raster::Surface::new(format)));
+                for selected in [false, true] {
+                    let mut amounts = vec![0.; format.channels()];
+                    *amounts.last_mut().unwrap() = if selected { 1. } else { 0. };
+                    let noise = FilterParams::ChannelNoise(algo::channel_noise::Params {
+                        amounts,
+                        distribution: algo::Distribution::Uniform,
+                        monochromatic: false,
+                        relative: false,
+                        seed: 1,
+                    });
+                    let mut channels = vec![false; format.channels()];
+                    *channels.last_mut().unwrap() = selected;
+                    let convolution = FilterParams::Convolution(algo::convolution::Params {
+                        kernel: vec![0.; 25],
+                        scale: 1.,
+                        offset: 0.,
+                        channels,
+                        alpha_weighted: false,
+                        edge: algo::convolution::Edge::Repeat,
+                    });
+                    for filter in [noise, convolution] {
+                        assert_eq!(edits_transparency(&filter, &layer), alpha && selected, "{mode:?}/{depth:?}/{alpha}/{selected}");
+                    }
+                }
+                assert!(edits_transparency(&FilterParams::ColorToAlpha { color: [1.; 4], transparency_threshold: 0., opacity_threshold: 1. }, &layer));
+            }
+        }
+    }
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 48, "height": 32})).unwrap();

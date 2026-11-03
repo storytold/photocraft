@@ -7,7 +7,7 @@
 use photocraft_algo::{
     self as algo, Distribution, FilterParams, PolarMode, Preserve, RadialMethod, RadialQuality, RippleSize, SpherizeMode, UndefinedAreas, WaveType,
 };
-use photocraft_doc::{LayerContent, SmartFilter};
+use photocraft_doc::{Layer, LayerContent, SmartFilter};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -231,6 +231,12 @@ pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), Strin
     }
 }
 
+/// Channel-selective controls describe native samples; their last entry is alpha only on alpha-capable surfaces.
+fn edits_transparency(filter: &FilterParams, layer: &Layer) -> bool {
+    filter.makes_transparency()
+        && (!matches!(filter, FilterParams::ChannelNoise(_) | FilterParams::Convolution(_)) || layer.surface().is_none_or(|surface| surface.format().alpha))
+}
+
 pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     validate_params(id, p)?;
     // Session state some filters read (colours) becomes explicit params; external inputs resolve here.
@@ -279,7 +285,8 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             }
             // Filters that make pixels transparent (Color to Alpha) turn the Background into a
             // normal layer first, as the erasers do: it can't hold transparency.
-            if fp.makes_transparency() {
+            let changes_alpha = doc.layer(layer).is_some_and(|layer| edits_transparency(&fp, layer));
+            if changes_alpha {
                 crate::extra_cmds::background_to_layer_for_mask(doc, layer);
             }
             let locks = doc.effective_locks(layer);
@@ -288,7 +295,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
             }
             // Putting the old alpha back (below) would leave unmixed colours fully opaque.
-            if locks.transparency && fp.makes_transparency() && matches!(l.content, LayerContent::Raster(_)) {
+            if locks.transparency && changes_alpha && matches!(l.content, LayerContent::Raster(_)) {
                 return Err(EngineError::Other(format!("Could not complete your request because the transparency of layer \"{}\" is locked", l.name)));
             }
             let mut fp = fp.clone();
@@ -324,7 +331,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 _ => return Err(EngineError::Other("not a pixel layer".into())),
             };
             if let Some(colors) = colors {
-                if fp.makes_transparency() {
+                if changes_alpha {
                     return Err(EngineError::Other("this filter requires composite channels".into()));
                 }
                 // A grayscale plane cannot distinguish an opaque black border from its zero

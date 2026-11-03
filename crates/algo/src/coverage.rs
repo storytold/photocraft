@@ -162,7 +162,7 @@ fn alpha_value(operation: Operation<'_>, current: f32) -> Result<f32, Error> {
 /// Place normalized coverage on the current model's neutral axes and make the pixel opaque, without an RGB conversion.
 fn alpha_to_color(pixel: &mut [f32], mode: ColorMode) -> Result<(), Error> {
     let (alpha, color) = pixel.split_last_mut().ok_or(Error::AlphaRequired)?;
-    if !alpha.is_finite() {
+    if !alpha.is_finite() || color.iter().any(|value| !value.is_finite()) {
         return Err(Error::NonFiniteSample);
     }
     let value = alpha.clamp(0., 1.);
@@ -359,6 +359,9 @@ pub fn apply_with(
             }
             let mut data = surface.try_read_region(tile).map_err(|_| Error::Allocation)?;
             for pixel in data.chunks_exact_mut(channels) {
+                if pixel.iter().any(|value| !value.is_finite()) {
+                    return Err(Error::NonFiniteSample);
+                }
                 let alpha = pixel.last_mut().ok_or(Error::AlphaRequired)?;
                 *alpha = alpha_value(operation, *alpha)?;
             }
@@ -757,6 +760,42 @@ mod tests {
         let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 2;
         assert_eq!(apply_with(&s, Operation::AlphaCurve(&values), r, r, None, &Interrupt::cancel_only(&cancel)).unwrap_err(), Error::Cancelled);
         assert_eq!(s.read_region(r), original);
+    }
+    #[test]
+    /// Reject nonfinite color or coverage with and without a selection, including failures after a valid tile.
+    fn alpha_operations_reject_nonfinite_samples_without_changing_source() {
+        let area = Rect::new(0, 0, 65, 1);
+        let curve: Vec<f32> = (0..256).map(|value| value as f32 / 255.).collect();
+        let selection = surface(ColorMode::Grayscale, SampleType::F32, false, area, &[0.5; 65]);
+        for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+            let format = PixelFormat::new(mode, SampleType::F32, true);
+            for channel in [0, format.channels() - 1] {
+                for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    let mut source = Surface::new(format);
+                    let mut pixel = vec![0.5; format.channels()];
+                    source.fill_rect(area, &pixel);
+                    pixel[channel] = invalid;
+                    source.write_pixel(64, 0, &pixel);
+                    let before: Vec<_> = source.read_region(area).into_iter().map(f32::to_bits).collect();
+                    for operation in [
+                        Operation::SetAlpha(0.25),
+                        Operation::AlphaCurve(&curve),
+                        Operation::ClampAlpha { low: 0.1, high: 0.9 },
+                        Operation::ThresholdAlpha(0.25),
+                        Operation::AlphaToColor,
+                    ] {
+                        for mask in [None, Some(&selection)] {
+                            assert_eq!(
+                                apply_with(&source, operation, area, area, mask, &Interrupt::NONE).unwrap_err(),
+                                Error::NonFiniteSample,
+                                "{mode:?}/{operation:?}/channel={channel}/sample={invalid}"
+                            );
+                            assert_eq!(source.read_region(area).into_iter().map(f32::to_bits).collect::<Vec<_>>(), before);
+                        }
+                    }
+                }
+            }
+        }
     }
     #[test]
     /// Fill an alpha hole without changing HDR color, then verify a half selection publishes half coverage only once.

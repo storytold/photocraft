@@ -217,6 +217,25 @@ mod tests {
     }
 
     #[test]
+    /// Finite HDR multiplication saturates instead of publishing infinity through native Smart-filter mixing.
+    fn hdr_multiply_overflow_stays_finite() {
+        let area = Rect::new(0, 0, 1, 1);
+        for alpha in [false, true] {
+            let format = PixelFormat::new(ColorMode::Rgb, SampleType::F32, alpha);
+            let base = surface(format, [2e19, -2e19, -2e19, 0.5], area);
+            for filtered_alpha in [0.5, 0.25] {
+                let filtered = surface(format, [2e19, 2e19, -2e19, filtered_alpha], area);
+                let result = mix(&base, &filtered, area, BlendMode::Multiply, 1., &Interrupt::NONE).unwrap();
+                let expected = if alpha && filtered_alpha == 0.25 { f32::MAX * 0.2 } else { f32::MAX };
+                for (value, sign) in result.pixel(0, 0).iter().take(3).zip([1., -1., 1.]) {
+                    assert!((*value - expected * sign).abs() <= f32::MAX * 1e-6);
+                }
+                assert!(result.pixel(0, 0).iter().all(|value| value.is_finite()));
+            }
+        }
+    }
+
+    #[test]
     /// Reject mismatched formats, invalid opacity and delayed cancellation without modifying either input surface.
     fn invalid_arguments_and_mid_work_cancellation_do_not_mutate_inputs() {
         let area = Rect::new(0, 0, 513, 1);
