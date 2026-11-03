@@ -1385,7 +1385,7 @@ fn selecting_another_layer_applies_the_transform_and_the_next_one_follows() {
     assert_eq!((t.layer, t.rect), (second.0, [40.0, 40.0, 56.0, 60.0]), "the next box is on the selected layer");
 }
 
-/// The screen rectangle the marching ants cover as [`draw_selection`] paints them over the
+/// The screen rectangle the marching ants cover as [`selection_ants`] places them over the
 /// active document's selection; `None` when it leaves them to the canvas.
 fn ants_bounds(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
     let st = app.session.active().unwrap();
@@ -1395,7 +1395,9 @@ fn ants_bounds(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
     let mut drawn = false;
     let mut output = ctx.run_ui(Default::default(), |ui| {
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("ants-test")));
-        drawn = draw_selection(app, &painter, xf, st.doc.id, &segs, 0.0);
+        let ants = selection_ants(app, &painter, xf, st.doc.id, &segs, 0.0);
+        drawn = ants.is_some();
+        painter.extend(ants.unwrap_or_default());
     });
     output.textures_delta.clear();
     // The ants are a mesh of straight dashes and line shapes for the slanted ones.
