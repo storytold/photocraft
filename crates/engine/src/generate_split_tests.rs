@@ -62,7 +62,7 @@ fn split_by_subjects_cuts_each_instance_out_over_a_repainted_background() {
     assert!(st.runs.iter().all(|r| r.request["task"] != "layers"), "not the layered model");
     // The removal names what it removes (an edit model told only "the object" changed nothing).
     assert!(
-        st.runs.iter().any(|r| r.request["task"] != "segment" && r.request["prompt"].as_str().is_some_and(|p| p.contains("main subject"))),
+        st.runs.iter().any(|r| r.request["task"] != "segment" && r.request["prompt"].as_str().is_some_and(|p| p.contains("the person"))),
         "{:?}",
         st.runs.iter().map(|r| r.request["prompt"].clone()).collect::<Vec<_>>()
     );
