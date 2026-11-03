@@ -7,8 +7,8 @@ use photocraft_geom::Rect;
 fn halo_and_spread_survive_extreme_params() {
     for v in [1e30_f32, f32::MAX, f32::INFINITY] {
         let p = RefineParams { radius: v, feather: v, smooth: v, smart_radius: true, ..RefineParams::default() };
-        assert!(p.halo() >= 0);
-        assert!(p.spread() >= 0);
+        assert_eq!(p.halo(), i32::MAX);
+        assert_eq!(p.spread(), i32::MAX);
     }
 }
 
