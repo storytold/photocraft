@@ -27,6 +27,9 @@ pub const SAVE_DIAGNOSTICS: &str = "layer.generative.saveDiagnostics";
 /// How many landed fills keep their capture (the oldest is dropped first).
 pub(super) const KEEP: usize = 8;
 
+/// Files to write: (name, bytes).
+type Files = Vec<(String, Vec<u8>)>;
+
 /// One picture the service returned, as it came, and what became of it.
 pub(super) struct Returned {
     pub(super) bytes: Vec<u8>,
@@ -131,7 +134,7 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The files for one capture (named with `prefix`) and its part of the summary.
-fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Vec<(String, Vec<u8>)>, Value)> {
+fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Value)> {
     let r = &c.prepared.reference;
     let request = &c.prepared.request;
     let crop: Vec<u8> = r
