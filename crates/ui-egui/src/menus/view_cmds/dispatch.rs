@@ -1,7 +1,7 @@
 use super::arrange::{arrange, fit_layers};
 use super::dialogs::front;
 use super::options::{panel_state, panel_tab, pixel_aspect_ratio, screen_mode_commands, show_slot, snap_slot, was_maximized_id};
-use super::*;
+use super::{FONT_PREVIEW, LANGUAGE, LAYOUTS, PIXEL_ASPECTS, PhotocraftApp, SCREEN_MODES, Show, SnapTo, Value, json};
 
 /// Ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
@@ -82,7 +82,10 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
     }
     let doc = app.session.active().is_some();
     Some(match id {
-        "view.screenMode.cycle" => app.ui.text_edit.is_none(),
+        // Full Screen Mode shows a document, so without one it is unavailable, as in Photoshop
+        // (#9349); with none open, Cycle can only bring a full screen mode back to Standard.
+        "view.screenMode.cycle" => app.ui.text_edit.is_none() && (doc || app.ui.view.screen_mode != "standard"),
+        "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
@@ -103,6 +106,14 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         i if wraps(i) => engine_enabled(),
         _ => true,
     })
+}
+
+/// A full screen mode with no document left (the last one closed) goes back to Standard Screen
+/// Mode, rather than showing the start screen on the full screen pasteboard (#9349).
+pub fn leave_full_screen_without_document(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.ui.view.screen_mode != "standard" && app.session.documents().is_empty() {
+        let _ = crate::menus::invoke(app, ctx, "view.screenMode.standard", json!({}));
+    }
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
@@ -174,6 +185,13 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(t.is_some_and(|t| (t.orientation == photocraft_doc::text::Orientation::Vertical) == (k == "vertical")));
     }
     let t = t?;
+    // The style where the menu reads: the selection start while editing a range (as the Character
+    // panel shows it), else the layer's first run.
+    let start = crate::type_tool::target(app).and_then(|(_, range)| range).map_or(0, |r| r[0]);
+    if let Some(key) = id.strip_prefix("type.openType.numerals.") {
+        let want = photocraft_engine::type_extra_cmds::NumeralsStyle::from_id(key)?;
+        return Some(photocraft_engine::type_extra_cmds::numerals_style_at(t, start) == Some(want));
+    }
     let tag = match id.strip_prefix("type.openType.")? {
         "standardLigatures" => "liga",
         "contextualAlternates" => "calt",
@@ -187,7 +205,7 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "fractions" => "frac",
         _ => return None,
     };
-    Some(t.char_runs().first().is_some_and(|r| photocraft_engine::type_extra_cmds::feature_on(&r.style, tag)))
+    Some(photocraft_engine::type_extra_cmds::feature_on_at(t, start, tag))
 }
 
 /// Engine commands that get a dialog or file picker here when invoked without parameters.
@@ -318,7 +336,16 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         return Ok(json!(*slot));
     }
     if let Some(k) = id.strip_prefix("view.screenMode.") {
-        let next = if k == "cycle" {
+        // Full Screen Mode shows a document (#9349): refused without one, from any caller (the
+        // toolbar's list, automation), before a viewport command can go out.
+        if matches!(k, "fullScreen" | "fullScreenWithMenuBar") && app.session.documents().is_empty() {
+            return Err("Full Screen Mode needs an open document".into());
+        }
+        let next = if k == "cycle" && app.session.documents().is_empty() {
+            // Without a document Cycle can only leave a full screen mode (#9349): straight back
+            // to Standard, not on to the next full screen mode.
+            "standard"
+        } else if k == "cycle" {
             let i = SCREEN_MODES.iter().position(|m| *m == o.screen_mode).unwrap_or(0);
             SCREEN_MODES[(i + 1) % SCREEN_MODES.len()]
         } else {

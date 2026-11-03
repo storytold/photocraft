@@ -2,7 +2,7 @@ use super::open::import_at_raw_ppi;
 use super::paths::{extension, file_name, join, list_images, read_file, stem};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, save_doc};
-use super::*;
+use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
 
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
@@ -138,12 +138,16 @@ pub(crate) fn process_tree(
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
 /// PhotoCraft opens but can't write, camera raws above all (#5799: a folder of ARWs failed on
-/// every file). Those are saved as PSD, the format Photoshop's Save As offers for a raw. An input
-/// whose file name has no extension (a dot in a folder name doesn't count) is saved as PNG.
+/// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates and the
+/// codec formats without a writer in this build. Those are saved as PSD, the format Photoshop's
+/// Save As offers for a raw. An input whose file name has no extension (a dot in a folder name
+/// doesn't count) is saved as PNG.
 pub(super) fn same_format(path: &str) -> String {
-    const IMPORT_ONLY: &[&str] = &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm"];
+    const IMPORT_ONLY: &[&str] =
+        &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) { "psd".into() } else { ext }
+    let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
+    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
 }
 
 #[cfg(test)]
@@ -155,6 +159,17 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/IMG_0001.HEIC"), "psd");
     assert_eq!(same_format("/in/logo.svg"), "psd");
     assert_eq!(same_format("/in/scan.cin"), "psd");
+    // Formats PhotoCraft opens and does not write are saved as PSD.
+    for name in ["/in/scan.dcm", "/in/scan.DICOM", "/in/scan.dc3", "/in/page.xcf", "/in/page.xcf.gz", "/in/page.xcfgz", "/in/card.psdt"] {
+        assert_eq!(same_format(name), "psd", "{name}");
+    }
+    for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read && !f.caps().write) {
+        for ext in f.extensions() {
+            assert_eq!(same_format(&format!("/in/a.{ext}")), "psd", "{f:?} .{ext}");
+        }
+    }
+    assert_eq!(same_format("/in/a.pam"), "pam");
+    assert_eq!(same_format("/in/a.dds"), "dds");
     // No extension in the file name: PNG, not the path after a dot in a folder name.
     assert_eq!(same_format("/in/v1.2/scan"), "png");
     assert_eq!(same_format("C:\\in.d\\scan"), "png");
@@ -292,7 +307,15 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             let mut saved: Option<Arc<Document>> = None;
             for (id, params) in &steps {
                 if batch_save_point(id) {
-                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
+                    let st = scratch.active_mut().ok_or(EngineError::NoDocument)?;
+                    saved = Some(st.doc.clone());
+                    // Batch performs the action's Save / Save As (to its destination), so the
+                    // document is saved there as far as the steps after it see: a Close recorded
+                    // without a save policy (`"save":"ask"`) then closes it. A Save a Copy leaves
+                    // the document as changed as it was.
+                    if id != "file.saveACopy" {
+                        st.saved_revision = st.revision;
+                    }
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;

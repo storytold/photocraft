@@ -20,12 +20,12 @@
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, vec2};
 use photocraft_doc::DocId;
-use photocraft_engine::jobs::{JobCtx, JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
+use photocraft_engine::jobs::{CancelRefused, JobCtx, JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
@@ -73,23 +73,14 @@ pub(crate) struct OpenBatch {
 /// The job command of a background save.
 pub const SAVE_JOB: &str = "file.save";
 
-const ENCODING: u8 = 0;
-const WRITING: u8 = 1;
-const CANCELLED: u8 = 2;
-
-/// A save worker's stage, shared between the worker and the UI.
+/// A save worker's state, shared between the worker and the UI. Whether it may still be
+/// cancelled is its job's ([`JobCtx::commit`]), so every cancel path agrees.
 #[derive(Debug, Default)]
 pub struct SaveState {
-    stage: AtomicU8,
     finished: AtomicBool,
 }
 
 impl SaveState {
-    /// Cancel unless writing has started; false once it has.
-    fn try_cancel(&self) -> bool {
-        matches!(self.stage.compare_exchange(ENCODING, CANCELLED, Ordering::AcqRel, Ordering::Acquire), Ok(_) | Err(CANCELLED))
-    }
-
     /// The worker has returned (or unwound): nothing of this save can still touch the file.
     pub fn finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
@@ -110,7 +101,6 @@ impl Drop for WorkerDone {
 /// be cancelled.
 pub struct SaveCtl {
     pub job: JobCtx,
-    state: Arc<SaveState>,
 }
 
 impl SaveCtl {
@@ -120,15 +110,15 @@ impl SaveCtl {
 
     /// `Err` once the save was cancelled: stop, write nothing.
     pub fn check(&self) -> Result<(), String> {
-        if self.job.cancelled() || self.state.stage.load(Ordering::Acquire) == CANCELLED { Err(SAVE_CANCELLED.into()) } else { Ok(()) }
+        if self.job.cancelled() { Err(SAVE_CANCELLED.into()) } else { Ok(()) }
     }
 
     /// Call once, right before replacing the file. `Ok`: the save can no longer be cancelled
-    /// (Cancel and Esc are refused) and must run to the end; `Err`: it was cancelled first and
-    /// nothing may be written.
+    /// (Cancel, Esc, `jobs.cancel`, cancelling every job and closing the document all leave it
+    /// running) and must run to the end; `Err`: it was cancelled first and nothing may be
+    /// written.
     pub fn commit(&self) -> Result<(), String> {
-        self.check()?;
-        self.state.stage.compare_exchange(ENCODING, WRITING, Ordering::AcqRel, Ordering::Acquire).map(|_| ()).map_err(|_| SAVE_CANCELLED.into())
+        self.job.commit().map_err(|_| SAVE_CANCELLED.into())
     }
 }
 
@@ -197,14 +187,24 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 }
 
 /// Open a file in the background: a tab appears at once and shows the progress; the document
-/// replaces it when decoded. `path` is remembered for File › Save and Open Recent.
-pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
+/// replaces it when decoded. `path` is remembered for File › Save and Open Recent. `slot` (a file
+/// dropped on the tabs) and `order` (its place in a set opened together) survive an inline
+/// completion, a memory prompt and the open itself, so the tab lands where it belongs either way.
+pub fn start_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user(name, source).map_err(|e| e.to_string())? {
-        // Inline (wasm): finish now, like a background open that ended at once.
-        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
+    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+        // Inline (wasm, or background jobs off): finish now, like a background open that ended at
+        // once. A preflight keeps the slot and set order in its memory prompt.
+        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
         Started::Job(job) => {
-            app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot: None, order: None });
+            app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot, order });
             app.jobs.focus = Some(job);
             app.ui.chrome.home = None;
             app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", name)]);
@@ -226,16 +226,20 @@ pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
 
 /// A member of a set opened at once (not in the background): its document is in place at the
 /// end, so later members go after it.
+#[cfg(test)]
 pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
     if let Some(batch) = jobs.batches.iter_mut().find(|b| b.id == order.batch) {
         batch.opened.push(order.seq);
     }
 }
 
-/// Every member of the set has been started: forget it unless some are still opening.
-pub(crate) fn end_batch(jobs: &mut JobsUi) {
-    let opens = &jobs.opens;
-    jobs.batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)));
+/// Every member of the set has been started: forget it unless some are still opening, waiting on
+/// their prompt (memory, profile or damage), or waiting for a prompt to clear.
+pub(crate) fn end_batch(app: &mut PhotocraftApp) {
+    let waiting: Vec<u64> =
+        app.held_memory_prompts.iter().filter_map(|m| m.order.map(|o| o.batch)).chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch))).collect();
+    let JobsUi { opens, batches, .. } = &mut app.jobs;
+    batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)) || waiting.contains(&b.id));
 }
 
 /// The tab position for a member of a set that just opened: after the members before it that
@@ -247,12 +251,19 @@ fn batch_slot(jobs: &mut JobsUi, order: OpenOrder) -> Option<usize> {
     Some(slot)
 }
 
+/// Where a finished open puts its tab: an explicit slot (a file dropped on the tabs) wins;
+/// otherwise its place in a set opened together, if that set is still tracked.
+pub(crate) fn tab_slot(app: &mut PhotocraftApp, slot: Option<usize>, order: Option<OpenOrder>) -> Option<usize> {
+    let in_set = order.and_then(|o| batch_slot(&mut app.jobs, o));
+    slot.or(in_set)
+}
+
 /// A background open's result (`{document, warnings, color}`) for `tab`, already taken out of
-/// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set.
+/// [`JobsUi::opens`]: the document goes to the tab's slot, or to its place in its set. A memory
+/// preflight keeps both in its prompt.
 pub(crate) fn finish_open_tab(app: &mut PhotocraftApp, tab: &OpenTab, v: &Value) -> Result<(), String> {
-    let slot = tab.slot.or_else(|| tab.order.and_then(|o| batch_slot(&mut app.jobs, o)));
-    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, slot);
-    end_batch(&mut app.jobs);
+    let r = finish_open(app, &tab.name, tab.path.as_deref(), v, tab.slot, tab.order);
+    end_batch(app);
     r
 }
 
@@ -290,8 +301,8 @@ pub fn start_save(
         &label,
         true,
         move |ctx| {
-            let _done = WorkerDone(Arc::clone(&worker));
-            let ctl = SaveCtl { job: ctx.clone(), state: worker };
+            let _done = WorkerDone(worker);
+            let ctl = SaveCtl { job: ctx.clone() };
             save(&snapshot, &target, &settings, &ctl)
                 .map_err(|e| if ctl.check().is_err() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
         },
@@ -382,6 +393,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if let Some(job) = job_in_view(app)
         && !ctx.text_edit_focused()
+        && !crate::zoom_field::editing(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         cancel(app, job.id);
@@ -425,27 +437,31 @@ pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
 
 /// Cancel job `id` (the status bar's ×, the dialog's Cancel, Esc, closing an opening tab).
 pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
+    try_cancel(app, id).is_ok()
+}
+
+/// [`cancel`], saying why a job was left running.
+pub fn try_cancel(app: &mut PhotocraftApp, id: JobId) -> Result<(), CancelRefused> {
     let label = app.session.job(id).map(|j| j.label);
+    let r = app.session.try_cancel_job(id);
     // A save that has started replacing the file runs to the end: cancelling it now would leave
     // the file written but the document marked unsaved.
-    if let Some(save) = app.jobs.saves.iter().find(|s| s.job == id)
-        && !save.state.try_cancel()
-    {
+    if r == Err(CancelRefused::Committing) {
         app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be cancelled"), &[("label", label.as_deref().unwrap_or_default())]);
         app.ui.status_error = false;
-        return false;
     }
-    let cancelled = app.session.cancel_job(id);
-    if cancelled {
+    if r.is_ok() {
         // The event (and its status text) arrives with the next poll; say so now as well.
         if let Some(l) = label {
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &l)]);
             app.ui.status_error = false;
         }
     }
-    cancelled
+    r
 }
 
+/// Handles one finished job: optional completion beep, waiting control replies, and the
+/// command-specific open, save, transform and recovery paths.
 fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     // Preferences ▸ General ▸ Beep When Done (off by default): a finished operation beeps, like
     // Photoshop's cue. Cancelling is the user's own action and stays silent.
@@ -506,7 +522,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
                 app.ui.status_error = false;
             }
         }
-        end_batch(&mut app.jobs);
+        end_batch(app);
         return;
     }
     match e.outcome {
@@ -545,8 +561,29 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 }
 
 /// What [`crate::PhotocraftApp::open_bytes`] does after decoding, for a background open's result
-/// (`{document, docId, warnings, color}` or `{held, …}`).
-fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>) -> Result<(), String> {
+/// (`{document, docId, warnings, color}` or `{held, …}`). `slot` and `order` are the tab position
+/// and set place the file keeps: through a memory prompt, a profile/damage prompt and the final
+/// document, so an inline completion lands where a background tab would.
+fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>, order: Option<OpenOrder>) -> Result<(), String> {
+    if let Some(preflight_id) = v.get("pendingPreflight").and_then(Value::as_u64) {
+        let estimated = v.get("estimated").and_then(Value::as_u64).unwrap_or(0);
+        let available = v.get("availableRam").and_then(Value::as_u64);
+        let capacity_unknown = v.get("capacityUnknown").and_then(Value::as_bool).unwrap_or(available.is_none());
+        let uncertain_capacity_warning = v.get("uncertainCapacityWarning").and_then(Value::as_bool).unwrap_or(false);
+        crate::open_prompt::arrive_memory(
+            app,
+            preflight_id,
+            name.to_string(),
+            path.map(str::to_string),
+            slot,
+            order,
+            estimated,
+            available,
+            capacity_unknown,
+            uncertain_capacity_warning,
+        );
+        return Ok(());
+    }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
@@ -558,6 +595,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         warnings: warnings.clone(),
         bytes: None,
         slot,
+        order,
         question,
         policy_applied,
     };
@@ -580,7 +618,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         crate::open_prompt::arrive(app, held(doc, read_only, None, true));
         return Ok(());
     }
-    if let Some(slot) = slot {
+    if let Some(slot) = tab_slot(app, slot, order) {
         let _ = app.run("document.move", json!({"document": index, "to": slot}));
     }
     after_open(app, document, name, path, &warnings, None)
