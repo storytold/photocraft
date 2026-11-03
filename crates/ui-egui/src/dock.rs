@@ -353,7 +353,8 @@ pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
 }
 
 const RESTORE_NOTICE_TITLE: &str = "The saved panel layout could not be restored.";
-const RESTORE_NOTICE_MESSAGE: &str = "The saved panel layout could not be restored. It has been preserved; reset the workspace to replace it.";
+const RESTORE_NOTICE_MESSAGE: &str =
+    "The saved panel layout could not be restored. It has been preserved; editing panels or resetting the workspace will replace it.";
 
 /// Preserve the explanation even when fullscreen or the status bar hides the chrome.
 fn sync_restore_notice(app: &mut PhotocraftApp) {
@@ -363,7 +364,13 @@ fn sync_restore_notice(app: &mut PhotocraftApp) {
         app.ui.status_error = false;
         app.ui.docking_restore_status = Some(message);
         if !app.ui.notices.iter().any(|n| n.title == RESTORE_NOTICE_TITLE) {
-            crate::notices::post(app, RESTORE_NOTICE_TITLE, vec!["It has been preserved; reset the workspace to replace it.".into()], false, None);
+            crate::notices::post(
+                app,
+                RESTORE_NOTICE_TITLE,
+                vec!["It has been preserved; editing panels or resetting the workspace will replace it.".into()],
+                false,
+                None,
+            );
         }
     } else {
         if app.ui.docking_restore_status.take().is_some_and(|own| own == app.ui.status) {
