@@ -152,6 +152,7 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
+        let notice_before = self.ui.notices.last().map(|notice| notice.id);
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -168,7 +169,8 @@ impl PhotocraftApp {
         }
         match &r {
             Ok(result) => {
-                if self.ui.status_error {
+                let action_reported_warning = id == "actions.play" && self.ui.notices.last().map(|notice| notice.id) != notice_before;
+                if self.ui.status_error && !action_reported_warning {
                     self.ui.status.clear();
                     self.ui.status_error = false;
                 }

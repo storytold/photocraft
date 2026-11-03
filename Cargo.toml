@@ -42,9 +42,9 @@ photocraft-ipp = { path = "crates/ipp" }
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
-craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "6ae033e6c18bde9cd6f18e505c0556667ba2226a" }
 # Reads .vectorcraft files (photocraft-io's `vectorcraft`); its craft-pcraft-format is the one above.
-craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba" }
+craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "6ae033e6c18bde9cd6f18e505c0556667ba2226a" }
 # Draws the PDF a .vectorcraft file carries. Its Hayro crates are patched below at the same revision.
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "fa1a657476650d870bd5982fa6a0ea83fa69ecba", features = ["raster"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.

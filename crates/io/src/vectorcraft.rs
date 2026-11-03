@@ -205,6 +205,12 @@ fn render(page: &Page<'_>, options: &Options, ctl: &Interrupt, buffer: &mut [u8]
 
 /// Forward cancellation while a draw is running, as well as before it starts.
 fn with_render_cancellation<T>(ctl: &Interrupt, draw: impl FnOnce(&InterpreterSettings) -> Result<T, raster::Error>) -> Result<T, raster::Error> {
+    struct Finished<'a>(&'a AtomicBool);
+    impl Drop for Finished<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
     if ctl.cancelled() {
         return Err(raster::Error::Cancelled);
     }
@@ -225,9 +231,8 @@ fn with_render_cancellation<T>(ctl: &Interrupt, draw: impl FnOnce(&InterpreterSe
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
-        let r = draw(&settings);
-        done.store(true, Ordering::Relaxed);
-        r
+        let _finished = Finished(&done);
+        draw(&settings)
     })
 }
 

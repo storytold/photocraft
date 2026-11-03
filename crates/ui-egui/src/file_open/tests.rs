@@ -25,17 +25,29 @@ fn vectorcraft_place_shows_import_warnings_from_bytes_and_commands() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("Pages.vectorcraft");
     std::fs::write(&path, &bytes).unwrap();
-    for command in [false, true] {
+    for command in ["bytes", "file.placeEmbedded", "file.placeLinked"] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-        let r = if command {
-            app.run("file.placeEmbedded", json!({"path": path})).unwrap()
+        if command != "bytes" {
+            app.run("actions.record", json!({})).unwrap();
+        }
+        let r = if command != "bytes" {
+            app.run(command, json!({"path": path})).unwrap()
         } else {
             app.place_bytes("Pages.vectorcraft", bytes.clone(), None).unwrap()
         };
         assert!(r["warnings"].as_array().is_some_and(|w| !w.is_empty()), "{r}");
         assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
         assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+        if command != "bytes" {
+            app.run("actions.stop", json!({})).unwrap();
+            app.ui.notices.clear();
+            app.ui.status.clear();
+            let played = app.run("actions.play", json!({"action": 0})).unwrap();
+            assert!(played.get("failed").is_none(), "{played}");
+            assert!(app.ui.notices.iter().any(|n| n.lines.iter().any(|line| line.contains("2 artboards"))));
+            assert!(app.ui.status.contains("2 artboards"), "{}", app.ui.status);
+        }
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

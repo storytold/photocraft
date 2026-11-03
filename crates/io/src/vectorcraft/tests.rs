@@ -189,6 +189,33 @@ fn cancellation_after_the_draw_callback_starts_reaches_the_pdf_renderer() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_draw_panic_stops_the_cancellation_watcher_before_resuming() {
+    let finished = AtomicBool::new(false);
+    let rescued = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let rescue = scope.spawn(|| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !finished.load(Ordering::Relaxed) {
+                if std::time::Instant::now() >= deadline {
+                    rescued.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        let cancel = || rescued.load(Ordering::Relaxed);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_render_cancellation(&Interrupt::cancel_only(&cancel), |_| -> Result<(), raster::Error> { panic!("synthetic draw panic") })
+        }));
+        finished.store(true, Ordering::Relaxed);
+        rescue.join().unwrap();
+        assert_eq!(panic.unwrap_err().downcast_ref::<&str>(), Some(&"synthetic draw panic"));
+        assert!(!rescued.load(Ordering::Relaxed), "the watcher needed cancellation before the draw panic could resume");
+    });
+}
+
+#[test]
 fn scale_limits_reuse_the_same_bytes_and_recheck_changed_or_invalid_sources() {
     let a = file(Some(&pdf(83, 47, 1)));
     let b = file(Some(&pdf(83, 48, 1)));

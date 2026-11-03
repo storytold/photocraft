@@ -263,6 +263,9 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         };
         match result {
             Ok(value) => {
+                if matches!(id.as_str(), "file.placeEmbedded" | "file.placeLinked") {
+                    app.report_place_warnings(&value, id == "file.placeLinked");
+                }
                 if let Some(error) = actions_cmds::nested_failure(id, &value).or_else(|| actions_cmds::save_target_closed(&app.session, id, target)) {
                     failed = Some(json!({"step": i, "id": id, "error": error}));
                     break;
