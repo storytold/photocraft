@@ -1,16 +1,18 @@
+use super::METHODS;
 use super::inspect::inspect;
 use super::params::{
     BUTTONS, KEY_MODIFIERS, MAX_CLICKS, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice, input_modifiers, input_number,
     input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
 };
 use super::{ControlRequest, DialogKind, Outcome, PhotocraftApp, SHELL_DIALOG, Tool, ToolEvent, Value, json, run_waiting, tool_event, wrap};
+use photocraft_engine::jobs::{CancelReport, JobId};
 
 /// A domain handler: `Some` when it owns the request's method, `None` to let the next one try.
 type Handler = fn(&mut PhotocraftApp, &egui::Context, &ControlRequest) -> Option<Outcome>;
 
 pub(super) fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     const HANDLERS: [Handler; 5] = [engine_methods, shell_methods, dialog_methods, input_methods, app_methods];
-    HANDLERS.iter().find_map(|handler| handler(app, ctx, req)).unwrap_or_else(|| err(format!("unknown method `{}`", req.method)))
+    HANDLERS.iter().find_map(|handler| handler(app, ctx, req)).unwrap_or_else(|| err(photocraft_engine::command_hints::unknown_method(&req.method, METHODS)))
 }
 
 fn str_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
@@ -50,6 +52,9 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
 
 fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
     let Some(id) = str_param(p, "id") else { return err("missing `id`") };
+    if app.ui.canvas_tool_menu.is_none() && app.ui.brush_mode_menu.is_some() {
+        return mode_menu_choose(app, ctx, id);
+    }
     let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
     if !crate::canvas_tool_menu::available(app, menu, id) {
         return err("context action is unavailable");
@@ -65,23 +70,42 @@ fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Ou
     ok(json!({"command": id, "dialog": app.ui.dialogs.last().map(|d| d.id)}))
 }
 
+/// A row of the painting tools' Shift+right-click menu, by its English label (`brushModeMenu.choices`).
+fn mode_menu_choose(app: &mut PhotocraftApp, ctx: &egui::Context, label: &str) -> Outcome {
+    let item = match crate::brush_mode_menu::find(app, label) {
+        Ok(item) => item,
+        Err(e) => return err(e),
+    };
+    if let Some((command, params)) = crate::brush_mode_menu::engine_call(app, app.ui.tool, item)
+        && let Some(authorize) = app.services.automation_command.as_ref()
+        && let Err(error) = authorize(command, &params)
+    {
+        return err(error);
+    }
+    crate::brush_mode_menu::choose(app, ctx, item);
+    ok(json!({"choice": label, "brushPicker": app.ui.brush_picker.is_some()}))
+}
+
 fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let Some(id) = str_param(p, "command").or(str_param(p, "id")) else { return err("missing `command`") };
+    if req.method == "engine.execute" && METHODS.contains(&id) && photocraft_engine::commands::find(id).is_none() {
+        return err(photocraft_engine::command_hints::protocol_method_as_command(id));
+    }
     let params = p.get("params").cloned().unwrap_or(json!({}));
     let wait = wait_param(p);
     // A control-channel menu click must respect the same modal gate as the native menu.
     // The documented `ui` requests of Camera Raw and the full-window workspaces operate
     // the already-open one rather than click a menu. Only that continuation may pass its
-    // own modal gate. engine.execute is deliberately not subject to the UI's menu-click semantics.
+    // own modal gate. Both command entry points respect document ownership.
     let open_modal = if app.camera_raw.is_some() { Some("filter.cameraRaw") } else { crate::distort_ui::modal_workspace(app) };
     let continuation = open_modal == Some(id)
         && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
         && app.ui.dialogs.is_empty()
         && app.discard.is_none()
         && !crate::crop_ui::blocks(app, id);
-    if req.method == "ui.menu.invoke" && !continuation && !crate::menus::modal_allows(app, id) {
-        return err("menu command is unavailable while a modal dialog is open");
+    if !continuation && !crate::menus::modal_allows(app, id) {
+        return err("command is unavailable while a modal dialog is open");
     }
     if let Some(authorize) = app.services.automation_command.as_ref()
         && let Err(error) = authorize(id, &params)
@@ -100,18 +124,27 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
 fn jobs_cancel(app: &mut PhotocraftApp, p: &Value) -> Outcome {
     let all = p.get("job").is_none_or(Value::is_null);
     match p.get("job").and_then(Value::as_u64) {
-        Some(j) if app.session.job(photocraft_engine::jobs::JobId(j)).is_some() => {
-            let cancelled = crate::jobs_ui::cancel(app, photocraft_engine::jobs::JobId(j));
-            ok(json!({"cancelled": usize::from(cancelled)}))
-        }
+        // Same reply as the engine's `jobs.cancel`: `{cancelled: n}`, plus `notCancelled:
+        // [{job, reason}]` for the jobs left running (a save already writing its file, a print).
+        Some(j) if app.session.job(JobId(j)).is_some() => ok(cancel_each(app, vec![JobId(j)]).to_json()),
         Some(j) => err(format!("no running job {j}")),
         None if all => {
             let ids: Vec<_> = app.session.jobs().into_iter().map(|j| j.id).collect();
-            let cancelled = ids.into_iter().filter(|j| crate::jobs_ui::cancel(app, *j)).count();
-            ok(json!({"cancelled": cancelled}))
+            ok(cancel_each(app, ids).to_json())
         }
         None => err("`job` must be a job id"),
     }
+}
+
+fn cancel_each(app: &mut PhotocraftApp, ids: Vec<JobId>) -> CancelReport {
+    let mut report = CancelReport::default();
+    for id in ids {
+        match crate::jobs_ui::try_cancel(app, id) {
+            Ok(()) => report.cancelled.push(id),
+            Err(why) => report.refused.push((id, why)),
+        }
+    }
+    report
 }
 
 // ---- the shell: view state, windows, GPU, focus, screenshots ----
@@ -272,6 +305,8 @@ struct ToolSet {
     cam_transform_on_drop: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<crate::layer_filter_ui::Filter>,
+    pen_mode: Option<String>,
+    pen_path_op: Option<String>,
 }
 
 impl ToolSet {
@@ -291,6 +326,8 @@ impl ToolSet {
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
+            pen_mode: pen_mode_param(p)?,
+            pen_path_op: pen_path_op_param(p)?,
         })
     }
 
@@ -328,6 +365,12 @@ impl ToolSet {
         if let Some(f) = self.layer_filter {
             crate::layer_filter_ui::apply(&mut app.ui, f);
         }
+        if let Some(m) = self.pen_mode {
+            app.ui.tool_options.vector_mode = m;
+        }
+        if let Some(o) = self.pen_path_op {
+            app.ui.tool_options.pen_path_op = o;
+        }
     }
 
     fn apply_gradient_and_trace(&self, app: &mut PhotocraftApp) {
@@ -345,6 +388,21 @@ impl ToolSet {
             crate::gradient_ui::options_changed(app, &gradient_before);
         }
     }
+}
+
+/// The Pen tools' options bar (#1397): Path or Shape mode.
+fn pen_mode_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("penMode") else { return Ok(None) };
+    v.as_str().filter(|m| matches!(*m, "path" | "shape")).map(|m| Some(m.to_string())).ok_or_else(|| "penMode must be \"path\" or \"shape\"".to_string())
+}
+
+/// The Pen tools' Path Operation.
+fn pen_path_op_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("penPathOp") else { return Ok(None) };
+    v.as_str()
+        .filter(|o| crate::vector_ui::PATH_OPS.iter().any(|(id, ..)| id == o))
+        .map(|o| Some(o.to_string()))
+        .ok_or_else(|| "penPathOp must be one of newLayer, combine, subtract, intersect, exclude".to_string())
 }
 
 fn gradient_blend_param(p: &Value) -> std::result::Result<Option<photocraft_color::BlendMode>, String> {
@@ -557,6 +615,9 @@ impl PanelSet {
             app.ui.mask_target = m;
             app.ui.properties_layer = None;
             app.ui.vector_mask_target &= !m;
+            if m {
+                app.target_mask_over_colour_rows();
+            }
             app.sync_mask_targets();
         }
         if let Some(open) = self.updates_open {
@@ -893,7 +954,14 @@ fn color_picker_dialog(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         let (Some(parent), Some(effect), Some(field)) = (u64_param(p, "parent"), str_param(p, "effect"), str_param(p, "field")) else {
             return err("need integer `parent` and string `effect` and `field`");
         };
-        return match crate::layer_style::color_picker::open(app, parent, effect, field) {
+        let stop = match p.get("stop") {
+            None | Some(Value::Null) => None,
+            Some(v) => match v.as_u64().and_then(|i| usize::try_from(i).ok()) {
+                Some(i) => Some(i),
+                None => return err("`stop` must be a non-negative integer"),
+            },
+        };
+        return match crate::layer_style::color_picker::open(app, parent, effect, field, stop) {
             Ok(id) => ok(json!({"dialog": id})),
             Err(error) => err(error),
         };
@@ -1110,6 +1178,9 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
         mods: modifiers_from(&parsed.modifiers),
     };
     for sample in parsed.events {
+        if crate::brush_mode_menu::blocks_control(app, ctx, sample.ev) {
+            continue;
+        }
         if !pointer_event_intercepted(app, ctx, &gesture, &sample) {
             forward_pointer_event(app, &gesture, sample);
         }
@@ -1308,7 +1379,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => app_open(app, path),
+            Some(path) => match p.get("approveHighMemory") {
+                None | Some(Value::Null) => app_open(app, path, false),
+                Some(Value::Bool(approved)) => app_open(app, path, *approved),
+                Some(_) => err("expected boolean for `approveHighMemory`"),
+            },
             None => err("missing `path`"),
         },
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
@@ -1327,7 +1402,9 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     })
 }
 
-fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
+/// The `app.open` control method: opens a path through the configured automation read
+/// capability, with optional high-memory approval.
+fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1337,7 +1414,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes(&name, &bytes)?;
+        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);
