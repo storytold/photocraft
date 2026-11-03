@@ -718,6 +718,46 @@ fn closing_the_document_discards_its_dropped_files() {
     assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps));
 }
 
+/// The closed-document notice survives the same call that would start the next queued file: the
+/// placement waits one frame, so the message is drawn.
+#[test]
+fn the_closed_document_notice_stays_when_the_next_queued_file_starts() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let a = app.session.active().unwrap().doc.id;
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let b = app.session.active().unwrap().doc.id;
+    let b_layers = layer_count(&app);
+    app.drop_places.push_back((a, crate::file_open::DropPlace::Bytes("a.png".into(), png_bytes(4, 3))));
+    app.drop_places.push_back((b, crate::file_open::DropPlace::Bytes("b.png".into(), png_bytes(4, 3))));
+    app.run("file.close", json!({"document": 0})).unwrap();
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.status.contains("closed"), "{}", app.ui.status);
+    assert_eq!(app.drop_places.len(), 1, "B's file waits for the next frame");
+    assert!(app.jobs.place.is_none() && app.ui.transform.is_none());
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), b_layers + 1);
+    assert!(app.drop_places.is_empty());
+}
+
+/// The drop queue is bounded: files dropped on another tab wait, and a browser drop holds its whole
+/// file, so neither a flood of drops nor a huge one grows it without limit.
+#[test]
+fn the_drop_queue_is_bounded() {
+    let mut app = app_with_canvas();
+    let doc = app.session.active().unwrap().doc.id;
+    for _ in 0..crate::file_open::MAX_QUEUED_DROPS {
+        app.queue_drop(doc, crate::file_open::DropPlace::Bytes("p.png".into(), vec![0]));
+    }
+    assert_eq!(app.drop_places.len(), crate::file_open::MAX_QUEUED_DROPS);
+    app.queue_drop(doc, crate::file_open::DropPlace::Bytes("over.png".into(), vec![0]));
+    assert_eq!(app.drop_places.len(), crate::file_open::MAX_QUEUED_DROPS, "the queue keeps its cap");
+    assert!(app.ui.status.contains("too many") && app.ui.status_error, "{}", app.ui.status);
+    assert!(crate::file_open::queue_takes_drop(0, crate::file_open::MAX_QUEUED_DROP_BYTES, 0));
+    assert!(!crate::file_open::queue_takes_drop(0, crate::file_open::MAX_QUEUED_DROP_BYTES, 1));
+    assert!(!crate::file_open::queue_takes_drop(crate::file_open::MAX_QUEUED_DROPS, 0, 0));
+}
+
 /// Closing A while its file is being placed: nothing lands anywhere, and A's next file is dropped.
 #[test]
 fn closing_the_document_while_its_file_is_placed_places_nothing_elsewhere() {

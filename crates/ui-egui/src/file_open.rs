@@ -44,6 +44,27 @@ pub(crate) enum DropPlace {
     Bytes(String, Vec<u8>),
 }
 
+impl DropPlace {
+    /// The file contents held while it waits for its document (a path drop holds none yet).
+    fn queued_bytes(&self) -> usize {
+        match self {
+            Self::File(_) => 0,
+            Self::Bytes(_, bytes) => bytes.len(),
+        }
+    }
+}
+
+/// The most dropped files that can wait for their document to come back in view.
+const MAX_QUEUED_DROPS: usize = 32;
+/// The most dropped file contents kept in memory while they wait: a browser drop carries its whole
+/// file, and anything queued on a document in another tab stays until it is back in view.
+const MAX_QUEUED_DROP_BYTES: usize = 256 * 1024 * 1024;
+
+/// Whether the drop queue takes `incoming` more bytes when it holds `queued` files and `bytes`.
+fn queue_takes_drop(queued: usize, bytes: usize, incoming: usize) -> bool {
+    queued < MAX_QUEUED_DROPS && bytes.saturating_add(incoming) <= MAX_QUEUED_DROP_BYTES
+}
+
 /// `warnings` from an import, plus one for each font family the active document's type uses that
 /// isn't installed (#4559): Photoshop warns about missing fonts as a file opens, and the CLI and
 /// automation already report them; the type would otherwise silently render in a fallback face.
@@ -246,7 +267,7 @@ impl PhotocraftApp {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
                 if let Some(doc) = self.session.active().map(|st| st.doc.id) {
-                    self.drop_places.push_back((doc, DropPlace::File(f)));
+                    self.queue_drop(doc, DropPlace::File(f));
                 }
                 continue;
             }
@@ -322,7 +343,11 @@ impl PhotocraftApp {
     /// files dropped on a document in another tab wait until it is back in view, and are discarded
     /// (with a message) when it is closed.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
-        self.discard_drops_of_closed_documents();
+        // Leave the closed-document notice up for this frame: starting the next queued placement
+        // would clear the status bar, and the next frame retries the queue anyway.
+        if self.discard_drops_of_closed_documents() {
+            return;
+        }
         while self.ui.transform.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
@@ -361,21 +386,38 @@ impl PhotocraftApp {
     pub(crate) fn queue_web_places(&mut self) {
         let arrived: Vec<(DocId, String, Vec<u8>)> =
             self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(arrived.into_iter().map(|(doc, name, bytes)| (doc, DropPlace::Bytes(name, bytes))));
+        for (doc, name, bytes) in arrived {
+            self.queue_drop(doc, DropPlace::Bytes(name, bytes));
+        }
     }
 
-    /// Drop the queued files whose document has been closed, saying so.
-    fn discard_drops_of_closed_documents(&mut self) {
-        if self.drop_places.is_empty() {
+    /// Queue a canvas drop for the document it was dropped on, keeping the queue bounded: files
+    /// dropped on a document in another tab wait here, and a browser drop carries its whole file.
+    fn queue_drop(&mut self, doc: DocId, place: DropPlace) {
+        let bytes = self.drop_places.iter().fold(0usize, |sum, (_, p)| sum.saturating_add(p.queued_bytes()));
+        if !queue_takes_drop(self.drop_places.len(), bytes, place.queued_bytes()) {
+            self.ui.status = tl!("Dropped files weren't placed: too many are waiting for their document.").into();
+            self.ui.status_error = true;
             return;
+        }
+        self.drop_places.push_back((doc, place));
+    }
+
+    /// Drop the queued files whose document has been closed, saying so. True when one was dropped
+    /// (the caller lets the notice stand).
+    fn discard_drops_of_closed_documents(&mut self) -> bool {
+        if self.drop_places.is_empty() {
+            return false;
         }
         let before = self.drop_places.len();
         let open: Vec<DocId> = self.session.documents().iter().map(|st| st.doc.id).collect();
         self.drop_places.retain(|(doc, _)| open.contains(doc));
-        if self.drop_places.len() < before {
+        let discarded = self.drop_places.len() < before;
+        if discarded {
             self.ui.status = tl!("Dropped files weren't placed: their document was closed.").into();
             self.ui.status_error = false;
         }
+        discarded
     }
 
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
