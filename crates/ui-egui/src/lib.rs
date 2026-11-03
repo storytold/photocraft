@@ -868,6 +868,9 @@ mod nudge_bundle_tests;
 mod caps_lock_tests;
 
 #[cfg(test)]
+mod quit_shortcut_tests;
+
+#[cfg(test)]
 mod view_sync_tests;
 
 #[cfg(test)]
