@@ -917,6 +917,8 @@ fn internal_dtd_subsets_are_refused_before_parsing() {
     let error = import_svg("dtd", svg.as_bytes()).unwrap_err().to_string();
     assert!(error.contains("internal DTD"), "{error}");
     let embedded = image_svg(&embedded_image("image/svg+xml", svg.as_bytes()));
-    let error = import_svg("dtd", embedded.as_bytes()).unwrap_err().to_string();
-    assert!(error.contains("internal DTD"), "{error}");
+    // an embedded drawing only fails the strict (preview) import; the editable import skips it
+    assert!(import_svg("dtd", embedded.as_bytes()).is_ok());
+    let error = import_svg_preview_with_work("dtd", embedded.as_bytes(), MAX_RASTER_PIXELS).unwrap_err().to_string();
+    assert!(error.contains("embedded SVG"), "{error}");
 }
