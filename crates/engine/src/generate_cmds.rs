@@ -2419,6 +2419,7 @@ fn run_variations(backend: &dyn GenerativeBackend, req: &mut Request, n: u32, se
 }
 
 /// What a fill or expand job needs once its plan is made and the backend is in hand.
+#[derive(Clone)]
 struct FillJob {
     backend: Arc<dyn GenerativeBackend>,
     /// The same native worker answers vision-language questions: rewriting, judging and

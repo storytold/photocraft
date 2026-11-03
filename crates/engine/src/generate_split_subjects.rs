@@ -13,6 +13,8 @@ use std::sync::Arc;
 use photocraft_genai::GenerativeBackend;
 use photocraft_geom::Rect;
 
+use crate::EngineError;
+
 use super::{
     Common, DEFAULT_MATTE_TEMPLATE, GenerativeInfo, Gray8, JobCtx, JobProgress, Layer, MATTE_DEFAULT_PROMPT, MAX_GROW, REMOVE_BG, REMOVE_MIN_REQUEST, Request,
     Result, Rgba8, SPLIT, Session, Task, Tuning, Value, at_least, embed_coverage, fill_rect, fill_region, gen_err, json, matte_request_size, name_selected,
@@ -163,18 +165,40 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             };
             let template_id = job.template_id.clone();
             let below = *active;
-            ctx.progress(0.35, "Filling the background");
-            let (made, ..) = fill_region(doc, active, ctx, job, rect, embed_coverage(area, &hole, rect), None)?;
-            ctx.check()?;
-            ctx.progress(0.95, "Placing");
-            // The background whole: the picture with the fill over the hole, one layer.
-            let background = photocraft_compose::render(doc, area).to_rgba8().pixels;
-            let fill_seed = made.first().map_or(0, |m| m.1);
-            let ms = made.iter().map(|m| m.3).sum::<u64>();
-            for (id, ..) in &made {
-                doc.remove(*id);
+            // The background: the hole filled, then checked with the detector. A fill that paints
+            // the subject back (on a 12-megapixel portrait the edit model kept the head and
+            // repainted the body, every seed tried, measured in the app 2026-11-03) is thrown
+            // away and tried on the next seed; none clean, and the split fails with nothing
+            // changed rather than hand back a repainted person.
+            let mut ms = 0u64;
+            let mut fill = None;
+            for attempt in 0..FILL_TRIES {
+                ctx.progress(0.35 + 0.5 * attempt as f32 / FILL_TRIES as f32, "Filling the background");
+                let mut try_job = job.clone();
+                try_job.seed = job.seed.wrapping_add(u64::from(attempt) * 1000);
+                let (made, ..) = fill_region(doc, active, ctx, try_job, rect, embed_coverage(area, &hole, rect), None)?;
+                ctx.check()?;
+                ms += made.iter().map(|m| m.3).sum::<u64>();
+                // The background whole: the picture with the fill over the hole, one layer.
+                let background = photocraft_compose::render(doc, area).to_rgba8().pixels;
+                let fill_seed = made.first().map_or(0, |m| m.1);
+                ctx.progress(0.35 + 0.5 * (attempt as f32 + 0.9) / FILL_TRIES as f32, "Checking the background");
+                let left = subject_left_in(&finder.only(&found_by), doc, *active, &hole, ctx)?;
+                for (id, ..) in &made {
+                    doc.remove(*id);
+                }
+                *active = below;
+                if !left {
+                    fill = Some((background, fill_seed));
+                    break;
+                }
             }
-            *active = below;
+            let Some((background, fill_seed)) = fill else {
+                return Err(EngineError::Other(format!(
+                    "Split into Layers could not clear the {name} out of the background: the fill painted it back on {FILL_TRIES} tries, so nothing was changed"
+                )));
+            };
+            ctx.progress(0.95, "Placing");
             let count = 1 + instances.len();
             let mut layers: Vec<(Rgba8, String)> = Vec::with_capacity(count);
             layers.push((Rgba8::new(w, h, background).map_err(gen_err)?, format!("{base} 1/{count}")));
@@ -219,6 +243,46 @@ pub(super) fn run(s: &mut Session, plan: SubjectsPlan) -> Result<Value> {
             })
         },
     )
+}
+
+/// Fills tried before Split gives up on a background with the subject painted back.
+const FILL_TRIES: u32 = 3;
+
+/// Of a detection on the filled background, the share inside the hole at which it counts as
+/// the subject painted back (a person beside the hole overlaps it little).
+const LEFT_IN_HOLE: f32 = 0.5;
+
+/// Whether the detector (asked for what found the subjects) still finds a subject in the hole
+/// of the picture as it is now (the fill over it): a detection mostly inside the hole and at
+/// least a quarter of the hole's size. Nothing found is a clean fill.
+fn subject_left_in(
+    finder: &crate::select_ml_cmds::SubjectFinder,
+    doc: &photocraft_doc::Document,
+    active: Option<photocraft_doc::LayerId>,
+    hole: &[f32],
+    ctx: &JobCtx,
+) -> Result<bool> {
+    let holed = hole.iter().filter(|v| **v >= 0.5).count();
+    if holed == 0 {
+        return Ok(false);
+    }
+    let found = match finder.instances(doc, active, true, ctx) {
+        Ok((found, _)) => found,
+        Err(EngineError::Other(e)) if e.starts_with("nothing") => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    Ok(found.iter().any(|(cov, _, _)| {
+        let (mut on, mut inside) = (0usize, 0usize);
+        for (c, h) in cov.iter().zip(hole) {
+            if *c >= 0.5 {
+                on += 1;
+                if *h >= 0.5 {
+                    inside += 1;
+                }
+            }
+        }
+        on > 0 && inside as f32 >= LEFT_IN_HOLE * on as f32 && inside * 4 >= holed
+    }))
 }
 
 /// The subjects' alphas from the matte model (Remove Background's), or `None` when the server

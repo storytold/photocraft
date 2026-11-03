@@ -140,3 +140,22 @@ fn split_takes_hair_from_the_matte_around_each_subject() {
         assert!(matches!(s.execute(SPLIT, json!({"edges": bad})), Err(EngineError::BadParams { .. })), "{bad}");
     }
 }
+
+#[test]
+fn split_fails_with_nothing_changed_when_every_fill_paints_the_subject_back() {
+    // The fake's fill hands the picture back (echo), so the detector still finds the subject
+    // in the hole after each try.
+    let fake = FakeNative::start_with(photocraft_genai::fake::Options { echo: true, ..Default::default() }).unwrap();
+    let mut s = session(&fake.url);
+    s.execute("edit.fill", json!({"use": "color", "color": [30, 90, 160]})).ok();
+    let (before, steps) = {
+        let d = s.active().unwrap();
+        (d.doc.layers.len(), d.history.past_len())
+    };
+    let e = s.execute(SPLIT, json!({"seed": 3})).unwrap_err().to_string();
+    assert!(e.contains("could not clear"), "{e}");
+    let d = s.active().unwrap();
+    assert_eq!((d.doc.layers.len(), d.history.past_len()), (before, steps), "nothing changed");
+    let fills = fake.state().runs.iter().filter(|r| r.request["task"] != "segment" && r.request["task"] != "matte").count();
+    assert!(fills >= 3, "three fills tried: {fills}");
+}

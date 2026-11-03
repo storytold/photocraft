@@ -861,6 +861,12 @@ pub(crate) fn subject_finder(s: &Session, prompt: Option<&str>) -> Result<Subjec
 }
 
 impl SubjectFinder {
+    /// The same finder asking only for `prompt` (one detector run: the prompt that found the
+    /// subjects, when checking that a fill removed them).
+    pub(crate) fn only(&self, prompt: &str) -> Self {
+        SubjectFinder { backend: Arc::clone(&self.backend), server: self.server.clone(), prompting: self.prompting.clone(), prompts: vec![prompt.to_string()] }
+    }
+
     /// Let the detector return up to `n` instances (its default is one).
     pub(crate) fn at_most(mut self, n: usize) -> Self {
         self.prompting.max_detections = Some(n.max(1));
