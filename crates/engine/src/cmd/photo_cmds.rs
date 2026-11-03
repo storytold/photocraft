@@ -64,11 +64,65 @@ pub(crate) struct Source {
 /// Loaded sources, the common pixel format and the first source's ICC profile.
 type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 
-/// Flattens the open documents and files named by `p` into common-format sources.
-fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
+/// Keeps the flattened sources a Photomerge is loading inside the command's memory budget.
+///
+/// The command's own peak estimate runs after alignment, when the canvas is known; until then
+/// every source is flattened and retained, so a large stack could exhaust memory before that
+/// check. Each source is admitted here before its surface is allocated. Two surfaces are
+/// charged: the one retained, and a same-canvas temporary for `flattened_checked` while the
+/// source document still holds its layers. A file also holds its encoded bytes during import.
+/// The import itself is admitted by the format's own memory limits (`photocraft-io::memory`).
+struct SourceLoad {
+    /// `None` keeps the previous behaviour for Merge to HDR Pro, which has no budget.
+    budget: Option<usize>,
+    /// Bytes of the flattened surfaces retained so far.
+    retained: usize,
+    /// Sources admitted so far (for the error message).
+    count: usize,
+}
+
+impl SourceLoad {
+    fn new(budget: Option<usize>) -> Self {
+        Self { budget, retained: 0, count: 0 }
+    }
+
+    /// Admits one more `w × h` source in `bpp`, from a file of `encoded` bytes (zero for an
+    /// open document), or fails before its surface is allocated. Saturating math makes an
+    /// overflow exceed any finite budget rather than wrapping below it.
+    fn admit(&mut self, w: usize, h: usize, bpp: usize, encoded: usize, cmd: &str) -> Result<()> {
+        let surface = w.checked_mul(h).and_then(|px| px.checked_mul(bpp)).unwrap_or(usize::MAX);
+        let Some(budget) = self.budget else {
+            self.retained = self.retained.saturating_add(surface);
+            self.count += 1;
+            return Ok(());
+        };
+        let needed = self.retained.saturating_add(surface.saturating_mul(2)).saturating_add(encoded);
+        if needed > budget {
+            let amount = |b: usize| if b >= 1 << 20 { format!("{} MiB", b >> 20) } else { format!("{} KiB", b >> 10) };
+            return Err(crate::allocation::error(
+                "Photomerge",
+                &format!(
+                    "loading {} source image(s) plus another {w}×{h} one needs about {}, which exceeds budget of {}; use fewer or smaller images, or raise \"memoryBudget\"",
+                    self.count,
+                    amount(needed),
+                    amount(budget)
+                ),
+            ));
+        }
+        self.retained = self.retained.saturating_add(surface);
+        self.count += 1;
+        Ok(())
+    }
+}
+
+/// Flattens the open documents and files named by `p` into common-format sources. With a
+/// `budget`, each source is admitted by [`SourceLoad`] before it is allocated; `None` (Merge to
+/// HDR Pro) only flattens, as before. `cmd` names the command in errors.
+fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Result<Loaded> {
     let mut out = Vec::new();
     let (mut fmt, mut icc) = (None, None);
-    let mut add = |name: String, d: &Document| -> Result<()> {
+    let mut load = SourceLoad::new(budget);
+    let mut add = |name: String, d: &Document, encoded: usize| -> Result<()> {
         let source_fmt = d.pixel_format();
         // Registration and blending work in RGB, so the result is RGB.
         let output_fmt = *fmt.get_or_insert_with(|| {
@@ -82,12 +136,14 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
             icc = d.icc_profile.clone();
         }
         let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-        out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w: d.size.width as usize, h: d.size.height as usize, exif: info });
+        let (w, h) = (d.size.width as usize, d.size.height as usize);
+        load.admit(w, h, output_fmt.bytes_per_pixel(), encoded, cmd)?;
+        out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w, h, exif: info });
         Ok(())
     };
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
-            add(d.doc.name.clone(), &d.doc)?;
+            add(d.doc.name.clone(), &d.doc, 0)?;
         }
     }
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -98,7 +154,7 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     for path in &paths {
         let bytes = read_file(path)?;
         let name = file_name(path);
-        add(name.clone(), &import(&name, &bytes)?)?;
+        add(name.clone(), &import(&name, &bytes)?, bytes.len())?;
     }
     if out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
@@ -656,11 +712,13 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
     let vignette = p.get("vignetteRemoval").and_then(Value::as_bool).unwrap_or(false);
     let geometric = p.get("geometricCorrection").and_then(Value::as_bool).unwrap_or(false);
     let fill = p.get("contentAwareFill").and_then(Value::as_bool).unwrap_or(false);
-    let (mut srcs, fmt, icc) = load_sources(s, p, cmd)?;
+    // Resolved before loading: the sources are flattened and retained one at a time, so the
+    // budget has to bound them before the first surface is allocated, not after they all exist.
+    let budget = photomerge_memory_budget(p);
+    let (mut srcs, fmt, icc) = load_sources(s, p, cmd, Some(budget))?;
     if srcs.len() < 2 {
         return Err(bad(cmd, "Photomerge needs two or more images"));
     }
-    let budget = photomerge_memory_budget(p);
     let focal_param = p.get("focalLength").and_then(Value::as_f64).filter(|f| *f > 0.0);
     let doc_name = format!("Untitled_Panorama{}", s.documents().len() + 1);
     // A background job when started with `Session::start` (#210): alignment, warping and
@@ -710,7 +768,10 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             if est_needed > budget {
                 let mb_est = est_needed / (1 << 20);
                 let mb_budget = budget / (1 << 20);
-                return Err(crate::allocation::error("Photomerge", &format!("estimated memory of {mb_est} MiB exceeds budget of {mb_budget} MiB")));
+                return Err(crate::allocation::error(
+                    "Photomerge",
+                    &format!("estimated memory of {mb_est} MiB exceeds budget of {mb_budget} MiB; use fewer or smaller images, or raise \"memoryBudget\""),
+                ));
             }
             for (i, s) in srcs.iter_mut().enumerate() {
                 if al.placements.get(i).is_none_or(Option::is_none) {
@@ -869,7 +930,7 @@ fn shift_rgba(px: &[[f32; 4]], w: usize, h: usize, dx: i32, dy: i32) -> Vec<[f32
 fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.mergeToHdrPro";
     let t0 = Stopwatch::start();
-    let (srcs, _fmt, icc) = load_sources(s, p, cmd)?;
+    let (srcs, _fmt, icc) = load_sources(s, p, cmd, None)?;
     if srcs.len() < 2 {
         return Err(bad(cmd, "Merge to HDR Pro needs two or more exposures"));
     }

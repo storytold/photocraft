@@ -461,8 +461,94 @@ fn photomerge_memory_budget_precedence_and_defaults() {
 fn photomerge_rejects_oversized_sparse_source_before_flattening() {
     let mut s = Session::new();
     s.add_document(Document::new("sparse", Size::new(100_000, 100_000), ColorMode::Rgb, SampleType::U8), None);
-    let err = load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.photomerge").err().expect("oversized canvas must be refused");
+    let err = load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.photomerge", None).err().expect("oversized canvas must be refused");
     assert!(err.to_string().contains("too large to flatten"), "{err}");
     assert_eq!(s.documents().len(), 1);
     assert_eq!(s.active().unwrap().doc.name, "sparse");
+}
+
+#[test]
+fn photomerge_source_load_budget_counts_the_retained_surface_and_flatten_temporary() {
+    let cmd = "file.automate.photomerge";
+    // 260×200 RGBA8: one surface is 208,000 bytes; loading one needs it twice (retained plus the
+    // flatten temporary) and loading a second adds its own two surfaces after the first's bytes.
+    let (w, h, bpp) = (260, 200, 4);
+    let surface = w * h * bpp;
+    let mut load = SourceLoad::new(Some(2 * surface));
+    assert!(load.admit(w, h, bpp, 0, cmd).is_ok(), "the first source fits");
+    assert_eq!(load.retained, surface);
+    let err = load.admit(w, h, bpp, 0, cmd).err().expect("the second source exceeds the budget");
+    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
+    assert!(err.to_string().contains("exceeds budget"), "{err}");
+    assert!(err.to_string().contains("260×200"), "{err}");
+    assert_eq!(load.retained, surface, "a refused source is not counted as retained");
+    // Exactly enough for two: 208,000 retained + 2 × 208,000 for the second source.
+    let mut two = SourceLoad::new(Some(3 * surface));
+    assert!(two.admit(w, h, bpp, 0, cmd).is_ok());
+    assert!(two.admit(w, h, bpp, 0, cmd).is_ok());
+    assert_eq!(two.retained, 2 * surface);
+    let mut one_short = SourceLoad::new(Some(3 * surface - 1));
+    assert!(one_short.admit(w, h, bpp, 0, cmd).is_ok());
+    assert!(one_short.admit(w, h, bpp, 0, cmd).is_err());
+    // An encoded file's bytes are held during its import as well.
+    assert!(SourceLoad::new(Some(2 * surface + 99)).admit(w, h, bpp, 100, cmd).is_err());
+    assert!(SourceLoad::new(Some(2 * surface + 100)).admit(w, h, bpp, 100, cmd).is_ok());
+    // Hostile sizes saturate and fail a finite budget instead of wrapping under it.
+    let huge = 1usize << 40;
+    assert!(SourceLoad::new(Some(huge)).admit(usize::MAX, usize::MAX, usize::MAX, 0, cmd).is_err());
+    assert!(SourceLoad::new(Some(huge)).admit(usize::MAX, 2, 1, 0, cmd).is_err());
+    // Without a budget (Merge to HDR Pro) nothing is assessed.
+    let mut unbounded = SourceLoad::new(None);
+    assert!(unbounded.admit(usize::MAX, usize::MAX, usize::MAX, usize::MAX, cmd).is_ok());
+}
+
+#[test]
+fn photomerge_rejects_over_budget_sources_before_flattening() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 9);
+    let mut s = Session::new();
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+    }
+    // Enough for the first 260×200 source (416,000 bytes) but not for the second as well
+    // (another 208,000 retained + 208,000 temporary, plus the 208,000 already retained).
+    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 500_000u64})).unwrap_err();
+    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
+    assert!(err.to_string().contains("exceeds budget"), "{err}");
+    // Refused during loading, before alignment, warping or a new document.
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(s.active().unwrap().doc.name, "img1");
+}
+
+#[test]
+fn photomerge_rejects_a_panorama_over_budget_after_loading() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 5);
+    let mut s = Session::new();
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+    }
+    // Enough to load both sources (624,000 bytes) but far below the warp/blend estimate, so the
+    // post-alignment check refuses the job rather than the loader.
+    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 1_000_000u64})).unwrap_err();
+    assert!(err.to_string().contains("estimated memory"), "{err}");
+    assert!(err.to_string().contains("exceeds budget"), "{err}");
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(s.active().unwrap().doc.name, "img1");
+}
+
+#[test]
+fn merge_to_hdr_pro_accepts_sources_without_the_photomerge_budget() {
+    let (sw, sh) = (120, 90);
+    let sc = scene(sw, sh, 11);
+    let mut s = Session::new();
+    for k in 0..2 {
+        s.add_document(doc_from(&format!("exp{k}"), &crop(&sc, sw, 0, 0, sw, sh, 1.0 + k as f32), sw, sh, SampleType::U8), None);
+    }
+    // A 1-byte Photomerge budget refuses the sources; Merge to HDR Pro passes no budget and
+    // still loads them, so its behaviour is unchanged.
+    assert!(load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.photomerge", Some(1)).is_err());
+    let (srcs, fmt, _) = load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.mergeToHdrPro", None).unwrap();
+    assert_eq!(srcs.len(), 2);
+    assert_eq!(fmt, PixelFormat::RGBA8);
 }
