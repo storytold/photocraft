@@ -485,10 +485,92 @@ fn transparent_pixel_colour_does_not_change_alpha() {
         for (sx, sy) in [(0.25, 0.25), (0.6, 0.6), (0.4, 1.5)] {
             let white = resize_surface(&blob(1.0, fmt), sx, sy, filter);
             let black = resize_surface(&blob(0.0, fmt), sx, sy, filter);
-            for y in -4..50 {
-                for x in -4..50 {
+            let win = scaled_rect(Rect::new(0, 0, 96, 96), sx, sy);
+            for y in win.y0 - 8..win.y1 + 8 {
+                for x in win.x0 - 8..win.x1 + 8 {
                     let (w, b) = (white.pixel(x, y), black.pixel(x, y));
                     assert!((w[3] - b[3]).abs() < 1e-4, "{filter:?} {fmt:?} {sx}x{sy} alpha at {x},{y}: {w:?} vs {b:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Ringing can leave the filtered alpha a hair above zero while the premultiplied colour is only
+/// a little larger; dividing gave colours in the hundreds, which RGBA32F stores as they are and
+/// the next pass or filter reads. Wherever the coverage is partial the colour stays within what the
+/// source held (here pure red and pure blue).
+#[test]
+fn ringing_alpha_does_not_blow_up_colour() {
+    let mut s = Surface::new(PixelFormat::RGBA32F);
+    let mut px = Vec::new();
+    for y in 0..96 {
+        for x in 0..96 {
+            let inside = (32..64).contains(&y);
+            px.extend_from_slice(&match x {
+                20..44 if inside => [1.0, 0.0, 0.0, 1.0],
+                44..68 if inside => [0.0, 0.0, 1.0, 1.0],
+                _ => [0.0, 0.0, 0.0, 0.0],
+            });
+        }
+    }
+    s.write_region(Rect::new(0, 0, 96, 96), &px);
+    // Filters and scales whose only out-of-range colour comes from the near-clear division. (Sharper,
+    // and Bicubic at 0.37, also overshoot on the opaque pixels of the first pass, which the second
+    // pass then reads as source colour; that carry-over is not what is bounded here.)
+    for (filter, k) in [(Resample::Lanczos, 0.37), (Resample::Lanczos, 0.6), (Resample::Lanczos, 0.25), (Resample::Bicubic, 0.6)] {
+        let out = resize_surface(&s, k, k, filter);
+        let win = scaled_rect(Rect::new(0, 0, 96, 96), k, k);
+        for y in win.y0 - 8..win.y1 + 8 {
+            for x in win.x0 - 8..win.x1 + 8 {
+                let p = out.pixel(x, y);
+                if p[3] > 0.0 && p[3] < 1.0 {
+                    for c in &p[..3] {
+                        assert!((-1e-4..=1.0 + 1e-4).contains(c), "{filter:?} {k} colour out of range at {x},{y}: {p:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Image Size resizes layers with the canvas edge repeating outwards (the path the command takes).
+/// The stored colour of clear pixels, beyond the canvas included, must not change the alpha.
+#[test]
+fn canvas_resize_ignores_the_colour_of_clear_pixels() {
+    fn layer(clear: f32, fmt: PixelFormat) -> Surface {
+        let mut s = Surface::new(fmt);
+        let mut px = Vec::new();
+        for y in -16..80 {
+            for x in -16..80 {
+                let inside = (40..64).contains(&x) && (20..44).contains(&y);
+                px.extend_from_slice(&if inside { [0.5, 0.5, 0.5, 1.0] } else { [clear, clear, clear, 0.0] });
+            }
+        }
+        s.write_region(Rect::new(-16, -16, 80, 80), &px);
+        s
+    }
+    let canvas = Rect::new(0, 0, 64, 64);
+    for (filter, fmt) in [
+        Resample::Nearest,
+        Resample::Bilinear,
+        Resample::Bicubic,
+        Resample::BicubicSharper,
+        Resample::BicubicAutomatic,
+        Resample::Lanczos,
+        Resample::PreserveDetails,
+    ]
+    .into_iter()
+    .flat_map(|f| [PixelFormat::RGBA32F, PixelFormat::RGBA8].map(|p| (f, p)))
+    {
+        for k in [0.5, 1.7] {
+            let white = resize_surface_in_canvas(&layer(1.0, fmt), k, k, filter, canvas);
+            let black = resize_surface_in_canvas(&layer(0.0, fmt), k, k, filter, canvas);
+            let win = scaled_rect(Rect::new(-16, -16, 80, 80), k, k);
+            for y in win.y0 - 8..win.y1 + 8 {
+                for x in win.x0 - 8..win.x1 + 8 {
+                    let (w, b) = (white.pixel(x, y), black.pixel(x, y));
+                    assert!((w[3] - b[3]).abs() < 1e-4, "{filter:?} {fmt:?} {k} alpha at {x},{y}: {w:?} vs {b:?}");
                 }
             }
         }
