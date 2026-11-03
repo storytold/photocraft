@@ -416,7 +416,7 @@ fn button_fill(color: &str, t: &Tokens) -> Color32 {
 }
 
 fn button_label_color(color: &str, t: &Tokens) -> Color32 {
-    if color.is_empty() { t.text } else { Color32::from_rgb(20, 20, 20) }
+    if matches!(color, "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray") { Color32::from_rgb(20, 20, 20) } else { t.text }
 }
 
 fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
@@ -1579,5 +1579,7 @@ fn draw_step_controls(ui: &mut egui::Ui, rect: Rect, step: usize, label: &str, c
     (check.on_hover_text(tl!("Include in playback")), dialog.on_hover_text(tl!("Show dialog during playback")))
 }
 
+#[cfg(test)]
+mod metadata_color_tests;
 #[cfg(test)]
 mod tests;

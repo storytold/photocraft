@@ -2,6 +2,7 @@ use super::descriptors::{desc, get_obj, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
 use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use crate::actions_cmds::{color_from_atn, color_to_atn};
 
 // ------------------------------------------------------------------ import
 
@@ -68,6 +69,7 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
+    action.color = color_from_atn(a.color);
     for (i, item) in a.items.iter().enumerate() {
         let mapped = match (event_for(&item.event), &item.descriptor) {
             (Some(e), Some(d)) => (e.from)(d),
@@ -226,7 +228,8 @@ pub fn export(
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
-        let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
+        let color = color_to_atn(&a.color).ok_or_else(|| format!("action `{}` has an invalid colour", a.name))?;
+        let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, color, ..Default::default() };
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }

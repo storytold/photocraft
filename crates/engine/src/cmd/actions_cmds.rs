@@ -45,13 +45,33 @@ pub struct Action {
     /// filled by Load Actions (`actions.load`) and written by Save Actions (`actions.save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
-    /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
+    /// Action colour: one of [`BUTTON_COLORS`], or an opaque `@atn-color:N` imported header index.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
 }
 
-/// Button Mode colours, in Photoshop's order. Empty is no colour.
-pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
+/// Measured action colours in ATN index order. The classic picker offers the first eight.
+pub const BUTTON_COLORS: [&str; 12] = ["", "red", "orange", "yellow", "green", "blue", "violet", "gray", "teal", "blue2", "magenta", "purple"];
+
+const OPAQUE_COLOR_PREFIX: &str = "@atn-color:";
+
+/// Keep unknown u16 header indices in the existing String field without naming a new palette colour.
+pub(crate) fn color_from_atn(index: u16) -> String {
+    BUTTON_COLORS.get(usize::from(index)).map_or_else(|| format!("{OPAQUE_COLOR_PREFIX}{index}"), |name| (*name).to_string())
+}
+
+/// Only measured names or canonical unknown-index metadata may be written to an ATN header.
+pub(crate) fn color_to_atn(color: &str) -> Option<u16> {
+    if let Some(index) = BUTTON_COLORS.iter().position(|name| *name == color) {
+        return u16::try_from(index).ok();
+    }
+    let number = color.strip_prefix(OPAQUE_COLOR_PREFIX)?;
+    if number.len() > 5 {
+        return None; // A decimal u16 has at most five digits.
+    }
+    let index = number.parse::<u16>().ok()?;
+    (usize::from(index) >= BUTTON_COLORS.len() && number == index.to_string()).then_some(index)
+}
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
@@ -739,7 +759,7 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "needs \"color\""));
     };
     if !BUTTON_COLORS.contains(&color) {
-        return Err(bad(cmd, "color must be empty, red, orange, yellow, green, blue, violet, or gray"));
+        return Err(bad(cmd, "color must be empty, red, orange, yellow, green, blue, violet, gray, teal, blue2, magenta, or purple"));
     }
     let Some(action) = s.actions.list.get_mut(idx) else {
         return Err(bad(cmd, "no such action"));
@@ -777,7 +797,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Get Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index} → {name, steps:[[id, params]…], disabled:[step…], dialogs:[step…], set:name|null, color:str} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions; color is the Button Mode swatch, or empty)"##,
+            params: r##"{"action":name|index} → {name, steps:[[id, params]…], disabled:[step…], dialogs:[step…], set:name|null, color:str} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions; color is a measured action swatch, empty, or reserved @atn-color:N metadata preserving an unknown imported u16 index)"##,
             enabled: always,
             run: get,
             journal: false,
@@ -847,7 +867,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Action Color",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "color":""|"red"|"orange"|"yellow"|"green"|"blue"|"violet"|"gray"} → {action, color}. The Button Mode colour. Empty clears it."##,
+            params: r##"{"action":name|index, "color":""|"red"|"orange"|"yellow"|"green"|"blue"|"violet"|"gray"|"teal"|"blue2"|"magenta"|"purple"} → {action, color}. Measured ATN indices 0..11 in that order; blue is classic light blue (5), blue2 is modern blue (9). Empty clears it. Reserved @atn-color:N import metadata cannot be selected."##,
             enabled: always,
             run: set_color,
             journal: false,

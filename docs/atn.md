@@ -18,6 +18,22 @@ layers and documents, newer and older events and files, and a measured reference
 map yet, with everything needed to implement them without
 the reference application.
 
+## Action header colours
+
+Load and Save Actions preserve each action's colour index. Indices 0–11 map to
+`""`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `gray`, `teal`, `blue2`,
+`magenta`, and `purple`, respectively. The existing `blue` name remains index 5
+(light blue); `blue2` is the newer blue at index 9. `actions.setColor` accepts
+these measured names. The classic colour menu keeps its eight choices.
+
+An unknown u16 colour index is retained in native action JSON as the reserved
+String `@atn-color:N`, where `N` is its canonical decimal index from 12 to 65535.
+It survives library reloads and ATN export, but cannot be selected with
+`actions.setColor`. Invalid colour strings fail export, including exports with
+`skipUnsupported`, rather than silently becoming index 0. New colours and unknown
+indices use a neutral theme card in Classic Button Mode until their swatches are
+provided by the newer editor. This header support does not parse an action sidecar.
+
 ## Supported events (144)
 
 | Code | String ID | Label | PhotoCraft command(s) |
