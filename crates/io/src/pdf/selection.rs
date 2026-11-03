@@ -97,4 +97,15 @@ mod tests {
         let font = SelectionFont::new(std::iter::once(too_many.as_str()));
         assert!(font.encode("Ā").is_none(), "256 distinct characters exceed the code space");
     }
+
+    #[test]
+    fn to_unicode_maps_codes_beyond_the_first_bfchar_block() {
+        let text: String = (0x100u32..0x196).filter_map(char::from_u32).collect();
+        let font = SelectionFont::new(std::iter::once(text.as_str()));
+        let objects = font.objects(0);
+        let cmap = String::from_utf8_lossy(&objects[2]);
+        assert!(cmap.contains("100 beginbfchar"));
+        assert!(cmap.contains("50 beginbfchar"));
+        assert!(cmap.contains("<65> <0164>"));
+    }
 }

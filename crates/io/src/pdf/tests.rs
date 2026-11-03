@@ -383,3 +383,13 @@ fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF0041000A"), "the first span carries the break:\n{content}");
 }
+
+#[test]
+fn leading_newline_stays_in_the_first_selection_span() {
+    use photocraft_doc::TextLayer;
+    let mut d = doc(ColorMode::Rgb);
+    d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "\nA".into(), size_pt: 12.0, ..Default::default() })));
+    let pdf = export(&d).unwrap().bytes;
+    let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
+    assert!(content.contains("/ActualText <FEFF000A0041>"), "the first span retains the leading newline:\n{content}");
+}
