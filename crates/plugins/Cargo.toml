@@ -1,6 +1,6 @@
 [package]
 name = "photocraft-plugins"
-description = "Sandboxed WebAssembly filter plug-ins: a resource-limited wasmi host for the PhotoCraft plug-in ABI"
+description = "Sandboxed WebAssembly filter plug-ins: a resource-limited wasmi host for the LumaFoundry plug-in ABI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

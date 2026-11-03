@@ -1,13 +1,3 @@
-PhotoCraft app icon (photocraft.svg, photocraft-small.svg and every file derived from them in
-this directory: photocraft-1024.png, photocraft.icns, photocraft.ico, hicolor/).
-
-Original artwork made for this project by the project owner: an engraving-style drawing created
-in ArtCraft, then vectorised. No third-party material. Licensed like the rest of PhotoCraft,
-under either of
-
-  * Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
-  * MIT license (https://opensource.org/licenses/MIT)
-
-at your option.
-
-Regenerate the derived files with packaging/icons.sh.
+LumaFoundry LF monogram and derived icons in this directory.
+Original geometric vector artwork created by OpenAI Codex for LumaFoundry, 2026.
+Licensed under MIT OR Apache-2.0; see ../../LICENSE-MIT and ../../LICENSE-APACHE.

@@ -91,7 +91,7 @@ fn main() {
                 app.session.updates.status = photocraft_engine::updates_cmds::Status::Available {
                     release: photocraft_engine::updates_cmds::Release {
                         version: "99.0.0".into(),
-                        url: "https://github.com/storytold/photocraft/releases/tag/v99.0.0".into(),
+                        url: "https://github.com/tomblanchard312/lumafoundry/releases/tag/v99.0.0".into(),
                     },
                 };
             }

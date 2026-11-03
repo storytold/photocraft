@@ -246,7 +246,7 @@ mod boot {
             held.push(chunk);
         }
         let Some(payload) = super::payload(&head) else {
-            let e = JsValue::from_str("the download is not PhotoCraft's WebAssembly");
+            let e = JsValue::from_str("the download is not LumaFoundry's WebAssembly");
             // Stops the rest of the download, which nothing will read.
             let _ = reader.cancel_with_reason(&e);
             return Err(e);
@@ -328,12 +328,12 @@ mod boot {
                     Ok(()) => return,
                     Err(e) => e,
                 };
-                web_sys::console::error_2(&JsValue::from_str("photocraft-web-boot: could not start PhotoCraft:"), &error);
+                web_sys::console::error_2(&JsValue::from_str("photocraft-web-boot: could not start LumaFoundry:"), &error);
                 let Some(&wait) = RETRY_AFTER.get(attempt) else {
-                    say("PhotoCraft couldn't be downloaded. Check your connection, then try again: ", true);
+                    say("LumaFoundry couldn't be downloaded. Check your connection, then try again: ", true);
                     return;
                 };
-                say("Loading PhotoCraft\u{2026} (the download failed, trying again)", false);
+                say("Loading LumaFoundry\u{2026} (the download failed, trying again)", false);
                 sleep(wait).await;
                 attempt += 1;
             }

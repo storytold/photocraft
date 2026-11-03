@@ -475,7 +475,7 @@ mod tests {
     fn slice_deflate_matches_buffered_reader_and_preserves_checks() {
         use std::io::Write as _;
 
-        let content = b"PhotoCraft ZIP payload".repeat(5000);
+        let content = b"LumaFoundry ZIP payload".repeat(5000);
         let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::none());
         encoder.write_all(&content).unwrap();
         let compressed = encoder.finish().unwrap();
@@ -532,7 +532,7 @@ mod tests {
     fn deflated_entry_with_unbounded_limit_round_trips() {
         use std::io::Write as _;
 
-        let content = b"DEFLATE-compressed PhotoCraft project content, with a valid CRC.";
+        let content = b"DEFLATE-compressed LumaFoundry project content, with a valid CRC.";
         let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(content).unwrap();
         let compressed = encoder.finish().unwrap();

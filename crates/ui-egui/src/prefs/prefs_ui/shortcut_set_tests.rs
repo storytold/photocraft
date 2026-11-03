@@ -63,7 +63,7 @@ fn a_new_set_saves_the_dialogs_bindings_and_ok_keeps_it() {
     assert!(field(&h, id, "newSetName").is_null());
     // A bad name is refused with a message.
     click(&mut h, "New Set…");
-    set_field(&mut h, id, "newSetName", json!("PhotoCraft Defaults"));
+    set_field(&mut h, id, "newSetName", json!("LumaFoundry Defaults"));
     click(&mut h, "Create");
     assert!(field(&h, id, "message").as_str().unwrap_or_default().contains("built-in"), "{:?}", field(&h, id, "message"));
     click(&mut h, "Cancel");
@@ -117,7 +117,7 @@ fn export_and_summarize_write_the_dialogs_bindings() {
     let kys = String::from_utf8(written[0].1.clone()).unwrap();
     assert!(kys.contains("pc-id=\"edit.copy\"><shortcut>F9</shortcut></command>"), "{kys}");
     assert!(kys.contains("pc-id=\"tools.select.pencil\">F6</tool>"), "tools as <tool> rows: {kys}");
-    assert!(kys.contains("KeyboardCustomization/PhotoCraft Defaults="), "{kys}");
+    assert!(kys.contains("KeyboardCustomization/LumaFoundry Defaults="), "{kys}");
     // The file reads back with the same bindings.
     let set = photocraft_engine::kys::parse(&kys).unwrap();
     assert!(set.commands.iter().any(|c| c.id.as_deref() == Some("edit.copy") && c.shortcuts == ["F9"]));
@@ -187,12 +187,12 @@ fn the_set_dropdown_keeps_action_function_keys_like_use_set() {
     let ctx = h.ctx.clone();
     let id = crate::menus::invoke(h.state_mut(), &ctx, "edit.keyboardShortcuts", json!({})).unwrap()["dialog"].as_u64().unwrap();
     h.run_steps(4);
-    assert_eq!(shown_set(&h), "PhotoCraft Defaults", "an action key doesn't modify the defaults");
+    assert_eq!(shown_set(&h), "LumaFoundry Defaults", "an action key doesn't modify the defaults");
     pick_set(&mut h, "A");
     assert_eq!(field(&h, id, "activeSet"), json!("A"));
     assert_eq!(field(&h, id, "overrides"), json!({"edit.copy": "F9", "actions.play:Sepia": "F2"}), "A's keys, and the action's");
     assert_eq!(shown_set(&h), "A");
-    pick_set(&mut h, "PhotoCraft Defaults");
+    pick_set(&mut h, "LumaFoundry Defaults");
     assert_eq!(field(&h, id, "overrides"), json!({"actions.play:Sepia": "F2"}), "kept switching to the defaults");
     pick_set(&mut h, "B");
     // What wins is what `useSet` gives: the action keeps F2, B's old action key is dropped and

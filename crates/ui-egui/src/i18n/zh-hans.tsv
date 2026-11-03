@@ -5,7 +5,7 @@
 # with a single Chinese form. Other contexts disambiguate the English meaning.
 # Escapes inside columns: \n, \t, \\. Keep {name} placeholders and trailing ….
 #
-# Original translations from the meaning of PhotoCraft's English source keys,
+# Original translations from the meaning of LumaFoundry's English source keys,
 # including the current menus, panels and platform-specific shortcut templates.
 # No proprietary translation resources were consulted or extracted.
 # Licensed MIT OR Apache-2.0, as the code.
@@ -82,7 +82,7 @@
 # Batch / Image Processor
 
 # Native Windows printing qualification
-# PhotoCraft release checks.
+# LumaFoundry release checks.
 # History panel › History Brush source (#2966)
 # Bevel & Emboss shading controls.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
@@ -905,9 +905,9 @@
 	Timeline	时间轴
 	Tool Presets	工具预设
 	Tools	工具
-	About PhotoCraft	关于 PhotoCraft
-	PhotoCraft Website	PhotoCraft 网站
-	PhotoCraft on GitHub	PhotoCraft 的 GitHub 页面
+	About LumaFoundry	关于 LumaFoundry
+	LumaFoundry Website	LumaFoundry 网站
+	LumaFoundry on GitHub	LumaFoundry 的 GitHub 页面
 	ArtCraft Website	ArtCraft 网站
 	Join the ArtCraft Discord…	加入 ArtCraft 的 Discord 社区…
 	Report an Issue…	报告问题…
@@ -979,7 +979,7 @@
 	All Caps	全部大写
 	All Slices	所有切片
 	All User Slices	所有用户切片
-	All shortcuts reset to PhotoCraft defaults.	所有快捷键已重置为 PhotoCraft 默认值。
+	All shortcuts reset to LumaFoundry defaults.	所有快捷键已重置为 LumaFoundry 默认值。
 	Alt	Alt
 	Alt-click to define a source point to clone from	按 Alt 单击以定义仿制源点
 	Always use pressure for opacity	始终用压感控制不透明度
@@ -1234,8 +1234,8 @@
 	Drop an image or PSD anywhere to open it.	将图像或 PSD 拖放到任意位置即可打开。
 	Native file drag-and-drop is unavailable	Wayland 上不支持原生文件拖放
 	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or copy the image in your file manager and paste it with {paste}.	Wayland 尚不支持原生文件拖放。请使用“文件 › 打开”，或在文件管理器中复制图像后使用 {paste} 粘贴。
-	To drop files, start PhotoCraft under XWayland: `{command}`	要拖放文件，请在 XWayland 下启动 PhotoCraft：`{command}`
-	Or set Preferences › Performance › Linux display server to X11: PhotoCraft then always starts under XWayland.	或将 首选项 › 性能 › Linux 显示服务器 设为 X11：PhotoCraft 将始终在 XWayland 下启动。
+	To drop files, start LumaFoundry under XWayland: `{command}`	要拖放文件，请在 XWayland 下启动 LumaFoundry：`{command}`
+	Or set Preferences › Performance › Linux display server to X11: LumaFoundry then always starts under XWayland.	或将 首选项 › 性能 › Linux 显示服务器 设为 X11：LumaFoundry 将始终在 XWayland 下启动。
 	Edit › Paste	“编辑 › 粘贴”
 	Duplicate Layers…	复制图层…
 	Duplicate style	复制样式
@@ -1492,9 +1492,9 @@
 	Perspective Warp is not active	透视变形尚未启用
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	透视变形：沿图像透视绘制平面，然后切换到变形
 	Photo Filter	照片滤镜
-	PhotoCraft	PhotoCraft
-	PhotoCraft Manages Colors	由 PhotoCraft 管理颜色
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — 用 Rust 编写的开源原生图像编辑器。
+	LumaFoundry	LumaFoundry
+	LumaFoundry Manages Colors	由 LumaFoundry 管理颜色
+	LumaFoundry — an open-source, native image editor written in Rust.	LumaFoundry — 用 Rust 编写的开源原生图像编辑器。
 	Pin Depth:	控制点深度：
 	Pixel Length:	像素长度：
 	Pixels/Centimeter	像素/厘米
@@ -1571,11 +1571,11 @@
 	Import Shortcuts…	导入快捷键…
 	Load a keyboard shortcut set saved as .kys	载入保存为 .kys 的键盘快捷键集
 	Imported {n} shortcuts from {file}. Click OK to keep them.	已从 {file} 导入 {n} 个快捷键。点击“确定”保留。
-	{n} commands are not in PhotoCraft.	{n} 个命令在 PhotoCraft 中不存在。
+	{n} commands are not in LumaFoundry.	{n} 个命令在 LumaFoundry 中不存在。
 	Keyboard shortcuts imported	已导入键盘快捷键
 	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	此处正在使用你的键盘快捷键集 {set}：{n} 个快捷键与默认值不同。可在“编辑 › 键盘快捷键”中查看；“全部重置为默认值”可撤销。
 	Import keyboard shortcuts?	导入键盘快捷键？
-	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	PhotoCraft 在这台电脑上找到了你在其他图像编辑器中的键盘快捷键集 {set}：其中 {n} 个快捷键与 PhotoCraft 不同。要导入吗？
+	LumaFoundry found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from LumaFoundry's. Import it?	LumaFoundry 在这台电脑上找到了你在其他图像编辑器中的键盘快捷键集 {set}：其中 {n} 个快捷键与 LumaFoundry 不同。要导入吗？
 	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	“编辑 › 键盘快捷键 › 全部重置为默认值”可撤销导入。
 	Don't Import	不导入
 	The keyboard shortcut set was not imported: {error}	未导入键盘快捷键集：{error}
@@ -1808,7 +1808,7 @@
 	Current Tool	当前工具
 	Custom Shape Tool	自定形状工具
 	Cyans	青色
-	Default PhotoCraft Size	默认 PhotoCraft 大小
+	Default LumaFoundry Size	默认 LumaFoundry 大小
 	Delete Workspace	删除工作区
 	Diamond	菱形
 	Dimensions:	尺寸：
@@ -1922,7 +1922,7 @@
 	Pen Tool	钢笔工具
 	Convert Point Tool	转换点工具
 	Photo	照片
-	PhotoCraft website	PhotoCraft 网站
+	LumaFoundry website	LumaFoundry 网站
 	Picas	派卡
 	Pillow Emboss	枕状浮雕
 	Pixel Replacement	像素替换
@@ -2311,7 +2311,7 @@ cameraRaw	Blending	混合
 	System Info	系统信息
 	More panels	更多面板
 	More documents	更多文档
-	These settings aren't available in PhotoCraft yet.	PhotoCraft 暂不支持这些设置。
+	These settings aren't available in LumaFoundry yet.	LumaFoundry 暂不支持这些设置。
 	Graphics	图形
 	Reset GPU Backend	重置 GPU 后端
 	Applies at next launch.	下次启动时生效。
@@ -2435,7 +2435,7 @@ cameraRaw	Blending	混合
 	Automatic uses GPU acceleration when available and falls back to CPU rendering on errors.	自动模式会在可用时使用 GPU 加速，出错时改用 CPU 渲染。
 	Switched to CPU rendering	已切换到 CPU 渲染
 	GPU acceleration could not continue. Your documents are unchanged.	GPU 加速无法继续。您的文档未更改。
-	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	PhotoCraft 正在使用 CPU 合成图像。窗口仍可能使用您的显卡。
+	LumaFoundry is using the CPU image compositor. The window may still use your graphics adapter.	LumaFoundry 正在使用 CPU 合成图像。窗口仍可能使用您的显卡。
 	Retry GPU requires a restart. Save your work first.	重试 GPU 需要重新启动。请先保存您的工作。
 	Retry GPU tries the graphics processor again now.	重试 GPU 会立即再次尝试使用图形处理器。
 	GPU acceleration resumed.	已恢复 GPU 加速。
@@ -2628,7 +2628,7 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
-	PhotoCraft — Screen Color Picker	PhotoCraft — 屏幕取色器
+	LumaFoundry — Screen Color Picker	LumaFoundry — 屏幕取色器
 	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	设为 0 可关闭此阈值；嵌套超过 100 层的 SVG 组始终会被栅格化。
 	Rule of Thirds	三等分
@@ -2920,7 +2920,7 @@ curves	Smooth	平滑
 	{name} (Photoshop)	{name}（Photoshop）
 	{message} ({note})	{message}（{note}）
 @plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	已从 {file} 载入 {n} 个动作
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} 个步骤在 PhotoCraft 中尚无对应功能
+@plural	{n} step has no LumaFoundry equivalent yet|{n} steps have no LumaFoundry equivalent yet	{n} 个步骤在 LumaFoundry 中尚无对应功能
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	已将 {n} 个动作存储到 {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	已省略 {n} 个没有 Photoshop 对应功能的步骤
 @plural	{n} action file loaded|{n} action files loaded	已载入 {n} 个动作文件
@@ -3018,12 +3018,12 @@ curves	Smooth	平滑
 	Bicubic Smoother	双三次（较平滑）
 	Bicubic Sharper	双三次（较锐利）
 	Pasting from other apps is unavailable	无法从其他应用粘贴
-	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft 在此会话中无法访问系统剪贴板。在 Wayland 上，Flatpak 沙盒会隐藏读取其他应用图像所用的协议。
-	To paste from other apps, start PhotoCraft under XWayland: `{command}`	要从其他应用粘贴，请在 XWayland 下启动 PhotoCraft：`{command}`
-	Nothing to paste: PhotoCraft can't read the system clipboard here	没有可粘贴的内容：PhotoCraft 在此无法读取系统剪贴板
+	LumaFoundry can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	LumaFoundry 在此会话中无法访问系统剪贴板。在 Wayland 上，Flatpak 沙盒会隐藏读取其他应用图像所用的协议。
+	To paste from other apps, start LumaFoundry under XWayland: `{command}`	要从其他应用粘贴，请在 XWayland 下启动 LumaFoundry：`{command}`
+	Nothing to paste: LumaFoundry can't read the system clipboard here	没有可粘贴的内容：LumaFoundry 在此无法读取系统剪贴板
 	Delete this set	删除此组
 	New Set…	新建组…
-	PhotoCraft Defaults	PhotoCraft 默认值
+	LumaFoundry Defaults	LumaFoundry 默认值
 	Save a list of these shortcuts as a web page	将这些快捷键的列表存储为网页
 	Save the changes to this set	将更改存储到此组
 	Save these shortcuts as a .kys file	将这些快捷键存储为 .kys 文件

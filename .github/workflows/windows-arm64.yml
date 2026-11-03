@@ -30,6 +30,6 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: photocraft
-      app-dir: PhotoCraft
-      install-relative-path: Programs/ArtCraft/PhotoCraft
+      app-dir: LumaFoundry
+      install-relative-path: Programs/LumaFoundry/LumaFoundry
       install-scope: perUser

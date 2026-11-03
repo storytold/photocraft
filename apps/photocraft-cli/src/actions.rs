@@ -108,7 +108,7 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
         .unsupported
         .iter()
         .filter(|u| u.action == action.name)
-        .map(|u| format!("`{}` step {}: Photoshop's \"{}\" ({}) has no PhotoCraft equivalent yet", u.action, u.step + 1, u.name, u.event))
+        .map(|u| format!("`{}` step {}: Photoshop's \"{}\" ({}) has no LumaFoundry equivalent yet", u.action, u.step + 1, u.name, u.event))
         .chain(imp.warnings.iter().cloned())
         .collect();
     let play = vec![("actions.play".to_string(), json!({"action": action.name}))];

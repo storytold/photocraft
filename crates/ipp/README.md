@@ -1,7 +1,7 @@
 # photocraft-ipp
 
 A small IPP (Internet Printing Protocol, RFC 8010/8011) client for the local CUPS server, in pure
-Rust with no dependencies. It does in-process what `lp` does from the command line, so PhotoCraft
+Rust with no dependencies. It does in-process what `lp` does from the command line, so LumaFoundry
 can print where there is no `lp` binary (a Flatpak sandbox with `--socket=cups`, a minimal
 container) and can read the printer list and the default printer first instead of handing
 CUPS's errors to the user.
@@ -18,5 +18,5 @@ domain socket (`/run/cups/cups.sock`, or `CUPS_SERVER` as a path) or TCP (`local
 parsed with bounds checks; an IPP error status becomes `Error::Status` with the server's own
 message. Tests run against an in-process fake server over TCP and a Unix socket.
 
-Standalone: it depends on no other PhotoCraft crate. Used by `photocraft-engine`'s print
+Standalone: it depends on no other LumaFoundry crate. Used by `photocraft-engine`'s print
 commands on Unix; Windows printing lives in `photocraft-winprint`.

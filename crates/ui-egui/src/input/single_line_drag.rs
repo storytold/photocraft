@@ -24,7 +24,7 @@ pub struct SingleLineDrag {
 
 impl egui::plugin::Plugin for SingleLineDrag {
     fn debug_name(&self) -> &'static str {
-        "PhotoCraft single-line text drag"
+        "LumaFoundry single-line text drag"
     }
 
     fn on_end_pass(&mut self, ui: &mut egui::Ui) {

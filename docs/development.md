@@ -1,5 +1,10 @@
 # Development guide
 
+This fork is **LumaFoundry**: https://github.com/tomblanchard312/lumafoundry.
+Cargo packages, binary names, settings paths, automation ids and `.pcraft` files retain
+the upstream machine names for compatibility. Visible product branding uses LumaFoundry.
+Historical parity documentation describes upstream PhotoCraft.
+
 ## Prerequisites
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.

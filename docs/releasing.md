@@ -1,5 +1,14 @@
 # Releasing PhotoCraft
 
+## Rights and provenance review
+
+Follow [Independent implementation and provenance](legal/independent-implementation.md)
+before publishing. Review the actual artifact inventory, notices, asset/font/model terms,
+screenshots and exclusion of external test corpora. The inherited Pro interface presentation
+is an open review item. Passing feature tests, renaming the product or adding a disclaimer
+does not establish clearance. Preserve required upstream copyright and licence notices.
+
+
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
 signed installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball, then creates
 or updates a **draft** GitHub Release named `PhotoCraft v<version>`. Nobody sees a draft until a

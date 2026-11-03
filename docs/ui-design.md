@@ -1,10 +1,20 @@
 # UI design system
 
+## Independent visual identity
+
+Follow [Independent implementation and provenance](legal/independent-implementation.md).
+Functional compatibility is the goal; copying another product's distinctive presentation is
+not. Use our tokens, original or properly licensed icons, independently written labels and
+project-rendered screenshots. Do not trace screenshots or extract UI resources. Historical
+comparisons below describe inherited design choices, not permission to reproduce them.
+The combined presentation of the inherited Pro themes remains a release-review item; a
+colour change or renamed theme alone would not establish clearance.
+
 ## Themes
 
 | Theme | Intent |
 |---|---|
-| Pro | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
+| Pro | Inherited flat charcoal panels (#323232), dark tab strips, blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type; provenance and combined appearance require release review |
 | Pro Medium | Photoshop-style medium-gray panels and a dark canvas |
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
@@ -49,7 +59,7 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
   > crates/ui-egui/src/icon_data.rs
 ```
 
-## Interaction models (match Photoshop CC)
+## Functional interaction models
 
 | Feature | Module | Behaviour |
 |---|---|---|

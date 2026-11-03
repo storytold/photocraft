@@ -158,6 +158,6 @@ fn atn_corpus_loads_saves_and_reloads() {
     }
     println!("{} files, {steps} steps, {unsupported} kept Photoshop steps", files.len());
     assert!(files.len() >= FLOOR_FILES, "only {} .atn files; the corpus floor is {FLOOR_FILES}", files.len());
-    assert!(unsupported <= CEILING_UNSUPPORTED, "{unsupported} steps have no PhotoCraft equivalent; the ceiling is {CEILING_UNSUPPORTED}");
+    assert!(unsupported <= CEILING_UNSUPPORTED, "{unsupported} steps have no LumaFoundry equivalent; the ceiling is {CEILING_UNSUPPORTED}");
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
 }

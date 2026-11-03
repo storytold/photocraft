@@ -50,7 +50,7 @@ fn no_marker_uses_the_platform_dir() {
 fn either_marker_keeps_everything_beside_the_exe() {
     for marker in PORTABLE_MARKERS {
         let root = temp("portable");
-        let exe = root.join("PhotoCraft");
+        let exe = root.join("LumaFoundry");
         std::fs::create_dir_all(&exe).unwrap();
         std::fs::write(exe.join(marker), b"").unwrap();
         let d = resolve(fake_home(&root), Some(&exe));

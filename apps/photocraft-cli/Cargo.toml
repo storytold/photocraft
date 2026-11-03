@@ -1,6 +1,6 @@
 [package]
 name = "photocraft-cli"
-description = "Headless PhotoCraft: convert, inspect, run commands, batch, MCP server"
+description = "Headless LumaFoundry: convert, inspect, run commands, batch, MCP server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
