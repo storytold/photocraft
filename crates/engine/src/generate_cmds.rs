@@ -4060,10 +4060,18 @@ fn run_expand(s: &mut Session, p: &Value) -> Result<Value> {
                     let (rw, rh) = matte_request_size(seen.width, seen.height);
                     let seen = if (rw, rh) == (seen.width, seen.height) { seen } else { resize_rgba8(&seen, rw, rh)? };
                     ctx.progress(0.0, "Describing the picture");
-                    enhance_prompt(thinker.as_ref(), EnhanceKind::Scene, ENHANCE_SCENE_REQUEST, Some(&seen), None, EXPAND_CAPTION_SEED, &JobProgress::span(ctx, 0.0, 0.03))
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default()
+                    enhance_prompt(
+                        thinker.as_ref(),
+                        EnhanceKind::Scene,
+                        ENHANCE_SCENE_REQUEST,
+                        Some(&seen),
+                        None,
+                        EXPAND_CAPTION_SEED,
+                        &JobProgress::span(ctx, 0.0, 0.03),
+                    )
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
                 } else {
                     typed.clone()
                 };
