@@ -18,6 +18,14 @@ use crate::{FormatError, LoadOptions, Result, SaveOptions};
 use craft_pcraft_format::{BLOBS_DIR, COMPOSITE_DIR, TILES_DIR, blob_path, tile_path};
 // `SAVE_LOCK` is the file a directory save holds an exclusive lock on for its whole transaction (#4957).
 pub(crate) use craft_pcraft_format::{COMPOSITE, MANIFEST, SAVE_LOCK, THUMB};
+/// The flattened document at its canvas size, a PNG in [`COMPOSITE_DIR`], named by the manifest's
+/// `full_composite` member.
+pub(crate) const FULL_COMPOSITE: &str = "composite/full.png";
+/// The manifest member that names [`FULL_COMPOSITE`].
+const FULL_COMPOSITE_MEMBER: &str = "full_composite";
+/// Bytes a ZIP bundle may hold, central directory included, and entries it may hold: the
+/// format's 32-bit offsets and 16-bit counts ([`ZipWriter`] has no ZIP64).
+const ZIP_LIMIT: (u64, usize) = (u32::MAX as u64, u16::MAX as usize);
 /// How long a directory save waits for another save of the same bundle to finish.
 const SAVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -129,16 +137,31 @@ fn hash_bytes(b: &[u8]) -> Hash {
 }
 
 fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
-    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, img.pixels.clone())
-        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?;
+    png_tagged(img, None)
+}
+
+/// [`png`] with `icc` embedded.
+fn png_tagged(img: &Rgba8Image, icc: Option<&[u8]>) -> Result<Vec<u8>> {
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(img.pixels.len()).map_err(|_| FormatError::LimitExceeded("not enough memory for PNG pixels".into()))?;
+    pixels.extend_from_slice(&img.pixels);
+    let image = photocraft_codecs::Image::from_u8(img.width, img.height, photocraft_codecs::ChannelLayout::Rgba, pixels)
+        .map_err(|e| FormatError::Unsupported(format!("preview: {e}")))?
+        .with_icc(icc.map(<[u8]>::to_vec));
     photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
 }
 
 fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
-    let (composite, thumbnail) = beside(
-        opts.thumbnail.is_some() && opts.composite.is_some(),
-        || opts.composite.as_ref().map(png).transpose(),
-        || opts.thumbnail.as_ref().map(png).transpose(),
+    let (full, (composite, thumbnail)) = beside(
+        opts.full_composite.is_some() && (opts.thumbnail.is_some() || opts.composite.is_some()),
+        || opts.full_composite.as_ref().map(|img| png_tagged(img, opts.full_composite_icc.as_deref())).transpose(),
+        || {
+            beside(
+                opts.thumbnail.is_some() && opts.composite.is_some(),
+                || opts.composite.as_ref().map(png).transpose(),
+                || opts.thumbnail.as_ref().map(png).transpose(),
+            )
+        },
     );
     let mut out = Vec::new();
     if let Some(t) = thumbnail? {
@@ -146,6 +169,10 @@ fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
     }
     if let Some(t) = composite? {
         out.push((COMPOSITE, t));
+    }
+    // A full-size composite that cannot be encoded is left out; the save goes on without it.
+    if let Ok(Some(t)) = full {
+        out.push((FULL_COMPOSITE, t));
     }
     Ok(out)
 }
@@ -228,6 +255,43 @@ fn manifest_limits(max_manifest_bytes: usize) -> craft_pcraft_format::Limits {
     limits.max_manifest_bytes = max_manifest_bytes;
     limits.max_depth = craft_pcraft_format::manifest_depth(convert::MAX_GROUP_DEPTH);
     limits
+}
+
+/// The manifest as a save writes it: `manifest`, followed by a `full_composite` member naming
+/// [`FULL_COMPOSITE`] when `full_composite` is set. Without it the bytes are `manifest`'s own.
+fn manifest_json(manifest: &Manifest, full_composite: bool) -> Result<Vec<u8>> {
+    #[derive(serde::Serialize)]
+    struct WithFullComposite<'a> {
+        #[serde(flatten)]
+        manifest: &'a Manifest,
+        full_composite: &'static str,
+    }
+    // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
+    // refuse on load (issue #1101): refuse the save instead, naming the value.
+    crate::finite::check(manifest).map_err(|e| match e {
+        crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
+        crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
+    })?;
+    let json = if full_composite {
+        serde_json::to_vec_pretty(&WithFullComposite { manifest, full_composite: FULL_COMPOSITE })?
+    } else {
+        serde_json::to_vec_pretty(manifest)?
+    };
+    // The nesting and the items only: a save checks no manifest size.
+    craft_pcraft_format::check_manifest(&json, &manifest_limits(usize::MAX))?;
+    Ok(json)
+}
+
+/// The entry the manifest's `full_composite` member names: `None` when the member is missing or
+/// `null`. A member that names any entry other than [`FULL_COMPOSITE`] is refused.
+pub(crate) fn read_full_composite_entry(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Option<&'static str>> {
+    let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
+    let manifest = craft_pcraft_format::parse_manifest(&raw, &manifest_limits(opts.max_manifest_bytes))?;
+    match manifest.get(FULL_COMPOSITE_MEMBER) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(entry)) if entry == FULL_COMPOSITE => Ok(Some(FULL_COMPOSITE)),
+        Some(other) => Err(FormatError::corrupt(format!("`{FULL_COMPOSITE_MEMBER}` names {other}, not {FULL_COMPOSITE:?}"))),
+    }
 }
 
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
@@ -556,7 +620,8 @@ pub trait BundleStore: ByteSource {
     /// Make sure the store holds `object`.
     fn object(&mut self, object: &BundleObject<'_>) -> Result<Stored>;
 
-    /// Store a preview of the new manifest (`thumb.png` or `composite/preview.png`).
+    /// Store a preview of the new manifest (`thumb.png`, `composite/preview.png` or
+    /// `composite/full.png`).
     fn preview(&mut self, path: &str, png: Vec<u8>) -> Result<()>;
 
     /// Publish `manifest`, which references this save's objects and previews. Returns how many
@@ -585,6 +650,8 @@ pub struct ZipStore {
     previews: Vec<(String, Vec<u8>)>,
     /// Compresses what `plan` didn't, created on first use and dropped with the save.
     compressor: Option<Compressor>,
+    /// Bytes and entries an archive may hold: [`ZIP_LIMIT`], lowered by tests.
+    limit: (u64, usize),
     archive: Vec<u8>,
     /// Entries of `archive` by name, built on the first read.
     index: std::sync::OnceLock<HashMap<String, crate::zip::Entry>>,
@@ -599,6 +666,7 @@ impl Default for ZipStore {
             objects: Vec::new(),
             previews: Vec::new(),
             compressor: None,
+            limit: ZIP_LIMIT,
             archive: Vec::new(),
             index: std::sync::OnceLock::new(),
         }
@@ -637,6 +705,40 @@ impl ZipStore {
     pub fn set_compressed_cache_budget(&mut self, bytes: usize) {
         self.compressed_budget = bytes;
         self.compressed.clear();
+    }
+
+    /// Whether the archive, with a manifest of `manifest_len` bytes, stays within `limit`. A
+    /// STORE entry takes a 30-byte local header plus its name and data, and a 46-byte central
+    /// directory record plus its name again; the archive ends with a 22-byte end record.
+    fn fits(&self, manifest_len: usize) -> bool {
+        let stored = |name: &str, len: usize| 76 + 2 * name.len() as u64 + len as u64;
+        let total = 22
+            + stored(MANIFEST, manifest_len)
+            + self.previews.iter().map(|(name, data)| stored(name, data.len())).sum::<u64>()
+            + self.objects.iter().map(|(path, data)| stored(path, data.len())).sum::<u64>();
+        total <= self.limit.0 && 1 + self.previews.len() + self.objects.len() <= self.limit.1
+    }
+
+    /// [`BundleStore::commit`] for [`PcraftWriter::save_zip`]: the full-size composite is left
+    /// out, and `p`'s manifest no longer names it, rather than fail a save that fits without it
+    /// (past the ZIP limit, or the memory to build the archive).
+    fn commit_fitting(&mut self, p: &mut Prepared) -> Result<usize> {
+        let full = |store: &Self| store.previews.iter().any(|(name, _)| name == FULL_COMPOSITE);
+        if full(self) && !self.fits(p.manifest.len()) {
+            self.drop_full_composite(p)?;
+        }
+        match self.commit(&p.manifest) {
+            Err(FormatError::LimitExceeded(_)) if full(self) => {
+                self.drop_full_composite(p)?;
+                self.commit(&p.manifest)
+            }
+            committed => committed,
+        }
+    }
+
+    fn drop_full_composite(&mut self, p: &mut Prepared) -> Result<()> {
+        self.previews.retain(|(name, _)| name != FULL_COMPOSITE);
+        p.drop_full_composite()
     }
 }
 
@@ -703,13 +805,13 @@ impl BundleStore for ZipStore {
     /// Writes the archive: the manifest first (so [`crate::is_pcraft`] finds it at once), then
     /// the previews and objects.
     fn commit(&mut self, manifest: &[u8]) -> Result<usize> {
+        // The archive is sized for every entry up front (#7689); the entries stay until it is.
+        let entries = std::iter::once((MANIFEST, manifest.len()))
+            .chain(self.previews.iter().map(|(name, data)| (name.as_str(), data.len())))
+            .chain(self.objects.iter().map(|(path, data)| (path.as_str(), data.len())));
+        let mut z = ZipWriter::with_entries(entries)?;
         let objects = std::mem::take(&mut self.objects);
         let previews = std::mem::take(&mut self.previews);
-        // The archive is sized for every entry up front (#7689).
-        let entries = std::iter::once((MANIFEST, manifest.len()))
-            .chain(previews.iter().map(|(name, data)| (name.as_str(), data.len())))
-            .chain(objects.iter().map(|(path, data)| (path.as_str(), data.len())));
-        let mut z = ZipWriter::with_entries(entries)?;
         z.add(MANIFEST, manifest)?;
         for (name, data) in &previews {
             z.add(name, data)?;
@@ -866,7 +968,7 @@ impl DirStore {
         write_bundle_file(dir, &dir.join(MANIFEST), manifest, fs)?;
         // Omitted previews belong to the previous manifest until the new one commits.
         // After commit, a locked leftover is only housekeeping, just like unused objects.
-        for stale in [THUMB, COMPOSITE] {
+        for stale in [THUMB, COMPOSITE, FULL_COMPOSITE] {
             if !save.previews.iter().any(|n| n == stale) {
                 let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
             }
@@ -902,7 +1004,7 @@ impl BundleStore for DirStore {
         let existing = list_objects(&root)?;
         // Reject a hostile existing entry before writing any object or manifest. This also
         // covers entries that this save would otherwise leave untouched or garbage-collect.
-        for path in [MANIFEST, THUMB, COMPOSITE] {
+        for path in [MANIFEST, THUMB, COMPOSITE, FULL_COMPOSITE] {
             validate_bundle_file(&root, &root.join(path))?;
         }
         self.save = Some(DirSave {
@@ -1039,8 +1141,32 @@ struct FileSignature {
 
 struct Prepared {
     manifest: Vec<u8>,
+    /// What `manifest` encodes, for a ZIP save that has to leave the full-size composite out.
+    model: Manifest,
+    /// Whether `manifest` names the full-size composite.
+    full_composite: bool,
     objects: BTreeMap<String, Object>,
     stats: SaveStats,
+}
+
+impl Prepared {
+    /// Takes the full-size composite out of the manifest when `previews` does not hold it.
+    fn match_previews(&mut self, previews: &[(&str, Vec<u8>)]) -> Result<()> {
+        if !previews.iter().any(|(name, _)| *name == FULL_COMPOSITE) {
+            self.drop_full_composite()?;
+        }
+        Ok(())
+    }
+
+    /// Takes the full-size composite out of the manifest.
+    fn drop_full_composite(&mut self) -> Result<()> {
+        if self.full_composite {
+            self.full_composite = false;
+            self.manifest = manifest_json(&self.model, false)?;
+            self.stats.manifest_bytes = self.manifest.len();
+        }
+        Ok(())
+    }
 }
 
 enum Object {
@@ -1316,6 +1442,7 @@ impl BundleGc {
         let (handle, name) = match relative {
             THUMB => (&self.root, THUMB),
             COMPOSITE => (&self.composite, "preview.png"),
+            FULL_COMPOSITE => (&self.composite, "full.png"),
             _ => match relative.split_once('/') {
                 Some((TILES_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.tiles, name),
                 Some((BLOBS_DIR, name)) if name.strip_suffix(craft_pcraft_format::OBJECT_SUFFIX).is_some_and(is_valid_hash) => (&self.blobs, name),
@@ -1448,18 +1575,11 @@ impl Hashes {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.tiles), blob_hash_cache: Some(&mut self.blobs), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
-        let mut manifest = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
-        manifest.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
-        manifest.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
-        // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
-        // refuse on load (issue #1101): refuse the save instead, naming the value.
-        crate::finite::check(&manifest).map_err(|e| match e {
-            crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
-            crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
-        })?;
-        let manifest = serde_json::to_vec_pretty(&manifest)?;
-        // The nesting and the items only: a save checks no manifest size.
-        craft_pcraft_format::check_manifest(&manifest, &manifest_limits(usize::MAX))?;
+        let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
+        model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
+        let full_composite = opts.full_composite.is_some();
+        let manifest = manifest_json(&model, full_composite)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
         let invalid = |h: &str| FormatError::corrupt(format!("invalid object hash `{h}`"));
         let mut objects = BTreeMap::new();
@@ -1469,21 +1589,39 @@ impl Hashes {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h).ok_or_else(|| invalid(&h))?, Object::Blob(b));
         }
-        Ok(Prepared { manifest, objects, stats })
+        Ok(Prepared { manifest, model, full_composite, objects, stats })
     }
 
     /// One save into `store`, in the order [`BundleStore`] describes.
-    fn save(&mut self, doc: &Document, opts: &SaveOptions, store: &mut dyn BundleStore) -> Result<SaveStats> {
-        let result = store.begin().and_then(|()| self.save_begun(doc, opts, store));
+    fn save<S: BundleStore + ?Sized>(&mut self, doc: &Document, opts: &SaveOptions, store: &mut S) -> Result<SaveStats> {
+        self.save_committing(doc, opts, store, |store, p| store.commit(&p.manifest))
+    }
+
+    /// [`Self::save`] with `commit` in place of [`BundleStore::commit`]; it may change the
+    /// manifest it publishes.
+    fn save_committing<S: BundleStore + ?Sized>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        store: &mut S,
+        commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
+    ) -> Result<SaveStats> {
+        let result = store.begin().and_then(|()| self.save_begun(doc, opts, store, commit));
         store.end();
         result
     }
 
-    fn save_begun(&mut self, doc: &Document, opts: &SaveOptions, store: &mut dyn BundleStore) -> Result<SaveStats> {
+    fn save_begun<S: BundleStore + ?Sized>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        store: &mut S,
+        commit: impl FnOnce(&mut S, &mut Prepared) -> Result<usize>,
+    ) -> Result<SaveStats> {
         // Another thread encodes the previews while the document is collected and the store
         // plans its objects.
         let (previews, prepared) = beside(
-            opts.thumbnail.is_some() || opts.composite.is_some(),
+            opts.thumbnail.is_some() || opts.composite.is_some() || opts.full_composite.is_some(),
             || previews(opts),
             || -> Result<_> {
                 let p = self.prepare(doc, opts)?;
@@ -1491,8 +1629,9 @@ impl Hashes {
                 Ok(p)
             },
         );
-        let p = prepared?;
+        let mut p = prepared?;
         let previews = previews?;
+        p.match_previews(&previews)?;
         let mut stats = p.stats;
         for object in p.bundle_objects() {
             match (store.object(&object)?, object.is_tile()) {
@@ -1505,7 +1644,8 @@ impl Hashes {
         for (name, data) in previews {
             store.preview(name, data)?;
         }
-        stats.objects_removed = store.commit(&p.manifest)?;
+        stats.objects_removed = commit(store, &mut p)?;
+        stats.manifest_bytes = p.manifest.len();
         Ok(stats)
     }
 }
@@ -1542,8 +1682,17 @@ impl PcraftWriter {
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let stats = self.hashes.save(doc, opts, &mut self.zip)?;
+        let stats = self.hashes.save_committing(doc, opts, &mut self.zip, ZipStore::commit_fitting)?;
         Ok((self.zip.take_archive(), stats))
+    }
+
+    /// [`Self::save_zip`] with `limit` (bytes, entries) in place of [`ZIP_LIMIT`].
+    #[cfg(test)]
+    fn save_zip_within(&mut self, doc: &Document, opts: &SaveOptions, limit: (u64, usize)) -> Result<(Vec<u8>, SaveStats)> {
+        self.zip.limit = limit;
+        let saved = self.save_zip(doc, opts);
+        self.zip.limit = ZIP_LIMIT;
+        saved
     }
 
     /// Save into a directory bundle: reuses only valid existing objects,
@@ -1666,33 +1815,100 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
         i.pixels.iter_mut().enumerate().for_each(|(j, p)| *p = (j as u8).wrapping_mul(k));
         i
     };
-    let (thumb, composite) = (image(4, 3, 7), image(9, 5, 13));
-    for (t, c) in [(true, true), (true, false), (false, true), (false, false)] {
-        let opts = SaveOptions { thumbnail: t.then(|| thumb.clone()), composite: c.then(|| composite.clone()) };
+    let (thumb, composite, full) = (image(4, 3, 7), image(9, 5, 13), image(600, 3, 5));
+    for mask in 0..8u8 {
+        let (t, c, f) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
+        let opts = SaveOptions {
+            thumbnail: t.then(|| thumb.clone()),
+            composite: c.then(|| composite.clone()),
+            full_composite: f.then(|| full.clone()),
+            ..Default::default()
+        };
         let (bytes, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
         let zip = ZipReader::new(&bytes).unwrap();
         let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
         let mut want = vec![MANIFEST];
         want.extend(t.then_some(THUMB));
         want.extend(c.then_some(COMPOSITE));
+        want.extend(f.then_some(FULL_COMPOSITE));
         assert_eq!(names[..want.len()], want[..]);
         assert!(names[want.len()..].iter().all(|n| n.starts_with("tiles/") || n.starts_with("blobs/")), "{names:?}");
-        for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref())] {
+        for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref()), (FULL_COMPOSITE, opts.full_composite.as_ref())] {
             assert_eq!(zip.read_by_name(name, usize::MAX).ok(), img.map(|i| png(i).unwrap()), "{name}");
         }
+        assert_eq!(crate::read_full_composite(&bytes).unwrap(), opts.full_composite.as_ref().map(|i| png(i).unwrap()));
     }
-    let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()) };
+    let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()), ..Default::default() };
     assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
-    let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }) };
+    let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }), ..Default::default() };
     assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    // A full-size composite that cannot be encoded is left out, and the save goes on without it.
+    let bad =
+        SaveOptions { thumbnail: Some(thumb.clone()), full_composite: Some(Rgba8Image { width: 600, height: 3, pixels: vec![0; 5] }), ..Default::default() };
+    let (bytes, stats) = PcraftWriter::new().save_zip(&doc, &bad).unwrap();
+    let zip = ZipReader::new(&bytes).unwrap();
+    assert!(zip.read_by_name(FULL_COMPOSITE, usize::MAX).is_err());
+    assert_eq!(zip.read_by_name(THUMB, usize::MAX).unwrap(), png(&thumb).unwrap());
+    assert_eq!(crate::read_full_composite(&bytes).unwrap(), None);
+    assert_eq!(stats.manifest_bytes, zip.read_by_name(MANIFEST, usize::MAX).unwrap().len());
+    let dir = std::env::temp_dir().join(format!("pcraft-bad-full-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    PcraftWriter::new().save_dir(&doc, &dir, &bad).unwrap();
+    assert!(!dir.join(FULL_COMPOSITE).exists());
+    assert!(!std::fs::read_to_string(dir.join(MANIFEST)).unwrap().contains("full_composite"));
+    std::fs::remove_dir_all(&dir).unwrap();
 
     let dir = std::env::temp_dir().join(format!("pcraft-previews-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()) };
+    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()), full_composite: Some(full.clone()), ..Default::default() };
     PcraftWriter::new().save_dir(&doc, &dir, &opts).unwrap();
     assert_eq!(std::fs::read(dir.join(THUMB)).unwrap(), png(&thumb).unwrap());
     assert_eq!(std::fs::read(dir.join(COMPOSITE)).unwrap(), png(&composite).unwrap());
+    assert_eq!(std::fs::read(dir.join(FULL_COMPOSITE)).unwrap(), png(&full).unwrap());
+    // A later save without it removes the file once the new manifest is in place.
+    PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions { full_composite: None, ..opts }).unwrap();
+    assert!(!dir.join(FULL_COMPOSITE).exists());
+    assert!(dir.join(COMPOSITE).exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(test)]
+#[test]
+fn zip_save_leaves_the_full_composite_out_past_the_zip_limit() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("limit", Size::new(300, 200), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    surface.write_pixel(7, 9, &[0.2, 0.4, 0.6, 1.0]);
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let mut full = Rgba8Image::new(300, 200);
+    full.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = (i % 251) as u8);
+    let opts = SaveOptions {
+        thumbnail: Some(Rgba8Image::new(4, 3)),
+        composite: Some(Rgba8Image::new(9, 6)),
+        full_composite: Some(full.clone()),
+        ..Default::default()
+    };
+    let (whole, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+    // The whole archive, central directory included, and how many entries it holds: what the
+    // limit compares.
+    let bytes = whole.len() as u64;
+    let count = ZipReader::new(&whole).unwrap().entries.len();
+    let (fits, _) = PcraftWriter::new().save_zip_within(&doc, &opts, (bytes, count)).unwrap();
+    assert_eq!(fits, whole, "an archive at the limit keeps the composite");
+    for limit in [(bytes - 1, count), (bytes, count - 1)] {
+        let (saved, stats) = PcraftWriter::new().save_zip_within(&doc, &opts, limit).unwrap();
+        let zip = ZipReader::new(&saved).unwrap();
+        let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&FULL_COMPOSITE), "{limit:?}: {names:?}");
+        assert!(names.contains(&THUMB) && names.contains(&COMPOSITE), "{limit:?}: {names:?}");
+        let manifest = zip.read_by_name(MANIFEST, usize::MAX).unwrap();
+        assert_eq!(stats.manifest_bytes, manifest.len());
+        assert!(!String::from_utf8(manifest).unwrap().contains("full_composite"));
+        assert_eq!(crate::load_from_bytes(&saved).unwrap(), doc);
+    }
 }
 
 #[cfg(all(test, unix))]

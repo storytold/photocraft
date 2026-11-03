@@ -15,7 +15,7 @@ fn with_previews() -> SaveOptions {
     thumb.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = i as u8);
     let mut composite = Rgba8Image::new(9, 5);
     composite.pixels.iter_mut().enumerate().for_each(|(i, p)| *p = (i as u8).wrapping_mul(13));
-    SaveOptions { thumbnail: Some(thumb), composite: Some(composite) }
+    SaveOptions { thumbnail: Some(thumb), composite: Some(composite), ..Default::default() }
 }
 
 /// Every file of a directory bundle by relative path, except the lock file.
