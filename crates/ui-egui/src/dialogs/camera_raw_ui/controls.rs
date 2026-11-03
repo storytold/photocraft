@@ -218,9 +218,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // the main window, as Photoshop opens it.
     let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
     let size = window_size(monitor);
-    let mut builder = crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size([900.0, 600.0]).with_visible(false);
+    let mut builder =
+        crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size(window_min_size(monitor)).with_visible(false);
     if let Some(outer) = outer {
-        builder = builder.with_position(outer.center() - size / 2.0);
+        // Never above the main window's top edge, so the title bar stays on its monitor and in reach.
+        let mut pos = outer.center() - size / 2.0;
+        pos.y = pos.y.max(outer.top());
+        builder = builder.with_position(pos);
     }
     let mut close = false;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
@@ -245,10 +249,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// The Camera Raw window's first size: two thirds of the monitor's width and three quarters of its
-/// height, at most the full 1360×900 and at least the minimum 900×600.
+/// height, at most the full 1360×900 and at least `window_min_size`.
 fn window_size(monitor: Option<egui::Vec2>) -> egui::Vec2 {
     let Some(m) = monitor else { return vec2(1010.0, 630.0) };
-    vec2((m.x * 0.66).clamp(900.0, 1360.0), (m.y * 0.73).clamp(600.0, 900.0))
+    let min = window_min_size(Some(m));
+    vec2((m.x * 0.66).clamp(min.x, 1360.0), (m.y * 0.73).clamp(min.y, 900.0))
+}
+
+/// The smallest Camera Raw window: 900×600, or less on a screen too small for it, leaving room
+/// for the title bar and the taskbar so the OK and Cancel buttons stay on screen.
+fn window_min_size(monitor: Option<egui::Vec2>) -> egui::Vec2 {
+    let full = vec2(900.0, 600.0);
+    monitor.map_or(full, |m| full.min(vec2(m.x - 40.0, m.y - 90.0)).max(vec2(400.0, 300.0)))
 }
 
 impl CameraRawDialog {
@@ -553,7 +565,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
 
 #[cfg(test)]
 mod window_size_tests {
-    use super::window_size;
+    use super::{window_min_size, window_size};
     use egui::vec2;
 
     /// A 1536×864 laptop screen gets a window that fits it; big screens stop at 1360×900 and small
@@ -564,5 +576,15 @@ mod window_size_tests {
         assert_eq!(window_size(Some(vec2(3840.0, 2160.0))), vec2(1360.0, 900.0));
         assert_eq!(window_size(Some(vec2(1024.0, 700.0))), vec2(900.0, 600.0));
         assert_eq!(window_size(None), vec2(1010.0, 630.0));
+    }
+
+    /// On a screen shorter than the 600-point minimum plus the title bar and taskbar, both the
+    /// first and the minimum size shrink to fit it.
+    #[test]
+    fn a_small_screen_lowers_the_minimum_to_fit() {
+        let small = Some(vec2(1093.0, 614.0));
+        assert_eq!(window_min_size(small), vec2(900.0, 524.0));
+        assert_eq!(window_size(small), vec2(900.0, 524.0));
+        assert_eq!(window_min_size(None), vec2(900.0, 600.0));
     }
 }
