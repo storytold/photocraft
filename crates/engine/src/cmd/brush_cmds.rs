@@ -768,14 +768,14 @@ fn apply_mask_preview_tile_patches(stack: &mut Stack, active_index: usize, patch
     }
     for patch in patches {
         if let Some(source) = patch.tile {
-            if surface.tile(patch.coord).is_some_and(|target| std::sync::Arc::ptr_eq(target, &source) || target.bytes() == source.bytes()) {
+            if surface.tile(patch.coord).is_some_and(|target| std::sync::Arc::ptr_eq(target, &source) || &*target.bytes() == &*source.bytes()) {
                 continue;
             }
             let target = surface.tile_mut(patch.coord);
             if source.bytes().len() != target.bytes().len() {
                 return false;
             }
-            target.bytes_mut().copy_from_slice(source.bytes());
+            target.bytes_mut().copy_from_slice(&source.bytes());
         } else {
             if surface.tile(patch.coord).is_none_or(|target| target.bytes().chunks_exact(default.len()).all(|pixel| pixel == default)) {
                 continue;

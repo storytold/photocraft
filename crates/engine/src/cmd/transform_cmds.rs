@@ -654,6 +654,7 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
                     SampleType::F32 => tb.chunks_exact(bpp).all(|px| read_sample(px, SampleType::F32, a) == 1.0),
                 };
                 if all_opaque {
+                    drop(tb);
                     return Some((tc, top_tile));
                 }
                 let all_transparent = match fmt.sample {
@@ -671,6 +672,7 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
                         SampleType::F32 => tb.chunks_exact(bpp).all(|px| read_sample(px, SampleType::F32, a) > 0.0 || px.iter().all(|&b| b == 0)),
                     };
                     if clean_zero {
+                        drop(tb);
                         return Some((tc, top_tile));
                     }
                 }

@@ -183,7 +183,9 @@ fn sparse(old: Option<&Document>, doc: &Document) -> Option<Vec<Rect>> {
                     if a.zip(b).is_some_and(|(a, b)| Arc::ptr_eq(a, b)) {
                         continue;
                     }
-                    if let Some(local) = changed_bounds(a.map(|t| t.bytes()), b.map(|t| t.bytes()), x.default_bytes(), x.format().bytes_per_pixel()) {
+                    let a_bytes = a.map(|tile| tile.bytes());
+                    let b_bytes = b.map(|tile| tile.bytes());
+                    if let Some(local) = changed_bounds(a_bytes.as_deref(), b_bytes.as_deref(), x.default_bytes(), x.format().bytes_per_pixel()) {
                         let origin = coord.rect();
                         regions.push(Rect::new(origin.x0 + local.x0, origin.y0 + local.y0, origin.x0 + local.x1, origin.y0 + local.y1));
                     }

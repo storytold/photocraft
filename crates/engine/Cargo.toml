@@ -69,6 +69,7 @@ rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
+photocraft-io = { workspace = true, features = ["testgen"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
