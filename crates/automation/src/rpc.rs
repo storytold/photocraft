@@ -308,6 +308,10 @@ pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
     // poisoned lock is safe to keep using, the same as the MCP server does.
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.lock().unwrap_or_else(PoisonError::into_inner).handle(method, params)))
         .unwrap_or_else(|_| Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
+    for diagnostic in h.lock().unwrap_or_else(PoisonError::into_inner).drain_diagnostics() {
+        // A broken stderr pipe must not panic the server before it writes the reply.
+        let _ = writeln!(std::io::stderr(), "warning: {diagnostic}");
+    }
     match r {
         Ok(v) => json!({"id": id, "ok": true, "result": v}),
         Err(e) => {
