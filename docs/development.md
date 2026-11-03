@@ -942,8 +942,9 @@ local-time implementation in the browser. No filesystem access is required for b
 Native filesystem helpers remain separate from browser downloads.
 
 Timestamp exports stage and flush encoded bytes beside the destination, then publish with a
-non-replacing hard link. Where hard links fail, exclusive `create_new` writes protect existing
-files without a check-then-write race. This fallback exposes the newly created file during writing;
+non-replacing hard link. Where hard links fail, staging is removed before writing with exclusive
+`create_new`. This avoids keeping two on-disk copies and protects existing files without a
+check-then-write race. This fallback exposes the newly created file during writing;
 a crash can leave it incomplete. Write errors attempt cleanup, and failures after publication
 report the written path without retrying. Directory flushing follows the ordinary atomic writer's
 platform policy. Existing save/replacement APIs are unchanged. A finite 100,000-candidate bound

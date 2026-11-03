@@ -55,24 +55,35 @@ fn write_unique_with(fs: &dyn AtomicFs, path: &Path, bytes: &[u8], link: &dyn Fn
             }
             path.with_file_name(name)
         };
-        match link(&staged.path, &candidate) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                let mut output = match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
-                    Ok(file) => file,
-                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => return Err(e),
-                };
-                if let Err(e) = output.write_all(bytes).and_then(|()| sync_file(&output)) {
-                    drop(output);
-                    let cleanup = fs.remove(&candidate);
-                    return Err(io::Error::other(format!("could not write {}: {e}; cleanup: {cleanup:?}", candidate.display())));
+        let linked = if staged.cleanup_pending {
+            match link(&staged.path, &candidate) {
+                Ok(()) => true,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(_) => {
+                    fs.remove(&staged.path)?;
+                    staged.cleanup_pending = false;
+                    false
                 }
             }
+        } else {
+            false
+        };
+        if !linked {
+            let mut output = match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+                Ok(file) => file,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            };
+            if let Err(e) = output.write_all(bytes).and_then(|()| sync_file(&output)) {
+                drop(output);
+                let cleanup = fs.remove(&candidate);
+                return Err(io::Error::other(format!("could not write {}: {e}; cleanup: {cleanup:?}", candidate.display())));
+            }
         }
-        fs.remove(&staged.path).map_err(|e| io::Error::other(format!("wrote {}, but staging cleanup failed: {e}", candidate.display())))?;
-        staged.cleanup_pending = false;
+        if staged.cleanup_pending {
+            fs.remove(&staged.path).map_err(|e| io::Error::other(format!("wrote {}, but staging cleanup failed: {e}", candidate.display())))?;
+            staged.cleanup_pending = false;
+        }
         let synced = fs.sync_dir(dir);
         #[cfg(not(windows))]
         let synced = super::dir_synced(synced);
@@ -115,6 +126,59 @@ mod tests {
             assert_eq!(out, dir.0.join("写真.edit_2_2.png"));
             assert_eq!(std::fs::read(out).unwrap(), b"export");
             assert_eq!(std::fs::read(dir.0.join("写真.edit_2.png")).unwrap(), b"original");
+            assert_no_temp(&dir.0);
+        }
+    }
+
+    #[test]
+    fn fallback_releases_staging_before_creating_output_and_retries_collisions() {
+        struct FallbackFs {
+            target: PathBuf,
+            collide: bool,
+            removals: Cell<usize>,
+            removed_before_output: Cell<bool>,
+        }
+        impl AtomicFs for FallbackFs {
+            fn write_new(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+                RealFs.write_new(path, bytes)
+            }
+            fn rename(&self, _: &Path, _: &Path) -> io::Result<()> {
+                panic!("exclusive publication must never replace")
+            }
+            fn remove(&self, path: &Path) -> io::Result<()> {
+                self.removed_before_output.set(!self.target.exists());
+                RealFs.remove(path)?;
+                self.removals.set(self.removals.get() + 1);
+                if self.collide {
+                    std::fs::write(&self.target, b"original")?;
+                }
+                Ok(())
+            }
+            fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+                RealFs.sync_dir(dir)
+            }
+            fn copy_metadata(&self, _: &Path, _: &Path) -> io::Result<()> {
+                panic!("existing candidate metadata must not be copied")
+            }
+        }
+        for collide in [false, true] {
+            let dir = TempDir::new("unique-fallback");
+            let fs = FallbackFs { target: dir.0.join("photo.png"), collide, removals: Cell::new(0), removed_before_output: Cell::new(false) };
+            let links = Cell::new(0);
+            let link = |from: &Path, _: &Path| {
+                assert!(from.exists(), "a removed staging file must not be linked again");
+                links.set(links.get() + 1);
+                Err(io::ErrorKind::Unsupported.into())
+            };
+            let out = write_unique_with(&fs, &fs.target, b"export", &link).unwrap();
+            assert!(fs.removed_before_output.get(), "staging must be released before creating the output");
+            assert_eq!(links.get(), 1);
+            assert_eq!(fs.removals.get(), 1);
+            assert_eq!(out, dir.0.join(if collide { "photo_1.png" } else { "photo.png" }));
+            assert_eq!(std::fs::read(out).unwrap(), b"export");
+            if collide {
+                assert_eq!(std::fs::read(&fs.target).unwrap(), b"original");
+            }
             assert_no_temp(&dir.0);
         }
     }
