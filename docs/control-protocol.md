@@ -309,6 +309,15 @@ Headless CLI/MCP sessions and the web build keep brush presets and the action li
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
 
+`brush.presets.importAbr` and `gradient.presets.importGrd` never overwrite a group by default: a
+file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
+result's `group` names the one it landed in. Pass `"replace": true` to delete that group's own
+presets first (built-in brushes are kept); the preset libraries are outside document history, so
+this can't be undone (#10640). In the app, opening such a file (`app.open`, File › Open,
+drag-and-drop, Import Brushes…) shows a prompt instead: `ui.dialog.confirm` imports as a new
+group, `ui.dialog.set {"choice":"replace"}` then `ui.dialog.confirm` replaces, and
+`ui.dialog.cancel` imports nothing.
+
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
 web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or
 deletes it. Selection only fills the form: Create still runs `file.new`, and the document name
