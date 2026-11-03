@@ -4,6 +4,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+use photocraft_automation::workspace::AuthorizedWorkspace;
 use photocraft_automation::{Headless, files};
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{DocId, Document, Rect, Size};
@@ -145,5 +146,33 @@ fn failed_atomic_write_keeps_renderer_diagnostics_for_the_caller() {
     assert!(res.is_err(), "a write over a directory must fail: {res:?}");
     let diagnostics = renderer.drain_diagnostics();
     assert!(diagnostics.iter().any(|d| d.contains("failed write")), "diagnostics drained before the failed write must be queued again: {diagnostics:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn failed_workspace_write_keeps_export_diagnostics_for_the_caller() {
+    let dir = std::env::temp_dir().join(format!("photocraft-workspace-save-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let root = dir.join("root");
+    fs::create_dir_all(&root).unwrap();
+
+    let workspace = AuthorizedWorkspace::new(Some(&root), Some(&root)).expect("authorized workspace");
+    let mut h = Headless::with_workspace(workspace);
+    let mut doc = Document::with_background("test", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut top = doc.layers[0].clone();
+    top.name = "top".into();
+    doc.layers.push(top);
+    h.session.open_document(doc, None);
+    h.set_renderer(Some(Box::new(DiagnosingRenderer { diagnostics: Vec::new() })));
+
+    // Outside the authorized root: the export succeeds, then its write is refused.
+    let outside = dir.join("outside.png");
+    let res = h.save(None, Some(&outside), Some("png"), &Default::default());
+    assert!(res.is_err(), "a write outside the workspace must fail: {res:?}");
+    let diagnostics = h.drain_diagnostics();
+    assert!(
+        diagnostics.iter().any(|d| d.contains("failed write")),
+        "export diagnostics drained before the failed workspace write must be queued again: {diagnostics:?}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

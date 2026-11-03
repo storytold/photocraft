@@ -341,7 +341,16 @@ impl Headless {
                     &opts,
                     self.renderer.as_mut().map(|b| &mut **b as &mut dyn photocraft_io::BandRenderer),
                 )?;
-                workspace.write(target_text, &bytes)?;
+                if let Err(error) = workspace.write(target_text, &bytes) {
+                    // Requeue the export diagnostics so the caller still reports them with the
+                    // write error, as the local save path does.
+                    if let Some(renderer) = self.renderer.as_mut() {
+                        for warning in warnings {
+                            renderer.push_diagnostic(warning);
+                        }
+                    }
+                    return Err(error);
+                }
                 warnings
             }
         };

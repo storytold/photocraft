@@ -585,9 +585,12 @@ pub fn export_preview_png_with_renderer(doc: &Document, renderer: Option<&mut dy
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                // Keep the fallback reason in this export's warnings only. Queuing it on the
-                // renderer would leak it into the next successful GPU export's diagnostics.
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns early and they stay with the renderer for the caller.
                 let mut cpu_result = export_preview_png_with_renderer(doc, None)?;
+                cpu_result.warnings.extend(r.drain_diagnostics());
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
             }
@@ -962,9 +965,12 @@ pub fn export_flat_with_renderer(
             }
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                // Keep the fallback reason in this export's warnings only. Queuing it on the
-                // renderer would leak it into the next successful GPU export's diagnostics.
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns early and they stay with the renderer for the caller.
                 let mut cpu_result = export_flat_with_renderer(doc, format, opts, ctl, None)?;
+                cpu_result.warnings.extend(r.drain_diagnostics());
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
             }
@@ -1104,9 +1110,12 @@ pub fn export_png_streamed_with_renderer(
             Ok(None) => return Err(IoError::Unsupported("PNG export lost its alpha channel".into())),
             Err(IoError::Render(render_err)) if render_err.is_retryable() => {
                 let fallback_warning = format!("GPU rendering unavailable ({render_err}); falling back to CPU");
-                // Keep the fallback reason in this export's warnings only. Queuing it on the
-                // renderer would leak it into the next successful GPU export's diagnostics.
+                // Keep the fallback reason in this export's warnings only. Move this attempt's
+                // queued diagnostics into its retry result too: leaving either on the renderer
+                // would leak them into a later successful GPU export. If the retry fails, `?`
+                // returns early and they stay with the renderer for the caller.
                 let mut cpu_result = export_png_streamed_with_renderer(doc, opts, ctl, rows, None)?;
+                cpu_result.warnings.extend(r.drain_diagnostics());
                 cpu_result.warnings.push(fallback_warning);
                 return Ok(cpu_result);
             }

@@ -133,65 +133,82 @@ mod tests {
         let is_software = gpu_renderer.is_software();
         println!("GPU parity verified using adapter '{adapter}' (software: {is_software})");
 
-        // Matrix: SampleType (U8, U16) x Alpha modes (opaque background, translucent document).
-        // F32 is deliberately excluded: band readback is half-precision, so it must reject F32
-        // and let the export fall back to the CPU (checked below).
-        for depth in [SampleType::U8, SampleType::U16] {
-            for with_alpha in [false, true] {
-                let doc = if with_alpha {
-                    let mut d = Document::new("translucent", Size::new(96, 96), ColorMode::Rgb, depth);
-                    let mut s = Surface::new(d.pixel_format());
-                    s.fill_rect(Rect::new(10, 10, 86, 86), &[0.3, 0.6, 0.9, 0.5]);
-                    d.layers.push(Layer::new("trans", LayerContent::Raster(s)));
-                    d
-                } else {
-                    make_test_doc(96, 96, depth)
-                };
+        // Matrix: 8-bit output x Alpha modes (opaque background, translucent document).
+        // U16 and F32 are deliberately excluded: band readback uploads half-precision textures,
+        // so both must reject and let the export fall back to the CPU (checked below).
+        for with_alpha in [false, true] {
+            let doc = if with_alpha {
+                let mut d = Document::new("translucent", Size::new(96, 96), ColorMode::Rgb, SampleType::U8);
+                let mut s = Surface::new(d.pixel_format());
+                s.fill_rect(Rect::new(10, 10, 86, 86), &[0.3, 0.6, 0.9, 0.5]);
+                d.layers.push(Layer::new("trans", LayerContent::Raster(s)));
+                d
+            } else {
+                make_test_doc(96, 96, SampleType::U8)
+            };
 
-                // Independent reference CPU compositor oracle
-                let mut cpu_pixels = Vec::new();
-                photocraft_compose::render_bands(&doc, doc.bounds(), 16, |buf| {
-                    cpu_pixels.extend_from_slice(&buf.px);
-                    Ok::<(), std::convert::Infallible>(())
+            // Independent reference CPU compositor oracle
+            let mut cpu_pixels = Vec::new();
+            photocraft_compose::render_bands(&doc, doc.bounds(), 16, |buf| {
+                cpu_pixels.extend_from_slice(&buf.px);
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .expect("CPU reference compose failed");
+
+            // Direct GPU renderer invocation (MUST NOT fall back to CPU)
+            let mut gpu_pixels = Vec::new();
+            gpu_renderer
+                .render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |band| {
+                    gpu_pixels.extend_from_slice(&band.pixels);
+                    Ok::<(), photocraft_io::IoError>(())
                 })
-                .expect("CPU reference compose failed");
+                .expect("direct GPU render_bands failed");
 
-                // Direct GPU renderer invocation (MUST NOT fall back to CPU)
-                let mut gpu_pixels = Vec::new();
-                gpu_renderer
-                    .render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |band| {
-                        gpu_pixels.extend_from_slice(&band.pixels);
-                        Ok::<(), photocraft_io::IoError>(())
-                    })
-                    .expect("direct GPU render_bands failed");
-
-                assert_eq!(cpu_pixels.len(), gpu_pixels.len());
-                let tol = 2.0 / 255.0;
-                for (i, (c, g)) in cpu_pixels.iter().zip(&gpu_pixels).enumerate() {
-                    for ch in 0..4 {
-                        assert!(
-                            (c[ch] - g[ch]).abs() <= tol,
-                            "depth {:?} alpha {} pixel {} ch {} differs: cpu={}, gpu={}",
-                            depth,
-                            with_alpha,
-                            i,
-                            ch,
-                            c[ch],
-                            g[ch]
-                        );
-                    }
+            assert_eq!(cpu_pixels.len(), gpu_pixels.len());
+            let tol = 1.0 / 255.0;
+            for (i, (c, g)) in cpu_pixels.iter().zip(&gpu_pixels).enumerate() {
+                for ch in 0..4 {
+                    assert!((c[ch] - g[ch]).abs() <= tol, "alpha {} pixel {} ch {} differs: cpu={}, gpu={}", with_alpha, i, ch, c[ch], g[ch]);
                 }
             }
         }
 
-        // 32-bit float needs the CPU compositor: band readback would quantise it to half.
-        let f32_doc = make_test_doc(64, 64, SampleType::F32);
-        let f32_res =
-            gpu_renderer.render_bands(&f32_doc, f32_doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
-        assert!(
-            matches!(f32_res, Err(photocraft_io::RenderError::Unsupported(_))),
-            "F32 documents must be rejected so the export falls back to CPU: {f32_res:?}"
-        );
+        // U16 and F32 need the CPU compositor: band readback would quantise them to half.
+        for depth in [SampleType::U16, SampleType::F32] {
+            let doc = make_test_doc(64, 64, depth);
+            let res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
+            assert!(
+                matches!(res, Err(photocraft_io::RenderError::Unsupported(_))),
+                "{depth:?} documents must be rejected so the export falls back to CPU: {res:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn high_depth_exports_fall_back_to_the_cpu_compositor() {
+        let mut gpu_renderer = match GpuRenderer::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIPPED: GpuRenderer unavailable ({e}); no GPU adapter present");
+                return;
+            }
+        };
+
+        let opts = photocraft_io::ExportOptions::default();
+        for depth in [SampleType::U16, SampleType::F32] {
+            let doc = make_test_doc(64, 64, depth);
+            let expected = photocraft_io::export_flat(&doc, photocraft_codecs::Format::Png, &opts).expect("CPU export");
+            let res = photocraft_io::export_flat_with_renderer(
+                &doc,
+                photocraft_codecs::Format::Png,
+                &opts,
+                &photocraft_raster::Interrupt::NONE,
+                Some(&mut gpu_renderer),
+            )
+            .expect("the export must retry on the CPU");
+            assert_eq!(expected.bytes, res.bytes, "{depth:?} exports must keep the CPU compositor's precision");
+            assert!(res.warnings.iter().any(|w| w.contains("falling back to CPU")), "{depth:?} export must report its CPU fallback: {:?}", res.warnings);
+        }
     }
 
     #[test]

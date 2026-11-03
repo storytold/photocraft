@@ -159,11 +159,12 @@ where
         return Ok(());
     }
     ctl.check().map_err(|_| ReadbackError::Cancelled)?;
-    // Band readback goes through a half-precision staging texture on every adapter, so values
-    // above 65504 become infinity and the rest lose mantissa bits. Keep F32 exports on the CPU
-    // compositor, where the writer receives the document's full precision.
-    if doc.depth == SampleType::F32 {
-        return Err(ReadbackError::Unsupported("32-bit float documents need the CPU compositor".into()));
+    // Layer content is uploaded as half-precision textures on every adapter. Values above 65504
+    // become infinity, and the rest lose mantissa bits: 16-bit samples near 1.0 already merge
+    // before compositing, so only 8-bit output can be read back losslessly. Keep U16 and F32
+    // exports on the CPU compositor, which composites and writes in 32-bit float.
+    if matches!(doc.depth, SampleType::U16 | SampleType::F32) {
+        return Err(ReadbackError::Unsupported("16-bit and 32-bit float documents need the CPU compositor".into()));
     }
 
     let bpp = if comp.acc_format() == wgpu::TextureFormat::Rgba32Float { 16u64 } else { 8u64 };
@@ -212,6 +213,10 @@ where
         if let Some(fault) = comp.fault() {
             return Err(ReadbackError::DeviceLost(fault.to_string()));
         }
+
+        // A sink can cancel after its band is delivered: stop before staging or submitting
+        // another band, instead of finding out only after the next device wait.
+        ctl.check().map_err(|_| ReadbackError::Cancelled)?;
 
         let mut staging: Vec<(Rect, wgpu::Buffer, u32)> = Vec::new();
         let mut accumulated_staging: u64 = 0;
