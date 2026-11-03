@@ -1328,6 +1328,7 @@ fn timestamp_quick_export_preserves_source_and_all_formats() {
     s.execute("file.export.exportPreferences", json!({"quickExportNaming": "timestamp", "quickExportLocation": "sameFolder"})).unwrap();
     for ext in ["png", "jpg", "gif", "webp", "exr"] {
         s.execute("prefs.set", json!({"path": "export.quickExportFormat", "value": ext})).unwrap();
+        let mut kept: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
         for explicit in [false, true] {
             let base = dir.path().join(format!("写真.edit_2.{ext}"));
             let params = if explicit { json!({"path": base}) } else { json!({}) };
@@ -1336,7 +1337,13 @@ fn timestamp_quick_export_preserves_source_and_all_formats() {
             assert_ne!(out, base);
             assert_eq!(out.extension().unwrap(), ext);
             assert!(out.file_stem().unwrap().to_str().unwrap().starts_with("写真.edit_2_"));
-            assert!(!std::fs::read(out).unwrap().is_empty());
+            let bytes = std::fs::read(out).unwrap();
+            assert!(!bytes.is_empty());
+            for (earlier, earlier_bytes) in &kept {
+                assert_ne!(out, earlier.as_path());
+                assert_eq!(std::fs::read(earlier).unwrap(), *earlier_bytes);
+            }
+            kept.push((out.to_path_buf(), bytes));
         }
     }
     assert_eq!(std::fs::read(own).unwrap(), b"original");

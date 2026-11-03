@@ -945,11 +945,14 @@ Timestamp exports stage and flush encoded bytes beside the destination, then pub
 non-replacing hard link. Where hard links fail, staging is removed before writing with exclusive
 `create_new`. This avoids keeping two on-disk copies and protects existing files without a
 check-then-write race. This fallback exposes the newly created file during writing;
-a crash can leave it incomplete. Write errors attempt cleanup, and failures after publication
-report the written path without retrying. Directory flushing follows the ordinary atomic writer's
-platform policy. Existing save/replacement APIs are unchanged. A finite 100,000-candidate bound
-prevents an unbounded collision search. Invalid names and filesystem length limits produce errors;
-names are never truncated or converted lossily. Existing UI/command Unicode path restrictions remain.
+a crash or write/flush failure can leave it incomplete. Failed fallback outputs are not deleted:
+another process may have replaced the pathname. The error reports the affected path without retrying.
+Failures after publication also report the written path without retrying. Directory flushing
+follows the ordinary atomic writer's platform policy. Existing save/replacement APIs are unchanged.
+A finite 100,000-candidate bound prevents an unbounded collision search. Invalid names and
+filesystem length limits produce errors; names are never truncated or converted lossily.
+Existing UI/command Unicode path restrictions remain.
+Empty names and final separators, `.` or `..` components are rejected before filesystem writes.
 
 Preferences missing the field select Default. Older builds following the current Serde convention
 ignore this unknown field and may discard it when saving settings; a newer build then uses Default.

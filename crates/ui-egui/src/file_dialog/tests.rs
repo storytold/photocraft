@@ -23,6 +23,8 @@ fn timestamp_quick_export_ask_and_same_folder_preserve_original() {
     assert!(open.borrow().is_empty());
     assert_eq!(std::fs::read(&own).unwrap(), b"original");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    assert_eq!(names.iter().filter(|n| n.starts_with("photo_") && n.contains('-') && n.ends_with(".png")).count(), 2, "{names:?}");
 }
 
 /// The requests the fake dialog service was given, with their replies: dialogs the user is still in.

@@ -15,36 +15,42 @@ fn ico_export_is_available_and_rejects_oversize_output() {
 use super::*;
 
 #[test]
-fn browser_quick_export_passes_timestamped_name_to_download_writer() {
+fn browser_quick_export_download_uses_selected_naming() {
     use std::cell::RefCell;
     use std::rc::Rc;
-    let reply = Rc::new(RefCell::new(None));
-    let written = Rc::new(RefCell::new(Vec::new()));
-    let (r, w) = (reply.clone(), written.clone());
-    let services = crate::Services {
-        file_dialog: Some(Box::new(move |_, _, answer| *r.borrow_mut() = Some(answer))),
-        export: Some(Box::new(|_, _, _| Ok((vec![1, 2, 3], Vec::new())))),
-        write: Some(Box::new(move |path, _| {
-            w.borrow_mut().push(path.to_owned());
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
-    app.run("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
-    let fields = json!({"format": "png", "transparency": true, "scale": 100}).as_object().unwrap().clone();
-    quick_export_download(&mut app, &fields).unwrap();
-    let ctx = egui::Context::default();
-    app.poll_file_dialog(&ctx, None);
-    reply.borrow_mut().take().unwrap().send(Some(crate::file_dialog::FileDialogAnswer::SaveTo("photo.png".into())));
-    app.poll_file_dialog(&ctx, None);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    let written = written.borrow();
-    assert_eq!(written.len(), 1);
-    assert!(written[0].starts_with("photo_"));
-    assert!(written[0].ends_with(".png"));
-    assert!(app.ui.status.contains(&written[0]));
+    for naming in ["default", "timestamp"] {
+        let reply = Rc::new(RefCell::new(None));
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let (r, w) = (reply.clone(), written.clone());
+        let services = crate::Services {
+            file_dialog: Some(Box::new(move |_, _, answer| *r.borrow_mut() = Some(answer))),
+            export: Some(Box::new(|_, _, _| Ok((vec![1, 2, 3], Vec::new())))),
+            write: Some(Box::new(move |path, _| {
+                w.borrow_mut().push(path.to_owned());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        app.run("prefs.set", json!({"path": "export.quickExportNaming", "value": naming})).unwrap();
+        let fields = json!({"format": "png", "transparency": true, "scale": 100}).as_object().unwrap().clone();
+        quick_export_download(&mut app, &fields).unwrap();
+        let ctx = egui::Context::default();
+        app.poll_file_dialog(&ctx, None);
+        reply.borrow_mut().take().unwrap().send(Some(crate::file_dialog::FileDialogAnswer::SaveTo("photo.png".into())));
+        app.poll_file_dialog(&ctx, None);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let written = written.borrow();
+        assert_eq!(written.len(), 1);
+        if naming == "default" {
+            assert_eq!(written[0], "photo.png");
+        } else {
+            assert!(written[0].starts_with("photo_"));
+            assert!(written[0].ends_with(".png"));
+        }
+        assert!(app.ui.status.contains(&written[0]));
+    }
 }
 
 fn default_export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {

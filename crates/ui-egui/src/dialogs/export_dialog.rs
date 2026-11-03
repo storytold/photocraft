@@ -1171,16 +1171,13 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
     f.insert("format".into(), json!("png"));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
-    if app.session.prefs().export.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Default {
-        confirm(app, &f)
-    } else {
-        quick_export_download(app, &f)
-    }
+    quick_export_download(app, &f)
 }
 
 // Browser collisions are handled by the download service, not by the document exporter.
 fn quick_export_download(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    confirm_document(app, f, true)
+    let timestamp = app.session.prefs().export.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
+    confirm_document(app, f, timestamp)
 }
 
 /// Runs Quick Export with `p` (an explicit `path`, or none for the document's folder).

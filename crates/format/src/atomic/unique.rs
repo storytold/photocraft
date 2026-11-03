@@ -1,4 +1,5 @@
 use super::{AtomicFs, RealFs, sync_file, temp_name};
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -6,7 +7,7 @@ const MAX_CANDIDATES: u32 = 100_000;
 
 /// Write to a free filename, adding numeric suffixes on collisions without overwriting files.
 pub fn write_unique(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-    write_unique_with(&RealFs, path, bytes, &|from: &Path, to: &Path| std::fs::hard_link(from, to))
+    write_unique_with(&RealFs, path, bytes, &|from: &Path, to: &Path| std::fs::hard_link(from, to), &write_and_sync)
         .map_err(|e| io::Error::new(e.kind(), format!("cannot export {}: {e}", path.display())))
 }
 
@@ -23,7 +24,22 @@ impl Drop for Staged<'_> {
     }
 }
 
-fn write_unique_with(fs: &dyn AtomicFs, path: &Path, bytes: &[u8], link: &dyn Fn(&Path, &Path) -> io::Result<()>) -> io::Result<PathBuf> {
+fn write_and_sync(output: &mut File, bytes: &[u8]) -> io::Result<()> {
+    output.write_all(bytes)?;
+    sync_file(output)
+}
+
+fn write_unique_with(
+    fs: &dyn AtomicFs,
+    path: &Path,
+    bytes: &[u8],
+    link: &dyn Fn(&Path, &Path) -> io::Result<()>,
+    write: &dyn Fn(&mut File, &[u8]) -> io::Result<()>,
+) -> io::Result<PathBuf> {
+    let last_component = path.as_os_str().as_encoded_bytes().rsplit(|&b| std::path::is_separator(char::from(b))).next().unwrap_or_default();
+    if last_component.is_empty() || last_component == b"." || last_component == b".." {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Quick Export needs a filename"));
+    }
     let stem = path.file_stem().filter(|s| !s.is_empty()).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Quick Export needs a filename"))?;
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
@@ -74,10 +90,9 @@ fn write_unique_with(fs: &dyn AtomicFs, path: &Path, bytes: &[u8], link: &dyn Fn
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             };
-            if let Err(e) = output.write_all(bytes).and_then(|()| sync_file(&output)) {
-                drop(output);
-                let cleanup = fs.remove(&candidate);
-                return Err(io::Error::other(format!("could not write {}: {e}; cleanup: {cleanup:?}", candidate.display())));
+            if let Err(e) = write(&mut output, bytes) {
+                // The pathname may now refer to another process's file.
+                return Err(io::Error::other(format!("could not write {}: {e}; output may be incomplete and was not removed", candidate.display())));
             }
         }
         if staged.cleanup_pending {
@@ -122,7 +137,7 @@ mod tests {
                 std::fs::write(dir.0.join(name), b"original").unwrap();
             }
             let link = |a: &Path, b: &Path| if fallback { Err(io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(a, b) };
-            let out = write_unique_with(&RealFs, &dir.0.join("写真.edit_2.png"), b"export", &link).unwrap();
+            let out = write_unique_with(&RealFs, &dir.0.join("写真.edit_2.png"), b"export", &link, &write_and_sync).unwrap();
             assert_eq!(out, dir.0.join("写真.edit_2_2.png"));
             assert_eq!(std::fs::read(out).unwrap(), b"export");
             assert_eq!(std::fs::read(dir.0.join("写真.edit_2.png")).unwrap(), b"original");
@@ -170,7 +185,7 @@ mod tests {
                 links.set(links.get() + 1);
                 Err(io::ErrorKind::Unsupported.into())
             };
-            let out = write_unique_with(&fs, &fs.target, b"export", &link).unwrap();
+            let out = write_unique_with(&fs, &fs.target, b"export", &link, &write_and_sync).unwrap();
             assert!(fs.removed_before_output.get(), "staging must be released before creating the output");
             assert_eq!(links.get(), 1);
             assert_eq!(fs.removals.get(), 1);
@@ -193,7 +208,7 @@ mod tests {
                     std::thread::spawn(move || {
                         let link = |a: &Path, b: &Path| if fallback { Err(io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(a, b) };
                         let bytes = vec![n; 4096];
-                        let out = write_unique_with(&RealFs, &path, &bytes, &link).unwrap();
+                        let out = write_unique_with(&RealFs, &path, &bytes, &link, &write_and_sync).unwrap();
                         assert_eq!(std::fs::read(&out).unwrap(), bytes);
                         out
                     })
@@ -235,12 +250,12 @@ mod tests {
         let path = dir.0.join("photo.png");
         let link = |a: &Path, b: &Path| std::fs::hard_link(a, b);
         let failed_stage = FailingFs { stage: true, removals: Cell::new(0) };
-        assert!(write_unique_with(&failed_stage, &path, b"bytes", &link).is_err());
+        assert!(write_unique_with(&failed_stage, &path, b"bytes", &link, &write_and_sync).is_err());
         assert_eq!(failed_stage.removals.get(), 1);
         assert!(!path.exists());
         assert_no_temp(&dir.0);
         let failed_sync = FailingFs { stage: false, removals: Cell::new(0) };
-        let error = write_unique_with(&failed_sync, &path, b"bytes", &link).unwrap_err();
+        let error = write_unique_with(&failed_sync, &path, b"bytes", &link, &write_and_sync).unwrap_err();
         assert_eq!(failed_sync.removals.get(), 1);
         assert!(error.to_string().contains("could not confirm durability"));
         assert_eq!(std::fs::read(&path).unwrap(), b"bytes");
@@ -253,10 +268,55 @@ mod tests {
         let dir = TempDir::new("unique-invalid");
         let file = dir.0.join("file");
         std::fs::write(&file, b"original").unwrap();
+        for invalid in ["folder/", "folder/.", "folder/.."] {
+            let error = write_unique(&dir.0.join(invalid), b"bytes").unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+        #[cfg(windows)]
+        for invalid in ["folder\\", "folder\\.", "folder\\.."] {
+            assert_eq!(write_unique(&dir.0.join(invalid), b"bytes").unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        }
+        assert!(!dir.0.join("folder").exists());
         assert!(write_unique(&file.join("photo.png"), b"bytes").is_err());
         assert!(write_unique(&dir.0.join(format!("{}.png", "x".repeat(300))), b"bytes").is_err());
         assert_eq!(std::fs::read(file).unwrap(), b"original");
         assert_no_temp(&dir.0);
+    }
+
+    #[test]
+    fn fallback_failures_preserve_partial_outputs_and_replacements_without_retrying() {
+        for replace in [false, true] {
+            for sync_failure in [false, true] {
+                let dir = TempDir::new("unique-failed-output");
+                let path = dir.0.join("photo.png");
+                let moved = dir.0.join("moved.png");
+                let attempts = Cell::new(0);
+                let link = |_: &Path, _: &Path| Err(io::ErrorKind::Unsupported.into());
+                let write = |output: &mut File, bytes: &[u8]| {
+                    attempts.set(attempts.get() + 1);
+                    output.write_all(if sync_failure { bytes } else { b"exp" })?;
+                    if replace {
+                        std::fs::rename(&path, &moved)?;
+                        std::fs::write(&path, b"replacement")?;
+                    }
+                    Err(if sync_failure { io::ErrorKind::AlreadyExists } else { io::ErrorKind::StorageFull }.into())
+                };
+                let error = write_unique_with(&RealFs, &path, b"export", &link, &write).unwrap_err();
+                assert_eq!(attempts.get(), 1);
+                assert_eq!(error.kind(), io::ErrorKind::Other);
+                assert!(error.to_string().contains(&path.display().to_string()));
+                assert!(error.to_string().contains("output may be incomplete and was not removed"));
+                let expected: &[u8] = if sync_failure { b"export" } else { b"exp" };
+                if replace {
+                    assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+                    assert_eq!(std::fs::read(&moved).unwrap(), expected);
+                } else {
+                    assert_eq!(std::fs::read(&path).unwrap(), expected);
+                }
+                assert!(!dir.0.join("photo_1.png").exists());
+                assert_no_temp(&dir.0);
+            }
+        }
     }
 
     #[cfg(unix)]
