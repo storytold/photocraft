@@ -277,6 +277,16 @@ impl Running {
     }
 }
 
+/// A cancelled job's worker that may still be unwinding.
+#[cfg(not(target_arch = "wasm32"))]
+struct Draining {
+    handle: std::thread::JoinHandle<()>,
+    doc: Option<DocId>,
+    /// Its document closed: the worker still holds that document's snapshot, so the scratch
+    /// pool is released again once it exits (the release at close came too early, #10479).
+    release: bool,
+}
+
 /// The session's job table (see the module docs).
 #[derive(Default)]
 pub struct Jobs {
@@ -292,7 +302,7 @@ pub struct Jobs {
     recent: Vec<JobInfo>,
     /// Workers of cancelled jobs that may still be unwinding (native).
     #[cfg(not(target_arch = "wasm32"))]
-    draining: Vec<std::thread::JoinHandle<()>>,
+    draining: Vec<Draining>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
 }
@@ -367,6 +377,18 @@ pub fn run<T: Send + 'static>(
     work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
+    // The job reads the active document it captured; only that document's pixels gate it.
+    let source = s.active().map(|d| d.doc.clone());
+    let work = move |ctx: &JobCtx| -> Result<T> {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        let health = || source.as_deref().map_or(Ok(()), photocraft_doc::Document::scratch_health).map_err(EngineError::Other);
+        health()?;
+        let generation = photocraft_raster::spill::read_error_generation();
+        let value = work(ctx)?;
+        photocraft_raster::spill::check_since(generation).map_err(EngineError::Other)?;
+        health()?;
+        Ok(value)
+    };
     let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
     let _authorization = AuthorizationScope::enter(authorization);
     // The job's document: stored paths it follows are resolved against it on any thread.
@@ -673,7 +695,17 @@ impl Session {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        self.jobs.draining.retain(|h| !h.is_finished());
+        {
+            let mut release = false;
+            self.jobs.draining.retain(|d| {
+                let done = d.handle.is_finished();
+                release |= done && d.release;
+                !done
+            });
+            if release {
+                photocraft_raster::scratch::release();
+            }
+        }
         std::mem::take(&mut self.jobs.events)
     }
 
@@ -706,8 +738,8 @@ impl Session {
         job.ctx.cancel();
         self.end_job(&job, JobOutcome::Cancelled);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(h) = job.handle {
-            self.jobs.draining.push(h);
+        if let Some(handle) = job.handle {
+            self.jobs.draining.push(Draining { handle, doc: job.doc, release: false });
         }
         true
     }
@@ -754,8 +786,15 @@ impl Session {
     /// cancel latency with it). Native only; returns at once on wasm.
     pub fn join_cancelled_jobs(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        for h in self.jobs.draining.drain(..) {
-            let _ = h.join();
+        {
+            let mut release = false;
+            for d in self.jobs.draining.drain(..) {
+                let _ = d.handle.join();
+                release |= d.release;
+            }
+            if release {
+                photocraft_raster::scratch::release();
+            }
         }
     }
 
@@ -774,6 +813,11 @@ impl Session {
         for id in ids {
             self.cancel_job(id);
         }
+        // Workers cancelled now, or earlier and still unwinding, hold the closing document.
+        #[cfg(not(target_arch = "wasm32"))]
+        for d in self.jobs.draining.iter_mut().filter(|d| d.doc == Some(doc)) {
+            d.release = true;
+        }
     }
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
@@ -781,6 +825,7 @@ impl Session {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
+        self.sync_scratch_state();
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -857,6 +902,7 @@ impl Session {
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
         let before = self.active().map(|st| st.doc.clone());
+        let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
@@ -876,7 +922,7 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
-        match (r, pending) {
+        let out = match (r, pending) {
             (Err(e), Some(job)) => {
                 job.ctx.cancel();
                 Err(e)
@@ -893,8 +939,8 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some(before) = before {
-                    self.add_relayout_damage(&before);
+                if let Some(before) = &before {
+                    self.add_relayout_damage(before);
                 }
                 if let Some((doc_id, layer_id)) = new_fx_target
                     && let Some(st) = self.active_mut()
@@ -910,7 +956,15 @@ impl Session {
                 self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref());
                 Ok(Started::Done(v))
             }
+        };
+        // A closed document's freed buffers went to the scratch pool (`before` kept the active
+        // one alive until here): hand them back to the OS (#10479). Compared by id, since Split
+        // and Merge Channels close documents while opening others.
+        if docs_before.iter().any(|id| !self.docs.iter().any(|st| st.doc.id == *id)) {
+            drop(before);
+            photocraft_raster::scratch::release();
         }
+        out
     }
 
     /// Grows the damage a command reported for the pixels it changed by what effects laid out

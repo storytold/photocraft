@@ -309,6 +309,15 @@ Headless CLI/MCP sessions and the web build keep brush presets and the action li
 only, unless a store is attached. Gradient presets (including imported `.grd` groups) persist with
 the preferences.
 
+`brush.presets.importAbr` and `gradient.presets.importGrd` never overwrite a group by default: a
+file whose group name is already taken imports beside it as `<group> (2)`, `<group> (3)`…, and the
+result's `group` names the one it landed in. Pass `"replace": true` to delete that group's own
+presets first (built-in brushes are kept); the preset libraries are outside document history, so
+this can't be undone (#10640). In the app, opening such a file (`app.open`, File › Open,
+drag-and-drop, Import Brushes…) shows a prompt instead: `ui.dialog.confirm` imports as a new
+group, `ui.dialog.set {"choice":"replace"}` then `ui.dialog.confirm` replaces, and
+`ui.dialog.cancel` imports nothing.
+
 Named New Document presets also persist with preferences (`presets.documents`) on desktop and
 web. File › New › Save Preset… saves the current form; the Saved tab selects a configuration or
 deletes it. Selection only fills the form: Create still runs `file.new`, and the document name
@@ -440,7 +449,7 @@ stdio, and a value that is not a port is a usage error naming the variable. Impl
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, skipped}` (plus `count` for workspace exports): one file per exported top-level layer, named like `file.export.layersToFiles` names them. `count` is present only for workspace exports and counts written files only. `skipped` is always an array (empty when nothing is omitted), in top-to-bottom order, of `{layer, name, reason}`: the session layer id, original unsanitized name, and `"hidden by visibleOnly"` or `"adjustment layer has no pixels of its own"`. Visibility takes precedence for hidden adjustments; `visibleOnly:false` exports hidden non-adjustment layers. Groups export merged; their children are not separate exports or skips. Existing filenames/numbering are unchanged. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file. Encode/write failures are errors, not skips |
 | `doc.exportDataSets` | `{dir, format? (png), dataSets? (all), naming? ("{name}\|{index}\|{document}"), index?}` → `{files, count}`: the capability-scoped `file.export.dataSetsAsFiles`. The batch is planned first and colliding names are refused before any file is written, as in the command |
 | `doc.importDataSets` | `{path, delimiter? (,), index?}` → `{imported}`: the capability-scoped `file.import.variableDataSets`; the CSV is read beneath the read root |
-| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?, tgaBits?, ddsCompression?, ddsMipmaps?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF; `tgaBits` 24 or 32 sets a TGA's bits per pixel, and `ddsCompression`/`ddsMipmaps` a DDS texture's compression and mip chain, as `app.save` does). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
+| `doc.save` | `{path?, format?, quality?, index?, tiffLayers?, tgaBits?, ddsCompression?, ddsMipmaps?, pcraftFullComposite?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF; `tgaBits` 24 or 32 sets a TGA's bits per pixel, and `ddsCompression`/`ddsMipmaps` a DDS texture's compression and mip chain, as `app.save` does; `pcraftFullComposite: true` also writes the flattened document at its canvas size into a `.pcraft` file as `composite/full.png`; the save may leave it out in the cases listed in [the format guide](../book/src/formats/pcraft.md), and the manifest's `full_composite` member names it when written). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
