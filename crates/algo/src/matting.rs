@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 use crate::segment::{RgbImage, Sampler};
 use crate::selection::{Region, edt};
 
+/// Largest feather (pixels) the refinement honours; larger values would build a Gaussian kernel
+/// thousands of times wider than any image.
+const MAX_FEATHER: f32 = 1000.0;
+
 /// Select and Mask parameters (Photoshop's units).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -61,7 +65,8 @@ impl RefineParams {
         self.smooth.clamp(0.0, 100.0) / 100.0 * 4.0
     }
     fn feather_sigma(&self) -> f32 {
-        self.feather.max(0.0) / 2.0
+        // The same bound the Select and Mask command applies; `clamp` would pass a NaN through.
+        if self.feather.is_nan() { 0.0 } else { self.feather.clamp(0.0, MAX_FEATHER) / 2.0 }
     }
     /// The factor Shift Edge multiplies each pixel's odds by: `49^(shift / 100)`, 1 at 0%.
     fn shift_odds(&self) -> f32 {
@@ -440,7 +445,7 @@ fn refine_mask_with(
     if bbox.is_empty() {
         return None;
     }
-    let halo = p.halo() + brush.map_or(0, |b| i32::try_from(b.window() * 4).unwrap_or(i32::MAX));
+    let halo = p.halo().saturating_add(brush.map_or(0, |b| i32::try_from(b.window() * 4).unwrap_or(i32::MAX)));
     let mut tiles = Vec::new();
     let mut y = bbox.y0;
     while y < bbox.y1 {
