@@ -85,13 +85,14 @@ fn open_file_sets_name_path_and_recent() {
 /// plain TIFF over the texture.
 #[test]
 fn tx_texture_does_not_acquire_its_path() {
-    let tiff = b"II*\x00\x08\x00\x00\x00";
+    let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Gray, vec![40; 4]).unwrap();
+    let tiff = photocraft_codecs::encode(&img, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
     for automation in [false, true] {
         let (mut app, _written) = app_with(vec![None]);
         if automation {
-            app.open_automation_bytes("wall.tx", tiff).unwrap();
+            app.open_automation_bytes("wall.tx", &tiff).unwrap();
         } else {
-            app.open_file("/tex/wall.tx", tiff).unwrap();
+            app.open_file("/tex/wall.tx", &tiff).unwrap();
         }
         let st = app.session.active().unwrap();
         assert!(st.source_read_only, "automation: {automation}");
@@ -100,7 +101,7 @@ fn tx_texture_does_not_acquire_its_path() {
     }
     // The same bytes under a TIFF name keep their path, as before.
     let (mut app, _written) = app_with(vec![None]);
-    app.open_file("/tex/wall.tif", tiff).unwrap();
+    app.open_file("/tex/wall.tif", &tiff).unwrap();
     assert!(!app.session.active().unwrap().source_read_only);
 }
 
@@ -909,7 +910,7 @@ fn a_set_of_background_opens_keeps_its_order_however_they_finish() {
     let index = app.session.add_document(Document::new("f1.psd", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), None);
     assert_eq!(index, 1);
     jobs_ui::opened_in_order(&mut app.jobs, OpenOrder { batch, seq: 1 });
-    jobs_ui::end_batch(&mut app.jobs);
+    jobs_ui::end_batch(&mut app);
     assert_eq!(app.jobs.batches.len(), 1, "kept while members are opening");
     // The rest finish out of order: last, first, third.
     for seq in [3usize, 0, 2] {
