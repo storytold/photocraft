@@ -193,7 +193,9 @@ answer yet, or right after a change made in PhotoCraft's own setup, is it read o
 the reason is the layer's own sentence, and Preferences › AI Integrations is where to fix it.
 
 A fill that fails keeps its tag and row until Retry (sent again as it was started, with the model
-chosen now) or Discard. Messages are the layer's, which name the connection and never hold a
+chosen now) or Discard, run from a script or the CLI as well as in the background. At most 8 fills
+wait at once (failed, or for the person's agreement), since each keeps what it sends in memory: a
+new fill is refused until one is retried, sent or discarded. Messages are the layer's, which name the connection and never hold a
 key: a refused key or a model this app can't run offers the setup; a busy service says "try again
 shortly" (after PhotoCraft's own retries); quota, network and service errors show the message; a
 cancelled fill shows nothing.

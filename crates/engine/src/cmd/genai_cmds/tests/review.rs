@@ -234,3 +234,21 @@ fn an_inline_fill_that_failed_stays_for_retry_discard_and_its_diagnostics() {
     s.execute(RETRY, json!({"fill": fills[0].id})).unwrap();
     assert!(s.generative_fills().is_empty());
 }
+
+#[test]
+fn only_so_many_fills_are_kept_waiting() {
+    let mut s = session(64, 64);
+    install(&mut s, Fake { fail: Some(AiFailure::new(AiErrorKind::Network, "offline")), ..fake([0, 0, 0]) });
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    for _ in 0..MAX_WAITING {
+        assert!(s.execute(FILL, json!({"variations": 1})).unwrap_err().to_string().contains("offline"));
+    }
+    assert_eq!(s.generative_fills().len(), MAX_WAITING);
+    assert!(!s.is_enabled(FILL));
+    let e = s.execute(FILL, json!({"variations": 1})).unwrap_err().to_string();
+    assert!(e.contains("discard one first"), "{e}");
+    assert_eq!(s.generative_fills().len(), MAX_WAITING, "the refused one isn't kept");
+    let id = s.generative_fills()[0].id;
+    s.execute(DISCARD, json!({"fill": id})).unwrap();
+    assert!(s.is_enabled(FILL));
+}

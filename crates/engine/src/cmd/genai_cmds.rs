@@ -377,7 +377,22 @@ fn fill_enabled(s: &Session) -> std::result::Result<(), String> {
     if sel.content_bounds().intersect(&st.doc.bounds()).is_empty() {
         return Err("the selection is empty".into());
     }
+    room_to_wait(s)?;
     ai_ready(s).map(|_| ())
+}
+
+/// The most fills kept waiting (failed, or for the person's agreement) at once. Each holds what
+/// it sends in memory (up to about 70 MB at the upload size, and a failed one its capture with
+/// the pictures returned) until it is retried, sent or discarded.
+const MAX_WAITING: usize = 8;
+
+/// A new fill (or Generate More) needs room: fewer than [`MAX_WAITING`] fills waiting.
+fn room_to_wait(s: &Session) -> std::result::Result<(), String> {
+    let n = s.generative_fills().iter().filter(|f| matches!(f.state, "failed" | "consent")).count();
+    if n >= MAX_WAITING {
+        return Err(format!("{n} Generative Fills are waiting (failed, or for your agreement to send them): retry, send or discard one first"));
+    }
+    Ok(())
 }
 
 /// `key` as a variation count, 1 to 4 (3 when missing).
@@ -886,6 +901,7 @@ fn select_variation(s: &mut Session, p: &Value) -> Result<Value> {
 /// Generate More needs an active generative layer and a tool that can run.
 fn more_enabled(s: &Session) -> std::result::Result<(), String> {
     select_enabled(s)?;
+    room_to_wait(s)?;
     ai_ready(s).map(|_| ())
 }
 
