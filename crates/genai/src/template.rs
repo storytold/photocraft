@@ -223,6 +223,7 @@ const BUILTIN: &[&str] = &[
     include_str!("../workflows/vitmatte-refine.json"),
     include_str!("../workflows/qwen-edit-2511-remove-lightning-8.json"),
     include_str!("../workflows/krea2-turbo-edit.json"),
+    include_str!("../workflows/krea2-turbo-fill.json"),
     include_str!("../workflows/qwen-2.1-image-ref.json"),
     include_str!("../workflows/moss-image-image.json"),
     include_str!("../workflows/moss-image-image-base.json"),

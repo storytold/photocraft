@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "id": "krea2-turbo/fill",
+    "name": "Generative Fill (Krea 2 Turbo, AnyPaint)",
+    "family": "krea2",
+    "task": "fill",
+    "license": "community",
+    "licenseNote": "Krea 2 Turbo and the AnyPaint LoRA (yijunwang2/krea2-anypaint, 2026): Krea 2 Community License (Krea.ai; commercial use with conditions). Bring your own files.",
+    "needsImage": true,
+    "needsMask": true,
+    "defaults": {
+      "steps": 8,
+      "guidance": 1.0
+    },
+    "models": [
+      {
+        "placeholder": "unet",
+        "folder": "diffusion_models",
+        "default": "krea2_turbo_fp8_scaled.safetensors"
+      },
+      {
+        "placeholder": "clip",
+        "folder": "text_encoders",
+        "default": "qwen3vl_4b_fp8_scaled.safetensors"
+      },
+      {
+        "placeholder": "vae",
+        "folder": "vae",
+        "default": "qwen_image_vae.safetensors"
+      },
+      {
+        "placeholder": "lora",
+        "folder": "loras",
+        "default": "krea2_anypaint_rank32.safetensors"
+      }
+    ],
+    "notes": "The AnyPaint recipe (yijunwang2/krea2-anypaint: anypaint.py and the krea2-anypaint ComfyUI nodes' krea2_registered_core.py; AusBoss's 'Krea 2 Inpaint Masked' workflow v1.3, read 2026-11-03): the AnyPaint LoRA at 1 on Krea 2 Turbo; the crop with the selection flattened to the median colour of the rest, shrunk to 384 px and registered over the whole canvas (RoPE frame 1, its keys and values computed once at timestep zero and read by every step); the same picture in the Qwen3-VL encoder's view ('Picture 1: …' before the prompt); sampling from the crop's own latent under a noise mask (the selection widened by 32 px), Euler/simple 8 steps CFG 1, `denoise` as KSampler's (1 replaces the area, about 0.7 keeps its old shape, 0.5 and under stays close to it). With Enhance prompts on, the vision-language model sees the crop with the selection flattened to grey and writes a 40 to 80 word description of the finished picture, as the workflow's Auto prompt does. Served natively by genai-native's gn-diffusion (krea2-turbo/fill) when the LoRA is in the loras folder; the Qwen-Image VAE beside the Krea 2 weights decodes when present.",
+    "creator": "Krea · yijunwang2",
+    "description": "Click-select and repaint on Krea 2: replaces what you selected, keeps the rest",
+    "badges": [
+      "fast"
+    ],
+    "estimatedSeconds": {
+      "base": 6,
+      "perMegapixel": 6
+    },
+    "pages": [
+      "fill"
+    ],
+    "parameters": [
+      "denoise"
+    ]
+  }
+}

@@ -96,3 +96,14 @@ fn template_preferences_are_validated_when_set() {
     assert!(p.set("integrations.defaultEditModel", json!("a/b.safetensors")).is_err());
     assert_eq!(p.integrations.default_fill_template, "qwen-2.1/fill");
 }
+
+/// Krea 2 AnyPaint: its template is a Krea 2 fill that takes `denoise`, and its prompt writer is
+/// shown the crop with the selection flattened to mid-grey (AusBoss's "Write the prompt").
+#[test]
+fn the_krea2_fill_takes_denoise_and_its_writer_sees_a_grey_hole() {
+    assert!(krea2_fill("krea2-turbo/fill") && !krea2_fill("qwen-2.1/fill") && !krea2_fill("krea2-turbo/edit"));
+    assert!(takes_denoise("krea2-turbo/fill"));
+    let image = Rgba8 { width: 2, height: 1, data: vec![10, 20, 30, 255, 40, 50, 60, 255] };
+    let mask = Gray8 { width: 2, height: 1, data: vec![200, 50] };
+    assert_eq!(grey_where(&image, &mask).data, vec![128, 128, 128, 255, 40, 50, 60, 255]);
+}

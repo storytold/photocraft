@@ -347,7 +347,15 @@ pub(crate) enum EnhanceKind {
     Subject,
     /// A picture: describe its background alone (Generative Expand with no prompt).
     Backdrop,
+    /// A fill on Krea 2 AnyPaint: the crop with the selection flattened to grey; describe the
+    /// whole finished picture with the user's words in the grey area.
+    FillScene,
 }
+
+/// The system turn of [`EnhanceKind::FillScene`]: AusBoss's "Write the prompt" step of the
+/// Krea 2 Inpaint Masked workflow (v1.3), which the AnyPaint LoRA follows best: it was trained
+/// on descriptions of the complete output picture, not of the patch.
+const ENHANCE_FILL_SCENE_SYSTEM: &str = "You see a picture with a flat mid-grey area that will be painted. Write one text-to-image prompt describing this picture as it will look when finished: one paragraph of 40 to 80 words covering the subject, setting, materials, lighting and camera style, with the grey area showing what the user asks for. Never call it grey, blank, masked, selected or painted, and describe it as part of the finished scene. Keep the user's words where they are specific. Reply with the prompt only: no title, no quotes, no markdown.";
 
 /// The system turn of [`EnhanceKind::Subject`]: a short noun phrase the matte can follow.
 const ENHANCE_SUBJECT_SYSTEM: &str = "You see a picture. Reply with one noun phrase of three to eight words naming its main subject as the picture shows it, for example \"the man in a white t-shirt\" or \"the red vintage car\". Reply with the phrase only: no sentence, no quotes, no full stop.";
@@ -449,6 +457,7 @@ pub(crate) fn enhance_prompt(
         EnhanceKind::FillRef => ENHANCE_FILL_REF_SYSTEM.to_string(),
         EnhanceKind::Subject => ENHANCE_SUBJECT_SYSTEM.to_string(),
         EnhanceKind::Backdrop => ENHANCE_BACKDROP_SYSTEM.to_string(),
+        EnhanceKind::FillScene => ENHANCE_FILL_SCENE_SYSTEM.to_string(),
     };
     let mut params = BTreeMap::new();
     params.insert("system".to_string(), Value::String(system));
@@ -2617,10 +2626,20 @@ fn rewritten_fill_prompt(
     image: &Rgba8,
     prompt: String,
     place: Option<&str>,
+    scene: Option<&Gray8>,
     seed: u64,
     ctx: &JobCtx,
 ) -> String {
     ctx.progress(0.02, "Improving the prompt");
+    // Krea 2 AnyPaint: the whole finished picture described, the area seen as flat grey.
+    if let (Some(mask), true) = (scene, command == FILL && refs.images.is_empty()) {
+        let grey = grey_where(image, mask);
+        let words = format!("What the grey area shows: {}", prompt.trim());
+        return match enhance_prompt(thinker, EnhanceKind::FillScene, &words, Some(&grey), None, seed, &JobProgress::span(ctx, 0.02, 0.05)) {
+            Ok(Some(p)) => p,
+            Ok(None) | Err(_) => prompt,
+        };
+    }
     // A fill from a reference shows the rewriter the picture (its hole grey) and the first
     // reference side by side, so it can name what to take as the reference shows it.
     let fill_ref = command == FILL && !refs.images.is_empty();
@@ -2639,6 +2658,26 @@ fn rewritten_fill_prompt(
         Ok(Some(p)) => p,
         Ok(None) | Err(_) => prompt,
     }
+}
+
+/// `image` with the pixels where `mask` is over half flattened to mid-grey (what AusBoss's
+/// prompt writer is shown); `image` as it is when the sizes differ.
+fn grey_where(image: &Rgba8, mask: &Gray8) -> Rgba8 {
+    let mut out = image.clone();
+    if (mask.width, mask.height) != (image.width, image.height) {
+        return out;
+    }
+    for (px, m) in out.data.chunks_exact_mut(4).zip(&mask.data) {
+        if *m > 127 {
+            px[..3].copy_from_slice(&[128, 128, 128]);
+        }
+    }
+    out
+}
+
+/// Whether `template` is a Krea 2 fill (AnyPaint), whose prompt describes the finished picture.
+fn krea2_fill(template: &str) -> bool {
+    template::find(template).is_ok_and(|t| t.meta.family == "krea2" && t.meta.task == Task::Fill)
 }
 
 /// What a whole-picture route changed beside the hole, connected to it (`change_band`): the
@@ -2806,7 +2845,8 @@ fn fill_region(
     let prompt = if let Some(r) = rewritten {
         r
     } else if enhance && outpaint.is_none() {
-        rewritten_fill_prompt(thinker.as_ref(), command, &refs, &image, prompt, place.as_deref(), seed, ctx)
+        let scene = krea2_fill(&template_id).then_some(&mask);
+        rewritten_fill_prompt(thinker.as_ref(), command, &refs, &image, prompt, place.as_deref(), scene, seed, ctx)
     } else {
         prompt
     };
