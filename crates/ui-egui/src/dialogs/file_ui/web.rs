@@ -302,7 +302,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
         // Settings scroll independently on smaller windows.
         ui.vertical(|ui| {
             ui.set_width(250.0);
-            egui::ScrollArea::vertical().id_salt("web-settings").max_height(area.y).show(ui, |ui| {
+            egui::ScrollArea::both().auto_shrink([false, true]).id_salt("web-settings").max_height(area.y).show(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
                 let mut preset = s(f, "__preset", "");
                 let mut opts: Vec<(String, &str)> = vec![("".into(), "[Unnamed]")];

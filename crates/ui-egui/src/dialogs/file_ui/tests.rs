@@ -865,6 +865,39 @@ fn web_preview_keeps_its_size_and_zoom_while_the_pointer_moves() {
 }
 
 #[test]
+fn web_settings_keep_dialog_width_stable_with_large_ui_font() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 1380.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.edit_prefs(|prefs| prefs.interface.ui_font_size = photocraft_engine::prefs::UiFontSize::Large);
+        app.run("file.new", json!({"width": 1080, "height": 1349, "name": "Screenshot_20260928_133405_Facebook.jpg"})).unwrap();
+        let id = open_web(&mut app);
+        let d = app.ui.dialog_mut(id).unwrap();
+        d.fields.insert("format".into(), json!("png24"));
+        d.fields.insert("resample".into(), json!("bicubic"));
+        app
+    });
+    h.run_steps(4);
+    let width = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique("pc-dialog-rects"))).unwrap();
+        rects[0].width()
+    };
+    let before = width(&h);
+    assert!(before < 2500.0, "dialog filled the window before the input baseline");
+    let pane = h.state().ui.dialogs[0].fields["__previewRects"][0].clone();
+    let at = egui::pos2(pane[0].as_f64().unwrap() as f32 + 20.0, pane[1].as_f64().unwrap() as f32 + 20.0);
+    for i in 0..30 {
+        h.event(egui::Event::PointerMoved(at + egui::vec2(i as f32 * 3.0, i as f32)));
+        h.step();
+    }
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+    }
+    assert_eq!(width(&h), before, "input repaints widened Save for Web");
+}
+
+#[test]
 fn palette_draft_survives_navigation_and_resets_when_colors_change() {
     let (app, _) = app();
     let mut f = serde_json::from_value::<Map<String, Value>>(json!({"format": "gif", "colors": 16})).unwrap();
