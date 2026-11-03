@@ -649,7 +649,9 @@ impl Surface {
             (gx0, gy0, gx1, gy1) = (gx0.min(c.tx), gy0.min(c.ty), gx1.max(c.tx), gy1.max(c.ty));
         }
         let mut order: Vec<(&TileCoord, &Arc<Tile>)> = self.tiles.iter().collect();
-        order.sort_by_key(|(c, _)| (c.tx - gx0).min(gx1 - c.tx).min(c.ty - gy0).min(gy1 - c.ty));
+        // Tile coordinates may come from files. Their non-negative grid distances can
+        // exceed i32::MAX, but always fit u32; signed subtraction would panic or wrap.
+        order.sort_by_key(|(c, _)| c.tx.abs_diff(gx0).min(gx1.abs_diff(c.tx)).min(c.ty.abs_diff(gy0)).min(gy1.abs_diff(c.ty)));
         let mut out = Rect::EMPTY;
         for (c, t) in order {
             let origin = c.rect();
